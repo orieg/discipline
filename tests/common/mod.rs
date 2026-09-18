@@ -16,13 +16,15 @@ pub fn read(p: *const u8) -> u8 {
 pub const GOOD_TEST: &str = "\
 #[test]
 fn adds() {
-    assert_eq!(1 + 1, 2);
-    assert_eq!(2 + 2, 4);
+    let x = 1;
+    assert_eq!(x + 1, 2);
+    assert_eq!(x + 3, 4);
 }
 
 #[test]
 fn orders() {
-    assert!(1 < 2);
+    let x = 1;
+    assert!(x < 2);
 }
 ";
 

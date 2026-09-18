@@ -243,14 +243,30 @@ impl<'a> Extractor<'a> {
             ignored,
             should_panic,
         };
+        let is_fallible_return = node
+            .child_by_field_name("return_type")
+            .map(|rt| {
+                let text = self.text(rt);
+                text.contains("Result") || text.contains("Option")
+            })
+            .unwrap_or(false);
         if let Some(body) = node.child_by_field_name("body") {
-            self.count_asserts(body, &mut test);
+            self.count_asserts(body, &mut test, is_fallible_return);
         }
         Some(test)
     }
 
-    fn count_asserts(&self, node: Node, test: &mut TestFn) {
+    fn count_asserts(&self, node: Node, test: &mut TestFn, is_fallible_return: bool) {
         match node.kind() {
+            "function_item" => {
+                // Do not recurse into nested function items.
+                return;
+            }
+            "try_expression" => {
+                if is_fallible_return {
+                    test.total_asserts += 1;
+                }
+            }
             "macro_invocation" => {
                 if let Some(m) = node.child_by_field_name("macro") {
                     let name = last_segment(self.text(m));
@@ -272,6 +288,14 @@ impl<'a> Extractor<'a> {
             }
             "call_expression" => {
                 if let Some(f) = node.child_by_field_name("function") {
+                    if f.kind() == "field_expression" {
+                        if let Some(field) = f.child_by_field_name("field") {
+                            let method = self.text(field);
+                            if method == "unwrap" || method == "expect" {
+                                test.total_asserts += 1;
+                            }
+                        }
+                    }
                     let name = last_segment(self.text(f));
                     if self.vocab.helper_fns.iter().any(|h| h == name) {
                         test.total_asserts += 1;
@@ -282,7 +306,7 @@ impl<'a> Extractor<'a> {
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.count_asserts(child, test);
+            self.count_asserts(child, test, is_fallible_return);
         }
     }
 
@@ -466,14 +490,97 @@ fn is_tautology(name: &str, token_tree: &str) -> bool {
         .trim_start_matches(['(', '[', '{'])
         .trim_end_matches([')', ']', '}']);
     let args = split_top_level(inner);
-    let first = args.first().map(|s| s.trim()).unwrap_or("");
     if name.contains("_eq") {
-        return args.len() >= 2 && first == args[1].trim() && !first.is_empty();
+        if args.len() >= 2 && args[0].trim() == args[1].trim() && !args[0].trim().is_empty() {
+            return true;
+        }
+        return args.len() >= 2 && is_constant_argument(args[0]) && is_constant_argument(args[1]);
     }
     if name.contains("_ne") || name.contains("matches") {
+        return args.len() >= 2 && is_constant_argument(args[0]) && is_constant_argument(args[1]);
+    }
+    if let Some(first) = args.first() {
+        return is_constant_argument(first);
+    }
+    false
+}
+
+fn is_constant_argument(arg: &str) -> bool {
+    let trimmed = arg.trim();
+    if trimmed.is_empty() {
         return false;
     }
-    first == "true"
+    if trimmed == "true" || trimmed == "false" {
+        return true;
+    }
+    let code = format!("fn _discipline_check() {{ let _ = ({trimmed}); }}");
+    let mut parser = Parser::new();
+    if parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .is_err()
+    {
+        return false;
+    }
+    let Some(tree) = parser.parse(&code, None) else {
+        return false;
+    };
+    let root = tree.root_node();
+    if root.has_error() {
+        return false;
+    }
+    let Some(fn_item) = root.child(0) else {
+        return false;
+    };
+    let Some(body) = fn_item.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    let let_decl = body
+        .children(&mut cursor)
+        .find(|c| c.kind() == "let_declaration");
+    let Some(let_node) = let_decl else {
+        return false;
+    };
+    let Some(value_node) = let_node.child_by_field_name("value") else {
+        return false;
+    };
+
+    let mut has_literal = false;
+    let mut has_forbidden = false;
+
+    check_constant_node(value_node, &mut has_literal, &mut has_forbidden);
+    has_literal && !has_forbidden
+}
+
+fn check_constant_node(n: Node, has_literal: &mut bool, has_forbidden: &mut bool) {
+    match n.kind() {
+        "integer_literal" | "float_literal" | "boolean_literal" | "string_literal"
+        | "char_literal" | "raw_string_literal" => {
+            *has_literal = true;
+        }
+        "identifier"
+        | "field_identifier"
+        | "type_identifier"
+        | "call_expression"
+        | "field_expression"
+        | "index_expression"
+        | "macro_invocation"
+        | "closure_expression"
+        | "scoped_identifier"
+        | "generic_type_with_arguments"
+        | "ERROR" => {
+            *has_forbidden = true;
+            return;
+        }
+        _ => {}
+    }
+    let mut cursor = n.walk();
+    for child in n.children(&mut cursor) {
+        check_constant_node(child, has_literal, has_forbidden);
+        if *has_forbidden {
+            return;
+        }
+    }
 }
 
 fn split_top_level(s: &str) -> Vec<&str> {
@@ -513,8 +620,9 @@ mod tests {
 fn real() {
     // assert_eq!(1, 2);
     let _s = "assert!(false)";
-    assert_eq!(1 + 1, 2);
-    assert!(2 > 1);
+    let x = 1;
+    assert_eq!(x + 1, 2);
+    assert!(x > 0);
 }
 fn not_a_test() { assert!(true); }
 "#,
@@ -651,5 +759,151 @@ unsafe impl Sync for X {}
     fn parse_errors_are_surfaced() {
         assert!(facts("fn broken( {").has_parse_errors);
         assert!(!facts("fn fine() {}").has_parse_errors);
+    }
+
+    #[test]
+    fn constant_expression_tautologies_are_flagged() {
+        let f = facts(
+            r#"
+mod tests {
+    #[test] fn t_const_eq() { assert_eq!(1, 1); }
+    #[test] fn t_const_math() { assert!(1 + 1 > 0); }
+    #[test] fn t_const_binary() { assert!(1 == 1); }
+    #[test] fn t_const_ne() { assert_ne!(1, 2); }
+    #[test] fn t_const_strings() { assert_ne!("a", "b"); }
+    #[test] fn t_const_with_msg() { assert!(1 == 1, "failed with: {}", x); }
+    #[test] fn t_ident_eq() { assert_eq!(x, x); }
+
+    // NOT tautologies:
+    #[test] fn real_call() { assert!(f() == 1); }
+    #[test] fn real_ident() { assert_eq!(N, 4); }
+    #[test] fn real_method() { assert!(x.len() > 0); }
+    #[test] fn real_ne_ident() { assert_ne!(x, y); }
+}
+"#,
+        );
+        let by_name = |n: &str| f.tests.iter().find(|t| t.name == n).unwrap().clone();
+        assert!(
+            by_name("tests::t_const_eq").is_vacuous(),
+            "t_const_eq should be vacuous"
+        );
+        assert!(
+            by_name("tests::t_const_math").is_vacuous(),
+            "t_const_math should be vacuous"
+        );
+        assert!(
+            by_name("tests::t_const_binary").is_vacuous(),
+            "t_const_binary should be vacuous"
+        );
+        assert!(
+            by_name("tests::t_const_ne").is_vacuous(),
+            "t_const_ne should be vacuous"
+        );
+        assert!(
+            by_name("tests::t_const_strings").is_vacuous(),
+            "t_const_strings should be vacuous"
+        );
+        assert!(
+            by_name("tests::t_const_with_msg").is_vacuous(),
+            "t_const_with_msg should be vacuous"
+        );
+        assert!(
+            by_name("tests::t_ident_eq").is_vacuous(),
+            "t_ident_eq should be vacuous"
+        );
+
+        assert!(
+            !by_name("tests::real_call").is_vacuous(),
+            "real_call should not be vacuous"
+        );
+        assert!(
+            !by_name("tests::real_ident").is_vacuous(),
+            "real_ident should not be vacuous"
+        );
+        assert!(
+            !by_name("tests::real_method").is_vacuous(),
+            "real_method should not be vacuous"
+        );
+        assert!(
+            !by_name("tests::real_ne_ident").is_vacuous(),
+            "real_ne_ident should not be vacuous"
+        );
+    }
+
+    #[test]
+    fn idiomatic_result_option_and_unwrap_assertions() {
+        let f = facts(
+            r#"
+mod tests {
+    #[test]
+    fn parses() -> Result<(), Box<dyn std::error::Error>> {
+        let _n: i32 = "4".parse()?;
+        Ok(())
+    }
+
+    #[test]
+    fn options() -> Option<()> {
+        let _v = map.get(&k)?;
+        Some(())
+    }
+
+    #[test]
+    fn result_no_assert_is_vacuous() -> Result<(), Box<dyn std::error::Error>> {
+        let _n = 4;
+        Ok(())
+    }
+
+    #[test]
+    fn unwrap_counts_as_assertion() {
+        let _n: i32 = "4".parse().unwrap();
+    }
+
+    #[test]
+    fn expect_counts_as_assertion() {
+        let _n: i32 = "4".parse().expect("valid int");
+    }
+}
+"#,
+        );
+        let by_name = |n: &str| f.tests.iter().find(|t| t.name == n).unwrap().clone();
+        assert!(
+            !by_name("tests::parses").is_vacuous(),
+            "parses with ? should not be vacuous"
+        );
+        assert_eq!(by_name("tests::parses").total_asserts, 1);
+        assert_eq!(by_name("tests::parses").strong_asserts, 0);
+
+        assert!(
+            !by_name("tests::options").is_vacuous(),
+            "options with ? should not be vacuous"
+        );
+        assert_eq!(by_name("tests::options").total_asserts, 1);
+
+        assert!(
+            by_name("tests::result_no_assert_is_vacuous").is_vacuous(),
+            "result without ? or assert must be vacuous"
+        );
+        assert_eq!(
+            by_name("tests::result_no_assert_is_vacuous").total_asserts,
+            0
+        );
+
+        assert!(
+            !by_name("tests::unwrap_counts_as_assertion").is_vacuous(),
+            "unwrap should count as assertion"
+        );
+        assert_eq!(
+            by_name("tests::unwrap_counts_as_assertion").total_asserts,
+            1
+        );
+
+        assert!(
+            !by_name("tests::expect_counts_as_assertion").is_vacuous(),
+            "expect should count as assertion"
+        );
+        assert_eq!(
+            by_name("tests::expect_counts_as_assertion").total_asserts,
+            1
+        );
     }
 }

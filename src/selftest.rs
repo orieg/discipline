@@ -229,6 +229,29 @@ const CASES: &[Case] = &[
                 && notes_permissive.is_empty())
         },
     ),
+    ("ast: constant-expression tautologies are vacuous", || {
+        let v = AssertVocabulary::default();
+        let math = analyze("#[test] fn t() { assert!(1 + 1 > 0); }", &v)?;
+        let eq = analyze("#[test] fn t() { assert_eq!(1, 1); }", &v)?;
+        let ne = analyze("#[test] fn t() { assert_ne!(1, 2); }", &v)?;
+        let real = analyze("#[test] fn t() { assert!(f() == 1); }", &v)?;
+        Ok(math.tests[0].is_vacuous()
+            && eq.tests[0].is_vacuous()
+            && ne.tests[0].is_vacuous()
+            && !real.tests[0].is_vacuous())
+    }),
+    (
+        "ast: fallible test with ? and unwrap count as assertions, empty fallible stays vacuous",
+        || {
+            let v = AssertVocabulary::default();
+            let q = analyze("#[test] fn t() -> Result<(), E> { x()?; Ok(()) }", &v)?;
+            let unwrap = analyze("#[test] fn t() { x().unwrap(); }", &v)?;
+            let empty = analyze("#[test] fn t() -> Result<(), E> { Ok(()) }", &v)?;
+            Ok(!q.tests[0].is_vacuous()
+                && !unwrap.tests[0].is_vacuous()
+                && empty.tests[0].is_vacuous())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

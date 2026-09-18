@@ -301,7 +301,7 @@ Design rules for packs:
 | Gate id | Status | Rule |
 |---|---|---|
 | `assertion-reduction` | shipped (Rust pack) | For each test present on both sides (matched by module-qualified name within a file, then by name across files so a moved test is compared, not re-counted), neither the count of effective assertions nor the count of equality / pattern assertions may drop. |
-| `vacuous-tests` | shipped (Rust pack) | A new test needs at least one non-tautological assertion, a configured helper call, or `#[should_panic]`. `assert!(true)` and `assert_eq!(x, x)` are tautologies. |
+| `vacuous-tests` | shipped (Rust pack) | A new test needs at least one non-tautological assertion, a configured helper call, `.unwrap()`/`.expect()`, `?` in a fallible test, or `#[should_panic]`. Constant expressions (`assert!(1 == 1)`, `assert!(1 + 1 > 0)`, `assert_ne!(1, 2)`) and verbatim `assert_eq!(x, x)` are tautologies. |
 | `ignored-tests` | shipped (Rust pack) | A test may not gain a skip marker (`#[ignore]` in Rust), and a new test may not arrive skipped. |
 | `unsafe-safety-comment` | shipped (Rust pack) | Every `unsafe` block or `unsafe impl` on an added line has a `// SAFETY:` comment above it, above its enclosing statement, or inline before it. Trailing comments, lower-case labels, and strings containing the text do not count. A file whose undocumented-site count rose is reported even when the `unsafe` line itself is untouched (a deleted comment). |
 | `deletion-rationale` | shipped (files: any language; removed tests: per pack) | A deleted file, or a test removed from a surviving file, needs a scoped `removes:`. |

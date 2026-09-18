@@ -58,7 +58,16 @@ Scope: a site is reported when its line was added, or when the file's count of u
 
 ### Assertion strength
 
-Two levels: *strong* (names containing `_eq`, `_ne`, `matches`) and everything else. A drop in either the effective total or the strong count is a reduction. Tautologies (`assert!(true)`, `assert_eq!(x, x)` with textually identical arguments) are subtracted from the effective total. This is a deliberately coarse proxy; PRD §11 lists what it misses.
+Two levels: *strong* (names containing `_eq`, `_ne`, `matches`) and everything else. A drop in either the effective total or the strong count is a reduction.
+
+#### Tautologies
+Tautologies are subtracted from the effective total:
+1. **Verbatim equality:** `assert_eq!(x, x)` where arguments are textually identical non-empty tokens.
+2. **Constant-expression tautologies:** For all assert macros, if tested operands consist exclusively of literals (integer, float, boolean, string, char) and operators (arithmetic, comparison, logical, unary, binary), with no identifiers, function calls, method calls, field accesses, or macro invocations. Examples include `assert!(true)`, `assert!(1 == 1)`, `assert!(1 + 1 > 0)`, `assert_eq!(1, 1)`, and `assert_ne!(1, 2)`. Dynamic expressions such as `assert!(f() == 1)`, `assert_eq!(N, 4)` (named const), and `assert!(x.len() > 0)` are preserved as valid assertions.
+
+#### Implicit & Weak Assertions
+1. **Fallible tests with `?`:** A `?` operator (`try_expression`) within a test function returning `Result` or `Option` represents a failing execution path; each counts as a weak assertion. A test returning `Result` or `Option` with no `?` and no assertions remains vacuous.
+2. **`.unwrap()` and `.expect(...)` calls:** Counted as weak assertions across all test bodies. In test code, calling `.unwrap()` or `.expect("msg")` on a fallible value acts as an invariant assertion that panics on `Err` or `None`. They increment `total_asserts` (preventing vacuous test flags on pure happy-path unwrapping) while not inflating `strong_asserts` (equality/pattern match).
 
 ## Golden-output gate design
 

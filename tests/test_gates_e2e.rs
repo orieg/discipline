@@ -45,7 +45,7 @@ fn assertion_reduction_override_must_name_the_test() {
     let repo = Repo::new();
     repo.write(
         "tests/a.rs",
-        &GOOD_TEST.replace("    assert_eq!(2 + 2, 4);\n", ""),
+        &GOOD_TEST.replace("    assert_eq!(x + 3, 4);\n", ""),
     );
     repo.commit("test: trim\n\nallow-assertion-drop: orders covered elsewhere");
     assert_eq!(
@@ -70,8 +70,8 @@ fn adding_assertions_is_not_a_reduction() {
     repo.write(
         "tests/a.rs",
         &GOOD_TEST.replace(
-            "assert!(1 < 2);",
-            "assert!(1 < 2);\n    assert_eq!(3, 1 + 2);",
+            "assert!(x < 2);",
+            "assert!(x < 2);\n    let y = 3; assert_eq!(y, 1 + 2);",
         ),
     );
     repo.commit("test: more");
@@ -112,7 +112,7 @@ fn unanalysed_languages_are_named_not_silently_passed() {
     let rust_only = Repo::new();
     rust_only.write(
         "tests/b.rs",
-        "#[test]\nfn real() { assert_eq!(2 * 2, 4); }\n",
+        "#[test]\nfn real() { let x = 2; assert_eq!(x * 2, 4); }\n",
     );
     rust_only.commit("test: rust");
     let rust_run = rust_only.check(&[]);
@@ -154,7 +154,7 @@ fn vacuous_tests_fire_on_empty_and_tautological_tests_only() {
     let repo = Repo::new();
     repo.write(
         "tests/b.rs",
-        "#[test]\nfn ghost() {}\n\n#[test]\nfn tautology() { assert!(true); }\n\n#[test]\nfn real() { assert_eq!(2 * 2, 4); }\n",
+        "#[test]\nfn ghost() {}\n\n#[test]\nfn tautology() { assert!(true); }\n\n#[test]\nfn real() { let x = 2; assert_eq!(x * 2, 4); }\n",
     );
     repo.commit("test: add");
     let run = repo.check(&[]);
@@ -176,6 +176,43 @@ fn vacuous_tests_honor_configured_assert_helpers() {
         "[gates.vacuous-tests]\nassert_helper_fns = [\"check_invariants\"]",
     ]);
     assert!(run.titles("vacuous-tests").is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn tautology_constant_expressions_fire_vacuous_tests_gate() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/b.rs",
+        "#[test]\nfn t_math() { assert!(1 + 1 > 0); }\n\
+         #[test]\nfn t_eq() { assert_eq!(1, 1); }\n\
+         #[test]\nfn t_ne() { assert_ne!(1, 2); }\n\
+         #[test]\nfn t_msg() { assert!(1 == 1, \"user: {}\", x); }\n\
+         #[test]\nfn t_real() { let x = 1; assert!(x > 0); }\n",
+    );
+    repo.commit("test: add constant tautologies");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let violations = run.titles("vacuous-tests");
+    assert_eq!(violations.len(), 4, "{}", run.stdout);
+}
+
+#[test]
+fn idiomatic_result_and_unwrap_tests_pass_vacuous_tests_gate() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/b.rs",
+        "#[test]\nfn parses() -> Result<(), Box<dyn std::error::Error>> {\n    let _n: i32 = \"4\".parse()?;\n    Ok(())\n}\n\
+         #[test]\nfn unwraps() {\n    let _n: i32 = \"4\".parse().unwrap();\n}\n\
+         #[test]\nfn expects() {\n    let _n: i32 = \"4\".parse().expect(\"valid\");\n}\n\
+         #[test]\nfn empty_fallible() -> Result<(), Box<dyn std::error::Error>> {\n    let _n = 4;\n    Ok(())\n}\n",
+    );
+    repo.commit("test: add fallible and unwrap tests");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let violations = run.titles("vacuous-tests");
+    // Only empty_fallible should be flagged
+    assert_eq!(violations.len(), 1, "{}", run.stdout);
+    assert_eq!(violations[0], "Vacuous Test Added");
 }
 
 // ---- ignored-tests ---------------------------------------------------------
@@ -302,7 +339,10 @@ fn rename_is_not_a_deletion_but_a_removed_test_is() {
 
     repo.write(
         "tests/arith.rs",
-        &GOOD_TEST.replace("#[test]\nfn orders() {\n    assert!(1 < 2);\n}\n", ""),
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
     );
     repo.commit("test: drop");
     assert_eq!(
@@ -334,8 +374,8 @@ fn rename_and_gut_fires_assertion_reduction() {
     let repo = Repo::new();
     // Rename adds to adds_integers and gut its assertions
     let gutted = GOOD_TEST.replace(
-        "#[test]\nfn adds() {\n    assert_eq!(1 + 1, 2);\n    assert_eq!(2 + 2, 4);\n}",
-        "#[test]\nfn adds_integers() {\n    assert!(1 + 1 == 2);\n}",
+        "#[test]\nfn adds() {\n    let x = 1;\n    assert_eq!(x + 1, 2);\n    assert_eq!(x + 3, 4);\n}",
+        "#[test]\nfn adds_integers() {\n    let x = 1;\n    assert!(x + 1 == 2);\n}",
     );
     repo.write("tests/a.rs", &gutted);
     repo.commit("test: rename and reduce assertions");
@@ -1188,7 +1228,10 @@ fn override_record_audit_trail_and_step_outputs() {
     let repo = Repo::new();
     repo.write(
         "tests/a.rs",
-        &GOOD_TEST.replace("#[test]\nfn orders() {\n    assert!(1 < 2);\n}\n", ""),
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
     );
     repo.commit("test: remove orders\n\nremoves: tests/a.rs orders moved to proptest");
 
@@ -1248,7 +1291,10 @@ fn fail_on_overrides_blocks_change_with_exit_1() {
     let repo = Repo::new();
     repo.write(
         "tests/a.rs",
-        &GOOD_TEST.replace("#[test]\nfn orders() {\n    assert!(1 < 2);\n}\n", ""),
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
     );
     repo.commit("test: remove orders\n\nremoves: tests/a.rs orders moved to proptest");
 
@@ -1268,7 +1314,10 @@ fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
     let repo = Repo::new();
     repo.write(
         "tests/a.rs",
-        &GOOD_TEST.replace("#[test]\nfn orders() {\n    assert!(1 < 2);\n}\n", ""),
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
     );
     // Hidden in HTML comments
     repo.commit("test: remove orders\n\n<!-- removes: tests/a.rs orders moved to proptest -->");
@@ -1313,7 +1362,10 @@ fn directive_sources_policy_restricts_sources() {
     );
     repo.write(
         "tests/a.rs",
-        &GOOD_TEST.replace("#[test]\nfn orders() {\n    assert!(1 < 2);\n}\n", ""),
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
     );
     // Commit message directive when sources = ["pr-body"]
     repo.commit("test: remove orders\n\nremoves: tests/a.rs orders moved to proptest");
