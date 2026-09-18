@@ -1,5 +1,11 @@
 # discipline
 
+[![CI](https://github.com/orieg/discipline/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/orieg/discipline/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)](#license)
+[![Rust 1.90+](https://img.shields.io/badge/rustc-1.90%2B-orange.svg)](Cargo.toml)
+[![Status](https://img.shields.io/badge/status-pre--release-yellow.svg)](docs/PRD.md)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](.pre-commit-hooks.yaml)
+
 **CI gatekeeper and AI coding agent diff sentinel.** One static binary, the same in GitHub Actions, Gitea Actions, a pre-commit hook, and an agent's inner loop.
 
 Coding agents in an iterate-until-green loop weaken assertions, add tests that assert nothing, mark tests `#[ignore]`, delete what is in the way, drop `// SAFETY:` comments, and — when a gate blocks them — edit the gate. `discipline` inspects the *change* (tree-sitter over a `git2` merge-base diff) and refuses those moves, with the fail-closed engineering distilled from [`orieg/expanse`](https://github.com/orieg/expanse).
