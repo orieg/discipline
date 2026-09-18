@@ -563,8 +563,19 @@ impl DisciplineConfig {
         }
 
         if let Some(sources) = &overrides.directive_sources {
-            let extra = Value::Array(sources.iter().map(|s| Value::String(s.clone())).collect());
-            set_path(&mut value, &["directives", "sources"], extra);
+            let filtered: Vec<Value> = sources
+                .iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| Value::String(s.to_string()))
+                .collect();
+            if !filtered.is_empty() {
+                set_path(
+                    &mut value,
+                    &["directives", "sources"],
+                    Value::Array(filtered),
+                );
+            }
         }
         if let Some(fail) = overrides.fail_on_overrides {
             set_path(

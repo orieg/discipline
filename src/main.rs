@@ -121,10 +121,15 @@ fn check(args: CheckArgs) -> Result<bool> {
     } else {
         None
     };
-    let extra_sources = if args.directive_sources.is_empty() {
+    let non_empty_sources: Vec<String> = args
+        .directive_sources
+        .iter()
+        .flat_map(|s| split_list(s))
+        .collect();
+    let extra_sources = if non_empty_sources.is_empty() {
         None
     } else {
-        Some(args.directive_sources.clone())
+        Some(non_empty_sources)
     };
     let (config, config_path) =
         load_config(&args.config, Some(git.root()), extra_fail, extra_sources)?;
