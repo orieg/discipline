@@ -38,4 +38,21 @@ for gate in assertion-reduction vacuous-tests unsafe-safety-comment time-estimat
   grep -q "\[${gate}\]" "${scratch}/pc-bad.log" || { echo "hook output does not name ${gate}" >&2; exit 1; }
 done
 grep -q 'Status: FAILED' "${scratch}/pc-bad.log"
-echo "pre-commit hook: both controls behaved"
+
+echo "== commit-msg positive control: clean commit message passes"
+(cd "${scratch}/pc-clean" && printf 'feat: clean commit\n' > commit_msg.txt)
+(cd "${scratch}/pc-clean" && pre-commit try-repo "${hook_repo}" discipline-commit-msg-system --hook-stage commit-msg --commit-msg-filename commit_msg.txt --verbose) > "${scratch}/pc-clean-msg.log" 2>&1
+cat "${scratch}/pc-clean-msg.log"
+grep -q 'Status: PASS' "${scratch}/pc-clean-msg.log"
+
+echo "== commit-msg negative control: time estimate in commit message is rejected"
+(cd "${scratch}/pc-clean" && printf 'feat: plan to ship in 3 weeks\n' > bad_commit_msg.txt)
+if (cd "${scratch}/pc-clean" && pre-commit try-repo "${hook_repo}" discipline-commit-msg-system --hook-stage commit-msg --commit-msg-filename bad_commit_msg.txt --verbose) > "${scratch}/pc-bad-msg.log" 2>&1; then
+  echo "bad commit message passed the hook" >&2
+  exit 1
+fi
+cat "${scratch}/pc-bad-msg.log"
+grep -q '\[time-estimates\]' "${scratch}/pc-bad-msg.log"
+grep -q 'Status: FAILED' "${scratch}/pc-bad-msg.log"
+
+echo "pre-commit hooks: all controls behaved"

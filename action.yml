@@ -72,7 +72,7 @@ inputs:
 
 outputs:
   status:
-    description: 'pass or fail'
+    description: 'pass, fail, or error'
     value: ${{ steps.run.outputs.status }}
   errors:
     description: 'Number of blocking violations'
@@ -230,7 +230,15 @@ runs:
         set -euo pipefail
         report="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/discipline-report-${GITHUB_RUN_ID:-0}-${GITHUB_ACTION:-step}.json"
         echo "report=${report}" >> "${GITHUB_OUTPUT}"
+        set +e
         "${DISCIPLINE_BIN}" check \
           --suite "${INPUT_SUITE}" \
           --format github-summary \
           --json-out "${report}"
+        rc=$?
+        set -e
+        if [ "${rc}" -eq 2 ]; then
+          echo "status=error" >> "${GITHUB_OUTPUT}"
+          exit 2
+        fi
+        exit "${rc}"

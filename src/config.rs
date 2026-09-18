@@ -632,24 +632,94 @@ pub fn split_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// Deep merge: tables merge key-wise, arrays are **appended** (every array in
-/// the schema is a pattern / path list, so a higher layer augments it), scalars
-/// are replaced.
-fn merge(base: &mut Value, over: Value) {
+pub const SHORTER_IS_STRICTER: &[&str] = &[
+    "exempt_paths",
+    "allow_patterns",
+    "allowed_users",
+    "assert_helper_fns",
+    "extra_assert_macros",
+];
+
+pub const LONGER_IS_STRICTER: &[&str] =
+    &["hostname_denylist", "extra_patterns", "paths", "include"];
+
+fn is_reset_token(val: &Value) -> bool {
+    val.as_str() == Some("__reset__")
+}
+
+fn extract_table_items(table: &toml::map::Map<String, Value>) -> Option<(bool, Vec<Value>)> {
+    if table.contains_key("reset") || table.contains_key("items") {
+        let reset = table.get("reset").and_then(Value::as_bool).unwrap_or(false);
+        let items = table
+            .get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Some((reset, items))
+    } else {
+        None
+    }
+}
+
+/// Deep merge: tables merge key-wise, scalars are replaced.
+///
+/// Array merging is asymmetric:
+/// - Lists where shorter is stricter (`exempt_paths`, `allow_patterns`, `allowed_users`,
+///   `assert_helper_fns`, `extra_assert_macros`) support explicit reset via `["__reset__", ...]`
+///   or `{ reset = true, items = [...] }` by clearing the base vector before inserting new items.
+/// - Lists where longer is stricter (`hostname_denylist`, `extra_patterns`, `paths`,
+///   `include`) ignore reset and remain strictly append-only.
+pub fn merge(base: &mut Value, over: Value) {
+    merge_inner(base, over, None);
+}
+
+fn merge_inner(base: &mut Value, over: Value, key: Option<&str>) {
+    let is_shorter_stricter = key
+        .map(|k| SHORTER_IS_STRICTER.contains(&k))
+        .unwrap_or(false);
+
     match (base, over) {
         (Value::Table(b), Value::Table(o)) => {
             for (k, v) in o {
                 match b.get_mut(&k) {
-                    Some(slot) => merge(slot, v),
-                    None => {
-                        b.insert(k, v);
-                    }
+                    Some(slot) => merge_inner(slot, v, Some(&k)),
+                    None => match v {
+                        Value::Table(ref tbl) if extract_table_items(tbl).is_some() => {
+                            let (_, items) = extract_table_items(tbl).unwrap();
+                            let filtered: Vec<Value> =
+                                items.into_iter().filter(|x| !is_reset_token(x)).collect();
+                            b.insert(k, Value::Array(filtered));
+                        }
+                        Value::Array(arr) => {
+                            let filtered: Vec<Value> =
+                                arr.into_iter().filter(|x| !is_reset_token(x)).collect();
+                            b.insert(k, Value::Array(filtered));
+                        }
+                        other => {
+                            b.insert(k, other);
+                        }
+                    },
                 }
             }
         }
         (Value::Array(b), Value::Array(o)) => {
+            let has_reset = is_shorter_stricter && o.iter().any(is_reset_token);
+            if has_reset {
+                b.clear();
+            }
             for v in o {
-                if !b.contains(&v) {
+                if !is_reset_token(&v) && !b.contains(&v) {
+                    b.push(v);
+                }
+            }
+        }
+        (Value::Array(b), Value::Table(ref o)) if extract_table_items(o).is_some() => {
+            let (reset, items) = extract_table_items(o).unwrap();
+            if reset && is_shorter_stricter {
+                b.clear();
+            }
+            for v in items {
+                if !is_reset_token(&v) && !b.contains(&v) {
                     b.push(v);
                 }
             }

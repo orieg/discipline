@@ -1447,3 +1447,75 @@ fn json_pr_body_outcome_source(json: &serde_json::Value) -> String {
         .unwrap()
         .to_string()
 }
+
+#[test]
+fn diff_command_accepts_config_and_json_out() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    assert!(1 + 1 == 2);\n}\n",
+    );
+    repo.commit("test: drop assertion\n\nremoves: orders removed");
+    let json_file = repo.file("report.json");
+    let json_path = json_file.to_string_lossy().to_string();
+
+    // 1. diff command with --json-out and --disable
+    let run = repo.run(
+        &[
+            "diff",
+            "--base",
+            "main",
+            "--disable",
+            "assertion-reduction",
+            "--format",
+            "terminal",
+            "--json-out",
+            &json_path,
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(json_file.exists());
+    let content = std::fs::read_to_string(&json_file).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(json["errors"], 0);
+
+    // 2. without disabling assertion-reduction, diff fails
+    let run_fail = repo.run(&["diff", "--base", "main", "--format", "json"], &[]);
+    assert_eq!(run_fail.code, 1);
+    let fail_json: serde_json::Value = serde_json::from_str(&run_fail.stdout).unwrap();
+    assert!(fail_json["errors"].as_u64().unwrap() >= 1);
+}
+
+#[test]
+fn commit_msg_file_flag_is_accepted() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace("assert_eq!(x + 3, 4);\n", ""),
+    );
+    repo.commit("test: drop assertion without justification");
+
+    let msg_file = repo.file("commit_msg.txt");
+    std::fs::write(
+        &msg_file,
+        "feat: update\n\nallow-assertion-drop: adds test updated\n",
+    )
+    .unwrap();
+
+    let run = repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--commit-msg-file",
+            &msg_file.to_string_lossy(),
+            "--format",
+            "json",
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let json = run.json();
+    assert_eq!(json["overrides"], 1);
+}

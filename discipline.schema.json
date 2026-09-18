@@ -1,0 +1,330 @@
+{
+  "$defs": {
+    "AssertionGate": {
+      "additionalProperties": false,
+      "properties": {
+        "assert_helper_fns": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "extra_assert_macros": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
+    "BasicGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
+    "DeletionGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
+    "PiiGate": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_patterns": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "allowed_users": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "extra_patterns": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "home_paths": {
+          "description": "Check for leaked home directory paths",
+          "type": "boolean"
+        },
+        "hostname_denylist": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "lan_ips": {
+          "description": "Check for leaked private LAN IPs",
+          "type": "boolean"
+        },
+        "scan_pr_body": {
+          "description": "Whether to scan PR description text",
+          "type": "boolean"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
+    "ScratchGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
+    "Severity": {
+      "description": "Violation severity: error (blocking, exit 1), warning (non-blocking), or info.",
+      "enum": [
+        "error",
+        "warning",
+        "info"
+      ],
+      "type": "string"
+    },
+    "StringListOrReset": {
+      "description": "A list of strings, or a table with reset = true to clear lower precedence layers.",
+      "oneOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "reset": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "reset"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TimeEstimateGate": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_patterns": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "extra_patterns": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "include": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "scan_pr_body": {
+          "description": "Whether to scan PR description text",
+          "type": "boolean"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Configuration schema for Discipline CI/CD gatekeeper and agent diff sentinel (discipline.toml)",
+  "properties": {
+    "directives": {
+      "additionalProperties": false,
+      "description": "Policy controls for override directives (sources and visibility)",
+      "properties": {
+        "allow_hidden": {
+          "description": "Allow directives hidden inside HTML comments <!-- --> (default: false)",
+          "type": "boolean"
+        },
+        "fail_on_overrides": {
+          "description": "Treat applied overrides as failures requiring human sign-off (default: false)",
+          "type": "boolean"
+        },
+        "sources": {
+          "description": "Allowed directive sources: pr-body, commits (default: [\"pr-body\", \"commits\"])",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "gates": {
+      "additionalProperties": false,
+      "description": "Per-gate settings. By default, every available gate is enabled at severity \"error\".",
+      "properties": {
+        "agent-scratch": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ScratchGate"
+            }
+          ],
+          "description": "agent scratch state is never tracked"
+        },
+        "agents-md": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it"
+        },
+        "assertion-reduction": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/AssertionGate"
+            }
+          ],
+          "description": "assertion count / strength must not drop in an existing test"
+        },
+        "config-integrity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "a change cannot weaken its own discipline.toml without a token"
+        },
+        "deletion-rationale": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/DeletionGate"
+            }
+          ],
+          "description": "deleted files and removed tests need a scoped removes: rationale"
+        },
+        "ignored-tests": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "tests must not be newly #[ignore]d"
+        },
+        "pii": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/PiiGate"
+            }
+          ],
+          "description": "no home paths, LAN IPs, or denylisted hostnames in tracked text"
+        },
+        "time-estimates": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/TimeEstimateGate"
+            }
+          ],
+          "description": "no calendar / duration estimates in markdown or the PR body"
+        },
+        "unsafe-safety-comment": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "unsafe blocks / impls carry a // SAFETY: comment"
+        },
+        "vacuous-tests": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/AssertionGate"
+            }
+          ],
+          "description": "new tests must carry a non-tautological assertion"
+        }
+      },
+      "type": "object"
+    },
+    "meta": {
+      "additionalProperties": false,
+      "description": "Repository metadata and configuration format version",
+      "properties": {
+        "description": {
+          "description": "Optional short description of the project",
+          "type": "string"
+        },
+        "name": {
+          "description": "Repository or project name",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "description": "Configuration schema version (must be 1)",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "meta"
+  ],
+  "title": "DisciplineConfig",
+  "type": "object"
+}

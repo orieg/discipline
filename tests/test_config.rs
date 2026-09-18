@@ -110,3 +110,157 @@ fn split_list_accepts_commas_spaces_and_newlines() {
     assert_eq!(split_list("a, b\nc  d,,"), vec!["a", "b", "c", "d"]);
     assert!(split_list(" \n").is_empty());
 }
+
+#[test]
+fn test_asymmetric_list_merging_reset() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("discipline.toml");
+    std::fs::write(
+        &path,
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.assertion-reduction]
+exempt_paths = ["tests/legacy/**"]
+assert_helper_fns = ["helper1"]
+extra_assert_macros = ["macro1"]
+
+[gates.deletion-rationale]
+paths = ["src/**"]
+
+[gates.time-estimates]
+include = ["**/*.md"]
+extra_patterns = ["pattern1"]
+
+[gates.pii]
+hostname_denylist = ["host1.local"]
+allow_patterns = ["allow1"]
+allowed_users = ["user1"]
+"#,
+    )
+    .unwrap();
+
+    // 1. Shorter-is-stricter lists clear when __reset__ or { reset = true } is supplied.
+    // 2. Longer-is-stricter lists ignore reset and stay append-only.
+    let overrides = Overrides {
+        config_override: Some(
+            r#"[gates.assertion-reduction]
+exempt_paths = ["__reset__", "tests/isolated/**"]
+assert_helper_fns = ["__reset__"]
+extra_assert_macros = ["__reset__", "macro2"]
+
+[gates.deletion-rationale]
+paths = ["__reset__", "docs/**"]
+
+[gates.time-estimates]
+include = ["__reset__", "**/*.txt"]
+extra_patterns = ["__reset__", "pattern2"]
+
+[gates.pii]
+hostname_denylist = ["__reset__", "host2.local"]
+allow_patterns = { reset = true, items = ["allow2"] }
+allowed_users = ["__reset__", "alice"]
+"#
+            .into(),
+        ),
+        ..Default::default()
+    };
+
+    let c = DisciplineConfig::resolve(Some(&path), &overrides).unwrap();
+
+    // Loosening lists (shorter is stricter): reset honored
+    assert_eq!(
+        c.gates.assertion_reduction.exempt_paths,
+        vec!["tests/isolated/**"]
+    );
+    assert_eq!(
+        c.gates.assertion_reduction.assert_helper_fns,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        c.gates.assertion_reduction.extra_assert_macros,
+        vec!["macro2"]
+    );
+    assert_eq!(c.gates.pii.allow_patterns, vec!["allow2"]);
+    assert_eq!(c.gates.pii.allowed_users, vec!["alice"]);
+
+    // Tightening lists (longer is stricter): reset ignored, strictly append-only
+    assert_eq!(
+        c.gates.pii.hostname_denylist,
+        vec!["host1.local", "host2.local"]
+    );
+    assert_eq!(
+        c.gates.time_estimates.extra_patterns,
+        vec!["pattern1", "pattern2"]
+    );
+    assert_eq!(c.gates.deletion_rationale.paths, vec!["src/**", "docs/**"]);
+    assert_eq!(c.gates.time_estimates.include, vec!["**/*.md", "**/*.txt"]);
+}
+
+#[test]
+fn schema_does_not_drift() {
+    let committed = std::fs::read_to_string("discipline.schema.json")
+        .expect("discipline.schema.json must exist at repo root");
+    let committed_val: serde_json::Value =
+        serde_json::from_str(&committed).expect("discipline.schema.json must be valid JSON");
+    let generated = discipline::schema::generate_schema();
+    assert_eq!(
+        committed_val, generated,
+        "committed discipline.schema.json does not match discipline::schema::generate_schema(); run `cargo run -- schema > discipline.schema.json`"
+    );
+
+    // Assert that every available gate has a property in the schema, and no planned gate does
+    let gates_props = generated["properties"]["gates"]["properties"]
+        .as_object()
+        .expect("gates properties must be an object");
+    for g in GATES {
+        assert_eq!(
+            gates_props.contains_key(g.id),
+            g.available,
+            "gate {} availability mismatch in schema",
+            g.id
+        );
+    }
+}
+
+#[test]
+fn test_init_starter_template_is_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("discipline.toml");
+    let starter = r#"# discipline.toml — configuration for Discipline CI gatekeeper.
+#
+# Schema version 1. By default, every available gate is enabled at severity = "error".
+# You only need to specify settings that differ from the defaults.
+# Run `discipline gates` to view the effective status of all gates.
+
+[meta]
+version = 1
+name = "my-test-proj"
+# description = "Brief description of the project"
+
+# [directives]
+# sources = ["pr-body", "commits"]
+# allow_hidden = false
+# fail_on_overrides = false
+
+# Gate customizations (examples):
+# [gates.assertion-reduction]
+# severity = "error"
+# exempt_paths = ["tests/legacy/**"]
+
+# [gates.pii]
+# allowed_users = ["runner", "user", "username"]
+# hostname_denylist = ["internal.corp"]
+
+# [gates.time-estimates]
+# allow_patterns = ['^timeout: \d+']
+"#;
+    std::fs::write(&path, starter).unwrap();
+    let cfg = DisciplineConfig::load_from_file(&path).unwrap();
+    assert_eq!(cfg.meta.name, "my-test-proj");
+    assert_eq!(cfg.meta.version, 1);
+    for g in GATES.iter().filter(|g| g.available) {
+        assert!(cfg.gates.settings(g.id).unwrap().enabled());
+    }
+}

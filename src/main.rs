@@ -1,6 +1,6 @@
 use anyhow::{bail, Context as _, Result};
 use clap::Parser;
-use discipline::cli::{CheckArgs, Cli, Commands, ConfigArgs, OutputFormat, SuiteChoice};
+use discipline::cli::{CheckArgs, Cli, Commands, ConfigArgs, SuiteChoice};
 use discipline::config::{split_list, DisciplineConfig, Overrides, GATES, HOSTNAME_DENYLIST_ENV};
 use discipline::gitctx::GitCtx;
 use discipline::guards::{run_checks, Context};
@@ -26,12 +26,7 @@ fn run() -> Result<bool> {
     match Cli::parse().command {
         Commands::Check(args) => check(args),
         Commands::Diff(args) => check(CheckArgs {
-            config: ConfigArgs {
-                config: "discipline.toml".into(),
-                config_override: None,
-                enable: Vec::new(),
-                disable: Vec::new(),
-            },
+            config: args.config,
             suite: SuiteChoice::AgentGuard,
             base: args.base,
             staged: false,
@@ -39,11 +34,12 @@ fn run() -> Result<bool> {
             fail_on_warnings: false,
             fail_on_overrides: false,
             directive_sources: Vec::new(),
-            format: OutputFormat::Terminal,
-            json_out: None,
+            format: args.format,
+            json_out: args.json_out,
         }),
         Commands::Init(args) => init(args.name),
         Commands::Gates(args) => gates(&args.config),
+        Commands::Schema => schema(),
         Commands::SelfTest => discipline::selftest::run(),
     }
 }
@@ -186,12 +182,47 @@ fn init(name: Option<String>) -> Result<bool> {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
             .unwrap_or_else(|| "my-project".to_string())
     });
-    let config = DisciplineConfig::default_for_repo(&project_name);
-    std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
+    let starter = format!(
+        r#"# discipline.toml — configuration for Discipline CI gatekeeper.
+#
+# Schema version 1. By default, every available gate is enabled at severity = "error".
+# You only need to specify settings that differ from the defaults.
+# Run `discipline gates` to view the effective status of all gates.
+
+[meta]
+version = 1
+name = "{project_name}"
+# description = "Brief description of the project"
+
+# [directives]
+# sources = ["pr-body", "commits"]
+# allow_hidden = false
+# fail_on_overrides = false
+
+# Gate customizations (examples):
+# [gates.assertion-reduction]
+# severity = "error"
+# exempt_paths = ["tests/legacy/**"]
+
+# [gates.pii]
+# allowed_users = ["runner", "user", "username"]
+# hostname_denylist = ["internal.corp"]
+
+# [gates.time-estimates]
+# allow_patterns = ['^timeout: \d+']
+"#
+    );
+    std::fs::write(&config_path, starter)?;
     println!(
-        "{} wrote discipline.toml for `{project_name}` with every available gate on.",
+        "{} wrote minimal discipline.toml for `{project_name}` with every available gate on.",
         style::green("ok:")
     );
+    Ok(true)
+}
+
+fn schema() -> Result<bool> {
+    let s = discipline::schema::generate_schema();
+    println!("{}", serde_json::to_string_pretty(&s)?);
     Ok(true)
 }
 

@@ -136,7 +136,10 @@ Planned hardening, from expanse's `allow-regression:` history (#524, #822, #826,
 | 4. Gate switches | `--enable` / `--disable`, `DISCIPLINE_ENABLE` / `DISCIPLINE_DISABLE`, action inputs `enable` / `disable` | "this job runs hygiene only, minus `pii`" |
 | 5. Secret denylist | `DISCIPLINE_HOSTNAME_DENYLIST`, action input `hostname_denylist` | hostnames that must not appear even in the config file |
 
-Merge rule: tables merge key-wise, **lists append** (a higher layer augments a pattern list; it cannot shorten one), scalars replace. All layers are merged as TOML values and validated once, so every layer gets the strict checks of F6.
+Merge rule: tables merge key-wise, scalars replace. Array merging is **asymmetric**:
+- **Tightening lists (longer is stricter):** `hostname_denylist`, `extra_patterns`, `paths`, `include` remain strictly append-only. A higher layer can add restrictions; it cannot remove them. Any reset directive on tightening lists is ignored.
+- **Loosening lists (shorter is stricter):** `exempt_paths`, `allow_patterns`, `allowed_users`, `assert_helper_fns`, `extra_assert_macros` default to appending, but support an explicit reset syntax: `["__reset__", ...]` or `{ reset = true, items = [...] }` clears the base list before inserting new items, allowing overrides to tighten an exemption-heavy configuration.
+All layers are merged as TOML values and validated once, so every layer gets the strict checks of F6.
 
 ### 5.2 Schema (version 1)
 
@@ -415,10 +418,11 @@ Per the math-first rule, the statistics ship as cited, unit-tested functions wit
 
 | Surface | Form | Notes |
 |---|---|---|
-| GitHub / Gitea Actions | composite `action.yml` | shell only, no JavaScript runtime; downloads a release, verifies `SHA256SUMS`, or takes `binary_path`. Resolves the base ref (PR base, else the pushed-from commit, else the default branch) and fetches it if the clone lacks it. |
-| pre-commit framework | `.pre-commit-hooks.yaml` | `discipline` (builds with cargo) and `discipline-system` (binary on `PATH`); both run `check --staged`. |
+| GitHub / Gitea Actions | composite `action.yml` | shell only, no JavaScript runtime; downloads a release, verifies `SHA256SUMS`, or takes `binary_path`. Resolves the base ref (PR base, else the pushed-from commit, else the default branch) and fetches it if the clone lacks it. Emits `status` (`pass`, `fail`, `error`), counts, and report artifact path. |
+| Shell installer | `install.sh` | standalone non-cargo shell installer with architecture detection and SHA256 checksum verification matching `action.yml`. |
+| pre-commit framework | `.pre-commit-hooks.yaml` | `discipline` / `discipline-system` (`check --staged`), and `discipline-commit-msg` / `discipline-commit-msg-system` (`check --staged --commit-msg-file`). |
 | Plain git hook | `discipline check --staged` | same binary, same gates. |
-| CLI | `check`, `diff`, `init`, `gates`, `self-test` | `gates` prints the registry with each gate's effective state; `self-test` runs embedded positive and negative controls against the installed binary. |
+| CLI | `check`, `diff`, `init`, `gates`, `schema`, `self-test` | `gates` prints the registry with each gate's effective state; `schema` prints the JSON schema for `discipline.toml`; `self-test` runs embedded positive and negative controls against the installed binary. |
 
 Output formats: terminal, `github-summary` (terminal + workflow-command annotations + job summary + step outputs), `json`; `--json-out` writes the JSON report alongside any of them.
 

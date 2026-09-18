@@ -19,6 +19,8 @@ pub enum Commands {
     Init(InitArgs),
     /// List every gate: id, suite, availability, and effective state
     Gates(GatesArgs),
+    /// Print the JSON Schema for discipline.toml
+    Schema,
     /// Run the embedded negative / positive controls against this binary
     SelfTest,
 }
@@ -69,9 +71,9 @@ pub struct CheckArgs {
     #[arg(long)]
     pub staged: bool,
 
-    /// File holding the PR body (override directives, PR-body hygiene).
+    /// File holding the PR body or commit message (override directives, hygiene scanning).
     /// Falls back to the PR_BODY environment variable
-    #[arg(long)]
+    #[arg(long, visible_alias = "commit-msg-file")]
     pub pr_body_file: Option<PathBuf>,
 
     /// Treat warnings as failures
@@ -97,9 +99,20 @@ pub struct CheckArgs {
 
 #[derive(Args, Debug)]
 pub struct DiffArgs {
+    #[command(flatten)]
+    pub config: ConfigArgs,
+
     /// Base branch or commit ref to compare against
     #[arg(short, long, default_value = "HEAD~1")]
     pub base: String,
+
+    /// Output format
+    #[arg(short, long, value_enum, default_value_t = OutputFormat::Terminal)]
+    pub format: OutputFormat,
+
+    /// Also write the JSON report to this path, whatever --format is
+    #[arg(long)]
+    pub json_out: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
