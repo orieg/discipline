@@ -241,7 +241,7 @@ jobs:
           binary_path: .ci-bin/discipline
           working_directory: ${{ runner.temp }}/fx-del
           base_ref: main
-          pr_body: "<!-- discipline:allow(deletion-rationale) tests -->"
+          pr_body: "discipline:allow(deletion-rationale) tests"
       - name: Bare-word directive was rejected by deletion-rationale gate
         shell: bash
         env:
@@ -254,6 +254,27 @@ jobs:
           [ "${STATUS}" = "fail" ] || { echo "::error::status output was '${STATUS}'"; exit 1; }
           tests/action/assert-report.sh "${REPORT}" fail deletion-rationale
 
+      - name: "PR-body override: hidden directive rejected by default"
+        id: pr_hidden
+        continue-on-error: true
+        uses: ./
+        with:
+          binary_path: .ci-bin/discipline
+          working_directory: ${{ runner.temp }}/fx-del
+          base_ref: main
+          pr_body: "<!-- discipline:allow(deletion-rationale) tests/legacy/ -->"
+      - name: Hidden directive was rejected by default
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.pr_hidden.outcome }}
+          STATUS: ${{ steps.pr_hidden.outputs.status }}
+          REPORT: ${{ steps.pr_hidden.outputs.report }}
+        run: |
+          set -euo pipefail
+          [ "${OUTCOME}" = "failure" ] || { echo "::error::hidden directive incorrectly allowed deletion"; exit 1; }
+          [ "${STATUS}" = "fail" ] || { echo "::error::status output was '${STATUS}'"; exit 1; }
+          tests/action/assert-report.sh "${REPORT}" fail deletion-rationale
+
       - name: "PR-body override: scoped directory prefix directive allows deletion"
         id: pr_scoped
         uses: ./
@@ -261,14 +282,18 @@ jobs:
           binary_path: .ci-bin/discipline
           working_directory: ${{ runner.temp }}/fx-del
           base_ref: main
-          pr_body: "<!-- discipline:allow(deletion-rationale) tests/legacy/ -->"
+          pr_body: "discipline:allow(deletion-rationale) tests/legacy/"
       - name: Scoped directory prefix directive passed
         shell: bash
         env:
           REPORT: ${{ steps.pr_scoped.outputs.report }}
+          OVERRIDES: ${{ steps.pr_scoped.outputs.overrides }}
+          OVERRIDDEN_GATES: ${{ steps.pr_scoped.outputs.overridden_gates }}
         run: |
           set -euo pipefail
           tests/action/assert-report.sh "${REPORT}" pass
+          [ "${OVERRIDES}" = "1" ] || { echo "::error::expected overrides=1, got '${OVERRIDES}'"; exit 1; }
+          [ "${OVERRIDDEN_GATES}" = "deletion-rationale" ] || { echo "::error::expected overridden_gates=deletion-rationale, got '${OVERRIDDEN_GATES}'"; exit 1; }
 
       # The download path, before any real release exists: a local release
       # store laid out like GitHub's, served over HTTP.
