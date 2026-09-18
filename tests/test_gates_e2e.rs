@@ -583,10 +583,10 @@ $ranges = [
 
     // Negative control: host IPs, JSON string leaks, and leaks inside > 2 MiB files
     let bad_repo = Repo::new();
-    bad_repo.write("examples/lookup.php", "echo lookup('192.168.1.50');\n");
-    bad_repo.write("data/leak.json", r#"{"client_ip": "10.0.1.5"}"#);
+    bad_repo.write("examples/lookup.php", "echo lookup('192.168.1.50');\n"); // discipline:allow(pii)
+    bad_repo.write("data/leak.json", r#"{"client_ip": "10.0.1.5"}"#); // discipline:allow(pii)
     let mut large_leak = "clean padding line\n".repeat(100_000);
-    large_leak.push_str("connect to 172.16.5.9\n");
+    large_leak.push_str("connect to 172.16.5.9\n"); // discipline:allow(pii)
     bad_repo.write("data/large_leak.txt", &large_leak);
     bad_repo.commit("feat: bad configs");
 

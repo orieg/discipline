@@ -166,8 +166,8 @@ const CASES: &[Case] = &[
             use crate::guards::hygiene::is_exempt_lan_ip;
             Ok(is_exempt_lan_ip("10.0.0.0", "10.0.0.0", 0, 8)
                 && is_exempt_lan_ip("192.168.0.0", "192.168.0.0", 0, 11)
-                && !is_exempt_lan_ip("10.0.1.5", "10.0.1.5", 0, 8)
-                && !is_exempt_lan_ip("192.168.1.50", "192.168.1.50", 0, 12))
+                && !is_exempt_lan_ip("10.0.1.5", "10.0.1.5", 0, 8) // discipline:allow(pii)
+                && !is_exempt_lan_ip("192.168.1.50", "192.168.1.50", 0, 12)) // discipline:allow(pii)
         },
     ),
     (
