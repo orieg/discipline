@@ -429,7 +429,7 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
 
     let mut scan = |label: &str, text: &str, out: &mut GateOutcome| {
         let mut fence: Option<&str> = None;
-        for line in text.lines() {
+        for (idx, line) in text.lines().enumerate() {
             let trimmed = line.trim_start();
             if let Some(m) = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m)) {
                 fence = match fence {
@@ -444,6 +444,17 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
             }
             if line_allows(line, GATE) && banned.iter().any(|re| re.is_match(line)) {
                 out.inline_exemptions += 1;
+                out.overrides.push(crate::tokens::OverrideRecord {
+                    gate: GATE.to_string(),
+                    subject: format!("{label}:{}", idx + 1),
+                    directive: format!("discipline:allow({GATE})"),
+                    reason: "inline exemption marker".to_string(),
+                    source: crate::tokens::OverrideSource::Inline {
+                        file: label.to_string(),
+                        line: idx + 1,
+                    },
+                    hidden: true,
+                });
             }
         }
 
@@ -718,6 +729,17 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
             let Some((rule, matched)) = hit else { continue };
             if line_allows(line, GATE) {
                 out.inline_exemptions += 1;
+                out.overrides.push(crate::tokens::OverrideRecord {
+                    gate: GATE.to_string(),
+                    subject: format!("{label}:{}", idx + 1),
+                    directive: format!("discipline:allow({GATE})"),
+                    reason: "inline exemption marker".to_string(),
+                    source: crate::tokens::OverrideSource::Inline {
+                        file: label.to_string(),
+                        line: idx + 1,
+                    },
+                    hidden: true,
+                });
                 continue;
             }
             if allowed.iter().any(|re| re.is_match(line)) {

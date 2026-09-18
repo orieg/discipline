@@ -206,9 +206,29 @@ pub enum Severity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DirectivesConfig {
+    pub sources: Vec<String>,
+    pub allow_hidden: bool,
+    pub fail_on_overrides: bool,
+}
+
+impl Default for DirectivesConfig {
+    fn default() -> Self {
+        Self {
+            sources: vec!["pr-body".to_string(), "commits".to_string()],
+            allow_hidden: false,
+            fail_on_overrides: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisciplineConfig {
     pub meta: MetaConfig,
+    #[serde(default)]
+    pub directives: DirectivesConfig,
     #[serde(default)]
     pub gates: Gates,
 }
@@ -454,6 +474,8 @@ pub struct Overrides {
     pub enable: Vec<String>,
     pub disable: Vec<String>,
     pub hostname_denylist: Vec<String>,
+    pub directive_sources: Option<Vec<String>>,
+    pub fail_on_overrides: Option<bool>,
 }
 
 impl Overrides {
@@ -462,6 +484,8 @@ impl Overrides {
             && self.enable.is_empty()
             && self.disable.is_empty()
             && self.hostname_denylist.is_empty()
+            && self.directive_sources.is_none()
+            && self.fail_on_overrides.is_none()
     }
 }
 
@@ -473,6 +497,7 @@ impl DisciplineConfig {
                 name: name.to_string(),
                 description: None,
             },
+            directives: DirectivesConfig::default(),
             gates: Gates::default(),
         }
     }
@@ -535,6 +560,18 @@ impl DisciplineConfig {
             let mut layer = Value::Table(Default::default());
             set_path(&mut layer, &["gates", "pii", "hostname_denylist"], extra);
             merge(&mut value, layer);
+        }
+
+        if let Some(sources) = &overrides.directive_sources {
+            let extra = Value::Array(sources.iter().map(|s| Value::String(s.clone())).collect());
+            set_path(&mut value, &["directives", "sources"], extra);
+        }
+        if let Some(fail) = overrides.fail_on_overrides {
+            set_path(
+                &mut value,
+                &["directives", "fail_on_overrides"],
+                Value::Boolean(fail),
+            );
         }
 
         Self::from_value(value)

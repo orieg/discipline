@@ -141,6 +141,8 @@ impl Repo {
             "DISCIPLINE_DISABLE",
             "DISCIPLINE_BASE_REF",
             "DISCIPLINE_FAIL_ON_WARNINGS",
+            "DISCIPLINE_FAIL_ON_OVERRIDES",
+            "DISCIPLINE_DIRECTIVE_SOURCES",
             "DISCIPLINE_HOSTNAME_DENYLIST",
         ] {
             cmd.env_remove(var);

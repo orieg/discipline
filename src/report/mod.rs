@@ -9,14 +9,15 @@ pub fn render_report(
     summary: &CheckSummary,
     format: OutputFormat,
     fail_on_warnings: bool,
+    fail_on_overrides: bool,
 ) -> Result<()> {
     match format {
-        OutputFormat::Terminal => render_terminal(summary, fail_on_warnings),
+        OutputFormat::Terminal => render_terminal(summary, fail_on_warnings, fail_on_overrides),
         OutputFormat::GithubSummary => {
-            render_terminal(summary, fail_on_warnings);
+            render_terminal(summary, fail_on_warnings, fail_on_overrides);
             render_annotations(summary);
-            render_step_summary(summary, fail_on_warnings)?;
-            render_step_outputs(summary, fail_on_warnings)?;
+            render_step_summary(summary, fail_on_warnings, fail_on_overrides)?;
+            render_step_outputs(summary, fail_on_warnings, fail_on_overrides)?;
         }
         OutputFormat::Json => println!("{}", serde_json::to_string_pretty(summary)?),
     }
@@ -31,7 +32,7 @@ fn location(v: &Violation) -> Option<String> {
     }
 }
 
-fn render_terminal(summary: &CheckSummary, fail_on_warnings: bool) {
+fn render_terminal(summary: &CheckSummary, fail_on_warnings: bool, fail_on_overrides: bool) {
     println!("\n{}", style::bold("=== Discipline Gate Report ==="));
     println!("base: {}\n", summary.base);
 
@@ -59,6 +60,20 @@ fn render_terminal(summary: &CheckSummary, fail_on_warnings: bool) {
             println!(
                 "  · {} line(s) exempted by inline `discipline:allow` markers",
                 o.inline_exemptions
+            );
+        }
+        for ov in &o.overrides {
+            println!(
+                "  · override applied: `{}: {}` on `{}` ({})",
+                ov.directive,
+                ov.reason,
+                ov.subject,
+                match &ov.source {
+                    crate::tokens::OverrideSource::PrBody => "PR body".to_string(),
+                    crate::tokens::OverrideSource::Commit(oid) => format!("commit {oid}"),
+                    crate::tokens::OverrideSource::Inline { file, line } =>
+                        format!("{file}:{line}"),
+                }
             );
         }
         for note in &o.notes {
@@ -91,11 +106,18 @@ fn render_terminal(summary: &CheckSummary, fail_on_warnings: bool) {
         }
     }
 
+    let total_ov = summary.total_overrides();
     println!(
-        "\nerrors: {}  warnings: {}",
-        summary.errors, summary.warnings
+        "\nerrors: {}  warnings: {}  overrides: {}",
+        summary.errors, summary.warnings, total_ov
     );
-    if summary.is_success(fail_on_warnings) {
+    if fail_on_overrides && total_ov > 0 {
+        println!(
+            "{}",
+            style::red("failure: applied overrides require human sign-off (directives.fail_on_overrides / --fail-on-overrides)")
+        );
+    }
+    if summary.is_success(fail_on_warnings, fail_on_overrides) {
         println!("{}", style::green("Status: PASS"));
     } else {
         println!("{}", style::red("Status: FAILED"));
@@ -129,7 +151,11 @@ fn render_annotations(summary: &CheckSummary) {
     }
 }
 
-fn render_step_summary(summary: &CheckSummary, fail_on_warnings: bool) -> Result<()> {
+fn render_step_summary(
+    summary: &CheckSummary,
+    fail_on_warnings: bool,
+    fail_on_overrides: bool,
+) -> Result<()> {
     let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY") else {
         return Ok(());
     };
@@ -140,7 +166,7 @@ fn render_step_summary(summary: &CheckSummary, fail_on_warnings: bool) -> Result
         .with_context(|| format!("failed to open job summary {path}"))?;
     let cell = |s: &str| s.replace('|', "\\|").replace('\n', " ");
 
-    let heading = if summary.is_success(fail_on_warnings) {
+    let heading = if summary.is_success(fail_on_warnings, fail_on_overrides) {
         "### Discipline gate: passed"
     } else {
         "### Discipline gate: FAILED"
@@ -167,6 +193,31 @@ fn render_step_summary(summary: &CheckSummary, fail_on_warnings: bool) -> Result
             summary.planned_gates.join(", ")
         )?;
     }
+    let total_ov = summary.total_overrides();
+    if total_ov > 0 {
+        writeln!(
+            file,
+            "\n#### Overrides Applied ({total_ov})\n\n| Gate | Directive | Subject | Reason | Source |\n|---|---|---|---|---|"
+        )?;
+        for ov in summary.overrides() {
+            let src = match &ov.source {
+                crate::tokens::OverrideSource::PrBody => "PR body".to_string(),
+                crate::tokens::OverrideSource::Commit(oid) => format!("commit `{oid}`"),
+                crate::tokens::OverrideSource::Inline { file, line } => {
+                    format!("`{file}:{line}`")
+                }
+            };
+            writeln!(
+                file,
+                "| `{}` | `{}` | `{}` | {} | {} |",
+                ov.gate,
+                cell(&ov.directive),
+                cell(&ov.subject),
+                cell(&ov.reason),
+                src
+            )?;
+        }
+    }
     if summary.violations().next().is_some() {
         writeln!(
             file,
@@ -192,7 +243,11 @@ fn render_step_summary(summary: &CheckSummary, fail_on_warnings: bool) -> Result
 
 /// `errors`, `warnings` and `status` as step outputs, so a workflow can assert
 /// on *why* a run failed rather than on the exit code alone.
-fn render_step_outputs(summary: &CheckSummary, fail_on_warnings: bool) -> Result<()> {
+fn render_step_outputs(
+    summary: &CheckSummary,
+    fail_on_warnings: bool,
+    fail_on_overrides: bool,
+) -> Result<()> {
     let Ok(path) = std::env::var("GITHUB_OUTPUT") else {
         return Ok(());
     };
@@ -201,16 +256,20 @@ fn render_step_outputs(summary: &CheckSummary, fail_on_warnings: bool) -> Result
         .append(true)
         .open(&path)
         .with_context(|| format!("failed to open step output file {path}"))?;
-    let status = if summary.is_success(fail_on_warnings) {
+    let status = if summary.is_success(fail_on_warnings, fail_on_overrides) {
         "pass"
     } else {
         "fail"
     };
     let mut fired: Vec<&str> = summary.violations().map(|v| v.gate).collect();
     fired.dedup();
+    let mut overridden: Vec<&str> = summary.overrides().map(|o| o.gate.as_str()).collect();
+    overridden.dedup();
     writeln!(file, "errors={}", summary.errors)?;
     writeln!(file, "warnings={}", summary.warnings)?;
+    writeln!(file, "overrides={}", summary.total_overrides())?;
     writeln!(file, "status={status}")?;
     writeln!(file, "failed_gates={}", fired.join(","))?;
+    writeln!(file, "overridden_gates={}", overridden.join(","))?;
     Ok(())
 }

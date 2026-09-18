@@ -78,6 +78,14 @@ pub struct CheckArgs {
     #[arg(long, env = "DISCIPLINE_FAIL_ON_WARNINGS")]
     pub fail_on_warnings: bool,
 
+    /// Treat applied overrides as failures (requires human sign-off)
+    #[arg(long, env = "DISCIPLINE_FAIL_ON_OVERRIDES")]
+    pub fail_on_overrides: bool,
+
+    /// Comma-separated list of allowed directive sources (pr-body, commits)
+    #[arg(long, env = "DISCIPLINE_DIRECTIVE_SOURCES", value_delimiter = ',')]
+    pub directive_sources: Vec<String>,
+
     /// Output format
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Terminal)]
     pub format: OutputFormat,

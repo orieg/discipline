@@ -1180,3 +1180,182 @@ fn empty_repo_unstaged_mode_fails_closed_exit_2() {
     let out = cmd.output().unwrap();
     assert_eq!(out.status.code(), Some(2));
 }
+
+// ---- Directives & Overrides Policy (T1 + T2) -------------------------------
+
+#[test]
+fn override_record_audit_trail_and_step_outputs() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace("#[test]\nfn orders() {\n    assert!(1 < 2);\n}\n", ""),
+    );
+    repo.commit("test: remove orders\n\nremoves: tests/a.rs orders moved to proptest");
+
+    let step_summary_file = repo.dir.path().join("step_summary.md");
+    let step_output_file = repo.dir.path().join("step_output.txt");
+
+    let run = repo.run(
+        &["check", "--format", "github-summary", "--base", "main"],
+        &[
+            ("GITHUB_STEP_SUMMARY", step_summary_file.to_str().unwrap()),
+            ("GITHUB_OUTPUT", step_output_file.to_str().unwrap()),
+        ],
+    );
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("Status: PASS"));
+    assert!(run
+        .stdout
+        .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
+    assert!(run.stdout.contains("overrides: 1"));
+
+    // Check GITHUB_OUTPUT contents
+    let step_output = std::fs::read_to_string(&step_output_file).unwrap();
+    assert!(step_output.contains("overrides=1"), "{step_output}");
+    assert!(
+        step_output.contains("overridden_gates=deletion-rationale"),
+        "{step_output}"
+    );
+    assert!(step_output.contains("status=pass"), "{step_output}");
+
+    // Check GITHUB_STEP_SUMMARY contents
+    let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
+    assert!(
+        step_summary.contains("#### Overrides Applied (1)"),
+        "{step_summary}"
+    );
+    assert!(
+        step_summary.contains("| `deletion-rationale` | `removes` | `orders` |"),
+        "{step_summary}"
+    );
+
+    // Check JSON output
+    let json_run = repo.check(&[]);
+    assert_eq!(json_run.code, 0);
+    let json = json_run.json();
+    assert_eq!(json["overrides"], 1);
+    let outcome = json_run.outcome("deletion-rationale");
+    let overrides = outcome["overrides"].as_array().unwrap();
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(overrides[0]["directive"], "removes");
+    assert_eq!(overrides[0]["subject"], "orders");
+    assert_eq!(overrides[0]["hidden"], false);
+}
+
+#[test]
+fn fail_on_overrides_blocks_change_with_exit_1() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace("#[test]\nfn orders() {\n    assert!(1 < 2);\n}\n", ""),
+    );
+    repo.commit("test: remove orders\n\nremoves: tests/a.rs orders moved to proptest");
+
+    let run = repo.check(&["--fail-on-overrides"]);
+    assert_eq!(run.code, 1, "should fail when --fail-on-overrides is set");
+
+    let terminal_run = repo.run(&["check", "--base", "main", "--fail-on-overrides"], &[]);
+    assert_eq!(terminal_run.code, 1);
+    assert!(terminal_run.stdout.contains("Status: FAILED"));
+    assert!(terminal_run
+        .stdout
+        .contains("failure: applied overrides require human sign-off"));
+}
+
+#[test]
+fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace("#[test]\nfn orders() {\n    assert!(1 < 2);\n}\n", ""),
+    );
+    // Hidden in HTML comments
+    repo.commit("test: remove orders\n\n<!-- removes: tests/a.rs orders moved to proptest -->");
+
+    // By default, allow_hidden = false, so directive is ignored
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "hidden directive must be rejected by default");
+    assert_eq!(run.titles("deletion-rationale").len(), 1);
+    let outcome = run.outcome("deletion-rationale");
+    let notes = outcome["notes"].as_array().unwrap();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("hidden directive")),
+        "expected note about hidden directive being ignored"
+    );
+
+    // Now configure allow_hidden = true in discipline.toml
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nallow_hidden = true\n",
+    );
+    repo.commit("chore: allow hidden directives");
+    let run_allowed = repo.check(&[]);
+    assert_eq!(
+        run_allowed.code, 0,
+        "hidden directive must be accepted when allow_hidden = true: {}",
+        run_allowed.stdout
+    );
+    let json = run_allowed.json();
+    assert_eq!(json["overrides"], 1);
+    let outcome = run_allowed.outcome("deletion-rationale");
+    assert_eq!(outcome["overrides"][0]["hidden"], true);
+}
+
+#[test]
+fn directive_sources_policy_restricts_sources() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nsources = [\"pr-body\"]\n",
+    );
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace("#[test]\nfn orders() {\n    assert!(1 < 2);\n}\n", ""),
+    );
+    // Commit message directive when sources = ["pr-body"]
+    repo.commit("test: remove orders\n\nremoves: tests/a.rs orders moved to proptest");
+
+    let run_blocked = repo.check(&[]);
+    assert_eq!(
+        run_blocked.code, 1,
+        "commit directive must be ignored when sources = [pr-body]"
+    );
+    let outcome = run_blocked.outcome("deletion-rationale");
+    let notes = outcome["notes"].as_array().unwrap();
+    assert!(
+        notes.iter().any(|n| n
+            .as_str()
+            .unwrap()
+            .contains("commit-message directives are disabled by policy")),
+        "expected note about commit directives disabled"
+    );
+
+    // Now pass the directive in PR_BODY
+    let run_pr_body = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("PR_BODY", "removes: tests/a.rs orders moved to proptest")],
+    );
+    assert_eq!(
+        run_pr_body.code, 0,
+        "pr-body directive must be accepted: {}",
+        run_pr_body.stdout
+    );
+    let json = run_pr_body.json();
+    assert_eq!(json["overrides"], 1);
+    assert_eq!(json_pr_body_outcome_source(&json), "PrBody");
+}
+
+fn json_pr_body_outcome_source(json: &serde_json::Value) -> String {
+    json["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "deletion-rationale")
+        .unwrap()["overrides"][0]["source"]["type"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}

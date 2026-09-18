@@ -11,6 +11,49 @@
 //! mechanism in a markdown table silently approved every regression in the run.
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "detail")]
+pub enum OverrideSource {
+    PrBody,
+    Commit(String),
+    Inline { file: String, line: usize },
+}
+
+impl std::fmt::Display for OverrideSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OverrideSource::PrBody => write!(f, "PR body"),
+            OverrideSource::Commit(sha) => write!(f, "commit {sha}"),
+            OverrideSource::Inline { file, line } => write!(f, "inline {file}:{line}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OverrideRecord {
+    pub gate: String,
+    pub subject: String,
+    pub directive: String,
+    pub reason: String,
+    pub source: OverrideSource,
+    pub hidden: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParsedDirective {
+    pub directive: String,
+    pub reason: String,
+    pub source: OverrideSource,
+    pub hidden: bool,
+}
+
+impl ParsedDirective {
+    pub fn covers(&self, subject: &str) -> bool {
+        reason_names(&self.reason, subject)
+    }
+}
 
 pub const REMOVES: &[&str] = &[
     "removes",
@@ -36,12 +79,34 @@ pub const ALLOW_GATE_WEAKENING: &[&str] = &[
     "allow(config-integrity)",
 ];
 
+pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
+    "removes",
+    "deletes",
+    "remove",
+    "delete",
+    "discipline:allow(deletion-rationale)",
+    "allow(deletion-rationale)",
+    "allow-assertion-drop",
+    "discipline:allow(assertion-reduction)",
+    "allow(assertion-reduction)",
+    "allow-ignore",
+    "discipline:allow(ignored-tests)",
+    "allow(ignored-tests)",
+    "allow-gate-weakening",
+    "discipline:allow(config-integrity)",
+    "allow(config-integrity)",
+];
+
 const PLACEHOLDERS: &[&str] = &[
     "todo", "tbd", "none", "n/a", "na", "reason", "why", "...", "xxx", "fixme", "-",
 ];
 
-/// Reasons of every well-formed directive named in `names` found in `text`.
-pub fn directive_reasons(text: &str, names: &[&str]) -> Vec<String> {
+/// Parses all directives from `text` matching any names in `names`.
+pub fn parse_directives_with_names(
+    text: &str,
+    names: &[&str],
+    source: OverrideSource,
+) -> Vec<ParsedDirective> {
     let patterns = names
         .iter()
         .map(|n| {
@@ -54,12 +119,10 @@ pub fn directive_reasons(text: &str, names: &[&str]) -> Vec<String> {
         })
         .collect::<Vec<_>>()
         .join("|");
-    let re = Regex::new(&format!(
-        r"(?i)^[ \t]*(?:<!--[ \t]*)?(?:{patterns})[ \t]*(.*)$"
-    ))
-    .expect("directive regex is static");
+    let re = Regex::new(&format!(r"(?i)^[ \t]*(<!--[ \t]*)?({patterns})[ \t]*(.*)$"))
+        .expect("directive regex is static");
 
-    let mut reasons = Vec::new();
+    let mut directives = Vec::new();
     let mut fence: Option<&str> = None;
     for line in text.lines() {
         let trimmed = line.trim_start();
@@ -77,13 +140,87 @@ pub fn directive_reasons(text: &str, names: &[&str]) -> Vec<String> {
             (None, None) => {}
         }
         if let Some(caps) = re.captures(line) {
-            let reason = clean_reason(&caps[1]);
+            let reason = clean_reason(&caps[3]);
             if !is_placeholder(&reason) {
-                reasons.push(reason);
+                let directive_str = caps[2].trim_end_matches(':').trim().to_string();
+                directives.push(ParsedDirective {
+                    directive: directive_str,
+                    reason,
+                    source: source.clone(),
+                    hidden: caps.get(1).is_some(),
+                });
             }
         }
     }
-    reasons
+    directives
+}
+
+/// Parses all directives in `text` against all known directive names.
+pub fn parse_directives(text: &str, source: OverrideSource) -> Vec<ParsedDirective> {
+    parse_directives_with_names(text, ALL_DIRECTIVE_NAMES, source)
+}
+
+/// Extracts active valid directives according to the policy in `policy`.
+/// Directives from disallowed sources or hidden when `allow_hidden` is false
+/// are dropped, and explanatory notes are emitted.
+pub fn extract_directives(
+    pr_body: Option<&str>,
+    commits: &[(String, String)],
+    policy: &crate::config::DirectivesConfig,
+) -> (Vec<ParsedDirective>, Vec<String>) {
+    let mut active = Vec::new();
+    let mut notes = Vec::new();
+
+    let pr_body_allowed = policy.sources.iter().any(|s| s == "pr-body");
+    let commits_allowed = policy.sources.iter().any(|s| s == "commits");
+
+    if let Some(body) = pr_body {
+        let parsed = parse_directives(body, OverrideSource::PrBody);
+        if pr_body_allowed {
+            for d in parsed {
+                if d.hidden && !policy.allow_hidden {
+                    notes.push(format!(
+                        "hidden directive `{}: {}` in PR body ignored (directives.allow_hidden is false)",
+                        d.directive, d.reason
+                    ));
+                } else {
+                    active.push(d);
+                }
+            }
+        } else if !parsed.is_empty() {
+            notes.push("PR-body directives are disabled by policy; ignored".to_string());
+        }
+    }
+
+    for (oid, msg) in commits {
+        let parsed = parse_directives(msg, OverrideSource::Commit(oid.clone()));
+        if commits_allowed {
+            for d in parsed {
+                if d.hidden && !policy.allow_hidden {
+                    notes.push(format!(
+                        "hidden directive `{}: {}` in commit {oid} ignored (directives.allow_hidden is false)",
+                        d.directive, d.reason
+                    ));
+                } else {
+                    active.push(d);
+                }
+            }
+        } else if !parsed.is_empty() {
+            notes.push(format!(
+                "commit-message directives are disabled by policy; ignored directive from commit {oid}"
+            ));
+        }
+    }
+
+    (active, notes)
+}
+
+/// Reasons of every well-formed directive named in `names` found in `text`.
+pub fn directive_reasons(text: &str, names: &[&str]) -> Vec<String> {
+    parse_directives_with_names(text, names, OverrideSource::PrBody)
+        .into_iter()
+        .map(|d| d.reason)
+        .collect()
 }
 
 /// True when some directive's reason names `subject` (or, for paths, a

@@ -7,7 +7,7 @@
 
 use super::{Context, GateOutcome};
 use crate::config::{DisciplineConfig, GateSettings, Severity};
-use crate::tokens::{self, covers, directive_reasons};
+use crate::tokens;
 use anyhow::Result;
 use toml::Value;
 
@@ -67,9 +67,9 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
         .as_table()
         .map(|t| t.len())
         .unwrap_or(0);
-    let reasons = directive_reasons(&ctx.directive_text, tokens::ALLOW_GATE_WEAKENING);
     for w in weakenings {
-        if covers(&reasons, &w.gate) {
+        if let Some(record) = ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, &w.gate) {
+            out.overrides.push(record);
             continue;
         }
         out.push(
@@ -77,7 +77,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
             "Gate Weakened By This Change",
             Some(ctx.config_path),
             None,
-            format!("[gates.{}] {}.", w.gate, w.what),
+            format!("[{}] {}.", w.gate, w.what),
             &format!(
                 "Revert the change, or justify it on its own line in the PR body or a commit \
                  message: `allow-gate-weakening: {} <reason>`.",
@@ -89,13 +89,37 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
 }
 
 pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<Vec<Weakening>> {
+    let mut found = Vec::new();
+
+    // Check [directives] table
+    let mut dir_note = |what: String| {
+        found.push(Weakening {
+            gate: "directives".to_string(),
+            what,
+        })
+    };
+    if !base.directives.allow_hidden && head.directives.allow_hidden {
+        dir_note("`allow_hidden` changed from false to true".to_string());
+    }
+    let gained_sources: Vec<_> = head
+        .directives
+        .sources
+        .iter()
+        .filter(|s| !base.directives.sources.contains(s))
+        .collect();
+    if gained_sources.iter().any(|s| s.as_str() == "commits") {
+        dir_note("`sources` gained commits".to_string());
+    }
+    if base.directives.fail_on_overrides && !head.directives.fail_on_overrides {
+        dir_note("`fail_on_overrides` changed from true to false".to_string());
+    }
+
     let base_v = Value::try_from(&base.gates)?;
     let head_v = Value::try_from(&head.gates)?;
     let (Some(base_t), Some(head_t)) = (base_v.as_table(), head_v.as_table()) else {
-        return Ok(Vec::new());
+        return Ok(found);
     };
 
-    let mut found = Vec::new();
     for (gate, base_gate) in base_t {
         let (Some(b), Some(h)) = (
             base_gate.as_table(),

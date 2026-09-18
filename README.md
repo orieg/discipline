@@ -144,18 +144,23 @@ Loosening an existing `discipline.toml` (disabling a gate, lowering a severity, 
 
 ## Override directives
 
-On its own line in the PR body or a commit message; the reason must name what it covers.
+On its own line in the PR body or a commit message; the reason must name what it covers. Directives are audit-trailed in reports and step outputs.
 
 ```
-removes: tests/legacy replaced by the property suite
+removes: tests/legacy/ replaced by the property suite
 allow-assertion-drop: inserts_in_order second case moved to proptest
 allow-ignore: big_alloc needs the new allocator first
 allow-gate-weakening: vacuous-tests suite asserts through snapshot macros
 ```
 
+Directives policy can be configured via `[directives]` in `discipline.toml`:
+- `sources = ["pr-body", "commits"]` — allowed channels for directives.
+- `allow_hidden = false` — when false (default), HTML-comment-wrapped directives are rejected.
+- `fail_on_overrides = false` — when true (or via `--fail-on-overrides`), any applied override fails the check, requiring explicit human sign-off.
+
 ## Action outputs
 
-`status`, `errors`, `warnings`, `failed_gates`, `report` (path of the JSON report), `install_error`.
+`status`, `errors`, `warnings`, `failed_gates`, `overrides`, `overridden_gates`, `report` (path of the JSON report), `install_error`.
 
 ## Development
 

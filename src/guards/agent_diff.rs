@@ -7,7 +7,7 @@ use crate::ast::{
 };
 use crate::config::GateSettings;
 use crate::gitctx::{ChangeKind, ChangedFile};
-use crate::tokens::{self, covers, directive_reasons};
+use crate::tokens;
 use anyhow::{anyhow, bail, Result};
 
 pub(crate) struct FileFacts {
@@ -468,7 +468,6 @@ fn assertion_reduction(
     const GATE: &str = "assertion-reduction";
     let settings = &ctx.config.gates.assertion_reduction;
     let exempt = exempt_filter(settings)?;
-    let reasons = directive_reasons(&ctx.directive_text, tokens::ALLOW_ASSERTION_DROP);
     let mut out = GateOutcome::new(GATE);
     out.examined = pairs.len();
     report_parse_errors(ctx, GATE, rust, &mut out);
@@ -510,11 +509,13 @@ fn assertion_reduction(
         // the old test that was replaced/gutted. For non-forced pairs (exact name or similarity rename),
         // naming either the old test or the new test is accepted.
         let allowed = if p.forced {
-            covers(&reasons, leaf_name(b))
+            ctx.find_override(GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(b))
         } else {
-            covers(&reasons, leaf_name(h)) || covers(&reasons, leaf_name(b))
+            ctx.find_override(GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(h))
+                .or_else(|| ctx.find_override(GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(b)))
         };
-        if allowed {
+        if let Some(record) = allowed {
+            out.overrides.push(record);
             continue;
         }
 
@@ -595,7 +596,6 @@ fn ignored_tests(
     const GATE: &str = "ignored-tests";
     let settings = &ctx.config.gates.ignored_tests;
     let exempt = exempt_filter(settings)?;
-    let reasons = directive_reasons(&ctx.directive_text, tokens::ALLOW_IGNORE);
     let mut out = GateOutcome::new(GATE);
     out.examined = pairs.len() + added.len();
     report_parse_errors(ctx, GATE, rust, &mut out);
@@ -611,7 +611,11 @@ fn ignored_tests(
                 .map(|a| (a.path, a.test)),
         );
     for (path, test) in newly_ignored {
-        if exempt.matches(path) || covers(&reasons, leaf_name(test)) {
+        if exempt.matches(path) {
+            continue;
+        }
+        if let Some(record) = ctx.find_override(GATE, tokens::ALLOW_IGNORE, leaf_name(test)) {
+            out.overrides.push(record);
             continue;
         }
         out.push(
@@ -676,7 +680,6 @@ fn deletion_rationale(
     let settings = &ctx.config.gates.deletion_rationale;
     let exempt = exempt_filter(settings)?;
     let watched = PathFilter::new(&settings.paths)?;
-    let reasons = directive_reasons(&ctx.directive_text, tokens::REMOVES);
     let severity = ctx.overridable(settings.severity());
     let mut out = GateOutcome::new(GATE);
 
@@ -685,7 +688,8 @@ fn deletion_rationale(
             continue;
         }
         out.examined += 1;
-        if covers(&reasons, &file.path) {
+        if let Some(record) = ctx.find_override(GATE, tokens::REMOVES, &file.path) {
+            out.overrides.push(record);
             continue;
         }
         out.push(
@@ -714,7 +718,8 @@ fn deletion_rationale(
             continue;
         }
         out.examined += 1;
-        if covers(&reasons, leaf_name(r.test)) {
+        if let Some(record) = ctx.find_override(GATE, tokens::REMOVES, leaf_name(r.test)) {
+            out.overrides.push(record);
             continue;
         }
         out.push(

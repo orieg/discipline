@@ -274,8 +274,8 @@ impl GitCtx {
             .unwrap_or(false))
     }
 
-    /// Messages of the commits between the base and `HEAD` (empty when staged).
-    pub fn commit_messages(&self) -> Result<Vec<String>> {
+    /// Commits between the base and `HEAD` as `(short_oid, message)` (empty when staged).
+    pub fn commits(&self) -> Result<Vec<(String, String)>> {
         let (Some(base), false) = (self.base, self.staged) else {
             return Ok(Vec::new());
         };
@@ -284,10 +284,19 @@ impl GitCtx {
         walk.hide(base)?;
         let mut out = Vec::new();
         for oid in walk {
-            let commit = self.repo.find_commit(oid?)?;
-            out.push(String::from_utf8_lossy(commit.message_bytes()).into_owned());
+            let oid = oid?;
+            let commit = self.repo.find_commit(oid)?;
+            let id_str = format!("{oid}");
+            let short = id_str.chars().take(7).collect::<String>();
+            let msg = String::from_utf8_lossy(commit.message_bytes()).into_owned();
+            out.push((short, msg));
         }
         Ok(out)
+    }
+
+    /// Messages of the commits between the base and `HEAD` (empty when staged).
+    pub fn commit_messages(&self) -> Result<Vec<String>> {
+        Ok(self.commits()?.into_iter().map(|(_, m)| m).collect())
     }
 }
 

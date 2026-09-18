@@ -41,6 +41,14 @@ inputs:
     description: 'Treat warnings as failures.'
     required: false
     default: 'false'
+  fail_on_overrides:
+    description: 'Treat applied overrides as failures (requires human sign-off).'
+    required: false
+    default: 'false'
+  directive_sources:
+    description: 'Comma-separated list of allowed directive sources (pr-body, commits).'
+    required: false
+    default: ''
   pr_body:
     description: 'PR description: carries override directives and is itself scanned by hygiene gates.'
     required: false
@@ -75,6 +83,12 @@ outputs:
   failed_gates:
     description: 'Comma separated ids of the gates that reported a violation'
     value: ${{ steps.run.outputs.failed_gates }}
+  overrides:
+    description: 'Number of applied override directives'
+    value: ${{ steps.run.outputs.overrides }}
+  overridden_gates:
+    description: 'Comma separated ids of the gates that had an override applied'
+    value: ${{ steps.run.outputs.overridden_gates }}
   report:
     description: 'Path of the JSON report'
     value: ${{ steps.run.outputs.report }}
@@ -208,6 +222,8 @@ runs:
         DISCIPLINE_CONFIG_OVERRIDE: ${{ inputs.config_override }}
         DISCIPLINE_HOSTNAME_DENYLIST: ${{ inputs.hostname_denylist }}
         DISCIPLINE_FAIL_ON_WARNINGS: ${{ inputs.fail_on_warnings == 'true' && 'true' || 'false' }}
+        DISCIPLINE_FAIL_ON_OVERRIDES: ${{ inputs.fail_on_overrides == 'true' && 'true' || 'false' }}
+        DISCIPLINE_DIRECTIVE_SOURCES: ${{ inputs.directive_sources }}
         INPUT_SUITE: ${{ inputs.suite }}
         PR_BODY: ${{ inputs.pr_body }}
       run: |

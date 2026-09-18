@@ -207,6 +207,28 @@ const CASES: &[Case] = &[
                 && added.is_empty())
         },
     ),
+    (
+        "directives: hidden directives rejected by default, accepted when allow_hidden is set",
+        || {
+            use crate::config::DirectivesConfig;
+            use crate::tokens::extract_directives;
+            let hidden_directive = "<!-- removes: tests/old.rs replaced -->";
+            let default_policy = DirectivesConfig::default();
+            let (active_default, notes_default) =
+                extract_directives(Some(hidden_directive), &[], &default_policy);
+            let permissive_policy = DirectivesConfig {
+                allow_hidden: true,
+                ..Default::default()
+            };
+            let (active_permissive, notes_permissive) =
+                extract_directives(Some(hidden_directive), &[], &permissive_policy);
+            Ok(active_default.is_empty()
+                && !notes_default.is_empty()
+                && active_permissive.len() == 1
+                && active_permissive[0].hidden
+                && notes_permissive.is_empty())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

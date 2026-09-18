@@ -37,6 +37,8 @@ fn run() -> Result<bool> {
             staged: false,
             pr_body_file: None,
             fail_on_warnings: false,
+            fail_on_overrides: false,
+            directive_sources: Vec::new(),
             format: OutputFormat::Terminal,
             json_out: None,
         }),
@@ -46,7 +48,12 @@ fn run() -> Result<bool> {
     }
 }
 
-fn load_config(args: &ConfigArgs, repo_root: Option<&Path>) -> Result<(DisciplineConfig, String)> {
+fn load_config(
+    args: &ConfigArgs,
+    repo_root: Option<&Path>,
+    extra_fail_on_overrides: Option<bool>,
+    extra_directive_sources: Option<Vec<String>>,
+) -> Result<(DisciplineConfig, String)> {
     let overrides = Overrides {
         config_override: args
             .config_override
@@ -57,6 +64,8 @@ fn load_config(args: &ConfigArgs, repo_root: Option<&Path>) -> Result<(Disciplin
         hostname_denylist: std::env::var(HOSTNAME_DENYLIST_ENV)
             .map(|v| split_list(&v))
             .unwrap_or_default(),
+        directive_sources: extra_directive_sources,
+        fail_on_overrides: extra_fail_on_overrides,
     };
     let explicit = args.config != Path::new("discipline.toml");
     let resolved_path = match repo_root {
@@ -107,7 +116,18 @@ fn load_config(args: &ConfigArgs, repo_root: Option<&Path>) -> Result<(Disciplin
 
 fn check(args: CheckArgs) -> Result<bool> {
     let git = GitCtx::open(&args.base, args.staged)?;
-    let (config, config_path) = load_config(&args.config, Some(git.root()))?;
+    let extra_fail = if args.fail_on_overrides {
+        Some(true)
+    } else {
+        None
+    };
+    let extra_sources = if args.directive_sources.is_empty() {
+        None
+    } else {
+        Some(args.directive_sources.clone())
+    };
+    let (config, config_path) =
+        load_config(&args.config, Some(git.root()), extra_fail, extra_sources)?;
 
     let pr_body = match &args.pr_body_file {
         Some(p) => Some(
@@ -118,11 +138,9 @@ fn check(args: CheckArgs) -> Result<bool> {
             .ok()
             .filter(|b| !b.trim().is_empty()),
     };
-    let mut directive_text = pr_body.clone().unwrap_or_default();
-    for msg in git.commit_messages()? {
-        directive_text.push_str("\n\n");
-        directive_text.push_str(&msg);
-    }
+    let commits = git.commits()?;
+    let (directives, directive_notes) =
+        discipline::tokens::extract_directives(pr_body.as_deref(), &commits, &config.directives);
 
     let ctx = Context {
         config: &config,
@@ -130,15 +148,22 @@ fn check(args: CheckArgs) -> Result<bool> {
         config_path: &config_path,
         staged: args.staged,
         pr_body,
-        directive_text,
+        directives,
+        directive_notes,
     };
     let summary = run_checks(&config, args.suite, &ctx)?;
-    render_report(&summary, args.format, args.fail_on_warnings)?;
+    let fail_on_overrides = config.directives.fail_on_overrides;
+    render_report(
+        &summary,
+        args.format,
+        args.fail_on_warnings,
+        fail_on_overrides,
+    )?;
     if let Some(path) = &args.json_out {
         std::fs::write(path, serde_json::to_string_pretty(&summary)?)
             .with_context(|| format!("failed to write JSON report {}", path.display()))?;
     }
-    Ok(summary.is_success(args.fail_on_warnings))
+    Ok(summary.is_success(args.fail_on_warnings, fail_on_overrides))
 }
 
 fn init(name: Option<String>) -> Result<bool> {
@@ -168,7 +193,7 @@ fn init(name: Option<String>) -> Result<bool> {
 fn gates(args: &ConfigArgs) -> Result<bool> {
     let repo = git2::Repository::discover(".").ok();
     let repo_root = repo.as_ref().and_then(|r| r.workdir());
-    let (config, _) = load_config(args, repo_root)?;
+    let (config, _) = load_config(args, repo_root, None, None)?;
     println!("{:<24} {:<13} {:<9} SUMMARY", "GATE", "SUITE", "STATE");
     for g in GATES {
         let state = match config.gates.settings(g.id) {

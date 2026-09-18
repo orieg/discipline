@@ -47,6 +47,7 @@ fn schema_is_strict() {
         "[gates.golden-output]\nenabled = true\n",
         "[nonsense]\na = 1\n",
         "[gates.pii]\nseverity = \"fatal\"\n",
+        "[directives]\nunknown_key = true\n",
     ] {
         assert!(
             DisciplineConfig::from_toml_str(&format!("{head}{bad}")).is_err(),
@@ -55,6 +56,29 @@ fn schema_is_strict() {
     }
     assert!(DisciplineConfig::from_toml_str("[meta]\nversion = 2\nname = \"t\"\n").is_err());
     assert!(DisciplineConfig::from_toml_str(head).is_ok());
+}
+
+#[test]
+fn directives_config_defaults_and_overrides() {
+    let base = DisciplineConfig::default_for_repo("t");
+    assert_eq!(base.directives.sources, vec!["pr-body", "commits"]);
+    assert!(!base.directives.allow_hidden);
+    assert!(!base.directives.fail_on_overrides);
+
+    let toml = "[meta]\nversion = 1\nname = \"t\"\n[directives]\nsources = [\"pr-body\"]\nallow_hidden = true\nfail_on_overrides = true\n";
+    let cfg = DisciplineConfig::from_toml_str(toml).unwrap();
+    assert_eq!(cfg.directives.sources, vec!["pr-body"]);
+    assert!(cfg.directives.allow_hidden);
+    assert!(cfg.directives.fail_on_overrides);
+
+    let overrides = Overrides {
+        directive_sources: Some(vec!["commits".into()]),
+        fail_on_overrides: Some(false),
+        ..Default::default()
+    };
+    let c = DisciplineConfig::resolve(None, &overrides).unwrap();
+    assert_eq!(c.directives.sources, vec!["commits"]);
+    assert!(!c.directives.fail_on_overrides);
 }
 
 #[test]
@@ -71,6 +95,7 @@ fn override_layers_merge_tables_append_lists_and_replace_scalars() {
         enable: vec![],
         disable: vec!["time-estimates".into()],
         hostname_denylist: vec!["c".into(), "a".into()],
+        ..Default::default()
     };
     let c = DisciplineConfig::resolve(Some(&path), &overrides).unwrap();
     assert_eq!(c.gates.pii.hostname_denylist, vec!["a", "b", "c"]);

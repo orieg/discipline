@@ -33,6 +33,7 @@ pub struct GateOutcome {
     /// Named degradations: what the gate could not verify, and why.
     pub notes: Vec<String>,
     pub violations: Vec<Violation>,
+    pub overrides: Vec<crate::tokens::OverrideRecord>,
 }
 
 impl GateOutcome {
@@ -46,6 +47,7 @@ impl GateOutcome {
             inline_exemptions: 0,
             notes: Vec::new(),
             violations: Vec::new(),
+            overrides: Vec::new(),
         }
     }
 
@@ -75,6 +77,7 @@ pub struct CheckSummary {
     pub base: String,
     pub errors: usize,
     pub warnings: usize,
+    pub overrides: usize,
     pub outcomes: Vec<GateOutcome>,
     /// Gates the PRD plans but this binary does not ship. Listed in every
     /// report so their absence is never mistaken for coverage.
@@ -82,12 +85,22 @@ pub struct CheckSummary {
 }
 
 impl CheckSummary {
-    pub fn is_success(&self, fail_on_warnings: bool) -> bool {
-        self.errors == 0 && (!fail_on_warnings || self.warnings == 0)
+    pub fn is_success(&self, fail_on_warnings: bool, fail_on_overrides: bool) -> bool {
+        self.errors == 0
+            && (!fail_on_warnings || self.warnings == 0)
+            && (!fail_on_overrides || self.total_overrides() == 0)
     }
 
     pub fn violations(&self) -> impl Iterator<Item = &Violation> {
         self.outcomes.iter().flat_map(|o| o.violations.iter())
+    }
+
+    pub fn overrides(&self) -> impl Iterator<Item = &crate::tokens::OverrideRecord> {
+        self.outcomes.iter().flat_map(|o| o.overrides.iter())
+    }
+
+    pub fn total_overrides(&self) -> usize {
+        self.outcomes.iter().map(|o| o.overrides.len()).sum()
     }
 }
 
@@ -99,11 +112,32 @@ pub struct Context<'a> {
     pub config_path: &'a str,
     pub staged: bool,
     pub pr_body: Option<String>,
-    /// PR body plus commit messages: where override directives are read from.
-    pub directive_text: String,
+    pub directives: Vec<crate::tokens::ParsedDirective>,
+    pub directive_notes: Vec<String>,
 }
 
 impl Context<'_> {
+    pub fn find_override(
+        &self,
+        gate: &str,
+        names: &[&str],
+        subject: &str,
+    ) -> Option<crate::tokens::OverrideRecord> {
+        for d in &self.directives {
+            if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive)) && d.covers(subject) {
+                return Some(crate::tokens::OverrideRecord {
+                    gate: gate.to_string(),
+                    subject: subject.to_string(),
+                    directive: d.directive.clone(),
+                    reason: d.reason.clone(),
+                    source: d.source.clone(),
+                    hidden: d.hidden,
+                });
+            }
+        }
+        None
+    }
+
     /// A finding that an override directive could lift is only a warning in
     /// `--staged` mode without a PR body: a pre-commit hook runs before the
     /// commit message exists, so there is nowhere to put the directive yet.
@@ -196,6 +230,35 @@ pub fn run_checks(
         outcomes.push(outcome);
     }
 
+    for note in &ctx.directive_notes {
+        let target_gate = if note.contains("removes") || note.contains("deletes") {
+            "deletion-rationale"
+        } else if note.contains("allow-assertion-drop") {
+            "assertion-reduction"
+        } else if note.contains("allow-ignore") {
+            "ignored-tests"
+        } else if note.contains("allow-gate-weakening") {
+            "config-integrity"
+        } else {
+            ""
+        };
+        for o in &mut outcomes {
+            if target_gate.is_empty() {
+                if matches!(
+                    o.gate,
+                    "deletion-rationale"
+                        | "assertion-reduction"
+                        | "ignored-tests"
+                        | "config-integrity"
+                ) {
+                    o.notes.push(note.clone());
+                }
+            } else if o.gate == target_gate {
+                o.notes.push(note.clone());
+            }
+        }
+    }
+
     let count = |s: Severity| {
         outcomes
             .iter()
@@ -203,10 +266,12 @@ pub fn run_checks(
             .filter(|v| v.severity == s)
             .count()
     };
+    let total_overrides = outcomes.iter().map(|o| o.overrides.len()).sum();
     Ok(CheckSummary {
         base: ctx.git.base_label().to_string(),
         errors: count(Severity::Error),
         warnings: count(Severity::Warning),
+        overrides: total_overrides,
         planned_gates: GATES
             .iter()
             .filter(|g| !g.available)
