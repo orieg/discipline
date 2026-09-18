@@ -642,6 +642,7 @@ fn scan_json(
     rules: &[PiiRule],
     settings: &PiiGate,
     allowed: &[Regex],
+    is_active_config: bool,
     out: &mut GateOutcome,
 ) -> bool {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
@@ -653,6 +654,9 @@ fn scan_json(
 
     for token in tokens {
         for rule in rules {
+            if is_active_config && rule.label == "denylisted hostname" {
+                continue;
+            }
             for caps in rule.re.captures_iter(token) {
                 let m = caps.get(0).unwrap();
                 if rule.label == "private LAN address"
@@ -706,9 +710,19 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
     let mut out = GateOutcome::new(GATE);
     let mut binary = 0usize;
 
+    let is_active_config = |label: &str| {
+        let l = label.trim_start_matches("./");
+        let c = ctx.config_path.trim_start_matches("./");
+        l == c || l == "discipline.toml"
+    };
+
     let mut scan = |label: &str, text: &str, out: &mut GateOutcome| {
+        let active_cfg = is_active_config(label);
         for (idx, line) in text.lines().enumerate() {
             let hit = rules.iter().find_map(|rule| {
+                if active_cfg && rule.label == "denylisted hostname" {
+                    return None;
+                }
                 rule.re.captures_iter(line).find_map(|caps| {
                     let m = caps.get(0).unwrap();
                     if rule.label == "private LAN address"
@@ -769,7 +783,15 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
             Some(text) => {
                 out.examined += 1;
                 if path.ends_with(".json")
-                    && scan_json(&path, &text, &rules, settings, &allowed, &mut out)
+                    && scan_json(
+                        &path,
+                        &text,
+                        &rules,
+                        settings,
+                        &allowed,
+                        is_active_config(&path),
+                        &mut out,
+                    )
                 {
                     continue;
                 }

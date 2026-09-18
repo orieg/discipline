@@ -770,6 +770,39 @@ fn hostname_denylist_comes_from_config_or_secret_env_and_is_never_echoed() {
 }
 
 #[test]
+fn active_config_exempt_from_hostname_denylist() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nhostname_denylist = [\"my-internal-server\"]\n",
+    );
+    repo.commit("config: set hostname denylist");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 0,
+        "active config should not flag its own hostname denylist: {}",
+        run.stdout
+    );
+    assert_eq!(run.titles("pii").len(), 0);
+
+    // But if another file contains it, it must still be caught
+    repo.write("src/lib.rs", "// connects to my-internal-server\n");
+    let run2 = repo.check(&[]);
+    assert_eq!(run2.code, 1);
+    // Restore clean src/lib.rs
+    repo.write("src/lib.rs", "// clean\n");
+
+    // And if discipline.toml contains a home-directory path, it MUST still fire
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nhostname_denylist = [\"my-internal-server\"]\n# /Users/alice/config\n",
+    );
+    let run3 = repo.check(&[]);
+    assert_eq!(run3.code, 1);
+    assert_eq!(run3.titles("pii").len(), 1);
+}
+
+#[test]
 fn pii_rfc1918_network_id_exemption_and_json_streaming() {
     let repo = Repo::new();
     repo.write(

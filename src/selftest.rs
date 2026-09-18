@@ -252,6 +252,107 @@ const CASES: &[Case] = &[
                 && empty.tests[0].is_vacuous())
         },
     ),
+    (
+        "agent-diff: pure evaluate_assertion_reduction discriminates drop and accepts override",
+        || {
+            use crate::ast::TestFn;
+            use crate::guards::agent_diff::{evaluate_assertion_reduction, TestPair};
+            let b = TestFn {
+                name: "test_check".to_string(),
+                line: 1,
+                total_asserts: 2,
+                strong_asserts: 2,
+                tautologies: 0,
+                ignored: false,
+                should_panic: false,
+            };
+            let h = TestFn {
+                name: "test_check".to_string(),
+                line: 1,
+                total_asserts: 1,
+                strong_asserts: 1,
+                tautologies: 0,
+                ignored: false,
+                should_panic: false,
+            };
+            let pair = [TestPair {
+                path: "tests/pure.rs",
+                base: &b,
+                head: &h,
+                forced: false,
+            }];
+            let settings = crate::config::AssertionGate::default();
+            let unexcused = evaluate_assertion_reduction(&pair, &[], &settings, &[], false)?;
+            let directives = [crate::tokens::ParsedDirective {
+                directive: "allow-assertion-drop".to_string(),
+                reason: "test_check simplified".to_string(),
+                source: crate::tokens::OverrideSource::PrBody,
+                hidden: false,
+            }];
+            let excused = evaluate_assertion_reduction(&pair, &[], &settings, &directives, false)?;
+            Ok(unexcused.violations.len() == 1
+                && unexcused.overrides.is_empty()
+                && excused.violations.is_empty()
+                && excused.overrides.len() == 1)
+        },
+    ),
+    (
+        "agent-diff: pure evaluate_deletion_rationale catches unexcused test and file removals",
+        || {
+            use crate::ast::TestFn;
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::agent_diff::{evaluate_deletion_rationale, Located};
+            let settings = crate::config::DeletionGate::default();
+            let deleted_file = [ChangedFile {
+                path: "src/old.rs".into(),
+                old_path: "src/old.rs".into(),
+                kind: ChangeKind::Deleted,
+                added_lines: std::collections::BTreeSet::new(),
+            }];
+            let unexcused_file =
+                evaluate_deletion_rationale(&deleted_file, &[], &settings, &[], false)?;
+            let file_directive = [crate::tokens::ParsedDirective {
+                directive: "removes".to_string(),
+                reason: "src/old.rs superseded".to_string(),
+                source: crate::tokens::OverrideSource::PrBody,
+                hidden: false,
+            }];
+            let excused_file =
+                evaluate_deletion_rationale(&deleted_file, &[], &settings, &file_directive, false)?;
+
+            let t = TestFn {
+                name: "test_old".to_string(),
+                line: 1,
+                total_asserts: 1,
+                strong_asserts: 1,
+                tautologies: 0,
+                ignored: false,
+                should_panic: false,
+            };
+            let removed_test = [Located {
+                path: "tests/suite.rs",
+                file_survives: true,
+                test: &t,
+            }];
+            let unexcused_test =
+                evaluate_deletion_rationale(&[], &removed_test, &settings, &[], false)?;
+            let test_directive = [crate::tokens::ParsedDirective {
+                directive: "removes".to_string(),
+                reason: "test_old superseded".to_string(),
+                source: crate::tokens::OverrideSource::PrBody,
+                hidden: false,
+            }];
+            let excused_test =
+                evaluate_deletion_rationale(&[], &removed_test, &settings, &test_directive, false)?;
+
+            Ok(unexcused_file.violations.len() == 1
+                && excused_file.violations.is_empty()
+                && excused_file.overrides.len() == 1
+                && unexcused_test.violations.len() == 1
+                && excused_test.violations.is_empty()
+                && excused_test.overrides.len() == 1)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

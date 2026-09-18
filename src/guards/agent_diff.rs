@@ -10,24 +10,24 @@ use crate::gitctx::{ChangeKind, ChangedFile};
 use crate::tokens;
 use anyhow::{anyhow, bail, Result};
 
-pub(crate) struct FileFacts {
-    pub(crate) file: ChangedFile,
-    pub(crate) base: Option<RustFacts>,
-    pub(crate) head: Option<RustFacts>,
+pub struct FileFacts {
+    pub file: ChangedFile,
+    pub base: Option<RustFacts>,
+    pub head: Option<RustFacts>,
 }
 
-pub(crate) struct TestPair<'a> {
-    pub(crate) path: &'a str,
-    pub(crate) base: &'a TestFn,
-    pub(crate) head: &'a TestFn,
-    pub(crate) forced: bool,
+pub struct TestPair<'a> {
+    pub path: &'a str,
+    pub base: &'a TestFn,
+    pub head: &'a TestFn,
+    pub forced: bool,
 }
 
-pub(crate) struct Located<'a> {
-    pub(crate) path: &'a str,
+pub struct Located<'a> {
+    pub path: &'a str,
     /// The file still exists on the head side.
-    pub(crate) file_survives: bool,
-    pub(crate) test: &'a TestFn,
+    pub file_survives: bool,
+    pub test: &'a TestFn,
 }
 
 /// Runs every diff-based agent-guard gate and returns one outcome per gate.
@@ -98,12 +98,46 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
 
     let (pairs, removed, added) = match_tests(&rust);
 
+    let is_staged = ctx.staged && ctx.pr_body.is_none();
     let mut ast_gates = vec![
-        assertion_reduction(ctx, &rust, &pairs, &added)?,
-        vacuous_tests(ctx, &rust, &added)?,
-        ignored_tests(ctx, &rust, &pairs, &added)?,
-        unsafe_safety_comment(ctx, &rust)?,
+        evaluate_assertion_reduction(
+            &pairs,
+            &added,
+            &gates.assertion_reduction,
+            &ctx.directives,
+            is_staged,
+        )?,
+        evaluate_vacuous_tests(&added, &gates.vacuous_tests)?,
+        evaluate_ignored_tests(
+            &pairs,
+            &added,
+            &gates.ignored_tests,
+            &ctx.directives,
+            is_staged,
+        )?,
+        evaluate_unsafe_safety_comment(&rust, &gates.unsafe_safety_comment)?,
     ];
+
+    let first_enabled = [
+        ("assertion-reduction", gates.assertion_reduction.enabled),
+        ("vacuous-tests", gates.vacuous_tests.enabled),
+        ("ignored-tests", gates.ignored_tests.enabled),
+        ("unsafe-safety-comment", gates.unsafe_safety_comment.enabled),
+    ]
+    .into_iter()
+    .find(|(_, on)| *on)
+    .map(|(id, _)| id);
+
+    if let Some(target) = first_enabled {
+        if let Some(outcome) = ast_gates.iter_mut().find(|o| o.gate == target) {
+            let sev = ctx
+                .config
+                .gates
+                .settings(target)
+                .map_or(crate::config::Severity::Error, |s| s.severity());
+            report_parse_errors(&rust, sev, outcome);
+        }
+    }
 
     fn format_unsupported_breakdown(paths: &[&str]) -> String {
         let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
@@ -163,7 +197,13 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         }
     }
 
-    ast_gates.push(deletion_rationale(ctx, &changed, &removed)?);
+    ast_gates.push(evaluate_deletion_rationale(
+        &changed,
+        &removed,
+        &gates.deletion_rationale,
+        &ctx.directives,
+        is_staged,
+    )?);
     Ok(ast_gates)
 }
 
@@ -242,9 +282,7 @@ pub fn name_similarity(a: &str, b: &str) -> f64 {
 
 /// Pair tests by name within a file, then pair the leftovers across files so a
 /// test moved to another file is compared instead of reported as removed+new.
-pub(crate) fn match_tests(
-    rust: &[FileFacts],
-) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, Vec<Located<'_>>) {
+pub fn match_tests(rust: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, Vec<Located<'_>>) {
     let mut pairs = Vec::new();
     let mut removed: Vec<Located> = Vec::new();
     let mut added: Vec<Located> = Vec::new();
@@ -411,7 +449,7 @@ pub(crate) fn match_tests(
     (pairs, removed, added)
 }
 
-fn leaf_name(test: &TestFn) -> &str {
+pub(crate) fn leaf_name(test: &TestFn) -> &str {
     test.name.rsplit("::").next().unwrap_or(&test.name)
 }
 
@@ -422,30 +460,15 @@ fn analyzed_files(rust: &[FileFacts], exempt: &PathFilter) -> usize {
 }
 
 /// Parse errors are reported by the first enabled AST gate only.
-fn report_parse_errors(
-    ctx: &Context,
-    gate: &'static str,
+pub(crate) fn report_parse_errors(
     rust: &[FileFacts],
+    severity: crate::config::Severity,
     out: &mut GateOutcome,
 ) {
-    let g = &ctx.config.gates;
-    let first_enabled = [
-        ("assertion-reduction", g.assertion_reduction.enabled),
-        ("vacuous-tests", g.vacuous_tests.enabled),
-        ("ignored-tests", g.ignored_tests.enabled),
-        ("unsafe-safety-comment", g.unsafe_safety_comment.enabled),
-    ]
-    .into_iter()
-    .find(|(_, on)| *on)
-    .map(|(id, _)| id);
-    if first_enabled != Some(gate) {
-        return;
-    }
-    let settings = g.settings(gate).expect("registered gate");
     for ff in rust {
         if ff.head.as_ref().is_some_and(|h| h.has_parse_errors) {
             out.push(
-                settings.severity(),
+                severity,
                 "Rust File Could Not Be Fully Parsed",
                 Some(&ff.file.path),
                 None,
@@ -459,18 +482,17 @@ fn report_parse_errors(
     }
 }
 
-fn assertion_reduction(
-    ctx: &Context,
-    rust: &[FileFacts],
+pub fn evaluate_assertion_reduction(
     pairs: &[TestPair],
     added: &[Located],
+    settings: &crate::config::AssertionGate,
+    directives: &[crate::tokens::ParsedDirective],
+    is_staged: bool,
 ) -> Result<GateOutcome> {
     const GATE: &str = "assertion-reduction";
-    let settings = &ctx.config.gates.assertion_reduction;
     let exempt = exempt_filter(settings)?;
     let mut out = GateOutcome::new(GATE);
     out.examined = pairs.len();
-    report_parse_errors(ctx, GATE, rust, &mut out);
 
     // Track surplus assertions per file from tests added in the head side.
     // When a test is split into multiple tests, the surplus assertions in the same file
@@ -509,10 +531,17 @@ fn assertion_reduction(
         // the old test that was replaced/gutted. For non-forced pairs (exact name or similarity rename),
         // naming either the old test or the new test is accepted.
         let allowed = if p.forced {
-            ctx.find_override(GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(b))
+            tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(b))
         } else {
-            ctx.find_override(GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(h))
-                .or_else(|| ctx.find_override(GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(b)))
+            tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(h))
+                .or_else(|| {
+                    tokens::find_override(
+                        directives,
+                        GATE,
+                        tokens::ALLOW_ASSERTION_DROP,
+                        leaf_name(b),
+                    )
+                })
         };
         if let Some(record) = allowed {
             out.overrides.push(record);
@@ -538,8 +567,14 @@ fn assertion_reduction(
         };
         let directive_name = if p.forced { leaf_name(b) } else { leaf_name(h) };
 
+        let severity = if is_staged {
+            crate::config::Severity::Warning
+        } else {
+            settings.severity()
+        };
+
         out.push(
-            ctx.overridable(settings.severity()),
+            severity,
             "Assertion Reduction In Existing Test",
             Some(p.path),
             Some(h.line),
@@ -554,13 +589,14 @@ fn assertion_reduction(
     Ok(out)
 }
 
-fn vacuous_tests(ctx: &Context, rust: &[FileFacts], added: &[Located]) -> Result<GateOutcome> {
+pub fn evaluate_vacuous_tests(
+    added: &[Located],
+    settings: &crate::config::AssertionGate,
+) -> Result<GateOutcome> {
     const GATE: &str = "vacuous-tests";
-    let settings = &ctx.config.gates.vacuous_tests;
     let exempt = exempt_filter(settings)?;
     let mut out = GateOutcome::new(GATE);
     out.examined = added.len();
-    report_parse_errors(ctx, GATE, rust, &mut out);
 
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
         if !a.test.is_vacuous() {
@@ -587,18 +623,17 @@ fn vacuous_tests(ctx: &Context, rust: &[FileFacts], added: &[Located]) -> Result
     Ok(out)
 }
 
-fn ignored_tests(
-    ctx: &Context,
-    rust: &[FileFacts],
+pub fn evaluate_ignored_tests(
     pairs: &[TestPair],
     added: &[Located],
+    settings: &crate::config::BasicGate,
+    directives: &[crate::tokens::ParsedDirective],
+    is_staged: bool,
 ) -> Result<GateOutcome> {
     const GATE: &str = "ignored-tests";
-    let settings = &ctx.config.gates.ignored_tests;
     let exempt = exempt_filter(settings)?;
     let mut out = GateOutcome::new(GATE);
     out.examined = pairs.len() + added.len();
-    report_parse_errors(ctx, GATE, rust, &mut out);
 
     let newly_ignored = pairs
         .iter()
@@ -614,12 +649,19 @@ fn ignored_tests(
         if exempt.matches(path) {
             continue;
         }
-        if let Some(record) = ctx.find_override(GATE, tokens::ALLOW_IGNORE, leaf_name(test)) {
+        if let Some(record) =
+            tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
+        {
             out.overrides.push(record);
             continue;
         }
+        let severity = if is_staged {
+            crate::config::Severity::Warning
+        } else {
+            settings.severity()
+        };
         out.push(
-            ctx.overridable(settings.severity()),
+            severity,
             "Test Newly Marked #[ignore]",
             Some(path),
             Some(test.line),
@@ -634,13 +676,14 @@ fn ignored_tests(
     Ok(out)
 }
 
-fn unsafe_safety_comment(ctx: &Context, rust: &[FileFacts]) -> Result<GateOutcome> {
+pub fn evaluate_unsafe_safety_comment(
+    rust: &[FileFacts],
+    settings: &crate::config::BasicGate,
+) -> Result<GateOutcome> {
     const GATE: &str = "unsafe-safety-comment";
-    let settings = &ctx.config.gates.unsafe_safety_comment;
     let exempt = exempt_filter(settings)?;
     let mut out = GateOutcome::new(GATE);
     out.examined = analyzed_files(rust, &exempt);
-    report_parse_errors(ctx, GATE, rust, &mut out);
 
     for ff in rust {
         let Some(head) = &ff.head else { continue };
@@ -671,16 +714,21 @@ fn unsafe_safety_comment(ctx: &Context, rust: &[FileFacts]) -> Result<GateOutcom
     Ok(out)
 }
 
-fn deletion_rationale(
-    ctx: &Context,
+pub fn evaluate_deletion_rationale(
     changed: &[ChangedFile],
     removed: &[Located],
+    settings: &crate::config::DeletionGate,
+    directives: &[crate::tokens::ParsedDirective],
+    is_staged: bool,
 ) -> Result<GateOutcome> {
     const GATE: &str = "deletion-rationale";
-    let settings = &ctx.config.gates.deletion_rationale;
     let exempt = exempt_filter(settings)?;
     let watched = PathFilter::new(&settings.paths)?;
-    let severity = ctx.overridable(settings.severity());
+    let severity = if is_staged {
+        crate::config::Severity::Warning
+    } else {
+        settings.severity()
+    };
     let mut out = GateOutcome::new(GATE);
 
     for file in changed.iter().filter(|f| f.kind == ChangeKind::Deleted) {
@@ -688,7 +736,7 @@ fn deletion_rationale(
             continue;
         }
         out.examined += 1;
-        if let Some(record) = ctx.find_override(GATE, tokens::REMOVES, &file.path) {
+        if let Some(record) = tokens::find_override(directives, GATE, tokens::REMOVES, &file.path) {
             out.overrides.push(record);
             continue;
         }
@@ -718,7 +766,9 @@ fn deletion_rationale(
             continue;
         }
         out.examined += 1;
-        if let Some(record) = ctx.find_override(GATE, tokens::REMOVES, leaf_name(r.test)) {
+        if let Some(record) =
+            tokens::find_override(directives, GATE, tokens::REMOVES, leaf_name(r.test))
+        {
             out.overrides.push(record);
             continue;
         }
@@ -866,5 +916,302 @@ mod tests {
         assert_eq!(removed.len(), 1);
         assert_eq!(removed[0].test.name, "b2");
         assert!(added.is_empty());
+    }
+
+    #[test]
+    fn test_assertion_reduction_pure() {
+        let b = TestFn {
+            name: "test_something".to_string(),
+            line: 1,
+            total_asserts: 2,
+            strong_asserts: 2,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let h_weak = TestFn {
+            name: "test_something".to_string(),
+            line: 1,
+            total_asserts: 2,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let h_drop = TestFn {
+            name: "test_something".to_string(),
+            line: 1,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let settings = crate::config::AssertionGate::default();
+
+        // Weakened strong assert
+        let pair_weak = [TestPair {
+            path: "tests/a.rs",
+            base: &b,
+            head: &h_weak,
+            forced: false,
+        }];
+        let out_weak =
+            evaluate_assertion_reduction(&pair_weak, &[], &settings, &[], false).unwrap();
+        assert_eq!(out_weak.violations.len(), 1);
+        assert_eq!(out_weak.examined, 1);
+
+        // Dropped total assert
+        let pair_drop = [TestPair {
+            path: "tests/a.rs",
+            base: &b,
+            head: &h_drop,
+            forced: false,
+        }];
+        let out_drop =
+            evaluate_assertion_reduction(&pair_drop, &[], &settings, &[], false).unwrap();
+        assert_eq!(out_drop.violations.len(), 1);
+
+        // Override justifies the drop
+        let directives = [crate::tokens::ParsedDirective {
+            directive: "allow-assertion-drop".to_string(),
+            reason: "test_something refactored".to_string(),
+            source: crate::tokens::OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let out_override =
+            evaluate_assertion_reduction(&pair_drop, &[], &settings, &directives, false).unwrap();
+        assert_eq!(out_override.violations.len(), 0);
+        assert_eq!(out_override.overrides.len(), 1);
+
+        // Split absorption: added test with strong assert absorbs the drop
+        let added_split = [Located {
+            path: "tests/a.rs",
+            file_survives: true,
+            test: &b, // has 2 asserts
+        }];
+        let out_absorbed =
+            evaluate_assertion_reduction(&pair_drop, &added_split, &settings, &[], false).unwrap();
+        assert_eq!(out_absorbed.violations.len(), 0);
+    }
+
+    #[test]
+    fn test_vacuous_tests_pure() {
+        let settings = crate::config::AssertionGate::default();
+        let t_empty = TestFn {
+            name: "empty".to_string(),
+            line: 10,
+            total_asserts: 0,
+            strong_asserts: 0,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let t_tautology = TestFn {
+            name: "tauto".to_string(),
+            line: 20,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 1,
+            ignored: false,
+            should_panic: false,
+        };
+        let t_real = TestFn {
+            name: "real".to_string(),
+            line: 30,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+
+        let loc_empty = [Located {
+            path: "tests/a.rs",
+            file_survives: true,
+            test: &t_empty,
+        }];
+        let out_empty = evaluate_vacuous_tests(&loc_empty, &settings).unwrap();
+        assert_eq!(out_empty.violations.len(), 1);
+        assert!(out_empty.violations[0]
+            .message
+            .contains("contains no assertion"));
+
+        let loc_tauto = [Located {
+            path: "tests/a.rs",
+            file_survives: true,
+            test: &t_tautology,
+        }];
+        let out_tauto = evaluate_vacuous_tests(&loc_tauto, &settings).unwrap();
+        assert_eq!(out_tauto.violations.len(), 1);
+        assert!(out_tauto.violations[0]
+            .message
+            .contains("contains only tautological assertions"));
+
+        let loc_real = [Located {
+            path: "tests/a.rs",
+            file_survives: true,
+            test: &t_real,
+        }];
+        let out_real = evaluate_vacuous_tests(&loc_real, &settings).unwrap();
+        assert_eq!(out_real.violations.len(), 0);
+    }
+
+    #[test]
+    fn test_ignored_tests_pure() {
+        let settings = crate::config::BasicGate::default();
+        let b = TestFn {
+            name: "active".to_string(),
+            line: 1,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let h_ignored = TestFn {
+            name: "active".to_string(),
+            line: 1,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: true,
+            should_panic: false,
+        };
+
+        let pairs = [TestPair {
+            path: "tests/a.rs",
+            base: &b,
+            head: &h_ignored,
+            forced: false,
+        }];
+        let out = evaluate_ignored_tests(&pairs, &[], &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 1);
+
+        let directives = [crate::tokens::ParsedDirective {
+            directive: "allow-ignore".to_string(),
+            reason: "active flaky upstream".to_string(),
+            source: crate::tokens::OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let out_override =
+            evaluate_ignored_tests(&pairs, &[], &settings, &directives, false).unwrap();
+        assert_eq!(out_override.violations.len(), 0);
+        assert_eq!(out_override.overrides.len(), 1);
+    }
+
+    #[test]
+    fn test_unsafe_safety_comment_pure() {
+        use crate::ast::UnsafeSite;
+        use std::collections::BTreeSet;
+
+        let settings = crate::config::BasicGate::default();
+        let mut added_lines = BTreeSet::new();
+        added_lines.insert(15);
+
+        let facts_undocumented = [FileFacts {
+            file: ChangedFile {
+                path: "src/lib.rs".into(),
+                old_path: "src/lib.rs".into(),
+                kind: ChangeKind::Modified,
+                added_lines: added_lines.clone(),
+            },
+            base: None,
+            head: Some(RustFacts {
+                tests: vec![],
+                unsafe_sites: vec![UnsafeSite {
+                    kind: "block",
+                    line: 15,
+                    documented: false,
+                    snippet: "unsafe { *p }".into(),
+                }],
+                has_parse_errors: false,
+            }),
+        }];
+        let out_bad = evaluate_unsafe_safety_comment(&facts_undocumented, &settings).unwrap();
+        assert_eq!(out_bad.violations.len(), 1);
+
+        let facts_documented = [FileFacts {
+            file: ChangedFile {
+                path: "src/lib.rs".into(),
+                old_path: "src/lib.rs".into(),
+                kind: ChangeKind::Modified,
+                added_lines,
+            },
+            base: None,
+            head: Some(RustFacts {
+                tests: vec![],
+                unsafe_sites: vec![UnsafeSite {
+                    kind: "block",
+                    line: 15,
+                    documented: true,
+                    snippet: "unsafe { *p }".into(),
+                }],
+                has_parse_errors: false,
+            }),
+        }];
+        let out_good = evaluate_unsafe_safety_comment(&facts_documented, &settings).unwrap();
+        assert_eq!(out_good.violations.len(), 0);
+    }
+
+    #[test]
+    fn test_deletion_rationale_pure() {
+        let settings = crate::config::DeletionGate::default();
+        let deleted_files = [ChangedFile {
+            path: "src/legacy.rs".into(),
+            old_path: "src/legacy.rs".into(),
+            kind: ChangeKind::Deleted,
+            added_lines: std::collections::BTreeSet::new(),
+        }];
+
+        // File deletion without rationale
+        let out_unexcused =
+            evaluate_deletion_rationale(&deleted_files, &[], &settings, &[], false).unwrap();
+        assert_eq!(out_unexcused.violations.len(), 1);
+
+        // File deletion with rationale
+        let directives = [crate::tokens::ParsedDirective {
+            directive: "removes".to_string(),
+            reason: "src/legacy.rs removed in v2".to_string(),
+            source: crate::tokens::OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let out_excused =
+            evaluate_deletion_rationale(&deleted_files, &[], &settings, &directives, false)
+                .unwrap();
+        assert_eq!(out_excused.violations.len(), 0);
+        assert_eq!(out_excused.overrides.len(), 1);
+
+        // Test removal from surviving file without rationale
+        let t = TestFn {
+            name: "test_old".to_string(),
+            line: 5,
+            total_asserts: 2,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let removed_tests = [Located {
+            path: "tests/suite.rs",
+            file_survives: true,
+            test: &t,
+        }];
+        let out_test_unexcused =
+            evaluate_deletion_rationale(&[], &removed_tests, &settings, &[], false).unwrap();
+        assert_eq!(out_test_unexcused.violations.len(), 1);
+
+        // Test removal with rationale
+        let test_directive = [crate::tokens::ParsedDirective {
+            directive: "removes".to_string(),
+            reason: "test_old superseded".to_string(),
+            source: crate::tokens::OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let out_test_excused =
+            evaluate_deletion_rationale(&[], &removed_tests, &settings, &test_directive, false)
+                .unwrap();
+        assert_eq!(out_test_excused.violations.len(), 0);
+        assert_eq!(out_test_excused.overrides.len(), 1);
     }
 }

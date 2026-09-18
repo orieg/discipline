@@ -55,6 +55,27 @@ impl ParsedDirective {
     }
 }
 
+pub fn find_override(
+    directives: &[ParsedDirective],
+    gate: &str,
+    names: &[&str],
+    subject: &str,
+) -> Option<OverrideRecord> {
+    for d in directives {
+        if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive)) && d.covers(subject) {
+            return Some(OverrideRecord {
+                gate: gate.to_string(),
+                subject: subject.to_string(),
+                directive: d.directive.clone(),
+                reason: d.reason.clone(),
+                source: d.source.clone(),
+                hidden: d.hidden,
+            });
+        }
+    }
+    None
+}
+
 pub const REMOVES: &[&str] = &[
     "removes",
     "deletes",

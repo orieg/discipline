@@ -123,19 +123,7 @@ impl Context<'_> {
         names: &[&str],
         subject: &str,
     ) -> Option<crate::tokens::OverrideRecord> {
-        for d in &self.directives {
-            if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive)) && d.covers(subject) {
-                return Some(crate::tokens::OverrideRecord {
-                    gate: gate.to_string(),
-                    subject: subject.to_string(),
-                    directive: d.directive.clone(),
-                    reason: d.reason.clone(),
-                    source: d.source.clone(),
-                    hidden: d.hidden,
-                });
-            }
-        }
-        None
+        crate::tokens::find_override(&self.directives, gate, names, subject)
     }
 
     /// A finding that an override directive could lift is only a warning in
