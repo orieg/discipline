@@ -1,121 +1,53 @@
-//! Tree-sitter extraction of the facts the agent-guard gates reason about.
-//!
-//! Everything here is keyed on syntax nodes, never on substring matches: the
-//! word `unsafe` or `assert!` inside a comment, a string literal, or a doc
-//! example is not a node of the corresponding kind and is never counted.
-//!
-//! Known limit (see docs/ARCHITECTURE.md): the
-//! body of a macro invocation is an unparsed token tree, so tests generated
-//! inside `proptest! { .. }` and assertions nested inside another macro's
-//! arguments are not visible.
+//! Rust language pack: tree-sitter AST extraction of tests, assertions, and unsafe sites.
 
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
-/// Languages with a fact extractor. Adding a language pack means: a grammar,
-/// an extractor that fills [`RustFacts`]' language-neutral fields (tests,
-/// assertion counts, skip markers, escape-hatch sites), and its controls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Language {
-    Rust,
-}
+use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn, UnsafeSite};
 
-/// Source extensions discipline recognises but cannot analyse yet. A change
-/// touching these is *named* in the report: the AST gates did not look at it.
-const UNSUPPORTED_SOURCE_EXTS: &[&str] = &[
-    "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "java", "kt", "kts", "scala", "go", "c", "h",
-    "cc", "cpp", "cxx", "hpp", "hh", "cs", "rb", "swift", "php", "phpt", "m", "mm",
-];
+/// Rust language pack implementing [`LanguagePack`].
+pub struct RustPack;
 
-pub fn language_for(path: &str) -> Option<Language> {
-    match extension(path)? {
-        "rs" => Some(Language::Rust),
-        _ => None,
-    }
-}
-
-pub fn is_unsupported_source(path: &str) -> bool {
-    extension(path).is_some_and(|e| UNSUPPORTED_SOURCE_EXTS.contains(&e))
-}
-
-fn extension(path: &str) -> Option<&str> {
-    let name = path.rsplit('/').next()?;
-    name.rsplit_once('.').map(|(_, ext)| ext)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TestFn {
-    /// Module-qualified name, e.g. `tests::inserts_in_order`.
-    pub name: String,
-    /// 1-based line of the `fn` item.
-    pub line: usize,
-    pub total_asserts: usize,
-    /// Equality / pattern assertions (`assert_eq!`, `assert_ne!`, `assert_matches!` ...).
-    pub strong_asserts: usize,
-    pub tautologies: usize,
-    pub ignored: bool,
-    pub should_panic: bool,
-}
-
-impl TestFn {
-    /// Assertions that can actually fail.
-    pub fn effective_asserts(&self) -> usize {
-        self.total_asserts - self.tautologies
+impl LanguagePack for RustPack {
+    fn id(&self) -> &'static str {
+        "rust"
     }
 
-    pub fn is_vacuous(&self) -> bool {
-        self.effective_asserts() == 0 && !self.should_panic
+    fn name(&self) -> &'static str {
+        "Rust"
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnsafeSite {
-    pub line: usize,
-    pub kind: &'static str,
-    pub documented: bool,
-    pub snippet: String,
-}
+    fn matches(&self, path: &str) -> bool {
+        super::extension(path) == Some("rs")
+    }
 
-#[derive(Debug, Clone, Default)]
-pub struct RustFacts {
-    pub tests: Vec<TestFn>,
-    pub unsafe_sites: Vec<UnsafeSite>,
-    /// The grammar could not parse part of the file; facts may be incomplete.
-    pub has_parse_errors: bool,
-}
+    fn extract(&self, _path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .map_err(|e| anyhow!("failed to load the Rust grammar: {e}"))?;
+        let tree = parser
+            .parse(src, None)
+            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let root = tree.root_node();
 
-#[derive(Debug, Clone, Default)]
-pub struct AssertVocabulary {
-    pub extra_macros: Vec<String>,
-    pub helper_fns: Vec<String>,
-}
-
-pub fn analyze(source: &str, vocab: &AssertVocabulary) -> Result<RustFacts> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .map_err(|e| anyhow!("failed to load the Rust grammar: {e}"))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
-    let root = tree.root_node();
-
-    let mut cx = Extractor {
-        src: source.as_bytes(),
-        lines: source.lines().collect(),
-        line_starts: std::iter::once(0)
-            .chain(source.match_indices('\n').map(|(i, _)| i + 1))
-            .collect(),
-        vocab,
-        comments: Vec::new(),
-        facts: RustFacts {
-            has_parse_errors: root.has_error(),
-            ..Default::default()
-        },
-    };
-    cx.collect_comments(root);
-    cx.visit(root, &mut Vec::new());
-    Ok(cx.facts)
+        let mut cx = Extractor {
+            src: src.as_bytes(),
+            lines: src.lines().collect(),
+            line_starts: std::iter::once(0)
+                .chain(src.match_indices('\n').map(|(i, _)| i + 1))
+                .collect(),
+            vocab,
+            comments: Vec::new(),
+            facts: ParsedFileFacts {
+                has_parse_errors: root.has_error(),
+                ..Default::default()
+            },
+        };
+        cx.collect_comments(root);
+        cx.visit(root, &mut Vec::new());
+        Ok(cx.facts)
+    }
 }
 
 struct Comment {
@@ -133,7 +65,7 @@ struct Extractor<'a> {
     line_starts: Vec<usize>,
     vocab: &'a AssertVocabulary,
     comments: Vec<Comment>,
-    facts: RustFacts,
+    facts: ParsedFileFacts,
 }
 
 impl<'a> Extractor<'a> {
@@ -320,16 +252,26 @@ impl<'a> Extractor<'a> {
     fn unsafe_site(&mut self, node: Node, kind: &'static str) {
         let documented = self.is_documented(node);
         let row = node.start_position().row;
-        self.facts.unsafe_sites.push(UnsafeSite {
+        let snippet = self
+            .lines
+            .get(row)
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default();
+        let site = UnsafeSite {
             line: row + 1,
             kind,
             documented,
-            snippet: self
-                .lines
-                .get(row)
-                .map(|l| l.trim().to_string())
-                .unwrap_or_default(),
-        });
+            snippet: snippet.clone(),
+        };
+        self.facts.unsafe_sites.push(site);
+        self.facts
+            .escape_hatches
+            .push(EscapeHatchSite::UnsafeBlock {
+                line: row + 1,
+                kind,
+                documented,
+                snippet,
+            });
     }
 
     /// A site is documented when a `SAFETY:` comment sits in the contiguous
@@ -608,8 +550,10 @@ fn split_top_level(s: &str) -> Vec<&str> {
 mod tests {
     use super::*;
 
-    fn facts(src: &str) -> RustFacts {
-        analyze(src, &AssertVocabulary::default()).expect("analyze")
+    fn facts(src: &str) -> ParsedFileFacts {
+        RustPack
+            .extract("test.rs", src, &AssertVocabulary::default())
+            .expect("analyze")
     }
 
     #[test]
@@ -662,7 +606,7 @@ mod tests {
             extra_macros: vec!["verify".into()],
             helper_fns: vec!["check_invariants".into()],
         };
-        let f = analyze(src, &vocab).unwrap();
+        let f = RustPack.extract("test.rs", src, &vocab).unwrap();
         assert_eq!(f.tests[0].total_asserts, 2);
     }
 
@@ -708,6 +652,7 @@ unsafe impl Send for X {}
             "{:?}",
             f.unsafe_sites
         );
+        assert_eq!(f.escape_hatches.len(), 4);
     }
 
     #[test]
@@ -735,24 +680,14 @@ unsafe impl Sync for X {}
             "{:?}",
             f.unsafe_sites
         );
+        assert_eq!(f.escape_hatches.len(), 5);
     }
 
     #[test]
     fn the_word_unsafe_in_comments_and_strings_is_not_a_site() {
         let f = facts("// unsafe { }\nfn a() { let _ = \"unsafe { x }\"; }");
         assert!(f.unsafe_sites.is_empty());
-    }
-
-    #[test]
-    fn language_dispatch_is_by_extension() {
-        assert_eq!(language_for("src/a.rs"), Some(Language::Rust));
-        assert_eq!(language_for("src/a.py"), None);
-        assert!(is_unsupported_source("pkg/mod/a.py"));
-        assert!(is_unsupported_source("web/App.tsx"));
-        assert!(is_unsupported_source("tests/001.phpt"));
-        assert!(!is_unsupported_source("src/a.rs"));
-        assert!(!is_unsupported_source("docs/plan.md"));
-        assert!(!is_unsupported_source("Makefile"));
+        assert!(f.escape_hatches.is_empty());
     }
 
     #[test]

@@ -3,7 +3,7 @@
 
 use super::{exempt_filter, Context, GateOutcome, PathFilter};
 use crate::ast::{
-    analyze, is_unsupported_source, language_for, AssertVocabulary, RustFacts, TestFn,
+    default_registry, is_unsupported_source_in, AssertVocabulary, ParsedFileFacts, TestFn,
 };
 use crate::config::GateSettings;
 use crate::gitctx::{ChangeKind, ChangedFile};
@@ -12,8 +12,8 @@ use anyhow::{anyhow, bail, Result};
 
 pub struct FileFacts {
     pub file: ChangedFile,
-    pub base: Option<RustFacts>,
-    pub head: Option<RustFacts>,
+    pub base: Option<ParsedFileFacts>,
+    pub head: Option<ParsedFileFacts>,
 }
 
 pub struct TestPair<'a> {
@@ -47,27 +47,32 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         .concat(),
     };
 
+    let registry = default_registry();
     let changed = ctx.git.changed_files()?;
-    let mut rust = Vec::new();
+    let mut analyzed_files = Vec::new();
     for file in changed
         .iter()
-        .filter(|f| language_for(&f.path).is_some() || language_for(&f.old_path).is_some())
+        .filter(|f| registry.is_supported(&f.path) || registry.is_supported(&f.old_path))
     {
         let base = match ctx.git.base_bytes(&file.old_path)? {
             Some(bytes) => {
-                if bytes.contains(&0) {
-                    bail!(
-                        "source file `{}` on base contains a NUL byte; refusing to analyze corrupted or binary source",
-                        file.old_path
-                    );
+                if let Some(pack) = registry.find_pack(&file.old_path) {
+                    if bytes.contains(&0) {
+                        bail!(
+                            "source file `{}` on base contains a NUL byte; refusing to analyze corrupted or binary source",
+                            file.old_path
+                        );
+                    }
+                    let src = String::from_utf8(bytes).map_err(|e| {
+                        anyhow!(
+                            "source file `{}` on base is not valid UTF-8: {e}",
+                            file.old_path
+                        )
+                    })?;
+                    Some(pack.extract(&file.old_path, &src, &vocab)?)
+                } else {
+                    None
                 }
-                let src = String::from_utf8(bytes).map_err(|e| {
-                    anyhow!(
-                        "source file `{}` on base is not valid UTF-8: {e}",
-                        file.old_path
-                    )
-                })?;
-                Some(analyze(&src, &vocab)?)
             }
             None => None,
         };
@@ -75,28 +80,32 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
             ChangeKind::Deleted => None,
             _ => match ctx.git.head_bytes(&file.path)? {
                 Some(bytes) => {
-                    if bytes.contains(&0) {
-                        bail!(
-                            "source file `{}` contains a NUL byte; refusing to analyze corrupted or binary source",
-                            file.path
-                        );
+                    if let Some(pack) = registry.find_pack(&file.path) {
+                        if bytes.contains(&0) {
+                            bail!(
+                                "source file `{}` contains a NUL byte; refusing to analyze corrupted or binary source",
+                                file.path
+                            );
+                        }
+                        let src = String::from_utf8(bytes).map_err(|e| {
+                            anyhow!("source file `{}` is not valid UTF-8: {e}", file.path)
+                        })?;
+                        Some(pack.extract(&file.path, &src, &vocab)?)
+                    } else {
+                        None
                     }
-                    let src = String::from_utf8(bytes).map_err(|e| {
-                        anyhow!("source file `{}` is not valid UTF-8: {e}", file.path)
-                    })?;
-                    Some(analyze(&src, &vocab)?)
                 }
                 None => None,
             },
         };
-        rust.push(FileFacts {
+        analyzed_files.push(FileFacts {
             file: file.clone(),
             base,
             head,
         });
     }
 
-    let (pairs, removed, added) = match_tests(&rust);
+    let (pairs, removed, added) = match_tests(&analyzed_files);
 
     let is_staged = ctx.staged && ctx.pr_body.is_none();
     let mut ast_gates = vec![
@@ -115,7 +124,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
             &ctx.directives,
             is_staged,
         )?,
-        evaluate_unsafe_safety_comment(&rust, &gates.unsafe_safety_comment)?,
+        evaluate_unsafe_safety_comment(&analyzed_files, &gates.unsafe_safety_comment)?,
     ];
 
     let first_enabled = [
@@ -135,7 +144,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
                 .gates
                 .settings(target)
                 .map_or(crate::config::Severity::Error, |s| s.severity());
-            report_parse_errors(&rust, sev, outcome);
+            report_parse_errors(&analyzed_files, sev, outcome);
         }
     }
 
@@ -176,7 +185,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     // not analysed. Saying so keeps "0 violations" from reading as coverage.
     let unseen: Vec<&str> = changed
         .iter()
-        .filter(|f| f.kind != ChangeKind::Deleted && is_unsupported_source(&f.path))
+        .filter(|f| f.kind != ChangeKind::Deleted && is_unsupported_source_in(&f.path, &registry))
         .map(|f| f.path.as_str())
         .collect();
     if !unseen.is_empty() {
@@ -282,7 +291,7 @@ pub fn name_similarity(a: &str, b: &str) -> f64 {
 
 /// Pair tests by name within a file, then pair the leftovers across files so a
 /// test moved to another file is compared instead of reported as removed+new.
-pub fn match_tests(rust: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, Vec<Located<'_>>) {
+pub fn match_tests(files: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, Vec<Located<'_>>) {
     let mut pairs = Vec::new();
     let mut removed: Vec<Located> = Vec::new();
     let mut added: Vec<Located> = Vec::new();
@@ -296,7 +305,7 @@ pub fn match_tests(rust: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, 
 
     let mut file_unmatched: Vec<FileUnmatched> = Vec::new();
 
-    for ff in rust {
+    for ff in files {
         let base_tests: &[TestFn] = ff.base.as_ref().map(|f| &f.tests[..]).unwrap_or(&[]);
         let head_tests: &[TestFn] = ff.head.as_ref().map(|f| &f.tests[..]).unwrap_or(&[]);
         let mut taken = vec![false; head_tests.len()];
@@ -453,26 +462,27 @@ pub(crate) fn leaf_name(test: &TestFn) -> &str {
     test.name.rsplit("::").next().unwrap_or(&test.name)
 }
 
-fn analyzed_files(rust: &[FileFacts], exempt: &PathFilter) -> usize {
-    rust.iter()
+fn analyzed_files(files: &[FileFacts], exempt: &PathFilter) -> usize {
+    files
+        .iter()
         .filter(|f| f.head.is_some() && !exempt.matches(&f.file.path))
         .count()
 }
 
 /// Parse errors are reported by the first enabled AST gate only.
 pub(crate) fn report_parse_errors(
-    rust: &[FileFacts],
+    files: &[FileFacts],
     severity: crate::config::Severity,
     out: &mut GateOutcome,
 ) {
-    for ff in rust {
+    for ff in files {
         if ff.head.as_ref().is_some_and(|h| h.has_parse_errors) {
             out.push(
                 severity,
-                "Rust File Could Not Be Fully Parsed",
+                "Source File Could Not Be Fully Parsed",
                 Some(&ff.file.path),
                 None,
-                "The Rust grammar reported syntax errors, so assertion and unsafe facts for \
+                "The grammar reported syntax errors, so assertion and unsafe facts for \
                  this file may be incomplete. A gate that cannot read its input does not pass."
                     .to_string(),
                 "Fix the syntax error, or list the path under `exempt_paths` for the AST gates \
@@ -677,20 +687,21 @@ pub fn evaluate_ignored_tests(
 }
 
 pub fn evaluate_unsafe_safety_comment(
-    rust: &[FileFacts],
+    files: &[FileFacts],
     settings: &crate::config::BasicGate,
 ) -> Result<GateOutcome> {
     const GATE: &str = "unsafe-safety-comment";
     let exempt = exempt_filter(settings)?;
     let mut out = GateOutcome::new(GATE);
-    out.examined = analyzed_files(rust, &exempt);
+    out.examined = analyzed_files(files, &exempt);
 
-    for ff in rust {
+    for ff in files {
         let Some(head) = &ff.head else { continue };
         if exempt.matches(&ff.file.path) {
             continue;
         }
-        let undocumented = |f: &RustFacts| f.unsafe_sites.iter().filter(|s| !s.documented).count();
+        let undocumented =
+            |f: &ParsedFileFacts| f.unsafe_sites.iter().filter(|s| !s.documented).count();
         let base_undocumented = ff.base.as_ref().map(undocumented).unwrap_or(0);
         // A site is in scope when its line was added, or — to catch a SAFETY
         // comment deleted from above an untouched block — when the file now
@@ -791,6 +802,7 @@ pub fn evaluate_deletion_rationale(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::RustFacts;
 
     #[test]
     fn name_similarity_discriminates_renames_from_unrelated_tests() {
@@ -842,11 +854,13 @@ mod tests {
             base: Some(RustFacts {
                 tests: vec![t1],
                 unsafe_sites: vec![],
+                escape_hatches: vec![],
                 has_parse_errors: false,
             }),
             head: Some(RustFacts {
                 tests: vec![t2],
                 unsafe_sites: vec![],
+                escape_hatches: vec![],
                 has_parse_errors: false,
             }),
         }];
@@ -899,11 +913,13 @@ mod tests {
             base: Some(RustFacts {
                 tests: vec![b1, b2],
                 unsafe_sites: vec![],
+                escape_hatches: vec![],
                 has_parse_errors: false,
             }),
             head: Some(RustFacts {
                 tests: vec![h1],
                 unsafe_sites: vec![],
+                escape_hatches: vec![],
                 has_parse_errors: false,
             }),
         }];
@@ -1125,6 +1141,7 @@ mod tests {
                     documented: false,
                     snippet: "unsafe { *p }".into(),
                 }],
+                escape_hatches: vec![],
                 has_parse_errors: false,
             }),
         }];
@@ -1147,6 +1164,7 @@ mod tests {
                     documented: true,
                     snippet: "unsafe { *p }".into(),
                 }],
+                escape_hatches: vec![],
                 has_parse_errors: false,
             }),
         }];
