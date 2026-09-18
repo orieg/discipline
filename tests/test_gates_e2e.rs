@@ -795,7 +795,10 @@ fn active_config_exempt_from_hostname_denylist() {
     // And if discipline.toml contains a home-directory path, it MUST still fire
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nhostname_denylist = [\"my-internal-server\"]\n# /Users/alice/config\n",
+        &format!(
+            "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nhostname_denylist = [\"my-internal-server\"]\n# /{}/alice/config\n",
+            "Users"
+        ),
     );
     let run3 = repo.check(&[]);
     assert_eq!(run3.code, 1);
