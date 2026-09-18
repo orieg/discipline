@@ -51,7 +51,7 @@ pub fn time_estimate_patterns() -> Vec<&'static str> {
     vec![
         // "3 weeks", "1-2 days", "~10 engineer-days", "2-hour"
         r"(?i)\b\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*-?\s*(?:(?:business|working|calendar)\s+|(?:engineer|person|man|dev)[- ])?(?:minutes?|mins?|hours?|hrs?|days?|weeks?|wks?|months?|quarters?|sprints?|years?)\b",
-        r"(?i)\b(?:next|this|following|coming)\s+(?:sprint|week|month|quarter)\b",
+        r"(?i)\b(?:next|this|following|coming)\s+(?:sprint|week|month|quarter|(?:mon|tues|wednes|thurs|fri|satur|sun)day)\b",
         r"\bQ[1-4]\b",
         r"(?i)\b(?:engineer|person|man|dev)[- ](?:hours?|days?|weeks?|months?)\b",
         r"(?i)\bby\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day\b",
@@ -135,223 +135,286 @@ impl MarkdownTableTracker {
     }
 }
 
+pub(crate) fn split_into_clauses(line: &str) -> Vec<(usize, &str)> {
+    let mut clauses = Vec::new();
+    let mut start = 0;
+    let chars: Vec<(usize, char)> = line.char_indices().collect();
+    let len = chars.len();
+
+    let mut i = 0;
+    while i < len {
+        let (byte_idx, ch) = chars[i];
+        let mut is_delim = false;
+        let mut delim_len = ch.len_utf8();
+
+        if ch == ';' || ch == '—' {
+            is_delim = true;
+        } else if ch == '-' && i + 1 < len && chars[i + 1].1 == '-' {
+            is_delim = true;
+            delim_len = 2;
+        } else if ch == '.' || ch == '!' || ch == '?' {
+            if i + 1 == len {
+                is_delim = true;
+            } else {
+                let next_ch = chars[i + 1].1;
+                if next_ch.is_whitespace()
+                    || next_ch == '"'
+                    || next_ch == '\''
+                    || next_ch == ')'
+                    || next_ch == ']'
+                {
+                    let before = &line[start..byte_idx];
+                    let is_num = before.chars().last().is_some_and(|c| c.is_ascii_digit());
+                    let next_is_num = chars.get(i + 2).is_some_and(|(_, c)| c.is_ascii_digit());
+                    if !(is_num && next_is_num) {
+                        is_delim = true;
+                    }
+                }
+            }
+        } else if ch == ',' {
+            let rest = &line[byte_idx + 1..];
+            let rest_trimmed = rest.trim_start();
+            let lower = rest_trimmed.to_lowercase();
+            for conj in ["but ", "although ", "whereas ", "while ", "however "] {
+                if lower.starts_with(conj) {
+                    is_delim = true;
+                    break;
+                }
+            }
+        }
+
+        if is_delim {
+            let slice = line[start..byte_idx].trim();
+            if !slice.is_empty() {
+                clauses.push((start, slice));
+            }
+            start = byte_idx + delim_len;
+            if delim_len > 1 {
+                i += delim_len - 1;
+            }
+        }
+        i += 1;
+    }
+
+    let tail = line[start..].trim();
+    if !tail.is_empty() {
+        clauses.push((start, tail));
+    }
+
+    if clauses.is_empty() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            clauses.push((0, trimmed));
+        }
+    }
+
+    clauses
+}
+
+fn has_setting_cue(clause: &str, line: &str) -> bool {
+    // 1. Inherent labor units / relative calendar projections / deadline promises
+    let inherent_re = Regex::new(
+        r"(?i)\b(?:(?:engineer|person|man|dev)[- ](?:hours?|days?|weeks?|months?)|(?:next|this|following|coming)\s+(?:sprint|week|month|quarter|(?:mon|tues|wednes|thurs|fri|satur|sun)day)|by\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day|over\s+the\s+weekend)\b",
+    )
+    .unwrap();
+    if inherent_re.is_match(clause) {
+        return true;
+    }
+
+    // 2. Step / Phase / Stage / Task / Batch labels
+    let step_re =
+        Regex::new(r"(?i)\b(?:phase|step|stage|task|batch|milestone)\s*(?:\d+|[a-z]\b|[ivx]+\b)")
+            .unwrap();
+    if step_re.is_match(clause) || step_re.is_match(line) {
+        return true;
+    }
+
+    // 3. Forward-looking delivery / planning verbs and nouns
+    let delivery_re = Regex::new(
+        r"(?i)\b(?:ship(?:s|ped|ping)?|deliver(?:s|ed|y|ing|ables?)?|land(?:s|ed|ing)?|launch(?:es|ed|ing)?|release(?:s|ed|ing)?|deploy(?:s|ed|ing)?|target(?:s|ed|ing)?|due|done|finish(?:es|ed|ing)?|complete(?:s|d|ion|ing)?|sprint(?:s)?|milestone(?:s)?|schedule(?:s|d)?|timeline(?:s)?|eta|deadline(?:s)?|roadmap|plan(?:s|ned|ning)?)\b",
+    )
+    .unwrap();
+    if delivery_re.is_match(clause) {
+        return true;
+    }
+
+    // 4. Estimation / rollup / effort phrasing
+    let estimate_re = Regex::new(
+        r"(?i)\b(?:estimate(?:s|d)?|duration|effort|sized|takes?|taking|roll(?:ed)?\s+up|approx(?:\.|imately)?|roughly)\b",
+    )
+    .unwrap();
+    if estimate_re.is_match(clause) {
+        return true;
+    }
+
+    // 5. In-future / working-for constructs
+    let in_duration_re = Regex::new(
+        r"(?i)\b(?:in\s+(?:about\s+|~\s*|approx(?:\.|imately)?\s*)?\d+\s+(?:days?|weeks?|months?|sprints?|quarters?|years?)|working\s+for\s+\d+)\b",
+    )
+    .unwrap();
+    if in_duration_re.is_match(clause) {
+        return true;
+    }
+
+    false
+}
+
+fn has_exemption_cue(clause: &str, line: &str, matched: &str) -> bool {
+    // 1. Question references (Q1, Q2, Q3, Q4)
+    if matches!(matched, "Q1" | "Q2" | "Q3" | "Q4") {
+        let target_re = Regex::new(
+            r"(?i)\b(?:target|due|done|roadmap|release|launch|schedule|timeline|deliver|ship|plan)\b",
+        )
+        .unwrap();
+        if target_re.is_match(clause) {
+            return false;
+        }
+        let q_re = Regex::new(
+            r"(?i)(?:\b(?:question|ask|answering|quoting|faq)\b|Q[1-4]\s*[-—–:)?.]|\(Q[1-4]\)|Q[1-4]['’]s|\*\*Q[1-4]|\[Q[1-4]\]|###?\s*Q[1-4])",
+        )
+        .unwrap();
+        if q_re.is_match(clause) || q_re.is_match(line) {
+            return true;
+        }
+    }
+
+    // 2. Operational limits / timeouts / caps / budgets / TTL / retention / intervals
+    let op_re = Regex::new(
+        r"(?i)\b(?:budget|cap|capped|limit(?:s)?|timeout(?:-minutes)?|ttl|retention|interval|window|rate\s+limit|frequency|every\s+\d+|default|gap)\b",
+    )
+    .unwrap();
+    if op_re.is_match(clause) {
+        return true;
+    }
+
+    // 3. Performance / measurement / runtimes / latency / benchmarks / loadavg
+    let meas_re = Regex::new(
+        r"(?i)\b(?:took|taken|runs?|ran|running|elapsed|runtime|run[- ]time|wall[- ]clock|wall[- ]time|wall\s+time|wall|latency|benchmarks?|p50|p90|p95|p99|loadavg|load\s+average|decaying)\b",
+    )
+    .unwrap();
+    if meas_re.is_match(clause) {
+        return true;
+    }
+
+    // 4. Historical durations / ages / production stability
+    let hist_re = Regex::new(
+        r"(?i)\b(?:\d+[- ](?:year|month|day)[- ]old|\d+\s+(?:years?|months?|days?)\s+ago|invariants?|history|precedent|historical|survived|undetected|unbroken|stable\s+for|compatibility\s+for)\b",
+    )
+    .unwrap();
+    if hist_re.is_match(clause) || hist_re.is_match(line) {
+        return true;
+    }
+    let for_hist_re = Regex::new(
+        r"(?i)\b(?:for|over|in)\s+(?:the\s+past|the\s+last|about|over|~)?\s*\d+\s*(?:years?|months?)\b",
+    )
+    .unwrap();
+    if for_hist_re.is_match(clause) {
+        return true;
+    }
+
+    // 5. Reading / media time
+    let media_re = Regex::new(
+        r"(?i)\b\d+[- ](?:minute|min|hour|hr)[- ](?:read|overview|talk|presentation|paper|video|podcast|description)\b",
+    )
+    .unwrap();
+    if media_re.is_match(clause) {
+        return true;
+    }
+
+    // 6. URLs, file paths
+    if clause.contains("://") || clause.contains(".htm") || clause.contains(".html") {
+        return true;
+    }
+
+    false
+}
+
+pub(crate) fn is_time_estimate_violation(
+    clause: &str,
+    line: &str,
+    matched: &str,
+    in_exempt_table_cell: bool,
+) -> bool {
+    if in_exempt_table_cell {
+        return false;
+    }
+    if has_exemption_cue(clause, line, matched) {
+        return false;
+    }
+    has_setting_cue(clause, line)
+}
+
 pub(crate) fn is_exempt_time_estimate(
     line: &str,
     hit_start: usize,
     hit_end: usize,
     matched: &str,
 ) -> bool {
-    let before = &line[..hit_start];
-    let after = &line[hit_end..];
-
-    // 1. Question references (Q1, Q2, Q3, Q4)
-    if matches!(matched, "Q1" | "Q2" | "Q3" | "Q4") {
-        let before_trimmed = before.trim_end();
-        let before_lower = before_trimmed.to_lowercase();
-        // If preceded by scheduling / planning cues, it is a quarter estimate, not a question!
-        let sched_cues = [
-            "target:", "target", "done in", "in", "by", "due in", "due", "for", "release:",
-            "release", "launch:", "launch", "roadmap:", "phase",
-        ];
-        if sched_cues.iter().any(|c| before_lower.ends_with(c)) {
-            return false;
-        }
-
-        let after_trimmed = after.trim_start();
-        if after_trimmed.starts_with(['—', '–', '-', ':', ')', '?'])
-            || after_trimmed.starts_with(". ")
-            || after_trimmed.starts_with("'s")
-            || after_trimmed.starts_with("’s")
-        {
-            return true;
-        }
-        if before_lower.ends_with("question")
-            || before_lower.ends_with("quoting")
-            || before_lower.ends_with("answering")
-            || before_lower.ends_with("ask")
-        {
-            return true;
-        }
-        if (before_trimmed.ends_with("**")
-            || before_trimmed.starts_with('#')
-            || before_trimmed.starts_with('('))
-            && (after.contains('?') || after.contains('—') || after.contains(':'))
-        {
-            return true;
-        }
-        return false;
-    }
-
-    // 2. Historical durations / ages
-    let after_trimmed = after.trim_start();
-    if after.starts_with("-old")
-        || after_trimmed.starts_with("old")
-        || after_trimmed.starts_with("ago")
-    {
-        return true;
-    }
-    if after_trimmed.starts_with("invariants")
-        || after_trimmed.starts_with("history")
-        || after_trimmed.starts_with("precedent")
-    {
-        return true;
-    }
-    let before_lower = before.to_lowercase();
-    if matched.contains("year") {
-        let hist_cues = [
-            "for over",
-            "for the past",
-            "for the last",
-            "for ~",
-            "for about",
-            "over the past",
-            "over the last",
-            "in the past",
-            "in the last",
-            "survived",
-            "undetected for",
-            "silently for",
-            "unchecked for",
-        ];
-        if hist_cues
-            .iter()
-            .any(|cue| before_lower.ends_with(cue) || before_lower.trim_end().ends_with(cue))
-        {
-            return true;
-        }
-        if before_lower.trim_end().ends_with("for")
-            || before_lower.trim_end().ends_with("for ~")
-            || before_lower.trim_end().ends_with("for over")
-        {
-            return true;
+    let clauses = split_into_clauses(line);
+    for (clause_start, clause) in &clauses {
+        let clause_end = clause_start + clause.len();
+        if hit_start >= *clause_start && hit_end <= clause_end {
+            return !is_time_estimate_violation(clause, line, matched, false);
         }
     }
+    !is_time_estimate_violation(line, line, matched, false)
+}
 
-    // 3. Operational limits / budgets / caps / timeouts / retention
-    let after_prefix = match after.char_indices().nth(25) {
-        Some((idx, _)) => &after[..idx],
-        None => after,
-    };
-    let after_lower = after_prefix.to_lowercase();
-    let after_tokens = after_lower.trim_start();
-    if after_tokens.starts_with("budget")
-        || after_tokens.starts_with("cap")
-        || after_tokens.starts_with("limit")
-        || after_tokens.starts_with("timeout")
-        || after_tokens.starts_with("default")
-        || after_tokens.starts_with("gap")
-        || after_tokens.starts_with("window")
-        || after_tokens.starts_with("active window")
-        || after_tokens.starts_with("per")
-        || after_tokens.starts_with("average")
-        || after_tokens.starts_with("ttl")
-        || after_tokens.starts_with("retention")
-        || after_tokens.starts_with("of wall time")
-        || after_tokens.starts_with("wall time")
-        || after_tokens.starts_with("description")
-        || after_tokens.starts_with("read")
-        || after_tokens.starts_with("overview")
-        || after_tokens.starts_with("paper")
-        || after_tokens.starts_with("talk")
-        || after_tokens.starts_with("presentation")
-    {
-        return true;
-    }
+pub(crate) fn scan_text_for_time_estimates(
+    text: &str,
+    banned: &[Regex],
+    allowed: &[Regex],
+) -> Vec<(usize, String)> {
+    let mut violations = Vec::new();
+    let mut fence: Option<&str> = None;
+    let mut table = MarkdownTableTracker::default();
 
-    // Loadavg format: "5-min 1.32, 15-min 0.47" (followed by whitespace and float)
-    if after.starts_with(char::is_whitespace) {
-        let first_token = after.split_whitespace().next().unwrap_or("");
-        let num_str = first_token.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
-        if num_str.contains('.') && num_str.parse::<f64>().is_ok() {
-            return true;
+    for (idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if let Some(m) = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m)) {
+            fence = match fence {
+                None => Some(m),
+                Some(open) if open == m => None,
+                keep => keep,
+            };
+            continue;
+        }
+        if fence.is_some() {
+            continue;
+        }
+
+        table.feed_line(line);
+
+        if line_allows(line, "time-estimates") {
+            continue;
+        }
+        if allowed.iter().any(|re| re.is_match(line)) {
+            continue;
+        }
+
+        let clauses = split_into_clauses(line);
+        let mut seen_spans: Vec<(usize, usize)> = Vec::new();
+        for (clause_start, clause) in clauses {
+            for re in banned {
+                for hit in re.find_iter(clause) {
+                    let abs_start = clause_start + hit.start();
+                    let abs_end = clause_start + hit.end();
+                    if seen_spans
+                        .iter()
+                        .any(|(s, e)| !(abs_end <= *s || abs_start >= *e))
+                    {
+                        continue;
+                    }
+                    let in_exempt_cell = table.is_cell_exempt(line, abs_start);
+                    if is_time_estimate_violation(clause, line, hit.as_str(), in_exempt_cell) {
+                        seen_spans.push((abs_start, abs_end));
+                        violations.push((idx + 1, hit.as_str().to_string()));
+                    }
+                }
+            }
         }
     }
-
-    // Cues in preceding text
-    let char_count = before.chars().count();
-    let before_suffix = if char_count > 35 {
-        match before.char_indices().nth(char_count - 35) {
-            Some((idx, _)) => &before[idx..],
-            None => before,
-        }
-    } else {
-        before
-    };
-    let before_lower = before_suffix.to_lowercase();
-    let before_trimmed = before_lower.trim_end();
-    let before_cues = [
-        "retention is",
-        "retention of",
-        "retention",
-        "ttl",
-        "timeout of",
-        "timeout is",
-        "timeout:",
-        "timeout-minutes:",
-        "timeout",
-        "budget of",
-        "budget is",
-        "budget:",
-        "budget",
-        "cap of",
-        "cap is",
-        "cap:",
-        "cap",
-        "limit of",
-        "limit is",
-        "limit:",
-        "limit",
-        "max of",
-        "maximum of",
-        "max",
-        "took",
-        "takes",
-        "runs",
-        "ran in",
-        "ran for over",
-        "ran for",
-        "elapsed:",
-        "elapsed",
-        "runtime:",
-        "runtime",
-        "run time",
-        "wall time",
-        "wall-clock",
-        "wall clock",
-        "wall",
-        "latency",
-        "observed run (~",
-        "observed run",
-        "measured:",
-        "measured",
-        "loadavg",
-        "load average",
-        "decaying from",
-        "p50",
-        "p90",
-        "p95",
-        "p99",
-    ];
-    if before_cues
-        .iter()
-        .any(|cue| before_trimmed.ends_with(cue) || before_lower.contains(cue))
-    {
-        return true;
-    }
-
-    // URL or file path check: e.g. "https://judy.sourceforge.net/doc/10minutes.htm"
-    let before_non_ws = before.split_whitespace().last().unwrap_or("");
-    let after_non_ws = after.split_whitespace().next().unwrap_or("");
-    if before_non_ws.contains("://")
-        || before_non_ws.contains('/')
-        || after_non_ws.contains('/')
-        || after_non_ws.starts_with(".htm")
-        || after_non_ws.starts_with(".html")
-    {
-        return true;
-    }
-
-    false
+    violations
 }
 
 pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
@@ -366,8 +429,7 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
 
     let mut scan = |label: &str, text: &str, out: &mut GateOutcome| {
         let mut fence: Option<&str> = None;
-        let mut table = MarkdownTableTracker::default();
-        for (idx, line) in text.lines().enumerate() {
+        for line in text.lines() {
             let trimmed = line.trim_start();
             if let Some(m) = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m)) {
                 fence = match fence {
@@ -380,38 +442,22 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
             if fence.is_some() {
                 continue;
             }
-
-            table.feed_line(line);
-
-            if line_allows(line, GATE) {
-                if banned.iter().any(|re| re.is_match(line)) {
-                    out.inline_exemptions += 1;
-                }
-                continue;
+            if line_allows(line, GATE) && banned.iter().any(|re| re.is_match(line)) {
+                out.inline_exemptions += 1;
             }
-            if allowed.iter().any(|re| re.is_match(line)) {
-                continue;
-            }
+        }
 
-            for re in &banned {
-                for hit in re.find_iter(line) {
-                    if table.is_cell_exempt(line, hit.start()) {
-                        continue;
-                    }
-                    if is_exempt_time_estimate(line, hit.start(), hit.end(), hit.as_str()) {
-                        continue;
-                    }
-                    out.push(
-                        settings.severity(),
-                        "Time Estimate",
-                        Some(label),
-                        Some(idx + 1),
-                        format!("Calendar / duration estimate `{}`.", hit.as_str()),
-                        "Replace it with ordering, dependencies, or a gate criterion. A line that \
-                         must quote the term can carry `<!-- discipline:allow(time-estimates) -->`.",
-                    );
-                }
-            }
+        let violations = scan_text_for_time_estimates(text, &banned, &allowed);
+        for (line_num, hit_str) in violations {
+            out.push(
+                settings.severity(),
+                "Time Estimate",
+                Some(label),
+                Some(line_num),
+                format!("Calendar / duration estimate `{}`.", hit_str),
+                "Replace it with ordering, dependencies, or a gate criterion. A line that \
+                 must quote the term can carry `<!-- discipline:allow(time-estimates) -->`.",
+            );
         }
     };
 
@@ -831,6 +877,53 @@ mod tests {
                 "expected violation (not exempt): {line} (hit: {hit})"
             );
         }
+    }
+
+    #[test]
+    fn time_estimates_corpus_has_zero_false_positives_and_zero_false_negatives() {
+        #[derive(serde::Deserialize)]
+        struct TestCase {
+            id: String,
+            text: String,
+            is_violation: bool,
+            category: String,
+            description: String,
+        }
+
+        let corpus_raw = include_str!("../../tests/fixtures/time_estimates_corpus.json");
+        let cases: Vec<TestCase> = serde_json::from_str(corpus_raw).expect("valid corpus json");
+        assert_eq!(cases.len(), 90, "corpus must contain exactly 90 cases");
+
+        let banned = compile(time_estimate_patterns(), "banned").unwrap();
+        let allowed = compile(Vec::<String>::new(), "allowed").unwrap();
+
+        let mut false_positives = Vec::new();
+        let mut false_negatives = Vec::new();
+
+        for case in &cases {
+            let hits = scan_text_for_time_estimates(&case.text, &banned, &allowed);
+            let detected = !hits.is_empty();
+            if case.is_violation && !detected {
+                false_negatives.push(format!(
+                    "{} ({}): `{}` - {}",
+                    case.id, case.category, case.text, case.description
+                ));
+            } else if !case.is_violation && detected {
+                false_positives.push(format!(
+                    "{} ({}): `{}` (hits: {:?}) - {}",
+                    case.id, case.category, case.text, hits, case.description
+                ));
+            }
+        }
+
+        assert!(
+            false_positives.is_empty() && false_negatives.is_empty(),
+            "Corpus evaluation failed!\nFalse Positives ({}):\n{}\nFalse Negatives ({}):\n{}",
+            false_positives.len(),
+            false_positives.join("\n"),
+            false_negatives.len(),
+            false_negatives.join("\n")
+        );
     }
 
     fn rule_hits(settings: &PiiGate, line: &str) -> bool {

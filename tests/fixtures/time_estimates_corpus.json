@@ -1,0 +1,632 @@
+[
+  {
+    "id": "tp-01",
+    "text": "We plan to ship in 3 weeks.",
+    "is_violation": true,
+    "category": "delivery_verb",
+    "description": "Explicit delivery verb 'ship' with calendar duration"
+  },
+  {
+    "id": "tp-02",
+    "text": "Ship v0.1 in 1-2 days.",
+    "is_violation": true,
+    "category": "delivery_verb",
+    "description": "Ship imperative with day range"
+  },
+  {
+    "id": "tp-03",
+    "text": "Will deliver the feature in 4 weeks.",
+    "is_violation": true,
+    "category": "delivery_verb",
+    "description": "Deliver verb with week duration"
+  },
+  {
+    "id": "tp-04",
+    "text": "Delivery scheduled for next sprint.",
+    "is_violation": true,
+    "category": "delivery_noun",
+    "description": "Delivery noun with next sprint"
+  },
+  {
+    "id": "tp-05",
+    "text": "Plan to land this change next week.",
+    "is_violation": true,
+    "category": "delivery_verb",
+    "description": "Land verb with next week"
+  },
+  {
+    "id": "tp-06",
+    "text": "Landing expected in 5 days.",
+    "is_violation": true,
+    "category": "delivery_noun",
+    "description": "Landing noun with relative days"
+  },
+  {
+    "id": "tp-07",
+    "text": "Launch planned for next month.",
+    "is_violation": true,
+    "category": "delivery_noun",
+    "description": "Launch noun with next month"
+  },
+  {
+    "id": "tp-08",
+    "text": "Will release in 2-3 weeks.",
+    "is_violation": true,
+    "category": "delivery_verb",
+    "description": "Release verb with week range"
+  },
+  {
+    "id": "tp-09",
+    "text": "Releasing next sprint.",
+    "is_violation": true,
+    "category": "delivery_verb",
+    "description": "Releasing participle with next sprint"
+  },
+  {
+    "id": "tp-10",
+    "text": "Deploying to production in 10 days.",
+    "is_violation": true,
+    "category": "delivery_verb",
+    "description": "Deploying with day estimate"
+  },
+  {
+    "id": "tp-11",
+    "text": "Target release date is next quarter.",
+    "is_violation": true,
+    "category": "target_projection",
+    "description": "Target release with next quarter"
+  },
+  {
+    "id": "tp-12",
+    "text": "Target: Q2.",
+    "is_violation": true,
+    "category": "quarter_projection",
+    "description": "Target quarter specification"
+  },
+  {
+    "id": "tp-13",
+    "text": "Done in Q3.",
+    "is_violation": true,
+    "category": "quarter_projection",
+    "description": "Completion in quarter specification"
+  },
+  {
+    "id": "tp-14",
+    "text": "Due in Q1.",
+    "is_violation": true,
+    "category": "quarter_projection",
+    "description": "Due quarter specification"
+  },
+  {
+    "id": "tp-15",
+    "text": "Roadmap: release in Q4.",
+    "is_violation": true,
+    "category": "quarter_projection",
+    "description": "Roadmap quarter specification"
+  },
+  {
+    "id": "tp-16",
+    "text": "Milestone 1 due in 5 days.",
+    "is_violation": true,
+    "category": "milestone_deadline",
+    "description": "Milestone with relative days"
+  },
+  {
+    "id": "tp-17",
+    "text": "Schedule: deliver in 2 weeks.",
+    "is_violation": true,
+    "category": "schedule_projection",
+    "description": "Schedule with delivery duration"
+  },
+  {
+    "id": "tp-18",
+    "text": "Timeline for completion is 3 weeks.",
+    "is_violation": true,
+    "category": "timeline_projection",
+    "description": "Timeline with completion duration"
+  },
+  {
+    "id": "tp-19",
+    "text": "ETA is 4 days.",
+    "is_violation": true,
+    "category": "eta_projection",
+    "description": "ETA specification"
+  },
+  {
+    "id": "tp-20",
+    "text": "The deadline is next Friday.",
+    "is_violation": true,
+    "category": "weekday_deadline",
+    "description": "Deadline by day of week"
+  },
+  {
+    "id": "tp-21",
+    "text": "Must finish by Monday.",
+    "is_violation": true,
+    "category": "weekday_deadline",
+    "description": "Finish by day of week"
+  },
+  {
+    "id": "tp-22",
+    "text": "Will complete over the weekend.",
+    "is_violation": true,
+    "category": "weekend_projection",
+    "description": "Complete over the weekend"
+  },
+  {
+    "id": "tp-23",
+    "text": "Phase 2 (1 week).",
+    "is_violation": true,
+    "category": "step_label_duration",
+    "description": "Phase label parenthetical duration"
+  },
+  {
+    "id": "tp-24",
+    "text": "Phase 1: 3 weeks.",
+    "is_violation": true,
+    "category": "step_label_duration",
+    "description": "Phase label colon duration"
+  },
+  {
+    "id": "tp-25",
+    "text": "Step 1 — Ship v0.1 (1-2 days).",
+    "is_violation": true,
+    "category": "step_label_duration",
+    "description": "Step label parenthetical duration"
+  },
+  {
+    "id": "tp-26",
+    "text": "Step 2: 3-4 days.",
+    "is_violation": true,
+    "category": "step_label_duration",
+    "description": "Step label colon duration"
+  },
+  {
+    "id": "tp-27",
+    "text": "Stage 1 (about 2 weeks).",
+    "is_violation": true,
+    "category": "step_label_duration",
+    "description": "Stage label hedged duration"
+  },
+  {
+    "id": "tp-28",
+    "text": "Task 3 (approx. 5 days).",
+    "is_violation": true,
+    "category": "step_label_duration",
+    "description": "Task label hedged duration"
+  },
+  {
+    "id": "tp-29",
+    "text": "Batch 2 (1 week).",
+    "is_violation": true,
+    "category": "step_label_duration",
+    "description": "Batch label duration"
+  },
+  {
+    "id": "tp-30",
+    "text": "Milestone 2 (2 weeks).",
+    "is_violation": true,
+    "category": "step_label_duration",
+    "description": "Milestone label duration"
+  },
+  {
+    "id": "tp-31",
+    "text": "Estimated effort: ~10 engineer-days.",
+    "is_violation": true,
+    "category": "engineering_labor_unit",
+    "description": "Engineer-days estimate"
+  },
+  {
+    "id": "tp-32",
+    "text": "Requires ~5 dev-days to complete.",
+    "is_violation": true,
+    "category": "engineering_labor_unit",
+    "description": "Dev-days estimate"
+  },
+  {
+    "id": "tp-33",
+    "text": "Estimated at 2 person-weeks.",
+    "is_violation": true,
+    "category": "engineering_labor_unit",
+    "description": "Person-weeks estimate"
+  },
+  {
+    "id": "tp-34",
+    "text": "Sized at 3 man-months.",
+    "is_violation": true,
+    "category": "engineering_labor_unit",
+    "description": "Man-months estimate"
+  },
+  {
+    "id": "tp-35",
+    "text": "Roughly 4 engineer-hours remaining.",
+    "is_violation": true,
+    "category": "engineering_labor_unit",
+    "description": "Engineer-hours estimate"
+  },
+  {
+    "id": "tp-36",
+    "text": "three deliverables in <=2 weeks",
+    "is_violation": true,
+    "category": "aggregate_rollup",
+    "description": "Aggregate deliverables rollup with duration bound"
+  },
+  {
+    "id": "tp-37",
+    "text": "Total work rolled up to ~3 weeks.",
+    "is_violation": true,
+    "category": "aggregate_rollup",
+    "description": "Rolled up duration estimate"
+  },
+  {
+    "id": "tp-38",
+    "text": "The project will take ~2 months.",
+    "is_violation": true,
+    "category": "duration_estimate",
+    "description": "Project duration estimate"
+  },
+  {
+    "id": "tp-39",
+    "text": "Feature should take roughly 2 weeks.",
+    "is_violation": true,
+    "category": "duration_estimate",
+    "description": "Hedged feature duration estimate"
+  },
+  {
+    "id": "tp-40",
+    "text": "Estimated duration: 4-5 days.",
+    "is_violation": true,
+    "category": "duration_estimate",
+    "description": "Explicit estimated duration"
+  },
+  {
+    "id": "tp-41",
+    "text": "Will land next sprint.",
+    "is_violation": true,
+    "category": "sprint_projection",
+    "description": "Land next sprint"
+  },
+  {
+    "id": "tp-42",
+    "text": "Shipping following week.",
+    "is_violation": true,
+    "category": "relative_projection",
+    "description": "Shipping following week"
+  },
+  {
+    "id": "tp-43",
+    "text": "Delivery planned for coming sprint.",
+    "is_violation": true,
+    "category": "sprint_projection",
+    "description": "Delivery planned for coming sprint"
+  },
+  {
+    "id": "tp-44",
+    "text": "Working for 3 weeks on migration.",
+    "is_violation": true,
+    "category": "duration_estimate",
+    "description": "Planned working duration on task"
+  },
+  {
+    "id": "tp-45",
+    "text": "Ship in 3 weeks; update cache ttl.",
+    "is_violation": true,
+    "category": "compound_clause_delivery",
+    "description": "Delivery estimate in first clause despite operational second clause"
+  },
+  {
+    "id": "tn-01",
+    "text": "Expanse is a replacement for the 20-year-old C library.",
+    "is_violation": false,
+    "category": "historical_age",
+    "description": "Historical library age"
+  },
+  {
+    "id": "tn-02",
+    "text": "Invariants unchecked for 20 years (§6.5) hold.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Invariants unchecked duration"
+  },
+  {
+    "id": "tn-03",
+    "text": "The 20-year invariants hold.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Multi-year invariant age"
+  },
+  {
+    "id": "tn-04",
+    "text": "Bug survived 19 years before discovery.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Bug age before discovery"
+  },
+  {
+    "id": "tn-05",
+    "text": "Went undetected for ~19 years.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Historical undetected duration"
+  },
+  {
+    "id": "tn-06",
+    "text": "This protocol has been stable for 15 years.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Protocol stability duration"
+  },
+  {
+    "id": "tn-07",
+    "text": "Unbroken compatibility for over 10 years.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Historical compatibility duration"
+  },
+  {
+    "id": "tn-08",
+    "text": "Code written 5 years ago still works.",
+    "is_violation": false,
+    "category": "historical_age",
+    "description": "Time in past"
+  },
+  {
+    "id": "tn-09",
+    "text": "A 3-year-old issue was resolved.",
+    "is_violation": false,
+    "category": "historical_age",
+    "description": "Issue age"
+  },
+  {
+    "id": "tn-10",
+    "text": "Production history spans 12 years.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Production history span"
+  },
+  {
+    "id": "tn-11",
+    "text": "The test suite ran for 29 min on macos.",
+    "is_violation": false,
+    "category": "measured_runtime",
+    "description": "Measured test runtime"
+  },
+  {
+    "id": "tn-12",
+    "text": "Total test execution took 22 min.",
+    "is_violation": false,
+    "category": "measured_runtime",
+    "description": "Past test execution duration"
+  },
+  {
+    "id": "tn-13",
+    "text": "Wall clock time was 49 min.",
+    "is_violation": false,
+    "category": "measured_runtime",
+    "description": "Wall clock measurement"
+  },
+  {
+    "id": "tn-14",
+    "text": "Benchmark elapsed: 14 hours.",
+    "is_violation": false,
+    "category": "measured_runtime",
+    "description": "Benchmark elapsed timing"
+  },
+  {
+    "id": "tn-15",
+    "text": "p99 latency under load is 120 ms.",
+    "is_violation": false,
+    "category": "measured_latency",
+    "description": "Performance latency percentile"
+  },
+  {
+    "id": "tn-16",
+    "text": "Mean runtime of 45 mins.",
+    "is_violation": false,
+    "category": "measured_runtime",
+    "description": "Mean runtime specification"
+  },
+  {
+    "id": "tn-17",
+    "text": "The job finished in 35 seconds.",
+    "is_violation": false,
+    "category": "measured_runtime",
+    "description": "Job completion measurement"
+  },
+  {
+    "id": "tn-18",
+    "text": "Measured elapsed time: 15 minutes.",
+    "is_violation": false,
+    "category": "measured_runtime",
+    "description": "Explicit measured elapsed time"
+  },
+  {
+    "id": "tn-19",
+    "text": "Nightly run took 3 hours.",
+    "is_violation": false,
+    "category": "measured_runtime",
+    "description": "Nightly benchmark duration"
+  },
+  {
+    "id": "tn-20",
+    "text": "Ran for over two hours of wall time on the same core.",
+    "is_violation": false,
+    "category": "measured_runtime",
+    "description": "Wall time measurement on core"
+  },
+  {
+    "id": "tn-21",
+    "text": "Each shard has its own 180-minute budget.",
+    "is_violation": false,
+    "category": "operational_budget",
+    "description": "Shard execution budget"
+  },
+  {
+    "id": "tn-22",
+    "text": "Cancelled at its 60-minute cap on every scheduled run.",
+    "is_violation": false,
+    "category": "operational_cap",
+    "description": "Job timeout cap"
+  },
+  {
+    "id": "tn-23",
+    "text": "Half of GitHub's 6-hour default.",
+    "is_violation": false,
+    "category": "operational_default",
+    "description": "Default CI timeout reference"
+  },
+  {
+    "id": "tn-24",
+    "text": "The 6-hour gap between runs.",
+    "is_violation": false,
+    "category": "operational_interval",
+    "description": "Gap interval between runs"
+  },
+  {
+    "id": "tn-25",
+    "text": "Artifact retention is 30 days.",
+    "is_violation": false,
+    "category": "operational_retention",
+    "description": "Artifact storage retention"
+  },
+  {
+    "id": "tn-26",
+    "text": "HTTP client has a 30-second timeout.",
+    "is_violation": false,
+    "category": "operational_timeout",
+    "description": "Network timeout limit"
+  },
+  {
+    "id": "tn-27",
+    "text": "Redis cache ttl is set to 24 hours.",
+    "is_violation": false,
+    "category": "operational_ttl",
+    "description": "Cache expiration TTL"
+  },
+  {
+    "id": "tn-28",
+    "text": "Session retention of 7 days.",
+    "is_violation": false,
+    "category": "operational_retention",
+    "description": "Session storage retention"
+  },
+  {
+    "id": "tn-29",
+    "text": "Rate limit is 100 requests per minute.",
+    "is_violation": false,
+    "category": "operational_rate_limit",
+    "description": "API rate limit window"
+  },
+  {
+    "id": "tn-30",
+    "text": "Polling interval is every 5 minutes.",
+    "is_violation": false,
+    "category": "operational_frequency",
+    "description": "Polling loop interval"
+  },
+  {
+    "id": "tn-31",
+    "text": "Cron schedule triggers every 15 minutes.",
+    "is_violation": false,
+    "category": "operational_frequency",
+    "description": "Cron schedule trigger interval"
+  },
+  {
+    "id": "tn-32",
+    "text": "**Q1 — what do our patches buy?**",
+    "is_violation": false,
+    "category": "question_label",
+    "description": "Benchmark question heading"
+  },
+  {
+    "id": "tn-33",
+    "text": "### Q2: Why judy?",
+    "is_violation": false,
+    "category": "question_label",
+    "description": "FAQ question heading"
+  },
+  {
+    "id": "tn-34",
+    "text": "Q3. How does this scale?",
+    "is_violation": false,
+    "category": "question_label",
+    "description": "Numbered question item"
+  },
+  {
+    "id": "tn-35",
+    "text": "(Q1) What is the throughput?",
+    "is_violation": false,
+    "category": "question_label",
+    "description": "Parenthesized question label"
+  },
+  {
+    "id": "tn-36",
+    "text": "Both numbers are true; only Q1's is ours.",
+    "is_violation": false,
+    "category": "question_reference",
+    "description": "Possessive question reference"
+  },
+  {
+    "id": "tn-37",
+    "text": "Quoting Q2 as the vendoring speedup.",
+    "is_violation": false,
+    "category": "question_reference",
+    "description": "Quoting question label"
+  },
+  {
+    "id": "tn-38",
+    "text": "Addressing question Q4 from the review.",
+    "is_violation": false,
+    "category": "question_reference",
+    "description": "Question keyword preceding Q4"
+  },
+  {
+    "id": "tn-39",
+    "text": "Please see Q1 in the FAQ section.",
+    "is_violation": false,
+    "category": "question_reference",
+    "description": "FAQ question cross-reference"
+  },
+  {
+    "id": "tn-40",
+    "text": "Doug Baskins, A 10-Minute Description of How Judy Arrays Work.",
+    "is_violation": false,
+    "category": "media_title",
+    "description": "Published paper title duration"
+  },
+  {
+    "id": "tn-41",
+    "text": "URL: https://example.com/doc/10minutes.htm",
+    "is_violation": false,
+    "category": "url_path",
+    "description": "Hyperlink URL path"
+  },
+  {
+    "id": "tn-42",
+    "text": "This paper provides a 15-minute overview of the architecture.",
+    "is_violation": false,
+    "category": "media_overview",
+    "description": "Reading overview duration"
+  },
+  {
+    "id": "tn-43",
+    "text": "Recorded a 45-minute presentation for the conference.",
+    "is_violation": false,
+    "category": "media_presentation",
+    "description": "Presentation talk duration"
+  },
+  {
+    "id": "tn-44",
+    "text": "Loadavg: that is a 1-min average decaying from build (5-min 1.32, 15-min 0.47).",
+    "is_violation": false,
+    "category": "system_metric",
+    "description": "Load average measurement"
+  },
+  {
+    "id": "tn-45",
+    "text": "System load average over 15 minutes was 0.42.",
+    "is_violation": false,
+    "category": "system_metric",
+    "description": "CPU load average window"
+  }
+]

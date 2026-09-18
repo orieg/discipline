@@ -312,7 +312,7 @@ Design rules for packs:
 
 | Gate id | Status | Rule |
 |---|---|---|
-| `time-estimates` | shipped | No calendar or duration estimates in tracked markdown or the PR body. Fenced code is skipped; operational durations (retention, TTL, timeouts) are allowed by default pattern. |
+| `time-estimates` | shipped | No calendar or duration estimates in tracked markdown or the PR body. Evaluated clause-by-clause with setting cues; fenced code is skipped; operational caps (retention, TTL, timeouts), benchmarks/measurements, and historical durations are contextually exempt. |
 | `pii` | shipped | No home-directory paths, private LAN addresses, denylisted hostnames, or configured patterns in any tracked text file or the PR body. |
 | `agent-scratch` | shipped | Agent scratch state is never tracked. |
 | `provenance-tags` | planned | Published numerics carry `(measured …)`, `(target)`, or `(projected)`. |
