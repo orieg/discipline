@@ -32,14 +32,16 @@ RS
 cat > tests/arith.rs <<'RS'
 #[test]
 fn adds() {
-    assert_eq!(1 + 1, 2);
-    assert_eq!(2 + 2, 4);
+    let x = 1;
+    assert_eq!(x + 1, 2);
+    assert_eq!(x + 3, 4);
 }
 RS
 cat > tests/legacy/old.rs <<'RS'
 #[test]
 fn legacy_test() {
-    assert_eq!(1, 1);
+    let x = 1;
+    assert_eq!(x, 1);
 }
 RS
 cat > docs/plan.md <<'MD'
@@ -57,7 +59,8 @@ case "${kind}" in
 
 #[test]
 fn multiplies() {
-    assert_eq!(3 * 3, 9);
+    let x = 3;
+    assert_eq!(x * 3, 9);
 }
 RS
     printf '\nPhase 3 is blocked on Phase 2.\n' >> docs/plan.md
@@ -69,7 +72,8 @@ RS
     cat > tests/arith.rs <<'RS'
 #[test]
 fn adds() {
-    assert!(1 + 1 == 2);
+    let x = 1;
+    assert!(x + 1 == 2);
 }
 
 #[test]
