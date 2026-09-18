@@ -348,6 +348,189 @@ fn rename_and_gut_fires_assertion_reduction() {
     assert_eq!(run.titles("assertion-reduction").len(), 1);
 }
 
+#[test]
+fn r1_test_swap_without_directive_fails_assertion_reduction() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    let x = 1 + 1;\n    assert_eq!(x, 2);\n    assert_eq!(x + 2, 4);\n}\n",
+    );
+    repo.commit("feat: base adds");
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn zq() {\n    let x = 1 + 1;\n    assert!(x > 0);\n}\n",
+    );
+    repo.commit("test: swap adds with zq");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 1,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    let titles = run.titles("assertion-reduction");
+    assert_eq!(titles, vec!["Assertion Reduction In Existing Test"]);
+    let outcome = run.outcome("assertion-reduction");
+    let violations = outcome["violations"].as_array().unwrap();
+    let msg = violations[0]["message"].as_str().unwrap();
+    assert!(msg.contains("adds"), "message should name old test: {msg}");
+    assert!(msg.contains("zq"), "message should name new test: {msg}");
+}
+
+#[test]
+fn r1_rename_and_gut_with_truthful_removes_still_fails_assertion_reduction() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    let x = 1 + 1;\n    assert_eq!(x, 2);\n    assert_eq!(x + 2, 4);\n}\n",
+    );
+    repo.commit("feat: base adds");
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn zq() {\n    let x = 1 + 1;\n    assert!(x > 0);\n}\n",
+    );
+    repo.commit("test: rename adds to zq\n\nremoves: adds renamed to zq");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 1,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert_eq!(
+        run.titles("assertion-reduction"),
+        vec!["Assertion Reduction In Existing Test"]
+    );
+}
+
+#[test]
+fn r1_two_tests_replaced_by_two_weaker_ones_fails() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn t1() {\n    let x = 1;\n    assert_eq!(x, 1);\n    assert_eq!(x + 1, 2);\n    assert_eq!(x + 2, 3);\n}\n#[test]\nfn t2() {\n    let y = 4;\n    assert_eq!(y, 4);\n    assert_eq!(y + 1, 5);\n    assert_eq!(y + 2, 6);\n}\n",
+    );
+    repo.commit("feat: initial tests");
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn w1() {\n    let x = 1;\n    assert!(x > 0);\n}\n#[test]\nfn w2() {\n    let y = 2;\n    assert!(y > 0);\n}\n",
+    );
+    repo.commit("test: replace with weaker tests");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 1,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert_eq!(run.titles("assertion-reduction").len(), 2);
+}
+
+#[test]
+fn r1_long_test_deleted_while_unrelated_one_line_test_added_fails() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn test_security_audit() {\n    let x = 1;\n    assert_eq!(x, 1);\n    assert_eq!(x + 1, 2);\n    assert_eq!(x + 2, 3);\n    assert_eq!(x + 3, 4);\n    assert_eq!(x + 4, 5);\n}\n",
+    );
+    repo.commit("feat: long test");
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn test_dummy_hello() {\n    let b = true;\n    assert!(b);\n}\n",
+    );
+    repo.commit("test: replace long test with dummy");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 1,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert_eq!(
+        run.titles("assertion-reduction"),
+        vec!["Assertion Reduction In Existing Test"]
+    );
+}
+
+#[test]
+fn r1_pure_rename_opposite_names_passes() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn is_valid() {\n    let x = 1;\n    assert_eq!(x, 1);\n    assert_eq!(x + 1, 2);\n}\n",
+    );
+    repo.commit("feat: valid");
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn is_invalid() {\n    let x = 1;\n    assert_eq!(x, 1);\n    assert_eq!(x + 1, 2);\n}\n",
+    );
+    repo.commit("refactor: rename is_valid to is_invalid");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 0,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert!(run.titles("assertion-reduction").is_empty());
+    assert!(run.titles("deletion-rationale").is_empty());
+}
+
+#[test]
+fn r1_one_test_split_into_two_with_total_assertions_not_lower_passes() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn test_combo() {\n    let x = 1;\n    assert_eq!(x, 1);\n    assert_eq!(x + 1, 2);\n    assert!(x > 0);\n}\n",
+    );
+    repo.commit("feat: combo test");
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn test_part1() {\n    let x = 1;\n    assert_eq!(x, 1);\n    assert_eq!(x + 1, 2);\n}\n#[test]\nfn test_part2() {\n    let x = 3;\n    assert!(x > 0);\n}\n",
+    );
+    repo.commit("refactor: split test_combo into part1 and part2");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 0,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert!(run.titles("assertion-reduction").is_empty());
+    assert!(run.titles("deletion-rationale").is_empty());
+}
+
+#[test]
+fn r1_forced_pair_allow_assertion_drop_must_name_old_test() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    let x = 1;\n    assert_eq!(x, 1);\n    assert_eq!(x + 1, 2);\n}\n",
+    );
+    repo.commit("feat: base adds");
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn zq() {\n    let x = 1;\n    assert!(x > 0);\n}\n",
+    );
+    // Naming new test zq must FAIL:
+    repo.commit("test: drop\n\nallow-assertion-drop: zq reason");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run.code, 1, "naming new test should fail");
+
+    // Naming old test adds must PASS:
+    let repo2 = Repo::new();
+    repo2.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    let x = 1;\n    assert_eq!(x, 1);\n    assert_eq!(x + 1, 2);\n}\n",
+    );
+    repo2.commit("feat: base adds");
+    repo2.write(
+        "tests/a.rs",
+        "#[test]\nfn zq() {\n    let x = 1;\n    assert!(x > 0);\n}\n",
+    );
+    repo2.commit("test: drop\n\nallow-assertion-drop: adds reason");
+    let run2 = repo2.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run2.code, 0,
+        "naming old test must pass: stdout: {}\nstderr: {}",
+        run2.stdout, run2.stderr
+    );
+}
+
 // ---- time-estimates --------------------------------------------------------
 
 #[test]

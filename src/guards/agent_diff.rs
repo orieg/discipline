@@ -10,23 +10,24 @@ use crate::gitctx::{ChangeKind, ChangedFile};
 use crate::tokens::{self, covers, directive_reasons};
 use anyhow::{anyhow, bail, Result};
 
-struct FileFacts {
-    file: ChangedFile,
-    base: Option<RustFacts>,
-    head: Option<RustFacts>,
+pub(crate) struct FileFacts {
+    pub(crate) file: ChangedFile,
+    pub(crate) base: Option<RustFacts>,
+    pub(crate) head: Option<RustFacts>,
 }
 
-struct TestPair<'a> {
-    path: &'a str,
-    base: &'a TestFn,
-    head: &'a TestFn,
+pub(crate) struct TestPair<'a> {
+    pub(crate) path: &'a str,
+    pub(crate) base: &'a TestFn,
+    pub(crate) head: &'a TestFn,
+    pub(crate) forced: bool,
 }
 
-struct Located<'a> {
-    path: &'a str,
+pub(crate) struct Located<'a> {
+    pub(crate) path: &'a str,
     /// The file still exists on the head side.
-    file_survives: bool,
-    test: &'a TestFn,
+    pub(crate) file_survives: bool,
+    pub(crate) test: &'a TestFn,
 }
 
 /// Runs every diff-based agent-guard gate and returns one outcome per gate.
@@ -98,7 +99,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     let (pairs, removed, added) = match_tests(&rust);
 
     let mut ast_gates = vec![
-        assertion_reduction(ctx, &rust, &pairs)?,
+        assertion_reduction(ctx, &rust, &pairs, &added)?,
         vacuous_tests(ctx, &rust, &added)?,
         ignored_tests(ctx, &rust, &pairs, &added)?,
         unsafe_safety_comment(ctx, &rust)?,
@@ -162,7 +163,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         }
     }
 
-    ast_gates.push(deletion_rationale(ctx, &changed, &removed, &added)?);
+    ast_gates.push(deletion_rationale(ctx, &changed, &removed)?);
     Ok(ast_gates)
 }
 
@@ -241,16 +242,27 @@ pub fn name_similarity(a: &str, b: &str) -> f64 {
 
 /// Pair tests by name within a file, then pair the leftovers across files so a
 /// test moved to another file is compared instead of reported as removed+new.
-fn match_tests(rust: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, Vec<Located<'_>>) {
+pub(crate) fn match_tests(
+    rust: &[FileFacts],
+) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, Vec<Located<'_>>) {
     let mut pairs = Vec::new();
     let mut removed: Vec<Located> = Vec::new();
     let mut added: Vec<Located> = Vec::new();
+
+    struct FileUnmatched<'a> {
+        path: &'a str,
+        file_survives: bool,
+        base: Vec<&'a TestFn>,
+        head: Vec<(usize, &'a TestFn)>,
+    }
+
+    let mut file_unmatched: Vec<FileUnmatched> = Vec::new();
 
     for ff in rust {
         let base_tests: &[TestFn] = ff.base.as_ref().map(|f| &f.tests[..]).unwrap_or(&[]);
         let head_tests: &[TestFn] = ff.head.as_ref().map(|f| &f.tests[..]).unwrap_or(&[]);
         let mut taken = vec![false; head_tests.len()];
-        let mut file_unmatched_base = Vec::new();
+        let mut unmatched_base = Vec::new();
 
         // 1. Exact name match within file
         for b in base_tests {
@@ -265,21 +277,23 @@ fn match_tests(rust: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, Vec<
                         path: &ff.file.path,
                         base: b,
                         head: h,
+                        forced: false,
                     });
                 }
-                None => file_unmatched_base.push(b),
+                None => unmatched_base.push(b),
             }
         }
 
         // 2. Name similarity pairing within file for renames
-        let mut file_unmatched_head: Vec<(usize, &TestFn)> = head_tests
+        let mut unmatched_head: Vec<(usize, &TestFn)> = head_tests
             .iter()
             .enumerate()
             .filter(|(i, _)| !taken[*i])
             .collect();
 
-        for b in file_unmatched_base {
-            let best = file_unmatched_head
+        let mut still_unmatched_base = Vec::new();
+        for b in unmatched_base {
+            let best = unmatched_head
                 .iter()
                 .enumerate()
                 .map(|(idx, &(orig_i, h))| (idx, orig_i, h, name_similarity(&b.name, &h.name)))
@@ -288,51 +302,113 @@ fn match_tests(rust: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, Vec<
 
             if let Some((idx, orig_i, h, _sim)) = best {
                 taken[orig_i] = true;
-                file_unmatched_head.remove(idx);
+                unmatched_head.remove(idx);
                 pairs.push(TestPair {
                     path: &ff.file.path,
                     base: b,
                     head: h,
+                    forced: false,
                 });
             } else {
-                removed.push(Located {
-                    path: &ff.file.path,
-                    file_survives: ff.head.is_some(),
-                    test: b,
-                });
+                still_unmatched_base.push(b);
             }
         }
 
-        for (i, h) in head_tests.iter().enumerate() {
-            if !taken[i] {
-                added.push(Located {
-                    path: &ff.file.path,
-                    file_survives: true,
-                    test: h,
-                });
+        file_unmatched.push(FileUnmatched {
+            path: &ff.file.path,
+            file_survives: ff.head.is_some(),
+            base: still_unmatched_base,
+            head: unmatched_head,
+        });
+    }
+
+    // 3. Exact leaf name match across files (e.g. test moved to another file)
+    fn str_leaf(s: &str) -> &str {
+        s.rsplit("::").next().unwrap_or(s)
+    }
+    for i in 0..file_unmatched.len() {
+        let mut b_idx = 0;
+        while b_idx < file_unmatched[i].base.len() {
+            let b_leaf = str_leaf(&file_unmatched[i].base[b_idx].name);
+            let mut matched = false;
+            for j in 0..file_unmatched.len() {
+                if i == j {
+                    continue;
+                }
+                if let Some(pos) = file_unmatched[j]
+                    .head
+                    .iter()
+                    .position(|(_, h)| str_leaf(&h.name) == b_leaf)
+                {
+                    let b = file_unmatched[i].base.remove(b_idx);
+                    let (_, h) = file_unmatched[j].head.remove(pos);
+                    pairs.push(TestPair {
+                        path: file_unmatched[j].path,
+                        base: b,
+                        head: h,
+                        forced: false,
+                    });
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                b_idx += 1;
             }
         }
     }
 
-    let leaf = |n: &str| n.rsplit("::").next().unwrap_or(n).to_string();
-    let mut still_removed = Vec::new();
-    for r in removed {
-        match added
-            .iter()
-            .position(|a| leaf(&a.test.name) == leaf(&r.test.name))
-        {
-            Some(i) => {
-                let a = added.remove(i);
+    // 4. Forced 1-to-1 pairing within file for remaining tests
+    for fu in &mut file_unmatched {
+        while !fu.base.is_empty() && !fu.head.is_empty() {
+            let mut best_pair: Option<(usize, usize, f64)> = None;
+            for (b_idx, b) in fu.base.iter().enumerate() {
+                for (h_idx, &(_, h)) in fu.head.iter().enumerate() {
+                    let sim = name_similarity(&b.name, &h.name);
+                    match best_pair {
+                        None => best_pair = Some((b_idx, h_idx, sim)),
+                        Some((_, _, best_sim)) => {
+                            if sim > best_sim {
+                                best_pair = Some((b_idx, h_idx, sim));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some((b_idx, h_idx, _)) = best_pair {
+                let b = fu.base.remove(b_idx);
+                let (_, h) = fu.head.remove(h_idx);
                 pairs.push(TestPair {
-                    path: a.path,
-                    base: r.test,
-                    head: a.test,
+                    path: fu.path,
+                    base: b,
+                    head: h,
+                    forced: true,
                 });
+            } else {
+                break;
             }
-            None => still_removed.push(r),
+        }
+
+        // Any remaining base tests are genuine surplus removals
+        for b in fu.base.drain(..) {
+            removed.push(Located {
+                path: fu.path,
+                file_survives: fu.file_survives,
+                test: b,
+            });
+        }
+
+        // Any remaining head tests are genuine surplus additions
+        for (_, h) in fu.head.drain(..) {
+            added.push(Located {
+                path: fu.path,
+                file_survives: true,
+                test: h,
+            });
         }
     }
-    (pairs, still_removed, added)
+
+    (pairs, removed, added)
 }
 
 fn leaf_name(test: &TestFn) -> &str {
@@ -387,6 +463,7 @@ fn assertion_reduction(
     ctx: &Context,
     rust: &[FileFacts],
     pairs: &[TestPair],
+    added: &[Located],
 ) -> Result<GateOutcome> {
     const GATE: &str = "assertion-reduction";
     let settings = &ctx.config.gates.assertion_reduction;
@@ -396,13 +473,51 @@ fn assertion_reduction(
     out.examined = pairs.len();
     report_parse_errors(ctx, GATE, rust, &mut out);
 
+    // Track surplus assertions per file from tests added in the head side.
+    // When a test is split into multiple tests, the surplus assertions in the same file
+    // absorb the apparent assertion drop of the paired test.
+    let mut surplus_per_file: std::collections::BTreeMap<&str, (usize, usize)> =
+        std::collections::BTreeMap::new();
+    for a in added {
+        let entry = surplus_per_file.entry(a.path).or_insert((0, 0));
+        entry.0 += a.test.effective_asserts();
+        entry.1 += a.test.strong_asserts;
+    }
+
     for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
         let (b, h) = (p.base, p.head);
-        let total_drop = h.effective_asserts() < b.effective_asserts();
+        let b_eff = b.effective_asserts();
+        let h_eff = h.effective_asserts();
+        let total_drop = h_eff < b_eff;
         let strong_drop = h.strong_asserts < b.strong_asserts;
-        if !(total_drop || strong_drop) || covers(&reasons, leaf_name(h)) {
+        if !(total_drop || strong_drop) {
             continue;
         }
+
+        let eff_drop_count = b_eff.saturating_sub(h_eff);
+        let str_drop_count = b.strong_asserts.saturating_sub(h.strong_asserts);
+
+        // Check if surplus assertions in this file can absorb the drop (test split)
+        if let Some(surplus) = surplus_per_file.get_mut(p.path) {
+            if surplus.0 >= eff_drop_count && surplus.1 >= str_drop_count {
+                surplus.0 -= eff_drop_count;
+                surplus.1 -= str_drop_count;
+                continue;
+            }
+        }
+
+        // For forced pairs (unrelated names forced together), the override directive MUST name
+        // the old test that was replaced/gutted. For non-forced pairs (exact name or similarity rename),
+        // naming either the old test or the new test is accepted.
+        let allowed = if p.forced {
+            covers(&reasons, leaf_name(b))
+        } else {
+            covers(&reasons, leaf_name(h)) || covers(&reasons, leaf_name(b))
+        };
+        if allowed {
+            continue;
+        }
+
         let what = if total_drop {
             format!(
                 "effective assertions dropped from {} to {}",
@@ -415,16 +530,23 @@ fn assertion_reduction(
                 b.strong_asserts, h.strong_asserts
             )
         };
+        let test_label = if p.forced {
+            format!("Test `{}` -> `{}`", b.name, h.name)
+        } else {
+            format!("Test `{}`", h.name)
+        };
+        let directive_name = if p.forced { leaf_name(b) } else { leaf_name(h) };
+
         out.push(
             ctx.overridable(settings.severity()),
             "Assertion Reduction In Existing Test",
             Some(p.path),
             Some(h.line),
-            format!("Test `{}`: {what}.", h.name),
+            format!("{test_label}: {what}."),
             &format!(
                 "Restore the assertions, or justify the drop on its own line in the PR body or \
                  a commit message: `allow-assertion-drop: {} <reason>`.",
-                leaf_name(h)
+                directive_name
             ),
         );
     }
@@ -549,7 +671,6 @@ fn deletion_rationale(
     ctx: &Context,
     changed: &[ChangedFile],
     removed: &[Located],
-    added: &[Located],
 ) -> Result<GateOutcome> {
     const GATE: &str = "deletion-rationale";
     let settings = &ctx.config.gates.deletion_rationale;
@@ -584,25 +705,12 @@ fn deletion_rationale(
         );
     }
 
-    let mut file_removed_counts = std::collections::BTreeMap::new();
-    for r in removed.iter().filter(|r| r.file_survives) {
-        *file_removed_counts.entry(r.path).or_insert(0usize) += 1;
-    }
-    let mut file_added_counts = std::collections::BTreeMap::new();
-    for a in added.iter() {
-        *file_added_counts.entry(a.path).or_insert(0usize) += 1;
-    }
-
-    // Tests removed from a file that still exists. Tests inside a deleted file
-    // are covered by that file's own rationale.
-    // Require `removes:` only when removed tests outnumber added tests in that file.
+    // Tests removed from a file that still exists. Because match_tests force-pairs
+    // tests 1-to-1 within each file, any tests remaining in `removed` are genuine
+    // surplus deletions (removed tests outnumber added tests in that file).
+    // Tests inside a deleted file are covered by that file's own rationale.
     for r in removed.iter().filter(|r| r.file_survives) {
         if !watched.matches(r.path) || exempt.matches(r.path) {
-            continue;
-        }
-        let rem = file_removed_counts.get(r.path).copied().unwrap_or(0);
-        let add = file_added_counts.get(r.path).copied().unwrap_or(0);
-        if rem <= add {
             continue;
         }
         out.examined += 1;
@@ -647,5 +755,111 @@ mod tests {
         );
         assert!(name_similarity("test_alpha", "test_beta") < RENAME_NAME_SIMILARITY_THRESHOLD);
         assert!(name_similarity("adds", "orders") < RENAME_NAME_SIMILARITY_THRESHOLD);
+    }
+
+    #[test]
+    fn match_tests_force_pairs_unrelated_tests_in_same_file() {
+        let t1 = TestFn {
+            name: "test_alpha".to_string(),
+            line: 10,
+            total_asserts: 3,
+            strong_asserts: 2,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let t2 = TestFn {
+            name: "test_omega".to_string(),
+            line: 20,
+            total_asserts: 1,
+            strong_asserts: 0,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let facts = vec![FileFacts {
+            file: ChangedFile {
+                path: "tests/foo.rs".into(),
+                old_path: "tests/foo.rs".into(),
+                kind: ChangeKind::Modified,
+                added_lines: std::collections::BTreeSet::new(),
+            },
+            base: Some(RustFacts {
+                tests: vec![t1],
+                unsafe_sites: vec![],
+                has_parse_errors: false,
+            }),
+            head: Some(RustFacts {
+                tests: vec![t2],
+                unsafe_sites: vec![],
+                has_parse_errors: false,
+            }),
+        }];
+
+        let (pairs, removed, added) = match_tests(&facts);
+        assert_eq!(pairs.len(), 1);
+        assert!(pairs[0].forced);
+        assert_eq!(pairs[0].base.name, "test_alpha");
+        assert_eq!(pairs[0].head.name, "test_omega");
+        assert!(removed.is_empty());
+        assert!(added.is_empty());
+    }
+
+    #[test]
+    fn match_tests_surplus_base_goes_to_removed_and_surplus_head_to_added() {
+        let b1 = TestFn {
+            name: "b1".to_string(),
+            line: 1,
+            total_asserts: 2,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let b2 = TestFn {
+            name: "b2".to_string(),
+            line: 5,
+            total_asserts: 2,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let h1 = TestFn {
+            name: "h1".to_string(),
+            line: 1,
+            total_asserts: 2,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        };
+        let facts = vec![FileFacts {
+            file: ChangedFile {
+                path: "tests/foo.rs".into(),
+                old_path: "tests/foo.rs".into(),
+                kind: ChangeKind::Modified,
+                added_lines: std::collections::BTreeSet::new(),
+            },
+            base: Some(RustFacts {
+                tests: vec![b1, b2],
+                unsafe_sites: vec![],
+                has_parse_errors: false,
+            }),
+            head: Some(RustFacts {
+                tests: vec![h1],
+                unsafe_sites: vec![],
+                has_parse_errors: false,
+            }),
+        }];
+
+        let (pairs, removed, added) = match_tests(&facts);
+        assert_eq!(pairs.len(), 1);
+        assert!(pairs[0].forced);
+        assert_eq!(pairs[0].base.name, "b1");
+        assert_eq!(pairs[0].head.name, "h1");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].test.name, "b2");
+        assert!(added.is_empty());
     }
 }

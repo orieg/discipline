@@ -180,6 +180,33 @@ const CASES: &[Case] = &[
                 && !is_exempt_time_estimate(real_est, 14, 21, "3 weeks"))
         },
     ),
+    (
+        "pairing: forced test pairing pairs unrelated tests and marks them forced",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::agent_diff::{match_tests, FileFacts};
+            let v = AssertVocabulary::default();
+            let b = analyze("#[test] fn test_alpha() { assert_eq!(1, 1); }", &v)?;
+            let h = analyze("#[test] fn test_omega() { assert!(true != false); }", &v)?;
+            let facts = vec![FileFacts {
+                file: ChangedFile {
+                    path: "tests/a.rs".into(),
+                    old_path: "tests/a.rs".into(),
+                    kind: ChangeKind::Modified,
+                    added_lines: std::collections::BTreeSet::new(),
+                },
+                base: Some(b),
+                head: Some(h),
+            }];
+            let (pairs, removed, added) = match_tests(&facts);
+            Ok(pairs.len() == 1
+                && pairs[0].forced
+                && pairs[0].base.name == "test_alpha"
+                && pairs[0].head.name == "test_omega"
+                && removed.is_empty()
+                && added.is_empty())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {
