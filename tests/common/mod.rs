@@ -65,6 +65,34 @@ impl Run {
     }
 }
 
+const ISOLATED_ENV_VARS: &[&str] = &[
+    "PR_BODY",
+    "GITHUB_STEP_SUMMARY",
+    "GITHUB_BASE_REF",
+    "GITHUB_EVENT_PATH",
+    "GITEA_BASE_REF",
+    "GITEA_EVENT_PATH",
+    "FORGEJO_BASE_REF",
+    "FORGEJO_EVENT_PATH",
+    "FORGEJO_ACTIONS",
+    "DISCIPLINE_CONFIG",
+    "DISCIPLINE_CONFIG_OVERRIDE",
+    "DISCIPLINE_ENABLE",
+    "DISCIPLINE_DISABLE",
+    "DISCIPLINE_BASE_REF",
+    "DISCIPLINE_FAIL_ON_WARNINGS",
+    "DISCIPLINE_FAIL_ON_OVERRIDES",
+    "DISCIPLINE_DIRECTIVE_SOURCES",
+    "DISCIPLINE_HOSTNAME_DENYLIST",
+    "DISCIPLINE_REPORT_GITLAB",
+    "DISCIPLINE_REPORT_JUNIT",
+    "DISCIPLINE_REPORT_SARIF",
+    "GITLAB_CI",
+    "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
+    "CI_MERGE_REQUEST_DIFF_BASE_SHA",
+    "CI_DEFAULT_BRANCH",
+];
+
 impl Repo {
     /// A clean repository with one commit on `main`, checked out on `work`.
     pub fn new() -> Self {
@@ -166,26 +194,7 @@ impl Repo {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
         cmd.args(args).current_dir(self.path());
         // Inherit nothing that could change the verdict.
-        for var in [
-            "PR_BODY",
-            "GITHUB_STEP_SUMMARY",
-            "DISCIPLINE_CONFIG",
-            "DISCIPLINE_CONFIG_OVERRIDE",
-            "DISCIPLINE_ENABLE",
-            "DISCIPLINE_DISABLE",
-            "DISCIPLINE_BASE_REF",
-            "DISCIPLINE_FAIL_ON_WARNINGS",
-            "DISCIPLINE_FAIL_ON_OVERRIDES",
-            "DISCIPLINE_DIRECTIVE_SOURCES",
-            "DISCIPLINE_HOSTNAME_DENYLIST",
-            "DISCIPLINE_REPORT_GITLAB",
-            "DISCIPLINE_REPORT_JUNIT",
-            "DISCIPLINE_REPORT_SARIF",
-            "GITLAB_CI",
-            "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
-            "CI_MERGE_REQUEST_DIFF_BASE_SHA",
-            "CI_DEFAULT_BRANCH",
-        ] {
+        for var in ISOLATED_ENV_VARS {
             cmd.env_remove(var);
         }
         cmd.envs(env.iter().copied());
@@ -200,17 +209,7 @@ impl Repo {
     pub fn run_in_dir(&self, rel_dir: &str, args: &[&str], env: &[(&str, &str)]) -> Run {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
         cmd.args(args).current_dir(self.file(rel_dir));
-        for var in [
-            "PR_BODY",
-            "GITHUB_STEP_SUMMARY",
-            "DISCIPLINE_CONFIG",
-            "DISCIPLINE_CONFIG_OVERRIDE",
-            "DISCIPLINE_ENABLE",
-            "DISCIPLINE_DISABLE",
-            "DISCIPLINE_BASE_REF",
-            "DISCIPLINE_FAIL_ON_WARNINGS",
-            "DISCIPLINE_HOSTNAME_DENYLIST",
-        ] {
+        for var in ISOLATED_ENV_VARS {
             cmd.env_remove(var);
         }
         cmd.envs(env.iter().copied());

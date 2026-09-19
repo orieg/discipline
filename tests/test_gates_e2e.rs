@@ -1511,6 +1511,13 @@ fn empty_tree_first_commit_staged_mode_passes() {
     for var in [
         "PR_BODY",
         "GITHUB_STEP_SUMMARY",
+        "GITHUB_BASE_REF",
+        "GITHUB_EVENT_PATH",
+        "GITEA_BASE_REF",
+        "GITEA_EVENT_PATH",
+        "FORGEJO_BASE_REF",
+        "FORGEJO_EVENT_PATH",
+        "FORGEJO_ACTIONS",
         "DISCIPLINE_CONFIG",
         "DISCIPLINE_CONFIG_OVERRIDE",
         "DISCIPLINE_ENABLE",
