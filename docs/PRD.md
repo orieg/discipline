@@ -8,7 +8,7 @@
 | **Status** | Draft. Phase 0 and Phase 1 implemented; not externally reviewed (§11) |
 | **Target Platforms** | GitHub Actions, Gitea Actions (act_runner), local workstations (macOS, Linux) |
 | **Implementation Core** | Rust static binary (musl) + tree-sitter + libgit2 |
-| **Checked repositories** | Any language for hygiene, integrity and deletion gates (shipped); per-language packs for the AST gates — Rust shipped; Python, JavaScript / TypeScript, Java / Kotlin, C / C++, Go planned (§6.1) |
+| **Checked repositories** | Any language for hygiene, integrity and deletion gates (shipped); per-language packs for the AST gates — Rust, Python, PHPT shipped; JavaScript / TypeScript, Java / Kotlin, C / C++, Go planned (§6.1) |
 | **License** | Apache-2.0 / MIT |
 
 Numbers in this document carry a provenance tag: `(measured: <source>)`, `(target)`, or `(projected)`.
@@ -279,14 +279,14 @@ Status: **shipped** = implemented with discriminating tests (§9); **planned** =
 
 ### 6.1 Language scope
 
-Six of the ten shipped gates are language-independent and work on any repository today: `deletion-rationale` (file level), `agents-md`, `time-estimates`, `pii`, `agent-scratch`, `config-integrity`. The four AST gates need a language pack. When a change touches source files in a language with no pack, each AST gate **says so by name** in its report ("N changed source file(s) … NOT analysed") rather than showing a quiet zero (F7).
+Seven of the eleven shipped gates are language-independent and work on any repository today: `deletion-rationale` (file level), `agents-md`, `time-estimates`, `pii`, `agent-scratch`, `config-integrity`, `golden-output`. The four AST gates need a language pack. When a change touches source files in a language with no pack, each AST gate **says so by name** in its report ("N changed source file(s) … NOT analysed") rather than showing a quiet zero (F7).
 
 A pack maps its ecosystem onto the shared fact model:
 
 | Language | Test function | Assertion vocabulary (strong = equality / pattern) | Skip markers (`ignored-tests`) | Escape hatches (`unsafe-safety-comment`, `suppression-delta`) | State |
 |---|---|---|---|---|---|
 | Rust | `#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case]` | `assert*!`, `debug_assert*!`, `prop_assert*!`; strong: `_eq`, `_ne`, `matches` | `#[ignore]` | `unsafe` block / impl + `// SAFETY:`; `#[allow]` | **shipped** |
-| Python | `test_*` functions, `Test*` methods, `unittest.TestCase` | `assert` statements, `self.assert*`, `pytest.raises`, `pytest.approx`; strong: `==` comparisons, `assertEqual` family | `@pytest.mark.skip` / `skipif` / `xfail`, `@unittest.skip*` | `# type: ignore`, `# noqa`, `# pragma: no cover`, `cast(Any, …)` | planned |
+| Python | `test_*` functions, `Test*` methods, `unittest.TestCase` | `assert` statements, `self.assert*`, `pytest.raises`, `pytest.approx`; strong: `==` comparisons, `assertEqual` family | `@pytest.mark.skip` / `skipif` / `xfail`, `@unittest.skip*` | `# type: ignore`, `# noqa`, `# pragma: no cover`, `cast(Any, …)` | **shipped** |
 | JavaScript / TypeScript | `test(` / `it(` callbacks (Jest, Vitest, Mocha, node:test) | `expect(…).matcher`, `assert.*`; strong: `toBe`, `toEqual`, `toStrictEqual`, `deepStrictEqual`; weak: `toBeTruthy`, `toBeDefined` | `.skip`, `.todo`, `xit`, `xdescribe`, `.only` (narrows the suite) | `@ts-ignore`, `@ts-expect-error`, `as any`, `eslint-disable*` | planned |
 | Java / Kotlin | `@Test`, `@ParameterizedTest`, `@RepeatedTest` | JUnit `assert*`, AssertJ `assertThat(…)` chains, Hamcrest; strong: `assertEquals`, `isEqualTo` | `@Disabled`, `@Ignore`, `Assumptions.*` | `@SuppressWarnings`, `sun.misc.Unsafe`, unchecked casts | planned |
 | C / C++ | GoogleTest `TEST*`, Catch2 `TEST_CASE`, doctest | `EXPECT_*` / `ASSERT_*`, `REQUIRE` / `CHECK`; strong: `_EQ`, `_STREQ`; note `EXPECT` → non-fatal is itself a weakening of `ASSERT` | `DISABLED_` prefix, `GTEST_SKIP()` | `reinterpret_cast`, `const_cast`, `// NOLINT`, `#pragma … ignored` | planned |

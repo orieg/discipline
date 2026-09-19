@@ -8,6 +8,8 @@ use anyhow::Result;
 
 #[cfg(feature = "lang-golden")]
 pub mod golden;
+#[cfg(feature = "lang-python")]
+pub mod python;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
 
@@ -69,6 +71,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(rust::RustPack));
     #[cfg(feature = "lang-golden")]
     reg.register(Box::new(golden::GoldenPack));
+    #[cfg(feature = "lang-python")]
+    reg.register(Box::new(python::PythonPack));
     reg
 }
 
@@ -76,6 +80,7 @@ pub fn default_registry() -> LanguageRegistry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
     Rust,
+    Python,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
@@ -88,6 +93,7 @@ pub const UNSUPPORTED_SOURCE_EXTS: &[&str] = &[
 pub fn language_for(path: &str) -> Option<Language> {
     match extension(path)? {
         "rs" => Some(Language::Rust),
+        "py" | "pyi" => Some(Language::Python),
         _ => None,
     }
 }
@@ -237,8 +243,9 @@ mod tests {
     #[test]
     fn language_dispatch_is_by_extension() {
         assert_eq!(language_for("src/a.rs"), Some(Language::Rust));
-        assert_eq!(language_for("src/a.py"), None);
-        assert!(is_unsupported_source("pkg/mod/a.py"));
+        assert_eq!(language_for("src/a.py"), Some(Language::Python));
+        assert_eq!(language_for("src/a.go"), None);
+        assert!(!is_unsupported_source("pkg/mod/a.py"));
         assert!(is_unsupported_source("web/App.tsx"));
         assert!(is_unsupported_source("main.go"));
         assert!(!is_unsupported_source("src/a.rs"));
@@ -254,6 +261,13 @@ mod tests {
         let pack = reg.find_pack("src/main.rs").expect("rust pack found");
         assert_eq!(pack.id(), "rust");
         assert_eq!(pack.name(), "Rust");
+        #[cfg(feature = "lang-python")]
+        {
+            assert!(reg.is_supported("tests/test_foo.py"));
+            let py_pack = reg.find_pack("test.py").expect("python pack found");
+            assert_eq!(py_pack.id(), "python");
+            assert_eq!(py_pack.name(), "Python");
+        }
     }
 
     #[test]
@@ -279,18 +293,18 @@ mod tests {
     #[test]
     fn unsupported_source_respects_active_registry() {
         let mut reg = default_registry();
-        assert!(is_unsupported_source_in("script.py", &reg));
+        assert!(is_unsupported_source_in("main.go", &reg));
 
-        struct PythonDummy;
-        impl LanguagePack for PythonDummy {
+        struct GoDummy;
+        impl LanguagePack for GoDummy {
             fn id(&self) -> &'static str {
-                "python"
+                "go"
             }
             fn name(&self) -> &'static str {
-                "Python"
+                "Go"
             }
             fn matches(&self, path: &str) -> bool {
-                extension(path) == Some("py")
+                extension(path) == Some("go")
             }
             fn extract(
                 &self,
@@ -302,7 +316,7 @@ mod tests {
             }
         }
 
-        reg.register(Box::new(PythonDummy));
-        assert!(!is_unsupported_source_in("script.py", &reg));
+        reg.register(Box::new(GoDummy));
+        assert!(!is_unsupported_source_in("main.go", &reg));
     }
 }

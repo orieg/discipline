@@ -18,9 +18,9 @@ Coding agents in an iterate-until-green loop weaken assertions, add tests that a
 
 | Gate | Suite | Languages | Rule |
 |---|---|---|---|
-| `assertion-reduction` | agent-guard | Rust | assertion count and strength may not drop in an existing test |
-| `vacuous-tests` | agent-guard | Rust | a new test needs a non-tautological assertion |
-| `ignored-tests` | agent-guard | Rust | a test may not become `#[ignore]` |
+| `assertion-reduction` | agent-guard | Rust, Python, PHPT | assertion count and strength may not drop in an existing test |
+| `vacuous-tests` | agent-guard | Rust, Python, PHPT | a new test needs a non-tautological assertion |
+| `ignored-tests` | agent-guard | Rust, Python, PHPT | a test may not become ignored or skipped |
 | `unsafe-safety-comment` | agent-guard | Rust | `unsafe` needs a `// SAFETY:` comment; deleting one is caught |
 | `deletion-rationale` | agent-guard | any | deleted files and removed tests need a scoped `removes:` |
 | `agents-md` | agent-guard | any | `AGENTS.md` exists; `CLAUDE.md` / `GEMINI.md` do not fork it |
@@ -30,7 +30,7 @@ Coding agents in an iterate-until-green loop weaken assertions, add tests that a
 | `config-integrity` | integrity | any | a change cannot weaken its own `discipline.toml` without saying so |
 | `golden-output` | integrity | any | committed snapshots and golden files cannot be modified or deleted without a scoped `allow-golden-update:` |
 
-Seven gates work on a repository in any language. The four AST gates use a per-language pack; Rust and PHPT ship today, and Python, JavaScript / TypeScript, Java / Kotlin, C / C++ and Go are planned. When a change touches source in a language without a pack, the AST gates **say so in the report** rather than showing a clean zero.
+Seven gates work on a repository in any language. The four AST gates use a per-language pack; Rust, Python, and PHPT ship today, and JavaScript / TypeScript, Java / Kotlin, C / C++ and Go are planned. When a change touches source in a language without a pack, the AST gates **say so in the report** rather than showing a clean zero.
 
 ## Fail-closed by construction
 

@@ -383,6 +383,22 @@ const CASES: &[Case] = &[
                 && prose.is_empty())
         },
     ),
+    #[cfg(feature = "lang-python")]
+    (
+        "python: pytest and unittest extraction catches assertions, vacuous tests, and skips",
+        || {
+            use crate::ast::LanguagePack;
+            let py_pack = crate::ast::python::PythonPack;
+            let vocab = AssertVocabulary::default();
+            let src = "def test_a():\n    assert 1 + 1 == 2\n\ndef test_b():\n    pass\n\n@pytest.mark.skip\ndef test_c():\n    assert True\n";
+            let facts = py_pack.extract("test_mod.py", src, &vocab)?;
+            Ok(facts.tests.len() == 3
+                && facts.tests[0].total_asserts == 1
+                && !facts.tests[0].is_vacuous()
+                && facts.tests[1].is_vacuous()
+                && facts.tests[2].ignored)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

@@ -81,7 +81,7 @@ fn adding_assertions_is_not_a_reduction() {
 #[test]
 fn unanalysed_languages_are_named_not_silently_passed() {
     let repo = Repo::new();
-    repo.write("tools/check.py", "def test_nothing():\n    pass\n");
+    repo.write("tools/check.go", "package main\nfunc TestNothing() {}\n");
     repo.write("web/app.ts", "export const x = 1;\n");
     repo.commit("feat: tooling");
     let run = repo.check(&[]);
@@ -127,8 +127,8 @@ fn unsupported_source_files_group_by_extension() {
     let repo = Repo::new();
     repo.write("ext/judy.c", "void foo() {}\n");
     repo.write("ext/judy.h", "#define FOO 1\n");
-    repo.write("tests/001.py", "def test_foo(): pass\n");
-    repo.commit("feat: c and py");
+    repo.write("tests/001.go", "package main\nfunc TestFoo() {}\n");
+    repo.commit("feat: c and go");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0);
     for gate in [
@@ -140,7 +140,7 @@ fn unsupported_source_files_group_by_extension() {
         let notes = run.outcome(gate)["notes"].to_string();
         assert!(
             notes.contains("3 changed source file(s)")
-                && notes.contains("2 .c/.h, 1 .py")
+                && notes.contains("2 .c/.h, 1 .go")
                 && notes.contains("NOT analysed"),
             "gate {gate} should format extension breakdown: {notes}"
         );
@@ -1630,4 +1630,76 @@ fn phpt_assertion_reduction_and_ignored_detected() {
     assert_eq!(run_xfail.code, 1);
     let outcome_xfail = run_xfail.outcome("ignored-tests");
     assert_eq!(outcome_xfail["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn python_source_files_are_analysed_by_python_pack() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/test_math.py",
+        "def test_square():\n    x = 3\n    assert x * x == 9\n",
+    );
+    repo.commit("feat: python test");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("assertion-reduction");
+    assert!(!outcome["notes"].to_string().contains("NOT analysed"));
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn python_assertion_reduction_and_vacuous_tests_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_py = "def test_calc():\n    assert 1 + 1 == 2\n    assert 2 + 2 == 4\n";
+    repo.write("tests/test_calc.py", base_py);
+    repo.commit("feat: initial python test");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Weaken assertions: 2 assertions reduced to 1
+    let weaker_py = "def test_calc():\n    assert 1 + 1 == 2\n";
+    repo.write("tests/test_calc.py", weaker_py);
+    repo.commit("test: weaken assertions");
+
+    let run_weak = repo.check(&[]);
+    assert_eq!(run_weak.code, 1);
+    let outcome_weak = run_weak.outcome("assertion-reduction");
+    assert_eq!(outcome_weak["violations"].as_array().unwrap().len(), 1);
+
+    // Vacuous test addition
+    let repo2 = Repo::new();
+    repo2.write("tests/test_empty.py", "def test_nothing():\n    pass\n");
+    repo2.commit("test: add empty test");
+    let run_vac = repo2.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let outcome_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn python_ignored_tests_and_skip_decorators_detected() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/test_skip.py",
+        "import pytest\n\n@pytest.mark.skip(reason=\"not ready\")\ndef test_skipped():\n    assert 1 + 1 == 2\n",
+    );
+    repo.commit("test: add skipped test");
+
+    let run_skip = repo.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let outcome_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(outcome_skip["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: test_skipped skipped until new backend is ready",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("ignored-tests");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
 }
