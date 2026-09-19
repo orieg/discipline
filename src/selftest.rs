@@ -545,6 +545,38 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 3)
         },
     ),
+    #[cfg(feature = "lang-java")]
+    (
+        "java: JUnit 5 extraction catches assertions, vacuous tests, and disabled tests",
+        || {
+            use crate::ast::LanguagePack;
+            let java_pack = crate::ast::java::JavaPack;
+            let vocab = AssertVocabulary::default();
+            let src = "class JTest {\n  @Test void t1() { assertEquals(1, 2); }\n  @Test void t2() { assertTrue(true); }\n  @Disabled @Test void t3() { assertEquals(3, 4); }\n}";
+            let facts = java_pack.extract("JTest.java", src, &vocab)?;
+            Ok(facts.tests.len() == 3
+                && facts.tests[0].total_asserts == 1
+                && !facts.tests[0].is_vacuous()
+                && facts.tests[1].is_vacuous()
+                && facts.tests[2].ignored)
+        },
+    ),
+    #[cfg(feature = "lang-java")]
+    (
+        "java: assertEquals vs assertTrue assertion weakening is detected",
+        || {
+            use crate::ast::LanguagePack;
+            let java_pack = crate::ast::java::JavaPack;
+            let vocab = AssertVocabulary::default();
+            let strong_src = "class JTest {\n  @Test void t() { assertEquals(a, b); assertThrows(E.class, () -> {}); }\n}";
+            let weak_src = "class JTest {\n  @Test void t() { assertTrue(x); assertTrue(y); }\n}";
+            let strong_facts = java_pack.extract("JTest.java", strong_src, &vocab)?;
+            let weak_facts = java_pack.extract("JTest.java", weak_src, &vocab)?;
+            Ok(strong_facts.tests[0].strong_asserts == 2
+                && weak_facts.tests[0].strong_asserts == 0
+                && weak_facts.tests[0].total_asserts == 2)
+        },
+    ),
     (
         "bench: callgrind and criterion benchmark parsing and delta calculation discriminate",
         || {

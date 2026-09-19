@@ -8,6 +8,8 @@ use anyhow::Result;
 
 #[cfg(feature = "lang-golden")]
 pub mod golden;
+#[cfg(feature = "lang-java")]
+pub mod java;
 #[cfg(feature = "lang-javascript")]
 pub mod javascript;
 #[cfg(feature = "lang-python")]
@@ -77,6 +79,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(python::PythonPack));
     #[cfg(feature = "lang-javascript")]
     reg.register(Box::new(javascript::JavaScriptPack));
+    #[cfg(feature = "lang-java")]
+    reg.register(Box::new(java::JavaPack));
     reg
 }
 
@@ -87,13 +91,14 @@ pub enum Language {
     Python,
     JavaScript,
     TypeScript,
+    Java,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
 /// touching these is *named* in the report: the AST gates did not look at it.
 pub const UNSUPPORTED_SOURCE_EXTS: &[&str] = &[
-    "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "java", "kt", "kts", "scala", "go", "c", "h",
-    "cc", "cpp", "cxx", "hpp", "hh", "cs", "rb", "swift", "php", "phpt", "m", "mm",
+    "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "kt", "kts", "scala", "go", "c", "h", "cc",
+    "cpp", "cxx", "hpp", "hh", "cs", "rb", "swift", "php", "phpt", "m", "mm",
 ];
 
 pub fn language_for(path: &str) -> Option<Language> {
@@ -102,6 +107,7 @@ pub fn language_for(path: &str) -> Option<Language> {
         "py" | "pyi" => Some(Language::Python),
         "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
         "ts" | "tsx" | "mts" | "cts" => Some(Language::TypeScript),
+        "java" => Some(Language::Java),
         _ => None,
     }
 }
@@ -255,10 +261,12 @@ mod tests {
         assert_eq!(language_for("src/a.py"), Some(Language::Python));
         assert_eq!(language_for("src/a.js"), Some(Language::JavaScript));
         assert_eq!(language_for("web/App.tsx"), Some(Language::TypeScript));
+        assert_eq!(language_for("service.java"), Some(Language::Java));
         assert_eq!(language_for("src/a.go"), None);
         assert!(!is_unsupported_source("pkg/mod/a.py"));
         assert!(!is_unsupported_source("web/App.tsx"));
-        assert!(is_unsupported_source("service.java"));
+        assert!(!is_unsupported_source("service.java"));
+        assert!(is_unsupported_source("service.kt"));
         assert!(is_unsupported_source("main.go"));
         assert!(!is_unsupported_source("src/a.rs"));
         assert!(!is_unsupported_source("tests/001.phpt"));
@@ -286,6 +294,13 @@ mod tests {
             let js_pack = reg.find_pack("index.js").expect("javascript pack found");
             assert_eq!(js_pack.id(), "javascript");
             assert_eq!(js_pack.name(), "JavaScript/TypeScript");
+        }
+        #[cfg(feature = "lang-java")]
+        {
+            assert!(reg.is_supported("src/test/java/CalcTest.java"));
+            let java_pack = reg.find_pack("CalcTest.java").expect("java pack found");
+            assert_eq!(java_pack.id(), "java");
+            assert_eq!(java_pack.name(), "Java");
         }
     }
 

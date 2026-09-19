@@ -82,7 +82,7 @@ fn adding_assertions_is_not_a_reduction() {
 fn unanalysed_languages_are_named_not_silently_passed() {
     let repo = Repo::new();
     repo.write("tools/check.go", "package main\nfunc TestNothing() {}\n");
-    repo.write("src/App.java", "public class App {}\n");
+    repo.write("src/App.kt", "class App {}\n");
     repo.commit("feat: tooling");
     let run = repo.check(&[]);
     assert_eq!(
@@ -2826,4 +2826,103 @@ fn bench_provenance_tracking_and_cross_host_flag() {
     // Bypass flag --allow-cross-host-bench allows cross-host diff
     let run_pass = repo.check(&["--suite", "bench", "--allow-cross-host-bench"]);
     assert_eq!(run_pass.code, 0);
+}
+
+#[test]
+fn java_assertion_reduction_and_vacuous_tests_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_java = r#"
+package com.example;
+
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class CalcTest {
+    @Test
+    void testCalc() {
+        assertEquals(2, 1 + 1);
+        assertEquals(4, 2 + 2);
+    }
+}
+"#;
+    repo.write("src/test/java/com/example/CalcTest.java", base_java);
+    repo.commit("feat: initial java test");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Weaken assertions: 2 assertions reduced to 1
+    let weaker_java = r#"
+package com.example;
+
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class CalcTest {
+    @Test
+    void testCalc() {
+        assertEquals(2, 1 + 1);
+    }
+}
+"#;
+    repo.write("src/test/java/com/example/CalcTest.java", weaker_java);
+    repo.commit("test: weaken assertions in java");
+
+    let run_weak = repo.check(&[]);
+    assert_eq!(run_weak.code, 1);
+    let outcome_weak = run_weak.outcome("assertion-reduction");
+    assert_eq!(outcome_weak["violations"].as_array().unwrap().len(), 1);
+
+    // Vacuous test addition
+    let repo2 = Repo::new();
+    repo2.write(
+        "src/test/java/com/example/EmptyTest.java",
+        "package com.example;\nimport org.junit.jupiter.api.Test;\nclass EmptyTest {\n    @Test\n    void empty() {}\n}\n",
+    );
+    repo2.commit("test: add empty java test");
+    let run_vac = repo2.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let outcome_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn java_disabled_tests_and_skips_detected() {
+    let repo = Repo::new();
+    repo.write(
+        "src/test/java/com/example/SkipTest.java",
+        r#"
+package com.example;
+
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class SkipTest {
+    @Disabled("temporarily disabled")
+    @Test
+    void skipsThisTest() {
+        assertEquals(2, 1 + 1);
+    }
+}
+"#,
+    );
+    repo.commit("test: add disabled java test");
+
+    let run_skip = repo.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let outcome_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(outcome_skip["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: SkipTest.skipsThisTest disabled for refactoring",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("ignored-tests");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
 }
