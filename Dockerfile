@@ -29,7 +29,7 @@ FROM alpine:3.21
 # Install CA certificates for secure checkouts and git for local repository operations
 RUN apk add --no-cache ca-certificates git \
     && addgroup -g 10001 -S discipline \
-    && adduser -u 10001 -S -G discipline -h /home/discipline -s /bin/sh discipline \
+    && adduser -u 10001 -S -G discipline -h /workspace -s /bin/sh discipline \
     && mkdir -p /workspace \
     && chown -R discipline:discipline /workspace
 
