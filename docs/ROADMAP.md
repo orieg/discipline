@@ -47,6 +47,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 | `config-integrity` | integrity | any | a change cannot weaken its own discipline.toml without a token |
 | `golden-output` | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
 | `dependency-delta` | integrity | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
+| `test-budget` | integrity | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
 | `command` | verification | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
 <!-- /generated -->

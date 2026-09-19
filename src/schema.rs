@@ -23,6 +23,7 @@ pub fn generate_schema() -> Value {
             "unsafe-safety-comment" => "#/$defs/UnsafeSafetyCommentGate",
             "command" => "#/$defs/CommandGate",
             "dependency-delta" => "#/$defs/DependencyDeltaGate",
+            "test-budget" => "#/$defs/TestBudgetGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -272,6 +273,19 @@ pub fn generate_schema() -> Value {
                     "deny_file": { "type": "string", "description": "Path to deny.toml policy file" },
                     "allow_dependencies": { "$ref": "#/$defs/StringListOrReset", "description": "Explicit list of allowed dependency package names" },
                     "deny_dependencies": { "$ref": "#/$defs/StringListOrReset", "description": "Explicit list of forbidden dependency package names" }
+                }
+            },
+            "TestBudgetGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "corpus_dirs": { "$ref": "#/$defs/StringListOrReset", "description": "Corpus directory patterns to monitor for seed file shrink" },
+                    "fuzz_targets": { "$ref": "#/$defs/StringListOrReset", "description": "Fuzz manifest and harness globs" },
+                    "scan_workflows": { "type": "boolean", "description": "Whether to scan workflow files" },
+                    "scan_scripts": { "type": "boolean", "description": "Whether to scan shell scripts" }
                 }
             }
         }

@@ -353,6 +353,38 @@
         }
       ]
     },
+    "TestBudgetGate": {
+      "additionalProperties": false,
+      "properties": {
+        "corpus_dirs": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Corpus directory patterns to monitor for seed file shrink"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "fuzz_targets": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Fuzz manifest and harness globs"
+        },
+        "scan_scripts": {
+          "description": "Whether to scan shell scripts",
+          "type": "boolean"
+        },
+        "scan_workflows": {
+          "description": "Whether to scan workflow files",
+          "type": "boolean"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "TimeEstimateGate": {
       "additionalProperties": false,
       "properties": {
@@ -517,6 +549,14 @@
             }
           ],
           "description": "no home paths, LAN IPs, or denylisted hostnames in tracked text"
+        },
+        "test-budget": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/TestBudgetGate"
+            }
+          ],
+          "description": "property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)"
         },
         "time-estimates": {
           "allOf": [

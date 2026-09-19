@@ -175,6 +175,13 @@ pub const GATES: &[GateInfo] = &[
         available: true,
     },
     GateInfo {
+        id: "test-budget",
+        suite: Suite::Integrity,
+        summary: "property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)",
+        languages: "Rust, Python, JS/TS, Go, any",
+        available: true,
+    },
+    GateInfo {
         id: "pr-checklist",
         suite: Suite::Hygiene,
         summary: "ticked PR checkboxes are reconciled against the diff",
@@ -290,6 +297,7 @@ pub struct Gates {
     pub bench_regression: BenchRegressionGate,
     pub command: CommandGate,
     pub dependency_delta: DependencyDeltaGate,
+    pub test_budget: TestBudgetGate,
 }
 
 /// Settings every gate shares.
@@ -319,7 +327,8 @@ impl_gate_settings!(
     GoldenGate,
     BenchRegressionGate,
     CommandGate,
-    DependencyDeltaGate
+    DependencyDeltaGate,
+    TestBudgetGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -704,6 +713,43 @@ impl Default for DependencyDeltaGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestBudgetGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Corpus directory patterns to monitor for seed file shrink (default: ["fuzz/corpus/**", "corpus/**", "**/tests/corpus/**"]).
+    pub corpus_dirs: Vec<String>,
+    /// Fuzz manifest and harness globs (default: ["fuzz/Cargo.toml", "fuzz/fuzz_targets/**"]).
+    pub fuzz_targets: Vec<String>,
+    /// Whether to scan workflow files (.github/workflows, .gitlab-ci.yml) (default: true).
+    pub scan_workflows: bool,
+    /// Whether to scan shell scripts (*.sh, *.bash) (default: true).
+    pub scan_scripts: bool,
+}
+
+impl Default for TestBudgetGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            corpus_dirs: vec![
+                "fuzz/corpus/**".to_string(),
+                "corpus/**".to_string(),
+                "**/tests/corpus/**".to_string(),
+            ],
+            fuzz_targets: vec![
+                "fuzz/Cargo.toml".to_string(),
+                "fuzz/fuzz_targets/**".to_string(),
+            ],
+            scan_workflows: true,
+            scan_scripts: true,
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -721,6 +767,7 @@ impl Gates {
             "bench-regression" => &self.bench_regression,
             "command" => &self.command,
             "dependency-delta" => &self.dependency_delta,
+            "test-budget" => &self.test_budget,
             _ => return None,
         })
     }
@@ -917,6 +964,8 @@ pub const LONGER_IS_STRICTER: &[&str] = &[
     "forbid_output",
     "deny_dependencies",
     "manifests",
+    "corpus_dirs",
+    "fuzz_targets",
 ];
 
 fn is_reset_token(val: &Value) -> bool {

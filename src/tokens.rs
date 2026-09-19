@@ -133,6 +133,13 @@ pub const ALLOW_DEPENDENCY: &[&str] = &[
     "allow(dependency-delta)",
 ];
 
+pub const ALLOW_TEST_SHRINK: &[&str] = &[
+    "allow-test-shrink",
+    "allow-test-budget",
+    "discipline:allow(test-budget)",
+    "allow(test-budget)",
+];
+
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
     "deletes",
@@ -161,6 +168,10 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-dependency",
     "discipline:allow(dependency-delta)",
     "allow(dependency-delta)",
+    "allow-test-shrink",
+    "allow-test-budget",
+    "discipline:allow(test-budget)",
+    "allow(test-budget)",
     "allow-nul",
     "allow-nul-byte",
     "allow-corrupt",

@@ -3717,3 +3717,145 @@ fn dependency_delta_language_neutral_package_json_and_pyproject() {
     assert_eq!(run_pass.code, 0);
     assert_eq!(run_pass.json()["overrides"], 2);
 }
+
+#[test]
+fn test_budget_fires_on_rust_proptest_reduction_and_accepts_override() {
+    let repo = Repo::new();
+    let base_code = r#"
+#[test]
+fn property_test() {
+    let config = ProptestConfig {
+        cases: 10000,
+        max_shrink_iters: 5000,
+        ..Default::default()
+    };
+}
+"#;
+    repo.commit_base(
+        "tests/prop.rs",
+        base_code,
+        "base: add proptest with 10000 cases",
+    );
+
+    // Head reduces cases and shrink iters
+    let head_code = r#"
+#[test]
+fn property_test() {
+    let config = ProptestConfig {
+        cases: 1000,
+        max_shrink_iters: 500,
+        ..Default::default()
+    };
+}
+"#;
+    repo.write("tests/prop.rs", head_code);
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let titles = run.titles("test-budget");
+    assert_eq!(
+        titles
+            .iter()
+            .filter(|t| *t == "Test Budget Reduced")
+            .count(),
+        2
+    );
+
+    // Override with allow-test-shrink
+    let run_pass = repo.check_with_pr(
+        &[],
+        "allow-test-shrink: proptest cases reduced for fast iteration\nallow-test-shrink: proptest max_shrink_iters reduced for fast iteration",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 2);
+}
+
+#[test]
+fn test_budget_fires_on_workflow_fuzz_flag_drop_and_accepts_override() {
+    let repo = Repo::new();
+    let base_wf = r#"name: Fuzz
+jobs:
+  fuzz:
+    env:
+      PROPTEST_CASES: 50000
+    steps:
+      - run: cargo fuzz run target -max_total_time 7200
+"#;
+    repo.commit_base(
+        ".github/workflows/fuzz.yml",
+        base_wf,
+        "base: add fuzz workflow",
+    );
+
+    // Head drops cases and duration
+    let head_wf = r#"name: Fuzz
+jobs:
+  fuzz:
+    env:
+      PROPTEST_CASES: 5000
+    steps:
+      - run: cargo fuzz run target -max_total_time 600
+"#;
+    repo.write(".github/workflows/fuzz.yml", head_wf);
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let titles = run.titles("test-budget");
+    assert_eq!(
+        titles
+            .iter()
+            .filter(|t| *t == "Test Budget Reduced")
+            .count(),
+        2
+    );
+
+    // Override both flags
+    let run_pass = repo.check_with_pr(
+        &[],
+        "allow-test-shrink: PROPTEST_CASES trimmed in branch\nallow-test-shrink: fuzz -max_total_time trimmed in branch",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 2);
+}
+
+#[test]
+fn test_budget_fires_on_hypothesis_and_fuzz_target_removal() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (
+                "fuzz/Cargo.toml",
+                "[package]\nname = \"fuzz\"\nversion = \"0.0.0\"\n\n[[bin]]\nname = \"parse_fuzz\"\n\n[[bin]]\nname = \"eval_fuzz\"\n",
+            ),
+            (
+                "tests/test_h.py",
+                "@settings(max_examples=2000)\ndef test_p(): pass\n",
+            ),
+        ],
+        "base: init fuzz manifest and python hypothesis test",
+    );
+
+    // Head removes eval_fuzz and drops max_examples
+    repo.write(
+        "fuzz/Cargo.toml",
+        "[package]\nname = \"fuzz\"\nversion = \"0.0.0\"\n\n[[bin]]\nname = \"parse_fuzz\"\n",
+    );
+    repo.write(
+        "tests/test_h.py",
+        "@settings(max_examples=200)\ndef test_p(): pass\n",
+    );
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let titles = run.titles("test-budget");
+    assert!(titles.contains(&"Fuzz Target Removed".to_string()));
+    assert!(titles.contains(&"Test Budget Reduced".to_string()));
+
+    // Override both
+    let run_pass = repo.check_with_pr(
+        &[],
+        "allow-test-shrink: eval_fuzz target retired\nallow-test-shrink: hypothesis max_examples reduced",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 2);
+}

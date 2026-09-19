@@ -34,6 +34,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | `test-floor` | integrity | planned | any | test-count ratchet read from the base ref |
 | `golden-output` | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override |
 | `dependency-delta` | integrity | **shipped** | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
+| `test-budget` | integrity | **shipped** | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
 | `pr-checklist` | hygiene | planned | any | ticked PR checkboxes are reconciled against the diff |
 | `command` | verification | **shipped** | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | `sanitizers` | verification | planned | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
@@ -370,6 +371,32 @@ When a change touches source files in a language without an active pack, each AS
   - Dependencies explicitly excused via scoped `allow-dependency: <name> <reason>`.
 - **Lifting directive:** `allow-dependency: <dependency-name> <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `manifests`, `allow_wildcards`, `require_git_pins`, `deny_file`, `allow_dependencies`, `deny_dependencies`.
+
+#### `test-budget`
+- **Rule:** Universal property-test and fuzz effort ratchet across languages and CI workflows. Property-testing iterations, shrink limits, fuzzing durations, fuzz targets, and seed corpus directories cannot be lowered without an explicit scoped directive.
+- **Languages:** Rust, Python, JS/TS, Go, any workflow/script.
+- **What it catches:**
+  - Reductions in Rust `proptest` (`cases`, `max_shrink_iters`) and `quickcheck` (`tests`, `gen_size`).
+  - Reductions in Python `hypothesis` (`max_examples`, `deadline`).
+  - Reductions in JS/TS `fast-check` (`numRuns`).
+  - Lowered fuzzing or test effort in workflows and shell scripts (`PROPTEST_CASES`, `-max_total_time`, `-runs`, Go fuzz `-fuzztime`).
+  - Removal of fuzz targets from `fuzz/Cargo.toml` (`[[bin]] name = "..."`) or deletion of `fuzz/fuzz_targets/*.rs`.
+  - Shrunken seed corpus directories or deleted seed files (`fuzz/corpus/**`, `corpus/**`).
+- **Failing diff example (rejected):**
+  ```diff
+  // tests/prop.rs
+  - cases: 10000
+  + cases: 1000
+  ```
+- **Passing commit / PR description (accepted):**
+  ```text
+  allow-test-shrink: proptest cases trimmed for faster local iteration in dev branch
+  ```
+- **What it does NOT catch:**
+  - Increases or additions of property-testing iterations or new fuzz targets (ratchet permits tightening).
+  - Reductions explicitly excused by scoped directive `allow-test-shrink: <target/metric> <reason>`.
+- **Lifting directive:** `allow-test-shrink: <target-or-metric> <reason>` or `allow-test-budget: <target-or-metric> <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `corpus_dirs`, `fuzz_targets`, `scan_workflows`, `scan_scripts`.
 
 ---
 

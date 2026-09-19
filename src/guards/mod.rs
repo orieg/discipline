@@ -4,6 +4,7 @@ pub mod dependency;
 pub mod hygiene;
 pub mod integrity;
 pub mod perf;
+pub mod test_budget;
 
 use crate::cli::SuiteChoice;
 use crate::config::{gate_info, DisciplineConfig, GateSettings, Severity, Suite, GATES};
@@ -206,6 +207,7 @@ pub fn run_checks(
             "bench-regression" => perf::bench_regression(ctx),
             "command" => command::evaluate_command(ctx),
             "dependency-delta" => dependency::evaluate_dependency_delta(ctx),
+            "test-budget" => test_budget::evaluate_test_budget(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -244,6 +246,8 @@ pub fn run_checks(
             "command"
         } else if note.contains("allow-dependency") {
             "dependency-delta"
+        } else if note.contains("allow-test-shrink") || note.contains("allow-test-budget") {
+            "test-budget"
         } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
             "assertion-reduction"
         } else {
@@ -261,6 +265,7 @@ pub fn run_checks(
                         | "bench-regression"
                         | "command"
                         | "dependency-delta"
+                        | "test-budget"
                 ) {
                     o.notes.push(note.clone());
                 }

@@ -962,6 +962,90 @@ allow-git = [
             Ok(policy_ok && covers_named && !covers_other && placeholder.is_empty())
         },
     ),
+    (
+        "test-budget: proptest, quickcheck, hypothesis, and fast-check budget reductions are detected",
+        || {
+            use crate::guards::test_budget::{
+                extract_js_budgets, extract_python_budgets, extract_rust_budgets,
+            };
+
+            // 1. Rust proptest and quickcheck reduction
+            let base_rs = "let c = ProptestConfig { cases: 5000, max_shrink_iters: 2000, ..Default::default() };\nQuickCheck::new().tests(500);";
+            let head_rs = "let c = ProptestConfig { cases: 500, max_shrink_iters: 200, ..Default::default() };\nQuickCheck::new().tests(50);";
+            let base_rust = extract_rust_budgets(base_rs, "tests/prop.rs");
+            let head_rust = extract_rust_budgets(head_rs, "tests/prop.rs");
+
+            let cases_drop = base_rust.iter().find(|m| m.subject == "proptest cases").unwrap().value
+                > head_rust.iter().find(|m| m.subject == "proptest cases").unwrap().value;
+            let shrink_drop = base_rust.iter().find(|m| m.subject == "proptest max_shrink_iters").unwrap().value
+                > head_rust.iter().find(|m| m.subject == "proptest max_shrink_iters").unwrap().value;
+            let qc_drop = base_rust.iter().find(|m| m.subject == "quickcheck tests").unwrap().value
+                > head_rust.iter().find(|m| m.subject == "quickcheck tests").unwrap().value;
+
+            // 2. Python Hypothesis reduction
+            let base_py = "@settings(max_examples=1000, deadline=500)\ndef test_h(): pass";
+            let head_py = "@settings(max_examples=100, deadline=50)\ndef test_h(): pass";
+            let base_python = extract_python_budgets(base_py, "test_h.py");
+            let head_python = extract_python_budgets(head_py, "test_h.py");
+
+            let hypo_examples_drop = base_python.iter().find(|m| m.subject == "hypothesis max_examples").unwrap().value
+                > head_python.iter().find(|m| m.subject == "hypothesis max_examples").unwrap().value;
+            let hypo_deadline_drop = base_python.iter().find(|m| m.subject == "hypothesis deadline").unwrap().value
+                > head_python.iter().find(|m| m.subject == "hypothesis deadline").unwrap().value;
+
+            // 3. JS fast-check reduction
+            let base_js = "fc.assert(prop, { numRuns: 1000 });";
+            let head_js = "fc.assert(prop, { numRuns: 100 });";
+            let base_fc = extract_js_budgets(base_js, "test.js");
+            let head_fc = extract_js_budgets(head_js, "test.js");
+
+            let fc_drop = base_fc[0].value > head_fc[0].value;
+
+            Ok(cases_drop && shrink_drop && qc_drop && hypo_examples_drop && hypo_deadline_drop && fc_drop)
+        },
+    ),
+    (
+        "test-budget: workflow flags, fuzz targets, and allow-test-shrink override discriminate",
+        || {
+            use crate::guards::test_budget::{
+                extract_fuzz_manifest_targets, extract_script_and_workflow_budgets,
+            };
+            use crate::tokens::{covers, directive_reasons, ALLOW_TEST_SHRINK};
+
+            // 1. Workflow flags reduction
+            let base_wf = "PROPTEST_CASES=10000\ncargo fuzz run t -max_total_time 3600 -runs 1000000\ngo test -fuzztime=10m";
+            let head_wf = "PROPTEST_CASES=1000\ncargo fuzz run t -max_total_time 300 -runs 10000\ngo test -fuzztime=1m";
+            let base_metrics = extract_script_and_workflow_budgets(base_wf, "ci.sh");
+            let head_metrics = extract_script_and_workflow_budgets(head_wf, "ci.sh");
+
+            let prop_drop = base_metrics.iter().find(|m| m.subject == "PROPTEST_CASES").unwrap().value
+                > head_metrics.iter().find(|m| m.subject == "PROPTEST_CASES").unwrap().value;
+            let time_drop = base_metrics.iter().find(|m| m.subject == "fuzz -max_total_time").unwrap().value
+                > head_metrics.iter().find(|m| m.subject == "fuzz -max_total_time").unwrap().value;
+            let runs_drop = base_metrics.iter().find(|m| m.subject == "fuzz -runs").unwrap().value
+                > head_metrics.iter().find(|m| m.subject == "fuzz -runs").unwrap().value;
+            let fuzztime_drop = base_metrics.iter().find(|m| m.subject == "go fuzz -fuzztime").unwrap().value
+                > head_metrics.iter().find(|m| m.subject == "go fuzz -fuzztime").unwrap().value;
+
+            // 2. Fuzz manifest targets removal
+            let base_fuzz = "[[bin]]\nname = \"target_a\"\n[[bin]]\nname = \"target_b\"";
+            let head_fuzz = "[[bin]]\nname = \"target_a\"";
+            let base_targets = extract_fuzz_manifest_targets(base_fuzz);
+            let head_targets = extract_fuzz_manifest_targets(head_fuzz);
+            let target_removed = base_targets.contains("target_b") && !head_targets.contains("target_b");
+
+            // 3. Directive override check
+            let armed = directive_reasons(
+                "allow-test-shrink: PROPTEST_CASES fast local iteration budget",
+                ALLOW_TEST_SHRINK,
+            );
+            let covers_named = covers(&armed, "PROPTEST_CASES");
+            let covers_other = covers(&armed, "fuzz -max_total_time");
+            let placeholder = directive_reasons("allow-test-shrink: <reason>", ALLOW_TEST_SHRINK);
+
+            Ok(prop_drop && time_drop && runs_drop && fuzztime_drop && target_removed && covers_named && !covers_other && placeholder.is_empty())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {
