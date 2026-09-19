@@ -44,7 +44,7 @@ fn schema_is_strict() {
         "[gates.pii]\nlan_ipz = false\n",
         "[gates.no-such-gate]\nenabled = true\n",
         "[gates.miri]\nenabled = true\n",
-        "[gates.golden-output]\nenabled = true\n",
+        "[gates.test-floor]\nenabled = true\n",
         "[nonsense]\na = 1\n",
         "[gates.pii]\nseverity = \"fatal\"\n",
         "[directives]\nunknown_key = true\n",

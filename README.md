@@ -28,8 +28,9 @@ Coding agents in an iterate-until-green loop weaken assertions, add tests that a
 | `pii` | hygiene | any | no home paths, LAN addresses, or denylisted hostnames in tracked text |
 | `agent-scratch` | hygiene | any | agent scratch state is never tracked |
 | `config-integrity` | integrity | any | a change cannot weaken its own `discipline.toml` without saying so |
+| `golden-output` | integrity | any | committed snapshots and golden files cannot be modified or deleted without a scoped `allow-golden-update:` |
 
-Six gates work on a repository in any language. The four AST gates use a per-language pack; Rust ships today, and Python, JavaScript / TypeScript, Java / Kotlin, C / C++ and Go are planned. When a change touches source in a language without a pack, the AST gates **say so in the report** rather than showing a clean zero.
+Seven gates work on a repository in any language. The four AST gates use a per-language pack; Rust and PHPT ship today, and Python, JavaScript / TypeScript, Java / Kotlin, C / C++ and Go are planned. When a change touches source in a language without a pack, the AST gates **say so in the report** rather than showing a clean zero.
 
 ## Fail-closed by construction
 
@@ -151,6 +152,7 @@ removes: tests/legacy/ replaced by the property suite
 allow-assertion-drop: inserts_in_order second case moved to proptest
 allow-ignore: big_alloc needs the new allocator first
 allow-gate-weakening: vacuous-tests suite asserts through snapshot macros
+allow-golden-update: tests/snapshots/result.snap re-blessed output
 ```
 
 Directives policy can be configured via `[directives]` in `discipline.toml`:

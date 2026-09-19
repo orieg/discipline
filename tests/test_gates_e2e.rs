@@ -123,12 +123,12 @@ fn unanalysed_languages_are_named_not_silently_passed() {
 }
 
 #[test]
-fn unsupported_source_files_include_phpt_and_group_by_extension() {
+fn unsupported_source_files_group_by_extension() {
     let repo = Repo::new();
     repo.write("ext/judy.c", "void foo() {}\n");
     repo.write("ext/judy.h", "#define FOO 1\n");
-    repo.write("tests/001.phpt", "--TEST--\ntest\n");
-    repo.commit("feat: c and phpt");
+    repo.write("tests/001.py", "def test_foo(): pass\n");
+    repo.commit("feat: c and py");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0);
     for gate in [
@@ -140,9 +140,33 @@ fn unsupported_source_files_include_phpt_and_group_by_extension() {
         let notes = run.outcome(gate)["notes"].to_string();
         assert!(
             notes.contains("3 changed source file(s)")
-                && notes.contains("2 .c/.h, 1 .phpt")
+                && notes.contains("2 .c/.h, 1 .py")
                 && notes.contains("NOT analysed"),
             "gate {gate} should format extension breakdown: {notes}"
+        );
+    }
+}
+
+#[test]
+fn phpt_source_files_are_analysed_by_golden_pack() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/001.phpt",
+        "--TEST--\nSample\n--FILE--\n<?php echo 1;\n--EXPECT--\n1\n",
+    );
+    repo.commit("feat: phpt test");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0);
+    for gate in [
+        "assertion-reduction",
+        "vacuous-tests",
+        "ignored-tests",
+        "unsafe-safety-comment",
+    ] {
+        let notes = run.outcome(gate)["notes"].to_string();
+        assert!(
+            !notes.contains("NOT analysed"),
+            "gate {gate} should analyse phpt files: {notes}"
         );
     }
 }
@@ -1518,4 +1542,92 @@ fn commit_msg_file_flag_is_accepted() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let json = run.json();
     assert_eq!(json["overrides"], 1);
+}
+
+#[test]
+fn golden_output_gate_fires_on_modified_snapshot_and_accepts_override() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    repo.write("tests/snapshots/result.snap", "output: line 1\n");
+    repo.commit("feat: initial snapshot");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Modify snapshot without override
+    repo.write("tests/snapshots/result.snap", "output: modified\n");
+    repo.commit("feat: modify snapshot");
+
+    let run_fail = repo.check(&[]);
+    assert_eq!(run_fail.code, 1);
+    let outcome = run_fail.outcome("golden-output");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 1);
+    assert_eq!(outcome["examined"], 1);
+    assert_eq!(
+        outcome["violations"][0]["file"],
+        "tests/snapshots/result.snap"
+    );
+
+    // With scoped override directive
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-golden-update: tests/snapshots/result.snap re-blessed output",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("golden-output");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn golden_output_gate_ignores_added_snapshot() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", "pub fn f() {}\n");
+    repo.commit("feat: initial");
+
+    repo.write("tests/snapshots/new.snap", "output: new\n");
+    repo.commit("feat: add new snapshot");
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0);
+    let outcome = run.outcome("golden-output");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome["examined"], 0);
+}
+
+#[test]
+fn phpt_assertion_reduction_and_ignored_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_phpt = "--TEST--\nJudy test\n--FILE--\n<?php echo 1;\n--EXPECT--\nline 1\nline 2\n";
+    repo.write("tests/judy.phpt", base_phpt);
+    repo.commit("feat: initial phpt test");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Head shrinks EXPECT from 2 lines to 1
+    let weaker_phpt = "--TEST--\nJudy test\n--FILE--\n<?php echo 1;\n--EXPECT--\nline 1\n";
+    repo.write("tests/judy.phpt", weaker_phpt);
+    repo.commit("test: weaken expect");
+
+    let run_weak = repo.check(&[]);
+    assert_eq!(run_weak.code, 1);
+    let outcome = run_weak.outcome("assertion-reduction");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 1);
+
+    // Now test XFAIL addition
+    let repo2 = Repo::new();
+    repo2.git(&["checkout", "main"]);
+    repo2.write("tests/judy.phpt", base_phpt);
+    repo2.commit("feat: initial phpt test");
+    repo2.git(&["checkout", "-B", "work", "main"]);
+
+    let xfail_phpt = "--TEST--\nJudy test\n--XFAIL--\nKnown bug\n--FILE--\n<?php echo 1;\n--EXPECT--\nline 1\nline 2\n";
+    repo2.write("tests/judy.phpt", xfail_phpt);
+    repo2.commit("test: mark xfail");
+
+    let run_xfail = repo2.check(&[]);
+    assert_eq!(run_xfail.code, 1);
+    let outcome_xfail = run_xfail.outcome("ignored-tests");
+    assert_eq!(outcome_xfail["violations"].as_array().unwrap().len(), 1);
 }

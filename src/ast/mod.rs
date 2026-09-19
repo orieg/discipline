@@ -6,6 +6,8 @@
 
 use anyhow::Result;
 
+#[cfg(feature = "lang-golden")]
+pub mod golden;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
 
@@ -65,6 +67,8 @@ pub fn default_registry() -> LanguageRegistry {
     let mut reg = LanguageRegistry::new();
     #[cfg(feature = "lang-rust")]
     reg.register(Box::new(rust::RustPack));
+    #[cfg(feature = "lang-golden")]
+    reg.register(Box::new(golden::GoldenPack));
     reg
 }
 
@@ -236,8 +240,9 @@ mod tests {
         assert_eq!(language_for("src/a.py"), None);
         assert!(is_unsupported_source("pkg/mod/a.py"));
         assert!(is_unsupported_source("web/App.tsx"));
-        assert!(is_unsupported_source("tests/001.phpt"));
+        assert!(is_unsupported_source("main.go"));
         assert!(!is_unsupported_source("src/a.rs"));
+        assert!(!is_unsupported_source("tests/001.phpt"));
         assert!(!is_unsupported_source("docs/plan.md"));
         assert!(!is_unsupported_source("Makefile"));
     }

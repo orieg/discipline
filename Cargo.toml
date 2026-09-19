@@ -27,7 +27,7 @@ globset = "0.4"
 serde_json = "1.0"
 
 [features]
-default = ["lang-rust"]
+default = ["lang-rust", "lang-golden"]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-golden = []
 lang-python = []

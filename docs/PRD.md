@@ -108,7 +108,7 @@ Every escape hatch uses one parser (`src/tokens.rs`) and one grammar.
 | `allow-assertion-drop:` | `assertion-reduction` | test fn |
 | `allow-ignore:` | `ignored-tests` | test fn |
 | `allow-gate-weakening:` | `config-integrity` | gate id |
-| `allow-golden-update:` (planned) | `golden-output` | golden/snapshot path or directory prefix |
+| `allow-golden-update:` | `golden-output` | golden/snapshot path or directory prefix |
 | `allow-regression:` (planned) | `bench-regression` | benchmark arm, plus a resolvable, fresh citation |
 | `allow-test-shrink:` (planned) | `test-floor` | — |
 
@@ -330,7 +330,7 @@ Design rules for packs:
 | `config-integrity` | shipped | §5.4. |
 | `ci-integrity` | planned | Workflow diffs: a job removed from the rollup's `needs`, new `continue-on-error`, `\|\| true`, a dropped `-D warnings`, an action unpinned from its SHA, a rollup that accepts anything but `success` / a consistent `skipped`, `disable:` added to the discipline step. Expanse polices rollup completeness and skip consistency but not step-level weakening. |
 | `test-floor` | planned | Test-count ratchet with the floor read from the base ref; zero tests selected is a failure; `allow-test-shrink:`. |
-| `golden-output` | planned | Stealth edits to committed golden files, test outputs, or recorded test fixtures are rejected without an explicit scoped rationale (`allow-golden-update: <path> <reason>`). |
+| `golden-output` | shipped | Stealth edits to committed golden files, test outputs, or recorded test fixtures are rejected without an explicit scoped rationale (`allow-golden-update: <path> <reason>`). |
 | `snapshot gates` | planned | Public API and exported-symbol snapshots as reviewed diffs, regenerated with `--write`. |
 
 #### Design specification: `golden-output` gate

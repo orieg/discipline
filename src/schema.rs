@@ -18,6 +18,7 @@ pub fn generate_schema() -> Value {
             "time-estimates" => "#/$defs/TimeEstimateGate",
             "pii" => "#/$defs/PiiGate",
             "agent-scratch" => "#/$defs/ScratchGate",
+            "golden-output" => "#/$defs/GoldenGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -173,6 +174,16 @@ pub fn generate_schema() -> Value {
                 }
             },
             "ScratchGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "paths": { "$ref": "#/$defs/StringListOrReset" }
+                }
+            },
+            "GoldenGate": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {

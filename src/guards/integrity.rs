@@ -5,8 +5,9 @@
 //! the configuration on the base side with the head side and demands a scoped
 //! `allow-gate-weakening:` directive for every loosening.
 
-use super::{Context, GateOutcome};
+use super::{Context, GateOutcome, PathFilter};
 use crate::config::{DisciplineConfig, GateSettings, Severity};
+use crate::gitctx::ChangeKind;
 use crate::tokens;
 use anyhow::Result;
 use toml::Value;
@@ -85,6 +86,67 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
             ),
         );
     }
+    Ok(out)
+}
+
+pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
+    const GATE: &str = "golden-output";
+    let settings = &ctx.config.gates.golden_output;
+    let mut out = GateOutcome::new(GATE);
+
+    let path_filter = PathFilter::new(&settings.paths)?;
+    let exempt_filter = PathFilter::new(&settings.exempt_paths)?;
+
+    let changed = ctx.git.changed_files()?;
+    for file in &changed {
+        if file.kind == ChangeKind::Added {
+            continue;
+        }
+
+        let matches_target = path_filter.matches(&file.path)
+            || (!file.old_path.is_empty() && path_filter.matches(&file.old_path));
+        if !matches_target {
+            continue;
+        }
+
+        let is_exempt = exempt_filter.matches(&file.path)
+            || (!file.old_path.is_empty() && exempt_filter.matches(&file.old_path));
+        if is_exempt {
+            continue;
+        }
+
+        out.examined += 1;
+
+        if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_GOLDEN_UPDATE, &file.path) {
+            out.overrides.push(ov);
+            continue;
+        }
+        if !file.old_path.is_empty() && file.old_path != file.path {
+            if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_GOLDEN_UPDATE, &file.old_path) {
+                out.overrides.push(ov);
+                continue;
+            }
+        }
+
+        let action = match file.kind {
+            ChangeKind::Deleted => "deleted",
+            _ => "modified",
+        };
+
+        out.push(
+            ctx.overridable(settings.severity()),
+            "Golden Output Modified Without Directive",
+            Some(&file.path),
+            None,
+            format!(
+                "Committed golden/snapshot file `{}` was {action} without an explicit override.",
+                file.path
+            ),
+            "Provide a scoped override on its own line in the PR body or a commit message: \
+             `allow-golden-update: <path-or-prefix> <reason>` (or `discipline:allow(golden-output): ...`).",
+        );
+    }
+
     Ok(out)
 }
 

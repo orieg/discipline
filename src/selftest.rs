@@ -353,6 +353,36 @@ const CASES: &[Case] = &[
                 && excused_test.overrides.len() == 1)
         },
     ),
+    (
+        "golden-output: path matching discriminates and accepts allow-golden-update",
+        || {
+            use crate::guards::PathFilter;
+            use crate::tokens::{directive_reasons, ALLOW_GOLDEN_UPDATE};
+            let paths = [
+                "**/golden/**".to_string(),
+                "**/snapshots/**".to_string(),
+                "**/*.snap".to_string(),
+                "tests/fixtures/**/output*".to_string(),
+            ];
+            let filter = PathFilter::new(&paths)?;
+            let is_golden = filter.matches("tests/snapshots/result.snap");
+            let not_golden = filter.matches("src/lib.rs");
+
+            let armed = directive_reasons(
+                "allow-golden-update: tests/snapshots/result.snap regenerated",
+                ALLOW_GOLDEN_UPDATE,
+            );
+            let prose = directive_reasons(
+                "mention of allow-golden-update: tests/snapshots/result.snap",
+                ALLOW_GOLDEN_UPDATE,
+            );
+            Ok(is_golden
+                && !not_golden
+                && covers(&armed, "tests/snapshots/result.snap")
+                && !covers(&armed, "tests/snapshots/other.snap")
+                && prose.is_empty())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

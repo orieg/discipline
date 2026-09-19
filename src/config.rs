@@ -148,7 +148,7 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Integrity,
         summary:
             "prevents stealth edits to committed golden/test output files without explicit override",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "pr-checklist",
@@ -255,6 +255,7 @@ pub struct Gates {
     pub pii: PiiGate,
     pub agent_scratch: ScratchGate,
     pub config_integrity: BasicGate,
+    pub golden_output: GoldenGate,
 }
 
 /// Settings every gate shares.
@@ -279,7 +280,8 @@ impl_gate_settings!(
     DeletionGate,
     TimeEstimateGate,
     PiiGate,
-    ScratchGate
+    ScratchGate,
+    GoldenGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -449,6 +451,35 @@ impl Default for ScratchGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GoldenGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Globs of committed output / snapshot files guarded against unexcused edits.
+    pub paths: Vec<String>,
+}
+
+impl Default for GoldenGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            paths: [
+                "**/golden/**",
+                "**/snapshots/**",
+                "**/*.snap",
+                "tests/fixtures/**/output*",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -462,6 +493,7 @@ impl Gates {
             "pii" => &self.pii,
             "agent-scratch" => &self.agent_scratch,
             "config-integrity" => &self.config_integrity,
+            "golden-output" => &self.golden_output,
             _ => return None,
         })
     }

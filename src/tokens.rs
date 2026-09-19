@@ -99,6 +99,11 @@ pub const ALLOW_GATE_WEAKENING: &[&str] = &[
     "discipline:allow(config-integrity)",
     "allow(config-integrity)",
 ];
+pub const ALLOW_GOLDEN_UPDATE: &[&str] = &[
+    "allow-golden-update",
+    "discipline:allow(golden-output)",
+    "allow(golden-output)",
+];
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
@@ -116,6 +121,9 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-gate-weakening",
     "discipline:allow(config-integrity)",
     "allow(config-integrity)",
+    "allow-golden-update",
+    "discipline:allow(golden-output)",
+    "allow(golden-output)",
 ];
 
 const PLACEHOLDERS: &[&str] = &[

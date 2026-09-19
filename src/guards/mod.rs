@@ -197,6 +197,7 @@ pub fn run_checks(
             "pii" => hygiene::pii(ctx),
             "agent-scratch" => hygiene::agent_scratch(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
+            "golden-output" => integrity::golden_output(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -227,6 +228,8 @@ pub fn run_checks(
             "ignored-tests"
         } else if note.contains("allow-gate-weakening") {
             "config-integrity"
+        } else if note.contains("allow-golden-update") {
+            "golden-output"
         } else {
             ""
         };
@@ -238,6 +241,7 @@ pub fn run_checks(
                         | "assertion-reduction"
                         | "ignored-tests"
                         | "config-integrity"
+                        | "golden-output"
                 ) {
                     o.notes.push(note.clone());
                 }

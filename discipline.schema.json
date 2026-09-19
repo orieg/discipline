@@ -57,6 +57,25 @@
       },
       "type": "object"
     },
+    "GoldenGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "PiiGate": {
       "additionalProperties": false,
       "properties": {
@@ -253,6 +272,14 @@
             }
           ],
           "description": "deleted files and removed tests need a scoped removes: rationale"
+        },
+        "golden-output": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/GoldenGate"
+            }
+          ],
+          "description": "prevents stealth edits to committed golden/test output files without explicit override"
         },
         "ignored-tests": {
           "allOf": [
