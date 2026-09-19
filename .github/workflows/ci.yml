@@ -42,6 +42,16 @@ jobs:
         run: python3 tests/action/check-links.py
       - name: Check ecosystem theme contract
         run: python3 tests/action/check_ecosystem_theme.py --local-only
+      - name: Test release notes sanitiser
+        run: python3 tests/action/sanitize-release-notes.py --test
+      - name: Lint PR title for unquoted mentions
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          python3 tests/action/sanitize-release-notes.py --check-pr-title "${PR_TITLE}"
 
   test:
     strategy:

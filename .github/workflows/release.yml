@@ -164,14 +164,23 @@ jobs:
           PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: |
           set -euo pipefail
-          flags=(--verify-tag --generate-notes --title "${TAG}")
+          # Generate notes via GitHub API and sanitize arbitrary @-mentions
+          raw_notes="$(mktemp)"
+          clean_notes="dist/release-notes-${TAG}.md"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="${TAG}" \
+            --jq .body > "${raw_notes}"
+          python3 tests/action/sanitize-release-notes.py "${raw_notes}" "${clean_notes}"
+
+          flags=(--verify-tag --title "${TAG}" --notes-file "${clean_notes}")
           if [ "${PRERELEASE}" = "true" ]; then
             flags+=(--prerelease)
           fi
           # Draft first: the release only becomes visible (and `latest`) once
           # every asset is attached.
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "Release ${TAG} already exists; updating assets"
+            echo "Release ${TAG} already exists; updating notes and assets"
+            gh release edit "${TAG}" --notes-file "${clean_notes}"
           else
             gh release create "${TAG}" --draft "${flags[@]}"
           fi
