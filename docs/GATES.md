@@ -481,7 +481,7 @@ The following curated configuration profiles provide turn-key setups tailored fo
 
 ### Profile 1: Research & High-Assurance Algorithm Labs
 
-Tailored for scientific computing, cryptographic libraries, and high-assurance algorithmic cores (e.g. `expanse`). Enforces zero-tolerance benchmark drift with statistical variance guards, strict hygiene (zero time estimates, PII redaction), property-test ratchets, and immutability of golden outputs.
+Tailored for scientific computing, cryptographic libraries, and high-assurance algorithmic cores. Enforces zero-tolerance benchmark drift with statistical variance guards, strict hygiene (zero time estimates, PII redaction), property-test ratchets, and immutability of golden outputs.
 
 ```toml
 schema_version = 1

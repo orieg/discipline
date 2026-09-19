@@ -8,7 +8,7 @@ Welcome to **Discipline** (`orieg/discipline`). This document establishes mandat
 
 ## 1. Project Mission & Identity
 
-**Discipline** is a universal CI/CD gatekeeper and AI coding agent diff sentinel built in Rust. It transforms the verification rigors from high-assurance algorithm repos (such as `orieg/expanse`) into a single, declarative static binary wrapped in a composite GitHub, Gitea, and Forgejo Action.
+**Discipline** is a universal CI/CD gatekeeper and AI coding agent diff sentinel built in Rust. It transforms the verification rigors from high-assurance algorithm repositories into a single, declarative static binary wrapped in a composite GitHub, Gitea, and Forgejo Action.
 
 Its primary mandate is to **prevent agent drift and test erosion**:
 - Disallowing assertion weakening (`assert_eq!` -> `assert!` or removal).

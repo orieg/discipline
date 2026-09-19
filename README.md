@@ -4,7 +4,8 @@
 [![Documentation](https://img.shields.io/badge/docs-orieg.github.io%2Fdiscipline-blue.svg)](https://orieg.github.io/discipline/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)](#license)
 [![Rust 1.90+](https://img.shields.io/badge/rustc-1.90%2B-orange.svg)](Cargo.toml)
-[![Status](https://img.shields.io/badge/status-pre--release-yellow.svg)](docs/ROADMAP.md)
+[![Release](https://img.shields.io/github/v/release/orieg/discipline?logo=github)](https://github.com/orieg/discipline/releases)
+[![Marketplace](https://img.shields.io/badge/Marketplace-Discipline%20CI%20Gate-blue?logo=github-actions)](https://github.com/marketplace/actions/discipline-ci-gate)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](.pre-commit-hooks.yaml)
 
 **Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust.** One static binary, identical in GitHub Actions, GitLab CI/CD, Forgejo Actions, Gitea Actions, Argo Workflows, pre-commit hooks, and an agent's local inner loop. Interactive guides and documentation: [orieg.github.io/discipline](https://orieg.github.io/discipline/).
@@ -20,9 +21,7 @@ Autonomous coding agents operating in iterate-until-green loops optimize for pas
 - Editing the gate configuration (`discipline.toml`) to disable failing checks.
 - Introducing unverified calendar estimates or leaking developer workstation paths and LAN IPs.
 
-Discipline inspects the **diff** against the merge base using `tree-sitter` AST parsing and fail-closed engineering distilled from [`orieg/expanse`](https://github.com/orieg/expanse). It rejects erosion patterns before they reach review.
-
-> **Status: pre-release.** No version tag is published yet. Code examples pin the verified commit SHA `d77059689f7fda42cc52a2b17ea8dd118af2e6f6` or use `binary_path: ...`. Upon release, snippets will track `@v0` / `v0.1.0`.
+Discipline inspects the **diff** against the merge base using `tree-sitter` AST parsing and fail-closed verification rigors. It rejects erosion patterns before they reach review.
 
 ## Gates
 
@@ -48,7 +47,7 @@ Discipline inspects the **diff** against the merge base using `tree-sitter` AST 
 | `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
 <!-- /generated -->
 
-Seven gates inspect text, diffs, or repository metadata across any language. The four AST gates use per-language packs (Rust, Python, JavaScript / TypeScript, PHPT) with Go, Java/Kotlin, and C/C++ planned. `bench-regression` tracks micro-benchmarks with interval degradation when sampling distributions lack confidence bounds.
+Seven gates inspect text, diffs, or repository metadata across any language. The four AST gates use per-language packs (Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C/C++, C#, Ruby) with Kotlin planned. `bench-regression` tracks micro-benchmarks with statistical variance bounds and interval degradation when sampling distributions lack confidence bounds.
 
 ## Quickstart
 
@@ -68,7 +67,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # merge base must be reachable
-      - uses: orieg/discipline@d77059689f7fda42cc52a2b17ea8dd118af2e6f6
+      - uses: orieg/discipline@v0
         with:
           fail_on_warnings: true
 ```

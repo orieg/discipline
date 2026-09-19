@@ -210,12 +210,12 @@ Discipline distinguishes between **configurable** and **bypassable**:
 
 Reference configurations proven in production repositories:
 
-### `orieg/expanse` (High-Assurance Rust Algorithms)
+### High-Assurance Rust Algorithms
 
 ```toml
 [meta]
 version = 1
-name = "expanse"
+name = "algorithm-core"
 
 [gates.vacuous-tests]
 assert_helper_fns = [

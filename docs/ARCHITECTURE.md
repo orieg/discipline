@@ -27,11 +27,11 @@ Autonomous coding agents operating in iterate-until-green loops frequently intro
 6. **Documentation drift:** Introducing unverified calendar estimates, leaking developer environment paths/IPs, or committing agent transcripts.
 7. **Benchmark drift:** Small algorithmic or execution regressions slipping past wall-clock tests lacking statistical rigor.
 
-### 1.2 Heritage and Prior Art
+### 1.2 Design Origin and Prior Art
 
-Discipline inherits its operational rigors from [`orieg/expanse`](https://github.com/orieg/expanse), which defended against these regressions through dozens of repository scripts. However:
-- Expanse had no AST-level detection: test erosion was guarded solely by aggregate counts and pull request token checks. Discipline's tree-sitter AST diff gates represent new engineering.
-- What Discipline inherits from Expanse is **adversarial hardening**: the specific failure modes, bypasses, and fail-open traps recorded across Expanse incidents form the binding requirements of the Fail-Closed Contract below.
+Discipline's operational rigors were developed to defend high-assurance repositories against subtle automated regressions. Rather than relying on dozens of disparate repository scripts:
+- Unlike legacy regex or aggregate count scripts, Discipline uses tree-sitter AST diff inspection to analyze syntactic structures directly.
+- The specific failure modes, bypasses, and fail-open traps observed in automated development environments form the binding requirements of the Fail-Closed Contract below.
 
 ---
 
