@@ -102,7 +102,45 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
         let base_bytes = ctx.git.base_bytes(&file.old_path)?;
         let head_bytes = ctx.git.head_bytes(&file.path)?;
 
-        // G1(c): Missing baseline artifact -> FAIL (exit 2, cannot run).
+        if file.kind == ChangeKind::Added {
+            let subjects = benchmark_subjects(&file.path, "");
+            let allowed = subjects
+                .iter()
+                .find_map(|s| ctx.find_override(GATE, tokens::ALLOW_REGRESSION, s));
+
+            let Some(head_raw) = head_bytes else {
+                bail!("missing benchmark artifact `{}` at head", file.path);
+            };
+            let head_text = String::from_utf8_lossy(&head_raw);
+            let _head_metrics = parse_metrics(&file.path, &head_text).with_context(|| {
+                format!(
+                    "unparseable or malformed benchmark artifact `{}`",
+                    file.path
+                )
+            })?;
+
+            if let Some(ov) = allowed {
+                out.overrides.push(ov);
+            } else {
+                out.push(
+                    ctx.overridable(settings.severity),
+                    "New Benchmark Artifact Lacks Baseline",
+                    Some(&file.path),
+                    None,
+                    format!(
+                        "benchmark artifact `{}` was added without a merge-base baseline; newly added benchmark artifacts require an explicit scoped `allow-regression:` directive",
+                        file.path
+                    ),
+                    &format!(
+                        "justify adding the new benchmark baseline on its own line in the PR body or a commit message: `allow-regression: {} <rationale>`",
+                        file.path
+                    ),
+                );
+            }
+            continue;
+        }
+
+        // G1(c): Missing baseline artifact on modified file -> FAIL (exit 2, cannot run).
         let Some(base_raw) = base_bytes else {
             bail!(
                 "missing baseline artifact `{}` at merge base; cannot verify performance regression without baseline",

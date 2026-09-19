@@ -528,7 +528,16 @@ impl Default for BenchRegressionGate {
         Self {
             enabled: true,
             severity: Severity::Error,
-            exempt_paths: Vec::new(),
+            exempt_paths: [
+                ".github/**",
+                ".gitea/**",
+                ".gitlab/**",
+                "docs/**",
+                "research/**",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
             tolerance_pct: 0.5,
             paths: [
                 "target/iai/**",

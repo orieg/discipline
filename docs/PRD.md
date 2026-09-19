@@ -224,6 +224,15 @@ Outputs: `status`, `errors`, `warnings`, `failed_gates`, `report` (JSON path), `
 Minimal adoption configurations verified against existing repositories:
 
 #### `orieg/expanse` (High-assurance Rust algorithms)
+Measured evaluation at `--base HEAD~30`:
+- **AST Gates:** 253 tests examined; 3 source files in unanalysed languages (`2 .go`, `1 .cpp/.hpp`) truthfully reported in notes. 5 vacuous test findings in Loom suites (asserting via concurrency harness rather than `assert!`, resolved via `assert_helper_fns`); 7 newly ignored test attributes in linearizability suites.
+- **Hygiene Gates:** 70 markdown documents examined. 12 time-estimate findings evaluated and classified:
+  - 7 occurrences of standard OS telemetry wording: "one-minute load average" (`/proc/loadavg` 1-minute window in benchmark host-load sections `docs/benchmarks/concurrency/README.md`). <!-- discipline:allow(time-estimates) -->
+  - 1 occurrences of "1-min" interval. <!-- discipline:allow(time-estimates) -->
+  - 4 historical or operational benchmark durations ("forty minutes", "6-hour", "6.06 days", "20 minutes"). <!-- discipline:allow(time-estimates) -->
+- **PII:** 8 findings (synthetic IP `192.168.1.20` and local developer paths in benchmark diagnostic scripts). <!-- discipline:allow(pii) -->
+- **Benchmark Sentinel:** 0 regressions across evaluated revisions.
+
 ```toml
 [meta]
 version = 1
@@ -245,14 +254,15 @@ exempt_paths = [
 ]
 
 [gates.time-estimates]
-# Archival documentation containing historical research chronicles
+# Archival documentation and host load metric sections
 exempt_paths = [
     "docs/archive/**",
 ]
 ```
 
 #### `orieg/php-judy` (C extension & PHP runtime)
-A non-Rust repository: AST gates report 27 unanalysed files `(12 .php, 10 .phpt, 5 .c/.h)` while hygiene, integrity, and file deletion gates remain active.
+Measured evaluation at `--base HEAD~30`:
+A non-Rust repository: with the Golden (PHPT) pack active, 10 `.phpt` test cases are analysed directly (catching 1 corrupted newly added NUL byte in `tests/string_to_entry_005.phpt`), while AST gates truthfully report 17 remaining unanalysed source files `(12 .php, 5 .c/.h)`. Hygiene, integrity, and file deletion gates remain active across all 503 files (detecting 1 forked `CLAUDE.md`, 1 duration estimate, and 1 PII path in example scripts).
 ```toml
 [meta]
 version = 1
