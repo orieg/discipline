@@ -147,3 +147,109 @@ fn vacuous_assertions_in_new_test_rejected() {
         run.stdout
     );
 }
+
+#[test]
+fn cli_check_format_junit_and_output_file() {
+    let repo = Repo::new();
+    let out_file = repo.file("junit-report.xml");
+    let run = repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--format",
+            "junit",
+            "-o",
+            out_file.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run
+        .stdout
+        .starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+    assert!(out_file.exists());
+    let content = std::fs::read_to_string(&out_file).unwrap();
+    assert!(content.contains("<testsuites name=\"discipline\""));
+    assert!(content.contains("<testcase name=\"agents-md\""));
+
+    // With a failure
+    repo.write(
+        "tests/a.rs",
+        &format!("{GOOD_TEST}\n#[test]\nfn vacuous_fail() {{\n    assert!(true);\n}}\n"),
+    );
+    repo.commit("test: add vacuous assert");
+    let run_fail = repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--format",
+            "junit",
+            "-o",
+            out_file.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run_fail.code, 1);
+    let fail_content = std::fs::read_to_string(&out_file).unwrap();
+    assert!(fail_content.contains("<failure message=\"Vacuous Test Added\""));
+    assert!(fail_content.contains("cannot fail"));
+}
+
+#[test]
+fn cli_check_format_sarif_and_output_file() {
+    let repo = Repo::new();
+    let out_file = repo.file("sarif-report.sarif");
+    let run = repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--format",
+            "sarif",
+            "-o",
+            out_file.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&run.stdout).expect("valid SARIF json");
+    assert_eq!(parsed["version"], "2.1.0");
+    assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "discipline");
+    assert!(out_file.exists());
+    let file_content = std::fs::read_to_string(&out_file).unwrap();
+    let file_parsed: serde_json::Value =
+        serde_json::from_str(&file_content).expect("valid SARIF file json");
+    assert_eq!(file_parsed["version"], "2.1.0");
+
+    // With a failure
+    repo.write(
+        "tests/a.rs",
+        &format!("{GOOD_TEST}\n#[test]\nfn vacuous_fail() {{\n    assert!(true);\n}}\n"),
+    );
+    repo.commit("test: add vacuous assert");
+    let run_fail = repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--format",
+            "sarif",
+            "-o",
+            out_file.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run_fail.code, 1);
+    let fail_parsed: serde_json::Value =
+        serde_json::from_str(&run_fail.stdout).expect("valid SARIF failure json");
+    assert!(!fail_parsed["runs"][0]["results"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        fail_parsed["runs"][0]["results"][0]["ruleId"],
+        "vacuous-tests"
+    );
+}

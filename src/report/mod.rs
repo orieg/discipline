@@ -1,9 +1,30 @@
+pub mod junit;
+pub mod sarif;
+
 use crate::cli::OutputFormat;
 use crate::config::Severity;
 use crate::guards::{CheckSummary, Violation};
 use crate::style;
 use anyhow::{Context, Result};
 use std::io::Write;
+
+pub fn format_report_content(
+    summary: &CheckSummary,
+    format: OutputFormat,
+    fail_on_warnings: bool,
+    fail_on_overrides: bool,
+) -> Result<String> {
+    match format {
+        OutputFormat::Terminal | OutputFormat::GithubSummary => {
+            let mut buf = Vec::new();
+            render_terminal_to_writer(&mut buf, summary, fail_on_warnings, fail_on_overrides)?;
+            Ok(String::from_utf8_lossy(&buf).to_string())
+        }
+        OutputFormat::Json => Ok(serde_json::to_string_pretty(summary)?),
+        OutputFormat::Junit => Ok(junit::format_junit(summary, fail_on_warnings)),
+        OutputFormat::Sarif => Ok(serde_json::to_string_pretty(&sarif::format_sarif(summary))?),
+    }
+}
 
 pub fn render_report(
     summary: &CheckSummary,
@@ -20,6 +41,13 @@ pub fn render_report(
             render_step_outputs(summary, fail_on_warnings, fail_on_overrides)?;
         }
         OutputFormat::Json => println!("{}", serde_json::to_string_pretty(summary)?),
+        OutputFormat::Junit => println!("{}", junit::format_junit(summary, fail_on_warnings)),
+        OutputFormat::Sarif => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&sarif::format_sarif(summary))?
+            )
+        }
     }
     Ok(())
 }
@@ -33,15 +61,30 @@ fn location(v: &Violation) -> Option<String> {
 }
 
 fn render_terminal(summary: &CheckSummary, fail_on_warnings: bool, fail_on_overrides: bool) {
-    println!("\n{}", style::bold("=== Discipline Gate Report ==="));
-    println!("base: {}\n", summary.base);
+    let _ = render_terminal_to_writer(
+        &mut std::io::stdout(),
+        summary,
+        fail_on_warnings,
+        fail_on_overrides,
+    );
+}
+
+fn render_terminal_to_writer<W: Write>(
+    w: &mut W,
+    summary: &CheckSummary,
+    fail_on_warnings: bool,
+    fail_on_overrides: bool,
+) -> Result<()> {
+    writeln!(w, "\n{}", style::bold("=== Discipline Gate Report ==="))?;
+    writeln!(w, "base: {}\n", summary.base)?;
 
     // The gate table is printed on every run, pass or fail: which gates ran,
     // over how much, and which were off. A pass is only as good as this table.
-    println!(
+    writeln!(
+        w,
         "{:<24} {:<8} {:>9} {:>11}",
         "GATE", "STATE", "EXAMINED", "VIOLATIONS"
-    );
+    )?;
     for o in &summary.outcomes {
         // Pad before styling: escape codes would count toward the width.
         let state = if o.enabled {
@@ -49,21 +92,24 @@ fn render_terminal(summary: &CheckSummary, fail_on_warnings: bool, fail_on_overr
         } else {
             style::yellow(&format!("{:<8}", "OFF"))
         };
-        println!(
+        writeln!(
+            w,
             "{:<24} {} {:>9} {:>11}",
             o.gate,
             state,
             o.examined,
             o.violations.len()
-        );
+        )?;
         if o.inline_exemptions > 0 {
-            println!(
+            writeln!(
+                w,
                 "  · {} line(s) exempted by inline `discipline:allow` markers",
                 o.inline_exemptions
-            );
+            )?;
         }
         for ov in &o.overrides {
-            println!(
+            writeln!(
+                w,
                 "  · override applied: `{}: {}` on `{}` ({})",
                 ov.directive,
                 ov.reason,
@@ -74,18 +120,19 @@ fn render_terminal(summary: &CheckSummary, fail_on_warnings: bool, fail_on_overr
                     crate::tokens::OverrideSource::Inline { file, line } =>
                         format!("{file}:{line}"),
                 }
-            );
+            )?;
         }
         for note in &o.notes {
-            println!("  · {note}");
+            writeln!(w, "  · {note}")?;
         }
     }
     if !summary.planned_gates.is_empty() {
-        println!(
+        writeln!(
+            w,
             "\n{} {}",
             style::dim("not checked (planned gates, not in this version):"),
             style::dim(&summary.planned_gates.join(", "))
-        );
+        )?;
     }
 
     for v in summary.violations() {
@@ -94,34 +141,38 @@ fn render_terminal(summary: &CheckSummary, fail_on_warnings: bool, fail_on_overr
             Severity::Warning => style::yellow("warning"),
         };
         let loc = location(v).map(|l| format!(" [{l}]")).unwrap_or_default();
-        println!(
+        writeln!(
+            w,
             "\n{icon} {} {}{}",
             style::bold(&format!("[{}]", v.gate)),
             style::bold(&v.title),
             style::cyan(&loc)
-        );
-        println!("   {}", v.message);
+        )?;
+        writeln!(w, "   {}", v.message)?;
         if let Some(rem) = &v.remediation {
-            println!("   {} {rem}", style::bold("Remediation:"));
+            writeln!(w, "   {} {rem}", style::bold("Remediation:"))?;
         }
     }
 
     let total_ov = summary.total_overrides();
-    println!(
+    writeln!(
+        w,
         "\nerrors: {}  warnings: {}  overrides: {}",
         summary.errors, summary.warnings, total_ov
-    );
+    )?;
     if fail_on_overrides && total_ov > 0 {
-        println!(
+        writeln!(
+            w,
             "{}",
             style::red("failure: applied overrides require human sign-off (directives.fail_on_overrides / --fail-on-overrides)")
-        );
+        )?;
     }
     if summary.is_success(fail_on_warnings, fail_on_overrides) {
-        println!("{}", style::green("Status: PASS"));
+        writeln!(w, "{}", style::green("Status: PASS"))?;
     } else {
-        println!("{}", style::red("Status: FAILED"));
+        writeln!(w, "{}", style::red("Status: FAILED"))?;
     }
+    Ok(())
 }
 
 /// Workflow-command annotations, understood by GitHub and Gitea runners.

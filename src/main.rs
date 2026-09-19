@@ -36,6 +36,7 @@ fn run() -> Result<bool> {
             directive_sources: Vec::new(),
             format: args.format,
             json_out: args.json_out,
+            output_file: args.output_file,
         }),
         Commands::Init(args) => init(args.name),
         Commands::Gates(args) => gates(&args.config),
@@ -160,6 +161,16 @@ fn check(args: CheckArgs) -> Result<bool> {
         args.fail_on_warnings,
         fail_on_overrides,
     )?;
+    if let Some(path) = &args.output_file {
+        let content = discipline::report::format_report_content(
+            &summary,
+            args.format,
+            args.fail_on_warnings,
+            fail_on_overrides,
+        )?;
+        std::fs::write(path, content)
+            .with_context(|| format!("failed to write output file {}", path.display()))?;
+    }
     if let Some(path) = &args.json_out {
         std::fs::write(path, serde_json::to_string_pretty(&summary)?)
             .with_context(|| format!("failed to write JSON report {}", path.display()))?;

@@ -95,6 +95,10 @@ pub struct CheckArgs {
     /// Also write the JSON report to this path, whatever --format is
     #[arg(long)]
     pub json_out: Option<PathBuf>,
+
+    /// Write the formatted report to this path
+    #[arg(short = 'o', long = "output-file")]
+    pub output_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -113,6 +117,10 @@ pub struct DiffArgs {
     /// Also write the JSON report to this path, whatever --format is
     #[arg(long)]
     pub json_out: Option<PathBuf>,
+
+    /// Write the formatted report to this path
+    #[arg(short = 'o', long = "output-file")]
+    pub output_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -144,4 +152,6 @@ pub enum OutputFormat {
     Terminal,
     GithubSummary,
     Json,
+    Junit,
+    Sarif,
 }
