@@ -560,4 +560,49 @@ mod tests {
             assert!(!rule.remediation().contains("$SECRET"));
         }
     }
+
+    #[derive(serde::Deserialize)]
+    struct CorpusCase {
+        line: String,
+        is_secret: bool,
+        category: String,
+    }
+
+    #[test]
+    fn shell_secrets_corpus_baseline_evaluation() {
+        let corpus_raw = include_str!("../../tests/fixtures/shell_secrets_corpus.json");
+        let cases: Vec<CorpusCase> = serde_json::from_str(corpus_raw).unwrap();
+        let scanner = ShellSecretScanner::new(&ShellSecretsGate::default()).unwrap();
+
+        let mut false_negatives = 0;
+        let mut false_positives = 0;
+        let mut total_positives = 0;
+        let mut total_negatives = 0;
+
+        for case in &cases {
+            let hit = scanner.check_line(&case.line);
+            if case.is_secret {
+                total_positives += 1;
+                if hit.is_none() {
+                    false_negatives += 1;
+                    eprintln!("FN: [{}] {}", case.category, case.line);
+                }
+            } else {
+                total_negatives += 1;
+                if hit.is_some() {
+                    false_positives += 1;
+                    eprintln!("FP: [{}] {}", case.category, case.line);
+                }
+            }
+        }
+        println!(
+            "Corpus baseline stats: Positives={total_positives} (FN={false_negatives}), Negatives={total_negatives} (FP={false_positives})"
+        );
+        // Record baseline: the current detector misses most actual secrets!
+        assert!(
+            false_negatives > 0,
+            "Baseline must demonstrate that old detector misses secrets"
+        );
+        assert_eq!(false_positives, 0, "Old detector must have 0 false positives");
+    }
 }
