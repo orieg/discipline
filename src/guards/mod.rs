@@ -3,8 +3,10 @@ pub mod command;
 pub mod dependency;
 pub mod hygiene;
 pub mod integrity;
+pub mod issue_link;
 pub mod perf;
 pub mod presets;
+pub mod shell_secrets;
 pub mod test_budget;
 
 use crate::cli::SuiteChoice;
@@ -116,6 +118,7 @@ pub struct Context<'a> {
     /// Repo-relative path of the configuration file (for config-integrity).
     pub config_path: &'a str,
     pub staged: bool,
+    pub pr_title: Option<String>,
     pub pr_body: Option<String>,
     pub directives: Vec<crate::tokens::ParsedDirective>,
     pub directive_notes: Vec<String>,
@@ -203,6 +206,8 @@ pub fn run_checks(
             "time-estimates" => hygiene::time_estimates(ctx),
             "pii" => hygiene::pii(ctx),
             "agent-scratch" => hygiene::agent_scratch(ctx),
+            "shell-secrets" => shell_secrets::evaluate_shell_secrets(ctx),
+            "issue-link" => issue_link::evaluate_issue_link(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
             "golden-output" => integrity::golden_output(ctx),
             "bench-regression" => perf::bench_regression(ctx),

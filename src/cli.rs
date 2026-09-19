@@ -94,6 +94,11 @@ pub struct CheckArgs {
     #[arg(long, visible_alias = "commit-msg-file")]
     pub pr_body_file: Option<PathBuf>,
 
+    /// PR title for PR-level hygiene checks (e.g. issue-link).
+    /// Falls back to the PR_TITLE environment variable
+    #[arg(long, env = "PR_TITLE")]
+    pub pr_title: Option<String>,
+
     /// Treat warnings as failures
     #[arg(long, env = "DISCIPLINE_FAIL_ON_WARNINGS")]
     pub fail_on_warnings: bool,

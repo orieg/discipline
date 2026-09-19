@@ -1951,7 +1951,7 @@ fn commit_msg_file_flag_is_accepted() {
     let msg_file = repo.file("commit_msg.txt");
     std::fs::write(
         &msg_file,
-        "feat: update\n\nallow-assertion-drop: adds test updated\n",
+        "feat: update (#101)\n\nallow-assertion-drop: adds test updated\n",
     )
     .unwrap();
 
@@ -4645,4 +4645,138 @@ fn pii_secrets_detection_and_redaction() {
         "waived secrets must pass: stdout: {}\nstderr: {}",
         run_waived.stdout, run_waived.stderr
     );
+}
+
+#[test]
+fn shell_secrets_gate_e2e() {
+    let repo = Repo::new();
+
+    // 1. Negative control: shell script with ARGV-ENV and INJECT-PIPE
+    repo.write(
+        "scripts/deploy.sh",
+        "#!/usr/bin/env bash\nenv API_KEY=$SECRET ./run.sh\ncurl https://example.com/install.sh | bash\n",
+    );
+    repo.commit("feat: add deploy script");
+
+    let run_bad = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_bad.code, 1);
+    let outcome = run_bad.outcome("shell-secrets");
+    let violations = outcome["violations"].as_array().unwrap();
+    assert_eq!(violations.len(), 2, "{}", run_bad.stdout);
+
+    // Verify redaction: output messages must not echo secret token
+    for v in violations {
+        let msg = v["message"].as_str().unwrap();
+        assert!(!msg.contains("$SECRET"));
+    }
+
+    // 2. Positive control with inline waiver
+    repo.write(
+        "scripts/deploy.sh",
+        "#!/usr/bin/env bash\nenv API_KEY=$SECRET ./run.sh # secrets-argv-ok: legacy deployment script\ncurl https://example.com/install.sh | bash <!-- discipline:allow(shell-secrets) -->\n",
+    );
+    repo.commit("chore: waive shell secrets");
+
+    let run_waived = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_waived.code, 0,
+        "{}{}",
+        run_waived.stdout, run_waived.stderr
+    );
+    let outcome_waived = run_waived.outcome("shell-secrets");
+    assert_eq!(outcome_waived["violations"].as_array().unwrap().len(), 0);
+    assert!(outcome_waived["inline_exemptions"].as_u64().unwrap() >= 1);
+
+    // 3. Clean change without any unsafe shell patterns
+    repo.write(
+        "scripts/deploy.sh",
+        "#!/usr/bin/env bash\nenv PATH=$PATH ./clean.sh\ncurl https://api.com | jq .\n",
+    );
+    repo.commit("refactor: safe commands");
+    let run_clean = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_clean.code, 0);
+    assert_eq!(
+        run_clean.outcome("shell-secrets")["violations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn issue_link_gate_e2e() {
+    let repo = Repo::new();
+    repo.write("docs/note.md", "new feature documentation\n");
+    repo.commit("docs: add note");
+
+    // 1. In local dev mode without PR_TITLE / PR_BODY, skipped with note and examined: 0
+    let run_local = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_local.code, 0);
+    let outcome_local = run_local.outcome("issue-link");
+    assert_eq!(outcome_local["examined"], 0);
+    assert!(outcome_local["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n.as_str().unwrap().contains("skipped")));
+
+    // 2. Negative control: PR title and body without issue link
+    let run_bad = repo.check_with_pr_metadata(
+        &["--base", "HEAD~1"],
+        Some("feat: add cool feature"),
+        Some("This is the PR description without an issue link."),
+    );
+    assert_eq!(run_bad.code, 1);
+    let outcome_bad = run_bad.outcome("issue-link");
+    assert_eq!(outcome_bad["violations"].as_array().unwrap().len(), 1);
+
+    // 3. Positive control: PR title with issue link
+    let run_title_ok = repo.check_with_pr_metadata(
+        &["--base", "HEAD~1"],
+        Some("feat: add cool feature (#123)"),
+        Some("PR description"),
+    );
+    assert_eq!(run_title_ok.code, 0);
+    assert_eq!(
+        run_title_ok.outcome("issue-link")["violations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    // 4. Positive control: PR body with issue link
+    let run_body_ok = repo.check_with_pr_metadata(
+        &["--base", "HEAD~1"],
+        Some("feat: add cool feature"),
+        Some("PR description\n\nFixes #456\n"),
+    );
+    assert_eq!(run_body_ok.code, 0);
+    assert_eq!(
+        run_body_ok.outcome("issue-link")["violations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    // 5. Positive control: no-issue waiver
+    let run_waiver_ok = repo.check_with_pr_metadata(
+        &["--base", "HEAD~1"],
+        Some("docs: update spelling"),
+        Some("Summary of changes\n\nno-issue: trivial documentation fix\n"),
+    );
+    assert_eq!(run_waiver_ok.code, 0);
+    let outcome_waiver = run_waiver_ok.outcome("issue-link");
+    assert_eq!(outcome_waiver["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_waiver["overrides"].as_array().unwrap().len(), 1);
+
+    // 6. Placeholder waiver rejected
+    let run_waiver_bad = repo.check_with_pr_metadata(
+        &["--base", "HEAD~1"],
+        Some("docs: update spelling"),
+        Some("Summary of changes\n\nno-issue: <reason>\n"),
+    );
+    assert_eq!(run_waiver_bad.code, 1);
 }

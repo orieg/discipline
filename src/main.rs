@@ -33,6 +33,7 @@ fn run() -> Result<bool> {
             base: args.base.or_else(|| Some("HEAD~1".to_string())),
             staged: false,
             pr_body_file: None,
+            pr_title: None,
             fail_on_warnings: false,
             fail_on_overrides: false,
             directive_sources: Vec::new(),
@@ -160,6 +161,31 @@ fn detect_pr_body_from_ci() -> Option<String> {
     None
 }
 
+fn detect_pr_title_from_ci() -> Option<String> {
+    for var in &[
+        "FORGEJO_EVENT_PATH",
+        "GITEA_EVENT_PATH",
+        "GITHUB_EVENT_PATH",
+    ] {
+        if let Ok(path) = std::env::var(var) {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(title) = json
+                        .get("pull_request")
+                        .and_then(|pr| pr.get("title"))
+                        .and_then(|b| b.as_str())
+                    {
+                        if !title.trim().is_empty() {
+                            return Some(title.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn check(args: CheckArgs) -> Result<bool> {
     let is_gitlab = is_gitlab_ci();
     let base_ref = discipline::gitctx::detect_base_ref(args.base.as_deref());
@@ -182,6 +208,12 @@ fn check(args: CheckArgs) -> Result<bool> {
     let (config, config_path) =
         load_config(&args.config, Some(git.root()), extra_fail, extra_sources)?;
 
+    let pr_title = args
+        .pr_title
+        .or_else(|| std::env::var("PR_TITLE").ok())
+        .filter(|t| !t.trim().is_empty())
+        .or_else(detect_pr_title_from_ci);
+
     let pr_body = match &args.pr_body_file {
         Some(p) => Some(
             std::fs::read_to_string(p)
@@ -201,6 +233,7 @@ fn check(args: CheckArgs) -> Result<bool> {
         git: &git,
         config_path: &config_path,
         staged: args.staged,
+        pr_title,
         pr_body,
         directives,
         directive_notes,

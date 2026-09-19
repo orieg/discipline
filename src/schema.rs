@@ -24,6 +24,8 @@ pub fn generate_schema() -> Value {
             "command" => "#/$defs/CommandGate",
             "dependency-delta" => "#/$defs/DependencyDeltaGate",
             "test-budget" => "#/$defs/TestBudgetGate",
+            "shell-secrets" => "#/$defs/ShellSecretsGate",
+            "issue-link" => "#/$defs/IssueLinkGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -293,6 +295,28 @@ pub fn generate_schema() -> Value {
                     "fuzz_targets": { "$ref": "#/$defs/StringListOrReset", "description": "Fuzz manifest and harness globs" },
                     "scan_workflows": { "type": "boolean", "description": "Whether to scan workflow files" },
                     "scan_scripts": { "type": "boolean", "description": "Whether to scan shell scripts" }
+                }
+            },
+            "ShellSecretsGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "extra_secret_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional custom regex patterns for sensitive secret variable names" },
+                    "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Custom regex patterns exempted from violation" }
+                }
+            },
+            "IssueLinkGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "pattern": { "type": "string", "description": "Custom regex pattern required in PR title or body" },
+                    "require_in_commit_if_no_pr": { "type": "boolean", "description": "Require issue link in commit messages when no PR metadata is supplied" }
                 }
             }
         }

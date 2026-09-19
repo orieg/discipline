@@ -140,6 +140,18 @@ pub const ALLOW_TEST_SHRINK: &[&str] = &[
     "allow(test-budget)",
 ];
 
+pub const SECRETS_ARGV_OK: &[&str] = &[
+    "secrets-argv-ok",
+    "discipline:allow(shell-secrets)",
+    "allow(shell-secrets)",
+];
+
+pub const NO_ISSUE: &[&str] = &[
+    "no-issue",
+    "discipline:allow(issue-link)",
+    "allow(issue-link)",
+];
+
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
     "deletes",
@@ -175,6 +187,12 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-nul",
     "allow-nul-byte",
     "allow-corrupt",
+    "secrets-argv-ok",
+    "discipline:allow(shell-secrets)",
+    "allow(shell-secrets)",
+    "no-issue",
+    "discipline:allow(issue-link)",
+    "allow(issue-link)",
 ];
 
 const PLACEHOLDERS: &[&str] = &[
@@ -525,5 +543,28 @@ removes: tests/old.rs inside a fence
 
         let r3 = directive_reasons("allow-corrupt: tests/fixture.bin raw fuzz input", ALLOW_NUL);
         assert!(covers(&r3, "tests/fixture.bin"));
+    }
+
+    #[test]
+    fn secrets_argv_ok_and_no_issue_directives_parsed() {
+        let r1 = directive_reasons(
+            "secrets-argv-ok: deploy.sh legacy container entrypoint",
+            SECRETS_ARGV_OK,
+        );
+        assert!(covers(&r1, "deploy.sh"));
+        assert!(!covers(&r1, "build.sh"));
+
+        let r2 = directive_reasons(
+            "<!-- discipline:allow(shell-secrets) scripts/run.sh dev test runner -->",
+            SECRETS_ARGV_OK,
+        );
+        assert!(covers(&r2, "scripts/run.sh"));
+
+        let r3 = directive_reasons("no-issue: trivial documentation fix", NO_ISSUE);
+        assert_eq!(r3, vec!["trivial documentation fix"]);
+        assert!(!is_placeholder(&r3[0]));
+
+        let r4 = directive_reasons("no-issue: <reason>", NO_ISSUE);
+        assert!(r4.is_empty());
     }
 }

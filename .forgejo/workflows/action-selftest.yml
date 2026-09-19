@@ -38,7 +38,9 @@ jobs:
             echo "using the prebuilt binary supplied by the caller"
           else
             command -v cargo >/dev/null || {
-              curl --proto '=https' --tlsv1.2 -fsS https://sh.rustup.rs | sh -s -- -y --profile minimal
+              curl --proto '=https' --tlsv1.2 -fsS https://sh.rustup.rs -o /tmp/rustup-init.sh
+              sh /tmp/rustup-init.sh -y --profile minimal
+              rm -f /tmp/rustup-init.sh
               . "${HOME}/.cargo/env"
             }
             cargo build --release --locked

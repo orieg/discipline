@@ -44,6 +44,8 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 | `time-estimates` | hygiene | any | no calendar / duration estimates in markdown or the PR body |
 | `pii` | hygiene | any | no home paths, LAN IPs, or denylisted hostnames in tracked text |
 | `agent-scratch` | hygiene | any | agent scratch state is never tracked |
+| `shell-secrets` | hygiene | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
+| `issue-link` | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | `config-integrity` | integrity | any | a change cannot weaken its own discipline.toml without a token |
 | `golden-output` | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
 | `dependency-delta` | integrity | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |

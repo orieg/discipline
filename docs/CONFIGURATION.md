@@ -80,6 +80,10 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.bench-regression.paths` | list | `[...]` | Benchmark artifact globs tracked across revisions |
 | `gates.bench-regression.provenance` | string | `""` | Expected host or runner provenance tag for benchmark artifacts |
 | `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched provenance tags |
+| `gates.shell-secrets.extra_secret_patterns` | list | `[]` | Additional custom regex patterns for sensitive secret variable names |
+| `gates.shell-secrets.allow_patterns` | list | `[]` | Custom regex patterns exempted from violation |
+| `gates.issue-link.pattern` | string | `""` | Custom regex pattern required in PR title or body |
+| `gates.issue-link.require_in_commit_if_no_pr` | boolean | `false` | Require issue link in commit messages when no PR metadata is supplied |
 <!-- /generated -->
 
 ---
@@ -104,6 +108,7 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `fail_on_overrides` | `false` | Treat applied overrides as failures (requires human sign-off). |
 | `directive_sources` | *(none)* | Comma-separated list of allowed directive sources (pr-body, commits). |
 | `pr_body` | `${{ github.event.pull_request.body }}` | PR description: carries override directives and is itself scanned by hygiene gates. |
+| `pr_title` | `${{ github.event.pull_request.title }}` | PR title: checked by hygiene gates (e.g. issue-link). |
 | `working_directory` | `.` | Directory of the repository to check. |
 | `version` | *(none)* | Release to download (e.g. v0.1.0). Default: the tag this action was referenced by, else the latest release. |
 | `binary_path` | *(none)* | Use this discipline binary instead of downloading one (air-gapped Gitea/Forgejo runners, self-tests). |

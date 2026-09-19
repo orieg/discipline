@@ -1177,6 +1177,20 @@ discipline self-test</div>
             <td>agent scratch state is never tracked</td>
           </tr>
           <tr>
+            <td class="gate-id">shell-secrets</td>
+            <td>Hygiene</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">shell, docker, workflows</span></td>
+            <td>no command-line secrets or unverified piped scripts in shell, docker, or CI</td>
+          </tr>
+          <tr>
+            <td class="gate-id">issue-link</td>
+            <td>Hygiene</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>PR title or description links a tracking issue (#123, Fixes #123)</td>
+          </tr>
+          <tr>
             <td class="gate-id">config-integrity</td>
             <td>Integrity</td>
             <td><span class="gate-badge badge-error">Error</span></td>
@@ -1308,6 +1322,11 @@ discipline self-test</div>
       <td class="gate-id">pr_body</td>
       <td><code>${{ github.event.pull_request.body }}</code></td>
       <td>PR description: carries override directives and is itself scanned by hygiene gates.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">pr_title</td>
+      <td><code>${{ github.event.pull_request.title }}</code></td>
+      <td>PR title: checked by hygiene gates (e.g. issue-link).</td>
     </tr>
     <tr>
       <td class="gate-id">working_directory</td>

@@ -67,6 +67,7 @@ impl Run {
 
 const ISOLATED_ENV_VARS: &[&str] = &[
     "PR_BODY",
+    "PR_TITLE",
     "GITHUB_STEP_SUMMARY",
     "GITHUB_BASE_REF",
     "GITHUB_EVENT_PATH",
@@ -165,7 +166,32 @@ impl Repo {
             args.extend(["--base", "main"]);
         }
         args.extend(extra);
-        self.run(&args, &[("PR_BODY", pr_body)])
+        self.run(
+            &args,
+            &[("PR_BODY", pr_body), ("PR_TITLE", "chore: test PR (#101)")],
+        )
+    }
+
+    /// `discipline check --format json --base main <extra>` with PR_TITLE and/or PR_BODY
+    pub fn check_with_pr_metadata(
+        &self,
+        extra: &[&str],
+        pr_title: Option<&str>,
+        pr_body: Option<&str>,
+    ) -> Run {
+        let mut args = vec!["check", "--format", "json"];
+        if !extra.contains(&"--staged") && !extra.contains(&"--base") {
+            args.extend(["--base", "main"]);
+        }
+        args.extend(extra);
+        let mut env = Vec::new();
+        if let Some(t) = pr_title {
+            env.push(("PR_TITLE", t));
+        }
+        if let Some(b) = pr_body {
+            env.push(("PR_BODY", b));
+        }
+        self.run(&args, &env)
     }
 
     pub fn commit_base(&self, rel: &str, content: &str, message: &str) {
@@ -196,6 +222,11 @@ impl Repo {
         // Inherit nothing that could change the verdict.
         for var in ISOLATED_ENV_VARS {
             cmd.env_remove(var);
+        }
+        let has_pr_body = env.iter().any(|(k, _)| *k == "PR_BODY");
+        let has_pr_title = env.iter().any(|(k, _)| *k == "PR_TITLE");
+        if has_pr_body && !has_pr_title {
+            cmd.env("PR_TITLE", "chore: test PR (#101)");
         }
         cmd.envs(env.iter().copied());
         let out = cmd.output().unwrap();

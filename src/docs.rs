@@ -298,7 +298,11 @@ pub fn render_config_schema_markdown() -> String {
 | `gates.bench-regression.tolerance_pct` | number | `0.5` | Maximum allowed benchmark regression percentage |\n\
 | `gates.bench-regression.paths` | list | `[...]` | Benchmark artifact globs tracked across revisions |\n\
 | `gates.bench-regression.provenance` | string | `\"\"` | Expected host or runner provenance tag for benchmark artifacts |\n\
-| `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched provenance tags |\n",
+| `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched provenance tags |\n\
+| `gates.shell-secrets.extra_secret_patterns` | list | `[]` | Additional custom regex patterns for sensitive secret variable names |\n\
+| `gates.shell-secrets.allow_patterns` | list | `[]` | Custom regex patterns exempted from violation |\n\
+| `gates.issue-link.pattern` | string | `\"\"` | Custom regex pattern required in PR title or body |\n\
+| `gates.issue-link.require_in_commit_if_no_pr` | boolean | `false` | Require issue link in commit messages when no PR metadata is supplied |\n",
     )
 }
 

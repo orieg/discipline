@@ -118,6 +118,20 @@ pub const GATES: &[GateInfo] = &[
         available: true,
     },
     GateInfo {
+        id: "shell-secrets",
+        suite: Suite::Hygiene,
+        summary: "no command-line secrets or unverified piped scripts in shell, docker, or CI",
+        languages: "shell, docker, workflows",
+        available: true,
+    },
+    GateInfo {
+        id: "issue-link",
+        suite: Suite::Hygiene,
+        summary: "PR title or description links a tracking issue (#123, Fixes #123)",
+        languages: "any",
+        available: true,
+    },
+    GateInfo {
         id: "config-integrity",
         suite: Suite::Integrity,
         summary: "a change cannot weaken its own discipline.toml without a token",
@@ -298,6 +312,8 @@ pub struct Gates {
     pub command: CommandGate,
     pub dependency_delta: DependencyDeltaGate,
     pub test_budget: TestBudgetGate,
+    pub shell_secrets: ShellSecretsGate,
+    pub issue_link: IssueLinkGate,
 }
 
 /// Settings every gate shares.
@@ -328,7 +344,9 @@ impl_gate_settings!(
     BenchRegressionGate,
     CommandGate,
     DependencyDeltaGate,
-    TestBudgetGate
+    TestBudgetGate,
+    ShellSecretsGate,
+    IssueLinkGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -765,6 +783,50 @@ impl Default for TestBudgetGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ShellSecretsGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub extra_secret_patterns: Vec<String>,
+    pub allow_patterns: Vec<String>,
+}
+
+impl Default for ShellSecretsGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            extra_secret_patterns: Vec::new(),
+            allow_patterns: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IssueLinkGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub pattern: Option<String>,
+    pub require_in_commit_if_no_pr: bool,
+}
+
+impl Default for IssueLinkGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            pattern: None,
+            require_in_commit_if_no_pr: false,
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -777,6 +839,8 @@ impl Gates {
             "time-estimates" => &self.time_estimates,
             "pii" => &self.pii,
             "agent-scratch" => &self.agent_scratch,
+            "shell-secrets" => &self.shell_secrets,
+            "issue-link" => &self.issue_link,
             "config-integrity" => &self.config_integrity,
             "golden-output" => &self.golden_output,
             "bench-regression" => &self.bench_regression,

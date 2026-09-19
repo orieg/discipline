@@ -26,6 +26,8 @@ This document establishes the normative enforcement rules, detection capabilitie
 | `time-estimates` | hygiene | **shipped** | any | no calendar / duration estimates in markdown or the PR body |
 | `pii` | hygiene | **shipped** | any | no home paths, LAN IPs, or denylisted hostnames in tracked text |
 | `agent-scratch` | hygiene | **shipped** | any | agent scratch state is never tracked |
+| `shell-secrets` | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
+| `issue-link` | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | `config-integrity` | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
 | `scope-confinement` | agent-guard | planned | any | changes stay inside authorized paths |
 | `suppression-delta` | agent-guard | planned | per pack | new #[allow], commented-out tests, cfg-gated tests |

@@ -53,6 +53,10 @@ inputs:
     description: 'PR description: carries override directives and is itself scanned by hygiene gates.'
     required: false
     default: ${{ github.event.pull_request.body }}
+  pr_title:
+    description: 'PR title: checked by hygiene gates (e.g. issue-link).'
+    required: false
+    default: ${{ github.event.pull_request.title }}
   working_directory:
     description: 'Directory of the repository to check.'
     required: false
@@ -228,6 +232,7 @@ runs:
         DISCIPLINE_DIRECTIVE_SOURCES: ${{ inputs.directive_sources }}
         INPUT_SUITE: ${{ inputs.suite }}
         PR_BODY: ${{ inputs.pr_body }}
+        PR_TITLE: ${{ inputs.pr_title }}
       run: |
         set -euo pipefail
         run_id="${GITHUB_RUN_ID:-${FORGEJO_RUN_ID:-0}}"

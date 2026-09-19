@@ -279,6 +279,30 @@
       },
       "type": "object"
     },
+    "IssueLinkGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "pattern": {
+          "description": "Custom regex pattern required in PR title or body",
+          "type": "string"
+        },
+        "require_in_commit_if_no_pr": {
+          "description": "Require issue link in commit messages when no PR metadata is supplied",
+          "type": "boolean"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "PiiGate": {
       "additionalProperties": false,
       "properties": {
@@ -350,6 +374,30 @@
         "info"
       ],
       "type": "string"
+    },
+    "ShellSecretsGate": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_patterns": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Custom regex patterns exempted from violation"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "extra_secret_patterns": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Additional custom regex patterns for sensitive secret variable names"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
     },
     "StringListOrReset": {
       "description": "A list of strings, or a table with reset = true to clear lower precedence layers.",
@@ -569,6 +617,14 @@
           ],
           "description": "tests must not be newly #[ignore]d or skipped without directive"
         },
+        "issue-link": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/IssueLinkGate"
+            }
+          ],
+          "description": "PR title or description links a tracking issue (#123, Fixes #123)"
+        },
         "pii": {
           "allOf": [
             {
@@ -576,6 +632,14 @@
             }
           ],
           "description": "no home paths, LAN IPs, or denylisted hostnames in tracked text"
+        },
+        "shell-secrets": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ShellSecretsGate"
+            }
+          ],
+          "description": "no command-line secrets or unverified piped scripts in shell, docker, or CI"
         },
         "test-budget": {
           "allOf": [

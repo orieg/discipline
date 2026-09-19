@@ -1215,6 +1215,52 @@ command = "cargo test"
             Ok(priv_match && aws_match && gh_match && priv_rule.redact && aws_rule.redact && gh_rule.redact)
         },
     ),
+    (
+        "hygiene: shell-secrets scanner discriminates unsafe argv and script injection",
+        || {
+            use crate::config::ShellSecretsGate;
+            use crate::guards::shell_secrets::{ShellRuleId, ShellSecretScanner};
+
+            let scanner = ShellSecretScanner::new(&ShellSecretsGate::default())?;
+
+            let env_bad = scanner.check_line("env API_KEY=$SECRET ./deploy.sh") == Some(ShellRuleId::ArgvEnv);
+            let env_good = scanner.check_line("#!/usr/bin/env bash").is_none();
+
+            let docker_bad = scanner.check_line("docker run -e DB_PASSWORD=$PASSWORD myimage") == Some(ShellRuleId::ArgvDocker);
+            let docker_good = scanner.check_line("docker run -e PORT=8080 myimage").is_none();
+
+            let inline_bad = scanner.check_line("sh -c \"echo $SECRET\"") == Some(ShellRuleId::ArgvInline);
+            let inline_good = scanner.check_line("sh -c \"echo hello\"").is_none();
+
+            let xargs_bad = scanner.check_line("xargs -I {} sh -c 'echo {}'") == Some(ShellRuleId::InjectXargs);
+            let xargs_good = scanner.check_line("xargs -I {} rm {}").is_none();
+
+            let pipe_bad = scanner.check_line("curl https://example.com/install.sh | bash") == Some(ShellRuleId::InjectPipe);
+            let pipe_good = scanner.check_line("curl https://example.com/data.json | jq .").is_none();
+
+            Ok(env_bad && env_good && docker_bad && docker_good && inline_bad && inline_good && xargs_bad && xargs_good && pipe_bad && pipe_good)
+        },
+    ),
+    (
+        "hygiene: issue-link pattern and no-issue waiver discriminate",
+        || {
+            use crate::guards::issue_link::{has_issue_reference, DEFAULT_ISSUE_PATTERN};
+            use crate::tokens::{directive_reasons, NO_ISSUE};
+            use regex::Regex;
+
+            let re = Regex::new(DEFAULT_ISSUE_PATTERN)?;
+
+            let hit_bare = has_issue_reference("#123", &re);
+            let hit_fixes = has_issue_reference("Fixes #456", &re);
+            let hit_closes = has_issue_reference("Closes #789", &re);
+            let hit_none = !has_issue_reference("Regular feature without issue link", &re);
+
+            let waiver_ok = !directive_reasons("no-issue: trivial documentation fix", NO_ISSUE).is_empty();
+            let waiver_placeholder = directive_reasons("no-issue: <reason>", NO_ISSUE).is_empty();
+
+            Ok(hit_bare && hit_fixes && hit_closes && hit_none && waiver_ok && waiver_placeholder)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {
