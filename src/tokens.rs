@@ -76,6 +76,29 @@ pub fn find_override(
     None
 }
 
+pub fn find_gate_or_subject_override(
+    directives: &[ParsedDirective],
+    gate: &str,
+    names: &[&str],
+    subject: &str,
+) -> Option<OverrideRecord> {
+    for d in directives {
+        if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive))
+            && (subject.is_empty() || d.covers(subject) || d.covers(gate))
+        {
+            return Some(OverrideRecord {
+                gate: gate.to_string(),
+                subject: subject.to_string(),
+                directive: d.directive.clone(),
+                reason: d.reason.clone(),
+                source: d.source.clone(),
+                hidden: d.hidden,
+            });
+        }
+    }
+    None
+}
+
 pub const REMOVES: &[&str] = &[
     "removes",
     "deletes",
@@ -136,8 +159,19 @@ pub const ALLOW_DEPENDENCY: &[&str] = &[
 pub const ALLOW_TEST_SHRINK: &[&str] = &[
     "allow-test-shrink",
     "allow-test-budget",
+    "allow-floor-drop",
     "discipline:allow(test-budget)",
     "allow(test-budget)",
+    "discipline:allow(test-floor)",
+    "allow(test-floor)",
+];
+
+pub const ALLOW_CI_WEAKENING: &[&str] = &[
+    "allow-ci-weakening",
+    "allow-unpinned-action",
+    "allow-ci-change",
+    "discipline:allow(ci-integrity)",
+    "allow(ci-integrity)",
 ];
 
 pub const SECRETS_ARGV_OK: &[&str] = &[
@@ -182,8 +216,16 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow(dependency-delta)",
     "allow-test-shrink",
     "allow-test-budget",
+    "allow-floor-drop",
     "discipline:allow(test-budget)",
     "allow(test-budget)",
+    "discipline:allow(test-floor)",
+    "allow(test-floor)",
+    "allow-ci-weakening",
+    "allow-unpinned-action",
+    "allow-ci-change",
+    "discipline:allow(ci-integrity)",
+    "allow(ci-integrity)",
     "allow-nul",
     "allow-nul-byte",
     "allow-corrupt",

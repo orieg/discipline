@@ -25,6 +25,8 @@ pub fn generate_schema() -> Value {
             "command" => "#/$defs/CommandGate",
             "dependency-delta" => "#/$defs/DependencyDeltaGate",
             "test-budget" => "#/$defs/TestBudgetGate",
+            "test-floor" => "#/$defs/TestFloorGate",
+            "ci-integrity" => "#/$defs/CiIntegrityGate",
             "shell-secrets" => "#/$defs/ShellSecretsGate",
             "issue-link" => "#/$defs/IssueLinkGate",
             _ => "#/$defs/BasicGate",
@@ -334,6 +336,38 @@ pub fn generate_schema() -> Value {
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "pattern": { "type": "string", "description": "Custom regex pattern required in PR title or body" },
                     "require_in_commit_if_no_pr": { "type": "boolean", "description": "Require issue link in commit messages when no PR metadata is supplied" }
+                }
+            },
+            "TestFloorGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "min_tests": { "type": "integer", "description": "Minimum required workspace test count" },
+                    "constant_file": { "type": "string", "description": "File containing a floor constant" },
+                    "constant_name": { "type": "string", "description": "Name of the floor constant in constant_file" },
+                    "required_suites": { "$ref": "#/$defs/StringListOrReset", "description": "Required test suite files that must exist" },
+                    "test_command": { "type": "string", "description": "Custom command to list or count tests" }
+                }
+            },
+            "CiIntegrityGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "workflows": { "$ref": "#/$defs/StringListOrReset", "description": "Workflow file patterns to inspect" },
+                    "rollup_job": { "type": "string", "description": "Name of the rollup job that must depend on all jobs" },
+                    "excluded_jobs": { "$ref": "#/$defs/StringListOrReset", "description": "Job names excluded from rollup dependency requirements" },
+                    "pin_actions": { "type": "boolean", "description": "Ensure third-party GitHub actions are pinned by 40-character commit SHA" },
+                    "forbid_continue_on_error": { "type": "boolean", "description": "Forbid continue-on-error: true in workflow jobs or steps" },
+                    "forbid_or_true": { "type": "boolean", "description": "Forbid || true and set +e error masking in run commands" },
+                    "diff_only": { "type": "boolean", "description": "When true, scans only modified workflow files rather than all workflows" },
+                    "documented_job_count_path": { "type": "string", "description": "Path to catalog documentation stating job count" },
+                    "documented_job_count_pattern": { "type": "string", "description": "Regex pattern to extract job count from documentation" }
                 }
             }
         }

@@ -1,4 +1,5 @@
 pub mod agent_diff;
+pub mod ci_integrity;
 pub mod command;
 pub mod dependency;
 pub mod hygiene;
@@ -8,6 +9,7 @@ pub mod perf;
 pub mod presets;
 pub mod shell_secrets;
 pub mod test_budget;
+pub mod test_floor;
 
 use crate::cli::SuiteChoice;
 use crate::config::{gate_info, DisciplineConfig, GateSettings, Severity, Suite, GATES};
@@ -136,6 +138,15 @@ impl Context<'_> {
         crate::tokens::find_override(&self.directives, gate, names, subject)
     }
 
+    pub fn find_gate_or_subject_override(
+        &self,
+        gate: &str,
+        names: &[&str],
+        subject: &str,
+    ) -> Option<crate::tokens::OverrideRecord> {
+        crate::tokens::find_gate_or_subject_override(&self.directives, gate, names, subject)
+    }
+
     /// A finding that an override directive could lift is only a warning in
     /// `--staged` mode without a PR body: a pre-commit hook runs before the
     /// commit message exists, so there is nowhere to put the directive yet.
@@ -214,6 +225,8 @@ pub fn run_checks(
             "command" => command::evaluate_command(ctx),
             "dependency-delta" => dependency::evaluate_dependency_delta(ctx),
             "test-budget" => test_budget::evaluate_test_budget(ctx),
+            "test-floor" => test_floor::evaluate_test_floor(ctx),
+            "ci-integrity" => ci_integrity::evaluate_ci_integrity(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -252,8 +265,15 @@ pub fn run_checks(
             "command"
         } else if note.contains("allow-dependency") {
             "dependency-delta"
-        } else if note.contains("allow-test-shrink") || note.contains("allow-test-budget") {
+        } else if note.contains("allow-test-shrink") || note.contains("allow-floor-drop") {
+            "test-floor"
+        } else if note.contains("allow-test-budget") {
             "test-budget"
+        } else if note.contains("allow-ci-weakening")
+            || note.contains("allow-unpinned-action")
+            || note.contains("allow-ci-change")
+        {
+            "ci-integrity"
         } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
             "assertion-reduction"
         } else {
@@ -272,6 +292,8 @@ pub fn run_checks(
                         | "command"
                         | "dependency-delta"
                         | "test-budget"
+                        | "test-floor"
+                        | "ci-integrity"
                 ) {
                     o.notes.push(note.clone());
                 }

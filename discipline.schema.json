@@ -81,6 +81,58 @@
       },
       "type": "object"
     },
+    "CiIntegrityGate": {
+      "additionalProperties": false,
+      "properties": {
+        "diff_only": {
+          "description": "When true, scans only modified workflow files rather than all workflows",
+          "type": "boolean"
+        },
+        "documented_job_count_path": {
+          "description": "Path to catalog documentation stating job count",
+          "type": "string"
+        },
+        "documented_job_count_pattern": {
+          "description": "Regex pattern to extract job count from documentation",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "excluded_jobs": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Job names excluded from rollup dependency requirements"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "forbid_continue_on_error": {
+          "description": "Forbid continue-on-error: true in workflow jobs or steps",
+          "type": "boolean"
+        },
+        "forbid_or_true": {
+          "description": "Forbid || true and set +e error masking in run commands",
+          "type": "boolean"
+        },
+        "pin_actions": {
+          "description": "Ensure third-party GitHub actions are pinned by 40-character commit SHA",
+          "type": "boolean"
+        },
+        "rollup_job": {
+          "description": "Name of the rollup job that must depend on all jobs",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "workflows": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Workflow file patterns to inspect"
+        }
+      },
+      "type": "object"
+    },
     "CommandEntry": {
       "additionalProperties": false,
       "properties": {
@@ -503,6 +555,42 @@
       },
       "type": "object"
     },
+    "TestFloorGate": {
+      "additionalProperties": false,
+      "properties": {
+        "constant_file": {
+          "description": "File containing a floor constant",
+          "type": "string"
+        },
+        "constant_name": {
+          "description": "Name of the floor constant in constant_file",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "min_tests": {
+          "description": "Minimum required workspace test count",
+          "type": "integer"
+        },
+        "required_suites": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Required test suite files that must exist"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "test_command": {
+          "description": "Custom command to list or count tests",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "TimeEstimateGate": {
       "additionalProperties": false,
       "properties": {
@@ -616,6 +704,14 @@
           ],
           "description": "benchmark drift via harness adapters (deterministic counts or BCa intervals)"
         },
+        "ci-integrity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CiIntegrityGate"
+            }
+          ],
+          "description": "workflow weakening: continue-on-error, || true, unpinned actions"
+        },
         "command": {
           "allOf": [
             {
@@ -695,6 +791,14 @@
             }
           ],
           "description": "property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)"
+        },
+        "test-floor": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/TestFloorGate"
+            }
+          ],
+          "description": "test-count ratchet read from the base ref"
         },
         "time-estimates": {
           "allOf": [

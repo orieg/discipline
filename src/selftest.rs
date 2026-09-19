@@ -1405,6 +1405,60 @@ command = "cargo test"
             Ok(out_strict.violations.len() == 1 && out_unstrict.violations.is_empty())
         },
     ),
+    (
+        "test-floor: constant extraction and test count output discrimination",
+        || {
+            use crate::guards::test_floor::parse_test_count_output;
+            let sample = "
+test tests::a: test
+test tests::b: test
+test tests::c: test
+3 passed; 0 failed
+";
+            let parsed = parse_test_count_output(sample);
+            let num = parse_test_count_output("142\n");
+            let const_src = "pub const TEST_FLOOR: usize = 120;\n";
+            let re = Regex::new(r"(?m)^[ \t]*(?:(?:pub|export)\s+)?(?:const\s+)?TEST_FLOOR(?:\s*:\s*[a-zA-Z0-9_]+)?\s*=\s*(\d+)")?;
+            let extracted = re.captures(const_src).and_then(|c| c[1].parse::<usize>().ok());
+
+            Ok(parsed == 3 && num == 142 && extracted == Some(120))
+        },
+    ),
+    (
+        "ci-integrity: rollup needs detection, pinning, and error masks",
+        || {
+            use crate::guards::ci_integrity::parse_workflow_jobs;
+            let workflow = "
+name: CI
+jobs:
+  build:
+    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-latest
+  ci-gate:
+    needs: [build]
+";
+            let (jobs, rollup_needs) = parse_workflow_jobs(workflow, Some("ci-gate"));
+            let missing_test = jobs.contains("test") && !rollup_needs.contains("test");
+
+            let action_re = Regex::new(r#"uses:\s*['"]?([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)@([^'"\s#]+)"#)?;
+            let pinned = action_re.captures("uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11");
+            let unpinned = action_re.captures("uses: actions/checkout@v4");
+
+            let is_sha = |caps: Option<regex::Captures>| {
+                caps.map(|c| {
+                    let r = c.get(2).unwrap().as_str();
+                    r.len() == 40 && r.chars().all(|ch| ch.is_ascii_hexdigit())
+                }).unwrap_or(false)
+            };
+
+            let continue_err_re = Regex::new(r"continue-on-error:\s*true\b")?;
+            let masks = continue_err_re.is_match("continue-on-error: true");
+            let clean = !continue_err_re.is_match("continue-on-error: false");
+
+            Ok(missing_test && is_sha(pinned) && !is_sha(unpinned) && masks && clean)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

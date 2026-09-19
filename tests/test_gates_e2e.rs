@@ -5035,3 +5035,109 @@ fn tokens_namespaced_discipline_prefix_and_deletion_require_scope() {
         "unstrict accepts unscoped removes"
     );
 }
+
+#[test]
+fn test_floor_gate_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\nconstant_file = \"tests/floors.rs\"\nconstant_name = \"TEST_FLOOR\"\n",
+    );
+    repo.write("tests/floors.rs", "pub const TEST_FLOOR: usize = 2;\n");
+    repo.commit("feat: configure test floor");
+
+    // Head lowers constant without directive -> violation
+    repo.write("tests/floors.rs", "pub const TEST_FLOOR: usize = 1;\n");
+    repo.commit("test: lower floor");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run.titles("test-floor"), vec!["Floor Constant Decreased"]);
+
+    // Head lowers constant with allow-test-shrink -> passes
+    repo.commit("test: lower floor with override\n\nallow-test-shrink: TEST_FLOOR lowered for modularization");
+    let run_ov = repo.check(&["--base", "HEAD~2"]);
+    assert_eq!(run_ov.titles("test-floor").len(), 0, "{}", run_ov.stdout);
+
+    // Required suites check
+    let run_suite = repo.check(&[
+        "--base",
+        "HEAD~2",
+        "--config-override",
+        "[gates.test-floor]\nrequired_suites = [\"tests/non_existent.rs\"]\n",
+    ]);
+    assert_eq!(
+        run_suite.titles("test-floor"),
+        vec!["Required Test Suite Missing"]
+    );
+}
+
+#[test]
+fn ci_integrity_gate_e2e() {
+    let repo = Repo::new();
+    // Case 1: Incomplete rollup job needs
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n  ci-gate:\n    needs: [lint]\n    runs-on: ubuntu-latest\n",
+    );
+    repo.commit("ci: add workflow with incomplete rollup");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.titles("ci-integrity"),
+        vec!["Incomplete Rollup Job Needs"]
+    );
+
+    // With allow-ci-weakening directive -> passes
+    repo.commit("ci: incomplete rollup excused\n\nallow-ci-weakening: ci-gate partial rollup during migration");
+    let run_ov = repo.check(&["--base", "HEAD~2"]);
+    assert_eq!(run_ov.titles("ci-integrity").len(), 0, "{}", run_ov.stdout);
+
+    // Case 2: Unpinned action
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n",
+    );
+    repo.commit("ci: unpinned action");
+    let run_unpinned = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_unpinned.titles("ci-integrity"),
+        vec!["Unpinned Third-Party Action"]
+    );
+
+    // Pinned action with SHA -> passes
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11\n  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n",
+    );
+    repo.commit("ci: pinned action with commit SHA");
+    let run_pinned = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_pinned.titles("ci-integrity").len(),
+        0,
+        "{}",
+        run_pinned.stdout
+    );
+
+    // Case 3: continue-on-error and || true
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n    steps:\n      - run: cargo test || true\n  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n",
+    );
+    repo.commit("ci: masked failures");
+    let run_mask = repo.check(&["--base", "HEAD~1"]);
+    let titles = run_mask.titles("ci-integrity");
+    assert!(titles.contains(&"continue-on-error Masks Failure".to_string()));
+    assert!(titles.contains(&"Command Masks Exit Code".to_string()));
+
+    // Inline allow marker suppresses
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n    continue-on-error: true # discipline:allow(ci-integrity)\n    steps:\n      - run: cargo test || true # discipline:allow(ci-integrity)\n  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n",
+    );
+    repo.commit("ci: inline allowed masked failures");
+    let run_inline = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_inline.titles("ci-integrity").len(),
+        0,
+        "{}",
+        run_inline.stdout
+    );
+}

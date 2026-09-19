@@ -47,6 +47,8 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 | `shell-secrets` | hygiene | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | `issue-link` | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | `config-integrity` | integrity | any | a change cannot weaken its own discipline.toml without a token |
+| `ci-integrity` | integrity | any | workflow weakening: continue-on-error, || true, unpinned actions |
+| `test-floor` | integrity | any | test-count ratchet read from the base ref |
 | `golden-output` | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
 | `dependency-delta` | integrity | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
 | `test-budget` | integrity | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |

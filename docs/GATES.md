@@ -32,8 +32,8 @@ This document establishes the normative enforcement rules, detection capabilitie
 | `scope-confinement` | agent-guard | planned | any | changes stay inside authorized paths |
 | `suppression-delta` | agent-guard | planned | per pack | new #[allow], commented-out tests, cfg-gated tests |
 | `provenance-tags` | hygiene | planned | any | published numerics carry (measured|target|projected) |
-| `ci-integrity` | integrity | planned | any | workflow weakening: continue-on-error, || true, unpinned actions |
-| `test-floor` | integrity | planned | any | test-count ratchet read from the base ref |
+| `ci-integrity` | integrity | **shipped** | any | workflow weakening: continue-on-error, || true, unpinned actions |
+| `test-floor` | integrity | **shipped** | any | test-count ratchet read from the base ref |
 | `golden-output` | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override |
 | `dependency-delta` | integrity | **shipped** | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
 | `test-budget` | integrity | **shipped** | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
@@ -452,9 +452,46 @@ When a change touches source files in a language without an active pack, each AS
   - Increases or additions of property-testing iterations or new fuzz targets (ratchet permits tightening).
   - Reductions explicitly excused by scoped directive `allow-test-shrink: <target/metric> <reason>`.
 - **Lifting directive:** `allow-test-shrink: <target-or-metric> <reason>` or `allow-test-budget: <target-or-metric> <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `corpus_dirs`, `fuzz_targets`, `scan_workflows`, `scan_scripts`.
+#### `ci-integrity`
+- **Rule:** CI/CD workflow integrity and rollup sentinel. Enforces complete rollup jobs (`ci-gate` must `needs:` all verification jobs), pins third-party actions by 40-character commit SHA, bans masked failures (`continue-on-error: true`), and bans exit-code suppression (`|| true`, `set +e`).
+- **Languages:** CI workflow files (`.github/workflows/*.yml`, `.github/workflows/*.yaml`).
+- **What it catches:**
+  - Rollup job missing a dependency on verification jobs defined in the workflow (`Incomplete Rollup Job Needs`).
+  - Third-party GitHub actions unpinned or pinned to mutable tags/branches (`@v4`, `@main`) instead of 40-character commit SHA.
+  - Steps carrying `continue-on-error: true`.
+  - Commands masking exit codes (`|| true`, `set +e`).
+  - Documented job count mismatches when `documented_job_count_path` is configured.
+- **Passing commit / PR description (accepted):**
+  ```text
+  allow-ci-weakening: ci-gate temporary rollup relaxation during migration
+  ```
+- **What it does NOT catch:**
+  - Local actions (`./...`) and docker actions (`docker://...`).
+  - Workflows matching `excluded_jobs` (e.g. `detect-changes`).
+- **Lifting directive:** `allow-ci-weakening: <subject> <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `workflows`, `rollup_job`, `excluded_jobs`, `pin_actions`, `forbid_continue_on_error`, `forbid_or_true`, `diff_only`, `documented_job_count_path`, `documented_job_count_pattern`.
+
+#### `test-floor`
+- **Rule:** Universal test count ratchet and floor sentinel. Reads test count floor constants from the base ref, enforces configured test count minimums, and ensures required test suite files exist.
+- **Languages:** Any supported language pack or external test listing command.
+- **What it catches:**
+  - Workspace test count dropping below configured `min_tests` or base floor constant.
+  - Lowering of floor constant value in `constant_file` below merge base ref.
+  - Lowering of `min_tests` in `discipline.toml` below merge base ref.
+  - Missing `required_suites` files.
+  - Missing floor constant file on base ref (fails closed).
+- **Passing commit / PR description (accepted):**
+  ```text
+  allow-test-shrink: TEST_FLOOR test suite pruned for modularization
+  ```
+- **What it does NOT catch:**
+  - Test count increases (ratchet permits additions).
+  - Reductions excused with scoped `allow-test-shrink: <subject> <reason>`.
+- **Lifting directive:** `allow-test-shrink: <subject> <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `min_tests`, `constant_file`, `constant_name`, `required_suites`, `test_command`.
 
 ---
+
 
 ### Pillar 4: Verification Suite (`verification`)
 
@@ -728,8 +765,6 @@ The following gates are registered with `available: false` in the gate registry.
 - `scope-confinement` (Suite: Agent Guard) — Changes stay inside authorized directory paths.
 - `suppression-delta` (Suite: Agent Guard) — Tracks net increases in compiler/linter suppression attributes (`#[allow]`, `@ts-ignore`, `# noqa`).
 - `provenance-tags` (Suite: Hygiene) — Published numeric claims must carry `(measured)`, `(target)`, or `(projected)`.
-- `ci-integrity` (Suite: Integrity) — Detects workflow weakening (`continue-on-error`, dropped `needs`, unpinned actions).
-- `test-floor` (Suite: Integrity) — Test count ratchet read directly from the base ref.
 - `pr-checklist` (Suite: Hygiene) — Reconciles ticked PR checkboxes against actual diffs.
 - `sanitizers` (Suite: Verification) — Memory and thread sanitizer presets with race canaries.
 - `msrv` (Suite: Quality) — Verifies build against minimum supported Rust version.

@@ -164,14 +164,14 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Integrity,
         summary: "workflow weakening: continue-on-error, || true, unpinned actions",
         languages: "any",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "test-floor",
         suite: Suite::Integrity,
         summary: "test-count ratchet read from the base ref",
         languages: "any",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "golden-output",
@@ -312,6 +312,8 @@ pub struct Gates {
     pub command: CommandGate,
     pub dependency_delta: DependencyDeltaGate,
     pub test_budget: TestBudgetGate,
+    pub test_floor: TestFloorGate,
+    pub ci_integrity: CiIntegrityGate,
     pub shell_secrets: ShellSecretsGate,
     pub issue_link: IssueLinkGate,
 }
@@ -346,6 +348,8 @@ impl_gate_settings!(
     CommandGate,
     DependencyDeltaGate,
     TestBudgetGate,
+    TestFloorGate,
+    CiIntegrityGate,
     ShellSecretsGate,
     IssueLinkGate
 );
@@ -875,6 +879,73 @@ impl Default for IssueLinkGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestFloorGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub min_tests: Option<usize>,
+    pub constant_file: Option<String>,
+    pub constant_name: Option<String>,
+    pub required_suites: Vec<String>,
+    pub test_command: Option<String>,
+}
+
+impl Default for TestFloorGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            min_tests: None,
+            constant_file: None,
+            constant_name: None,
+            required_suites: Vec::new(),
+            test_command: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CiIntegrityGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub workflows: Vec<String>,
+    pub rollup_job: Option<String>,
+    pub excluded_jobs: Vec<String>,
+    pub pin_actions: bool,
+    pub forbid_continue_on_error: bool,
+    pub forbid_or_true: bool,
+    pub diff_only: bool,
+    pub documented_job_count_path: Option<String>,
+    pub documented_job_count_pattern: Option<String>,
+}
+
+impl Default for CiIntegrityGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            workflows: vec![
+                ".github/workflows/*.yml".to_string(),
+                ".github/workflows/*.yaml".to_string(),
+            ],
+            rollup_job: Some("ci-gate".to_string()),
+            excluded_jobs: vec!["detect-changes".to_string()],
+            pin_actions: true,
+            forbid_continue_on_error: true,
+            forbid_or_true: true,
+            diff_only: true,
+            documented_job_count_path: None,
+            documented_job_count_pattern: None,
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -895,6 +966,8 @@ impl Gates {
             "command" => &self.command,
             "dependency-delta" => &self.dependency_delta,
             "test-budget" => &self.test_budget,
+            "test-floor" => &self.test_floor,
+            "ci-integrity" => &self.ci_integrity,
             _ => return None,
         })
     }

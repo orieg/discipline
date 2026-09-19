@@ -1198,6 +1198,20 @@ discipline self-test</div>
             <td>a change cannot weaken its own discipline.toml without a token</td>
           </tr>
           <tr>
+            <td class="gate-id">ci-integrity</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>workflow weakening: continue-on-error, || true, unpinned actions</td>
+          </tr>
+          <tr>
+            <td class="gate-id">test-floor</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>test-count ratchet read from the base ref</td>
+          </tr>
+          <tr>
             <td class="gate-id">golden-output</td>
             <td>Integrity</td>
             <td><span class="gate-badge badge-error">Error</span></td>
