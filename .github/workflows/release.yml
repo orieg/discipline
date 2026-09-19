@@ -170,8 +170,12 @@ jobs:
           fi
           # Draft first: the release only becomes visible (and `latest`) once
           # every asset is attached.
-          gh release create "${TAG}" --draft "${flags[@]}"
-          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/SHA256SUMS
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; updating assets"
+          else
+            gh release create "${TAG}" --draft "${flags[@]}"
+          fi
+          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/SHA256SUMS --clobber
           gh release edit "${TAG}" --draft=false
 
   # Consume the release exactly as a user does: download, verify the checksum,
