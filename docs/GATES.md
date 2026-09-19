@@ -774,6 +774,26 @@ ratchet = true
 
 ---
 
+## Legacy Script Parity & Replacement Reference
+
+Discipline provides universal static binary drop-in replacements for the legacy verification scripts in high-assurance repositories (such as `orieg/expanse`):
+
+| Gate | Replaced Legacy Script | Discipline Enhancements & Behavioral Differences |
+|---|---|---|
+| `assertion-reduction` | `scripts/check_diff_guards.py` | Multi-language AST extraction (11 language packs), callback-aware function tracking, compile-time assertions (`static_assert`, `const _: () = assert!`). |
+| `vacuous-tests` | `scripts/check_diff_guards.py` | Language-specific AST helper detection (Python non-test methods, C/C++ non-zero return / throw helper recognition). |
+| `ignored-tests` | `scripts/check_diff_guards.py` | Distinguishes newly arriving ignored tests from modified tests, configurable approved skip predicates (`cfg_attr(miri, ignore)`). |
+| `deletion-rationale` | `scripts/check_diff_guards.py` | Line-anchored directive parsing, configurable `require_scope` and `allow_hidden` directive controls. |
+| `time-estimates` | `scripts/check_docs_hygiene.py` | Paragraph and sentence-level boundary lookarounds avoiding `\b` false positives on symbols (`×`, `~`), diff-scoped mode (`diff_only = true`), operational term-of-art and wrap window exemptions, `docs-lint: allow` alias. |
+| `pii` | `scripts/check_docs_hygiene.py` | AST test function exemption across all 11 language packs, JSON string unescaping, cross-tree agent config directory/playbook detection, secret-backed hostname denylist. |
+| `test-floor` | `scripts/check_test_floors.py` | Automatic base-ref constant extraction, direct `test_command` execution, fail-closed handling on unresolvable base floors, `allow-test-shrink:` override. |
+| `ci-integrity` | `scripts/check_ci_gate.py`, `scripts/check_gate_floor.py`, `scripts/check_ci_filters.py` | Complete rollup job `needs:` closure validation, 40-character commit SHA pinning, masked failure detection (`continue-on-error`, `\|\| true`, `set +e`), `allow-ci-weakening:` override. |
+| `bench-regression` | `scripts/perf_report.py`, `scripts/wasm_fuel.py` | In-job dual-file mode (`--bench-base-file` and `--bench-head-file`), `iai-callgrind` console line and neutral JSON parsers, two-tier threshold (single-worst >5% or $\ge 2$ arms regressing >0.5% noise floor, advisory 0.1%), declared arm exemptions, sourced overrides verifying CI URL or committed artifact and named arms, missing-baseline fatal fail-closed. |
+| `provenance-tags` | `scripts/check_docs_hygiene.py` | Table numeric provenance (`(measured: host, commit)`, `(target)`, `(projected)`), mechanism claim hardware counter citations, wall-clock intervals, paired comparison tags (`(workload: id)`). |
+| `command` | Bespoke shell runner wrappers | Universal fail-closed timeout wrapper, zero-tests guards, turnkey presets (`cargo-public-api`, `miri`, `sanitizers`, `loom`, `cargo-deny`, `cargo-mutants`). |
+
+---
+
 ## Planned Gates
 
 The following gates are registered with `available: false` in the gate registry. Attempting to enable or configure them exits non-zero (F5). Full roadmaps, dependencies, and go/no-go gates are documented in [ROADMAP.md](ROADMAP.md).

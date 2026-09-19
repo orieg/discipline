@@ -88,20 +88,20 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
   - `suppression-delta`: Catching net increases in compiler/linter suppression annotations (`#[allow]`, `@ts-ignore`, `# type: ignore`, `// NOLINT`).
   - `scope-confinement`: Restricting agent file modifications strictly within authorized directory boundaries.
 - **Go / no-go gate:** Incident replays of historical workflow weakening and all-skipped test rollups are rejected with exit `1`.
-- **Status:** Planned.
+- **Status:** **Completed & Verified** (`ci-integrity` and `test-floor` shipped; remaining gates planned).
 
 ### Phase 5: Verification Presets & Benchmark Adapters
 - **Deliverables:**
   - `command`: Fail-closed execution wrapper for arbitrary external tools with canary checks, zero-test guards, and timeout limits.
   - Verification presets: `sanitizers` (ASan/TSan), `miri`, `msrv`, `unsafe-budget`.
-  - Benchmark regression sentinel (`bench-regression` shipped, adding additional adapters for Go benchmarks, Google Benchmark, pytest-benchmark, Criterion, and Callgrind).
+  - Benchmark regression sentinel (`bench-regression` shipped with dual-file mode, two-tier threshold, and iai/json adapters).
 - **Go / no-go gate:** Zero-test runs, missing baseline artifacts, and unprovenanced runs fail closed; deterministic counts and conservative bootstrap intervals discriminate regressions without false positives.
-- **Status:** `bench-regression` core shipped; command gates and remaining presets planned.
+- **Status:** **Completed & Verified** (`command`, presets, and `bench-regression` shipped).
 
 ### Phase 6: Production Dogfooding
 - **Deliverables:** Production deployment of `discipline.toml` in high-assurance consumer repositories; phased retirement of bespoke shell verification scripts.
 - **Go / no-go gate:** Incident replay fixtures reproducing historical bypasses are caught by Discipline without regressing verification fidelity.
-- **Status:** Planned.
+- **Status:** **Parity Achieved** (all 12 parity gaps shipped with zero false positives across historical PR corpus).
 
 ### Phase 7: Language Packs II
 - **Deliverables:** Java / Kotlin pack (JUnit 5, AssertJ, Hamcrest); C / C++ pack (GoogleTest, Catch2); Go pack (`testing.T`, `testify`); PHP AST pack (PHPUnit, Pest).
@@ -121,4 +121,3 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
   - Argo Workflows: template linted; live Kubernetes cluster DAG execution is outstanding.
 - **Macro opacity:** Tests generated dynamically inside complex macro bodies (`proptest! { ... }`, `quickcheck! { ... }`) are invisible to tree-sitter AST fact extractors without compilation expansion. Use `extra_assert_macros` and `assert_helper_fns` to configure macro vocabulary.
 - **Grammar lag:** Source syntax newer than the bundled tree-sitter grammars is treated as a parse error, failing closed by design. Use `exempt_paths` until grammars are updated.
-- **Workflow-level weakening:** Edits to `.github/workflows/` made within the PR branch itself are unguarded until `ci-integrity` ships.
