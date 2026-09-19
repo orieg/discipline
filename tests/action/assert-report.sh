@@ -40,4 +40,9 @@ case "${expect}" in
     ;;
   *) echo "expected pass|fail, got ${expect}" >&2; exit 2 ;;
 esac
-echo "report matches expectation: ${expect} ${*}"
+
+if [ "$#" -gt 0 ]; then
+  echo "report matches expectation: ${expect} ${*}"
+else
+  echo "report matches expectation: ${expect}"
+fi
