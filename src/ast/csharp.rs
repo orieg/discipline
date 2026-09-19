@@ -31,18 +31,24 @@ impl LanguagePack for CSharpPack {
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
+        let (has_errors, first_line, error_count) = super::collect_error_nodes_info(root);
         let mut extractor = CSharpExtractor {
             src: src.as_bytes(),
             vocab,
             is_test_path: is_csharp_test_path(path),
             facts: ParsedFileFacts {
-                has_parse_errors: root.has_error(),
+                has_parse_errors: has_errors,
+                first_parse_error_line: first_line,
+                skipped_error_nodes_count: error_count,
                 ..Default::default()
             },
+            helpers: std::collections::HashMap::new(),
+            test_calls: Vec::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
+        extractor.resolve_same_file_helpers();
         Ok(extractor.facts)
     }
 }
@@ -68,6 +74,8 @@ struct CSharpExtractor<'a> {
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
+    helpers: std::collections::HashMap<String, super::HelperFacts>,
+    test_calls: Vec<Vec<String>>,
 }
 
 impl<'a> CSharpExtractor<'a> {
@@ -160,8 +168,35 @@ impl<'a> CSharpExtractor<'a> {
                     self.walk_scope(body, is_ignored);
                 }
             } else if kind == "method_declaration" {
-                if let Some(test_fn) = self.try_extract_method_test(child, class_ignored) {
+                let name_node = child.child_by_field_name("name");
+                let method_name = name_node.map(|n| self.text(n)).unwrap_or("");
+                if let Some((test_fn, calls)) = self.try_extract_method_test(child, class_ignored) {
                     self.facts.tests.push(test_fn);
+                    self.test_calls.push(calls);
+                } else if self.is_test_path {
+                    let mut helper_fn = TestFn::default();
+                    let mut dummy_calls = Vec::new();
+                    if let Some(body) = child.child_by_field_name("body") {
+                        self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
+                    } else {
+                        let mut cursor = child.walk();
+                        for c in child.children(&mut cursor) {
+                            if c.kind() == "arrow_expression_clause" {
+                                self.extract_assertions_in_body(
+                                    c,
+                                    &mut helper_fn,
+                                    &mut dummy_calls,
+                                );
+                            }
+                        }
+                    }
+                    let facts = super::HelperFacts {
+                        total_asserts: helper_fn.total_asserts,
+                        strong_asserts: helper_fn.strong_asserts,
+                        tautologies: helper_fn.tautologies,
+                        fatal_asserts: helper_fn.fatal_asserts,
+                    };
+                    self.helpers.insert(method_name.to_string(), facts);
                 }
             } else {
                 self.walk_scope(child, class_ignored);
@@ -190,7 +225,11 @@ impl<'a> CSharpExtractor<'a> {
         false
     }
 
-    fn try_extract_method_test(&self, node: Node, class_ignored: bool) -> Option<TestFn> {
+    fn try_extract_method_test(
+        &self,
+        node: Node,
+        class_ignored: bool,
+    ) -> Option<(TestFn, Vec<String>)> {
         let name_node = node.child_by_field_name("name")?;
         let method_name = self.text(name_node);
 
@@ -281,28 +320,38 @@ impl<'a> CSharpExtractor<'a> {
             ..Default::default()
         };
 
+        let mut direct_calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
-            self.extract_assertions_in_body(body, &mut test_fn);
+            self.extract_assertions_in_body(body, &mut test_fn, &mut direct_calls);
         } else {
             // Check for expression-bodied method (arrow_expression_clause)
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "arrow_expression_clause" {
-                    self.extract_assertions_in_body(child, &mut test_fn);
+                    self.extract_assertions_in_body(child, &mut test_fn, &mut direct_calls);
                 }
             }
         }
 
-        Some(test_fn)
+        Some((test_fn, direct_calls))
     }
 
-    fn extract_assertions_in_body(&self, node: Node, test_fn: &mut TestFn) {
+    fn extract_assertions_in_body(
+        &self,
+        node: Node,
+        test_fn: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
         let kind = node.kind();
 
         if kind == "invocation_expression" {
             let fn_node = node.child_by_field_name("function");
             if let Some(func) = fn_node {
                 let (class_name, method_name) = self.inspect_invocation_target(func);
+
+                if class_name.is_empty() || class_name == "this" {
+                    direct_calls.push(method_name.to_string());
+                }
 
                 if (class_name == "Assert" || class_name == "ClassicAssert")
                     && (method_name == "Skip" || method_name == "Ignore")
@@ -333,7 +382,26 @@ impl<'a> CSharpExtractor<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_assertions_in_body(child, test_fn);
+            self.extract_assertions_in_body(child, test_fn, direct_calls);
+        }
+    }
+
+    fn resolve_same_file_helpers(&mut self) {
+        for (i, test) in self.facts.tests.iter_mut().enumerate() {
+            if let Some(calls) = self.test_calls.get(i) {
+                for call in calls {
+                    if let Some(h) = self.helpers.get(call) {
+                        if self.vocab.helper_fns.iter().any(|name| name == call) {
+                            test.total_asserts = test.total_asserts.saturating_sub(1);
+                            test.strong_asserts = test.strong_asserts.saturating_sub(1);
+                        }
+                        test.total_asserts += h.total_asserts;
+                        test.strong_asserts += h.strong_asserts;
+                        test.tautologies += h.tautologies;
+                        test.fatal_asserts += h.fatal_asserts;
+                    }
+                }
+            }
         }
     }
 
@@ -719,5 +787,39 @@ public class Suppressed
         assert_eq!(t.strong_asserts, 1);
 
         assert!(!facts.escape_hatches.is_empty());
+    }
+
+    #[test]
+    fn test_csharp_helper_functions_and_same_file_resolution() {
+        let src = r#"
+public class HelperTests
+{
+    private void VerifyAnswer(int actual, int expected)
+    {
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void TestCalculation()
+    {
+        VerifyAnswer(1 + 1, 2);
+    }
+}
+"#;
+        let pack = CSharpPack;
+        let facts = pack
+            .extract("tests/HelperTests.cs", src, &AssertVocabulary::default())
+            .expect("extract succeeds");
+
+        assert_eq!(
+            facts.tests.len(),
+            1,
+            "only TestCalculation must be extracted; VerifyAnswer is a helper"
+        );
+        let t = &facts.tests[0];
+        assert_eq!(t.name, "TestCalculation");
+        assert_eq!(t.total_asserts, 1);
+        assert_eq!(t.strong_asserts, 1);
+        assert!(!t.is_vacuous());
     }
 }

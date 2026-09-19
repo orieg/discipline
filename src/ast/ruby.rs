@@ -41,10 +41,13 @@ impl LanguagePack for RubyPack {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
             },
+            helpers: std::collections::HashMap::new(),
+            test_calls: Vec::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
+        extractor.resolve_same_file_helpers();
         Ok(extractor.facts)
     }
 }
@@ -68,6 +71,8 @@ struct RubyExtractor<'a> {
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
+    helpers: std::collections::HashMap<String, super::HelperFacts>,
+    test_calls: Vec<Vec<String>>,
 }
 
 impl<'a> RubyExtractor<'a> {
@@ -121,12 +126,37 @@ impl<'a> RubyExtractor<'a> {
                 }
                 class_stack.pop();
             } else if kind == "method" || kind == "singleton_method" {
-                if let Some(test_fn) = self.extract_method(child, class_stack, parent_skipped) {
-                    self.facts.tests.push(test_fn);
+                let name_node = child.child_by_field_name("name");
+                let method_name = name_node.map(|n| self.text(n)).unwrap_or("");
+                let is_test = method_name.starts_with("test_") || method_name == "test";
+
+                if is_test {
+                    if let Some((test_fn, calls)) =
+                        self.extract_method(child, class_stack, parent_skipped)
+                    {
+                        self.facts.tests.push(test_fn);
+                        self.test_calls.push(calls);
+                    }
+                } else if self.is_test_path {
+                    if let Some(body) = child.child_by_field_name("body") {
+                        let mut helper_fn = TestFn::default();
+                        let mut dummy_calls = Vec::new();
+                        self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
+                        let facts = super::HelperFacts {
+                            total_asserts: helper_fn.total_asserts,
+                            strong_asserts: helper_fn.strong_asserts,
+                            tautologies: helper_fn.tautologies,
+                            fatal_asserts: helper_fn.fatal_asserts,
+                        };
+                        self.helpers.insert(method_name.to_string(), facts);
+                    }
                 }
             } else if kind == "call" {
-                if let Some(test_fn) = self.extract_block_test(child, class_stack, parent_skipped) {
+                if let Some((test_fn, calls)) =
+                    self.extract_block_test(child, class_stack, parent_skipped)
+                {
                     self.facts.tests.push(test_fn);
+                    self.test_calls.push(calls);
                 } else if let Some(block) = child.child_by_field_name("block") {
                     // Check for describe/context blocks
                     let method_name = child
@@ -156,20 +186,9 @@ impl<'a> RubyExtractor<'a> {
         node: Node,
         class_stack: &[String],
         parent_skipped: bool,
-    ) -> Option<TestFn> {
+    ) -> Option<(TestFn, Vec<String>)> {
         let name_node = node.child_by_field_name("name")?;
         let method_name = self.text(name_node);
-
-        let is_test = method_name.starts_with("test_")
-            || method_name.starts_with("test")
-            || (self.is_test_path
-                && class_stack
-                    .iter()
-                    .any(|c| c.ends_with("Test") || c.starts_with("Test")));
-
-        if !is_test {
-            return None;
-        }
 
         let full_name = if class_stack.is_empty() {
             method_name.to_string()
@@ -189,11 +208,12 @@ impl<'a> RubyExtractor<'a> {
             ..Default::default()
         };
 
+        let mut direct_calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
-            self.extract_assertions_in_body(body, &mut test_fn);
+            self.extract_assertions_in_body(body, &mut test_fn, &mut direct_calls);
         }
 
-        Some(test_fn)
+        Some((test_fn, direct_calls))
     }
 
     fn extract_block_test(
@@ -201,7 +221,7 @@ impl<'a> RubyExtractor<'a> {
         node: Node,
         class_stack: &[String],
         parent_skipped: bool,
-    ) -> Option<TestFn> {
+    ) -> Option<(TestFn, Vec<String>)> {
         // e.g. it "does something" do ... end
         // test "description" do ... end
         // specify "something" do ... end
@@ -254,15 +274,16 @@ impl<'a> RubyExtractor<'a> {
             ..Default::default()
         };
 
+        let mut direct_calls = Vec::new();
         if let Some(b) = block {
             if let Some(body) = b.child_by_field_name("body") {
-                self.extract_assertions_in_body(body, &mut test_fn);
+                self.extract_assertions_in_body(body, &mut test_fn, &mut direct_calls);
             } else {
-                self.extract_assertions_in_body(b, &mut test_fn);
+                self.extract_assertions_in_body(b, &mut test_fn, &mut direct_calls);
             }
         }
 
-        Some(test_fn)
+        Some((test_fn, direct_calls))
     }
 
     fn has_skip_metadata(&self, call_node: Node) -> bool {
@@ -295,7 +316,12 @@ impl<'a> RubyExtractor<'a> {
         None
     }
 
-    fn extract_assertions_in_body(&self, node: Node, test_fn: &mut TestFn) {
+    fn extract_assertions_in_body(
+        &self,
+        node: Node,
+        test_fn: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
         let kind = node.kind();
         if kind == "identifier" {
             let name = self.text(node);
@@ -310,6 +336,15 @@ impl<'a> RubyExtractor<'a> {
                 .child_by_field_name("method")
                 .map(|m| self.text(m))
                 .unwrap_or("");
+
+            let recv = node.child_by_field_name("receiver");
+            let is_local_call = match recv {
+                None => true,
+                Some(r) => self.text(r).trim() == "self",
+            };
+            if is_local_call && !method_name.is_empty() {
+                direct_calls.push(method_name.to_string());
+            }
 
             if matches!(method_name, "skip" | "omit" | "pending") {
                 test_fn.ignored = true;
@@ -347,7 +382,26 @@ impl<'a> RubyExtractor<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_assertions_in_body(child, test_fn);
+            self.extract_assertions_in_body(child, test_fn, direct_calls);
+        }
+    }
+
+    fn resolve_same_file_helpers(&mut self) {
+        for (i, test) in self.facts.tests.iter_mut().enumerate() {
+            if let Some(calls) = self.test_calls.get(i) {
+                for call in calls {
+                    if let Some(h) = self.helpers.get(call) {
+                        if self.vocab.helper_fns.iter().any(|name| name == call) {
+                            test.total_asserts = test.total_asserts.saturating_sub(1);
+                            test.strong_asserts = test.strong_asserts.saturating_sub(1);
+                        }
+                        test.total_asserts += h.total_asserts;
+                        test.strong_asserts += h.strong_asserts;
+                        test.tautologies += h.tautologies;
+                        test.fatal_asserts += h.fatal_asserts;
+                    }
+                }
+            }
         }
     }
 
@@ -834,5 +888,42 @@ end
         assert!(t1.ignored, "t1 must inherit skip from xdescribe");
         assert!(t2.ignored, "t2 must inherit skip from nested xdescribe");
         assert!(!t3.ignored, "t3 must be active");
+    }
+
+    #[test]
+    fn test_ruby_minitest_lifecycle_and_helper_resolution() {
+        let src = r#"
+class MinitestLifecycleTest < Minitest::Test
+  def setup
+    @val = 42
+  end
+
+  def teardown
+    @val = nil
+  end
+
+  def check_value(expected)
+    assert_equal expected, @val
+  end
+
+  def test_real_thing
+    check_value(42)
+  end
+end
+"#;
+        let facts = RubyPack
+            .extract("test/lifecycle_test.rb", src, &AssertVocabulary::default())
+            .unwrap();
+
+        assert_eq!(
+            facts.tests.len(),
+            1,
+            "only test_real_thing must be extracted; setup, teardown, and check_value are not tests"
+        );
+        let t = &facts.tests[0];
+        assert_eq!(t.name, "MinitestLifecycleTest#test_real_thing");
+        assert_eq!(t.total_asserts, 1);
+        assert_eq!(t.strong_asserts, 1);
+        assert!(!t.is_vacuous());
     }
 }

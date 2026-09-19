@@ -39,10 +39,13 @@ impl LanguagePack for JavaPack {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
             },
+            helpers: std::collections::HashMap::new(),
+            test_calls: Vec::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
+        extractor.resolve_same_file_helpers();
         Ok(extractor.facts)
     }
 }
@@ -71,6 +74,8 @@ struct JavaExtractor<'a> {
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
+    helpers: std::collections::HashMap<String, super::HelperFacts>,
+    test_calls: Vec<Vec<String>>,
 }
 
 impl<'a> JavaExtractor<'a> {
@@ -239,35 +244,48 @@ impl<'a> JavaExtractor<'a> {
                 && method_name.starts_with("test")
                 && Self::has_zero_parameters(node));
 
-        if !is_test {
-            return;
+        if is_test {
+            let full_name = if class_stack.is_empty() {
+                method_name.to_string()
+            } else {
+                format!("{}.{}", class_stack.join("."), method_name)
+            };
+
+            let line = node.start_position().row + 1;
+            let should_panic = self.has_expected_exception(node);
+
+            let mut test_fn = TestFn {
+                name: full_name,
+                line,
+                total_asserts: 0,
+                strong_asserts: 0,
+                tautologies: 0,
+                ignored: parent_ignored || method_ignored,
+                should_panic,
+                ..Default::default()
+            };
+
+            let mut direct_calls = Vec::new();
+            if let Some(body) = node.child_by_field_name("body") {
+                self.scan_method_body(body, &mut test_fn, &mut direct_calls);
+            }
+
+            self.facts.tests.push(test_fn);
+            self.test_calls.push(direct_calls);
+        } else if self.is_test_path {
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut helper_fn = TestFn::default();
+                let mut dummy_calls = Vec::new();
+                self.scan_method_body(body, &mut helper_fn, &mut dummy_calls);
+                let facts = super::HelperFacts {
+                    total_asserts: helper_fn.total_asserts,
+                    strong_asserts: helper_fn.strong_asserts,
+                    tautologies: helper_fn.tautologies,
+                    fatal_asserts: helper_fn.fatal_asserts,
+                };
+                self.helpers.insert(method_name.to_string(), facts);
+            }
         }
-
-        let full_name = if class_stack.is_empty() {
-            method_name.to_string()
-        } else {
-            format!("{}.{}", class_stack.join("."), method_name)
-        };
-
-        let line = node.start_position().row + 1;
-        let should_panic = self.has_expected_exception(node);
-
-        let mut test_fn = TestFn {
-            name: full_name,
-            line,
-            total_asserts: 0,
-            strong_asserts: 0,
-            tautologies: 0,
-            ignored: parent_ignored || method_ignored,
-            should_panic,
-            ..Default::default()
-        };
-
-        if let Some(body) = node.child_by_field_name("body") {
-            self.scan_method_body(body, &mut test_fn);
-        }
-
-        self.facts.tests.push(test_fn);
     }
 
     fn has_zero_parameters(method_node: Node) -> bool {
@@ -297,14 +315,19 @@ impl<'a> JavaExtractor<'a> {
         false
     }
 
-    fn scan_method_body(&self, body: Node, test_fn: &mut TestFn) {
+    fn scan_method_body(&self, body: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
         let mut cursor = body.walk();
         for child in body.children(&mut cursor) {
-            self.scan_statement_or_expr(child, test_fn);
+            self.scan_statement_or_expr(child, test_fn, direct_calls);
         }
     }
 
-    fn scan_statement_or_expr(&self, node: Node, test_fn: &mut TestFn) {
+    fn scan_statement_or_expr(
+        &self,
+        node: Node,
+        test_fn: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
         match node.kind() {
             "assert_statement" => {
                 test_fn.total_asserts += 1;
@@ -326,22 +349,39 @@ impl<'a> JavaExtractor<'a> {
                 }
             }
             "method_invocation" => {
-                self.inspect_method_invocation(node, test_fn);
+                self.inspect_method_invocation(node, test_fn, direct_calls);
             }
             _ => {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    self.scan_statement_or_expr(child, test_fn);
+                    self.scan_statement_or_expr(child, test_fn, direct_calls);
                 }
             }
         }
     }
 
-    fn inspect_method_invocation(&self, node: Node, test_fn: &mut TestFn) {
+    fn inspect_method_invocation(
+        &self,
+        node: Node,
+        test_fn: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
         let method_name = node
             .child_by_field_name("name")
             .map(|n| self.text(n))
             .unwrap_or("");
+
+        let object = node.child_by_field_name("object");
+        let is_local_call = match object {
+            None => true,
+            Some(obj) => {
+                let t = self.text(obj).trim();
+                t == "this" || t == "super"
+            }
+        };
+        if is_local_call {
+            direct_calls.push(method_name.to_string());
+        }
 
         let args_node = node.child_by_field_name("arguments");
         let args = Self::collect_arguments(args_node);
@@ -425,8 +465,10 @@ impl<'a> JavaExtractor<'a> {
                 test_fn.strong_asserts += 1;
             }
             other => {
-                // Check if user configured this helper function
-                if self.vocab.helper_fns.iter().any(|h| h == other) {
+                let is_custom_assert = other.starts_with("assert")
+                    && other.len() > 6
+                    && other.chars().nth(6).is_some_and(|c| c.is_ascii_uppercase());
+                if is_custom_assert || self.vocab.helper_fns.iter().any(|h| h == other) {
                     test_fn.total_asserts += 1;
                     test_fn.strong_asserts += 1;
                 }
@@ -437,12 +479,31 @@ impl<'a> JavaExtractor<'a> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child != args_node.unwrap_or(child) {
-                self.scan_statement_or_expr(child, test_fn);
+                self.scan_statement_or_expr(child, test_fn, direct_calls);
             } else {
                 // Also scan inside arguments for lambdas or nested assert calls (like assertThrows(() -> ...))
                 let mut arg_cursor = child.walk();
                 for arg_child in child.children(&mut arg_cursor) {
-                    self.scan_statement_or_expr(arg_child, test_fn);
+                    self.scan_statement_or_expr(arg_child, test_fn, direct_calls);
+                }
+            }
+        }
+    }
+
+    fn resolve_same_file_helpers(&mut self) {
+        for (i, test) in self.facts.tests.iter_mut().enumerate() {
+            if let Some(calls) = self.test_calls.get(i) {
+                for call in calls {
+                    if let Some(h) = self.helpers.get(call) {
+                        if self.vocab.helper_fns.iter().any(|name| name == call) {
+                            test.total_asserts = test.total_asserts.saturating_sub(1);
+                            test.strong_asserts = test.strong_asserts.saturating_sub(1);
+                        }
+                        test.total_asserts += h.total_asserts;
+                        test.strong_asserts += h.strong_asserts;
+                        test.tautologies += h.tautologies;
+                        test.fatal_asserts += h.fatal_asserts;
+                    }
                 }
             }
         }
@@ -629,6 +690,38 @@ class AssertJTest {
         let t = &facts.tests[0];
         assert_eq!(t.total_asserts, 2);
         assert_eq!(t.strong_asserts, 2);
+        assert!(!t.is_vacuous());
+    }
+
+    #[test]
+    fn test_java_assert_prefix_and_helper_resolution() {
+        let src = r#"
+import org.junit.jupiter.api.Test;
+
+class DomainTest {
+    private void verifyItem(String val) {
+        assertEquals("expected", val);
+    }
+
+    @Test
+    void testCustomAssertions() {
+        assertPreconditionViolationFor("foo");
+        assertMetaDataIsEqualTo("meta");
+        verifyItem("test");
+    }
+}
+"#;
+        let pack = JavaPack;
+        let facts = pack
+            .extract("DomainTest.java", src, &AssertVocabulary::default())
+            .expect("extraction must succeed");
+
+        assert_eq!(facts.tests.len(), 1);
+        let t = &facts.tests[0];
+        assert_eq!(t.name, "DomainTest.testCustomAssertions");
+        // assertPreconditionViolationFor (1) + assertMetaDataIsEqualTo (1) + verifyItem helper (1) = 3
+        assert_eq!(t.total_asserts, 3);
+        assert_eq!(t.strong_asserts, 3);
         assert!(!t.is_vacuous());
     }
 }

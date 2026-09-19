@@ -156,9 +156,8 @@ flowchart TD
 ### 2.4 Binary Footprint & Static Linking Profiles
 
 Discipline compiles to a standalone static binary with zero external runtime dependencies:
-- **Full Static Binary (Linux musl `x86_64` / `aarch64`):** ~22.3 MB. Statically links `libgit2` (vendored, offline) and all 11 `tree-sitter` language grammars (Rust, Python, JavaScript, TypeScript, Go, Java, C#, C, C++, Ruby, PHP). Runs in scratch containers or minimal CI runners without glibc, openssl, or package managers.
-- **Slim Distribution Profile:** ~8.3 MB when compiled with core language grammars (Rust, Python, JavaScript/TypeScript).
-- **macOS Native (`apple-darwin`):** Statically linked Mach-O binary optimized for local developer inner loops and git hooks.
+- **Full Static Binary (Linux musl `x86_64`):** 23.6 MB (23,624,256 bytes) (measured: `x86_64-unknown-linux-musl`, `32c81b5`). Statically links `libgit2` (vendored, offline) and all 11 `tree-sitter` language grammars (Rust, Python, JavaScript, TypeScript, Go, Java, C#, C, C++, Ruby, PHP). Fully static-pie linked; runs in scratch containers or minimal CI runners without glibc, openssl, or package managers.
+- **macOS Native (`aarch64-apple-darwin`):** 22.3 MB (22,310,544 bytes) (measured: `aarch64-apple-darwin`, `32c81b5`). Mach-O binary optimized for local developer inner loops and git hooks.
 
 ---
 

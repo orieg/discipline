@@ -39,12 +39,32 @@ impl LanguagePack for GoPack {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
             },
+            helpers: std::collections::HashMap::new(),
+            test_calls: Vec::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
+        extractor.resolve_same_file_helpers();
         Ok(extractor.facts)
     }
+}
+
+/// Determines whether a function name matches the Go test runner's convention (TestXxx or FuzzXxx).
+pub fn is_go_test_function_name(name: &str) -> bool {
+    for prefix in &["Test", "Fuzz"] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            if rest.is_empty() {
+                return true;
+            }
+            if let Some(first) = rest.chars().next() {
+                if !first.is_lowercase() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Determines whether a path is conventionally a Go test file.
@@ -62,6 +82,8 @@ struct GoExtractor<'a> {
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
+    helpers: std::collections::HashMap<String, super::HelperFacts>,
+    test_calls: Vec<Vec<String>>,
 }
 
 impl<'a> GoExtractor<'a> {
@@ -116,32 +138,42 @@ impl<'a> GoExtractor<'a> {
             return;
         }
 
-        let is_test_name = func_name.starts_with("Test") || func_name.starts_with("Fuzz");
-        if !is_test_name && !self.is_test_path {
-            return;
+        let is_test = is_go_test_function_name(func_name) && self.is_unit_test_signature(node);
+
+        if is_test {
+            let line = node.start_position().row + 1;
+            let mut test_fn = TestFn {
+                name: func_name.to_string(),
+                line,
+                total_asserts: 0,
+                strong_asserts: 0,
+                tautologies: 0,
+                ignored: false,
+                should_panic: false,
+                ..Default::default()
+            };
+
+            let mut direct_calls = Vec::new();
+            if let Some(body) = node.child_by_field_name("body") {
+                self.scan_block(body, &mut test_fn, func_name, &mut direct_calls);
+            }
+
+            self.facts.tests.push(test_fn);
+            self.test_calls.push(direct_calls);
+        } else if self.is_test_path {
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut helper_fn = TestFn::default();
+                let mut dummy_calls = Vec::new();
+                self.scan_block(body, &mut helper_fn, func_name, &mut dummy_calls);
+                let facts = super::HelperFacts {
+                    total_asserts: helper_fn.total_asserts,
+                    strong_asserts: helper_fn.strong_asserts,
+                    tautologies: helper_fn.tautologies,
+                    fatal_asserts: helper_fn.fatal_asserts,
+                };
+                self.helpers.insert(func_name.to_string(), facts);
+            }
         }
-
-        if !self.is_unit_test_signature(node) {
-            return;
-        }
-
-        let line = node.start_position().row + 1;
-        let mut test_fn = TestFn {
-            name: func_name.to_string(),
-            line,
-            total_asserts: 0,
-            strong_asserts: 0,
-            tautologies: 0,
-            ignored: false,
-            should_panic: false,
-            ..Default::default()
-        };
-
-        if let Some(body) = node.child_by_field_name("body") {
-            self.scan_block(body, &mut test_fn, func_name);
-        }
-
-        self.facts.tests.push(test_fn);
     }
 
     fn is_benchmark_signature(&self, func_node: Node) -> bool {
@@ -153,7 +185,7 @@ impl<'a> GoExtractor<'a> {
             if child.kind() == "parameter_declaration" {
                 let type_text = child
                     .child_by_field_name("type")
-                    .map(|n| self.text(n))
+                    .map(|n| self.text(n).trim())
                     .unwrap_or("");
                 if type_text.contains("testing.B") || type_text.ends_with("*B") {
                     return true;
@@ -172,12 +204,23 @@ impl<'a> GoExtractor<'a> {
             if child.kind() == "parameter_declaration" {
                 let type_text = child
                     .child_by_field_name("type")
-                    .map(|n| self.text(n))
+                    .map(|n| self.text(n).trim())
                     .unwrap_or("");
-                if type_text.contains("testing.T")
-                    || type_text.contains("testing.F")
-                    || type_text.ends_with("*T")
-                    || type_text.ends_with("*F")
+                if type_text.ends_with("testing.TB")
+                    || type_text.ends_with("*testing.TB")
+                    || type_text == "TB"
+                    || type_text == "*TB"
+                {
+                    return false;
+                }
+                if type_text.ends_with("testing.T")
+                    || type_text.ends_with("*testing.T")
+                    || type_text.ends_with("testing.F")
+                    || type_text.ends_with("*testing.F")
+                    || type_text == "*T"
+                    || type_text == "*F"
+                    || type_text == "T"
+                    || type_text == "F"
                 {
                     return true;
                 }
@@ -186,28 +229,46 @@ impl<'a> GoExtractor<'a> {
         false
     }
 
-    fn scan_block(&mut self, block: Node, test_fn: &mut TestFn, parent_name: &str) {
+    fn scan_block(
+        &mut self,
+        block: Node,
+        test_fn: &mut TestFn,
+        parent_name: &str,
+        direct_calls: &mut Vec<String>,
+    ) {
         let mut cursor = block.walk();
         for child in block.children(&mut cursor) {
-            self.scan_node(child, test_fn, parent_name);
+            self.scan_node(child, test_fn, parent_name, direct_calls);
         }
     }
 
-    fn scan_node(&mut self, node: Node, test_fn: &mut TestFn, parent_name: &str) {
+    fn scan_node(
+        &mut self,
+        node: Node,
+        test_fn: &mut TestFn,
+        parent_name: &str,
+        direct_calls: &mut Vec<String>,
+    ) {
         match node.kind() {
             "call_expression" => {
-                self.inspect_call(node, test_fn, parent_name);
+                self.inspect_call(node, test_fn, parent_name, direct_calls);
             }
             _ => {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    self.scan_node(child, test_fn, parent_name);
+                    self.scan_node(child, test_fn, parent_name, direct_calls);
                 }
             }
         }
     }
 
-    fn inspect_call(&mut self, node: Node, test_fn: &mut TestFn, parent_name: &str) {
+    fn inspect_call(
+        &mut self,
+        node: Node,
+        test_fn: &mut TestFn,
+        parent_name: &str,
+        direct_calls: &mut Vec<String>,
+    ) {
         let Some(func_node) = node.child_by_field_name("function") else {
             return;
         };
@@ -237,14 +298,16 @@ impl<'a> GoExtractor<'a> {
                 ..Default::default()
             };
 
+            let mut sub_calls = Vec::new();
             // Recursively scan callback body
             if let Some(func_lit) = args.iter().find(|a| a.kind() == "func_literal") {
                 if let Some(sub_body) = func_lit.child_by_field_name("body") {
-                    self.scan_block(sub_body, &mut sub_test, &sub_name);
+                    self.scan_block(sub_body, &mut sub_test, &sub_name, &mut sub_calls);
                 }
             }
 
             self.facts.tests.push(sub_test);
+            self.test_calls.push(sub_calls);
             test_fn.total_asserts += 1;
             test_fn.strong_asserts += 1;
             return;
@@ -341,11 +404,36 @@ impl<'a> GoExtractor<'a> {
             return;
         }
 
+        // Track potential call to helper
+        if func_node.kind() == "identifier" {
+            let id_text = self.text(func_node);
+            direct_calls.push(id_text.to_string());
+        }
+
         // Recursively inspect child nodes
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child != func_node {
-                self.scan_node(child, test_fn, parent_name);
+                self.scan_node(child, test_fn, parent_name, direct_calls);
+            }
+        }
+    }
+
+    fn resolve_same_file_helpers(&mut self) {
+        for (i, test) in self.facts.tests.iter_mut().enumerate() {
+            if let Some(calls) = self.test_calls.get(i) {
+                for call in calls {
+                    if let Some(h) = self.helpers.get(call) {
+                        if self.vocab.helper_fns.iter().any(|name| name == call) {
+                            test.total_asserts = test.total_asserts.saturating_sub(1);
+                            test.strong_asserts = test.strong_asserts.saturating_sub(1);
+                        }
+                        test.total_asserts += h.total_asserts;
+                        test.strong_asserts += h.strong_asserts;
+                        test.tautologies += h.tautologies;
+                        test.fatal_asserts += h.fatal_asserts;
+                    }
+                }
             }
         }
     }
@@ -578,5 +666,44 @@ func TestFatalAndNil(t *testing.T) {
         assert_eq!(t.strong_asserts, 3);
         // require.NotNil + require.Equal + t.Fatalf are 3 fatal
         assert_eq!(t.fatal_asserts, 3);
+    }
+
+    #[test]
+    fn test_go_helper_functions_and_same_file_resolution() {
+        let src = r#"
+package main
+
+import "testing"
+
+func assertValue(t *testing.T, got, want int) {
+	if got != want {
+		t.Fatalf("expected %d, got %d", want, got)
+	}
+}
+
+func testHelperUnused(_ testing.TB) {
+	// helper not starting with Test
+}
+
+func TestCaller(t *testing.T) {
+	assertValue(t, 1+1, 2)
+}
+"#;
+        let pack = GoPack;
+        let facts = pack
+            .extract("caller_test.go", src, &AssertVocabulary::default())
+            .expect("extraction must succeed");
+
+        assert_eq!(
+            facts.tests.len(),
+            1,
+            "only TestCaller must be extracted as a test; assertValue and testHelperUnused are helpers"
+        );
+        let t = &facts.tests[0];
+        assert_eq!(t.name, "TestCaller");
+        assert_eq!(t.total_asserts, 1, "must resolve helper assertion");
+        assert_eq!(t.strong_asserts, 1);
+        assert_eq!(t.fatal_asserts, 1);
+        assert!(!t.is_vacuous());
     }
 }

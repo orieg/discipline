@@ -65,6 +65,8 @@ When a change touches source files in a language without an active pack, each AS
 | **C / C++** | GoogleTest `TEST*`, Catch2 `TEST_CASE`, doctest, C ABI smoke (`main`, `test_*`) | `EXPECT_*` / `ASSERT_*`, `REQUIRE` / `CHECK`, `assert(...)`; strong: `_EQ`, `_STREQ`, comparison operators | `DISABLED_` prefix, `GTEST_SKIP()`, Catch2 `SKIP()` / `[.]` | `// NOLINT` | **shipped** |
 | **Go** | `func Test*(t *testing.T)`, subtests | `t.Error*` / `t.Fatal*`, testify `assert.*` / `require.*`; strong: `Equal`, `DeepEqual` | `t.Skip*` | `unsafe` package, `//nolint` | **shipped** |
 | **PHP** | PHPUnit `test*` methods, `@test` docblock / attribute, Pest `test(` / `it(` | PHPUnit `assert*`, Pest matchers (`->toBe`, `->toEqual`); strong: `assertEquals`, `assertSame`, `assertCount` | `$this->markTestSkipped()`, `$this->markTestIncomplete()`, `->skip()`, `#[Requires*]` | `// @psalm-suppress`, `// @phpstan-ignore`, `// phpcs:ignore` | **shipped** |
+| **C#** | `[Fact]`, `[Theory]` (xUnit), `[Test]` (NUnit), `[TestMethod]` (MSTest) | `Assert.*`, `StringAssert.*`, `CollectionAssert.*`; strong: `Equal`, `True`, `Throws` | `[Ignore]`, `[Fact(Skip = "...")]` | `#pragma warning disable`, `[SuppressMessage]` | **shipped** |
+| **Ruby** | `def test_*` (Minitest, Test::Unit), `it` / `specify` (RSpec) | `assert_*`, `refute_*`, RSpec `expect(...).to eq(...)`; strong: `assert_equal`, `eq` | `xit`, `xdescribe`, `:skip`, `skip` | `# rubocop:disable` | **shipped** |
 
 ---
 
@@ -74,7 +76,7 @@ When a change touches source files in a language without an active pack, each AS
 
 #### `assertion-reduction`
 - **Rule:** For each test present on both sides (matched by module-qualified name within a file, or by name across files for moved tests), neither the count of effective assertions nor the count of strong assertions may drop.
-- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C/C++.
+- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C/C++, C#, Ruby.
 - **What it catches:**
   - Deleting assertion statements or macros within existing tests.
   - Assertion weakening (e.g. `assert_eq!(a, b)` -> `assert!(a == b)` or `assert!(a.is_some())`).
@@ -145,6 +147,13 @@ When a change touches source files in a language without an active pack, each AS
   - Semantic non-assertions that involve external function calls (e.g. `assert!(check_validity())` where `check_validity()` returns `true` unconditionally).
   - Tests whose assertions occur in deeply nested helper callbacks not tracked by static analysis.
   - Dynamic branch reachability: assertions inside unreachable branches (e.g. `if False:`, `if (0) { ... }`, or dead closures) are counted as syntactically present by AST static analysis because dynamic runtime reachability is out of scope.
+- **Per-pack resolution contracts & known limits:**
+  - **Go**: Functions must match `TestXxx` or `FuzzXxx` with `*testing.T` or `*testing.F` parameters. Lowercase helpers (e.g. `testNewRouter`) and `testing.TB` interfaces are treated as helper functions. Direct same-file helper calls are resolved 1 level deep. *Known limit*: Indirect closure assertions (e.g. assertions inside HTTP handler or router callbacks executed indirectly via `router.ServeHTTP(rw, req)`) appear vacuous without `assert_helper_fns = ["ServeHTTP"]` or direct assertions in the test body.
+  - **Java**: 1-level same-file helper resolution covers direct helper methods within the test class. Custom domain assertion methods named `assert*` with an uppercase following character (e.g. `assertMetaDataIsEqualTo`, `assertPreconditionViolationFor`) are recognized automatically. *Known limit*: Assertions dispatched through external test fixture classes or mock framework verifiers outside the file require `assert_helper_fns`.
+  - **C / C++**: Catches GoogleTest, Catch2, doctest assertions. *Known limit*: Heavy preprocessor macro constructs (`#ifdef`, complex template metaprogramming) are gracefully downgraded to `Warning` severity with line numbers; surrounding well-formed AST regions continue to be inspected.
+  - **C#**: Recognizes standard xUnit (`[Fact]`, `[Theory]`), NUnit (`[Test]`), MSTest (`[TestMethod]`) attributes and resolves 1-level same-file helpers. *Known limit*: Multi-targeting `#if` preprocessor branches inside expressions are gracefully downgraded to `Warning` severity with line numbers.
+  - **Ruby**: Only methods prefixed with `test_` (or named `test`) in Minitest/Test::Unit and RSpec `it`/`specify` blocks are extracted as test cases. Lifecycle hooks (`setup`, `teardown`) are excluded from vacuous checks. Same-file helper method assertions are resolved 1 level deep.
+  - **PHP / PHPT**: PHPT sections require explicit `--EXPECT--`, `--EXPECTF--`, or `--EXPECTREGEX--`. PHPUnit methods require `$this->assert*` or configured helpers. Newly added NUL bytes in source fixtures are flagged as potential corruption and require `allow-nul:` or `discipline:allow(assertion-reduction)`.
 - **Lifting directive:** `allow-assertion-drop: <test-name> <reason>` or configuring `assert_helper_fns`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_assert_macros`, `assert_helper_fns`, `min_assertions_per_test`.
 

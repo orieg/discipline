@@ -3,32 +3,10 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
-use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn};
-
-fn collect_error_nodes_info(root: Node) -> (bool, Option<usize>, usize) {
-    if !root.has_error() {
-        return (false, None, 0);
-    }
-    let mut first_line = None;
-    let mut count = 0;
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.is_error() || node.is_missing() {
-            count += 1;
-            let line = node.start_position().row + 1;
-            if first_line.is_none() || Some(line) < first_line {
-                first_line = Some(line);
-            }
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.has_error() || child.is_error() || child.is_missing() {
-                stack.push(child);
-            }
-        }
-    }
-    (true, first_line.or(Some(1)), count.max(1))
-}
+use super::{
+    collect_error_nodes_info, AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts,
+    TestFn,
+};
 
 /// C language pack implementing [`LanguagePack`].
 pub struct CPack;

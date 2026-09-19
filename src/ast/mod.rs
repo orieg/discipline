@@ -191,6 +191,15 @@ impl TestFn {
     }
 }
 
+/// Aggregated assertion facts for non-test helper functions resolved in the same file.
+#[derive(Debug, Clone, Default)]
+pub struct HelperFacts {
+    pub total_asserts: usize,
+    pub strong_asserts: usize,
+    pub tautologies: usize,
+    pub fatal_asserts: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsafeSite {
     pub line: usize,
@@ -280,6 +289,32 @@ impl ParsedFileFacts {
             should_panic: false,
         });
     }
+}
+
+/// Helper to collect syntax error regions and first error line from an AST root.
+pub fn collect_error_nodes_info(root: tree_sitter::Node) -> (bool, Option<usize>, usize) {
+    if !root.has_error() {
+        return (false, None, 0);
+    }
+    let mut first_line = None;
+    let mut count = 0;
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            count += 1;
+            let line = node.start_position().row + 1;
+            if first_line.is_none() || Some(line) < first_line {
+                first_line = Some(line);
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.has_error() || child.is_error() || child.is_missing() {
+                stack.push(child);
+            }
+        }
+    }
+    (true, first_line.or(Some(1)), count.max(1))
 }
 
 /// Backwards compatibility alias for [`ParsedFileFacts`].

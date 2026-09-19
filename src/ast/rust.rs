@@ -57,13 +57,7 @@ impl LanguagePack for RustPack {
     }
 }
 
-#[derive(Default, Clone)]
-struct HelperFacts {
-    total_asserts: usize,
-    strong_asserts: usize,
-    tautologies: usize,
-    fatal_asserts: usize,
-}
+use super::HelperFacts;
 
 struct Comment {
     start_row: usize,

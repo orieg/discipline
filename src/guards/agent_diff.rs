@@ -496,30 +496,38 @@ pub(crate) fn report_parse_errors(
         }
         if let Some(h) = ff.head.as_ref() {
             if h.has_parse_errors {
-                let is_c_cpp = matches!(
+                let is_c_like = matches!(
                     crate::ast::language_for(&ff.file.path),
-                    Some(crate::ast::Language::C | crate::ast::Language::Cpp)
+                    Some(
+                        crate::ast::Language::C
+                            | crate::ast::Language::Cpp
+                            | crate::ast::Language::CSharp
+                    )
                 );
-                let sev = if is_c_cpp {
+                let sev = if is_c_like {
                     crate::config::Severity::Warning
                 } else {
                     severity
                 };
-                let err_line = if is_c_cpp {
+                let err_line = if is_c_like {
                     h.first_parse_error_line.or(Some(1))
                 } else {
                     h.first_parse_error_line
                 };
-                let (title, msg) = if is_c_cpp {
+                let (title, msg) = if is_c_like {
                     let line_display = err_line.unwrap_or(1);
+                    let lang_name = match crate::ast::language_for(&ff.file.path) {
+                        Some(crate::ast::Language::CSharp) => "C#",
+                        _ => "C/C++",
+                    };
                     out.notes.push(format!(
-                        "file `{}` had {} skipped C/C++ parse error region(s) (first error near line {})",
-                        ff.file.path, h.skipped_error_nodes_count, line_display
+                        "file `{}` had {} skipped {} parse error region(s) (first error near line {})",
+                        ff.file.path, h.skipped_error_nodes_count, lang_name, line_display
                     ));
                     (
-                        "C/C++ Preprocessor or Syntax Parse Warning",
+                        "Preprocessor or Syntax Parse Warning",
                         format!(
-                            "C/C++ grammar encountered preprocessor macro or syntax errors near line {line_display} ({} skipped AST error region(s)). Surrounding well-formed code was inspected, but some facts may be incomplete.",
+                            "{lang_name} grammar encountered preprocessor or syntax errors near line {line_display} ({} skipped AST error region(s)). Surrounding well-formed code was inspected, but some facts may be incomplete.",
                             h.skipped_error_nodes_count
                         ),
                     )

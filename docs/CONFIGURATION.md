@@ -210,36 +210,46 @@ Discipline distinguishes between **configurable** and **bypassable**:
 
 Reference configurations proven in production repositories:
 
-### High-Assurance Rust Algorithms
+### `orieg/expanse` (High-Assurance Rust Algorithms)
+
+Measured residue against merge base `HEAD~30` with unconfigured defaults:
+- `time-estimates`: 12 violations (system load average metrics and benchmarking durations, e.g. 6x `one-minute` in concurrency benchmarks, 1x `one-minute` in hot comparisons, `forty minutes`, `6-hour`, `6.06 days`, `1-min`, `20 minutes`). <!-- discipline:allow(time-estimates) -->
+- `pii`: 8 violations (test assertion fixtures in repository verification scripts matching sample home paths and LAN IP `192.168.1.20`). <!-- discipline:allow(pii) -->
+- `ignored-tests`: 7 warnings (conditional skips under `#[cfg_attr(miri, ignore)]`).
+
+Minimal configuration:
 
 ```toml
 [meta]
 version = 1
-name = "algorithm-core"
-
-[gates.vacuous-tests]
-assert_helper_fns = [
-    "check_invariants",
-    "assert_bounds",
-    "verify_distribution",
-]
+name = "expanse"
 
 [gates.pii]
-# Synthetic IP ranges in test suites and examples
+# Repository audit scripts contain synthetic test patterns for home paths and LAN IPs
 exempt_paths = [
-    "tests/**",
-    "examples/**",
-    "docs/archive/**",
+    "scripts/**",
 ]
 
 [gates.time-estimates]
-# Archival documentation and host load metric sections
+# Benchmark methodologies and operational docs reference system load averages (e.g. 1-minute load avg)
 exempt_paths = [
-    "docs/archive/**",
+    "docs/benchmarks/**",
+    "docs/DATABASE.md",
+    "docs/design/large-values.md",
+    "docs/TESTING.md",
 ]
 ```
 
 ### `orieg/php-judy` (C Extension & PHP Runtime)
+
+Measured residue against merge base `HEAD~30` with unconfigured defaults:
+- `time-estimates`: 1 violation (`BENCHMARK.md:1857`, historical runtime duration `one day`). <!-- discipline:allow(time-estimates) -->
+- `assertion-reduction`: 1 violation (`tests/string_to_entry_005.phpt`, newly added NUL-bearing PHP test fixture).
+- `pii`: 1 violation (`examples/ip-range-lookup.php`, sample LAN address `192.168.1.50`). <!-- discipline:allow(pii) -->
+- `agents-md`: 1 violation (`CLAUDE.md`, unlinked guide diverging from `AGENTS.md`).
+- 5 informational warnings (Zend engine C preprocessor macro expansions in `php_judy.c`, `php_judy.h`, `judy_handlers.c`, `judy_iterator.c`, `Judy_arginfo.h`).
+
+Minimal configuration:
 
 ```toml
 [meta]
@@ -247,14 +257,21 @@ version = 1
 name = "php-judy"
 
 [gates.pii]
-# Example script demonstrating IP lookups
+# Sample script demonstrating IP address lookup on Judy arrays
 exempt_paths = [
     "examples/ip-range-lookup.php",
 ]
 
 [gates.time-estimates]
+# Historical benchmark documentation references runtime durations
 exempt_paths = [
-    "docs/archive/**",
+    "BENCHMARK.md",
+]
+
+[gates.assertion-reduction]
+# PHP binary string entry test intentionally contains NUL bytes
+exempt_paths = [
+    "tests/string_to_entry_005.phpt",
 ]
 ```
 
