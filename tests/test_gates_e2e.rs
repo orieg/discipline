@@ -181,11 +181,7 @@ fn go_source_files_are_analysed_by_go_pack() {
     repo.commit("feat: go test");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0);
-    for gate in [
-        "assertion-reduction",
-        "vacuous-tests",
-        "ignored-tests",
-    ] {
+    for gate in ["assertion-reduction", "vacuous-tests", "ignored-tests"] {
         let notes = run.outcome(gate)["notes"].to_string();
         assert!(
             !notes.contains("NOT analysed"),
