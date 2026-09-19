@@ -161,6 +161,9 @@ extra_patterns = ["__reset__", "pattern2"]
 hostname_denylist = ["__reset__", "host2.local"]
 allow_patterns = { reset = true, items = ["allow2"] }
 allowed_users = ["__reset__", "alice"]
+
+[directives]
+sources = ["__reset__", "commits"]
 "#
             .into(),
         ),
@@ -184,6 +187,7 @@ allowed_users = ["__reset__", "alice"]
     );
     assert_eq!(c.gates.pii.allow_patterns, vec!["allow2"]);
     assert_eq!(c.gates.pii.allowed_users, vec!["alice"]);
+    assert_eq!(c.directives.sources, vec!["commits"]);
 
     // Tightening lists (longer is stricter): reset ignored, strictly append-only
     assert_eq!(

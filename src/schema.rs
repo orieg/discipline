@@ -66,8 +66,7 @@ pub fn generate_schema() -> Value {
                 "description": "Policy controls for override directives (sources and visibility)",
                 "properties": {
                     "sources": {
-                        "type": "array",
-                        "items": { "type": "string" },
+                        "$ref": "#/$defs/StringListOrReset",
                         "description": "Allowed directive sources: pr-body, commits (default: [\"pr-body\", \"commits\"])"
                     },
                     "allow_hidden": {

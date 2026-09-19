@@ -220,11 +220,8 @@
           "type": "boolean"
         },
         "sources": {
-          "description": "Allowed directive sources: pr-body, commits (default: [\"pr-body\", \"commits\"])",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Allowed directive sources: pr-body, commits (default: [\"pr-body\", \"commits\"])"
         }
       },
       "type": "object"

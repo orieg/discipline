@@ -251,10 +251,7 @@ fn ignored_tests_fire_and_accept_a_scoped_override() {
     repo.commit("test: quiet");
     let run = repo.check(&[]);
     assert_eq!(run.code, 1);
-    assert_eq!(
-        run.titles("ignored-tests"),
-        vec!["Test Newly Marked #[ignore]"]
-    );
+    assert_eq!(run.titles("ignored-tests"), vec!["Test Newly Skipped"]);
 
     repo.write(
         "body.md",
@@ -277,10 +274,7 @@ fn ignored_tests_fire_on_cfg_attr_ignore() {
     repo.commit("test: conditional ignore");
     let run = repo.check(&[]);
     assert_eq!(run.code, 1);
-    assert_eq!(
-        run.titles("ignored-tests"),
-        vec!["Test Newly Marked #[ignore]"]
-    );
+    assert_eq!(run.titles("ignored-tests"), vec!["Test Newly Skipped"]);
 }
 
 // ---- unsafe-safety-comment -------------------------------------------------
@@ -1745,6 +1739,59 @@ fn json_pr_body_outcome_source(json: &serde_json::Value) -> String {
         .as_str()
         .unwrap()
         .to_string()
+}
+
+#[test]
+fn config_override_sources_reset_narrows_directive_sources() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
+    );
+    repo.commit("test: remove orders");
+
+    // By default, sources are ["pr-body", "commits"]. A pr-body override works:
+    let run_default = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("PR_BODY", "removes: tests/a.rs orders removed")],
+    );
+    assert_eq!(
+        run_default.code, 0,
+        "default sources must accept pr-body override: {}",
+        run_default.stdout
+    );
+
+    // Override sources with reset to commits-only:
+    let override_toml = "[directives]\nsources = [\"__reset__\", \"commits\"]\n";
+    let run_narrowed = repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--format",
+            "json",
+            "--config-override",
+            override_toml,
+        ],
+        &[("PR_BODY", "removes: tests/a.rs orders removed")],
+    );
+    assert_eq!(
+        run_narrowed.code, 1,
+        "pr-body directive must be rejected when sources reset to commits only"
+    );
+    let outcome = run_narrowed.outcome("deletion-rationale");
+    let notes = outcome["notes"].as_array().unwrap();
+    assert!(
+        notes.iter().any(|n| n
+            .as_str()
+            .unwrap()
+            .contains("PR-body directives are disabled by policy")),
+        "expected note about PR-body directives disabled by policy, got: {:?}",
+        notes
+    );
 }
 
 #[test]

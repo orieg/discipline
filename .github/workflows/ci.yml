@@ -295,6 +295,30 @@ jobs:
           [ "${OVERRIDES}" = "1" ] || { echo "::error::expected overrides=1, got '${OVERRIDES}'"; exit 1; }
           [ "${OVERRIDDEN_GATES}" = "deletion-rationale" ] || { echo "::error::expected overridden_gates=deletion-rationale, got '${OVERRIDDEN_GATES}'"; exit 1; }
 
+      - name: "Action config_override: reset sources to commits-only rejects pr_body directive"
+        id: pr_sources_reset
+        continue-on-error: true
+        uses: ./
+        with:
+          binary_path: .ci-bin/discipline
+          working_directory: ${{ runner.temp }}/fx-del
+          base_ref: main
+          config_override: |
+            [directives]
+            sources = ["__reset__", "commits"]
+          pr_body: "discipline:allow(deletion-rationale) tests/legacy/"
+      - name: Rejected pr_body directive when sources reset to commits-only
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.pr_sources_reset.outcome }}
+          STATUS: ${{ steps.pr_sources_reset.outputs.status }}
+          REPORT: ${{ steps.pr_sources_reset.outputs.report }}
+        run: |
+          set -euo pipefail
+          [ "${OUTCOME}" = "failure" ] || { echo "::error::pr_body was accepted despite sources being reset to commits-only"; exit 1; }
+          [ "${STATUS}" = "fail" ] || { echo "::error::status output was '${STATUS}'"; exit 1; }
+          tests/action/assert-report.sh "${REPORT}" fail deletion-rationale
+
       # The download path, before any real release exists: a local release
       # store laid out like GitHub's, served over HTTP.
       - name: Serve a fake release store

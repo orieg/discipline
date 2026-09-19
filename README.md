@@ -32,6 +32,24 @@ Coding agents in an iterate-until-green loop weaken assertions, add tests that a
 
 Seven gates work on a repository in any language. The four AST gates use a per-language pack; Rust, Python, JavaScript / TypeScript, and PHPT ship today, and Java / Kotlin, C / C++ and Go are planned. When a change touches source in a language without a pack, the AST gates **say so in the report** rather than showing a clean zero.
 
+### Language packs & detection boundaries
+
+The four AST gates (`assertion-reduction`, `vacuous-tests`, `ignored-tests`, `unsafe-safety-comment`) operate via tree-sitter AST extraction. Only packs that pass rigorous verification (F3–F6) ship today (Rust, Python, JavaScript / TypeScript, PHPT). Other language packs (Java / Kotlin, C / C++, Go) are planned and report as unanalysed source when touched.
+
+Per-pack detection capabilities and boundaries:
+- **Rust pack:**
+  - *Detected:* `#[test]`, `tokio::test`, `async_std::test`; standard assertions (`assert!`, `assert_eq!`, `assert_ne!`, `matches!`, `assert_matches!`), tautological comparisons (`assert_eq!(x, x)`, `assert!(true)`); `#[ignore]`, `#[cfg_attr(..., ignore)]`; `unsafe` blocks and preceding `// SAFETY:` doc comments.
+  - *Not detected yet:* Tests dynamically generated inside macro bodies (e.g. `proptest! { ... }`, `quickcheck! { ... }`); custom assert macros or helper functions unless registered in `extra_assert_macros` / `assert_helper_fns`.
+- **Python pack:**
+  - *Detected:* `def test_*`, `TestCase` methods; `assert`, `self.assert*`, and assertion context managers (`with self.assertRaises(...)`, `assertLogs`, `assertWarns`); tautological assertions (`assert True`, `self.assertEqual(1, 1)`); function and class decorators (`@pytest.mark.skip`, `@pytest.mark.skipif`, `@unittest.skip`, `@unittest.skipIf`) and module/class-level `pytestmark` skip markers.
+  - *Not detected yet:* Dynamic test parametrizations (`@pytest.mark.parametrize` counts test definitions, not expanded invocations); assertions inside external helper functions unless declared in `assert_helper_fns`; class inheritance outside `unittest.TestCase`; dynamic runtime skip calls (`pytest.skip(...)`) inside test bodies.
+- **JavaScript / TypeScript pack:**
+  - *Detected:* `it(...)`, `test(...)`, describe suite nesting; standard matchers (`expect(...).toBe(...)`, `toEqual`, `toMatch`, `toBeTruthy`, etc.), tautological matchers (`expect(true).toBe(true)`, `expect(1).toBe(1)`); matcher weakening (`toBe` -> `toBeTruthy`, `toEqual` -> `toBeDefined`); skip helpers (`it.skip`, `test.skip`, `xit`, `xtest`, `describe.skip`, `xdescribe`).
+  - *Not detected yet:* Programmatic test generators (e.g. `test.each(...)` or `items.forEach(...)` test generation loops); custom Jest/Vitest/Chai matchers unless registered in `assert_helper_fns` / `extra_assert_macros`; dynamic conditional skips (early `return`).
+- **Golden (PHPT) pack:**
+  - *Detected:* Standard PHPT sections (`--TEST--`, `--FILE--`, `--EXPECT--`, `--EXPECTF--`, `--EXPECTREGEX--`, `--SKIPIF--`, `--XFAIL--`); empty expectation sections; skips via `--SKIPIF--` and `--XFAIL--`.
+  - *Not detected yet:* Dynamic runtime logic inside `--FILE--` or PHP script execution inside `--SKIPIF--`; multiple logical test cases embedded within a single `.phpt` file.
+
 ## Fail-closed by construction
 
 - Exit `0` pass, `1` violations, **`2` could not check**. An unresolvable base ref, a shallow clone, a missing repository, or a bad config is `2`, never an empty diff.

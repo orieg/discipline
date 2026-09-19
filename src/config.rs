@@ -557,6 +557,14 @@ impl DisciplineConfig {
             None => Value::try_from(Self::default_for_repo("workspace"))?,
         };
 
+        if value.get("directives").is_none() {
+            if let Some(table) = value.as_table_mut() {
+                if let Ok(def_dir) = Value::try_from(DirectivesConfig::default()) {
+                    table.insert("directives".to_string(), def_dir);
+                }
+            }
+        }
+
         if let Some(extra) = &overrides.config_override {
             let extra: Value =
                 toml::from_str(extra).context("config override is not valid TOML")?;
@@ -670,6 +678,7 @@ pub const SHORTER_IS_STRICTER: &[&str] = &[
     "allowed_users",
     "assert_helper_fns",
     "extra_assert_macros",
+    "sources",
 ];
 
 pub const LONGER_IS_STRICTER: &[&str] =
@@ -693,11 +702,41 @@ fn extract_table_items(table: &toml::map::Map<String, Value>) -> Option<(bool, V
     }
 }
 
+fn clean_value(v: Value) -> Value {
+    match v {
+        Value::Table(ref tbl) if extract_table_items(tbl).is_some() => {
+            let (_, items) = extract_table_items(tbl).unwrap();
+            let filtered: Vec<Value> = items
+                .into_iter()
+                .filter(|x| !is_reset_token(x))
+                .map(clean_value)
+                .collect();
+            Value::Array(filtered)
+        }
+        Value::Table(tbl) => {
+            let mut cleaned = toml::map::Map::new();
+            for (k, val) in tbl {
+                cleaned.insert(k, clean_value(val));
+            }
+            Value::Table(cleaned)
+        }
+        Value::Array(arr) => {
+            let filtered: Vec<Value> = arr
+                .into_iter()
+                .filter(|x| !is_reset_token(x))
+                .map(clean_value)
+                .collect();
+            Value::Array(filtered)
+        }
+        other => other,
+    }
+}
+
 /// Deep merge: tables merge key-wise, scalars are replaced.
 ///
 /// Array merging is asymmetric:
 /// - Lists where shorter is stricter (`exempt_paths`, `allow_patterns`, `allowed_users`,
-///   `assert_helper_fns`, `extra_assert_macros`) support explicit reset via `["__reset__", ...]`
+///   `assert_helper_fns`, `extra_assert_macros`, `sources`) support explicit reset via `["__reset__", ...]`
 ///   or `{ reset = true, items = [...] }` by clearing the base vector before inserting new items.
 /// - Lists where longer is stricter (`hostname_denylist`, `extra_patterns`, `paths`,
 ///   `include`) ignore reset and remain strictly append-only.
@@ -715,22 +754,9 @@ fn merge_inner(base: &mut Value, over: Value, key: Option<&str>) {
             for (k, v) in o {
                 match b.get_mut(&k) {
                     Some(slot) => merge_inner(slot, v, Some(&k)),
-                    None => match v {
-                        Value::Table(ref tbl) if extract_table_items(tbl).is_some() => {
-                            let (_, items) = extract_table_items(tbl).unwrap();
-                            let filtered: Vec<Value> =
-                                items.into_iter().filter(|x| !is_reset_token(x)).collect();
-                            b.insert(k, Value::Array(filtered));
-                        }
-                        Value::Array(arr) => {
-                            let filtered: Vec<Value> =
-                                arr.into_iter().filter(|x| !is_reset_token(x)).collect();
-                            b.insert(k, Value::Array(filtered));
-                        }
-                        other => {
-                            b.insert(k, other);
-                        }
-                    },
+                    None => {
+                        b.insert(k, clean_value(v));
+                    }
                 }
             }
         }

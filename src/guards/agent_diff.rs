@@ -693,7 +693,7 @@ pub fn evaluate_ignored_tests(
         };
         out.push(
             severity,
-            "Test Newly Marked #[ignore]",
+            "Test Newly Skipped",
             Some(path),
             Some(test.line),
             format!("Test `{}` no longer runs.", test.name),
