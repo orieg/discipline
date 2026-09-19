@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discipline — Universal CI/CD Diff Sentinel & AI Coding Agent Gatekeeper</title>
+  <meta name="description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Traverses AST diffs via tree-sitter to reject assertion weakening, vacuous tests, unannotated unsafe, and test erosion.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Discipline — Universal CI/CD Diff Sentinel & AI Coding Agent Gatekeeper">
+  <meta property="og:description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Prevents assertion weakening, vacuous tests, unannotated unsafe, and algorithmic regressions.">
+  <meta property="og:url" content="https://orieg.github.io/discipline/">
+  <meta property="og:site_name" content="Discipline">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Discipline — Universal CI/CD Diff Sentinel & AI Coding Agent Gatekeeper">
+  <meta name="twitter:description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1f6e1;&#xfe0f;</text></svg>">
+
+  <script>
+    (function() {
+      const saved = localStorage.getItem('discipline-theme');
+      const attr = document.documentElement.getAttribute('data-theme');
+      if (saved) {
+        document.documentElement.setAttribute('data-theme', saved);
+      } else if (!attr) {
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+          document.documentElement.setAttribute('data-theme', 'light');
+        } else {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      }
+    })();
+  </script>
+
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-inner: #0b1120;
+      --card-hover: #1e293b;
+      --border: #1f293d;
+      --border-accent: rgba(56, 189, 248, 0.4);
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --heading: #f8fafc;
+      --accent: #38bdf8;
+      --accent-hover: #7dd3fc;
+      --accent-green: #10b981;
+      --accent-purple: #a855f7;
+      --accent-orange: #f59e0b;
+      --accent-red: #ef4444;
+      --code-bg: #030712;
+      --navbar-bg: rgba(9, 13, 22, 0.85);
+      --nav-pill-bg: rgba(56, 189, 248, 0.1);
+      --nav-pill-border: rgba(56, 189, 248, 0.25);
+      --btn-secondary-bg: #111827;
+      --btn-secondary-hover: #1e293b;
+      --btn-secondary-border: #1f293d;
+      --btn-secondary-text: #f8fafc;
+      --badge-bg: #111827;
+      --badge-border: #1f293d;
+      --badge-text: #38bdf8;
+      --spotlight-bg: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+      --spotlight-border: rgba(99, 102, 241, 0.4);
+      color-scheme: dark;
+    }
+
+    [data-theme="light"] {
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --card-inner: #f1f5f9;
+      --card-hover: #f8fafc;
+      --border: #e2e8f0;
+      --border-accent: rgba(2, 132, 199, 0.4);
+      --text: #334155;
+      --text-muted: #64748b;
+      --heading: #0f172a;
+      --accent: #0284c7;
+      --accent-hover: #0369a1;
+      --accent-green: #059669;
+      --accent-purple: #9333ea;
+      --accent-orange: #d97706;
+      --accent-red: #dc2626;
+      --code-bg: #0f172a;
+      --navbar-bg: rgba(248, 250, 252, 0.88);
+      --nav-pill-bg: rgba(2, 132, 199, 0.08);
+      --nav-pill-border: rgba(2, 132, 199, 0.25);
+      --btn-secondary-bg: #ffffff;
+      --btn-secondary-hover: #f1f5f9;
+      --btn-secondary-border: #cbd5e1;
+      --btn-secondary-text: #0f172a;
+      --badge-bg: #ffffff;
+      --badge-border: #e2e8f0;
+      --badge-text: #0284c7;
+      --spotlight-bg: linear-gradient(135deg, #f0f9ff 0%, #e0e7ff 50%, #f0fdf4 100%);
+      --spotlight-border: rgba(99, 102, 241, 0.3);
+      color-scheme: light;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+
+    a { color: var(--accent); text-decoration: none; transition: color 0.15s ease; }
+    a:hover { color: var(--accent-hover); }
+
+    .container {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    /* Navbar */
+    .navbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--navbar-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-weight: 700;
+      font-size: 1.15rem;
+      color: var(--heading);
+      text-decoration: none;
+    }
+    .nav-logo {
+      width: 34px;
+      height: 34px;
+      background: linear-gradient(135deg, #38bdf8, #10b981);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #090d16;
+      font-size: 1.2rem;
+      box-shadow: 0 2px 8px rgba(56, 189, 248, 0.3);
+    }
+    .nav-links {
+      display: flex;
+      gap: 1.5rem;
+      list-style: none;
+      align-items: center;
+    }
+    .nav-links a {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: color 0.15s ease;
+    }
+    .nav-links a:hover { color: var(--heading); }
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .theme-toggle-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      transition: border-color 0.15s ease, background-color 0.15s ease;
+    }
+    .theme-toggle-btn:hover {
+      border-color: var(--accent);
+      background-color: var(--nav-pill-bg);
+    }
+    .btn-nav-gh {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.85rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      background: var(--btn-secondary-bg);
+      border: 1px solid var(--btn-secondary-border);
+      color: var(--btn-secondary-text);
+      transition: all 0.15s ease;
+    }
+    .btn-nav-gh:hover {
+      background: var(--btn-secondary-hover);
+      border-color: var(--border-accent);
+      color: var(--heading);
+    }
+    .btn-nav-gh svg { width: 16px; height: 16px; fill: currentColor; }
+
+    /* Hero Section */
+    .hero {
+      padding: 5rem 0 3.5rem;
+      text-align: center;
+      position: relative;
+    }
+    .hero-badge-row {
+      display: flex;
+      justify-content: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.5rem;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      background: var(--nav-pill-bg);
+      border: 1px solid var(--nav-pill-border);
+      color: var(--accent);
+    }
+    .pill-green {
+      background: rgba(16, 185, 129, 0.1);
+      border-color: rgba(16, 185, 129, 0.3);
+      color: var(--accent-green);
+    }
+    .pill-purple {
+      background: rgba(168, 85, 247, 0.1);
+      border-color: rgba(168, 85, 247, 0.3);
+      color: var(--accent-purple);
+    }
+    .hero h1 {
+      font-size: 2.75rem;
+      font-weight: 800;
+      color: var(--heading);
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 1.25rem;
+    }
+    .hero h1 span {
+      background: linear-gradient(135deg, #38bdf8 20%, #10b981 80%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero-sub {
+      font-size: 1.15rem;
+      color: var(--text-muted);
+      max-width: 760px;
+      margin: 0 auto 2.25rem;
+      line-height: 1.6;
+    }
+    .hero-actions {
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 3rem;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.7rem 1.5rem;
+      background: linear-gradient(135deg, #0284c7, #0369a1);
+      color: #ffffff;
+      font-weight: 600;
+      font-size: 0.95rem;
+      border-radius: 8px;
+      box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(2, 132, 199, 0.45);
+      color: #ffffff;
+    }
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.7rem 1.5rem;
+      background: var(--btn-secondary-bg);
+      border: 1px solid var(--btn-secondary-border);
+      color: var(--btn-secondary-text);
+      font-weight: 600;
+      font-size: 0.95rem;
+      border-radius: 8px;
+      transition: all 0.15s ease;
+    }
+    .btn-secondary:hover {
+      background: var(--btn-secondary-hover);
+      border-color: var(--border-accent);
+      color: var(--heading);
+      transform: translateY(-1px);
+    }
+
+    /* Stat bar */
+    .stat-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+    .stat-item h3 {
+      font-size: 1.75rem;
+      font-weight: 800;
+      color: var(--heading);
+      margin-bottom: 0.25rem;
+    }
+    .stat-item p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* Section styling */
+    .section-block {
+      padding: 3rem 0;
+      border-top: 1px solid var(--border);
+    }
+    .section-head {
+      margin-bottom: 2rem;
+    }
+    .section-title {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: var(--heading);
+      letter-spacing: -0.02em;
+      margin-bottom: 0.5rem;
+    }
+    .section-desc {
+      color: var(--text-muted);
+      font-size: 1rem;
+      max-width: 680px;
+    }
+
+    /* Card Grids */
+    .card-grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+    }
+    .card-grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.25rem;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: border-color 0.2s ease, transform 0.2s ease;
+    }
+    .card:hover {
+      border-color: var(--border-accent);
+      transform: translateY(-2px);
+    }
+    .card-icon-box {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      margin-bottom: 1rem;
+      background: var(--nav-pill-bg);
+      border: 1px solid var(--nav-pill-border);
+      color: var(--accent);
+    }
+    .card h3 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--heading);
+      margin-bottom: 0.5rem;
+    }
+    .card p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.55;
+    }
+    .card-tags {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin-top: 1.25rem;
+    }
+    .card-tag {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.55rem;
+      background: var(--card-inner);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    /* Platform Tabs & Code Showcase */
+    .platform-container {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-top: 1.5rem;
+    }
+    .platform-nav {
+      display: flex;
+      background: var(--card-inner);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .platform-btn {
+      padding: 0.85rem 1.25rem;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.15s ease;
+    }
+    .platform-btn:hover {
+      color: var(--heading);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .platform-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: var(--card-bg);
+    }
+    .platform-pane {
+      display: none;
+      padding: 1.5rem;
+    }
+    .platform-pane.active {
+      display: block;
+    }
+    .code-block {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.85rem;
+      color: #e2e8f0;
+      overflow-x: auto;
+      line-height: 1.5;
+      position: relative;
+    }
+    .code-comment { color: #64748b; }
+    .code-keyword { color: #38bdf8; font-weight: 600; }
+    .code-string { color: #34d399; }
+    .code-prop { color: #f59e0b; }
+
+    /* Gate Table */
+    .gate-table-wrapper {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--card-bg);
+    }
+    table.gate-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.88rem;
+    }
+    table.gate-table th {
+      background: var(--card-inner);
+      padding: 0.85rem 1.25rem;
+      font-weight: 600;
+      color: var(--heading);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    table.gate-table td {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    table.gate-table tr:last-child td {
+      border-bottom: none;
+    }
+    table.gate-table tr:hover td {
+      background: var(--card-inner);
+    }
+    .gate-id {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 700;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .gate-badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-error { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .badge-warn { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-lang { background: var(--card-inner); color: var(--text-muted); border: 1px solid var(--border); }
+
+    /* Override box */
+    .directive-card {
+      background: var(--card-inner);
+      border-left: 3px solid var(--accent);
+      padding: 1rem;
+      border-radius: 0 8px 8px 0;
+      margin-top: 0.5rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.82rem;
+      color: var(--text);
+    }
+
+    /* Installation grid */
+    .install-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1.5rem;
+    }
+    .install-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      transition: border-color 0.15s ease;
+    }
+    .install-card:hover { border-color: var(--border-accent); }
+    .install-card h4 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--heading);
+      margin-bottom: 0.5rem;
+    }
+    .install-snippet {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.6rem 0.85rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8rem;
+      color: #e2e8f0;
+      overflow-x: auto;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 3rem 0;
+      background: var(--card-bg);
+      color: var(--text-muted);
+      font-size: 0.88rem;
+    }
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .footer-links a { color: var(--text-muted); transition: color 0.15s ease; }
+    .footer-links a:hover { color: var(--heading); }
+    footer p { text-align: center; }
+
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 2rem; }
+      .stat-bar { grid-template-columns: repeat(2, 1fr); }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <a href="https://orieg.github.io/discipline/" class="nav-brand">
+    <div class="nav-logo">&#x1f6e1;&#xfe0f;</div>
+    <span>Discipline</span>
+  </a>
+
+  <ul class="nav-links">
+    <li><a href="#features">Capabilities</a></li>
+    <li><a href="#platforms">Platforms</a></li>
+    <li><a href="#gates">Gate Reference</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#install">Install</a></li>
+  </ul>
+
+  <div class="nav-actions">
+    <button class="theme-toggle-btn" id="themeToggle" aria-label="Toggle theme">
+      <span id="themeIcon">&#x2600;&#xfe0f;</span>
+    </button>
+    <a href="https://github.com/orieg/discipline" class="btn-nav-gh" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+  </div>
+</nav>
+
+<main class="container">
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-badge-row">
+      <span class="pill pill-green">&#x2714; Rust 1.80+ Static Binary</span>
+      <span class="pill pill-purple">&#x26a1; Zero C Runtime Dependencies</span>
+      <span class="pill">&#x1f504; 7 CI/CD Platforms</span>
+      <span class="pill">&#x1f916; AI Agent Drift Sentinel</span>
+    </div>
+
+    <h1>Universal CI/CD Diff Sentinel &<br><span>AI Coding Agent Gatekeeper</span></h1>
+    <p class="hero-sub">
+      Traverses AST diffs via tree-sitter over merge-base git graphs. Rejects assertion weakening, vacuous tests, unannotated <code>unsafe</code>, test suppression, and algorithmic regressions across pull requests and merge requests.
+    </p>
+
+    <div class="hero-actions">
+      <a href="#platforms" class="btn-primary">Explore Platform Guides &rarr;</a>
+      <a href="#gates" class="btn-secondary">Browse Active Gates</a>
+      <a href="https://github.com/orieg/discipline" class="btn-secondary" target="_blank" rel="noopener">Source Code</a>
+    </div>
+
+    <!-- Stat Bar -->
+    <div class="stat-bar">
+      <div class="stat-item">
+        <h3>11+</h3>
+        <p>Active Fail-Closed Gates</p>
+      </div>
+      <div class="stat-item">
+        <h3>4</h3>
+        <p>AST Language Packs (RS, PY, TS, PHPT)</p>
+      </div>
+      <div class="stat-item">
+        <h3>7</h3>
+        <p>Supported CI Integrations</p>
+      </div>
+      <div class="stat-item">
+        <h3>0 ms</h3>
+        <p>External Network Calls</p>
+      </div>
+    </div>
+  </header>
+
+  <!-- Core Capabilities -->
+  <section class="section-block" id="features">
+    <div class="section-head">
+      <div class="section-title">Why Discipline?</div>
+      <p class="section-desc">Autonomous AI agents in an iterate-until-green loop optimize for passing tests, not preserving invariants. Discipline halts erosion at the gate.</p>
+    </div>
+
+    <div class="card-grid-2">
+      <div class="card">
+        <div>
+          <div class="card-icon-box">&#x1f333;</div>
+          <h3>Tree-Sitter AST Diff Inspection</h3>
+          <p>Unlike fragile regex checks that trigger on comments or log messages, Discipline parses the complete AST of changed functions against the merge base. It accurately counts executable assertions and distinguishes real invariants from dead code.</p>
+        </div>
+        <div class="card-tags">
+          <span class="card-tag">tree-sitter-rust</span>
+          <span class="card-tag">tree-sitter-python</span>
+          <span class="card-tag">tree-sitter-javascript</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div>
+          <div class="card-icon-box">&#x1f916;</div>
+          <h3>AI Coding Agent Guardrails</h3>
+          <p>Flags silent test erosion: assertion count reductions (e.g. <code>assert_eq!</code> &rarr; <code>assert!</code>), test suppression (<code>#[ignore]</code>, <code>@pytest.mark.skip</code>, <code>it.skip</code>), tautological vacuous tests (<code>assert!(true)</code>), and stealth test deletions.</p>
+        </div>
+        <div class="card-tags">
+          <span class="card-tag">Claude Code</span>
+          <span class="card-tag">Gemini CLI</span>
+          <span class="card-tag">Codex / Copilot</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div>
+          <div class="card-icon-box">&#x1f512;</div>
+          <h3>Fail-Closed Engineering</h3>
+          <p>If git history cannot be resolved, a clone is shallow, or a configuration file is malformed, Discipline exits with code <code>2</code>. It never yields a false-positive pass on broken pipelines or empty diff outputs.</p>
+        </div>
+        <div class="card-tags">
+          <span class="card-tag">exit 0: pass</span>
+          <span class="card-tag">exit 1: violation</span>
+          <span class="card-tag">exit 2: error</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div>
+          <div class="card-icon-box">&#x1f4ca;</div>
+          <h3>Native Native MR & PR Reporting</h3>
+          <p>Discipline emits industry-standard reports without external plugins: GitLab Code Quality diffs, JUnit test widgets, GitHub PR comments, GitHub Actions Annotations, and SARIF security tabs.</p>
+        </div>
+        <div class="card-tags">
+          <span class="card-tag">SARIF 2.1.0</span>
+          <span class="card-tag">JUnit XML</span>
+          <span class="card-tag">Code Climate JSON</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Platform Integrations -->
+  <section class="section-block" id="platforms">
+    <div class="section-head">
+      <div class="section-title">Platform Integration Guides</div>
+      <p class="section-desc">First-class support across all enterprise CI/CD systems, container runtimes, and local developer hooks.</p>
+    </div>
+
+    <div class="platform-container">
+      <nav class="platform-nav" id="platformNav">
+        <button class="platform-btn active" data-target="pane-github">GitHub Actions</button>
+        <button class="platform-btn" data-target="pane-gitlab">GitLab CI/CD</button>
+        <button class="platform-btn" data-target="pane-gitea">Gitea Actions</button>
+        <button class="platform-btn" data-target="pane-argo">Argo Workflows</button>
+        <button class="platform-btn" data-target="pane-docker">Container (Docker)</button>
+        <button class="platform-btn" data-target="pane-precommit">pre-commit</button>
+        <button class="platform-btn" data-target="pane-cli">Standalone CLI</button>
+      </nav>
+
+      <!-- GitHub Actions -->
+      <div class="platform-pane active" id="pane-github">
+        <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Composite GitHub Action publishing workflow annotations, SARIF code scanning results, and PR status checks.
+        </p>
+        <div class="code-block"><span class="code-comment"># .github/workflows/discipline.yml</span>
+<span class="code-prop">name:</span> Discipline Sentinel
+
+<span class="code-prop">on:</span>
+  <span class="code-prop">pull_request:</span>
+    <span class="code-prop">types:</span> [opened, synchronize, reopened, edited]
+
+<span class="code-prop">permissions:</span>
+  <span class="code-prop">contents:</span> read
+  <span class="code-prop">pull-requests:</span> write
+  <span class="code-prop">security-events:</span> write
+
+<span class="code-prop">jobs:</span>
+  <span class="code-prop">sentinel:</span>
+    <span class="code-prop">runs-on:</span> ubuntu-latest
+    <span class="code-prop">steps:</span>
+      - <span class="code-prop">uses:</span> actions/checkout@v4
+        <span class="code-prop">with:</span>
+          <span class="code-prop">fetch-depth:</span> 0   <span class="code-comment"># Ensure git merge-base is reachable</span>
+
+      - <span class="code-prop">name:</span> Run Discipline Sentinel
+        <span class="code-prop">uses:</span> orieg/discipline@v0
+        <span class="code-prop">with:</span>
+          <span class="code-prop">fail_on_warnings:</span> false
+          <span class="code-prop">post_comment:</span> true</div>
+      </div>
+
+      <!-- GitLab CI/CD -->
+      <div class="platform-pane" id="pane-gitlab">
+        <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Native GitLab CI/CD integration. Populates GitLab Merge Request Code Quality diffs, JUnit test reports, and SAST/SARIF security tabs.
+        </p>
+        <div class="code-block"><span class="code-comment"># .gitlab-ci.yml using the Discipline CI/CD Component</span>
+<span class="code-keyword">include:</span>
+  - <span class="code-prop">component:</span> $CI_SERVER_FQDN/orieg/discipline/discipline@v0.1.0
+    <span class="code-prop">inputs:</span>
+      <span class="code-prop">stage:</span> test
+      <span class="code-prop">allow_failure:</span> false
+
+<span class="code-comment"># Or standalone job definition:</span>
+<span class="code-prop">discipline:gate:</span>
+  <span class="code-prop">stage:</span> test
+  <span class="code-prop">image:</span>
+    <span class="code-prop">name:</span> ghcr.io/orieg/discipline:latest
+    <span class="code-prop">entrypoint:</span> [<span class="code-string">""</span>]
+  <span class="code-prop">variables:</span>
+    <span class="code-prop">GIT_STRATEGY:</span> clone
+    <span class="code-prop">GIT_DEPTH:</span> 0
+  <span class="code-prop">rules:</span>
+    - <span class="code-prop">if:</span> $CI_PIPELINE_SOURCE == <span class="code-string">"merge_request_event"</span>
+    - <span class="code-prop">if:</span> $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  <span class="code-prop">before_script:</span>
+    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME --depth=100 || true
+  <span class="code-prop">script:</span>
+    <span class="code-comment"># Under $GITLAB_CI, automatically outputs gl-codequality.json, junit.xml, gl-sast-report.json</span>
+    - discipline check
+  <span class="code-prop">artifacts:</span>
+    <span class="code-prop">reports:</span>
+      <span class="code-prop">codequality:</span> gl-codequality.json
+      <span class="code-prop">junit:</span> junit.xml
+      <span class="code-prop">sast:</span> gl-sast-report.json
+    <span class="code-prop">when:</span> always</div>
+      </div>
+
+      <!-- Gitea Actions -->
+      <div class="platform-pane" id="pane-gitea">
+        <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Runs seamlessly under self-hosted Gitea <code>act_runner</code>. Zero JavaScript runtime required.
+        </p>
+        <div class="code-block"><span class="code-comment"># .gitea/workflows/discipline.yml</span>
+<span class="code-prop">name:</span> Gitea Sentinel Gate
+
+<span class="code-prop">on:</span>
+  <span class="code-prop">pull_request:</span>
+    <span class="code-prop">types:</span> [opened, synchronize]
+
+<span class="code-prop">jobs:</span>
+  <span class="code-prop">discipline:</span>
+    <span class="code-prop">runs-on:</span> ubuntu-latest
+    <span class="code-prop">steps:</span>
+      - <span class="code-prop">uses:</span> actions/checkout@v4
+        <span class="code-prop">with:</span>
+          <span class="code-prop">fetch-depth:</span> 0
+
+      - <span class="code-prop">name:</span> Run Discipline
+        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@v0
+        <span class="code-prop">with:</span>
+          <span class="code-prop">binary_path:</span> /opt/discipline/discipline</div>
+      </div>
+
+      <!-- Argo Workflows -->
+      <div class="platform-pane" id="pane-argo">
+        <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Kubernetes-native pre-merge gating for GitOps and continuous deployment pipelines.
+        </p>
+        <div class="code-block"><span class="code-comment"># Argo Workflow DAG Task Reference</span>
+- <span class="code-prop">name:</span> run-discipline-gate
+  <span class="code-prop">templateRef:</span>
+    <span class="code-prop">name:</span> discipline-sentinel
+    <span class="code-prop">template:</span> discipline-gate
+  <span class="code-prop">arguments:</span>
+    <span class="code-prop">parameters:</span>
+      - <span class="code-prop">name:</span> repo-url
+        <span class="code-prop">value:</span> <span class="code-string">"https://github.com/org/repo.git"</span>
+      - <span class="code-prop">name:</span> target-branch
+        <span class="code-prop">value:</span> <span class="code-string">"main"</span>
+      - <span class="code-prop">name:</span> source-branch
+        <span class="code-prop">value:</span> <span class="code-string">"feat/my-pr"</span></div>
+      </div>
+
+      <!-- Container / Docker -->
+      <div class="platform-pane" id="pane-docker">
+        <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Non-root, minimal static Alpine image for local containers or custom CI runners.
+        </p>
+        <div class="code-block"><span class="code-comment"># Pull official static container image</span>
+docker pull ghcr.io/orieg/discipline:latest
+
+<span class="code-comment"># Mount repository and execute diff check against origin/main</span>
+docker run --rm \
+  -v <span class="code-string">"$PWD"</span>:/workspace \
+  -w /workspace \
+  ghcr.io/orieg/discipline:latest check --base origin/main</div>
+      </div>
+
+      <!-- pre-commit -->
+      <div class="platform-pane" id="pane-precommit">
+        <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Git hook configuration preventing non-compliant commits before they reach remote branches.
+        </p>
+        <div class="code-block"><span class="code-comment"># .pre-commit-config.yaml</span>
+<span class="code-prop">repos:</span>
+  - <span class="code-prop">repo:</span> https://github.com/orieg/discipline
+    <span class="code-prop">rev:</span> v0.1.0
+    <span class="code-prop">hooks:</span>
+      - <span class="code-prop">id:</span> discipline         <span class="code-comment"># Compiles via cargo</span>
+      <span class="code-comment"># - id: discipline-system   # Or uses binary on PATH</span></div>
+      </div>
+
+      <!-- Standalone CLI -->
+      <div class="platform-pane" id="pane-cli">
+        <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Direct command-line execution for local developers, script automation, and self-checks.
+        </p>
+        <div class="code-block"><span class="code-comment"># Run full gate check against merge-base</span>
+discipline check --base origin/main
+
+<span class="code-comment"># Run check on staged changes before committing</span>
+discipline check --staged
+
+<span class="code-comment"># Inspect registry of gates and current configuration</span>
+discipline gates
+
+<span class="code-comment"># Run embedded verification controls</span>
+discipline self-test</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Active Gates Reference -->
+  <section class="section-block" id="gates">
+    <div class="section-head">
+      <div class="section-title">Active Gate Reference</div>
+      <p class="section-desc">Every gate operates with fail-closed semantics, truthful examination counts, and explicit remediation instructions.</p>
+    </div>
+
+    <div class="gate-table-wrapper">
+      <table class="gate-table">
+        <thead>
+          <tr>
+            <th>Gate ID</th>
+            <th>Category</th>
+            <th>Severity</th>
+            <th>Languages</th>
+            <th>Rule Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="gate-id">assertion-reduction</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust, Python, TS, PHPT</span></td>
+            <td>Ensures the total count and strength of assertions does not decrease in modified test cases.</td>
+          </tr>
+          <tr>
+            <td class="gate-id">vacuous-tests</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust, Python, TS, PHPT</span></td>
+            <td>Rejects tautological tests like <code>assert!(true)</code>, <code>assert_eq!(x, x)</code>, or <code>assert_eq!(1, 1)</code>.</td>
+          </tr>
+          <tr>
+            <td class="gate-id">ignored-tests</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust, Python, TS, PHPT</span></td>
+            <td>Flags addition of skip decorators or attributes (<code>#[ignore]</code>, <code>@pytest.mark.skip</code>, <code>it.skip</code>).</td>
+          </tr>
+          <tr>
+            <td class="gate-id">unsafe-safety-comment</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust</span></td>
+            <td>Mandates that every <code>unsafe</code> block is preceded by a load-bearing <code>// SAFETY:</code> comment.</td>
+          </tr>
+          <tr>
+            <td class="gate-id">deletion-rationale</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>Requires a scoped <code>removes: &lt;path&gt; &lt;reason&gt;</code> directive when deleting files or test suites.</td>
+          </tr>
+          <tr>
+            <td class="gate-id">golden-output</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>Guards test snapshots from unauthorized updates without an explicit <code>allow-golden-update:</code> directive.</td>
+          </tr>
+          <tr>
+            <td class="gate-id">time-estimates</td>
+            <td>Hygiene</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>Rejects calendar durations ("2 days", "3 weeks", "next sprint") in docs, plans, and PR bodies.</td>
+          </tr>
+          <tr>
+            <td class="gate-id">pii</td>
+            <td>Hygiene</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>Blocks leaks of internal hostnames, LAN IPv4/IPv6 addresses, or local developer workstation paths.</td>
+          </tr>
+          <tr>
+            <td class="gate-id">agent-scratch</td>
+            <td>Hygiene</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>Prevents tracking agent transcripts and scratch folders (<code>.claude/</code>, <code>.gemini/</code>, <code>scratch/</code>).</td>
+          </tr>
+          <tr>
+            <td class="gate-id">config-integrity</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>Prevents pull requests from silently disabling gates or loosening configuration in <code>discipline.toml</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Directives callout -->
+    <div style="margin-top: 2rem;">
+      <h3 style="font-size: 1.15rem; color: var(--heading); margin-bottom: 0.5rem;">Audit-Trailed Override Directives</h3>
+      <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+        Legitimate deletions or changes are authorized through explicit, scoped directives in the PR description or commit message:
+      </p>
+      <div class="directive-card">
+        removes: tests/legacy/ replaced by proptest property suite<br>
+        allow-assertion-drop: test_allocator single large allocation split into benchmark<br>
+        allow-ignore: test_darwin_kqueue requires macos runner environment<br>
+        allow-golden-update: tests/snapshots/v2.snap updated for new serializer format
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section class="section-block" id="architecture">
+    <div class="section-head">
+      <div class="section-title">Architecture & Execution Model</div>
+      <p class="section-desc">Zero-dependency, standalone binary operating entirely in-memory and offline.</p>
+    </div>
+
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="code-block" style="font-size: 0.8rem; line-height: 1.4;"><span class="code-comment">                   ┌───────────────────────────────┐
+                   │    PR / MR Head Git Commit    │
+                   └───────────────┬───────────────┘
+                                   │
+                                   ▼
+        ┌─────────────────────────────────────────────────────┐
+        │   GitCtx: Resolves merge-base against Target Ref    │
+        │   (git2 in-memory diff, fail-closed on shallow)     │
+        └──────────────────────────┬──────────────────────────┘
+                                   │
+                    ┌──────────────┴──────────────┐
+                    ▼                             ▼
+       ┌────────────────────────┐    ┌────────────────────────┐
+       │ Tree-Sitter AST Diff   │    │  Hygiene & Policy      │
+       │  • Assertion counters  │    │  • No time estimates   │
+       │  • Vacuous test AST    │    │  • PII & LAN scrub     │
+       │  • // SAFETY: comments │    │  • Scratch state deny  │
+       │  • Test skip detection │    │  • Directives parsing  │
+       └────────────┬───────────┘    └────────────┬───────────┘
+                    │                             │
+                    └──────────────┬──────────────┘
+                                   │
+                                   ▼
+        ┌─────────────────────────────────────────────────────┐
+        │ Gate Evaluator: Computes outcomes & verifies floors │
+        └──────────────────────────┬──────────────────────────┘
+                                   │
+         ┌─────────────────────────┼─────────────────────────┐
+         ▼                         ▼                         ▼
+┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
+│ GitLab Reports   │      │ GitHub Checks    │      │ Exit Code        │
+│ • Code Quality   │      │ • PR Comments    │      │ • 0: Pass        │
+│ • JUnit XML      │      │ • Workflow Annot │      │ • 1: Violations  │
+│ • SAST / SARIF   │      │ • SARIF Upload   │      │ • 2: Gate Error  │
+└──────────────────┘      └──────────────────┘      └──────────────────┘</span></div>
+    </div>
+  </section>
+
+  <!-- Installation -->
+  <section class="section-block" id="install">
+    <div class="section-head">
+      <div class="section-title">Installation & Distribution</div>
+      <p class="section-desc">Available as a pre-compiled static binary, container image, or from source via Cargo.</p>
+    </div>
+
+    <div class="install-grid">
+      <div class="install-card">
+        <h4>Cargo (From Source)</h4>
+        <div class="install-snippet">cargo install --git https://github.com/orieg/discipline</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Pure Rust build requiring rustc 1.80+.</p>
+      </div>
+      <div class="install-card">
+        <h4>Docker Container</h4>
+        <div class="install-snippet">docker pull ghcr.io/orieg/discipline:latest</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Non-root Alpine container with static binary.</p>
+      </div>
+      <div class="install-card">
+        <h4>GitLab CI/CD Component</h4>
+        <div class="install-snippet">component: $CI_SERVER_FQDN/orieg/discipline@v0.1.0</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">GitLab 16.0+ CI/CD Catalog Component.</p>
+      </div>
+      <div class="install-card">
+        <h4>GitHub Action</h4>
+        <div class="install-snippet">uses: orieg/discipline@v0</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Composite action with automatic binary bootstrap.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="container">
+    <div class="footer-links">
+      <a href="https://github.com/orieg/discipline" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/orieg/discipline/blob/main/docs/PRD.md" target="_blank" rel="noopener">PRD & Roadmap</a>
+      <a href="https://github.com/orieg/discipline/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener">Architecture</a>
+      <a href="https://orieg.github.io/expanse/">Expanse Engine</a>
+      <a href="https://orieg.github.io/php-judy/">PHP Judy</a>
+      <a href="https://orieg.github.io/judy-cache/">Judy Cache</a>
+      <a href="https://orieg.github.io/gws-connector/">GWS Connector</a>
+      <a href="https://orieg.github.io/">Nicolas Brousse</a>
+    </div>
+    <p>&copy; 2026 Nicolas Brousse. Discipline is dual-licensed under MIT or Apache-2.0.</p>
+  </div>
+</footer>
+
+<script>
+  // Theme toggle
+  const themeToggle = document.getElementById('themeToggle');
+  const themeIcon = document.getElementById('themeIcon');
+
+  function updateThemeIcon(theme) {
+    themeIcon.textContent = theme === 'light' ? '\u2600\ufe0f' : '\ud83c\udf19';
+  }
+
+  const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+  updateThemeIcon(currentTheme);
+
+  themeToggle.addEventListener('click', () => {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const nextTheme = isDark ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', nextTheme);
+    localStorage.setItem('discipline-theme', nextTheme);
+    updateThemeIcon(nextTheme);
+  });
+
+  // Platform tabs
+  const platformButtons = document.querySelectorAll('#platformNav .platform-btn');
+  platformButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      platformButtons.forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.platform-pane').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      const targetId = btn.getAttribute('data-target');
+      document.getElementById(targetId).classList.add('active');
+    });
+  });
+</script>
+
+</body>
+</html>

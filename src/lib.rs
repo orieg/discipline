@@ -10,3 +10,4 @@ pub mod style;
 pub mod tokens;
 
 pub use config::DisciplineConfig;
+pub use gitctx as git;

@@ -1,12 +1,13 @@
 # discipline
 
 [![CI](https://github.com/orieg/discipline/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/orieg/discipline/actions/workflows/ci.yml)
+[![Documentation](https://img.shields.io/badge/docs-orieg.github.io%2Fdiscipline-blue.svg)](https://orieg.github.io/discipline/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)](#license)
 [![Rust 1.90+](https://img.shields.io/badge/rustc-1.90%2B-orange.svg)](Cargo.toml)
 [![Status](https://img.shields.io/badge/status-pre--release-yellow.svg)](docs/PRD.md)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](.pre-commit-hooks.yaml)
 
-**CI gatekeeper and AI coding agent diff sentinel.** One static binary, the same in GitHub Actions, Gitea Actions, a pre-commit hook, and an agent's inner loop.
+**CI gatekeeper and AI coding agent diff sentinel.** One static binary, the same in GitHub Actions, GitLab CI/CD, Gitea Actions, a pre-commit hook, and an agent's inner loop. Full documentation and interactive guides: [orieg.github.io/discipline](https://orieg.github.io/discipline/).
 
 Coding agents in an iterate-until-green loop weaken assertions, add tests that assert nothing, mark tests `#[ignore]`, delete what is in the way, drop `// SAFETY:` comments, and — when a gate blocks them — edit the gate. `discipline` inspects the *change* (tree-sitter over a `git2` merge-base diff) and refuses those moves, with the fail-closed engineering distilled from [`orieg/expanse`](https://github.com/orieg/expanse).
 
@@ -78,6 +79,48 @@ jobs:
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding a `removes:` directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
 
+### GitLab CI/CD
+
+Native integration with GitLab Merge Requests. When running under GitLab CI (`$GITLAB_CI == "true"`), Discipline automatically detects merge request base refs and generates Code Quality diffs, JUnit test summaries, and SAST/SARIF security tabs.
+
+Use the reusable CI/CD Catalog Component ([`templates/discipline.gitlab-ci.yml`](templates/discipline.gitlab-ci.yml)):
+
+```yaml
+include:
+  - component: $CI_SERVER_FQDN/orieg/discipline/discipline@v0.1.0
+    inputs:
+      stage: test
+```
+
+Or configure a standalone job using the pre-built container:
+
+```yaml
+discipline:gate:
+  stage: test
+  image:
+    name: ghcr.io/orieg/discipline:latest
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME --depth=100 || true
+  script:
+    - discipline check
+  artifacts:
+    reports:
+      codequality: gl-codequality.json
+      junit: junit.xml
+      sast: gl-sast-report.json
+    paths:
+      - gl-codequality.json
+      - junit.xml
+      - gl-sast-report.json
+    when: always
+```
 
 ### Gitea Actions
 

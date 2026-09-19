@@ -58,14 +58,9 @@ pub struct CheckArgs {
     #[arg(short, long, value_enum, default_value_t = SuiteChoice::All)]
     pub suite: SuiteChoice,
 
-    /// Base branch or commit to measure the change against
-    #[arg(
-        short,
-        long,
-        default_value = "origin/main",
-        env = "DISCIPLINE_BASE_REF"
-    )]
-    pub base: String,
+    /// Base branch or commit to measure the change against (auto-detected in CI if omitted)
+    #[arg(short, long, env = "DISCIPLINE_BASE_REF")]
+    pub base: Option<String>,
 
     /// Inspect the index against HEAD instead (pre-commit hook mode)
     #[arg(long)]
@@ -99,6 +94,18 @@ pub struct CheckArgs {
     /// Write the formatted report to this path
     #[arg(short = 'o', long = "output-file")]
     pub output_file: Option<PathBuf>,
+
+    /// Write GitLab Code Quality JSON report to this path
+    #[arg(long, env = "DISCIPLINE_REPORT_GITLAB")]
+    pub report_gitlab: Option<PathBuf>,
+
+    /// Write JUnit XML report to this path
+    #[arg(long, env = "DISCIPLINE_REPORT_JUNIT")]
+    pub report_junit: Option<PathBuf>,
+
+    /// Write SARIF report to this path
+    #[arg(long, env = "DISCIPLINE_REPORT_SARIF")]
+    pub report_sarif: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -107,8 +114,8 @@ pub struct DiffArgs {
     pub config: ConfigArgs,
 
     /// Base branch or commit ref to compare against
-    #[arg(short, long, default_value = "HEAD~1")]
-    pub base: String,
+    #[arg(short, long)]
+    pub base: Option<String>,
 
     /// Output format
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Terminal)]
@@ -121,6 +128,18 @@ pub struct DiffArgs {
     /// Write the formatted report to this path
     #[arg(short = 'o', long = "output-file")]
     pub output_file: Option<PathBuf>,
+
+    /// Write GitLab Code Quality JSON report to this path
+    #[arg(long, env = "DISCIPLINE_REPORT_GITLAB")]
+    pub report_gitlab: Option<PathBuf>,
+
+    /// Write JUnit XML report to this path
+    #[arg(long, env = "DISCIPLINE_REPORT_JUNIT")]
+    pub report_junit: Option<PathBuf>,
+
+    /// Write SARIF report to this path
+    #[arg(long, env = "DISCIPLINE_REPORT_SARIF")]
+    pub report_sarif: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -154,4 +173,5 @@ pub enum OutputFormat {
     Json,
     Junit,
     Sarif,
+    Gitlab,
 }

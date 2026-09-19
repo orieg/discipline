@@ -28,7 +28,7 @@ fn run() -> Result<bool> {
         Commands::Diff(args) => check(CheckArgs {
             config: args.config,
             suite: SuiteChoice::AgentGuard,
-            base: args.base,
+            base: args.base.or_else(|| Some("HEAD~1".to_string())),
             staged: false,
             pr_body_file: None,
             fail_on_warnings: false,
@@ -37,6 +37,9 @@ fn run() -> Result<bool> {
             format: args.format,
             json_out: args.json_out,
             output_file: args.output_file,
+            report_gitlab: args.report_gitlab,
+            report_junit: args.report_junit,
+            report_sarif: args.report_sarif,
         }),
         Commands::Init(args) => init(args.name),
         Commands::Gates(args) => gates(&args.config),
@@ -111,8 +114,16 @@ fn load_config(
     }
 }
 
+fn is_gitlab_ci() -> bool {
+    std::env::var("GITLAB_CI")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+}
+
 fn check(args: CheckArgs) -> Result<bool> {
-    let git = GitCtx::open(&args.base, args.staged)?;
+    let is_gitlab = is_gitlab_ci();
+    let base_ref = discipline::gitctx::detect_base_ref(args.base.as_deref());
+    let git = GitCtx::open(&base_ref, args.staged)?;
     let extra_fail = if args.fail_on_overrides {
         Some(true)
     } else {
@@ -175,6 +186,51 @@ fn check(args: CheckArgs) -> Result<bool> {
         std::fs::write(path, serde_json::to_string_pretty(&summary)?)
             .with_context(|| format!("failed to write JSON report {}", path.display()))?;
     }
+
+    // Auto-bundle or explicit report outputs for GitLab CI / multi-CI
+    let report_gitlab = args.report_gitlab.or_else(|| {
+        if is_gitlab {
+            Some(std::path::PathBuf::from("gl-codequality.json"))
+        } else {
+            None
+        }
+    });
+    let report_junit = args.report_junit.or_else(|| {
+        if is_gitlab {
+            Some(std::path::PathBuf::from("junit.xml"))
+        } else {
+            None
+        }
+    });
+    let report_sarif = args.report_sarif.or_else(|| {
+        if is_gitlab {
+            Some(std::path::PathBuf::from("gl-sast-report.json"))
+        } else {
+            None
+        }
+    });
+
+    if let Some(path) = &report_gitlab {
+        let content = discipline::report::gitlab::format_gitlab(&summary);
+        std::fs::write(path, content).with_context(|| {
+            format!(
+                "failed to write GitLab Code Quality report {}",
+                path.display()
+            )
+        })?;
+    }
+    if let Some(path) = &report_junit {
+        let content = discipline::report::junit::format_junit(&summary, args.fail_on_warnings);
+        std::fs::write(path, content)
+            .with_context(|| format!("failed to write JUnit report {}", path.display()))?;
+    }
+    if let Some(path) = &report_sarif {
+        let sarif_val = discipline::report::sarif::format_sarif(&summary);
+        let content = serde_json::to_string_pretty(&sarif_val)?;
+        std::fs::write(path, content)
+            .with_context(|| format!("failed to write SARIF report {}", path.display()))?;
+    }
+
     Ok(summary.is_success(args.fail_on_warnings, fail_on_overrides))
 }
 

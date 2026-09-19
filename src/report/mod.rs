@@ -1,3 +1,4 @@
+pub mod gitlab;
 pub mod junit;
 pub mod sarif;
 
@@ -23,6 +24,7 @@ pub fn format_report_content(
         OutputFormat::Json => Ok(serde_json::to_string_pretty(summary)?),
         OutputFormat::Junit => Ok(junit::format_junit(summary, fail_on_warnings)),
         OutputFormat::Sarif => Ok(serde_json::to_string_pretty(&sarif::format_sarif(summary))?),
+        OutputFormat::Gitlab => Ok(gitlab::format_gitlab(summary)),
     }
 }
 
@@ -48,6 +50,7 @@ pub fn render_report(
                 serde_json::to_string_pretty(&sarif::format_sarif(summary))?
             )
         }
+        OutputFormat::Gitlab => println!("{}", gitlab::format_gitlab(summary)),
     }
     Ok(())
 }

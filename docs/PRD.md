@@ -6,7 +6,7 @@
 |---|---|
 | **Repository** | `orieg/discipline` |
 | **Status** | Draft. Phase 0 and Phase 1 implemented; not externally reviewed (§11) |
-| **Target Platforms** | GitHub Actions, Gitea Actions (act_runner), local workstations (macOS, Linux) |
+| **Target Platforms** | GitHub Actions, GitLab CI/CD, Gitea Actions (act_runner), Argo Workflows, Container (Docker), local workstations (macOS, Linux) |
 | **Implementation Core** | Rust static binary (musl) + tree-sitter + libgit2 |
 | **Checked repositories** | Any language for hygiene, integrity and deletion gates (shipped); per-language packs for the AST gates — Rust, Python, JavaScript / TypeScript, PHPT shipped; Java / Kotlin, C / C++, Go planned (§6.1) |
 | **License** | Apache-2.0 / MIT |
@@ -419,12 +419,17 @@ Per the math-first rule, the statistics ship as cited, unit-tested functions wit
 | Surface | Form | Notes |
 |---|---|---|
 | GitHub / Gitea Actions | composite `action.yml` | shell only, no JavaScript runtime; downloads a release, verifies `SHA256SUMS`, or takes `binary_path`. Resolves the base ref (PR base, else the pushed-from commit, else the default branch) and fetches it if the clone lacks it. Emits `status` (`pass`, `fail`, `error`), counts, and report artifact path. |
+| GitLab CI/CD Component | `templates/discipline.gitlab-ci.yml` & `.gitlab-ci.yml` | Conforms to GitLab CI/CD Catalog component specification with `spec:inputs`. Emits native GitLab Merge Request widgets: Code Quality diffs (`gl-codequality.json`), JUnit test summaries (`junit.xml`), and SAST security tabs (`gl-sast-report.json`). |
+| Argo Workflows | `templates/argo-workflow-template.yaml` | Kubernetes-native pre-merge DAG gating task for GitOps pipelines. |
+| Container (Docker) | `Dockerfile` | Minimal non-root Alpine container image packaging the static binary. |
 | Shell installer | `install.sh` | standalone non-cargo shell installer with architecture detection and SHA256 checksum verification matching `action.yml`. |
 | pre-commit framework | `.pre-commit-hooks.yaml` | `discipline` / `discipline-system` (`check --staged`), and `discipline-commit-msg` / `discipline-commit-msg-system` (`check --staged --commit-msg-file`). |
 | Plain git hook | `discipline check --staged` | same binary, same gates. |
 | CLI | `check`, `diff`, `init`, `gates`, `schema`, `self-test` | `gates` prints the registry with each gate's effective state; `schema` prints the JSON schema for `discipline.toml`; `self-test` runs embedded positive and negative controls against the installed binary. |
 
-Output formats: terminal, `github-summary` (terminal + workflow-command annotations + job summary + step outputs), `json`; `--json-out` writes the JSON report alongside any of them.
+Output formats: `terminal`, `github-summary` (terminal + workflow-command annotations + job summary + step outputs), `json`, and `gitlab` (Code Climate JSON array). Additional report flags (`--report-gitlab`, `--report-junit`, `--report-sarif`, and `--json-out`) write artifact reports alongside standard terminal output.
+
+Interactive documentation and platform integration examples are hosted on GitHub Pages at [orieg.github.io/discipline](https://orieg.github.io/discipline/).
 
 ---
 

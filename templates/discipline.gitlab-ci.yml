@@ -1,0 +1,92 @@
+# templates/discipline.gitlab-ci.yml
+# GitLab CI/CD Component for Discipline Diff Sentinel & AI Coding Agent Gatekeeper
+# Conforms to the GitLab CI/CD Catalog component specification.
+# Reference: https://docs.gitlab.com/ee/ci/components/
+
+spec:
+  inputs:
+    stage:
+      default: test
+      description: "Pipeline stage in which the discipline check job runs"
+    image:
+      default: "ghcr.io/orieg/discipline:latest"
+      description: "Container image containing the statically-linked discipline binary"
+    base_ref:
+      default: ""
+      description: "Target base ref or commit for AST diff analysis. If omitted, discipline auto-detects $CI_MERGE_REQUEST_TARGET_BRANCH_NAME, $CI_MERGE_REQUEST_DIFF_BASE_SHA, or $CI_DEFAULT_BRANCH"
+    config_path:
+      default: "discipline.toml"
+      description: "Path to discipline configuration file"
+    report_dir:
+      default: "."
+      description: "Directory where gl-codequality.json, junit.xml, and gl-sast-report.json are written"
+    allow_failure:
+      default: false
+      type: boolean
+      description: "Whether to allow the job to fail without blocking the pipeline"
+    fail_on_warnings:
+      default: false
+      type: boolean
+      description: "When true, exit non-zero if any warning findings exist"
+    fail_on_overrides:
+      default: false
+      type: boolean
+      description: "When true, exit non-zero if any override directives were applied"
+
+---
+
+discipline:
+  stage: $[[ inputs.stage ]]
+  image:
+    name: $[[ inputs.image ]]
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0
+  allow_failure: $[[ inputs.allow_failure ]]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - |
+      # Ensure remote refs are fetched so merge base is resolvable
+      if [ -n "$[[ inputs.base_ref ]]" ]; then
+        git fetch origin "$[[ inputs.base_ref ]]" --depth=100 || true
+      elif [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+        git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=100 || true
+      elif [ -n "$CI_DEFAULT_BRANCH" ]; then
+        git fetch origin "$CI_DEFAULT_BRANCH" --depth=100 || true
+      fi
+  script:
+    - |
+      ARGS="check --config $[[ inputs.config_path ]]"
+      if [ -n "$[[ inputs.base_ref ]]" ]; then
+        ARGS="$ARGS --base $[[ inputs.base_ref ]]"
+      fi
+      if [ "$[[ inputs.fail_on_warnings ]]" = "true" ]; then
+        ARGS="$ARGS --fail-on-warnings"
+      fi
+      if [ "$[[ inputs.fail_on_overrides ]]" = "true" ]; then
+        ARGS="$ARGS --fail-on-overrides"
+      fi
+
+      # When running inside GitLab CI ($GITLAB_CI == "true"), discipline automatically
+      # writes gl-codequality.json, junit.xml, and gl-sast-report.json.
+      # If custom report_dir is specified, route reports explicitly.
+      if [ "$[[ inputs.report_dir ]]" != "." ]; then
+        mkdir -p "$[[ inputs.report_dir ]]"
+        ARGS="$ARGS --report-gitlab $[[ inputs.report_dir ]]/gl-codequality.json --report-junit $[[ inputs.report_dir ]]/junit.xml --report-sarif $[[ inputs.report_dir ]]/gl-sast-report.json"
+      fi
+
+      echo "Executing: discipline $ARGS"
+      discipline $ARGS
+  artifacts:
+    reports:
+      codequality: $[[ inputs.report_dir ]]/gl-codequality.json
+      junit: $[[ inputs.report_dir ]]/junit.xml
+      sast: $[[ inputs.report_dir ]]/gl-sast-report.json
+    paths:
+      - $[[ inputs.report_dir ]]/gl-codequality.json
+      - $[[ inputs.report_dir ]]/junit.xml
+      - $[[ inputs.report_dir ]]/gl-sast-report.json
+    when: always

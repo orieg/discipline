@@ -1,0 +1,69 @@
+# .gitlab-ci.yml
+# GitLab CI/CD Pipeline for orieg/discipline
+# Demonstrates standalone usage and native GitLab MR widget integration.
+
+stages:
+  - lint
+  - test
+  - sentinel
+
+variables:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+# -----------------------------------------------------------------------------
+# Standalone Discipline Gating Job
+# Automatically generates gl-codequality.json, junit.xml, and gl-sast-report.json
+# populating GitLab Code Quality diffs, JUnit test reports, and SAST/SARIF tabs.
+# -----------------------------------------------------------------------------
+discipline:gate:
+  stage: sentinel
+  image:
+    name: ghcr.io/orieg/discipline:latest
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - |
+      # Fetch target branch for merge base resolution
+      if [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+        git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=100 || true
+      elif [ -n "$CI_DEFAULT_BRANCH" ]; then
+        git fetch origin "$CI_DEFAULT_BRANCH" --depth=100 || true
+      fi
+  script:
+    # Under $GITLAB_CI == "true", discipline automatically generates
+    # gl-codequality.json, junit.xml, and gl-sast-report.json
+    - discipline check
+  artifacts:
+    reports:
+      codequality: gl-codequality.json
+      junit: junit.xml
+      sast: gl-sast-report.json
+    paths:
+      - gl-codequality.json
+      - junit.xml
+      - gl-sast-report.json
+    when: always
+
+# -----------------------------------------------------------------------------
+# Standard Rust CI Jobs (Building & Testing from Source)
+# -----------------------------------------------------------------------------
+rust:lint:
+  stage: lint
+  image: rust:1.80-slim
+  before_script:
+    - rustup component add rustfmt clippy
+  script:
+    - cargo fmt --check
+    - cargo clippy --all-targets --locked -- -D warnings
+
+rust:test:
+  stage: test
+  image: rust:1.80-slim
+  script:
+    - cargo test --locked

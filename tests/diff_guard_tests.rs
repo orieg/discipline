@@ -253,3 +253,119 @@ fn cli_check_format_sarif_and_output_file() {
         "vacuous-tests"
     );
 }
+
+#[test]
+fn cli_check_format_gitlab_codequality() {
+    let repo = Repo::new();
+    let gl_file = repo.file("gl-custom.json");
+    let run = repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--format",
+            "gitlab",
+            "-o",
+            gl_file.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&run.stdout).expect("valid code quality json");
+    assert!(parsed.is_empty());
+    assert!(gl_file.exists());
+
+    // With a failure
+    repo.write(
+        "tests/a.rs",
+        &format!("{GOOD_TEST}\n#[test]\nfn vacuous_fail() {{\n    assert!(true);\n}}\n"),
+    );
+    repo.commit("test: add vacuous assert");
+
+    let explicit_report = repo.file("gl-explicit.json");
+    let run_fail = repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--format",
+            "gitlab",
+            "-o",
+            gl_file.to_str().unwrap(),
+            "--report-gitlab",
+            explicit_report.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run_fail.code, 1);
+    let fail_parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&run_fail.stdout).expect("valid code quality failure json");
+    assert_eq!(fail_parsed.len(), 1);
+    assert_eq!(fail_parsed[0]["check_name"], "agent_guard::vacuous_tests");
+    assert!(fail_parsed[0]["description"]
+        .as_str()
+        .unwrap()
+        .starts_with("Agent Guard:"));
+    assert_eq!(fail_parsed[0]["severity"], "major");
+    assert_eq!(fail_parsed[0]["location"]["path"], "tests/a.rs");
+    assert_eq!(fail_parsed[0]["fingerprint"].as_str().unwrap().len(), 64);
+
+    // Verify explicit --report-gitlab file
+    assert!(explicit_report.exists());
+    let exp_content = std::fs::read_to_string(&explicit_report).unwrap();
+    let exp_parsed: Vec<serde_json::Value> = serde_json::from_str(&exp_content).unwrap();
+    assert_eq!(exp_parsed.len(), 1);
+}
+
+#[test]
+fn cli_gitlab_ci_auto_detection() {
+    let repo = Repo::new();
+
+    // Create a feature branch
+    repo.git(&["checkout", "-b", "feat/mr-branch"]);
+    repo.write(
+        "tests/a.rs",
+        &format!("{GOOD_TEST}\n#[test]\nfn vacuous_fail() {{\n    assert!(true);\n}}\n"),
+    );
+    repo.commit("test: add vacuous assert on branch");
+
+    // Run WITHOUT --base flag, but with GITLAB_CI and CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+    let run = repo.run(
+        &["check"],
+        &[
+            ("GITLAB_CI", "true"),
+            ("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "main"),
+        ],
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+
+    // Verify default GitLab MR widget files were automatically generated
+    let gl_cq = repo.file("gl-codequality.json");
+    let gl_junit = repo.file("junit.xml");
+    let gl_sast = repo.file("gl-sast-report.json");
+
+    assert!(
+        gl_cq.exists(),
+        "gl-codequality.json should be auto-created in GitLab CI"
+    );
+    assert!(
+        gl_junit.exists(),
+        "junit.xml should be auto-created in GitLab CI"
+    );
+    assert!(
+        gl_sast.exists(),
+        "gl-sast-report.json should be auto-created in GitLab CI"
+    );
+
+    let cq_content = std::fs::read_to_string(&gl_cq).unwrap();
+    let cq_parsed: Vec<serde_json::Value> = serde_json::from_str(&cq_content).unwrap();
+    assert_eq!(cq_parsed.len(), 1);
+    assert_eq!(cq_parsed[0]["check_name"], "agent_guard::vacuous_tests");
+
+    let junit_content = std::fs::read_to_string(&gl_junit).unwrap();
+    assert!(junit_content.contains("<failure message=\"Vacuous Test Added\""));
+
+    let sast_content = std::fs::read_to_string(&gl_sast).unwrap();
+    assert!(sast_content.contains("\"version\": \"2.1.0\""));
+}

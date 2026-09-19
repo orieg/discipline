@@ -146,6 +146,13 @@ impl Repo {
             "DISCIPLINE_FAIL_ON_OVERRIDES",
             "DISCIPLINE_DIRECTIVE_SOURCES",
             "DISCIPLINE_HOSTNAME_DENYLIST",
+            "DISCIPLINE_REPORT_GITLAB",
+            "DISCIPLINE_REPORT_JUNIT",
+            "DISCIPLINE_REPORT_SARIF",
+            "GITLAB_CI",
+            "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
+            "CI_MERGE_REQUEST_DIFF_BASE_SHA",
+            "CI_DEFAULT_BRANCH",
         ] {
             cmd.env_remove(var);
         }

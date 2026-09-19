@@ -33,6 +33,42 @@ pub struct GitCtx {
     staged: bool,
 }
 
+/// Detect the target base git ref for diff inspection.
+///
+/// Precedence:
+/// 1. Explicit CLI argument (`--base <ref>`)
+/// 2. `DISCIPLINE_BASE_REF` environment variable
+/// 3. GitLab Merge Request Target Branch: `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` (`origin/<branch>`)
+/// 4. GitLab Merge Request Diff Base SHA: `CI_MERGE_REQUEST_DIFF_BASE_SHA`
+/// 5. GitLab Default Branch: `CI_DEFAULT_BRANCH` (`origin/<branch>`)
+/// 6. Default fallback: `"origin/main"`
+pub fn detect_base_ref(explicit_base: Option<&str>) -> String {
+    if let Some(b) = explicit_base.filter(|s| !s.trim().is_empty()) {
+        return b.to_string();
+    }
+    if let Ok(b) = std::env::var("DISCIPLINE_BASE_REF") {
+        if !b.trim().is_empty() {
+            return b.trim().to_string();
+        }
+    }
+    if let Ok(target_branch) = std::env::var("CI_MERGE_REQUEST_TARGET_BRANCH_NAME") {
+        if !target_branch.trim().is_empty() {
+            return format!("origin/{}", target_branch.trim());
+        }
+    }
+    if let Ok(diff_base) = std::env::var("CI_MERGE_REQUEST_DIFF_BASE_SHA") {
+        if !diff_base.trim().is_empty() {
+            return diff_base.trim().to_string();
+        }
+    }
+    if let Ok(default_branch) = std::env::var("CI_DEFAULT_BRANCH") {
+        if !default_branch.trim().is_empty() {
+            return format!("origin/{}", default_branch.trim());
+        }
+    }
+    "origin/main".to_string()
+}
+
 impl GitCtx {
     /// `staged = true` inspects the index against `HEAD` (pre-commit hook).
     /// Otherwise the working tree is measured against the merge base of
@@ -59,7 +95,13 @@ impl GitCtx {
             let head = head.ok_or_else(|| {
                 anyhow!("repository has no commits; use --staged for the first commit")
             })?;
-            let base_commit = [base_ref.to_string(), format!("origin/{base_ref}")]
+            let mut candidates = vec![base_ref.to_string()];
+            if let Some(stripped) = base_ref.strip_prefix("origin/") {
+                candidates.push(stripped.to_string());
+            } else {
+                candidates.push(format!("origin/{base_ref}"));
+            }
+            let base_commit = candidates
                 .iter()
                 .find_map(|name| Some(repo.revparse_single(name).ok()?.peel_to_commit().ok()?.id()))
                 .ok_or_else(|| {
@@ -422,4 +464,46 @@ pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
     // 3. For files with unknown or no extension: if the first 1024 bytes contain NUL, treat as binary.
     let check_len = bytes.len().min(1024);
     bytes[..check_len].contains(&0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_base_ref_explicit() {
+        assert_eq!(detect_base_ref(Some("my-branch")), "my-branch");
+    }
+
+    #[test]
+    fn test_detect_base_ref_gitlab_target_branch() {
+        std::env::set_var("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "feature/pr-123");
+        assert_eq!(detect_base_ref(None), "origin/feature/pr-123");
+        std::env::remove_var("CI_MERGE_REQUEST_TARGET_BRANCH_NAME");
+    }
+
+    #[test]
+    fn test_detect_base_ref_gitlab_diff_base_sha() {
+        std::env::set_var(
+            "CI_MERGE_REQUEST_DIFF_BASE_SHA",
+            "1234567890abcdef1234567890abcdef12345678",
+        );
+        assert_eq!(
+            detect_base_ref(None),
+            "1234567890abcdef1234567890abcdef12345678"
+        );
+        std::env::remove_var("CI_MERGE_REQUEST_DIFF_BASE_SHA");
+    }
+
+    #[test]
+    fn test_detect_base_ref_gitlab_default_branch() {
+        std::env::set_var("CI_DEFAULT_BRANCH", "master");
+        assert_eq!(detect_base_ref(None), "origin/master");
+        std::env::remove_var("CI_DEFAULT_BRANCH");
+    }
+
+    #[test]
+    fn test_detect_base_ref_fallback() {
+        assert_eq!(detect_base_ref(None), "origin/main");
+    }
 }
