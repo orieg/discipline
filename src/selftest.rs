@@ -1351,14 +1351,13 @@ command = "cargo test"
         },
     ),
     (
-        "pii: ast test functions exempt from home paths and lan ips",
+        "pii: test functions are scanned and flag home paths and lan ips",
         || {
-            use crate::ast::LanguagePack;
-            let v = AssertVocabulary::default();
-            let py = "def self_test():\n    p = \"/Users/someone/repo/\"\n    ip = \"192.168.1.20\"\n    assert p != ip\n"; // discipline:allow(pii)
-            let facts = crate::ast::python::PythonPack.extract("scripts/test.py", py, &v)?;
-            let test = &facts.tests[0];
-            Ok(test.name == "self_test" && test.line == 1 && test.end_line == 4)
+            let s = PiiGate::default();
+            let rules = pii_rules(&s)?;
+            let hit = |text: &str| rules.iter().any(|r| r.re.is_match(text));
+            Ok(hit("    fake_path = \"/Users/someone/repo/\"") // discipline:allow(pii)
+                && hit("    fake_ip = \"192.168.1.50\"")) // discipline:allow(pii)
         },
     ),
     (

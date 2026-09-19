@@ -302,8 +302,8 @@ When a change touches source files in a language without an active pack, each AS
 - **What it does NOT catch:**
   - Standard documentation placeholders: `runner`, `user`, `username`, `example`, `shared`.
   - RFC 1918 CIDR network notations in routing documentation (`10.0.0.0/8`, `192.168.0.0/16`).
-  - Mock path fixtures and private LAN IPs inside AST test and self-test functions (`def test_*`, `def self_test`).
   - Binary files (non-text).
+  *(Note: Test code is explicitly scanned because test fixtures are where paths and IPs frequently leak. Self-referential fixtures must use runtime assembly, inline `discipline:allow(pii)`, or `exempt_paths`).*
 - **Lifting directive:** `<!-- discipline:allow(pii) -->` or `docs-lint: allow` on the matching line.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `secrets`, `agent_config_refs`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 
@@ -785,7 +785,7 @@ Discipline provides universal static binary drop-in replacements for the legacy 
 | `ignored-tests` | `scripts/check_diff_guards.py` | Distinguishes newly arriving ignored tests from modified tests, configurable approved skip predicates (`cfg_attr(miri, ignore)`). |
 | `deletion-rationale` | `scripts/check_diff_guards.py` | Line-anchored directive parsing, configurable `require_scope` and `allow_hidden` directive controls. |
 | `time-estimates` | `scripts/check_docs_hygiene.py` | Paragraph and sentence-level boundary lookarounds avoiding `\b` false positives on symbols (`×`, `~`), diff-scoped mode (`diff_only = true`), operational term-of-art and wrap window exemptions, `docs-lint: allow` alias. |
-| `pii` | `scripts/check_docs_hygiene.py` | AST test function exemption across all 11 language packs, JSON string unescaping, cross-tree agent config directory/playbook detection, secret-backed hostname denylist. |
+| `pii` | `scripts/check_docs_hygiene.py` | Full test code inspection without blind spots, JSON string unescaping, cross-tree agent config directory/playbook detection, secret-backed hostname denylist. |
 | `test-floor` | `scripts/check_test_floors.py` | Automatic base-ref constant extraction, direct `test_command` execution, fail-closed handling on unresolvable base floors, `allow-test-shrink:` override. |
 | `ci-integrity` | `scripts/check_ci_gate.py`, `scripts/check_gate_floor.py`, `scripts/check_ci_filters.py` | Complete rollup job `needs:` closure validation, 40-character commit SHA pinning, masked failure detection (`continue-on-error`, `\|\| true`, `set +e`), `allow-ci-weakening:` override. |
 | `bench-regression` | `scripts/perf_report.py`, `scripts/wasm_fuel.py` | In-job dual-file mode (`--bench-base-file` and `--bench-head-file`), `iai-callgrind` console line and neutral JSON parsers, two-tier threshold (single-worst >5% or $\ge 2$ arms regressing >0.5% noise floor, advisory 0.1%), declared arm exemptions, sourced overrides verifying CI URL or committed artifact and named arms, missing-baseline fatal fail-closed. |

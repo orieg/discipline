@@ -732,26 +732,6 @@ struct PiiScanOptions<'a> {
     added_lines: Option<&'a std::collections::BTreeSet<usize>>,
 }
 
-fn get_test_lines(path: &str, text: &str) -> std::collections::BTreeSet<usize> {
-    let mut test_lines = std::collections::BTreeSet::new();
-    let reg = crate::ast::default_registry();
-    if let Some(pack) = reg.find_pack(path) {
-        if let Ok(facts) = pack.extract(path, text, &crate::ast::AssertVocabulary::default()) {
-            for test in facts.tests {
-                let start = test.line;
-                let end = if test.end_line >= test.line {
-                    test.end_line
-                } else {
-                    test.line
-                };
-                for l in start..=end {
-                    test_lines.insert(l);
-                }
-            }
-        }
-    }
-    test_lines
-}
 
 fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bool {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
@@ -863,7 +843,6 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                 added_lines: Option<&std::collections::BTreeSet<usize>>,
                 out: &mut GateOutcome| {
         let active_cfg = is_active_config(label);
-        let test_lines = get_test_lines(label, text);
         for (idx, line) in text.lines().enumerate() {
             let line_num = idx + 1;
             if let Some(lines) = added_lines {
@@ -871,21 +850,8 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                     continue;
                 }
             }
-            let is_in_test = test_lines.contains(&line_num);
             let hit = rules.iter().find_map(|rule| {
                 if active_cfg && rule.label == "denylisted hostname" {
-                    return None;
-                }
-                if is_in_test
-                    && matches!(
-                        rule.label,
-                        "home-directory path"
-                            | "private LAN address"
-                            | "home agent-config path"
-                            | "personal methodology doc"
-                            | "personal playbook"
-                    )
-                {
                     return None;
                 }
                 rule.re.captures_iter(line).find_map(|caps| {
@@ -1326,21 +1292,12 @@ mod tests {
     }
 
     #[test]
-    fn ast_test_function_exemption_in_python() {
-        let src = r#"
-def self_test():
-    fake_path = "/Users/someone/repo/"
-    fake_ip = "192.168.1.20"
-    assert fake_path != fake_ip
-
-def production_code():
-    real_path = "/Users/someone/repo/"
-    return real_path
-"#;
-        let test_lines = get_test_lines("scripts/check.py", src);
-        assert!(test_lines.contains(&3)); // inside self_test
-        assert!(test_lines.contains(&4)); // inside self_test
-        assert!(!test_lines.contains(&8)); // inside production_code
+    fn test_functions_are_scanned_for_pii() {
+        let rules = pii_rules(&PiiGate::default()).unwrap();
+        let py_test_path = "    fake_path = \"/Users/someone/repo/\"";
+        let py_test_ip = "    fake_ip = \"192.168.1.20\"";
+        assert!(rules.iter().any(|r| r.re.is_match(py_test_path)));
+        assert!(rules.iter().any(|r| r.re.is_match(py_test_ip)));
     }
 
     #[test]

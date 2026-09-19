@@ -4952,9 +4952,9 @@ fn time_estimates_terms_of_art_and_docs_lint_allow() {
 }
 
 #[test]
-fn pii_ast_test_function_exemption_and_agent_config_refs() {
+fn pii_scans_test_functions_and_agent_config_refs() {
     let repo = Repo::new();
-    // Python script with self_test fixture
+    // Python script with self_test fixture fires pii
     repo.write(
         "scripts/check_hygiene.py",
         "def self_test():\n    fake_home = \"/Users/someone/repo/\"\n    fake_lan = \"192.168.1.50\"\n    assert fake_home != fake_lan\n",
@@ -4964,10 +4964,19 @@ fn pii_ast_test_function_exemption_and_agent_config_refs() {
     let run = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run.titles("pii").len(),
-        0,
-        "AST test function must exempt home paths and lan IPs: {}",
+        2,
+        "Test function must NOT exempt home paths and lan IPs: {}",
         run.stdout
     );
+
+    // Documented resolution: inline waiver allows it
+    repo.write(
+        "scripts/check_hygiene.py",
+        "def self_test():\n    fake_home = \"/Users/someone/repo/\"  # discipline:allow(pii)\n    fake_lan = \"192.168.1.50\"  # discipline:allow(pii)\n    assert fake_home != fake_lan\n",
+    );
+    repo.commit("fix: waive fixture paths in self_test");
+    let run_waived = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_waived.titles("pii").len(), 0, "{}", run_waived.stdout);
 
     // Escaped JSON home path is caught
     repo.write(
