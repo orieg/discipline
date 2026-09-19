@@ -972,6 +972,7 @@ pub struct CiIntegrityGate {
     pub diff_only: bool,
     pub documented_job_count_path: Option<String>,
     pub documented_job_count_pattern: Option<String>,
+    pub first_party_action_prefixes: Vec<String>,
 }
 
 impl Default for CiIntegrityGate {
@@ -992,6 +993,7 @@ impl Default for CiIntegrityGate {
             diff_only: true,
             documented_job_count_path: None,
             documented_job_count_pattern: None,
+            first_party_action_prefixes: vec!["actions/".to_string(), "github/".to_string()],
         }
     }
 }

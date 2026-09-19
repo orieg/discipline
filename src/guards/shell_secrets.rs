@@ -252,9 +252,8 @@ impl ShellSecretScanner {
             r#"(?i)\b(?:curl|wget)\b[^|;\n\r]*\|\s*(?:sudo\s+)?(?:\/bin\/|\/usr\/bin\/)?(?:sh|bash|zsh)\b"#,
         )?;
 
-        let re_token_github = Regex::new(
-            r"\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82})\b",
-        )?;
+        let re_token_github =
+            Regex::new(r"\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82})\b")?;
 
         let re_token_aws = Regex::new(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")?;
 
@@ -267,9 +266,8 @@ impl ShellSecretScanner {
         let re_bearer =
             Regex::new(r#"(?i)\bAuthorization:\s*Bearer\s+['"]?([A-Za-z0-9_\-\.]{12,})['"]?"#)?;
 
-        let re_password_flag = Regex::new(
-            r#"(?i)(?:--password|--passwd)(?:=|\s+)(?:['"]([^'"]+)['"]|([^\s'"]+))"#,
-        )?;
+        let re_password_flag =
+            Regex::new(r#"(?i)(?:--password|--passwd)(?:=|\s+)(?:['"]([^'"]+)['"]|([^\s'"]+))"#)?;
 
         let re_short_password = Regex::new(
             r#"(?i)\b(?:mysql|mariadb|docker\s+login|podman\s+login)\b.*?(?:(?:\s|^)-p(?:['"]([^'"]+)['"]|([A-Za-z0-9_!@#$%^&*+=/]+))|(?:\s|^)-p\s+(?:['"]([^'"]+)['"]|([^\s'"-]+)))"#,
@@ -353,7 +351,11 @@ impl ShellSecretScanner {
 
         // 3. Command-line password flags
         if let Some(caps) = self.re_password_flag.captures(line) {
-            let val = caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str()).unwrap_or("");
+            let val = caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or("");
             if !val.is_empty() && !is_placeholder_or_var(val) {
                 return Some(ShellRuleId::LiteralPassword);
             }
@@ -373,7 +375,11 @@ impl ShellSecretScanner {
 
         // 4. AWS Secret Access Key
         if let Some(caps) = self.re_aws_secret.captures(line) {
-            let val = caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str()).unwrap_or("");
+            let val = caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or("");
             if !val.is_empty() && !is_placeholder_or_var(val) {
                 return Some(ShellRuleId::TokenAws);
             }
@@ -381,7 +387,11 @@ impl ShellSecretScanner {
 
         // 5. Generic literal secret assignment
         if let Some(caps) = self.re_generic_secret.captures(line) {
-            let val = caps.get(2).or_else(|| caps.get(3)).map(|m| m.as_str()).unwrap_or("");
+            let val = caps
+                .get(2)
+                .or_else(|| caps.get(3))
+                .map(|m| m.as_str())
+                .unwrap_or("");
             if !val.is_empty() && !is_placeholder_or_var(val) {
                 return Some(ShellRuleId::LiteralSecretEnv);
             }

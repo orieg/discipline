@@ -5120,10 +5120,10 @@ fn ci_integrity_gate_e2e() {
     let run_ov = repo.check(&["--base", "HEAD~2"]);
     assert_eq!(run_ov.titles("ci-integrity").len(), 0, "{}", run_ov.stdout);
 
-    // Case 2: Unpinned action
+    // Case 2: Unpinned action (third-party)
     repo.write(
         ".github/workflows/ci.yml",
-        "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n",
+        "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: codecov/codecov-action@v4\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n",
     );
     repo.commit("ci: unpinned action");
     let run_unpinned = repo.check(&["--base", "HEAD~1"]);
@@ -5132,10 +5132,10 @@ fn ci_integrity_gate_e2e() {
         vec!["Unpinned Third-Party Action"]
     );
 
-    // Pinned action with SHA -> passes
+    // Pinned action with SHA -> passes (actions/checkout@v4 allowed via first_party_action_prefixes)
     repo.write(
         ".github/workflows/ci.yml",
-        "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11\n  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n",
+        "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: codecov/codecov-action@b4ffde65f46336ab88eb53be808477a3936bae11\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n",
     );
     repo.commit("ci: pinned action with commit SHA");
     let run_pinned = repo.check(&["--base", "HEAD~1"]);
@@ -5149,7 +5149,7 @@ fn ci_integrity_gate_e2e() {
     // Case 3: continue-on-error and || true
     repo.write(
         ".github/workflows/ci.yml",
-        "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n    steps:\n      - run: cargo test || true\n  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n",
+        "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n    steps:\n      - run: cargo test || true\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n",
     );
     repo.commit("ci: masked failures");
     let run_mask = repo.check(&["--base", "HEAD~1"]);
@@ -5160,7 +5160,7 @@ fn ci_integrity_gate_e2e() {
     // Inline allow marker suppresses
     repo.write(
         ".github/workflows/ci.yml",
-        "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n    continue-on-error: true # discipline:allow(ci-integrity)\n    steps:\n      - run: cargo test || true # discipline:allow(ci-integrity)\n  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n",
+        "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n    continue-on-error: true # discipline:allow(ci-integrity)\n    steps:\n      - run: cargo test || true # discipline:allow(ci-integrity)\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n",
     );
     repo.commit("ci: inline allowed masked failures");
     let run_inline = repo.check(&["--base", "HEAD~1"]);
@@ -5170,6 +5170,182 @@ fn ci_integrity_gate_e2e() {
         "{}",
         run_inline.stdout
     );
+}
+
+#[test]
+fn ci_integrity_advanced_weakening_e2e() {
+    let repo = Repo::new();
+    // Base setup with a complete, healthy workflow (pin discipline with SHA so only grandfathered-action is unpinned)
+    let base_wf = r#"name: CI
+permissions: read-all
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: unpinned/grandfathered-action@v1
+      - name: Clippy check
+        run: cargo clippy --all-targets -- -D warnings
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: cargo test --locked
+      - name: Run discipline sentinel
+        uses: orieg/discipline@5ab92591605ad900000000000000000000000000
+        with:
+          suite: all
+          fail_on_warnings: true
+          directive_sources: pr-body
+  ci-gate:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+"#;
+    repo.write(".github/workflows/ci.yml", base_wf);
+    repo.commit("ci: initial healthy base workflow\n\nallow-gate-weakening: ci-integrity baseline unpinned action");
+
+    // Case 1: Grandfathered action (unpinned/grandfathered-action@v1) remains unflagged when unchanged
+    let touch_wf = format!("{base_wf}# touch\n");
+    repo.write(".github/workflows/ci.yml", &touch_wf);
+    repo.commit("ci: touch workflow without modifying unpinned action");
+    let run_base = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_base.titles("ci-integrity").len(),
+        0,
+        "{}",
+        run_base.stdout
+    );
+
+    // Case 2: Weakening flags (-D warnings dropped, --locked dropped, --all-targets dropped)
+    let weakened_flags_wf = r#"name: CI
+permissions: read-all
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: unpinned/grandfathered-action@v1
+      - name: Clippy check
+        run: cargo clippy
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: cargo test
+      - name: Run discipline sentinel
+        uses: orieg/discipline@5ab92591605ad900000000000000000000000000
+        with:
+          suite: all
+          fail_on_warnings: true
+          directive_sources: pr-body
+  ci-gate:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+"#;
+    repo.write(".github/workflows/ci.yml", weakened_flags_wf);
+    repo.commit("ci: drop flags");
+    let run_flags = repo.check(&["--base", "HEAD~1"]);
+    let titles = run_flags.titles("ci-integrity");
+    assert!(titles.contains(&"Compiler Flag Dropped (-D warnings)".to_string()));
+    assert!(titles.contains(&"Clippy Flag Dropped (--all-targets)".to_string()));
+    assert!(titles.contains(&"Cargo Flag Dropped (--locked)".to_string()));
+
+    // Case 3: Weakening discipline inputs (disable, fail_on_warnings: false, invalid config_override, suite narrowed, directive_sources widened)
+    let weakened_inputs_wf = r#"name: CI
+permissions: read-all
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: unpinned/grandfathered-action@v1
+      - name: Clippy check
+        run: cargo clippy --all-targets -- -D warnings
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: cargo test --locked
+      - name: Run discipline sentinel
+        uses: orieg/discipline@5ab92591605ad900000000000000000000000000
+        with:
+          suite: hygiene
+          disable: true
+          fail_on_warnings: false
+          config_override: nonexistent.toml
+          directive_sources: commits
+  ci-gate:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+"#;
+    repo.write(".github/workflows/ci.yml", weakened_inputs_wf);
+    repo.commit("ci: weaken discipline inputs");
+    let run_inputs = repo.check(&["--base", "HEAD~1"]);
+    let titles_inputs = run_inputs.titles("ci-integrity");
+    assert!(titles_inputs.contains(&"Discipline Action Weakened (disable input)".to_string()));
+    assert!(
+        titles_inputs.contains(&"Discipline Action Weakened (fail_on_warnings: false)".to_string())
+    );
+    assert!(titles_inputs.contains(&"Discipline Action Invalid config_override".to_string()));
+    assert!(titles_inputs.contains(&"Discipline Action Suite Changed".to_string()));
+    assert!(titles_inputs.contains(&"Discipline Action Directive Sources Widened".to_string()));
+
+    // Case 4: Permissions widening, pull_request_target, timeout-minutes removed, rollup needs dropped, deletion of verification step
+    let weakened_security_wf = r#"name: CI
+permissions: write-all
+on: [push, pull_request_target]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: unpinned/grandfathered-action@v1
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run discipline sentinel
+        uses: orieg/discipline@5ab92591605ad900000000000000000000000000
+        with:
+          suite: all
+          fail_on_warnings: true
+          directive_sources: pr-body
+  ci-gate:
+    needs: [lint]
+    runs-on: ubuntu-latest
+"#;
+    repo.write(".github/workflows/ci.yml", weakened_security_wf);
+    repo.commit("ci: weaken security, drop needs and verification steps");
+    let run_sec = repo.check(&["--base", "HEAD~1"]);
+    let titles_sec = run_sec.titles("ci-integrity");
+    assert!(titles_sec.contains(&"Dangerous pull_request_target Trigger".to_string()));
+    assert!(titles_sec.contains(&"Workflow Permissions Widened".to_string()));
+    assert!(titles_sec.contains(&"Job timeout-minutes Removed".to_string()));
+    assert!(titles_sec.contains(&"Rollup Job Dropped Dependency".to_string()));
+    assert!(titles_sec.contains(&"Deletion of Verification Step".to_string()));
+
+    // Case 5: allow-gate-weakening: ci-integrity <reason> in PR body excuses all findings
+    let run_ov = repo.check_with_pr(
+        &["--base", "HEAD~1"],
+        "PR body\n\nallow-gate-weakening: ci-integrity authorized major CI reorganization during migration",
+    );
+    assert_eq!(run_ov.titles("ci-integrity").len(), 0, "{}", run_ov.stdout);
+    assert!(!run_ov.outcome("ci-integrity")["overrides"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 // ---- Gap 8, Gap 10, Gap 11 (Parity Phase D) --------------------------------

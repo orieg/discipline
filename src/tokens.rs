@@ -167,6 +167,7 @@ pub const ALLOW_TEST_SHRINK: &[&str] = &[
 ];
 
 pub const ALLOW_CI_WEAKENING: &[&str] = &[
+    "allow-gate-weakening",
     "allow-ci-weakening",
     "allow-unpinned-action",
     "allow-ci-change",

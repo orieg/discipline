@@ -732,7 +732,6 @@ struct PiiScanOptions<'a> {
     added_lines: Option<&'a std::collections::BTreeSet<usize>>,
 }
 
-
 fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bool {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
         return false;

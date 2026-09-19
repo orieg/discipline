@@ -387,7 +387,8 @@ pub fn generate_schema() -> Value {
                     "forbid_or_true": { "type": "boolean", "description": "Forbid || true and set +e error masking in run commands" },
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified workflow files rather than all workflows" },
                     "documented_job_count_path": { "type": "string", "description": "Path to catalog documentation stating job count" },
-                    "documented_job_count_pattern": { "type": "string", "description": "Regex pattern to extract job count from documentation" }
+                    "documented_job_count_pattern": { "type": "string", "description": "Regex pattern to extract job count from documentation" },
+                    "first_party_action_prefixes": { "$ref": "#/$defs/StringListOrReset", "description": "Action prefixes considered first-party and excused from commit SHA pinning" }
                 }
             }
         }
