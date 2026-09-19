@@ -70,7 +70,21 @@ const CASES: &[Case] = &[
             .map(|p| Regex::new(p))
             .collect::<Result<_, _>>()?;
         let hit = |s: &str| res.iter().any(|r| r.is_match(s));
-        Ok(hit("Phase 2 (1 week)") && !hit("Phase 2 follows Phase 1"))
+        let empty_allowed = Vec::new();
+        let fires = |text: &str| {
+            !crate::guards::hygiene::scan_text_for_time_estimates(text, &res, &empty_allowed)
+                .is_empty()
+        };
+        Ok(hit("Phase 2 (1 week)")
+            && hit("The capacity work is 2 weeks.")
+            && hit("Expect it in two weeks.")
+            && hit("ETA: a month.")
+            && !hit("Phase 2 follows Phase 1")
+            && fires("The capacity work is 2 weeks.")
+            && fires("The migration took a decision; rollout is 3 weeks.")
+            && fires("Timeout budget aside, we ship in 2 weeks.")
+            && !fires("The job took 29 min on the hosted runner.")
+            && !fires("Miri shards are capped at 180 minutes."))
     }),
     (
         "hygiene: pii rules discriminate and honor allowed users",
@@ -176,8 +190,12 @@ const CASES: &[Case] = &[
             use crate::guards::hygiene::is_exempt_time_estimate;
             let exempt_span = "survived for 19 years in production";
             let real_est = "Plan: ship in 3 weeks";
+            let cap_work = "The capacity work is 2 weeks.";
+            let took_run = "The job took 29 min on the hosted runner.";
             Ok(is_exempt_time_estimate(exempt_span, 13, 21, "19 years")
-                && !is_exempt_time_estimate(real_est, 14, 21, "3 weeks"))
+                && is_exempt_time_estimate(took_run, 13, 19, "29 min")
+                && !is_exempt_time_estimate(real_est, 14, 21, "3 weeks")
+                && !is_exempt_time_estimate(cap_work, 21, 28, "2 weeks"))
         },
     ),
     (

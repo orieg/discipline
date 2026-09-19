@@ -876,6 +876,62 @@ Working for 3 weeks on migration.
     assert_eq!(violations.len(), 5, "violations: {violations:?}");
 }
 
+#[test]
+fn f2_repro_brief_time_estimates_all_fire_and_negative_controls_pass() {
+    let repo = Repo::new();
+    repo.write(
+        "docs/good.md",
+        r#"# Good
+The job took 29 min on the hosted runner.
+Miri shards are capped at 180 minutes.
+Runs once a day; the cache is a month old.
+**Q1 — what do our patches buy?**
+libjudy is 19 years old.
+"#,
+    );
+    repo.commit("docs: good");
+    let clean_run = repo.check(&[]);
+    assert_eq!(
+        clean_run.code, 0,
+        "clean docs must pass with exit 0: stdout: {}\nstderr: {}",
+        clean_run.stdout, clean_run.stderr
+    );
+
+    let bad_repo = Repo::new();
+    bad_repo.write(
+        "docs/bad.md",
+        r#"# Planning
+The capacity work is 2 weeks.
+The migration took a decision; rollout is 3 weeks.
+Timeout budget aside, we ship in 2 weeks.
+Work limit: 3 sprints of effort.
+Expect it in two weeks.
+ETA: a month.
+Since 2005 we planned this; done in 6 months.
+The cap on scope means about 4 weeks (measured).
+This is 2 weeks of work.
+Phase 2 takes 3 weeks.
+Maximum effort: 10 engineer-days.
+The firewall change lands in 5 days.
+Phase 3 (1 week).
+
+| Task | Latency |
+|---|---|
+| Rewrite parser | 2 weeks |
+"#,
+    );
+    bad_repo.commit("docs: bad");
+    let bad_run = bad_repo.check(&[]);
+    assert_eq!(bad_run.code, 1);
+    let outcome = bad_run.outcome("time-estimates");
+    let violations = outcome["violations"].as_array().unwrap();
+    assert_eq!(
+        violations.len(),
+        14,
+        "expected all 14 brief planning lines to fire: {violations:#?}"
+    );
+}
+
 // ---- pii -------------------------------------------------------------------
 
 #[test]

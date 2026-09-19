@@ -315,6 +315,111 @@
     "description": "Delivery estimate in first clause despite operational second clause"
   },
   {
+    "id": "tp-46",
+    "text": "The capacity work is 2 weeks.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "The capacity work is 2 weeks."
+  },
+  {
+    "id": "tp-47",
+    "text": "The migration took a decision; rollout is 3 weeks.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "The migration took a decision; rollout is 3 weeks."
+  },
+  {
+    "id": "tp-48",
+    "text": "Timeout budget aside, we ship in 2 weeks.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "Timeout budget aside, we ship in 2 weeks."
+  },
+  {
+    "id": "tp-49",
+    "text": "Work limit: 3 sprints of effort.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "Work limit: 3 sprints of effort."
+  },
+  {
+    "id": "tp-50",
+    "text": "Expect it in two weeks.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "Expect it in two weeks."
+  },
+  {
+    "id": "tp-51",
+    "text": "ETA: a month.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "ETA: a month."
+  },
+  {
+    "id": "tp-52",
+    "text": "Since 2005 we planned this; done in 6 months.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "Since 2005 we planned this; done in 6 months."
+  },
+  {
+    "id": "tp-53",
+    "text": "The cap on scope means about 4 weeks (measured).",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "The cap on scope means about 4 weeks (measured)."
+  },
+  {
+    "id": "tp-54",
+    "text": "This is 2 weeks of work.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "This is 2 weeks of work."
+  },
+  {
+    "id": "tp-55",
+    "text": "| Task | Latency |\n|---|---|\n| Rewrite parser | 2 weeks |",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "Planning row under Latency header in markdown table"
+  },
+  {
+    "id": "tp-56",
+    "text": "| Rewrite parser | 2 weeks |",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "Planning row in single line table"
+  },
+  {
+    "id": "tp-57",
+    "text": "Phase 2 takes 3 weeks.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "Phase 2 takes 3 weeks."
+  },
+  {
+    "id": "tp-58",
+    "text": "Maximum effort: 10 engineer-days.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "Maximum effort: 10 engineer-days."
+  },
+  {
+    "id": "tp-59",
+    "text": "The firewall change lands in 5 days.",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "The firewall change lands in 5 days."
+  },
+  {
+    "id": "tp-60",
+    "text": "Phase 3 (1 week).",
+    "is_violation": true,
+    "category": "brief_repro",
+    "description": "Phase 3 (1 week)."
+  },
+  {
     "id": "tn-01",
     "text": "Expanse is a replacement for the 20-year-old C library.",
     "is_violation": false,
@@ -628,5 +733,33 @@
     "is_violation": false,
     "category": "system_metric",
     "description": "CPU load average window"
+  },
+  {
+    "id": "tn-46",
+    "text": "The job took 29 min on the hosted runner.",
+    "is_violation": false,
+    "category": "brief_repro",
+    "description": "The job took 29 min on the hosted runner."
+  },
+  {
+    "id": "tn-47",
+    "text": "Miri shards are capped at 180 minutes.",
+    "is_violation": false,
+    "category": "brief_repro",
+    "description": "Miri shards are capped at 180 minutes."
+  },
+  {
+    "id": "tn-48",
+    "text": "Runs once a day; the cache is a month old.",
+    "is_violation": false,
+    "category": "brief_repro",
+    "description": "Runs once a day; the cache is a month old."
+  },
+  {
+    "id": "tn-49",
+    "text": "libjudy is 19 years old.",
+    "is_violation": false,
+    "category": "brief_repro",
+    "description": "libjudy is 19 years old."
   }
 ]
