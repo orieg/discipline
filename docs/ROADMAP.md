@@ -46,6 +46,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 | `agent-scratch` | hygiene | any | agent scratch state is never tracked |
 | `config-integrity` | integrity | any | a change cannot weaken its own discipline.toml without a token |
 | `golden-output` | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
+| `command` | verification | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
 <!-- /generated -->
 

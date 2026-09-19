@@ -69,6 +69,115 @@
       },
       "type": "object"
     },
+    "CommandEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_zero": {
+          "description": "Whether zero items selected is allowed",
+          "type": "boolean"
+        },
+        "canary_command": {
+          "description": "Optional negative-control canary command",
+          "type": "string"
+        },
+        "canary_expected_diagnostic": {
+          "description": "Expected diagnostic string that canary must produce",
+          "type": "string"
+        },
+        "command": {
+          "description": "Command string to execute",
+          "type": "string"
+        },
+        "count_pattern": {
+          "description": "Regex pattern to extract an integer count",
+          "type": "string"
+        },
+        "forbid_output": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Output patterns that must not appear in stdout or stderr"
+        },
+        "min_count": {
+          "description": "Minimum count required",
+          "type": "integer"
+        },
+        "name": {
+          "description": "Name or identifier of the command",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "description": "Execution timeout in seconds",
+          "type": "integer"
+        },
+        "zero_items_pattern": {
+          "description": "Pattern that indicates zero items were executed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "command"
+      ],
+      "type": "object"
+    },
+    "CommandGate": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_zero": {
+          "description": "Whether zero items selected is allowed",
+          "type": "boolean"
+        },
+        "canary_command": {
+          "description": "Optional negative-control canary command",
+          "type": "string"
+        },
+        "canary_expected_diagnostic": {
+          "description": "Expected diagnostic string that canary must produce",
+          "type": "string"
+        },
+        "command": {
+          "description": "Primary command to execute",
+          "type": "string"
+        },
+        "commands": {
+          "description": "Multi-command suite entries",
+          "items": {
+            "$ref": "#/$defs/CommandEntry"
+          },
+          "type": "array"
+        },
+        "count_pattern": {
+          "description": "Regex pattern to extract an integer count",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "forbid_output": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Output patterns that must not appear in stdout or stderr"
+        },
+        "min_count": {
+          "description": "Minimum count required",
+          "type": "integer"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "timeout_seconds": {
+          "description": "Execution timeout in seconds (default: 60s)",
+          "type": "integer"
+        },
+        "zero_items_pattern": {
+          "description": "Pattern that indicates zero items were executed",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "DeletionGate": {
       "additionalProperties": false,
       "properties": {
@@ -312,6 +421,14 @@
             }
           ],
           "description": "benchmark drift via harness adapters (deterministic counts or BCa intervals)"
+        },
+        "command": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CommandGate"
+            }
+          ],
+          "description": "fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet"
         },
         "config-integrity": {
           "allOf": [

@@ -121,6 +121,12 @@ pub const ALLOW_REGRESSION: &[&str] = &[
     "allow(bench-regression)",
 ];
 
+pub const ALLOW_COMMAND: &[&str] = &[
+    "allow-command",
+    "discipline:allow(command)",
+    "allow(command)",
+];
+
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
     "deletes",
@@ -143,6 +149,9 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-regression",
     "discipline:allow(bench-regression)",
     "allow(bench-regression)",
+    "allow-command",
+    "discipline:allow(command)",
+    "allow(command)",
     "allow-nul",
     "allow-nul-byte",
     "allow-corrupt",

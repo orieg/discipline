@@ -179,7 +179,7 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Verification,
         summary: "fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet",
         languages: "any",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "sanitizers",
@@ -281,6 +281,7 @@ pub struct Gates {
     pub config_integrity: BasicGate,
     pub golden_output: GoldenGate,
     pub bench_regression: BenchRegressionGate,
+    pub command: CommandGate,
 }
 
 /// Settings every gate shares.
@@ -308,7 +309,8 @@ impl_gate_settings!(
     PiiGate,
     ScratchGate,
     GoldenGate,
-    BenchRegressionGate
+    BenchRegressionGate,
+    CommandGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -581,6 +583,69 @@ impl Default for BenchRegressionGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CommandGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Primary command to execute.
+    pub command: Option<String>,
+    /// Execution timeout in seconds (default: 60s). Exceeding this triggers exit 2.
+    pub timeout_seconds: u64,
+    /// Regex pattern to extract an integer count (e.g. `test result: ok. (\\d+) passed`).
+    pub count_pattern: Option<String>,
+    /// Minimum count required. If base ref has a higher count, the base count acts as ratchet floor.
+    pub min_count: Option<u64>,
+    /// Output patterns that must NOT appear in stdout or stderr.
+    pub forbid_output: Vec<String>,
+    /// Pattern that indicates zero items were executed (e.g. `running 0 tests`).
+    pub zero_items_pattern: Option<String>,
+    /// Whether zero items selected is allowed (default: false).
+    pub allow_zero: bool,
+    /// Optional negative-control canary command.
+    pub canary_command: Option<String>,
+    /// Expected diagnostic string or regex that the canary MUST produce.
+    pub canary_expected_diagnostic: Option<String>,
+    /// Multi-command suite support.
+    pub commands: Vec<CommandEntry>,
+}
+
+impl Default for CommandGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            command: None,
+            timeout_seconds: 60,
+            count_pattern: None,
+            min_count: None,
+            forbid_output: Vec::new(),
+            zero_items_pattern: None,
+            allow_zero: false,
+            canary_command: None,
+            canary_expected_diagnostic: None,
+            commands: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CommandEntry {
+    pub name: String,
+    pub command: String,
+    pub timeout_seconds: Option<u64>,
+    pub count_pattern: Option<String>,
+    pub min_count: Option<u64>,
+    pub forbid_output: Vec<String>,
+    pub zero_items_pattern: Option<String>,
+    pub allow_zero: bool,
+    pub canary_command: Option<String>,
+    pub canary_expected_diagnostic: Option<String>,
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -596,6 +661,7 @@ impl Gates {
             "config-integrity" => &self.config_integrity,
             "golden-output" => &self.golden_output,
             "bench-regression" => &self.bench_regression,
+            "command" => &self.command,
             _ => return None,
         })
     }
@@ -783,8 +849,13 @@ pub const SHORTER_IS_STRICTER: &[&str] = &[
     "sources",
 ];
 
-pub const LONGER_IS_STRICTER: &[&str] =
-    &["hostname_denylist", "extra_patterns", "paths", "include"];
+pub const LONGER_IS_STRICTER: &[&str] = &[
+    "hostname_denylist",
+    "extra_patterns",
+    "paths",
+    "include",
+    "forbid_output",
+];
 
 fn is_reset_token(val: &Value) -> bool {
     val.as_str() == Some("__reset__")

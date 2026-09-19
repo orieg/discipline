@@ -21,6 +21,7 @@ pub fn generate_schema() -> Value {
             "golden-output" => "#/$defs/GoldenGate",
             "bench-regression" => "#/$defs/BenchRegressionGate",
             "unsafe-safety-comment" => "#/$defs/UnsafeSafetyCommentGate",
+            "command" => "#/$defs/CommandGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -215,6 +216,46 @@ pub fn generate_schema() -> Value {
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "placeholders": { "$ref": "#/$defs/StringListOrReset", "description": "Additional placeholder words or phrases to reject in SAFETY comments" }
+                }
+            },
+            "CommandGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "command": { "type": "string", "description": "Primary command to execute" },
+                    "timeout_seconds": { "type": "integer", "description": "Execution timeout in seconds (default: 60s)" },
+                    "count_pattern": { "type": "string", "description": "Regex pattern to extract an integer count" },
+                    "min_count": { "type": "integer", "description": "Minimum count required" },
+                    "forbid_output": { "$ref": "#/$defs/StringListOrReset", "description": "Output patterns that must not appear in stdout or stderr" },
+                    "zero_items_pattern": { "type": "string", "description": "Pattern that indicates zero items were executed" },
+                    "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed" },
+                    "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
+                    "canary_expected_diagnostic": { "type": "string", "description": "Expected diagnostic string that canary must produce" },
+                    "commands": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/CommandEntry" },
+                        "description": "Multi-command suite entries"
+                    }
+                }
+            },
+            "CommandEntry": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "command"],
+                "properties": {
+                    "name": { "type": "string", "description": "Name or identifier of the command" },
+                    "command": { "type": "string", "description": "Command string to execute" },
+                    "timeout_seconds": { "type": "integer", "description": "Execution timeout in seconds" },
+                    "count_pattern": { "type": "string", "description": "Regex pattern to extract an integer count" },
+                    "min_count": { "type": "integer", "description": "Minimum count required" },
+                    "forbid_output": { "$ref": "#/$defs/StringListOrReset", "description": "Output patterns that must not appear in stdout or stderr" },
+                    "zero_items_pattern": { "type": "string", "description": "Pattern that indicates zero items were executed" },
+                    "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed" },
+                    "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
+                    "canary_expected_diagnostic": { "type": "string", "description": "Expected diagnostic string that canary must produce" }
                 }
             }
         }

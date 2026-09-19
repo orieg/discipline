@@ -793,6 +793,95 @@ const CASES: &[Case] = &[
                 && py_subjects.contains(&"test_serialize".to_string()))
         },
     ),
+    (
+        "command: fail-closed execution wrapper catches forbidden output, exit status, and count ratchet",
+        || {
+            use crate::guards::command::{run_command_bounded, split_command_line};
+            use std::path::Path;
+
+            let tokens = split_command_line("echo \"test result: ok. 42 passed\"")?;
+            if tokens != vec!["echo", "test result: ok. 42 passed"] {
+                return Ok(false);
+            }
+
+            let run = run_command_bounded("echo_test", "echo \"test result: ok. 42 passed\"", 5, Path::new("."))?;
+            if !run.status.success() {
+                return Ok(false);
+            }
+
+            let output = format!("{}\n{}", run.stdout, run.stderr);
+            let re = Regex::new(r"(\d+) passed")?;
+            let count = re.captures(&output).and_then(|c| c.get(1)).and_then(|m| m.as_str().parse::<u64>().ok());
+            if count != Some(42) {
+                return Ok(false);
+            }
+
+            // Ratchet checks
+            let floor_pass = 40;
+            let floor_fail = 50;
+            let passes = count.unwrap() >= floor_pass;
+            let fails = count.unwrap() < floor_fail;
+
+            // Forbidden output checks
+            let forbid_pat = "FAILED";
+            let forbid_tripped = "42 passed";
+            let clean = !output.contains(forbid_pat);
+            let caught = output.contains(forbid_tripped);
+
+            Ok(passes && fails && clean && caught)
+        },
+    ),
+    (
+        "command: canary failure, missing tool, and zero-items are detected",
+        || {
+            use crate::guards::command::run_command_bounded;
+            use crate::tokens::{covers, directive_reasons, ALLOW_COMMAND};
+            use std::path::Path;
+
+            let missing_err = run_command_bounded(
+                "missing_tool",
+                "non_existent_binary_xyz_12345",
+                5,
+                Path::new("."),
+            );
+            let missing_ok = match missing_err {
+                Err(e) => format!("{e:#}").contains("not found in PATH"),
+                Ok(_) => false,
+            };
+
+            let timeout_err = run_command_bounded("timeout_test", "sleep 3", 1, Path::new("."));
+            let timeout_ok = match timeout_err {
+                Err(e) => format!("{e:#}").contains("timed out after 1s"),
+                Ok(_) => false,
+            };
+
+            // Canary diagnostic verification
+            let canary_out = "error[E0308]: mismatched types\nexpected u32, found i32";
+            let has_diag = canary_out.contains("mismatched types");
+            let missing_diag = !canary_out.contains("assertion failed");
+
+            // Zero items detection
+            let zero_out = "running 0 tests\ntest result: ok. 0 passed";
+            let re = Regex::new(r"running 0 tests")?;
+            let zero_matched = re.is_match(zero_out);
+
+            // Override directive check
+            let armed = directive_reasons(
+                "allow-command: my_suite integration tests offline in sandbox",
+                ALLOW_COMMAND,
+            );
+            let covers_named = covers(&armed, "my_suite");
+            let covers_other = covers(&armed, "other_suite");
+
+            Ok(missing_ok
+                && timeout_ok
+                && has_diag
+                && missing_diag
+                && zero_matched
+                && covers_named
+                && !covers_other)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

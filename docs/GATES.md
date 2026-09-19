@@ -34,7 +34,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | `test-floor` | integrity | planned | any | test-count ratchet read from the base ref |
 | `golden-output` | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override |
 | `pr-checklist` | hygiene | planned | any | ticked PR checkboxes are reconciled against the diff |
-| `command` | verification | planned | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
+| `command` | verification | **shipped** | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | `sanitizers` | verification | planned | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
 | `msrv` | quality | planned | Rust | cargo check under the pinned MSRV |
 | `miri` | verification | planned | Rust | Miri tiers with zero-tests guard |
@@ -346,6 +346,29 @@ When a change touches source files in a language without an active pack, each AS
 
 ---
 
+### Pillar 4: Verification Suite (`verification`)
+
+#### `command`
+- **Rule:** Universal, language-neutral fail-closed wrapper for external verification commands. Discipline executes the command directly without shell pipes, captures stdout/stderr concurrently, bounds runtime (timeout = exit 2), detects missing binaries in PATH (exit 2), enforces a test count ratchet against the merge base ref, forbids declared output patterns, fails when zero items/tests are executed, and verifies negative-control canaries produce stated diagnostics.
+- **Untrusted PR Text Guard:** PR diffs cannot alter or introduce commands in `discipline.toml` without runner environment authorization (`DISCIPLINE_COMMAND` or `DISCIPLINE_ALLOW_COMMAND_CHANGE`).
+- **Languages:** any.
+- **What it catches:**
+  - Non-zero command exit codes (exit 1).
+  - Missing binaries in `PATH` (fails closed with exit 2).
+  - Command timeouts exceeding `timeout_seconds` (fails closed with exit 2).
+  - Forbidden strings or regexes detected in stdout or stderr.
+  - Zero tests or items executed when `allow_zero = false`.
+  - Extracted count dropping below the `min_count` ratchet floor established on the merge base ref.
+  - Negative-control canaries failing to produce their declared diagnostic message or unexpectedly succeeding.
+- **Passing override directive (accepted):**
+  ```text
+  allow-command: integration_suite offline network tests disabled during maintenance
+  ```
+- **Lifting directive:** `allow-command: <command-name> <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `commands`.
+
+---
+
 ### Pillar 5: Benchmark Drift (`bench`)
 
 #### `bench-regression`
@@ -383,7 +406,6 @@ The following gates are registered with `available: false` in the gate registry.
 - `ci-integrity` (Suite: Integrity) — Detects workflow weakening (`continue-on-error`, dropped `needs`, unpinned actions).
 - `test-floor` (Suite: Integrity) — Test count ratchet read directly from the base ref.
 - `pr-checklist` (Suite: Hygiene) — Reconciles ticked PR checkboxes against actual diffs.
-- `command` (Suite: Verification) — Fail-closed wrapper for external tools with zero-test guards and canary checks.
 - `sanitizers` (Suite: Verification) — Memory and thread sanitizer presets with race canaries.
 - `msrv` (Suite: Quality) — Verifies build against minimum supported Rust version.
 - `miri` (Suite: Verification) — Undefined behavior verification under Miri with zero-test guards.

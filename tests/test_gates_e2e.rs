@@ -1316,7 +1316,7 @@ fn could_not_check_is_exit_2_never_a_pass() {
     std::fs::remove_file(repo.file("discipline.toml")).unwrap();
 
     assert_eq!(
-        repo.check(&["--suite", "verification"]).code,
+        repo.check(&["--suite", "quality"]).code,
         2,
         "empty suite must not pass"
     );
@@ -3430,4 +3430,178 @@ end
     let outcome_pass = run_pass.outcome("ignored-tests");
     assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
     assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+// ---- command ---------------------------------------------------------------
+
+#[test]
+fn command_gate_runs_mock_tool_and_enforces_ratchet() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+command = "echo \"test result: ok. 10 passed\""
+count_pattern = '(\d+) passed'
+min_count = 5
+"#,
+    );
+    repo.commit("ci: configure command gate on base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // 1. Clean run on base configuration
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("command");
+    assert_eq!(outcome["examined"], 1);
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+
+    // 2. Untrusted PR text tampering guard: PR modifies command in discipline.toml
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+command = "echo \"malicious tampering in PR\""
+count_pattern = '(\d+) passed'
+min_count = 5
+"#,
+    );
+    repo.commit("test: attempt untrusted command edit in PR");
+    let run_untrusted = repo.check(&[]);
+    assert_eq!(run_untrusted.code, 1);
+    assert!(run_untrusted
+        .titles("command")
+        .contains(&"Untrusted Command Modification".to_string()));
+
+    // Revert the untrusted edit
+    repo.git(&["checkout", "-q", "HEAD~1", "--", "discipline.toml"]);
+    repo.commit("chore: restore discipline.toml");
+
+    // 3. Count ratchet regression via runner command
+    let run_ratchet = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("DISCIPLINE_COMMAND", "echo \"test result: ok. 2 passed\"")],
+    );
+    assert_eq!(run_ratchet.code, 1);
+    assert!(run_ratchet
+        .titles("command")
+        .contains(&"Count Ratchet Regression".to_string()));
+
+    // 4. Lifted via scoped override directive
+    let run_override = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[
+            ("DISCIPLINE_COMMAND", "echo \"test result: ok. 2 passed\""),
+            (
+                "PR_BODY",
+                "allow-command: default justified test prune for refactoring",
+            ),
+        ],
+    );
+    assert_eq!(
+        run_override.code, 0,
+        "{}{}",
+        run_override.stdout, run_override.stderr
+    );
+    let outcome_ov = run_override.outcome("command");
+    assert_eq!(outcome_ov["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn command_gate_forbid_output_and_canary_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+command = "echo \"all tests passed\""
+canary_command = "echo \"canary triggered but harmless\""
+canary_expected_diagnostic = "CRITICAL_SECURITY_PANIC"
+forbid_output = ["FORBIDDEN_FLAG"]
+"#,
+    );
+    repo.commit("ci: configure command gate with canary and forbid_output");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Canary missing expected diagnostic -> violation
+    let run_canary = repo.check(&[]);
+    assert_eq!(run_canary.code, 1);
+    assert!(run_canary
+        .titles("command")
+        .contains(&"Canary Diagnostic Missing".to_string()));
+
+    // Forbidden output in primary command -> violation
+    let run_forbid = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "DISCIPLINE_COMMAND",
+            "echo \"warning: FORBIDDEN_FLAG encountered\"",
+        )],
+    );
+    assert_eq!(run_forbid.code, 1);
+    assert!(run_forbid
+        .titles("command")
+        .contains(&"Forbidden Output Detected".to_string()));
+}
+
+#[test]
+fn command_gate_missing_binary_and_timeout_fail_closed_exit_2() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+
+    // 1. Missing tool in PATH triggers exit code 2
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+command = "non_existent_binary_xyz_12345"
+"#,
+    );
+    repo.commit("ci: configure non-existent command");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    let run_missing = repo.check(&[]);
+    assert_eq!(
+        run_missing.code, 2,
+        "missing binary must trigger exit code 2 (could not check)"
+    );
+    assert!(run_missing.stderr.contains("not found in PATH"));
+
+    // 2. Timeout triggers exit code 2
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+command = "sleep 3"
+timeout_seconds = 1
+"#,
+    );
+    repo.commit("ci: configure sleep with 1s timeout");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    let run_timeout = repo.check(&[]);
+    assert_eq!(
+        run_timeout.code, 2,
+        "timeout must trigger exit code 2 (could not check)"
+    );
+    assert!(run_timeout.stderr.contains("timed out after 1s"));
 }

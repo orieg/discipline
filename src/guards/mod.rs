@@ -1,4 +1,5 @@
 pub mod agent_diff;
+pub mod command;
 pub mod hygiene;
 pub mod integrity;
 pub mod perf;
@@ -202,6 +203,7 @@ pub fn run_checks(
             "config-integrity" => integrity::config_integrity(ctx),
             "golden-output" => integrity::golden_output(ctx),
             "bench-regression" => perf::bench_regression(ctx),
+            "command" => command::evaluate_command(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -236,6 +238,8 @@ pub fn run_checks(
             "golden-output"
         } else if note.contains("allow-regression") {
             "bench-regression"
+        } else if note.contains("allow-command") {
+            "command"
         } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
             "assertion-reduction"
         } else {
