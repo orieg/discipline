@@ -402,12 +402,14 @@ const CASES: &[Case] = &[
                 newly_added_nul: true,
             }];
             let mut out_unexcused = GateOutcome::new("assertion-reduction");
+            let empty_exempt = crate::guards::PathFilter::new(&[])?;
             report_newly_added_nul_bytes(
                 &facts,
                 crate::config::Severity::Error,
                 &mut out_unexcused,
                 &[],
                 false,
+                &empty_exempt,
             );
 
             let directives = [crate::tokens::ParsedDirective {
@@ -423,6 +425,7 @@ const CASES: &[Case] = &[
                 &mut out_excused,
                 &directives,
                 false,
+                &empty_exempt,
             );
 
             Ok(out_unexcused.violations.len() == 1

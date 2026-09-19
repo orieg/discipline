@@ -126,13 +126,21 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
 
     if let Some(target) = first_enabled {
         if let Some(outcome) = ast_gates.iter_mut().find(|o| o.gate == target) {
-            let sev = ctx
-                .config
-                .gates
-                .settings(target)
-                .map_or(crate::config::Severity::Error, |s| s.severity());
-            report_parse_errors(&analyzed_files, sev, outcome);
-            report_newly_added_nul_bytes(&analyzed_files, sev, outcome, &ctx.directives, is_staged);
+            let target_settings = ctx.config.gates.settings(target);
+            let sev = target_settings.map_or(crate::config::Severity::Error, |s| s.severity());
+            let exempt = target_settings
+                .map(exempt_filter)
+                .transpose()?
+                .unwrap_or_else(|| PathFilter::new(&[]).unwrap());
+            report_parse_errors(&analyzed_files, sev, outcome, &exempt);
+            report_newly_added_nul_bytes(
+                &analyzed_files,
+                sev,
+                outcome,
+                &ctx.directives,
+                is_staged,
+                &exempt,
+            );
         }
     }
 
@@ -463,8 +471,12 @@ pub(crate) fn report_parse_errors(
     files: &[FileFacts],
     severity: crate::config::Severity,
     out: &mut GateOutcome,
+    exempt: &PathFilter,
 ) {
     for ff in files {
+        if exempt.matches(&ff.file.path) {
+            continue;
+        }
         if ff.head.as_ref().is_some_and(|h| h.has_parse_errors) {
             out.push(
                 severity,
@@ -488,8 +500,12 @@ pub(crate) fn report_newly_added_nul_bytes(
     out: &mut GateOutcome,
     directives: &[crate::tokens::ParsedDirective],
     is_staged: bool,
+    exempt: &PathFilter,
 ) {
     for ff in files {
+        if exempt.matches(&ff.file.path) {
+            continue;
+        }
         if ff.newly_added_nul {
             if let Some(record) =
                 tokens::find_override(directives, out.gate, tokens::ALLOW_NUL, &ff.file.path)

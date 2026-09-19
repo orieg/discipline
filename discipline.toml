@@ -8,3 +8,12 @@
 version = 1
 name = "discipline"
 description = "Universal CI/CD gatekeeper and AI coding agent diff sentinel"
+
+[gates.assertion-reduction]
+exempt_paths = ["tests/fixtures/**"]
+
+[gates.vacuous-tests]
+exempt_paths = ["tests/fixtures/**"]
+
+[gates.ignored-tests]
+exempt_paths = ["tests/fixtures/**"]
