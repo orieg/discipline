@@ -13,8 +13,8 @@ variables:
 
 # -----------------------------------------------------------------------------
 # Standalone Discipline Gating Job
-# Automatically generates gl-codequality.json, junit.xml, and gl-sast-report.json
-# populating GitLab Code Quality diffs, JUnit test reports, and SAST/SARIF tabs.
+# Automatically generates gl-codequality.json and junit.xml
+# populating GitLab Code Quality diffs and JUnit test reports.
 # -----------------------------------------------------------------------------
 discipline:gate:
   stage: sentinel
@@ -37,17 +37,15 @@ discipline:gate:
       fi
   script:
     # Under $GITLAB_CI == "true", discipline automatically generates
-    # gl-codequality.json, junit.xml, and gl-sast-report.json
+    # gl-codequality.json and junit.xml
     - discipline check
   artifacts:
     reports:
       codequality: gl-codequality.json
       junit: junit.xml
-      sast: gl-sast-report.json
     paths:
       - gl-codequality.json
       - junit.xml
-      - gl-sast-report.json
     when: always
 
 # -----------------------------------------------------------------------------

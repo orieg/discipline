@@ -10,11 +10,10 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
 
     let total_tests = summary.outcomes.len();
     let mut total_failures = 0;
-    let mut total_skipped = 0;
 
     for o in &summary.outcomes {
         if !o.enabled {
-            total_skipped += 1;
+            // Skipped counts belong to individual testsuite elements
         } else if !o.violations.is_empty() {
             let has_failure = o.violations.iter().any(|v| match v.severity {
                 Severity::Error => true,
@@ -27,7 +26,7 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
     }
 
     out.push_str(&format!(
-        "<testsuites name=\"discipline\" tests=\"{total_tests}\" failures=\"{total_failures}\" errors=\"0\" skipped=\"{total_skipped}\" time=\"0.0\">\n"
+        "<testsuites name=\"discipline\" tests=\"{total_tests}\" failures=\"{total_failures}\" errors=\"0\" time=\"0.0\">\n"
     ));
 
     // Group by suite
@@ -41,6 +40,8 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
         let suite_tests = outcomes.len();
         let mut suite_failures = 0;
         let mut suite_skipped = 0;
+        let suite_examined: usize = outcomes.iter().map(|o| o.examined).sum();
+        let suite_overrides: usize = outcomes.iter().map(|o| o.overrides.len()).sum();
 
         for o in &outcomes {
             if !o.enabled {
@@ -59,6 +60,28 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
         out.push_str(&format!(
             "  <testsuite name=\"{suite_name}\" tests=\"{suite_tests}\" failures=\"{suite_failures}\" errors=\"0\" skipped=\"{suite_skipped}\" time=\"0.0\">\n"
         ));
+        out.push_str("    <properties>\n");
+        out.push_str(&format!(
+            "      <property name=\"examined\" value=\"{suite_examined}\"/>\n"
+        ));
+        out.push_str(&format!(
+            "      <property name=\"overrides\" value=\"{suite_overrides}\"/>\n"
+        ));
+        for o in &outcomes {
+            out.push_str(&format!(
+                "      <property name=\"{}:examined\" value=\"{}\"/>\n",
+                o.gate, o.examined
+            ));
+            for (idx, ov) in o.overrides.iter().enumerate() {
+                out.push_str(&format!(
+                    "      <property name=\"{}:override:{}\" value=\"{}\"/>\n",
+                    o.gate,
+                    idx + 1,
+                    escape_xml(&format!("[{}] {}", ov.source, ov.reason))
+                ));
+            }
+        }
+        out.push_str("    </properties>\n");
 
         for o in outcomes {
             let classname = format!("discipline.{suite_name}");
@@ -71,12 +94,29 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
                 out.push_str("      <skipped message=\"gate disabled in configuration\"/>\n");
                 out.push_str("    </testcase>\n");
             } else if o.violations.is_empty() {
-                out.push_str(&format!(
-                    "    <testcase name=\"{gate_name}\" classname=\"{classname}\" time=\"0.0\"/>\n"
-                ));
+                if o.examined > 0 || !o.overrides.is_empty() {
+                    out.push_str(&format!(
+                        "    <testcase name=\"{gate_name}\" classname=\"{classname}\" time=\"0.0\">\n"
+                    ));
+                    out.push_str(&format!(
+                        "      <system-out>examined: {}; overrides: {}</system-out>\n",
+                        o.examined,
+                        o.overrides.len()
+                    ));
+                    out.push_str("    </testcase>\n");
+                } else {
+                    out.push_str(&format!(
+                        "    <testcase name=\"{gate_name}\" classname=\"{classname}\" time=\"0.0\"/>\n"
+                    ));
+                }
             } else {
                 out.push_str(&format!(
                     "    <testcase name=\"{gate_name}\" classname=\"{classname}\" time=\"0.0\">\n"
+                ));
+                out.push_str(&format!(
+                    "      <system-out>examined: {}; overrides: {}</system-out>\n",
+                    o.examined,
+                    o.overrides.len()
                 ));
                 for v in &o.violations {
                     let sev_type = match v.severity {
@@ -169,8 +209,9 @@ mod tests {
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
         assert!(xml.contains("<testsuites name=\"discipline\" tests=\"2\" failures=\"0\""));
         assert!(xml.contains(
-            "<testcase name=\"agents-md\" classname=\"discipline.agent-guard\" time=\"0.0\"/>"
+            "<testcase name=\"agents-md\" classname=\"discipline.agent-guard\" time=\"0.0\">"
         ));
+        assert!(xml.contains("<system-out>examined: 1; overrides: 0</system-out>"));
         assert!(xml.contains("<skipped message=\"gate disabled in configuration\"/>"));
     }
 

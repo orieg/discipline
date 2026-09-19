@@ -20,6 +20,7 @@ pub fn generate_schema() -> Value {
             "agent-scratch" => "#/$defs/ScratchGate",
             "golden-output" => "#/$defs/GoldenGate",
             "bench-regression" => "#/$defs/BenchRegressionGate",
+            "unsafe-safety-comment" => "#/$defs/UnsafeSafetyCommentGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -202,6 +203,16 @@ pub fn generate_schema() -> Value {
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "tolerance_pct": { "type": "number", "description": "Maximum allowed regression percentage" },
                     "paths": { "$ref": "#/$defs/StringListOrReset" }
+                }
+            },
+            "UnsafeSafetyCommentGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "placeholders": { "$ref": "#/$defs/StringListOrReset", "description": "Additional placeholder words or phrases to reject in SAFETY comments" }
                 }
             }
         }

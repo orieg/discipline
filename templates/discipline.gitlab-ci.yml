@@ -19,7 +19,7 @@ spec:
       description: "Path to discipline configuration file"
     report_dir:
       default: "."
-      description: "Directory where gl-codequality.json, junit.xml, and gl-sast-report.json are written"
+      description: "Directory where gl-codequality.json and junit.xml are written"
     allow_failure:
       default: false
       type: boolean
@@ -71,11 +71,11 @@ discipline:
       fi
 
       # When running inside GitLab CI ($GITLAB_CI == "true"), discipline automatically
-      # writes gl-codequality.json, junit.xml, and gl-sast-report.json.
+      # writes gl-codequality.json and junit.xml.
       # If custom report_dir is specified, route reports explicitly.
       if [ "$[[ inputs.report_dir ]]" != "." ]; then
         mkdir -p "$[[ inputs.report_dir ]]"
-        ARGS="$ARGS --report-gitlab $[[ inputs.report_dir ]]/gl-codequality.json --report-junit $[[ inputs.report_dir ]]/junit.xml --report-sarif $[[ inputs.report_dir ]]/gl-sast-report.json"
+        ARGS="$ARGS --report-gitlab $[[ inputs.report_dir ]]/gl-codequality.json --report-junit $[[ inputs.report_dir ]]/junit.xml"
       fi
 
       echo "Executing: discipline $ARGS"
@@ -84,9 +84,7 @@ discipline:
     reports:
       codequality: $[[ inputs.report_dir ]]/gl-codequality.json
       junit: $[[ inputs.report_dir ]]/junit.xml
-      sast: $[[ inputs.report_dir ]]/gl-sast-report.json
     paths:
       - $[[ inputs.report_dir ]]/gl-codequality.json
       - $[[ inputs.report_dir ]]/junit.xml
-      - $[[ inputs.report_dir ]]/gl-sast-report.json
     when: always

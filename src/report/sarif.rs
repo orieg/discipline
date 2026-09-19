@@ -18,7 +18,10 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
             "shortDescription": {
                 "text": desc
             },
-            "helpUri": "https://github.com/orieg/discipline"
+            "helpUri": "https://github.com/orieg/discipline",
+            "properties": {
+                "examined": o.examined
+            }
         }));
     }
 
@@ -64,8 +67,34 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
         results.push(result);
     }
 
+    // 3. Build invocations and overrides data
+    let mut overrides = Vec::new();
+    let mut total_examined = 0;
+    let mut total_overrides = 0;
+
+    for o in &summary.outcomes {
+        total_examined += o.examined;
+        total_overrides += o.overrides.len();
+        for ov in &o.overrides {
+            overrides.push(json!({
+                "descriptor": {
+                    "id": o.gate
+                },
+                "configuration": {
+                    "level": "none"
+                },
+                "properties": {
+                    "source": ov.source.to_string(),
+                    "directive": ov.directive.clone(),
+                    "subject": ov.subject.clone(),
+                    "reason": ov.reason.clone()
+                }
+            }));
+        }
+    }
+
     json!({
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
         "version": "2.1.0",
         "runs": [
             {
@@ -76,6 +105,16 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
                         "rules": rules
                     }
                 },
+                "invocations": [
+                    {
+                        "executionSuccessful": summary.errors == 0,
+                        "ruleConfigurationOverrides": overrides,
+                        "properties": {
+                            "totalExamined": total_examined,
+                            "totalOverrides": total_overrides
+                        }
+                    }
+                ],
                 "results": results
             }
         ]

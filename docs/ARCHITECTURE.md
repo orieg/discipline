@@ -57,6 +57,12 @@ Only real comment nodes that begin their line qualify. A string literal containi
 
 Scope: a site is reported when its line was added, or when the file's count of undocumented sites rose relative to the base. The second clause catches a `SAFETY:` comment deleted from above a block whose own line did not change.
 
+#### Invariant Quality and Placeholder Rejection
+Rather than relying on naive word-count thresholds, Discipline enforces substantive safety invariants:
+- **Placeholder rejection:** Comments consisting solely of vacuous placeholders (`todo`, `tbd`, `n/a`, `safe`, `ok`, `fine`, `valid`, `trust me`, `temporary`, `placeholder`, `fixme`, `wip`, `noop`) or keyword restatements (`unsafe`, `safety`) are rejected.
+- **Substantive threshold:** A comment is accepted if and only if it contains at least one substantive non-placeholder word, regardless of total length (e.g. `// SAFETY: caller-checked non-null.` passes; `// SAFETY: this is totally fine ok` fails).
+- **Configurable placeholders:** Additional placeholder terms can be declared per-repository under `[gates.unsafe-safety-comment]` via `placeholders = [...]` in `discipline.toml`.
+
 ### Assertion strength
 
 Two levels: *strong* (names containing `_eq`, `_ne`, `matches`) and everything else. A drop in either the effective total or the strong count is a reduction.
@@ -76,6 +82,19 @@ The planned `golden-output` gate guards against stealth re-blessing or silent mo
 - **Diff inspection:** Compares base vs. head blobs for all modified or deleted paths matching the gate's `paths` pattern.
 - **Scoped escape hatch:** Requires an explicit `allow-golden-update: <path> <reason>` or `discipline:allow(golden-output): <path> <reason>` directive parsed through `src/tokens.rs`.
 - **Integrity synergy:** Complements AST gates (`vacuous-tests`, `assertion-reduction`) by ensuring that tests asserting against external serialized data cannot be weakened by mutating the baseline fixture.
+
+## Reporter architecture & Zero-Dependency SHA-256
+
+Discipline emits structured reports across standard developer and enterprise interfaces:
+- **GitLab Code Quality (`gl-codequality.json`):** Code Climate JSON array consumed natively by GitLab Merge Request widgets.
+- **JUnit XML (`junit.xml`):** Validated offline against Jenkins `junit-10.xsd` with testsuite-level `<properties>` and testcase-level examined / override execution diagnostics in `<system-out>`.
+- **SARIF (`discipline.sarif`):** OASIS Static Analysis Results Interchange Format v2.1.0 schema-compliant report with rule configuration overrides and examined counter property bags in `runs[0].invocations[0]`.
+
+### Pure-Rust SHA-256 Fingerprint Rationale
+GitLab Code Quality issues require a unique, deterministic 32-byte hex fingerprint to track issues across commits and prevent duplicate alerts. Discipline maintains a pure-Rust, zero-dependency SHA-256 implementation (`src/report/gitlab.rs`) adhering strictly to NIST FIPS 180-4:
+1. **Zero crypto dependency footprint:** Relying on external cryptography crates (`ring`, `openssl`, `sha2`) would pull in large dependency graphs, C or assembly toolchain requirements, and potential licensing friction that complicates static musl binary compilation.
+2. **Deterministic invariant:** Fingerprints are computed as `SHA-256(check_name:path:line:title:message)`.
+3. **High-assurance test vectors:** The implementation is verified directly in unit tests against official NIST Cryptographic Algorithm Validation Program (CAVP) test vectors (`test_sha256_nist_vectors`: empty input, single-block `abc`, and 448-bit multi-block vectors).
 
 ## Known limits
 

@@ -81,7 +81,10 @@ impl<'a> Extractor<'a> {
                 end_row: node.end_position().row,
                 start_byte: node.start_byte(),
                 end_byte: node.end_byte(),
-                has_safety: has_valid_safety_comment(text),
+                has_safety: has_valid_safety_comment_with_placeholders(
+                    text,
+                    &self.vocab.safety_placeholders,
+                ),
             });
             return;
         }
@@ -351,7 +354,7 @@ impl<'a> Extractor<'a> {
                 }
             }
         }
-        has_valid_safety_comment(&combined)
+        has_valid_safety_comment_with_placeholders(&combined, &self.vocab.safety_placeholders)
     }
 
     /// A comment node that *begins the line* on `row` (or spans it), so a
@@ -367,17 +370,78 @@ impl<'a> Extractor<'a> {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn has_valid_safety_comment(text: &str) -> bool {
+    has_valid_safety_comment_with_placeholders(text, &[])
+}
+
+pub(crate) fn has_valid_safety_comment_with_placeholders(
+    text: &str,
+    custom_placeholders: &[String],
+) -> bool {
+    let default_list = crate::config::DEFAULT_SAFETY_PLACEHOLDERS;
+    let placeholders: Vec<String> = if custom_placeholders.is_empty() {
+        default_list.iter().map(|s| s.to_lowercase()).collect()
+    } else {
+        custom_placeholders
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect()
+    };
+
+    let mut multi_word = Vec::new();
+    let mut single_word = std::collections::HashSet::new();
+    for p in &placeholders {
+        let p = p.trim();
+        if p.contains(' ') {
+            multi_word.push(p.to_string());
+        } else if !p.is_empty() {
+            single_word.insert(p.to_string());
+        }
+    }
+
     let mut search_from = 0;
     while let Some(rel_idx) = text[search_from..].find("SAFETY:") {
         let idx = search_from + rel_idx + "SAFETY:".len();
         let after = &text[idx..];
-        let word_count = after
+
+        let mut comment_lines = Vec::new();
+        for line in after.lines() {
+            let trimmed = line
+                .trim()
+                .trim_start_matches('/')
+                .trim_start_matches('*')
+                .trim_end_matches('*')
+                .trim_end_matches('/')
+                .trim();
+            if trimmed.is_empty() && !comment_lines.is_empty() {
+                break;
+            }
+            comment_lines.push(trimmed);
+        }
+        let mut comment_text = comment_lines.join(" ").to_lowercase();
+
+        for mw in &multi_word {
+            comment_text = comment_text.replace(mw, " ");
+        }
+
+        let substantive_words = comment_text
             .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_'))
             .filter(|w| !w.is_empty())
+            .filter(|w| {
+                let w_lower = w.to_lowercase();
+                if single_word.contains(&w_lower) {
+                    return false;
+                }
+                if w_lower == "unsafe" || w_lower == "safety" {
+                    return false;
+                }
+                true
+            })
             .count();
-        if word_count >= 4 {
+
+        if substantive_words > 0 {
             return true;
         }
         search_from = idx;
@@ -688,6 +752,7 @@ mod tests {
         let vocab = AssertVocabulary {
             extra_macros: vec!["verify".into()],
             helper_fns: vec!["check_invariants".into()],
+            ..Default::default()
         };
         let f = RustPack.extract("test.rs", src, &vocab).unwrap();
         assert_eq!(f.tests[0].total_asserts, 2);
@@ -779,7 +844,7 @@ fn f(p: *const u8) -> u8 {
     unsafe { *p }
 }
 fn g(p: *const u8) -> u8 {
-    // SAFETY: needed here
+    // SAFETY: this is totally fine ok
     unsafe { *p }
 }
 unsafe impl Sync for X {}
@@ -951,5 +1016,44 @@ mod tests {
             by_name("tests::expect_counts_as_assertion").total_asserts,
             1
         );
+    }
+
+    #[test]
+    fn safety_comment_placeholders_and_substantive_discrimination() {
+        // Substantive short comments pass regardless of word count
+        assert!(has_valid_safety_comment(
+            "// SAFETY: caller-checked non-null."
+        ));
+        assert!(has_valid_safety_comment(
+            "// SAFETY: pointer is valid for reads"
+        ));
+        assert!(has_valid_safety_comment(
+            "// SAFETY: index is bounded by length"
+        ));
+
+        // Hollow padding and placeholders fail
+        assert!(!has_valid_safety_comment(
+            "// SAFETY: this is totally fine ok"
+        ));
+        assert!(!has_valid_safety_comment("// SAFETY: todo"));
+        assert!(!has_valid_safety_comment("// SAFETY: tbd"));
+        assert!(!has_valid_safety_comment("// SAFETY: n/a"));
+        assert!(!has_valid_safety_comment("// SAFETY: safe"));
+        assert!(!has_valid_safety_comment("// SAFETY: ok"));
+        assert!(!has_valid_safety_comment("// SAFETY: fine"));
+        assert!(!has_valid_safety_comment("// SAFETY: trust me"));
+        assert!(!has_valid_safety_comment("// SAFETY: safety"));
+        assert!(!has_valid_safety_comment("// SAFETY: unsafe"));
+
+        // Custom configurable placeholders
+        let custom = vec!["custom_filler".to_string()];
+        assert!(!has_valid_safety_comment_with_placeholders(
+            "// SAFETY: custom_filler",
+            &custom
+        ));
+        assert!(has_valid_safety_comment_with_placeholders(
+            "// SAFETY: custom_filler with non_null pointer",
+            &custom
+        ));
     }
 }

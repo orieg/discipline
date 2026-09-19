@@ -192,6 +192,7 @@ pub type RustFacts = ParsedFileFacts;
 pub struct AssertVocabulary {
     pub extra_macros: Vec<String>,
     pub helper_fns: Vec<String>,
+    pub safety_placeholders: Vec<String>,
 }
 
 /// Top-level helper to analyze Rust code directly.

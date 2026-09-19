@@ -91,7 +91,7 @@ jobs:
 
 ### GitLab CI/CD
 
-Native integration with GitLab Merge Requests. When running under GitLab CI (`$GITLAB_CI == "true"`), Discipline automatically detects merge request base refs and generates Code Quality diffs, JUnit test summaries, and SAST/SARIF security tabs.
+Native integration with GitLab Merge Requests. When running under GitLab CI (`$GITLAB_CI == "true"`), Discipline automatically detects merge request base refs and generates Code Quality diffs and JUnit test summaries.
 
 Use the reusable CI/CD Catalog Component ([`templates/discipline.gitlab-ci.yml`](templates/discipline.gitlab-ci.yml)):
 
@@ -124,11 +124,9 @@ discipline:gate:
     reports:
       codequality: gl-codequality.json
       junit: junit.xml
-      sast: gl-sast-report.json
     paths:
       - gl-codequality.json
       - junit.xml
-      - gl-sast-report.json
     when: always
 ```
 

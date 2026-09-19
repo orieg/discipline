@@ -28,6 +28,9 @@ Do not scatter notes into arbitrary files. Update canonical documents; do not pr
 | Agent rules & engineering standards | `AGENTS.md` (this file) | Project-level policy evolution |
 | Reference configuration schema | `discipline.toml` | Schema version bump |
 | Action runner definition | `action.yml` | Action input/runtime change |
+| GitLab CI component | `templates/discipline.gitlab-ci.yml` | Component interface or runner change |
+| Argo Workflow template | `templates/argo-workflow-template.yaml` | Task spec or parameter change |
+| Documentation site (GitHub Pages) | `docs/index.html` | UI, layout, or documentation updates |
 | Pre-commit hook definitions | `.pre-commit-hooks.yaml` | Hook interface change |
 | CI and release pipelines | `.github/workflows/`, `.gitea/workflows/` (described in `docs/PRD.md` §8) | Pipeline redesign |
 | Dependency policy | `deny.toml` | License or source policy change |

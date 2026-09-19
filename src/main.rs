@@ -202,13 +202,7 @@ fn check(args: CheckArgs) -> Result<bool> {
             None
         }
     });
-    let report_sarif = args.report_sarif.or_else(|| {
-        if is_gitlab {
-            Some(std::path::PathBuf::from("gl-sast-report.json"))
-        } else {
-            None
-        }
-    });
+    let report_sarif = args.report_sarif;
 
     if let Some(path) = &report_gitlab {
         let content = discipline::report::gitlab::format_gitlab(&summary);

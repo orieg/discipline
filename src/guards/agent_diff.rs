@@ -46,6 +46,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
             &gates.vacuous_tests.assert_helper_fns[..],
         ]
         .concat(),
+        safety_placeholders: gates.unsafe_safety_comment.placeholders.clone(),
     };
 
     let registry = default_registry();
@@ -709,7 +710,7 @@ pub fn evaluate_ignored_tests(
 
 pub fn evaluate_unsafe_safety_comment(
     files: &[FileFacts],
-    settings: &crate::config::BasicGate,
+    settings: &crate::config::UnsafeSafetyCommentGate,
 ) -> Result<GateOutcome> {
     const GATE: &str = "unsafe-safety-comment";
     let exempt = exempt_filter(settings)?;
@@ -1144,7 +1145,7 @@ mod tests {
         use crate::ast::UnsafeSite;
         use std::collections::BTreeSet;
 
-        let settings = crate::config::BasicGate::default();
+        let settings = crate::config::UnsafeSafetyCommentGate::default();
         let mut added_lines = BTreeSet::new();
         added_lines.insert(15);
 

@@ -788,7 +788,7 @@
       <!-- GitLab CI/CD -->
       <div class="platform-pane" id="pane-gitlab">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
-          Native GitLab CI/CD integration. Populates GitLab Merge Request Code Quality diffs, JUnit test reports, and SAST/SARIF security tabs.
+          Native GitLab CI/CD integration. Populates GitLab Merge Request Code Quality diffs and JUnit test reports.
         </p>
         <div class="code-block"><span class="code-comment"># .gitlab-ci.yml using the Discipline CI/CD Component</span>
 <span class="code-keyword">include:</span>
@@ -812,13 +812,15 @@
   <span class="code-prop">before_script:</span>
     - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME --depth=100 || true
   <span class="code-prop">script:</span>
-    <span class="code-comment"># Under $GITLAB_CI, automatically outputs gl-codequality.json, junit.xml, gl-sast-report.json</span>
+    <span class="code-comment"># Under $GITLAB_CI, automatically outputs gl-codequality.json and junit.xml</span>
     - discipline check
   <span class="code-prop">artifacts:</span>
     <span class="code-prop">reports:</span>
       <span class="code-prop">codequality:</span> gl-codequality.json
       <span class="code-prop">junit:</span> junit.xml
-      <span class="code-prop">sast:</span> gl-sast-report.json
+    <span class="code-prop">paths:</span>
+      - gl-codequality.json
+      - junit.xml
     <span class="code-prop">when:</span> always</div>
       </div>
 
@@ -1073,7 +1075,7 @@ discipline self-test</div>
 │ GitLab Reports   │      │ GitHub Checks    │      │ Exit Code        │
 │ • Code Quality   │      │ • PR Comments    │      │ • 0: Pass        │
 │ • JUnit XML      │      │ • Workflow Annot │      │ • 1: Violations  │
-│ • SAST / SARIF   │      │ • SARIF Upload   │      │ • 2: Gate Error  │
+│ • JSON / SARIF   │      │ • SARIF Upload   │      │ • 2: Gate Error  │
 └──────────────────┘      └──────────────────┘      └──────────────────┘</span></div>
     </div>
   </section>

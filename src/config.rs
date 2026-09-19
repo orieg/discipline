@@ -249,7 +249,7 @@ pub struct Gates {
     pub assertion_reduction: AssertionGate,
     pub vacuous_tests: AssertionGate,
     pub ignored_tests: BasicGate,
-    pub unsafe_safety_comment: BasicGate,
+    pub unsafe_safety_comment: UnsafeSafetyCommentGate,
     pub deletion_rationale: DeletionGate,
     pub time_estimates: TimeEstimateGate,
     pub pii: PiiGate,
@@ -276,6 +276,7 @@ macro_rules! impl_gate_settings {
 }
 impl_gate_settings!(
     BasicGate,
+    UnsafeSafetyCommentGate,
     AssertionGate,
     DeletionGate,
     TimeEstimateGate,
@@ -299,6 +300,34 @@ impl Default for BasicGate {
             enabled: true,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
+        }
+    }
+}
+
+pub const DEFAULT_SAFETY_PLACEHOLDERS: &[&str] = &[
+    "todo", "tbd", "n/a", "na", "none", "safe", "safety", "unsafe", "ok", "fine", "valid",
+    "trust me", "trust", "me", "this", "is", "totally",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UnsafeSafetyCommentGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub placeholders: Vec<String>,
+}
+
+impl Default for UnsafeSafetyCommentGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            placeholders: DEFAULT_SAFETY_PLACEHOLDERS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 }

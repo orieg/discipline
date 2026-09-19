@@ -2,16 +2,16 @@ mod common;
 use common::{Repo, GOOD_LIB, GOOD_TEST};
 
 #[test]
-fn safety_comment_requires_at_least_four_descriptive_words() {
+fn safety_comment_rejects_placeholders_and_accepts_short_invariants() {
     let repo = Repo::new();
-    // 1. Placeholder / short safety comment (< 4 words) fails
+    // 1. Hollow padding with >= 4 words fails
     repo.write(
         "src/lib.rs",
-        &format!("{GOOD_LIB}\npub fn short_safety(p: *const u8) -> u8 {{\n    // SAFETY: valid\n    unsafe {{ *p }}\n}}\n"),
+        &format!("{GOOD_LIB}\npub fn hollow_safety(p: *const u8) -> u8 {{\n    // SAFETY: this is totally fine ok\n    unsafe {{ *p }}\n}}\n"),
     );
-    repo.commit("feat: add unsafe with short safety comment");
+    repo.commit("feat: add unsafe with hollow padding safety comment");
     let run = repo.check(&[]);
-    assert_eq!(run.code, 1, "short safety comment must fail");
+    assert_eq!(run.code, 1, "hollow padding safety comment must fail");
     assert_eq!(
         run.titles("unsafe-safety-comment"),
         vec!["Unsafe Without SAFETY Comment"],
@@ -19,18 +19,39 @@ fn safety_comment_requires_at_least_four_descriptive_words() {
         run.stdout
     );
 
-    // 2. Descriptive safety comment (>= 4 words) passes
+    // 2. Legitimate short invariant (< 4 words) passes
     repo.write(
         "src/lib.rs",
-        &format!("{GOOD_LIB}\npub fn descriptive_safety(p: *const u8) -> u8 {{\n    // SAFETY: caller guarantees pointer is non-null and properly aligned.\n    unsafe {{ *p }}\n}}\n"),
+        &format!("{GOOD_LIB}\npub fn short_invariant(p: *const u8) -> u8 {{\n    // SAFETY: caller-checked non-null.\n    unsafe {{ *p }}\n}}\n"),
     );
-    repo.commit("feat: use descriptive safety comment");
+    repo.commit("feat: use legitimate short invariant safety comment");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.code, 0);
     assert!(
         run.titles("unsafe-safety-comment").is_empty(),
         "{}",
         run.stdout
+    );
+
+    // 3. Configurable placeholders in [gates.unsafe-safety-comment]
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\npub fn custom_p(p: *const u8) -> u8 {{\n    // SAFETY: custom_forbidden\n    unsafe {{ *p }}\n}}\n"),
+    );
+    repo.commit("feat: test configurable placeholder");
+    let run_custom = repo.check(&[
+        "--config-override",
+        "[gates.unsafe-safety-comment]\nplaceholders = [\"custom_forbidden\"]\n",
+    ]);
+    assert_eq!(
+        run_custom.code, 1,
+        "stdout: {}, stderr: {}",
+        run_custom.stdout, run_custom.stderr
+    );
+    assert_eq!(
+        run_custom.titles("unsafe-safety-comment"),
+        vec!["Unsafe Without SAFETY Comment"]
     );
 }
 
@@ -172,6 +193,29 @@ fn cli_check_format_junit_and_output_file() {
     let content = std::fs::read_to_string(&out_file).unwrap();
     assert!(content.contains("<testsuites name=\"discipline\""));
     assert!(content.contains("<testcase name=\"agents-md\""));
+    assert!(content.contains("<property name=\"examined\""));
+
+    // Validate against vendored junit-10.xsd
+    let schema_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/junit-10.xsd");
+    let script_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/validate.py");
+    let val = std::process::Command::new("python3")
+        .args([
+            script_path.to_str().unwrap(),
+            "junit",
+            out_file.to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("validate.py succeeds");
+    assert_eq!(
+        val.status.code(),
+        Some(0),
+        "stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&val.stdout),
+        String::from_utf8_lossy(&val.stderr)
+    );
 
     // With a failure
     repo.write(
@@ -195,6 +239,18 @@ fn cli_check_format_junit_and_output_file() {
     let fail_content = std::fs::read_to_string(&out_file).unwrap();
     assert!(fail_content.contains("<failure message=\"Vacuous Test Added\""));
     assert!(fail_content.contains("cannot fail"));
+    assert!(fail_content.contains("<property name=\"examined\""));
+
+    let val_fail = std::process::Command::new("python3")
+        .args([
+            script_path.to_str().unwrap(),
+            "junit",
+            out_file.to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("validate.py succeeds");
+    assert_eq!(val_fail.status.code(), Some(0));
 }
 
 #[test]
@@ -222,6 +278,29 @@ fn cli_check_format_sarif_and_output_file() {
     let file_parsed: serde_json::Value =
         serde_json::from_str(&file_content).expect("valid SARIF file json");
     assert_eq!(file_parsed["version"], "2.1.0");
+    assert!(file_parsed["runs"][0]["invocations"][0]["properties"]["totalExamined"].is_number());
+
+    // Validate against vendored sarif-schema-2.1.0.json
+    let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/schemas/sarif-schema-2.1.0.json");
+    let script_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/validate.py");
+    let val = std::process::Command::new("python3")
+        .args([
+            script_path.to_str().unwrap(),
+            "sarif",
+            out_file.to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("validate.py succeeds");
+    assert_eq!(
+        val.status.code(),
+        Some(0),
+        "stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&val.stdout),
+        String::from_utf8_lossy(&val.stderr)
+    );
 
     // With a failure
     repo.write(
@@ -252,6 +331,17 @@ fn cli_check_format_sarif_and_output_file() {
         fail_parsed["runs"][0]["results"][0]["ruleId"],
         "vacuous-tests"
     );
+
+    let val_fail = std::process::Command::new("python3")
+        .args([
+            script_path.to_str().unwrap(),
+            "sarif",
+            out_file.to_str().unwrap(),
+            schema_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("validate.py succeeds");
+    assert_eq!(val_fail.status.code(), Some(0));
 }
 
 #[test]
@@ -354,8 +444,8 @@ fn cli_gitlab_ci_auto_detection() {
         "junit.xml should be auto-created in GitLab CI"
     );
     assert!(
-        gl_sast.exists(),
-        "gl-sast-report.json should be auto-created in GitLab CI"
+        !gl_sast.exists(),
+        "gl-sast-report.json should NOT be auto-created in GitLab CI"
     );
 
     let cq_content = std::fs::read_to_string(&gl_cq).unwrap();
@@ -365,7 +455,11 @@ fn cli_gitlab_ci_auto_detection() {
 
     let junit_content = std::fs::read_to_string(&gl_junit).unwrap();
     assert!(junit_content.contains("<failure message=\"Vacuous Test Added\""));
-
-    let sast_content = std::fs::read_to_string(&gl_sast).unwrap();
-    assert!(sast_content.contains("\"version\": \"2.1.0\""));
+    assert!(!junit_content.is_empty());
+    assert!(!gl_sast.exists());
+    assert_eq!(cq_parsed[0]["severity"], "major");
+    assert_eq!(cq_parsed[0]["location"]["path"], "tests/a.rs");
+    assert_eq!(cq_parsed[0]["location"]["lines"]["begin"], 15);
+    assert_eq!(cq_parsed[0]["fingerprint"].as_str().unwrap().len(), 64);
+    assert_eq!(run.code, 1);
 }

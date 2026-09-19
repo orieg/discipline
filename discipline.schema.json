@@ -224,6 +224,26 @@
         }
       },
       "type": "object"
+    },
+    "UnsafeSafetyCommentGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "placeholders": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Additional placeholder words or phrases to reject in SAFETY comments"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -328,7 +348,7 @@
         "unsafe-safety-comment": {
           "allOf": [
             {
-              "$ref": "#/$defs/BasicGate"
+              "$ref": "#/$defs/UnsafeSafetyCommentGate"
             }
           ],
           "description": "unsafe blocks / impls carry a // SAFETY: comment"
