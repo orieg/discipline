@@ -10,8 +10,6 @@
 
 **Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust.** One static binary, identical in GitHub Actions, GitLab CI/CD, Forgejo Actions, Gitea Actions, Argo Workflows, pre-commit hooks, and an agent's local inner loop. Interactive guides and documentation: [orieg.github.io/discipline](https://orieg.github.io/discipline/).
 
-> **Status: Pre-release.** No version tag is published yet. The repository tracks unreleased `main` (`32c81b5`). Code snippets below pin this commit SHA. Upon first release (`v0.1.0`), snippets will track `@v0` / `v0.1.0`.
-
 ## Why Discipline?
 
 Autonomous coding agents operating in iterate-until-green loops optimize for passing tests, not preserving invariants:
@@ -69,12 +67,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # merge base must be reachable
-      - uses: orieg/discipline@32c81b5ab1d1f07d0e08b261cd4d83801a9d7bcd # unreleased: main @ 32c81b5
+      - uses: orieg/discipline@v0
         with:
           fail_on_warnings: true
 ```
 
-Tagged releases do not exist yet; the snippet pins the unreleased `main` commit SHA and will track `uses: orieg/discipline@v0` upon initial release (`v0.1.0`).
+The floating `@v0` ref automatically tracks the latest `v0.x.y` release while pinning against breaking changes. Use `@v0.1.0` if you require immutable release tag pinning.
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding a `removes:` directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
 

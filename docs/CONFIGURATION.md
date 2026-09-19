@@ -210,36 +210,6 @@ Discipline distinguishes between **configurable** and **bypassable**:
 
 Reference configurations proven in production repositories:
 
-### `orieg/expanse` (High-Assurance Rust Algorithms)
-
-Measured residue against merge base `HEAD~30` with unconfigured defaults:
-- `time-estimates`: 12 violations (system load average metrics and benchmarking durations, e.g. 6x `one-minute` in concurrency benchmarks, 1x `one-minute` in hot comparisons, `forty minutes`, `6-hour`, `6.06 days`, `1-min`, `20 minutes`). <!-- discipline:allow(time-estimates) -->
-- `pii`: 8 violations (test assertion fixtures in repository verification scripts matching sample home paths and LAN IP `192.168.1.20`). <!-- discipline:allow(pii) -->
-- `ignored-tests`: 7 warnings (conditional skips under `#[cfg_attr(miri, ignore)]`).
-
-Minimal configuration:
-
-```toml
-[meta]
-version = 1
-name = "expanse"
-
-[gates.pii]
-# Repository audit scripts contain synthetic test patterns for home paths and LAN IPs
-exempt_paths = [
-    "scripts/**",
-]
-
-[gates.time-estimates]
-# Benchmark methodologies and operational docs reference system load averages (e.g. 1-minute load avg)
-exempt_paths = [
-    "docs/benchmarks/**",
-    "docs/DATABASE.md",
-    "docs/design/large-values.md",
-    "docs/TESTING.md",
-]
-```
-
 ### `orieg/php-judy` (C Extension & PHP Runtime)
 
 Measured residue against merge base `HEAD~30` with unconfigured defaults:

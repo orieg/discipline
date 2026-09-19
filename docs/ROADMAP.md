@@ -10,8 +10,6 @@ This document establishes the delivery phases, dependency graph, go/no-go gates,
 
 **Superseded when:** A milestone completes, a new phase is initiated, or planned gate scope evolves. Update in place; do not fork.
 
-> **Status: Pre-release.** No version tag is published yet. The repository tracks unreleased `main` (`32c81b5`). Tagged releases begin with `v0.1.0`.
-
 ---
 
 ## Dependency Graph
