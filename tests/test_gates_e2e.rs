@@ -4198,6 +4198,168 @@ fn java_csharp_ruby_fixtures_parsed_and_discriminate() {
         !ignored_violations.is_empty(),
         "ignored tests must be detected"
     );
+
+    // 3. Syntax error fixtures mark parse errors
+    let java_syntax = std::fs::read_to_string("tests/fixtures/java/syntax_error.java").unwrap();
+    let csharp_syntax = std::fs::read_to_string("tests/fixtures/csharp/syntax_error.cs").unwrap();
+    let ruby_syntax = std::fs::read_to_string("tests/fixtures/ruby/syntax_error.rb").unwrap();
+
+    let registry = discipline::ast::default_registry();
+    let vocab = discipline::ast::AssertVocabulary::default();
+
+    let java_facts = registry
+        .find_pack("Test.java")
+        .unwrap()
+        .extract("Test.java", &java_syntax, &vocab)
+        .unwrap();
+    assert!(
+        java_facts.has_parse_errors,
+        "java syntax error must set has_parse_errors"
+    );
+
+    let csharp_facts = registry
+        .find_pack("Test.cs")
+        .unwrap()
+        .extract("Test.cs", &csharp_syntax, &vocab)
+        .unwrap();
+    assert!(
+        csharp_facts.has_parse_errors,
+        "csharp syntax error must set has_parse_errors"
+    );
+
+    let ruby_facts = registry
+        .find_pack("test.rb")
+        .unwrap()
+        .extract("test.rb", &ruby_syntax, &vocab)
+        .unwrap();
+    assert!(
+        ruby_facts.has_parse_errors,
+        "ruby syntax error must set has_parse_errors"
+    );
+}
+
+#[test]
+fn go_benchmarks_do_not_trigger_vacuous_tests() {
+    let repo = Repo::new();
+
+    let go_bench = r#"package main
+
+import "testing"
+
+func TestReal(t *testing.T) {
+	t.Fatal("fail")
+}
+
+func BenchmarkFastLoop(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		// timing loop without assertions
+	}
+}
+"#;
+    repo.write("bench_test.go", go_bench);
+    repo.commit("feat: add benchmark and test");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 0,
+        "benchmark should not trigger vacuous test: stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert_eq!(run.titles("vacuous-tests").len(), 0);
+}
+
+#[test]
+fn unannotated_skip_rationale_enforced() {
+    let repo = Repo::new();
+
+    let code = r#"
+#[test]
+#[ignore]
+fn test_something() {
+    let x = 1 + 2;
+    assert_eq!(x, 3);
+}
+"#;
+    repo.write("tests/my_test.rs", code);
+    repo.commit("test: add ignored test");
+
+    // 1. With vacuous placeholder "todo", it is rejected
+    let run_todo = repo.check_with_pr(&["--base", "HEAD~1"], "allow-ignore: test_something todo");
+    assert_eq!(run_todo.code, 1, "todo rationale must be rejected");
+    let outcome = run_todo.outcome("ignored-tests");
+    let violations = outcome["violations"].as_array().unwrap();
+    assert!(!violations.is_empty(), "expected ignored-tests violation");
+    assert!(violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("lacks a substantive rationale or issue tracker reference"));
+
+    // 2. With substantive rationale, it passes
+    let run_good = repo.check_with_pr(
+        &["--base", "HEAD~1"],
+        "allow-ignore: test_something #42 fix flaky timer",
+    );
+    assert_eq!(
+        run_good.code, 0,
+        "substantive rationale must be accepted, stdout: {}\nstderr: {}",
+        run_good.stdout, run_good.stderr
+    );
+}
+
+#[test]
+fn bench_noise_warning_and_margin() {
+    let repo = Repo::new();
+
+    let base_json = r#"{
+  "benchmarks": [
+    {
+      "name": "BM_Scan",
+      "cpu_time": 100.0,
+      "time_unit": "ns",
+      "stddev": 30.0
+    }
+  ]
+}"#;
+    let head_json = r#"{
+  "benchmarks": [
+    {
+      "name": "BM_Scan",
+      "cpu_time": 101.0,
+      "time_unit": "ns",
+      "stddev": 35.0
+    }
+  ]
+}"#;
+    repo.write("bench.json", base_json);
+    repo.commit("bench: base");
+
+    repo.write("bench.json", head_json);
+    repo.commit("bench: head");
+
+    // With max_noise_cv = 0.20, CV = 30/100 = 30% > 20% -> warning emitted in notes
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[gates.bench-regression]\nmax_noise_cv = 0.20\nnoise_margin_pct = 2.0\n"
+        ),
+    );
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    // Since noise_margin_pct = 2.0%, regression of 1.0% is within tolerance
+    assert_eq!(
+        run.code, 0,
+        "noise margin should permit mild variation, stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    let outcome = run.outcome("bench-regression");
+    let notes = outcome["notes"].as_array().unwrap();
+    let has_noise_warning = notes
+        .iter()
+        .any(|n| n.as_str().unwrap().contains("exhibits high variance"));
+    assert!(
+        has_noise_warning,
+        "expected high variance warning in notes: {notes:?}"
+    );
 }
 
 #[test]

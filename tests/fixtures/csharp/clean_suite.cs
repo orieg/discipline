@@ -21,5 +21,13 @@ namespace Discipline.Tests
             Assert.NotNull(val);
             Assert.Equal(val, val);
         }
+
+        [Test]
+        public void TestNUnitAddition()
+        {
+            int product = 6 * 7;
+            Assert.AreEqual(42, product);
+            Assert.IsTrue(product > 0);
+        }
     }
 }

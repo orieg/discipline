@@ -673,26 +673,40 @@ pub fn evaluate_vacuous_tests(
     out.examined = added.len();
 
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
-        if !a.test.is_vacuous() {
-            continue;
+        if a.test.is_vacuous() {
+            let why = if a.test.total_asserts == 0 {
+                "contains no assertion".to_string()
+            } else {
+                format!(
+                    "contains only tautological assertions ({} of {})",
+                    a.test.tautologies, a.test.total_asserts
+                )
+            };
+            out.push(
+                settings.severity(),
+                "Vacuous Test Added",
+                Some(a.path),
+                Some(a.test.line),
+                format!("New test `{}` {why}; it cannot fail.", a.test.name),
+                "Assert the behavior under test. If the suite asserts through helpers or custom \
+                 macros, declare them in `assert_helper_fns` / `extra_assert_macros`.",
+            );
+        } else if let Some(min) = settings.min_assertions_per_test {
+            if a.test.effective_asserts() < min {
+                out.push(
+                    settings.severity(),
+                    "Insufficient Assertion Density",
+                    Some(a.path),
+                    Some(a.test.line),
+                    format!(
+                        "New test `{}` contains {} effective assertion(s), failing minimum assertion density floor of {min}.",
+                        a.test.name,
+                        a.test.effective_asserts()
+                    ),
+                    "Add additional discriminating assertions to meet the configured assertion density floor.",
+                );
+            }
         }
-        let why = if a.test.total_asserts == 0 {
-            "contains no assertion".to_string()
-        } else {
-            format!(
-                "contains only tautological assertions ({} of {})",
-                a.test.tautologies, a.test.total_asserts
-            )
-        };
-        out.push(
-            settings.severity(),
-            "Vacuous Test Added",
-            Some(a.path),
-            Some(a.test.line),
-            format!("New test `{}` {why}; it cannot fail.", a.test.name),
-            "Assert the behavior under test. If the suite asserts through helpers or custom \
-             macros, declare them in `assert_helper_fns` / `extra_assert_macros`.",
-        );
     }
     Ok(out)
 }
@@ -726,6 +740,33 @@ pub fn evaluate_ignored_tests(
         if let Some(record) =
             tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
         {
+            let subject = leaf_name(test);
+            let cleaned = record.reason.trim().trim_matches(['"', '\'', '`']);
+            let explanation = cleaned
+                .strip_prefix(subject)
+                .map(|s| s.trim_start_matches(|c: char| c == ':' || c == '-' || c.is_whitespace()))
+                .unwrap_or(cleaned)
+                .trim();
+            if explanation.is_empty()
+                || explanation.eq_ignore_ascii_case("todo")
+                || explanation.eq_ignore_ascii_case("tbd")
+                || explanation.eq_ignore_ascii_case("fix later")
+                || explanation.eq_ignore_ascii_case("temporary")
+                || explanation.eq_ignore_ascii_case("wip")
+            {
+                out.push(
+                    settings.severity(),
+                    "Unannotated Skip Justification",
+                    Some(path),
+                    Some(test.line),
+                    format!(
+                        "Directive for skipped test `{}` lacks a substantive rationale or issue tracker reference (got `{}`).",
+                        test.name, record.reason
+                    ),
+                    "Provide a substantive explanation or linked issue reference (e.g. `allow-ignore: <test> #123 fix broken upstream API`).",
+                );
+                continue;
+            }
             out.overrides.push(record);
             continue;
         }

@@ -104,6 +104,55 @@ sequenceDiagram
     Report-->>CLI: Exit code (0 = pass, 1 = violations, 2 = could not check)
 ```
 
+### 2.3 AST Test Node Extraction & Assertion Counting Pipeline
+
+```mermaid
+flowchart TD
+    SRC["Changed Source File Blob"] --> LANG{"Language Dispatcher by Extension"}
+    LANG -->|"*.rs"| P_RS["Rust Parser (tree-sitter-rust)"]
+    LANG -->|"*.py"| P_PY["Python Parser (tree-sitter-python)"]
+    LANG -->|"*.js, *.ts"| P_JS["JS / TS Parser (tree-sitter)"]
+    LANG -->|"*.go"| P_GO["Go Parser (tree-sitter-go)"]
+    LANG -->|"*.java"| P_JV["Java Parser (tree-sitter-java)"]
+    LANG -->|"*.cs"| P_CS["C# Parser (tree-sitter-c-sharp)"]
+    LANG -->|"*.c, *.cpp"| P_CPP["C / C++ Parser (tree-sitter-cpp)"]
+    LANG -->|"*.rb"| P_RB["Ruby Parser (tree-sitter-ruby)"]
+    LANG -->|"*.php, *.phpt"| P_PHP["PHP / Golden Parser"]
+    LANG -->|"Unmatched"| UNK["Unanalysed Language Note (F7)"]
+
+    P_RS --> EXT["Fact Extractor Engine"]
+    P_PY --> EXT
+    P_JS --> EXT
+    P_GO --> EXT
+    P_JV --> EXT
+    P_CS --> EXT
+    P_CPP --> EXT
+    P_RB --> EXT
+    P_PHP --> EXT
+
+    EXT --> T_DISC{"Partition Function Nodes"}
+    T_DISC -->|"Go: Benchmark* with *testing.B"| BENCH_NODE["Benchmark Node (Excluded from Unit Tests)"]
+    T_DISC -->|"Test Attributes / Naming Conventions"| TEST_NODE["Test Function Node"]
+
+    TEST_NODE --> SKIP{"Check Skip / Ignore Markers"}
+    SKIP -->|"#[ignore], @skip, xit, [Ignore]"| FLG_SKIP["Mark TestFn.ignored = true"]
+    SKIP -->|"Active Executable"| SCAN_AST["Traverse AST Function Body"]
+
+    SCAN_AST --> CNT_ASSERT["Count Assertions & Matchers"]
+    CNT_ASSERT --> TAUT{"Inspect Assertion AST Expressions"}
+    TAUT -->|"assert_eq!(1, 1), assert!(true)"| FLG_TAUT["Increment tautological_count"]
+    TAUT -->|"Custom Helper Call"| CHK_HELP{"In assert_helper_fns?"}
+    CHK_HELP -->|"Yes"| INC_HELP["Count as Effective Assertion"]
+    CHK_HELP -->|"No"| REG_CALL["Regular Function Call"]
+    TAUT -->|"Standard Assert Macro / Expect Matcher"| INC_STD["Count Effective & Strong Assertions"]
+
+    FLG_SKIP --> FACTS["Output ParsedFileFacts (tests, assertions, unsafe)"]
+    FLG_TAUT --> FACTS
+    INC_HELP --> FACTS
+    INC_STD --> FACTS
+    REG_CALL --> FACTS
+```
+
 ---
 
 ## 3. The Fail-Closed Contract

@@ -280,7 +280,9 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
             // Evaluate regression
             match (&b.value, &h.value) {
                 (MetricValue::Discrete(d_base), MetricValue::Discrete(d_head)) => {
-                    if d_base.regressed(d_head, settings.tolerance_pct)? {
+                    let effective_tolerance =
+                        settings.tolerance_pct + settings.noise_margin_pct.unwrap_or(0.0);
+                    if d_base.regressed(d_head, effective_tolerance)? {
                         if let Some(ov) = allowed {
                             out.overrides.push(ov);
                         } else {
@@ -292,7 +294,7 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
                                 None,
                                 format!(
                                     "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), exceeding tolerance {:.2}%",
-                                    h.name, file.path, delta, d_base.count, d_head.count, h.unit, settings.tolerance_pct
+                                    h.name, file.path, delta, d_base.count, d_head.count, h.unit, effective_tolerance
                                 ),
                                 &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", h.name, h.name),
                             );
@@ -300,8 +302,28 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
                     }
                 }
                 (MetricValue::Continuous(c_base), MetricValue::Continuous(c_head)) => {
+                    let effective_tolerance =
+                        settings.tolerance_pct + settings.noise_margin_pct.unwrap_or(0.0);
                     let decision =
-                        evaluate_continuous_regression(c_base, c_head, settings.tolerance_pct)?;
+                        evaluate_continuous_regression(c_base, c_head, effective_tolerance)?;
+
+                    if let Some(max_cv) = settings.max_noise_cv {
+                        if c_base.is_noisy(max_cv) || c_head.is_noisy(max_cv) {
+                            let base_cv_str = c_base
+                                .cv()
+                                .map(|cv| format!("{:.1}%", cv * 100.0))
+                                .unwrap_or_else(|| "n/a".into());
+                            let head_cv_str = c_head
+                                .cv()
+                                .map(|cv| format!("{:.1}%", cv * 100.0))
+                                .unwrap_or_else(|| "n/a".into());
+                            out.notes.push(format!(
+                                "warning: benchmark `{}` exhibits high variance (base CV: {base_cv_str}, head CV: {head_cv_str}, exceeds threshold {:.1}%); baseline/head comparison may be noisy",
+                                h.name, max_cv * 100.0
+                            ));
+                        }
+                    }
+
                     if decision.is_regression {
                         if let Some(ov) = allowed {
                             out.overrides.push(ov);
@@ -319,7 +341,7 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
                             );
                         }
                     } else if decision.method == "not_comparable_no_ci"
-                        || decision.point_delta_pct > settings.tolerance_pct
+                        || decision.point_delta_pct > effective_tolerance
                     {
                         out.notes
                             .push(format!("benchmark `{}`: {}", h.name, decision.note));
@@ -480,11 +502,20 @@ fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
             } else {
                 None
             };
-            let est = ContinuousEstimate {
+            let std_dev = val
+                .get("std_dev")
+                .and_then(|s| s.get("point_estimate"))
+                .and_then(|p| p.as_f64())
+                .or_else(|| mean_val.get("standard_error").and_then(|s| s.as_f64()));
+            let mut est = ContinuousEstimate {
                 point_estimate: point,
                 ci,
+                std_dev: None,
                 unit: "ns".to_string(),
             };
+            if let Some(sd) = std_dev {
+                est = est.with_std_dev(sd);
+            }
             metrics.push(BenchmarkMetric {
                 name: "mean".to_string(),
                 count: point,
@@ -547,7 +578,15 @@ fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
                     .and_then(|u| u.as_str())
                     .unwrap_or("ns")
                     .to_string();
-                let est = ContinuousEstimate::point_only(cpu_time, &unit)?;
+                let std_dev = b
+                    .get("stddev")
+                    .or_else(|| b.get("standard_deviation"))
+                    .and_then(|v| v.as_f64())
+                    .or_else(|| b.get("cv").and_then(|v| v.as_f64()).map(|cv| cv * cpu_time));
+                let mut est = ContinuousEstimate::point_only(cpu_time, &unit)?;
+                if let Some(sd) = std_dev {
+                    est = est.with_std_dev(sd);
+                }
                 metrics.push(BenchmarkMetric {
                     name,
                     count: cpu_time,
@@ -561,7 +600,14 @@ fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
                 .and_then(|s| s.get("mean").or_else(|| s.get("median")))
                 .and_then(|v| v.as_f64())
             {
-                let est = ContinuousEstimate::point_only(mean, "s")?;
+                let std_dev = b
+                    .get("stats")
+                    .and_then(|s| s.get("stddev").or_else(|| s.get("std_dev")))
+                    .and_then(|v| v.as_f64());
+                let mut est = ContinuousEstimate::point_only(mean, "s")?;
+                if let Some(sd) = std_dev {
+                    est = est.with_std_dev(sd);
+                }
                 metrics.push(BenchmarkMetric {
                     name,
                     count: mean,

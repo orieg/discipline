@@ -135,7 +135,8 @@ pub fn generate_schema() -> Value {
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "extra_assert_macros": { "$ref": "#/$defs/StringListOrReset" },
-                    "assert_helper_fns": { "$ref": "#/$defs/StringListOrReset" }
+                    "assert_helper_fns": { "$ref": "#/$defs/StringListOrReset" },
+                    "min_assertions_per_test": { "type": "integer", "description": "Minimum assertions required per test method" }
                 }
             },
             "DeletionGate": {
@@ -195,7 +196,8 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "paths": { "$ref": "#/$defs/StringListOrReset" }
+                    "paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "allow_updates": { "type": "boolean", "description": "Permit snapshot updates without error" }
                 }
             },
             "BenchRegressionGate": {
@@ -206,6 +208,8 @@ pub fn generate_schema() -> Value {
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "tolerance_pct": { "type": "number", "description": "Maximum allowed regression percentage" },
+                    "noise_margin_pct": { "type": "number", "description": "Configurable noise margin added to tolerance_pct" },
+                    "max_noise_cv": { "type": "number", "description": "Maximum acceptable coefficient of variation (std_dev / mean)" },
                     "paths": { "$ref": "#/$defs/StringListOrReset" },
                     "provenance": { "type": "string", "description": "Expected host/runner provenance tag for benchmark artifacts" },
                     "allow_cross_host": { "type": "boolean", "description": "Allow benchmark comparison across mismatched host/runner provenance" }

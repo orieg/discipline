@@ -16,6 +16,10 @@
         "extra_assert_macros": {
           "$ref": "#/$defs/StringListOrReset"
         },
+        "min_assertions_per_test": {
+          "description": "Minimum assertions required per test method",
+          "type": "integer"
+        },
         "severity": {
           "$ref": "#/$defs/Severity"
         }
@@ -51,6 +55,14 @@
         },
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"
+        },
+        "max_noise_cv": {
+          "description": "Maximum acceptable coefficient of variation (std_dev / mean)",
+          "type": "number"
+        },
+        "noise_margin_pct": {
+          "description": "Configurable noise margin added to tolerance_pct",
+          "type": "number"
         },
         "paths": {
           "$ref": "#/$defs/StringListOrReset"
@@ -247,6 +259,10 @@
     "GoldenGate": {
       "additionalProperties": false,
       "properties": {
+        "allow_updates": {
+          "description": "Permit snapshot updates without error",
+          "type": "boolean"
+        },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"

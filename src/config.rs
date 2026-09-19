@@ -388,6 +388,8 @@ pub struct AssertionGate {
     /// Function names (final path segment) whose call counts as an assertion,
     /// for suites that assert through helpers such as `check_invariants(&t)`.
     pub assert_helper_fns: Vec<String>,
+    /// Minimum assertions required per test method (default: None).
+    pub min_assertions_per_test: Option<usize>,
 }
 
 impl Default for AssertionGate {
@@ -398,6 +400,7 @@ impl Default for AssertionGate {
             exempt_paths: Vec::new(),
             extra_assert_macros: Vec::new(),
             assert_helper_fns: Vec::new(),
+            min_assertions_per_test: None,
         }
     }
 }
@@ -567,6 +570,10 @@ pub struct BenchRegressionGate {
     pub paths: Vec<String>,
     pub provenance: Option<String>,
     pub allow_cross_host: bool,
+    /// Maximum acceptable coefficient of variation (std_dev / mean). Baselines exceeding this trigger a stability warning.
+    pub max_noise_cv: Option<f64>,
+    /// Configurable noise margin added to tolerance_pct.
+    pub noise_margin_pct: Option<f64>,
 }
 
 impl Default for BenchRegressionGate {
@@ -599,6 +606,8 @@ impl Default for BenchRegressionGate {
             .collect(),
             provenance: None,
             allow_cross_host: false,
+            max_noise_cv: None,
+            noise_margin_pct: None,
         }
     }
 }

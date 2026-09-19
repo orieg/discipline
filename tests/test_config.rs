@@ -327,3 +327,17 @@ fn schema_json_def_references_resolve() {
         }
     }
 }
+
+#[test]
+fn schema_json_file_in_sync_with_code() {
+    let committed = std::fs::read_to_string("discipline.schema.json")
+        .expect("discipline.schema.json must exist");
+    let generated = serde_json::to_string_pretty(&discipline::schema::generate_schema())
+        .expect("must serialize generated schema")
+        + "\n";
+
+    assert_eq!(
+        committed, generated,
+        "discipline.schema.json is out of sync with Rust Serde models; run `cargo run -- docs --write` to update"
+    );
+}

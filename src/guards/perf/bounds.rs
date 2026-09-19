@@ -68,6 +68,7 @@ impl ConfidenceInterval {
 pub struct ContinuousEstimate {
     pub point_estimate: f64,
     pub ci: Option<ConfidenceInterval>,
+    pub std_dev: Option<f64>,
     pub unit: String,
 }
 
@@ -82,6 +83,7 @@ impl ContinuousEstimate {
         Ok(Self {
             point_estimate,
             ci: None,
+            std_dev: None,
             unit: unit.into(),
         })
     }
@@ -112,8 +114,31 @@ impl ContinuousEstimate {
         Ok(Self {
             point_estimate,
             ci: Some(ci),
+            std_dev: None,
             unit: unit.into(),
         })
+    }
+
+    pub fn with_std_dev(mut self, std_dev: f64) -> Self {
+        if std_dev >= 0.0 {
+            self.std_dev = Some(std_dev);
+        }
+        self
+    }
+
+    /// Coefficient of variation: relative dispersion $\sigma / \mu$.
+    pub fn cv(&self) -> Option<f64> {
+        if let Some(sd) = self.std_dev {
+            if self.point_estimate > 0.0 {
+                return Some(sd / self.point_estimate);
+            }
+        }
+        None
+    }
+
+    /// Evaluates whether the benchmark variance exceeds an acceptable noise threshold.
+    pub fn is_noisy(&self, max_cv: f64) -> bool {
+        self.cv().is_some_and(|cv| cv > max_cv)
     }
 }
 
@@ -359,5 +384,15 @@ mod tests {
         let (lower_zero, upper_zero) = wilson_score_interval(0, 10, 0.95).unwrap();
         assert_eq!(lower_zero, 0.0);
         assert!((upper_zero - 0.2775).abs() < 0.01, "upper: {}", upper_zero);
+    }
+
+    #[test]
+    fn test_continuous_estimate_cv_and_noise_detection() {
+        let est = ContinuousEstimate::point_only(100.0, "ns")
+            .unwrap()
+            .with_std_dev(15.0);
+        assert_eq!(est.cv().unwrap(), 0.15);
+        assert!(!est.is_noisy(0.20));
+        assert!(est.is_noisy(0.10));
     }
 }

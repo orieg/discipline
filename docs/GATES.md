@@ -144,7 +144,7 @@ When a change touches source files in a language without an active pack, each AS
   - Semantic non-assertions that involve external function calls (e.g. `assert!(check_validity())` where `check_validity()` returns `true` unconditionally).
   - Tests whose assertions occur in deeply nested helper callbacks not tracked by static analysis.
 - **Lifting directive:** `allow-assertion-drop: <test-name> <reason>` or configuring `assert_helper_fns`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_assert_macros`, `assert_helper_fns`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_assert_macros`, `assert_helper_fns`, `min_assertions_per_test`.
 
 #### `ignored-tests`
 - **Rule:** An existing test may not become ignored or skipped, and a new test may not arrive skipped.
@@ -471,7 +471,215 @@ When a change touches source files in a language without an active pack, each AS
   - Uncommitted benchmark results (benchmark files must be committed or generated in CI workspace).
   - Wall-clock variance from co-resident CPU contention without sample distribution statistics.
 - **Lifting directive:** `allow-regression: <benchmark-name-or-path> <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `tolerance_pct`, `paths`, `provenance`, `allow_cross_host`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `tolerance_pct`, `paths`, `provenance`, `allow_cross_host`, `max_noise_cv`, `noise_margin_pct`.
+
+---
+
+## Preset Profile Configurations
+
+The following curated configuration profiles provide turn-key setups tailored for specific engineering environments. Copy the desired profile directly into `discipline.toml` at the repository root.
+
+### Profile 1: Research & High-Assurance Algorithm Labs
+
+Tailored for scientific computing, cryptographic libraries, and high-assurance algorithmic cores (e.g. `expanse`). Enforces zero-tolerance benchmark drift with statistical variance guards, strict hygiene (zero time estimates, PII redaction), property-test ratchets, and immutability of golden outputs.
+
+```toml
+schema_version = 1
+fail_on_warnings = true
+fail_on_overrides = false
+
+[directives]
+sources = ["pr-body", "commits"]
+allow_hidden = false
+
+[gates.assertion-reduction]
+enabled = true
+severity = "error"
+
+[gates.vacuous-tests]
+enabled = true
+severity = "error"
+min_assertions_per_test = 1
+
+[gates.ignored-tests]
+enabled = true
+severity = "error"
+
+[gates.unsafe-safety-comment]
+enabled = true
+severity = "error"
+
+[gates.deletion-rationale]
+enabled = true
+severity = "error"
+
+[gates.time-estimates]
+enabled = true
+severity = "error"
+
+[gates.pii]
+enabled = true
+severity = "error"
+allow_lan_ips = false
+
+[gates.agent-scratch]
+enabled = true
+severity = "error"
+
+[gates.config-integrity]
+enabled = true
+severity = "error"
+
+[gates.golden-output]
+enabled = true
+severity = "error"
+
+[gates.dependency-delta]
+enabled = true
+severity = "error"
+deny_wildcards = true
+enforce_deny_toml = true
+enforce_git_pins = true
+
+[gates.test-budget]
+enabled = true
+severity = "error"
+ratchet = true
+
+[gates.bench-regression]
+enabled = true
+severity = "error"
+tolerance_pct = 3.0
+max_noise_cv = 0.15
+noise_margin_pct = 2.0
+provenance = true
+allow_cross_host = false
+```
+
+### Profile 2: Enterprise Backend & Systems Services
+
+Tailored for production web services, distributed systems, and enterprise microservices. Focuses on multi-language test coverage preservation, supply chain audit verification, PII redaction, and preventing silent test suppression.
+
+```toml
+schema_version = 1
+fail_on_warnings = false
+fail_on_overrides = false
+
+[directives]
+sources = ["pr-body"]
+allow_hidden = false
+
+[gates.assertion-reduction]
+enabled = true
+severity = "error"
+assert_helper_fns = ["check_response_ok", "assert_valid_record"]
+
+[gates.vacuous-tests]
+enabled = true
+severity = "error"
+
+[gates.ignored-tests]
+enabled = true
+severity = "error"
+
+[gates.deletion-rationale]
+enabled = true
+severity = "error"
+paths = ["tests/**", "src/**", "migrations/**"]
+
+[gates.time-estimates]
+enabled = true
+severity = "warning"
+
+[gates.pii]
+enabled = true
+severity = "error"
+
+[gates.agent-scratch]
+enabled = true
+severity = "error"
+
+[gates.config-integrity]
+enabled = true
+severity = "error"
+
+[gates.dependency-delta]
+enabled = true
+severity = "error"
+deny_wildcards = true
+
+[gates.command]
+enabled = true
+severity = "error"
+
+[[gates.command.commands]]
+name = "cargo-deny"
+preset = "cargo-deny"
+```
+
+### Profile 3: AI Coding Agent Diff Sentinel
+
+Designed specifically for automated agent workflows (Claude Code, Antigravity, Copilot, Cursor). Restricts agent drift, prevents deletion or weakening of test suites, blocks ghost/vacuous tests with assertion density requirements, rejects placeholder justifications (e.g. `todo`, `fix later`), and bans ephemeral agent scratch directories from entering git history.
+
+```toml
+schema_version = 1
+fail_on_warnings = true
+fail_on_overrides = false
+
+[directives]
+sources = ["pr-body"]
+allow_hidden = false
+
+[gates.agents-md]
+enabled = true
+severity = "error"
+
+[gates.assertion-reduction]
+enabled = true
+severity = "error"
+
+[gates.vacuous-tests]
+enabled = true
+severity = "error"
+min_assertions_per_test = 1
+
+[gates.ignored-tests]
+enabled = true
+severity = "error"
+
+[gates.unsafe-safety-comment]
+enabled = true
+severity = "error"
+
+[gates.deletion-rationale]
+enabled = true
+severity = "error"
+
+[gates.time-estimates]
+enabled = true
+severity = "error"
+
+[gates.pii]
+enabled = true
+severity = "error"
+
+[gates.agent-scratch]
+enabled = true
+severity = "error"
+
+[gates.config-integrity]
+enabled = true
+severity = "error"
+
+[gates.golden-output]
+enabled = true
+severity = "error"
+
+[gates.test-budget]
+enabled = true
+severity = "error"
+ratchet = true
+```
 
 ---
 

@@ -111,16 +111,17 @@ impl<'a> GoExtractor<'a> {
         let name_node = node.child_by_field_name("name");
         let func_name = name_node.map(|n| self.text(n)).unwrap_or("");
 
-        // In Go, tests are named TestXxx, BenchmarkXxx, FuzzXxx and take a pointer to testing.T, testing.B, testing.F
-        let is_test_name = func_name.starts_with("Test")
-            || func_name.starts_with("Benchmark")
-            || func_name.starts_with("Fuzz");
+        // Benchmarks (BenchmarkXxx taking *testing.B) are performance harnesses, not assertion-bearing unit tests.
+        if func_name.starts_with("Benchmark") || self.is_benchmark_signature(node) {
+            return;
+        }
 
+        let is_test_name = func_name.starts_with("Test") || func_name.starts_with("Fuzz");
         if !is_test_name && !self.is_test_path {
             return;
         }
 
-        if !self.is_testing_signature(node) {
+        if !self.is_unit_test_signature(node) {
             return;
         }
 
@@ -142,12 +143,29 @@ impl<'a> GoExtractor<'a> {
         self.facts.tests.push(test_fn);
     }
 
-    fn is_testing_signature(&self, func_node: Node) -> bool {
+    fn is_benchmark_signature(&self, func_node: Node) -> bool {
         let Some(params) = func_node.child_by_field_name("parameters") else {
             return false;
         };
+        let mut cursor = params.walk();
+        for child in params.children(&mut cursor) {
+            if child.kind() == "parameter_declaration" {
+                let type_text = child
+                    .child_by_field_name("type")
+                    .map(|n| self.text(n))
+                    .unwrap_or("");
+                if type_text.contains("testing.B") || type_text.ends_with("*B") {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 
-        // If function name starts with Test/Benchmark/Fuzz, check if first param is *testing.T / *testing.B / *testing.F / t *T
+    fn is_unit_test_signature(&self, func_node: Node) -> bool {
+        let Some(params) = func_node.child_by_field_name("parameters") else {
+            return false;
+        };
         let mut cursor = params.walk();
         for child in params.children(&mut cursor) {
             if child.kind() == "parameter_declaration" {
@@ -156,10 +174,8 @@ impl<'a> GoExtractor<'a> {
                     .map(|n| self.text(n))
                     .unwrap_or("");
                 if type_text.contains("testing.T")
-                    || type_text.contains("testing.B")
                     || type_text.contains("testing.F")
                     || type_text.ends_with("*T")
-                    || type_text.ends_with("*B")
                     || type_text.ends_with("*F")
                 {
                     return true;
@@ -482,5 +498,35 @@ func TestSuite(t *testing.T) {
         assert!(facts.tests[1].ignored);
 
         assert_eq!(facts.tests[2].name, "TestSuite");
+    }
+
+    #[test]
+    fn test_go_benchmarks_distinguished_from_unit_tests() {
+        let src = r#"
+package main
+
+import "testing"
+
+func TestReal(t *testing.T) {
+	t.Fatal("fail")
+}
+
+func BenchmarkSearch(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		// Benchmark timing loop without assertions
+	}
+}
+"#;
+        let pack = GoPack;
+        let facts = pack
+            .extract("bench_test.go", src, &AssertVocabulary::default())
+            .expect("extraction must succeed");
+
+        assert_eq!(
+            facts.tests.len(),
+            1,
+            "only TestReal must be extracted as a test"
+        );
+        assert_eq!(facts.tests[0].name, "TestReal");
     }
 }

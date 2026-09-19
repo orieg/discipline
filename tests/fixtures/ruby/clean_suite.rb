@@ -11,6 +11,11 @@ class CleanCalculatorTest < Minitest::Test
     product = 6 * 7
     assert_equal 42, product
   end
+
+  def test_refutations
+    refute false
+    refute_equal 43, 42
+  end
 end
 
 RSpec.describe "StringFormatter" do
