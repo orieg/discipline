@@ -125,10 +125,10 @@ fn unanalysed_languages_are_named_not_silently_passed() {
 #[test]
 fn unsupported_source_files_group_by_extension() {
     let repo = Repo::new();
-    repo.write("ext/judy.c", "void foo() {}\n");
-    repo.write("ext/judy.h", "#define FOO 1\n");
+    repo.write("ext/judy.cs", "class Foo {}\n");
+    repo.write("ext/judy.swift", "class Bar {}\n");
     repo.write("tests/001.rb", "def test_foo; end\n");
-    repo.commit("feat: c and ruby");
+    repo.commit("feat: csharp, swift, and ruby");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0);
     for gate in [
@@ -140,7 +140,7 @@ fn unsupported_source_files_group_by_extension() {
         let notes = run.outcome(gate)["notes"].to_string();
         assert!(
             notes.contains("3 changed source file(s)")
-                && notes.contains("2 .c/.h, 1 .rb")
+                && notes.contains("1 .cs, 1 .rb, 1 .swift")
                 && notes.contains("NOT analysed"),
             "gate {gate} should format extension breakdown: {notes}"
         );
@@ -205,6 +205,29 @@ fn php_source_files_are_analysed_by_php_pack() {
         assert!(
             !notes.contains("NOT analysed"),
             "gate {gate} should analyse php files: {notes}"
+        );
+    }
+}
+
+#[test]
+fn c_cpp_source_files_are_analysed_by_c_cpp_pack() {
+    let repo = Repo::new();
+    repo.write(
+        "crates/expanse-capi/smoke/modern_api_smoke.c",
+        "#include <assert.h>\nint main(void) { int v = 42; assert(v == 42); return 0; }\n",
+    );
+    repo.write(
+        "tests/test_vector.cpp",
+        "TEST(VectorSuite, Push) { int s = 1; EXPECT_EQ(s, 1); }\n",
+    );
+    repo.commit("feat: c and cpp tests");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for gate in ["assertion-reduction", "vacuous-tests", "ignored-tests"] {
+        let notes = run.outcome(gate)["notes"].to_string();
+        assert!(
+            !notes.contains("NOT analysed"),
+            "gate {gate} should analyse c/cpp files: {notes}"
         );
     }
 }
@@ -3128,6 +3151,76 @@ class SkipTest extends TestCase {
         &[(
             "PR_BODY",
             "allow-ignore: SkipTest::testSkipped skipped for refactoring",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("ignored-tests");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn c_cpp_assertion_reduction_and_vacuous_tests_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_cpp = r#"
+TEST(CalcSuite, Calc) {
+    EXPECT_EQ(2, 1 + 1);
+    EXPECT_EQ(4, 2 + 2);
+}
+"#;
+    repo.write("tests/CalcTest.cpp", base_cpp);
+    repo.commit("feat: initial cpp test");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Weaken assertions: 2 assertions reduced to 1
+    let weaker_cpp = r#"
+TEST(CalcSuite, Calc) {
+    EXPECT_EQ(2, 1 + 1);
+}
+"#;
+    repo.write("tests/CalcTest.cpp", weaker_cpp);
+    repo.commit("test: weaken assertions in cpp");
+
+    let run_weak = repo.check(&[]);
+    assert_eq!(run_weak.code, 1);
+    let outcome_weak = run_weak.outcome("assertion-reduction");
+    assert_eq!(outcome_weak["violations"].as_array().unwrap().len(), 1);
+
+    // Vacuous test addition
+    let repo2 = Repo::new();
+    repo2.write("tests/EmptyTest.cpp", "TEST(EmptySuite, Empty) {}\n");
+    repo2.commit("test: add empty cpp test");
+    let run_vac = repo2.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let outcome_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn c_cpp_skipped_tests_detected_and_accepts_override() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/SkipTest.cpp",
+        r#"
+TEST(SkipSuite, DISABLED_Skipped) {
+    EXPECT_EQ(2, 1 + 1);
+}
+"#,
+    );
+    repo.commit("test: add skipped cpp test");
+
+    let run_skip = repo.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let outcome_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(outcome_skip["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: SkipSuite::DISABLED_Skipped skipped for refactoring",
         )],
     );
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);

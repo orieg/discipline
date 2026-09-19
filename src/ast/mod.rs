@@ -6,6 +6,8 @@
 
 use anyhow::Result;
 
+#[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
+pub mod c_cpp;
 #[cfg(feature = "lang-go")]
 pub mod r#go;
 #[cfg(feature = "lang-golden")]
@@ -89,6 +91,10 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(r#go::GoPack));
     #[cfg(feature = "lang-php")]
     reg.register(Box::new(php::PhpPack));
+    #[cfg(feature = "lang-c")]
+    reg.register(Box::new(c_cpp::CPack));
+    #[cfg(feature = "lang-cpp")]
+    reg.register(Box::new(c_cpp::CppPack));
     reg
 }
 
@@ -102,6 +108,8 @@ pub enum Language {
     Java,
     Go,
     Php,
+    C,
+    Cpp,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
@@ -120,6 +128,8 @@ pub fn language_for(path: &str) -> Option<Language> {
         "java" => Some(Language::Java),
         "go" => Some(Language::Go),
         "php" | "phtml" | "inc" => Some(Language::Php),
+        "c" | "h" => Some(Language::C),
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Language::Cpp),
         _ => None,
     }
 }
@@ -276,13 +286,17 @@ mod tests {
         assert_eq!(language_for("service.java"), Some(Language::Java));
         assert_eq!(language_for("src/a.go"), Some(Language::Go));
         assert_eq!(language_for("src/a.php"), Some(Language::Php));
+        assert_eq!(language_for("src/a.c"), Some(Language::C));
+        assert_eq!(language_for("src/a.cpp"), Some(Language::Cpp));
         assert!(!is_unsupported_source("pkg/mod/a.py"));
         assert!(!is_unsupported_source("web/App.tsx"));
         assert!(!is_unsupported_source("service.java"));
         assert!(!is_unsupported_source("src/a.go"));
         assert!(!is_unsupported_source("src/a.php"));
+        assert!(!is_unsupported_source("src/a.c"));
+        assert!(!is_unsupported_source("src/a.cpp"));
         assert!(is_unsupported_source("service.kt"));
-        assert!(is_unsupported_source("main.c"));
+        assert!(is_unsupported_source("service.rb"));
         assert!(!is_unsupported_source("src/a.rs"));
         assert!(!is_unsupported_source("tests/001.phpt"));
         assert!(!is_unsupported_source("docs/plan.md"));
@@ -332,6 +346,20 @@ mod tests {
             let php_pack = reg.find_pack("Test.php").expect("php pack found");
             assert_eq!(php_pack.id(), "php");
             assert_eq!(php_pack.name(), "PHP");
+        }
+        #[cfg(feature = "lang-c")]
+        {
+            assert!(reg.is_supported("crates/expanse-capi/smoke/modern_api_smoke.c"));
+            let c_pack = reg.find_pack("smoke.c").expect("c pack found");
+            assert_eq!(c_pack.id(), "c");
+            assert_eq!(c_pack.name(), "C");
+        }
+        #[cfg(feature = "lang-cpp")]
+        {
+            assert!(reg.is_supported("tests/test_expanse.cpp"));
+            let cpp_pack = reg.find_pack("test.cpp").expect("cpp pack found");
+            assert_eq!(cpp_pack.id(), "cpp");
+            assert_eq!(cpp_pack.name(), "C++");
         }
     }
 

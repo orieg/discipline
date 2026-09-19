@@ -641,6 +641,38 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 2)
         },
     ),
+    #[cfg(feature = "lang-cpp")]
+    (
+        "c_cpp: GoogleTest extraction catches assertions, vacuous tests, and DISABLED_ tests",
+        || {
+            use crate::ast::LanguagePack;
+            let cpp_pack = crate::ast::c_cpp::CppPack;
+            let vocab = AssertVocabulary::default();
+            let src = "TEST(Suite, TestOne) { EXPECT_EQ(1, 2); }\nTEST(Suite, TestTwo) { EXPECT_TRUE(true); }\nTEST(Suite, DISABLED_TestThree) { EXPECT_EQ(1, 2); }\n";
+            let facts = cpp_pack.extract("tests/test.cpp", src, &vocab)?;
+            Ok(facts.tests.len() == 3
+                && facts.tests[0].total_asserts == 1
+                && !facts.tests[0].is_vacuous()
+                && facts.tests[1].is_vacuous()
+                && facts.tests[2].ignored)
+        },
+    ),
+    #[cfg(feature = "lang-cpp")]
+    (
+        "c_cpp: EXPECT_EQ vs EXPECT_TRUE assertion weakening is detected",
+        || {
+            use crate::ast::LanguagePack;
+            let cpp_pack = crate::ast::c_cpp::CppPack;
+            let vocab = AssertVocabulary::default();
+            let strong_src = "TEST(Suite, TestA) { EXPECT_EQ(a, b); ASSERT_NE(c, d); }\n";
+            let weak_src = "TEST(Suite, TestA) { EXPECT_TRUE(x); EXPECT_TRUE(y); }\n";
+            let strong_facts = cpp_pack.extract("tests/test.cpp", strong_src, &vocab)?;
+            let weak_facts = cpp_pack.extract("tests/test.cpp", weak_src, &vocab)?;
+            Ok(strong_facts.tests[0].strong_asserts == 2
+                && weak_facts.tests[0].strong_asserts == 0
+                && weak_facts.tests[0].total_asserts == 2)
+        },
+    ),
     (
         "bench: callgrind and criterion benchmark parsing and delta calculation discriminate",
         || {
