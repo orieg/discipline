@@ -46,7 +46,6 @@ pub struct GateInfo {
     pub suite: Suite,
     pub summary: &'static str,
     pub languages: &'static str,
-    pub example: &'static str,
     /// `false` = planned in the roadmap but not shipped in this binary. A planned
     /// gate cannot be enabled or configured: asking for it is an error, never
     /// a silent pass.
@@ -60,7 +59,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::AgentGuard,
         summary: "AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it",
         languages: "any",
-        example: "Catches missing AGENTS.md or divergent non-symlinked CLAUDE.md / GEMINI.md",
         available: true,
     },
     GateInfo {
@@ -68,7 +66,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::AgentGuard,
         summary: "assertion count / strength must not drop in an existing test",
         languages: "Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby",
-        example: "Rejects assert_eq!(a, b) replaced by assert!(true) or removed assertions",
         available: true,
     },
     GateInfo {
@@ -76,15 +73,13 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::AgentGuard,
         summary: "new tests must carry a non-tautological assertion",
         languages: "Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby",
-        example: "Rejects empty test functions or tests without any executable assertions",
         available: true,
     },
     GateInfo {
         id: "ignored-tests",
         suite: Suite::AgentGuard,
-        summary: "tests must not be newly #[ignore]d",
+        summary: "tests must not be newly #[ignore]d or skipped without directive",
         languages: "Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby",
-        example: "Rejects newly added #[ignore] or @pytest.mark.skip without directive",
         available: true,
     },
     GateInfo {
@@ -92,7 +87,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::AgentGuard,
         summary: "unsafe blocks / impls carry a // SAFETY: comment",
         languages: "Rust",
-        example: "Rejects unsafe blocks or impls lacking a preceding // SAFETY: comment",
         available: true,
     },
     GateInfo {
@@ -100,7 +94,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::AgentGuard,
         summary: "deleted files and removed tests need a scoped removes: rationale",
         languages: "any",
-        example: "Rejects deleted files or removed tests lacking removes: <path> <reason>",
         available: true,
     },
     GateInfo {
@@ -108,7 +101,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Hygiene,
         summary: "no calendar / duration estimates in markdown or the PR body",
         languages: "any",
-        example: "Rejects calendar deadlines, sprint projections, and duration estimates",
         available: true,
     },
     GateInfo {
@@ -116,7 +108,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Hygiene,
         summary: "no home paths, LAN IPs, or denylisted hostnames in tracked text",
         languages: "any",
-        example: "Rejects committed workstation home directories, private LAN IPs, and hostnames",
         available: true,
     },
     GateInfo {
@@ -124,7 +115,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Hygiene,
         summary: "agent scratch state is never tracked",
         languages: "any",
-        example: "Rejects committed agent scratch state like .claude/plans/ or scratch/*.tmp",
         available: true,
     },
     GateInfo {
@@ -132,7 +122,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Integrity,
         summary: "a change cannot weaken its own discipline.toml without a token",
         languages: "any",
-        example: "Rejects changes disabling gates in discipline.toml without explicit token",
         available: true,
     },
     GateInfo {
@@ -140,7 +129,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::AgentGuard,
         summary: "changes stay inside authorized paths",
         languages: "any",
-        example: "Rejects diffs modifying files outside authorized path boundaries",
         available: false,
     },
     GateInfo {
@@ -148,7 +136,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::AgentGuard,
         summary: "new #[allow], commented-out tests, cfg-gated tests",
         languages: "per pack",
-        example: "Rejects newly added linter suppresses or commented-out test functions",
         available: false,
     },
     GateInfo {
@@ -156,7 +143,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Hygiene,
         summary: "published numerics carry (measured|target|projected)",
         languages: "any",
-        example: "Rejects published benchmark numerics lacking (measured|target|projected)",
         available: false,
     },
     GateInfo {
@@ -164,7 +150,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Integrity,
         summary: "workflow weakening: continue-on-error, || true, unpinned actions",
         languages: "any",
-        example: "Rejects workflow weakening such as continue-on-error: true or unpinned actions",
         available: false,
     },
     GateInfo {
@@ -172,7 +157,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Integrity,
         summary: "test-count ratchet read from the base ref",
         languages: "any",
-        example: "Rejects net test count dropping below the merge-base baseline",
         available: false,
     },
     GateInfo {
@@ -181,7 +165,6 @@ pub const GATES: &[GateInfo] = &[
         summary:
             "prevents stealth edits to committed golden/test output files without explicit override",
         languages: "any",
-        example: "Rejects edits to committed golden/snapshot fixture files without override",
         available: true,
     },
     GateInfo {
@@ -189,7 +172,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Integrity,
         summary: "manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification",
         languages: "any",
-        example: "Rejects unapproved new dependencies, wildcard versions, or unpinned git sources",
         available: true,
     },
     GateInfo {
@@ -197,7 +179,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Integrity,
         summary: "property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)",
         languages: "Rust, Python, JS/TS, Go, any",
-        example: "Rejects reductions in proptest cases, shrink iterations, or fuzz durations",
         available: true,
     },
     GateInfo {
@@ -205,7 +186,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Hygiene,
         summary: "ticked PR checkboxes are reconciled against the diff",
         languages: "any",
-        example: "Rejects ticked PR checklist items that have no matching diff changes",
         available: false,
     },
     GateInfo {
@@ -213,7 +193,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Verification,
         summary: "fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet",
         languages: "any",
-        example: "Wraps cargo test or custom tools to enforce non-zero exit and test execution",
         available: true,
     },
     GateInfo {
@@ -221,7 +200,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Verification,
         summary: "ASan / TSan preset with audited suppressions and a race canary",
         languages: "Rust, C/C++",
-        example: "Enforces clean memory/thread sanitizer runs without unreviewed suppressions",
         available: false,
     },
     GateInfo {
@@ -229,7 +207,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Quality,
         summary: "cargo check under the pinned MSRV",
         languages: "Rust",
-        example: "Validates compilation under the minimum supported toolchain version",
         available: false,
     },
     GateInfo {
@@ -237,7 +214,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Verification,
         summary: "Miri tiers with zero-tests guard",
         languages: "Rust",
-        example: "Runs undefined behavior checks ensuring test suites are not silently bypassed",
         available: false,
     },
     GateInfo {
@@ -245,7 +221,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Verification,
         summary: "unsafe count ratchet",
         languages: "Rust",
-        example: "Rejects any net increase in total unsafe block count across the project",
         available: false,
     },
     GateInfo {
@@ -253,7 +228,6 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Bench,
         summary: "benchmark drift via harness adapters (deterministic counts or BCa intervals)",
         languages: "Rust, Go, Python, C/C++",
-        example: "Detects CPU instruction regressions and non-overlapping BCa confidence intervals",
         available: true,
     },
 ];

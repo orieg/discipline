@@ -37,18 +37,42 @@ Discipline's operational rigors were developed to defend high-assurance reposito
 
 ## 2. Architecture Diagram & Binary Design
 
-```text
-                 discipline.toml  ◄── base-ref copy compared by `config-integrity`
-                        │
-   built-in defaults ─► │ ◄─ action inputs / CLI flags / env (layered)
-                        ▼
-              ┌───────────────────────┐
-              │  discipline (Rust)    │  git2: merge-base diff, index, blobs
-              │  gate registry        │  tree-sitter: tests, assertions, unsafe
-              └───┬─────────┬─────────┘
-                  │         │
-      GitHub/Forgejo/Gitea  pre-commit hook      agent inner loop
-      composite action      (`check --staged`)   (`check --base …`)
+```mermaid
+flowchart TD
+    subgraph CFG_LAYER["Layered Configuration & Directives"]
+        D["1. Built-in Defaults<br/>(All available gates ON, severity: error)"]
+        F["2. discipline.toml<br/>(Repository configuration)"]
+        O["3. Inline Overrides / Directives<br/>(--config-override, PR body)"]
+        CLI["4. CLI Flags & Environment<br/>(--enable, --disable, denylist)"]
+        BASE_CFG["base-ref discipline.toml<br/>(compared by config-integrity)"]
+    end
+
+    subgraph ENGINE["Discipline Core Engine (Rust)"]
+        RESOLVE["Config Resolution & Gate Registry"]
+        GIT["GitCtx (in-memory git2)<br/>merge-base diff, blobs, index"]
+        AST["Tree-Sitter AST Extractors<br/>tests, assertions, unsafe blocks"]
+        EVAL["Fail-Closed Gate Evaluators<br/>truthful examined counts, floors"]
+    end
+
+    subgraph CONSUMERS["Execution Contexts & Consumers"]
+        ACTION["GitHub / Gitea / Forgejo Action<br/>(composite runner)"]
+        HOOK["Pre-Commit Hook<br/>(discipline check --staged)"]
+        DEV["Agent Inner Loop / Dev CLI<br/>(discipline check --base ...)"]
+    end
+
+    D --> RESOLVE
+    F --> RESOLVE
+    O --> RESOLVE
+    CLI --> RESOLVE
+    BASE_CFG -.-> RESOLVE
+
+    RESOLVE --> EVAL
+    GIT --> AST
+    AST --> EVAL
+
+    EVAL --> ACTION
+    EVAL --> HOOK
+    EVAL --> DEV
 ```
 
 1. **Binary-first & zero-dependency:** Statically linked musl binaries (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) and native macOS binaries (`x86_64-apple-darwin`, `aarch64-apple-darwin`). No Node.js, Python, or container bootstrap required at runtime.

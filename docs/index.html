@@ -581,6 +581,114 @@
       line-height: 1.6;
     }
 
+    /* Architecture Diagram SVG */
+    .arch-card {
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      overflow-x: auto;
+    }
+    .arch-svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      min-width: 680px;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+    .arch-box {
+      fill: var(--card-bg);
+      stroke: var(--border);
+      stroke-width: 1.5;
+      transition: stroke 0.2s ease, fill 0.2s ease;
+    }
+    .arch-box-card {
+      fill: var(--card-inner);
+    }
+    .arch-box-head {
+      stroke: var(--border-accent);
+    }
+    .arch-box-git {
+      fill: var(--card-inner);
+      stroke: var(--border);
+    }
+    .arch-box-eval {
+      fill: var(--card-inner);
+      stroke: var(--border-accent);
+    }
+    .arch-box-out {
+      fill: var(--card-inner);
+      stroke: var(--border);
+    }
+    .arch-title {
+      fill: var(--heading);
+      font-size: 13px;
+      font-weight: 700;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .arch-subheading {
+      fill: var(--heading);
+      font-size: 12px;
+      font-weight: 600;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .arch-meta {
+      fill: var(--text-muted);
+      font-size: 11px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .arch-bullet {
+      fill: var(--text);
+      font-size: 11.5px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .arch-bullet-sm {
+      fill: var(--text-muted);
+      font-size: 10.5px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .arch-mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .arch-bold {
+      font-weight: 700;
+      fill: var(--heading);
+    }
+    .arch-line {
+      stroke: var(--text-muted);
+      stroke-width: 1.5;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .arch-dot-blue {
+      fill: var(--accent);
+    }
+    .arch-dot-purple {
+      fill: var(--accent-purple);
+    }
+    .arch-badge-blue {
+      fill: rgba(56, 189, 248, 0.15);
+      stroke: rgba(56, 189, 248, 0.35);
+      stroke-width: 1;
+    }
+    .arch-badge-text-blue {
+      fill: var(--accent);
+      font-size: 11px;
+      font-weight: 600;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .arch-badge-purple {
+      fill: rgba(168, 85, 247, 0.15);
+      stroke: rgba(168, 85, 247, 0.35);
+      stroke-width: 1;
+    }
+    .arch-badge-text-purple {
+      fill: var(--accent-purple);
+      font-size: 11px;
+      font-weight: 600;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
     /* Installation grid */
     .install-grid {
       display: grid;
@@ -1001,7 +1109,6 @@ discipline self-test</div>
             <th>Severity</th>
             <th>Languages</th>
             <th>Rule Description</th>
-            <th>Example / Enforces</th>
           </tr>
         </thead>
         <tbody>
@@ -1012,7 +1119,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it</td>
-            <td>Catches missing AGENTS.md or divergent non-symlinked CLAUDE.md / GEMINI.md</td>
           </tr>
           <tr>
             <td class="gate-id">assertion-reduction</td>
@@ -1020,7 +1126,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby</span></td>
             <td>assertion count / strength must not drop in an existing test</td>
-            <td>Rejects assert_eq!(a, b) replaced by assert!(true) or removed assertions</td>
           </tr>
           <tr>
             <td class="gate-id">vacuous-tests</td>
@@ -1028,15 +1133,13 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby</span></td>
             <td>new tests must carry a non-tautological assertion</td>
-            <td>Rejects empty test functions or tests without any executable assertions</td>
           </tr>
           <tr>
             <td class="gate-id">ignored-tests</td>
             <td>Agent Guard</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby</span></td>
-            <td>tests must not be newly #[ignore]d</td>
-            <td>Rejects newly added #[ignore] or @pytest.mark.skip without directive</td>
+            <td>tests must not be newly #[ignore]d or skipped without directive</td>
           </tr>
           <tr>
             <td class="gate-id">unsafe-safety-comment</td>
@@ -1044,7 +1147,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust</span></td>
             <td>unsafe blocks / impls carry a // SAFETY: comment</td>
-            <td>Rejects unsafe blocks or impls lacking a preceding // SAFETY: comment</td>
           </tr>
           <tr>
             <td class="gate-id">deletion-rationale</td>
@@ -1052,7 +1154,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>deleted files and removed tests need a scoped removes: rationale</td>
-            <td>Rejects deleted files or removed tests lacking removes: &lt;path&gt; &lt;reason&gt;</td>
           </tr>
           <tr>
             <td class="gate-id">time-estimates</td>
@@ -1060,7 +1161,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>no calendar / duration estimates in markdown or the PR body</td>
-            <td>Rejects calendar deadlines, sprint projections, and duration estimates</td>
           </tr>
           <tr>
             <td class="gate-id">pii</td>
@@ -1068,7 +1168,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>no home paths, LAN IPs, or denylisted hostnames in tracked text</td>
-            <td>Rejects committed workstation home directories, private LAN IPs, and hostnames</td>
           </tr>
           <tr>
             <td class="gate-id">agent-scratch</td>
@@ -1076,7 +1175,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>agent scratch state is never tracked</td>
-            <td>Rejects committed agent scratch state like .claude/plans/ or scratch/*.tmp</td>
           </tr>
           <tr>
             <td class="gate-id">config-integrity</td>
@@ -1084,7 +1182,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>a change cannot weaken its own discipline.toml without a token</td>
-            <td>Rejects changes disabling gates in discipline.toml without explicit token</td>
           </tr>
           <tr>
             <td class="gate-id">golden-output</td>
@@ -1092,7 +1189,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>prevents stealth edits to committed golden/test output files without explicit override</td>
-            <td>Rejects edits to committed golden/snapshot fixture files without override</td>
           </tr>
           <tr>
             <td class="gate-id">dependency-delta</td>
@@ -1100,7 +1196,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification</td>
-            <td>Rejects unapproved new dependencies, wildcard versions, or unpinned git sources</td>
           </tr>
           <tr>
             <td class="gate-id">test-budget</td>
@@ -1108,7 +1203,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, Go, any</span></td>
             <td>property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)</td>
-            <td>Rejects reductions in proptest cases, shrink iterations, or fuzz durations</td>
           </tr>
           <tr>
             <td class="gate-id">command</td>
@@ -1116,7 +1210,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet</td>
-            <td>Wraps cargo test or custom tools to enforce non-zero exit and test execution</td>
           </tr>
           <tr>
             <td class="gate-id">bench-regression</td>
@@ -1124,7 +1217,6 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Go, Python, C/C++</span></td>
             <td>benchmark drift via harness adapters (deterministic counts or BCa intervals)</td>
-            <td>Detects CPU instruction regressions and non-overlapping BCa confidence intervals</td>
           </tr>
 <!-- /generated -->
         </tbody>
@@ -1304,42 +1396,96 @@ discipline self-test</div>
       <p class="section-desc">Zero-dependency, standalone binary operating entirely in-memory and offline.</p>
     </div>
 
-    <div class="card" style="margin-bottom: 1.5rem;">
-      <div class="code-block" style="font-size: 0.8rem; line-height: 1.4;"><span class="code-comment">                   ┌───────────────────────────────┐
-                   │    PR / MR Head Git Commit    │
-                   └───────────────┬───────────────┘
-                                   │
-                                   ▼
-        ┌─────────────────────────────────────────────────────┐
-        │   GitCtx: Resolves merge-base against Target Ref    │
-        │   (git2 in-memory diff, fail-closed on shallow)     │
-        └──────────────────────────┬──────────────────────────┘
-                                   │
-                    ┌──────────────┴──────────────┐
-                    ▼                             ▼
-       ┌────────────────────────┐    ┌────────────────────────┐
-       │ Tree-Sitter AST Diff   │    │  Hygiene & Policy      │
-       │  • Assertion counters  │    │  • No time estimates   │
-       │  • Vacuous test AST    │    │  • PII & LAN scrub     │
-       │  • // SAFETY: comments │    │  • Scratch state deny  │
-       │  • Test skip detection │    │  • Directives parsing  │
-       └────────────┬───────────┘    └────────────┬───────────┘
-                    │                             │
-                    └──────────────┬──────────────┘
-                                   │
-                                   ▼
-        ┌─────────────────────────────────────────────────────┐
-        │ Gate Evaluator: Computes outcomes & verifies floors │
-        └──────────────────────────┬──────────────────────────┘
-                                   │
-         ┌─────────────────────────┼─────────────────────────┐
-         ▼                         ▼                         ▼
-┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
-│ GitLab Reports   │      │ GitHub Checks    │      │ Exit Code        │
-│ • Code Quality   │      │ • PR Comments    │      │ • 0: Pass        │
-│ • JUnit XML      │      │ • Workflow Annot │      │ • 1: Violations  │
-│ • JSON / SARIF   │      │ • SARIF Upload   │      │ • 2: Gate Error  │
-└──────────────────┘      └──────────────────┘      └──────────────────┘</span></div>
+    <div class="card arch-card">
+      <svg class="arch-svg" viewBox="0 0 860 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Discipline Architecture and Execution Model">
+        <defs>
+          <marker id="arch-arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--text-muted)"/>
+          </marker>
+        </defs>
+
+        <!-- 1. PR / MR Head Git Commit -->
+        <rect x="270" y="20" width="320" height="50" rx="8" class="arch-box arch-box-head"/>
+        <text x="430" y="41" class="arch-title" text-anchor="middle">PR / MR Head Git Commit</text>
+        <text x="430" y="56" class="arch-meta" text-anchor="middle">Working copy / incoming push ref</text>
+
+        <!-- Connector: Head -> GitCtx -->
+        <path class="arch-line" marker-end="url(#arch-arrow)" d="M 430 70 L 430 98"/>
+
+        <!-- 2. GitCtx Merge Base Resolver -->
+        <rect x="90" y="100" width="680" height="60" rx="8" class="arch-box arch-box-git"/>
+        <text x="430" y="125" class="arch-title" text-anchor="middle">GitCtx: Resolves merge-base against Target Ref</text>
+        <text x="430" y="144" class="arch-meta" text-anchor="middle">In-memory git2 diff • Zero transport / network stack • Fail-closed on shallow clone</text>
+
+        <!-- Connector: GitCtx -> AST & Hygiene -->
+        <path class="arch-line" d="M 430 160 L 430 185 M 250 185 L 610 185"/>
+        <path class="arch-line" marker-end="url(#arch-arrow)" d="M 250 185 L 250 212"/>
+        <path class="arch-line" marker-end="url(#arch-arrow)" d="M 610 185 L 610 212"/>
+
+        <!-- 3A. Tree-Sitter AST Diff Engine -->
+        <rect x="80" y="214" width="340" height="176" rx="8" class="arch-box arch-box-card"/>
+        <rect x="95" y="228" width="180" height="22" rx="4" class="arch-badge-blue"/>
+        <text x="185" y="243" class="arch-badge-text-blue" text-anchor="middle">Tree-Sitter AST Diff Engine</text>
+        <text x="95" y="268" class="arch-meta">10 language packs behind shared fact model</text>
+        <circle cx="103" cy="289" r="3" class="arch-dot-blue"/>
+        <text x="115" y="293" class="arch-bullet">Assertion count &amp; strength ratchets</text>
+        <circle cx="103" cy="311" r="3" class="arch-dot-blue"/>
+        <text x="115" y="315" class="arch-bullet">Vacuous &amp; ghost test rejection</text>
+        <circle cx="103" cy="333" r="3" class="arch-dot-blue"/>
+        <text x="115" y="337" class="arch-bullet">// SAFETY: justification invariants</text>
+        <circle cx="103" cy="355" r="3" class="arch-dot-blue"/>
+        <text x="115" y="359" class="arch-bullet">Newly skipped / #[ignore]d test sentinel</text>
+
+        <!-- 3B. Hygiene & Policy Sweeps -->
+        <rect x="440" y="214" width="340" height="176" rx="8" class="arch-box arch-box-card"/>
+        <rect x="455" y="228" width="195" height="22" rx="4" class="arch-badge-purple"/>
+        <text x="552" y="243" class="arch-badge-text-purple" text-anchor="middle">Hygiene, Integrity &amp; Policy</text>
+        <text x="455" y="268" class="arch-meta">Whole-tree text, manifest &amp; metadata sweeps</text>
+        <circle cx="463" cy="289" r="3" class="arch-dot-purple"/>
+        <text x="475" y="293" class="arch-bullet">No calendar deadlines or time estimates</text>
+        <circle cx="463" cy="311" r="3" class="arch-dot-purple"/>
+        <text x="475" y="315" class="arch-bullet">Workstation paths, LAN IPs &amp; PII scrub</text>
+        <circle cx="463" cy="333" r="3" class="arch-dot-purple"/>
+        <text x="475" y="337" class="arch-bullet">Agent scratch state deny (.claude/, *.tmp)</text>
+        <circle cx="463" cy="355" r="3" class="arch-dot-purple"/>
+        <text x="475" y="359" class="arch-bullet">Dependency delta &amp; discipline.toml integrity</text>
+
+        <!-- Connector: AST & Hygiene -> Evaluator -->
+        <path class="arch-line" d="M 250 390 L 250 412 L 610 412 L 610 390"/>
+        <path class="arch-line" marker-end="url(#arch-arrow)" d="M 430 412 L 430 434"/>
+
+        <!-- 4. Gate Evaluator -->
+        <rect x="90" y="436" width="680" height="60" rx="8" class="arch-box arch-box-eval"/>
+        <text x="430" y="461" class="arch-title" text-anchor="middle">Gate Evaluator: Computes Outcomes &amp; Verifies Floors</text>
+        <text x="430" y="480" class="arch-meta" text-anchor="middle">Strict 5-layer config resolution • Truthful examined counts • Line-anchored directives</text>
+
+        <!-- Connector: Evaluator -> Outputs -->
+        <path class="arch-line" d="M 430 496 L 430 514 M 195 514 L 665 514"/>
+        <path class="arch-line" marker-end="url(#arch-arrow)" d="M 195 514 L 195 532"/>
+        <path class="arch-line" marker-end="url(#arch-arrow)" d="M 430 514 L 430 532"/>
+        <path class="arch-line" marker-end="url(#arch-arrow)" d="M 665 514 L 665 532"/>
+
+        <!-- 5A. GitLab & Multi-CI -->
+        <rect x="75" y="534" width="240" height="82" rx="8" class="arch-box arch-box-out"/>
+        <text x="90" y="554" class="arch-subheading">GitLab &amp; Multi-CI</text>
+        <text x="90" y="572" class="arch-bullet-sm">• Code Quality (gl-codequality.json)</text>
+        <text x="90" y="588" class="arch-bullet-sm">• JUnit XML test reports</text>
+        <text x="90" y="604" class="arch-bullet-sm">• SARIF &amp; JSON machine output</text>
+
+        <!-- 5B. GitHub & Forgejo Checks -->
+        <rect x="330" y="534" width="240" height="82" rx="8" class="arch-box arch-box-out"/>
+        <text x="345" y="554" class="arch-subheading">GitHub &amp; Forgejo Checks</text>
+        <text x="345" y="572" class="arch-bullet-sm">• PR review comments &amp; summaries</text>
+        <text x="345" y="588" class="arch-bullet-sm">• Native workflow annotations</text>
+        <text x="345" y="604" class="arch-bullet-sm">• GitHub Code Scanning SARIF</text>
+
+        <!-- 5C. Fail-Closed Exit Code -->
+        <rect x="585" y="534" width="240" height="82" rx="8" class="arch-box arch-box-out"/>
+        <text x="600" y="554" class="arch-subheading">Fail-Closed Exit Code</text>
+        <text x="600" y="572" class="arch-bullet-sm"><tspan class="arch-mono arch-bold">0</tspan>: All gates pass</text>
+        <text x="600" y="588" class="arch-bullet-sm"><tspan class="arch-mono arch-bold">1</tspan>: Policy or AST violations</text>
+        <text x="600" y="604" class="arch-bullet-sm"><tspan class="arch-mono arch-bold">2</tspan>: Gate error or shallow ref</text>
+      </svg>
     </div>
   </section>
 

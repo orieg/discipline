@@ -33,23 +33,23 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 ## Shipped Gates
 
 <!-- generated:gates -->
-| Gate | Suite | Languages | Rule | Example / Enforces |
-|---|---|---|---|---|
-| `agents-md` | agent-guard | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it | Catches missing AGENTS.md or divergent non-symlinked CLAUDE.md / GEMINI.md |
-| `assertion-reduction` | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | assertion count / strength must not drop in an existing test | Rejects assert_eq!(a, b) replaced by assert!(true) or removed assertions |
-| `vacuous-tests` | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | new tests must carry a non-tautological assertion | Rejects empty test functions or tests without any executable assertions |
-| `ignored-tests` | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | tests must not be newly #[ignore]d | Rejects newly added #[ignore] or @pytest.mark.skip without directive |
-| `unsafe-safety-comment` | agent-guard | Rust | unsafe blocks / impls carry a // SAFETY: comment | Rejects unsafe blocks or impls lacking a preceding // SAFETY: comment |
-| `deletion-rationale` | agent-guard | any | deleted files and removed tests need a scoped removes: rationale | Rejects deleted files or removed tests lacking removes: <path> <reason> |
-| `time-estimates` | hygiene | any | no calendar / duration estimates in markdown or the PR body | Rejects calendar deadlines, sprint projections, and duration estimates |
-| `pii` | hygiene | any | no home paths, LAN IPs, or denylisted hostnames in tracked text | Rejects committed workstation home directories, private LAN IPs, and hostnames |
-| `agent-scratch` | hygiene | any | agent scratch state is never tracked | Rejects committed agent scratch state like .claude/plans/ or scratch/*.tmp |
-| `config-integrity` | integrity | any | a change cannot weaken its own discipline.toml without a token | Rejects changes disabling gates in discipline.toml without explicit token |
-| `golden-output` | integrity | any | prevents stealth edits to committed golden/test output files without explicit override | Rejects edits to committed golden/snapshot fixture files without override |
-| `dependency-delta` | integrity | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification | Rejects unapproved new dependencies, wildcard versions, or unpinned git sources |
-| `test-budget` | integrity | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) | Rejects reductions in proptest cases, shrink iterations, or fuzz durations |
-| `command` | verification | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet | Wraps cargo test or custom tools to enforce non-zero exit and test execution |
-| `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) | Detects CPU instruction regressions and non-overlapping BCa confidence intervals |
+| Gate | Suite | Languages | Rule Description |
+|---|---|---|---|
+| `agents-md` | agent-guard | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
+| `assertion-reduction` | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | assertion count / strength must not drop in an existing test |
+| `vacuous-tests` | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | new tests must carry a non-tautological assertion |
+| `ignored-tests` | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | tests must not be newly #[ignore]d or skipped without directive |
+| `unsafe-safety-comment` | agent-guard | Rust | unsafe blocks / impls carry a // SAFETY: comment |
+| `deletion-rationale` | agent-guard | any | deleted files and removed tests need a scoped removes: rationale |
+| `time-estimates` | hygiene | any | no calendar / duration estimates in markdown or the PR body |
+| `pii` | hygiene | any | no home paths, LAN IPs, or denylisted hostnames in tracked text |
+| `agent-scratch` | hygiene | any | agent scratch state is never tracked |
+| `config-integrity` | integrity | any | a change cannot weaken its own discipline.toml without a token |
+| `golden-output` | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
+| `dependency-delta` | integrity | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
+| `test-budget` | integrity | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
+| `command` | verification | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
+| `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
 <!-- /generated -->
 
 ---

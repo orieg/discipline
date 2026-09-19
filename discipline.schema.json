@@ -567,7 +567,7 @@
               "$ref": "#/$defs/BasicGate"
             }
           ],
-          "description": "tests must not be newly #[ignore]d"
+          "description": "tests must not be newly #[ignore]d or skipped without directive"
         },
         "pii": {
           "allOf": [

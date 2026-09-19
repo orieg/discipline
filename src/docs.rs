@@ -195,17 +195,15 @@ pub fn render_action_outputs_html(spec: &ActionSpec) -> String {
 
 /// Render gates Markdown table for README.md.
 pub fn render_gates_markdown(gates: &[GateInfo]) -> String {
-    let mut out = String::from(
-        "| Gate | Suite | Languages | Rule | Example / Enforces |\n|---|---|---|---|---|\n",
-    );
+    let mut out =
+        String::from("| Gate | Suite | Languages | Rule Description |\n|---|---|---|---|\n");
     for g in gates.iter().filter(|g| g.available) {
         out.push_str(&format!(
-            "| `{}` | {} | {} | {} | {} |\n",
+            "| `{}` | {} | {} | {} |\n",
             g.id,
             g.suite.label(),
             g.languages,
-            g.summary,
-            g.example
+            g.summary
         ));
     }
     out
@@ -213,8 +211,9 @@ pub fn render_gates_markdown(gates: &[GateInfo]) -> String {
 
 /// Render gates catalog Markdown table for GATES.md / ROADMAP.md.
 pub fn render_gates_catalog_markdown(gates: &[GateInfo], suite_filter: Option<Suite>) -> String {
-    let mut out =
-        String::from("| Gate id | Suite | Status | Languages | Rule | Example / Enforces |\n|---|---|---|---|---|---|\n");
+    let mut out = String::from(
+        "| Gate id | Suite | Status | Languages | Rule Description |\n|---|---|---|---|---|\n",
+    );
     let iter = gates.iter().filter(|g| match suite_filter {
         Some(s) => g.suite == s,
         None => true,
@@ -226,13 +225,12 @@ pub fn render_gates_catalog_markdown(gates: &[GateInfo], suite_filter: Option<Su
             "planned"
         };
         out.push_str(&format!(
-            "| `{}` | {} | {} | {} | {} | {} |\n",
+            "| `{}` | {} | {} | {} | {} |\n",
             g.id,
             g.suite.label(),
             status,
             g.languages,
-            g.summary,
-            g.example
+            g.summary
         ));
     }
     out
@@ -255,12 +253,11 @@ pub fn render_gates_html(gates: &[GateInfo]) -> String {
             other => other,
         };
         out.push_str(&format!(
-            "          <tr>\n            <td class=\"gate-id\">{}</td>\n            <td>{}</td>\n            <td><span class=\"gate-badge badge-error\">Error</span></td>\n            <td><span class=\"gate-badge badge-lang\">{}</span></td>\n            <td>{}</td>\n            <td>{}</td>\n          </tr>\n",
+            "          <tr>\n            <td class=\"gate-id\">{}</td>\n            <td>{}</td>\n            <td><span class=\"gate-badge badge-error\">Error</span></td>\n            <td><span class=\"gate-badge badge-lang\">{}</span></td>\n            <td>{}</td>\n          </tr>\n",
             g.id,
             suite_name,
             lang_badge,
-            html_escape(g.summary),
-            html_escape(g.example)
+            html_escape(g.summary)
         ));
     }
     out.trim_end().to_string()
