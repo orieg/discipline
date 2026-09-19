@@ -214,21 +214,34 @@ fn check(args: CheckArgs) -> Result<bool> {
     let (config, config_path) =
         load_config(&args.config, Some(git.root()), extra_fail, extra_sources)?;
 
-    let pr_title = args
-        .pr_title
-        .or_else(|| std::env::var("PR_TITLE").ok())
-        .filter(|t| !t.trim().is_empty())
-        .or_else(detect_pr_title_from_ci);
+    let pr_title = if args.staged {
+        args.pr_title
+    } else {
+        args.pr_title
+            .or_else(|| std::env::var("PR_TITLE").ok())
+            .filter(|t| !t.trim().is_empty())
+            .or_else(detect_pr_title_from_ci)
+    };
 
-    let pr_body = match &args.pr_body_file {
-        Some(p) => Some(
-            std::fs::read_to_string(p)
-                .with_context(|| format!("failed to read PR body file {}", p.display()))?,
-        ),
-        None => std::env::var("PR_BODY")
-            .ok()
-            .filter(|b| !b.trim().is_empty())
-            .or_else(detect_pr_body_from_ci),
+    let pr_body = if args.staged {
+        match &args.pr_body_file {
+            Some(p) => Some(
+                std::fs::read_to_string(p)
+                    .with_context(|| format!("failed to read PR body file {}", p.display()))?,
+            ),
+            None => None,
+        }
+    } else {
+        match &args.pr_body_file {
+            Some(p) => Some(
+                std::fs::read_to_string(p)
+                    .with_context(|| format!("failed to read PR body file {}", p.display()))?,
+            ),
+            None => std::env::var("PR_BODY")
+                .ok()
+                .filter(|b| !b.trim().is_empty())
+                .or_else(detect_pr_body_from_ci),
+        }
     };
     let commits = git.commits()?;
     let (directives, directive_notes) =

@@ -10,6 +10,9 @@ hook_repo="$(cd "${1:?path to the discipline repository}" && pwd)"
 scratch="${2:?scratch directory}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Ensure ambient CI pull-request context does not leak into isolated local hook tests
+unset GITHUB_EVENT_PATH GITEA_EVENT_PATH FORGEJO_EVENT_PATH PR_TITLE PR_BODY
+
 command -v discipline >/dev/null || { echo "discipline is not on PATH" >&2; exit 2; }
 command -v pre-commit >/dev/null || { echo "pre-commit is not on PATH" >&2; exit 2; }
 
