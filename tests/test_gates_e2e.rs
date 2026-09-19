@@ -82,7 +82,7 @@ fn adding_assertions_is_not_a_reduction() {
 fn unanalysed_languages_are_named_not_silently_passed() {
     let repo = Repo::new();
     repo.write("tools/check.go", "package main\nfunc TestNothing() {}\n");
-    repo.write("web/app.ts", "export const x = 1;\n");
+    repo.write("src/App.java", "public class App {}\n");
     repo.commit("feat: tooling");
     let run = repo.check(&[]);
     assert_eq!(
@@ -1696,6 +1696,79 @@ fn python_ignored_tests_and_skip_decorators_detected() {
         &[(
             "PR_BODY",
             "allow-ignore: test_skipped skipped until new backend is ready",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("ignored-tests");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn javascript_source_files_are_analysed_by_javascript_pack() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/auth.test.ts",
+        "describe('Auth', () => {\n    it('authenticates', () => {\n        expect(1 + 1).toBe(2);\n    });\n});\n",
+    );
+    repo.commit("feat: ts test");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("assertion-reduction");
+    assert!(!outcome["notes"].to_string().contains("NOT analysed"));
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn javascript_assertion_reduction_and_vacuous_tests_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_js =
+        "test('calc', () => {\n    expect(1 + 1).toBe(2);\n    expect(2 + 2).toBe(4);\n});\n";
+    repo.write("tests/calc.test.js", base_js);
+    repo.commit("feat: initial js test");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Weaken assertions: 2 assertions reduced to 1
+    let weaker_js = "test('calc', () => {\n    expect(1 + 1).toBe(2);\n});\n";
+    repo.write("tests/calc.test.js", weaker_js);
+    repo.commit("test: weaken assertions");
+
+    let run_weak = repo.check(&[]);
+    assert_eq!(run_weak.code, 1);
+    let outcome_weak = run_weak.outcome("assertion-reduction");
+    assert_eq!(outcome_weak["violations"].as_array().unwrap().len(), 1);
+
+    // Vacuous test addition
+    let repo2 = Repo::new();
+    repo2.write("tests/empty.test.js", "test('empty', () => {});\n");
+    repo2.commit("test: add empty test");
+    let run_vac = repo2.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let outcome_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn javascript_ignored_tests_and_skips_detected() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/skip.test.ts",
+        "it.skip('skips this test', () => {\n    expect(1 + 1).toBe(2);\n});\n",
+    );
+    repo.commit("test: add skipped test");
+
+    let run_skip = repo.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let outcome_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(outcome_skip["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: skips this test skipped for refactoring",
         )],
     );
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);

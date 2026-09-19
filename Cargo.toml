@@ -21,6 +21,8 @@ regex = "1.10"
 tree-sitter = "0.25"
 tree-sitter-rust = { version = "0.24", optional = true }
 tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
 # No network features: discipline only reads the local object database, and
 # dropping `https` keeps openssl out of the static musl build.
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
@@ -28,11 +30,11 @@ globset = "0.4"
 serde_json = "1.0"
 
 [features]
-default = ["lang-rust", "lang-golden", "lang-python"]
+default = ["lang-rust", "lang-golden", "lang-python", "lang-javascript"]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-golden = []
 lang-python = ["dep:tree-sitter-python"]
-lang-javascript = []
+lang-javascript = ["dep:tree-sitter-javascript", "dep:tree-sitter-typescript"]
 
 [dev-dependencies]
 tempfile = "3.10"

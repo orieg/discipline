@@ -8,6 +8,8 @@ use anyhow::Result;
 
 #[cfg(feature = "lang-golden")]
 pub mod golden;
+#[cfg(feature = "lang-javascript")]
+pub mod javascript;
 #[cfg(feature = "lang-python")]
 pub mod python;
 #[cfg(feature = "lang-rust")]
@@ -73,6 +75,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(golden::GoldenPack));
     #[cfg(feature = "lang-python")]
     reg.register(Box::new(python::PythonPack));
+    #[cfg(feature = "lang-javascript")]
+    reg.register(Box::new(javascript::JavaScriptPack));
     reg
 }
 
@@ -81,6 +85,8 @@ pub fn default_registry() -> LanguageRegistry {
 pub enum Language {
     Rust,
     Python,
+    JavaScript,
+    TypeScript,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
@@ -94,6 +100,8 @@ pub fn language_for(path: &str) -> Option<Language> {
     match extension(path)? {
         "rs" => Some(Language::Rust),
         "py" | "pyi" => Some(Language::Python),
+        "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
+        "ts" | "tsx" | "mts" | "cts" => Some(Language::TypeScript),
         _ => None,
     }
 }
@@ -244,9 +252,12 @@ mod tests {
     fn language_dispatch_is_by_extension() {
         assert_eq!(language_for("src/a.rs"), Some(Language::Rust));
         assert_eq!(language_for("src/a.py"), Some(Language::Python));
+        assert_eq!(language_for("src/a.js"), Some(Language::JavaScript));
+        assert_eq!(language_for("web/App.tsx"), Some(Language::TypeScript));
         assert_eq!(language_for("src/a.go"), None);
         assert!(!is_unsupported_source("pkg/mod/a.py"));
-        assert!(is_unsupported_source("web/App.tsx"));
+        assert!(!is_unsupported_source("web/App.tsx"));
+        assert!(is_unsupported_source("service.java"));
         assert!(is_unsupported_source("main.go"));
         assert!(!is_unsupported_source("src/a.rs"));
         assert!(!is_unsupported_source("tests/001.phpt"));
@@ -267,6 +278,13 @@ mod tests {
             let py_pack = reg.find_pack("test.py").expect("python pack found");
             assert_eq!(py_pack.id(), "python");
             assert_eq!(py_pack.name(), "Python");
+        }
+        #[cfg(feature = "lang-javascript")]
+        {
+            assert!(reg.is_supported("web/app.test.tsx"));
+            let js_pack = reg.find_pack("index.js").expect("javascript pack found");
+            assert_eq!(js_pack.id(), "javascript");
+            assert_eq!(js_pack.name(), "JavaScript/TypeScript");
         }
     }
 

@@ -399,6 +399,22 @@ const CASES: &[Case] = &[
                 && facts.tests[2].ignored)
         },
     ),
+    #[cfg(feature = "lang-javascript")]
+    (
+        "javascript: describe/it extraction catches matchers, vacuous tests, and skips",
+        || {
+            use crate::ast::LanguagePack;
+            let js_pack = crate::ast::javascript::JavaScriptPack;
+            let vocab = AssertVocabulary::default();
+            let src = "describe('S', () => {\n  it('a', () => { expect(1 + 1).toBe(2); });\n  it('b', () => {});\n  it.skip('c', () => {});\n});";
+            let facts = js_pack.extract("test.js", src, &vocab)?;
+            Ok(facts.tests.len() == 3
+                && facts.tests[0].total_asserts == 1
+                && !facts.tests[0].is_vacuous()
+                && facts.tests[1].is_vacuous()
+                && facts.tests[2].ignored)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

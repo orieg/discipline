@@ -260,6 +260,28 @@ pub fn covers(reasons: &[String], subject: &str) -> bool {
 
 fn reason_names(reason: &str, subject: &str) -> bool {
     let is_token_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/');
+    let trimmed_subject = subject.trim();
+
+    if !trimmed_subject.is_empty() {
+        // 1. Quoted subject anywhere in the reason: "name", 'name', or `name`.
+        for quote in ['"', '\'', '`'] {
+            let quoted = format!("{quote}{trimmed_subject}{quote}");
+            if reason.contains(&quoted) {
+                return true;
+            }
+        }
+
+        // 2. Multi-word subject at the beginning of the reason (e.g. `allow-ignore: my test name <reason>`).
+        if trimmed_subject.contains(' ') {
+            let unquoted_reason = reason.trim_start_matches(['"', '\'', '`']);
+            if let Some(rest) = unquoted_reason.strip_prefix(trimmed_subject) {
+                if rest.is_empty() || rest.starts_with(|c: char| !is_token_char(c)) {
+                    return true;
+                }
+            }
+        }
+    }
+
     let raw_tokens = reason
         .split(|c: char| !is_token_char(c))
         .filter(|t| !t.is_empty());
@@ -400,5 +422,22 @@ removes: tests/old.rs inside a fence
         let scoped_reasons = directive_reasons(scoped, REMOVES);
         assert_eq!(scoped_reasons, vec!["tests/legacy/"]);
         assert!(covers(&scoped_reasons, "tests/legacy/old.rs"));
+    }
+
+    #[test]
+    fn multi_word_and_quoted_subjects_are_covered() {
+        let r1 = directive_reasons(
+            "allow-ignore: skips this test skipped for refactoring",
+            ALLOW_IGNORE,
+        );
+        assert!(covers(&r1, "skips this test"));
+        assert!(!covers(&r1, "this test"));
+
+        let r2 = directive_reasons(
+            "allow-ignore: temporarily disabled 'skips this test' pending fix",
+            ALLOW_IGNORE,
+        );
+        assert!(covers(&r2, "skips this test"));
+        assert!(!covers(&r2, "other test"));
     }
 }
