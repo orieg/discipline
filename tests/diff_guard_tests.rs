@@ -463,3 +463,68 @@ fn cli_gitlab_ci_auto_detection() {
     assert_eq!(cq_parsed[0]["fingerprint"].as_str().unwrap().len(), 64);
     assert_eq!(run.code, 1);
 }
+
+#[test]
+fn cli_forgejo_actions_auto_detection() {
+    let repo = Repo::new();
+
+    // Create a feature branch and delete tests/a.rs
+    repo.git(&["checkout", "-b", "feat/forgejo-pr"]);
+    repo.git(&["rm", "-q", "tests/a.rs"]);
+    repo.commit("chore: remove tests/a.rs");
+
+    // Create a mock Forgejo event JSON payload
+    let event_file = repo.file("forgejo_event.json");
+    std::fs::write(
+        &event_file,
+        r#"{"pull_request": {"body": "removes: tests/a.rs superseded by updated test harness\n"}}"#,
+    )
+    .unwrap();
+
+    // 1. Without FORGEJO_EVENT_PATH, the deletion fails under FORGEJO_BASE_REF
+    let run_fail = repo.run(
+        &["check"],
+        &[("FORGEJO_ACTIONS", "true"), ("FORGEJO_BASE_REF", "main")],
+    );
+    assert_eq!(run_fail.code, 1);
+    assert!(run_fail.stdout.contains("File Deleted Without Rationale"));
+
+    // 2. With FORGEJO_EVENT_PATH, the PR body directive is extracted and lifts the deletion violation
+    let run_pass = repo.run(
+        &["check"],
+        &[
+            ("FORGEJO_ACTIONS", "true"),
+            ("FORGEJO_BASE_REF", "main"),
+            ("FORGEJO_EVENT_PATH", event_file.to_str().unwrap()),
+        ],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    assert!(run_pass.stdout.contains("Status: PASS"));
+}
+
+#[test]
+fn cli_gitea_actions_auto_detection() {
+    let repo = Repo::new();
+
+    repo.git(&["checkout", "-b", "feat/gitea-pr"]);
+    repo.git(&["rm", "-q", "tests/a.rs"]);
+    repo.commit("chore: remove tests/a.rs");
+
+    let event_file = repo.file("gitea_event.json");
+    std::fs::write(
+        &event_file,
+        r#"{"pull_request": {"body": "removes: tests/a.rs Gitea event justification\n"}}"#,
+    )
+    .unwrap();
+
+    let run_pass = repo.run(
+        &["check"],
+        &[
+            ("GITEA_ACTIONS", "true"),
+            ("GITEA_BASE_REF", "main"),
+            ("GITEA_EVENT_PATH", event_file.to_str().unwrap()),
+        ],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    assert!(run_pass.stdout.contains("Status: PASS"));
+}

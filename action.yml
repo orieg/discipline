@@ -1,5 +1,5 @@
 name: 'Discipline CI Gate'
-description: 'Agent diff sentinel and repository hygiene gates for GitHub Actions and Gitea Actions'
+description: 'Agent diff sentinel and repository hygiene gates for GitHub Actions, Gitea Actions, and Forgejo Actions'
 author: 'orieg'
 branding:
   icon: 'shield'
@@ -62,7 +62,7 @@ inputs:
     required: false
     default: ''
   binary_path:
-    description: 'Use this discipline binary instead of downloading one (air-gapped Gitea runners, self-tests).'
+    description: 'Use this discipline binary instead of downloading one (air-gapped Gitea/Forgejo runners, self-tests).'
     required: false
     default: ''
   download_url:
@@ -141,7 +141,7 @@ runs:
             base="${INPUT_DOWNLOAD_URL}/latest/download"
           fi
 
-          dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/discipline-${version:-latest}"
+          dir="${FORGEJO_TEMP:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}/discipline-${version:-latest}"
           mkdir -p "${dir}"
           archive="discipline-${triple}.tar.gz"
           fetch() {
@@ -184,9 +184,11 @@ runs:
         PR_BASE_REF: ${{ github.base_ref }}
         PUSH_BEFORE: ${{ github.event.before }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        FORGEJO_BASE_REF: ${{ env.FORGEJO_BASE_REF }}
+        GITEA_BASE_REF: ${{ env.GITEA_BASE_REF }}
       run: |
         set -euo pipefail
-        base="${INPUT_BASE_REF:-${PR_BASE_REF}}"
+        base="${INPUT_BASE_REF:-${PR_BASE_REF:-${FORGEJO_BASE_REF:-${GITEA_BASE_REF}}}}"
         if [ -z "${base}" ] && [ -n "${PUSH_BEFORE}" ] && ! [[ "${PUSH_BEFORE}" =~ ^0+$ ]]; then
           base="${PUSH_BEFORE}"
         fi
@@ -228,7 +230,9 @@ runs:
         PR_BODY: ${{ inputs.pr_body }}
       run: |
         set -euo pipefail
-        report="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/discipline-report-${GITHUB_RUN_ID:-0}-${GITHUB_ACTION:-step}.json"
+        run_id="${GITHUB_RUN_ID:-${FORGEJO_RUN_ID:-0}}"
+        action_id="${GITHUB_ACTION:-${FORGEJO_ACTION:-step}}"
+        report="${FORGEJO_TEMP:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}/discipline-report-${run_id}-${action_id}.json"
         echo "report=${report}" >> "${GITHUB_OUTPUT}"
         set +e
         "${DISCIPLINE_BIN}" check \

@@ -531,6 +531,7 @@ impl Default for BenchRegressionGate {
             exempt_paths: [
                 ".github/**",
                 ".gitea/**",
+                ".forgejo/**",
                 ".gitlab/**",
                 "docs/**",
                 "research/**",

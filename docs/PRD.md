@@ -6,7 +6,7 @@
 |---|---|
 | **Repository** | `orieg/discipline` |
 | **Status** | Draft. Phase 0 and Phase 1 implemented; not externally reviewed (§11) |
-| **Target Platforms** | GitHub Actions, GitLab CI/CD, Gitea Actions (act_runner), Argo Workflows, Container (Docker), local workstations (macOS, Linux) |
+| **Target Platforms** | GitHub Actions, GitLab CI/CD, Forgejo Actions (forgejo-runner), Gitea Actions (act_runner), Argo Workflows, Container (Docker), local workstations (macOS, Linux) |
 | **Implementation Core** | Rust static binary (musl) + tree-sitter + libgit2 |
 | **Checked repositories** | Any language for hygiene, integrity and deletion gates (shipped); per-language packs for the AST gates — Rust, Python, JavaScript / TypeScript, PHPT shipped; Java / Kotlin, C / C++, Go planned (§6.1) |
 | **License** | Apache-2.0 / MIT |
@@ -37,7 +37,7 @@ Reading that machinery closely changes what there is to inherit:
 - **What expanse contributes is hardening.** Its scripts record, in comments and self-tests, the specific ways each gate was bypassed or failed open. Those incidents, not the gate list, are the inheritance. §3 turns them into binding requirements.
 
 ### 1.3 Vision
-One declarative, static binary — the same one in GitHub Actions, Gitea Actions, a pre-commit hook, and an agent's inner loop, **for a repository in any language** — that combines semantic diff inspection (tree-sitter over `git2` diffs) with expanse's fail-closed engineering, and that a consuming repository can tune gate by gate without being able to quietly switch it off.
+One declarative, static binary — the same one in GitHub Actions, Forgejo Actions, Gitea Actions, a pre-commit hook, and an agent's inner loop, **for a repository in any language** — that combines semantic diff inspection (tree-sitter over `git2` diffs) with expanse's fail-closed engineering, and that a consuming repository can tune gate by gate without being able to quietly switch it off.
 
 ---
 
@@ -53,8 +53,8 @@ One declarative, static binary — the same one in GitHub Actions, Gitea Actions
               │  gate registry        │  tree-sitter: tests, assertions, unsafe
               └───┬─────────┬─────────┘
                   │         │
-      GitHub / Gitea     pre-commit hook      agent inner loop
-      composite action   (`check --staged`)   (`check --base …`)
+      GitHub/Forgejo/Gitea  pre-commit hook      agent inner loop
+      composite action      (`check --staged`)   (`check --base …`)
 ```
 
 1. **Binary-first.** Static musl binaries for `x86_64` and `aarch64` Linux, native macOS binaries for both architectures. No Node, Python, or container bootstrap. Startup overhead target: under 50 ms (target); the embedded self-test runs in 15 ms wall-clock on an Apple-silicon laptop (measured: single local run, release build, not load-controlled — indicative only).
@@ -423,7 +423,7 @@ Rules and Invariants (tested via audit fixtures in `tests/test_gates_e2e.rs`):
 
 | Surface | Form | Notes |
 |---|---|---|
-| GitHub / Gitea Actions | composite `action.yml` | shell only, no JavaScript runtime; downloads a release, verifies `SHA256SUMS`, or takes `binary_path`. Resolves the base ref (PR base, else the pushed-from commit, else the default branch) and fetches it if the clone lacks it. Emits `status` (`pass`, `fail`, `error`), counts, and report artifact path. |
+| GitHub / Forgejo / Gitea Actions | composite `action.yml` | shell only, no JavaScript runtime; downloads a release, verifies `SHA256SUMS`, or takes `binary_path`. Resolves the base ref (PR base via `GITHUB_BASE_REF`, `FORGEJO_BASE_REF`, or `GITEA_BASE_REF`, else the pushed-from commit, else the default branch) and fetches it if the clone lacks it. Automatically extracts PR body from event payloads when unset. Emits `status` (`pass`, `fail`, `error`), counts, and report artifact path. |
 | GitLab CI/CD Component | `templates/discipline.gitlab-ci.yml` & `.gitlab-ci.yml` | Conforms to GitLab CI/CD Catalog component specification with `spec:inputs`. Emits native GitLab Merge Request widgets: Code Quality diffs (`gl-codequality.json`) and JUnit test summaries (`junit.xml`). |
 | Argo Workflows | `templates/argo-workflow-template.yaml` | Kubernetes-native pre-merge DAG gating task for GitOps pipelines. |
 | Container (Docker) | `Dockerfile` | Minimal non-root Alpine container image packaging the static binary. |
@@ -446,7 +446,7 @@ Third-party actions are pinned by commit SHA; `actionlint` and `act` are install
 
 | Job | Proves |
 |---|---|
-| `lint` | `fmt`, `clippy -D warnings`, `actionlint` on GitHub and Gitea workflows, `shellcheck`, and `lint-action.py` (F11) |
+| `lint` | `fmt`, `clippy -D warnings`, `actionlint` on GitHub, Gitea, and Forgejo workflows, `shellcheck`, and `lint-action.py` (F11) |
 | `test` (Linux, macOS) | the suite passes **and** at least 65 tests ran; then `self-test` |
 | `msrv` | `cargo check` under the `rust-version` read from `Cargo.toml` |
 | `supply-chain` | `cargo-deny`: advisories, bans, license allow-list, sources |

@@ -746,6 +746,7 @@
       <nav class="platform-nav" id="platformNav">
         <button class="platform-btn active" data-target="pane-github">GitHub Actions</button>
         <button class="platform-btn" data-target="pane-gitlab">GitLab CI/CD</button>
+        <button class="platform-btn" data-target="pane-forgejo">Forgejo Actions</button>
         <button class="platform-btn" data-target="pane-gitea">Gitea Actions</button>
         <button class="platform-btn" data-target="pane-argo">Argo Workflows</button>
         <button class="platform-btn" data-target="pane-docker">Container (Docker)</button>
@@ -822,6 +823,32 @@
       - gl-codequality.json
       - junit.xml
     <span class="code-prop">when:</span> always</div>
+      </div>
+
+      <!-- Forgejo Actions -->
+      <div class="platform-pane" id="pane-forgejo">
+        <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Native support for Forgejo Actions running via <code>forgejo-runner</code>. Supports workflows in <code>.forgejo/workflows/</code> with automatic base ref and PR event detection.
+        </p>
+        <div class="code-block"><span class="code-comment"># .forgejo/workflows/discipline.yml</span>
+<span class="code-prop">name:</span> Forgejo Sentinel Gate
+
+<span class="code-prop">on:</span>
+  <span class="code-prop">pull_request:</span>
+    <span class="code-prop">types:</span> [opened, synchronize]
+
+<span class="code-prop">jobs:</span>
+  <span class="code-prop">discipline:</span>
+    <span class="code-prop">runs-on:</span> ubuntu-latest
+    <span class="code-prop">steps:</span>
+      - <span class="code-prop">uses:</span> actions/checkout@v4
+        <span class="code-prop">with:</span>
+          <span class="code-prop">fetch-depth:</span> 0
+
+      - <span class="code-prop">name:</span> Run Discipline
+        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@v0
+        <span class="code-prop">with:</span>
+          <span class="code-prop">binary_path:</span> /opt/discipline/discipline</div>
       </div>
 
       <!-- Gitea Actions -->
@@ -1114,6 +1141,11 @@ discipline self-test</div>
         <h4>GitHub Action</h4>
         <div class="install-snippet">uses: orieg/discipline@v0</div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Composite action with automatic binary bootstrap.</p>
+      </div>
+      <div class="install-card">
+        <h4>Forgejo Action</h4>
+        <div class="install-snippet">uses: https://github.com/orieg/discipline@v0</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Compatible with Forgejo Actions and forgejo-runner.</p>
       </div>
       <div class="install-card">
         <h4>Gitea Action</h4>

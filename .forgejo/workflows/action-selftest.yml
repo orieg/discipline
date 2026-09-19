@@ -1,0 +1,87 @@
+# Forgejo Actions self-test of the composite action.
+#
+# Runs on a Forgejo mirror of this repository as-is (e.g. on Codeberg),
+# and is executed via forgejo-runner (or nektos/act) with Forgejo's runner image.
+# It deliberately uses no GitHub-hosted action: only `uses: ./` and plain shell,
+# which is the portable FLOSS subset.
+name: Action self-test (Forgejo)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      # act/forgejo-runner binds the workspace; a clean runner needs a checkout.
+      - name: Check out (skipped when the workspace is already populated)
+        shell: bash
+        env:
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ ! -f action.yml ]; then
+            git init -q .
+            git remote add origin "${SERVER_URL}/${REPOSITORY}.git"
+            git fetch -q --depth 1 origin "${SHA}"
+            git checkout -q FETCH_HEAD
+          fi
+
+      - name: Provide a discipline binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -x .ci-bin/discipline ]; then
+            echo "using the prebuilt binary supplied by the caller"
+          else
+            command -v cargo >/dev/null || {
+              curl --proto '=https' --tlsv1.2 -fsS https://sh.rustup.rs | sh -s -- -y --profile minimal
+              . "${HOME}/.cargo/env"
+            }
+            cargo build --release --locked
+            mkdir -p .ci-bin
+            cp target/release/discipline .ci-bin/discipline
+          fi
+          .ci-bin/discipline self-test
+
+      - name: Build fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests/action/make-fixture.sh /tmp/fx-clean clean
+          tests/action/make-fixture.sh /tmp/fx-bad bad
+
+      - name: "Positive control: clean change passes"
+        id: clean
+        uses: ./
+        with:
+          binary_path: .ci-bin/discipline
+          working_directory: /tmp/fx-clean
+          base_ref: main
+      - shell: bash
+        env:
+          REPORT: ${{ steps.clean.outputs.report }}
+        run: tests/action/assert-report.sh "${REPORT}" pass
+
+      - name: "Negative control: bad change is rejected"
+        id: bad
+        continue-on-error: true
+        uses: ./
+        with:
+          binary_path: .ci-bin/discipline
+          working_directory: /tmp/fx-bad
+          base_ref: main
+          hostname_denylist: never-matches-anything
+      - name: Rejection names the expected gates
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.bad.outcome }}
+          REPORT: ${{ steps.bad.outputs.report }}
+        run: |
+          set -euo pipefail
+          [ "${OUTCOME}" = "failure" ] || { echo "bad fixture did not fail the action"; exit 1; }
+          tests/action/assert-report.sh "${REPORT}" fail \
+            assertion-reduction vacuous-tests unsafe-safety-comment time-estimates pii

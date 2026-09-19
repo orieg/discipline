@@ -33,7 +33,7 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - name: Install actionlint (pinned, checksum-verified)
         run: tests/action/install-tool.sh actionlint
-      - run: actionlint -color .github/workflows/*.yml .gitea/workflows/*.yml
+      - run: actionlint -color .github/workflows/*.yml .gitea/workflows/*.yml .forgejo/workflows/*.yml
       - run: shellcheck tests/action/*.sh
       - name: Composite action shell blocks pass shellcheck
         run: python3 tests/action/lint-action.py action.yml

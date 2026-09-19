@@ -7,7 +7,7 @@
 [![Status](https://img.shields.io/badge/status-pre--release-yellow.svg)](docs/PRD.md)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](.pre-commit-hooks.yaml)
 
-**CI gatekeeper and AI coding agent diff sentinel.** One static binary, the same in GitHub Actions, GitLab CI/CD, Gitea Actions, a pre-commit hook, and an agent's inner loop. Full documentation and interactive guides: [orieg.github.io/discipline](https://orieg.github.io/discipline/).
+**CI gatekeeper and AI coding agent diff sentinel.** One static binary, the same in GitHub Actions, GitLab CI/CD, Forgejo Actions, Gitea Actions, a pre-commit hook, and an agent's inner loop. Full documentation and interactive guides: [orieg.github.io/discipline](https://orieg.github.io/discipline/).
 
 Coding agents in an iterate-until-green loop weaken assertions, add tests that assert nothing, mark tests `#[ignore]`, delete what is in the way, drop `// SAFETY:` comments, and — when a gate blocks them — edit the gate. `discipline` inspects the *change* (tree-sitter over a `git2` merge-base diff) and refuses those moves, with the fail-closed engineering distilled from [`orieg/expanse`](https://github.com/orieg/expanse).
 
@@ -131,6 +131,16 @@ discipline:gate:
       - gl-codequality.json
       - junit.xml
     when: always
+```
+
+### Forgejo Actions
+
+Forgejo Actions runs natively via `forgejo-runner` using workflows in `.forgejo/workflows/` (or `.gitea/workflows/` / `.github/workflows/`). The composite action is shell-only and runs with zero JavaScript runtime:
+
+```yaml
+      - uses: https://github.com/orieg/discipline@v0
+        with:
+          binary_path: /opt/discipline/discipline
 ```
 
 ### Gitea Actions

@@ -24,8 +24,8 @@ Engine design for `discipline`. Requirements and roadmap live in `docs/PRD.md`; 
 ## Control flow of `check`
 
 1. **Resolve configuration.** Defaults, file, inline override, gate switches, and the secret denylist are merged as `toml::Value` trees and deserialized once under `deny_unknown_fields`. Gate ids are checked against the registry first, so a planned gate yields "planned, not available" rather than a generic unknown-key error.
-2. **Open the git context.** `--staged` measures the index against `HEAD` (or the empty tree before the first commit). Otherwise `base` and `origin/<base>` are tried, then `merge-base(base, HEAD)`. Any failure is an `Err`, which `main` turns into exit `2`.
-3. **Collect directive text:** the PR body plus every commit message from the merge base to `HEAD`.
+2. **Open the git context.** `--staged` measures the index against `HEAD` (or the empty tree before the first commit). Otherwise `base` and `origin/<base>` are tried, then `merge-base(base, HEAD)`. In CI environments (GitHub, Gitea, Forgejo Actions), the base ref is auto-detected from environment variables (`GITHUB_BASE_REF`, `GITEA_BASE_REF`, `FORGEJO_BASE_REF`). Any failure is an `Err`, which `main` turns into exit `2`.
+3. **Collect directive text:** the PR body (read from `--pr-body-file`, `PR_BODY`, or auto-extracted from CI webhook event payloads via `GITHUB_EVENT_PATH`, `GITEA_EVENT_PATH`, or `FORGEJO_EVENT_PATH`) plus every commit message from the merge base to `HEAD`.
 4. **Run gates** in registry order. The five diff gates share one computation (`agent_diff::run`), performed once.
 5. **Render**, then exit `0` or `1`.
 

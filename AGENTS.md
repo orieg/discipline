@@ -8,7 +8,7 @@ Welcome to **Discipline** (`orieg/discipline`). This document establishes mandat
 
 ## 1. Project Mission & Identity
 
-**Discipline** is a universal CI/CD gatekeeper and AI coding agent diff sentinel built in Rust. It transforms the verification rigors from high-assurance algorithm repos (such as `orieg/expanse`) into a single, declarative static binary wrapped in a composite GitHub and Gitea Action.
+**Discipline** is a universal CI/CD gatekeeper and AI coding agent diff sentinel built in Rust. It transforms the verification rigors from high-assurance algorithm repos (such as `orieg/expanse`) into a single, declarative static binary wrapped in a composite GitHub, Gitea, and Forgejo Action.
 
 Its primary mandate is to **prevent agent drift and test erosion**:
 - Disallowing assertion weakening (`assert_eq!` -> `assert!` or removal).
@@ -32,7 +32,7 @@ Do not scatter notes into arbitrary files. Update canonical documents; do not pr
 | Argo Workflow template | `templates/argo-workflow-template.yaml` | Task spec or parameter change |
 | Documentation site (GitHub Pages) | `docs/index.html` | UI, layout, or documentation updates |
 | Pre-commit hook definitions | `.pre-commit-hooks.yaml` | Hook interface change |
-| CI and release pipelines | `.github/workflows/`, `.gitea/workflows/` (described in `docs/PRD.md` §8) | Pipeline redesign |
+| CI and release pipelines | `.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/` (described in `docs/PRD.md` §8) | Pipeline redesign |
 | Dependency policy | `deny.toml` | License or source policy change |
 
 ---

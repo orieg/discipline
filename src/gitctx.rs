@@ -40,8 +40,11 @@ pub struct GitCtx {
 /// 2. `DISCIPLINE_BASE_REF` environment variable
 /// 3. GitLab Merge Request Target Branch: `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` (`origin/<branch>`)
 /// 4. GitLab Merge Request Diff Base SHA: `CI_MERGE_REQUEST_DIFF_BASE_SHA`
-/// 5. GitLab Default Branch: `CI_DEFAULT_BRANCH` (`origin/<branch>`)
-/// 6. Default fallback: `"origin/main"`
+/// 5. Forgejo Pull Request Base Branch: `FORGEJO_BASE_REF` (`origin/<branch>`)
+/// 6. Gitea Pull Request Base Branch: `GITEA_BASE_REF` (`origin/<branch>`)
+/// 7. GitHub Pull Request Base Branch: `GITHUB_BASE_REF` (`origin/<branch>`)
+/// 8. GitLab Default Branch: `CI_DEFAULT_BRANCH` (`origin/<branch>`)
+/// 9. Default fallback: `"origin/main"`
 pub fn detect_base_ref(explicit_base: Option<&str>) -> String {
     detect_base_ref_with_env(explicit_base, |k| std::env::var(k).ok())
 }
@@ -71,6 +74,18 @@ where
     if let Some(diff_base) = get_env("CI_MERGE_REQUEST_DIFF_BASE_SHA") {
         if !diff_base.trim().is_empty() {
             return diff_base.trim().to_string();
+        }
+    }
+    for var in &["FORGEJO_BASE_REF", "GITEA_BASE_REF", "GITHUB_BASE_REF"] {
+        if let Some(base_branch) = get_env(var) {
+            if !base_branch.trim().is_empty() {
+                let trimmed = base_branch.trim();
+                if trimmed.starts_with("origin/") {
+                    return trimmed.to_string();
+                } else {
+                    return format!("origin/{}", trimmed);
+                }
+            }
         }
     }
     if let Some(default_branch) = get_env("CI_DEFAULT_BRANCH") {
@@ -547,6 +562,45 @@ mod tests {
             }
         };
         assert_eq!(detect_base_ref_with_env(None, lookup), "origin/master");
+    }
+
+    #[test]
+    fn test_detect_base_ref_forgejo_base_ref() {
+        let lookup = |k: &str| {
+            if k == "FORGEJO_BASE_REF" {
+                Some("main".to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(detect_base_ref_with_env(None, lookup), "origin/main");
+    }
+
+    #[test]
+    fn test_detect_base_ref_gitea_base_ref() {
+        let lookup = |k: &str| {
+            if k == "GITEA_BASE_REF" {
+                Some("origin/develop".to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(detect_base_ref_with_env(None, lookup), "origin/develop");
+    }
+
+    #[test]
+    fn test_detect_base_ref_github_base_ref() {
+        let lookup = |k: &str| {
+            if k == "GITHUB_BASE_REF" {
+                Some("release/v1.0".to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            detect_base_ref_with_env(None, lookup),
+            "origin/release/v1.0"
+        );
     }
 
     #[test]

@@ -122,6 +122,31 @@ fn is_gitlab_ci() -> bool {
         .unwrap_or(false)
 }
 
+fn detect_pr_body_from_ci() -> Option<String> {
+    for var in &[
+        "FORGEJO_EVENT_PATH",
+        "GITEA_EVENT_PATH",
+        "GITHUB_EVENT_PATH",
+    ] {
+        if let Ok(path) = std::env::var(var) {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(body) = json
+                        .get("pull_request")
+                        .and_then(|pr| pr.get("body"))
+                        .and_then(|b| b.as_str())
+                    {
+                        if !body.trim().is_empty() {
+                            return Some(body.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn check(args: CheckArgs) -> Result<bool> {
     let is_gitlab = is_gitlab_ci();
     let base_ref = discipline::gitctx::detect_base_ref(args.base.as_deref());
@@ -151,7 +176,8 @@ fn check(args: CheckArgs) -> Result<bool> {
         ),
         None => std::env::var("PR_BODY")
             .ok()
-            .filter(|b| !b.trim().is_empty()),
+            .filter(|b| !b.trim().is_empty())
+            .or_else(detect_pr_body_from_ci),
     };
     let commits = git.commits()?;
     let (directives, directive_notes) =
