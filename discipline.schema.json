@@ -197,6 +197,46 @@
       },
       "type": "object"
     },
+    "DependencyDeltaGate": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_dependencies": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Explicit list of allowed dependency package names"
+        },
+        "allow_wildcards": {
+          "description": "Whether wildcard versions are permitted (default: false)",
+          "type": "boolean"
+        },
+        "deny_dependencies": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Explicit list of forbidden dependency package names"
+        },
+        "deny_file": {
+          "description": "Path to deny.toml policy file",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "manifests": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Manifest file globs to inspect"
+        },
+        "require_git_pins": {
+          "description": "Whether git dependencies must specify an immutable commit or tag pin (default: true)",
+          "type": "boolean"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "GoldenGate": {
       "additionalProperties": false,
       "properties": {
@@ -445,6 +485,14 @@
             }
           ],
           "description": "deleted files and removed tests need a scoped removes: rationale"
+        },
+        "dependency-delta": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/DependencyDeltaGate"
+            }
+          ],
+          "description": "manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification"
         },
         "golden-output": {
           "allOf": [

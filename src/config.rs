@@ -168,6 +168,13 @@ pub const GATES: &[GateInfo] = &[
         available: true,
     },
     GateInfo {
+        id: "dependency-delta",
+        suite: Suite::Integrity,
+        summary: "manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification",
+        languages: "any",
+        available: true,
+    },
+    GateInfo {
         id: "pr-checklist",
         suite: Suite::Hygiene,
         summary: "ticked PR checkboxes are reconciled against the diff",
@@ -282,6 +289,7 @@ pub struct Gates {
     pub golden_output: GoldenGate,
     pub bench_regression: BenchRegressionGate,
     pub command: CommandGate,
+    pub dependency_delta: DependencyDeltaGate,
 }
 
 /// Settings every gate shares.
@@ -310,7 +318,8 @@ impl_gate_settings!(
     ScratchGate,
     GoldenGate,
     BenchRegressionGate,
-    CommandGate
+    CommandGate,
+    DependencyDeltaGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -646,6 +655,55 @@ pub struct CommandEntry {
     pub canary_expected_diagnostic: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DependencyDeltaGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Manifest file globs to inspect (default covers Cargo.toml, package.json, pyproject.toml, go.mod, etc.).
+    pub manifests: Vec<String>,
+    /// Whether wildcard versions ("*", "latest", "") are permitted (default: false).
+    pub allow_wildcards: bool,
+    /// Whether git dependencies must specify an immutable commit or tag pin (default: true).
+    pub require_git_pins: bool,
+    /// Path to deny.toml policy file (default: "deny.toml").
+    pub deny_file: Option<String>,
+    /// Explicit list of allowed dependency package names.
+    pub allow_dependencies: Vec<String>,
+    /// Explicit list of forbidden dependency package names.
+    pub deny_dependencies: Vec<String>,
+}
+
+impl Default for DependencyDeltaGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            manifests: [
+                "**/Cargo.toml",
+                "**/package.json",
+                "**/pyproject.toml",
+                "**/requirements*.txt",
+                "**/go.mod",
+                "**/composer.json",
+                "**/Gemfile",
+                "**/*.csproj",
+                "**/Directory.Packages.props",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            allow_wildcards: false,
+            require_git_pins: true,
+            deny_file: Some("deny.toml".to_string()),
+            allow_dependencies: Vec::new(),
+            deny_dependencies: Vec::new(),
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -662,6 +720,7 @@ impl Gates {
             "golden-output" => &self.golden_output,
             "bench-regression" => &self.bench_regression,
             "command" => &self.command,
+            "dependency-delta" => &self.dependency_delta,
             _ => return None,
         })
     }
@@ -847,6 +906,7 @@ pub const SHORTER_IS_STRICTER: &[&str] = &[
     "assert_helper_fns",
     "extra_assert_macros",
     "sources",
+    "allow_dependencies",
 ];
 
 pub const LONGER_IS_STRICTER: &[&str] = &[
@@ -855,6 +915,8 @@ pub const LONGER_IS_STRICTER: &[&str] = &[
     "paths",
     "include",
     "forbid_output",
+    "deny_dependencies",
+    "manifests",
 ];
 
 fn is_reset_token(val: &Value) -> bool {

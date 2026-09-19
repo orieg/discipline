@@ -22,6 +22,7 @@ pub fn generate_schema() -> Value {
             "bench-regression" => "#/$defs/BenchRegressionGate",
             "unsafe-safety-comment" => "#/$defs/UnsafeSafetyCommentGate",
             "command" => "#/$defs/CommandGate",
+            "dependency-delta" => "#/$defs/DependencyDeltaGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -256,6 +257,21 @@ pub fn generate_schema() -> Value {
                     "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed" },
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
                     "canary_expected_diagnostic": { "type": "string", "description": "Expected diagnostic string that canary must produce" }
+                }
+            },
+            "DependencyDeltaGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "manifests": { "$ref": "#/$defs/StringListOrReset", "description": "Manifest file globs to inspect" },
+                    "allow_wildcards": { "type": "boolean", "description": "Whether wildcard versions are permitted (default: false)" },
+                    "require_git_pins": { "type": "boolean", "description": "Whether git dependencies must specify an immutable commit or tag pin (default: true)" },
+                    "deny_file": { "type": "string", "description": "Path to deny.toml policy file" },
+                    "allow_dependencies": { "$ref": "#/$defs/StringListOrReset", "description": "Explicit list of allowed dependency package names" },
+                    "deny_dependencies": { "$ref": "#/$defs/StringListOrReset", "description": "Explicit list of forbidden dependency package names" }
                 }
             }
         }

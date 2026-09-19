@@ -127,6 +127,12 @@ pub const ALLOW_COMMAND: &[&str] = &[
     "allow(command)",
 ];
 
+pub const ALLOW_DEPENDENCY: &[&str] = &[
+    "allow-dependency",
+    "discipline:allow(dependency-delta)",
+    "allow(dependency-delta)",
+];
+
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
     "deletes",
@@ -152,6 +158,9 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-command",
     "discipline:allow(command)",
     "allow(command)",
+    "allow-dependency",
+    "discipline:allow(dependency-delta)",
+    "allow(dependency-delta)",
     "allow-nul",
     "allow-nul-byte",
     "allow-corrupt",

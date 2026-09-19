@@ -33,6 +33,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | `ci-integrity` | integrity | planned | any | workflow weakening: continue-on-error, || true, unpinned actions |
 | `test-floor` | integrity | planned | any | test-count ratchet read from the base ref |
 | `golden-output` | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override |
+| `dependency-delta` | integrity | **shipped** | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
 | `pr-checklist` | hygiene | planned | any | ticked PR checkboxes are reconciled against the diff |
 | `command` | verification | **shipped** | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | `sanitizers` | verification | planned | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
@@ -343,6 +344,32 @@ When a change touches source files in a language without an active pack, each AS
   - Newly added snapshot files for newly created tests.
 - **Lifting directive:** `allow-golden-update: <path> <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `paths`.
+
+#### `dependency-delta`
+- **Rule:** Universal manifest diff inspection and dependency sentinel across languages. Only newly added or modified dependencies in the diff against the merge-base ref are evaluated. Enforces zero wildcards, immutable commit or release tag pins on git sources, repo-level `deny.toml` verification (banned crates, sources, wildcards), and configured allow/deny dependency lists.
+- **Languages:** any (Cargo.toml, package.json, pyproject.toml, requirements*.txt, go.mod, composer.json, Gemfile, *.csproj, Directory.Packages.props).
+- **What it catches:**
+  - Wildcard or unconstrained dependency version specifications (`*`, `latest`, empty version string).
+  - Unpinned git dependencies (floating branches like `branch = "main"` without explicit commit SHA or tag).
+  - Newly introduced dependencies that violate repository `deny.toml` `[bans]` or `[sources]`.
+  - Dependencies listed in configured `deny_dependencies`.
+  - Newly added dependencies not present in configured `allow_dependencies` (when configured).
+- **Failing diff example (rejected):**
+  ```diff
+  // Cargo.toml
+  + serde = "*"
+  + unsafe-unpinned-lib = { git = "https://github.com/org/repo.git", branch = "main" }
+  ```
+- **Passing commit / PR description (accepted):**
+  ```text
+  allow-dependency: serde temporary unpinned version for testing
+  allow-dependency: unsafe-unpinned-lib tracking upstream experimental branch
+  ```
+- **What it does NOT catch:**
+  - Unmodified pre-existing dependencies already present in the merge base ref.
+  - Dependencies explicitly excused via scoped `allow-dependency: <name> <reason>`.
+- **Lifting directive:** `allow-dependency: <dependency-name> <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `manifests`, `allow_wildcards`, `require_git_pins`, `deny_file`, `allow_dependencies`, `deny_dependencies`.
 
 ---
 

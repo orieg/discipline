@@ -3605,3 +3605,115 @@ timeout_seconds = 1
     );
     assert!(run_timeout.stderr.contains("timed out after 1s"));
 }
+
+#[test]
+fn dependency_delta_fires_on_wildcard_and_accepts_override() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "Cargo.toml",
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0.0\"\n",
+        "base: init cargo",
+    );
+
+    // Add wildcard dependency in head
+    repo.write(
+        "Cargo.toml",
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"*\"\n",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert!(run
+        .titles("dependency-delta")
+        .contains(&"Wildcard Dependency Version".to_string()));
+
+    // Override with allow-dependency
+    let run_pass = repo.check_with_pr(
+        &[],
+        "allow-dependency: serde temporary unpinned version for testing",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 1);
+}
+
+#[test]
+fn dependency_delta_enforces_deny_toml_bans_and_git_pins() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("deny.toml", "[bans]\ndeny = [ { name = \"banned-crate\" } ]\n"),
+            (
+                "Cargo.toml",
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0.0\"\n",
+            ),
+        ],
+        "base: init deny and cargo",
+    );
+
+    // Add banned crate and unpinned git dependency
+    let head_cargo = r#"[package]
+name = "demo"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0.0"
+banned-crate = "0.2.0"
+git-dep = { git = "https://github.com/example/repo.git", branch = "main" }
+"#;
+    repo.write("Cargo.toml", head_cargo);
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let titles = run.titles("dependency-delta");
+    assert!(titles.contains(&"Banned Dependency".to_string()));
+    assert!(titles.contains(&"Unpinned Git Dependency".to_string()));
+
+    // Override both dependencies
+    let run_pass = repo.check_with_pr(
+        &[],
+        "allow-dependency: banned-crate audited exception\nallow-dependency: git-dep tracking upstream dev",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 2);
+}
+
+#[test]
+fn dependency_delta_language_neutral_package_json_and_pyproject() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (
+                "package.json",
+                "{\n  \"name\": \"app\",\n  \"dependencies\": {\n    \"lodash\": \"4.17.21\"\n  }\n}\n",
+            ),
+            (
+                "pyproject.toml",
+                "[project]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"urllib3==1.26.0\"]\n",
+            ),
+        ],
+        "base: init npm and python manifests",
+    );
+
+    // Add wildcard to package.json and wildcard to pyproject.toml
+    let head_pkg = "{\n  \"name\": \"app\",\n  \"dependencies\": {\n    \"lodash\": \"4.17.21\",\n    \"axios\": \"latest\"\n  }\n}\n";
+    let head_py = "[project]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\n    \"urllib3==1.26.0\",\n    \"requests == *\",\n]\n";
+    repo.write("package.json", head_pkg);
+    repo.write("pyproject.toml", head_py);
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let titles = run.titles("dependency-delta");
+    assert_eq!(
+        titles
+            .iter()
+            .filter(|t| *t == "Wildcard Dependency Version")
+            .count(),
+        2
+    );
+
+    // Override both
+    let run_pass = repo.check_with_pr(
+        &[],
+        "allow-dependency: axios latest required for build test\nallow-dependency: requests unpinned version",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 2);
+}

@@ -882,6 +882,86 @@ const CASES: &[Case] = &[
                 && !covers_other)
         },
     ),
+    (
+        "dependency: manifest delta detects wildcards, unpinned git deps, and banned packages",
+        || {
+            use crate::guards::dependency::{parse_cargo_toml, parse_package_json};
+
+            // 1. Wildcard detection in cargo and npm
+            let cargo_wild = r#"
+[dependencies]
+sample-wildcard = "*"
+sample-pinned = "1.2.3"
+git-unpinned = { git = "https://github.com/example/lib.git", branch = "main" }
+git-pinned = { git = "https://github.com/example/lib.git", rev = "1234567890abcdef1234567890abcdef12345678" }
+"#;
+            let cargo_deps = parse_cargo_toml(cargo_wild, "Cargo.toml");
+            let unpinned_ver = cargo_deps.iter().find(|d| d.name == "sample-wildcard").unwrap();
+            let pinned_ver = cargo_deps.iter().find(|d| d.name == "sample-pinned").unwrap();
+            let git_unpinned = cargo_deps.iter().find(|d| d.name == "git-unpinned").unwrap();
+            let git_pinned = cargo_deps.iter().find(|d| d.name == "git-pinned").unwrap();
+
+            let wildcard_discriminated = unpinned_ver.is_wildcard && !pinned_ver.is_wildcard;
+            let git_pin_discriminated = git_unpinned.is_git && git_unpinned.git_pin.is_none()
+                && git_pinned.is_git && git_pinned.git_pin.is_some();
+
+            // 2. npm wildcard detection
+            let pkg_json = r#"{
+  "dependencies": {
+    "wild": "latest",
+    "exact": "2.4.0"
+  }
+}"#;
+            let npm_deps = parse_package_json(pkg_json, "package.json");
+            let wild = npm_deps.iter().find(|d| d.name == "wild").unwrap();
+            let exact = npm_deps.iter().find(|d| d.name == "exact").unwrap();
+            let npm_wildcard_discriminated = wild.is_wildcard && !exact.is_wildcard;
+
+            Ok(wildcard_discriminated && git_pin_discriminated && npm_wildcard_discriminated)
+        },
+    ),
+    (
+        "dependency: deny.toml allowlist enforcement and allow-dependency override discriminate",
+        || {
+            use crate::guards::dependency::parse_deny_toml;
+            use crate::tokens::{covers, directive_reasons, ALLOW_DEPENDENCY};
+
+            let deny_content = r#"
+[bans]
+deny = [
+    { name = "malicious-pkg" },
+]
+allow = [
+    { name = "approved-pkg" },
+]
+wildcards = "deny"
+
+[sources]
+unknown-git = "deny"
+allow-git = [
+    "https://github.com/trusted/repo",
+]
+"#;
+            let policy = parse_deny_toml(deny_content)?;
+            let policy_ok = policy.deny_bans.contains("malicious-pkg")
+                && !policy.deny_bans.contains("approved-pkg")
+                && policy.allow_bans.contains("approved-pkg")
+                && policy.wildcards_denied
+                && policy.deny_unknown_git
+                && policy.allow_git.iter().any(|u| u.contains("trusted/repo"));
+
+            // Directive override discrimination
+            let armed = directive_reasons(
+                "allow-dependency: malicious-pkg vendor patched audit in progress",
+                ALLOW_DEPENDENCY,
+            );
+            let covers_named = covers(&armed, "malicious-pkg");
+            let covers_other = covers(&armed, "other-pkg");
+            let placeholder = directive_reasons("allow-dependency: <reason>", ALLOW_DEPENDENCY);
+
+            Ok(policy_ok && covers_named && !covers_other && placeholder.is_empty())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {
