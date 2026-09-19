@@ -1,26 +1,27 @@
 //! Mathematical bounds and statistical decision rules for performance benchmarks.
 //!
-//! # Methodological Foundation & Primary Sources
+//! # Methodological Foundation & Derivation
 //!
 //! Statistical performance regression gating follows high-assurance evaluation rules:
-//! 1. **Conservative Confidence Interval Rule (docs/GATES.md#pillar-5-benchmark-drift; Vershynin 2018 §2):**
+//! 1. **Conservative Confidence Interval Rule (docs/GATES.md#pillar-5-benchmark-drift):**
 //!    A wall-clock regression claim against tolerance `tau` is statistically verified
 //!    iff the conservative lower bound of the performance difference exceeds `tau`.
-//!    For baseline interval `[L_base, U_base]` and head interval `[L_head, U_head]`:
-//!    `delta_min = (L_head - U_base) / U_base`.
-//!    When `L_head <= U_base`, the data cannot reject `head <= base`; `delta_min <= 0`.
-//!    A regression is flagged only when `delta_min > (tau / 100)`.
+//!    Derived from interval arithmetic: for independent estimators `X in [L_base, U_base]`
+//!    and `Y in [L_head, U_head]`, the minimal possible difference is `Y - X >= L_head - U_base`.
+//!    Normalizing by `U_base` yields the conservative lower bound on the percentage change:
+//!    `delta_min = ((L_head - U_base) / U_base) * 100.0`.
+//!    When `L_head <= U_base`, the data cannot reject `head <= base`; `delta_min <= 0.0`.
+//!    A regression is flagged only when `delta_min > tolerance_pct`.
+//!    When confidence intervals are missing for wall-clock data, the verdict degrades to
+//!    "not comparable", never failing on point-estimate deltas alone.
 //! 2. **Deterministic Integer Counters (Callgrind Ir, instruction cycles):**
 //!    Counters have zero sampling variance and are evaluated directly against `tau`.
 //! 3. **Wilson Score Interval (Wilson 1927):**
 //!    Binomial proportion confidence interval for discrete pass/fail trials.
 //!
 //! # References
-//! - Brook, J. (2014) *Criterion.rs: Statistics-driven Benchmarking in Rust*.
-//! - Vershynin, R. (2018) *High-Dimensional Probability*, Cambridge Univ. Press, §2.
 //! - Wilson, E. B. (1927) *Probable inference, the law of succession, and statistical inference*,
 //!   J. Am. Stat. Assoc. 22:209-212.
-//! - Gao, P. et al. (2017) *Participation ratio and effective dimension in neural representations*, bioRxiv.
 
 use anyhow::{bail, Result};
 
@@ -159,7 +160,7 @@ pub struct RegressionDecision {
     pub note: String,
 }
 
-/// Evaluates continuous benchmark regression using conservative interval bounds (Vershynin 2018; Brook 2014).
+/// Evaluates continuous benchmark regression using conservative interval bounds derived from interval arithmetic.
 ///
 /// If both `base` and `head` have confidence intervals `[L_base, U_base]` and `[L_head, U_head]`:
 /// - The conservative lower bound of the increase is:
@@ -215,10 +216,12 @@ pub fn evaluate_continuous_regression(
             note,
         })
     } else {
-        // Point estimate only (no confidence intervals reported)
-        let is_regression = point_delta_pct > tolerance_pct;
+        // Point estimate only (no confidence intervals reported for wall-clock data)
+        // High-assurance discipline: without confidence intervals, wall-clock data
+        // cannot reject the null hypothesis; verdict degrades to "not comparable" and never fails.
+        let is_regression = false;
         let note = format!(
-            "point estimate comparison (no CI available; point delta: {:.2}% vs tolerance {:.2}%)",
+            "not comparable (no CI available): point-estimate delta {:+.2}% vs tolerance {:.2}%; wall-clock data lacks confidence intervals and cannot verify regression",
             point_delta_pct, tolerance_pct
         );
 
@@ -226,7 +229,7 @@ pub fn evaluate_continuous_regression(
             delta_pct: point_delta_pct,
             point_delta_pct,
             is_regression,
-            method: "point_estimate_only",
+            method: "not_comparable_no_ci",
             note,
         })
     }
@@ -329,14 +332,18 @@ mod tests {
     }
 
     #[test]
-    fn test_point_estimate_only_fallback() {
+    fn test_missing_interval_degrades_to_not_comparable() {
         let base = ContinuousEstimate::point_only(10.0, "s").unwrap();
         let head = ContinuousEstimate::point_only(10.2, "s").unwrap(); // +2.0%
 
         let decision = evaluate_continuous_regression(&base, &head, 0.5).unwrap();
-        assert_eq!(decision.method, "point_estimate_only");
-        assert!(decision.is_regression);
+        assert_eq!(decision.method, "not_comparable_no_ci");
+        assert!(
+            !decision.is_regression,
+            "missing CI must never fail as a regression"
+        );
         assert!((decision.point_delta_pct - 2.0).abs() < 1e-6);
+        assert!(decision.note.contains("not comparable (no CI available)"));
     }
 
     #[test]

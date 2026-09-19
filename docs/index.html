@@ -17,16 +17,45 @@
 
   <script>
     (function() {
-      const saved = localStorage.getItem('discipline-theme');
-      const attr = document.documentElement.getAttribute('data-theme');
-      if (saved) {
-        document.documentElement.setAttribute('data-theme', saved);
-      } else if (!attr) {
-        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-          document.documentElement.setAttribute('data-theme', 'light');
-        } else {
-          document.documentElement.setAttribute('data-theme', 'dark');
+      'use strict';
+      var KEY = 'orieg-theme';
+      var LEGACY_KEY = 'discipline-theme';
+      var LABELS = {
+        system: 'Color theme: system (click to switch to light)',
+        light: 'Color theme: light (click to switch to dark)',
+        dark: 'Color theme: dark (click to switch to system)'
+      };
+      function stored() {
+        try {
+          var v = localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY);
+          return (v === 'light' || v === 'dark') ? v : null;
+        } catch (e) { return null; }
+      }
+      function systemTheme() {
+        return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      }
+      function apply() {
+        var override = stored();
+        var theme = override || systemTheme();
+        var mode = override || 'system';
+        var root = document.documentElement;
+        root.setAttribute('data-theme', theme);
+        root.setAttribute('data-theme-mode', mode);
+        var buttons = document.querySelectorAll('.theme-toggle');
+        for (var i = 0; i < buttons.length; i++) {
+          buttons[i].setAttribute('aria-label', LABELS[mode]);
+          buttons[i].setAttribute('title', LABELS[mode]);
         }
+      }
+      window.__disciplineApplyTheme = apply;
+      apply();
+      if (window.matchMedia) {
+        var mq = window.matchMedia('(prefers-color-scheme: dark)');
+        if (mq.addEventListener) { mq.addEventListener('change', apply); }
+        else if (mq.addListener) { mq.addListener(apply); }
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', apply);
       }
     })();
   </script>
@@ -188,6 +217,11 @@
       border-color: var(--accent);
       background-color: var(--nav-pill-bg);
     }
+    .theme-icon-system, .theme-icon-sun, .theme-icon-moon { display: none; }
+    [data-theme-mode="system"] .theme-icon-system { display: inline; }
+    [data-theme-mode="light"] .theme-icon-sun { display: inline; }
+    [data-theme-mode="dark"] .theme-icon-moon { display: inline; }
+    :root:not([data-theme-mode]) .theme-icon-system { display: inline; }
     .btn-nav-gh {
       display: inline-flex;
       align-items: center;
@@ -624,8 +658,10 @@
   </ul>
 
   <div class="nav-actions">
-    <button class="theme-toggle-btn" id="themeToggle" aria-label="Toggle theme">
-      <span id="themeIcon">&#x2600;&#xfe0f;</span>
+    <button class="theme-toggle-btn theme-toggle" id="themeToggle" type="button" onclick="toggleTheme()" aria-label="Toggle color theme" title="Toggle color theme">
+      <span class="theme-icon-system" aria-hidden="true">&#9681;</span>
+      <span class="theme-icon-sun" aria-hidden="true">&#9728;</span>
+      <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
     </button>
     <a href="https://github.com/orieg/discipline" class="btn-nav-gh" target="_blank" rel="noopener">
       <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -659,7 +695,7 @@
     <!-- Stat Bar -->
     <div class="stat-bar">
       <div class="stat-item">
-        <h3>11</h3>
+        <h3>12</h3>
         <p>Active Fail-Closed Gates</p>
       </div>
       <div class="stat-item">
@@ -671,7 +707,7 @@
         <p>Supported CI Integrations</p>
       </div>
       <div class="stat-item">
-        <h3>0 ms</h3>
+        <h3>0</h3>
         <p>External Network Calls</p>
       </div>
     </div>
@@ -1320,39 +1356,43 @@ discipline self-test</div>
 
 <footer>
   <div class="container">
-    <div class="footer-links">
-      <a href="https://github.com/orieg/discipline" target="_blank" rel="noopener">GitHub</a>
-      <a href="https://github.com/orieg/discipline/blob/main/docs/ROADMAP.md" target="_blank" rel="noopener">Roadmap & Milestones</a>
-      <a href="https://github.com/orieg/discipline/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener">Architecture</a>
-      <a href="https://orieg.github.io/expanse/">Expanse Engine</a>
-      <a href="https://orieg.github.io/php-judy/">PHP Judy</a>
-      <a href="https://orieg.github.io/judy-cache/">Judy Cache</a>
-      <a href="https://orieg.github.io/gws-connector/">GWS Connector</a>
-      <a href="https://orieg.github.io/">Nicolas Brousse</a>
+    <div class="footer-links" style="margin-bottom: 0.75rem; color: var(--text-muted); font-size: 0.85rem;">
+      Judy &amp; Systems Ecosystem:
+      <a href="https://orieg.github.io/judy-cache/">Judy Cache PSR-16</a> &bull;
+      <a href="https://orieg.github.io/php-judy/">PHP Judy</a> &bull;
+      <a href="https://orieg.github.io/judy-polyfill/">Judy Polyfill</a> &bull;
+      <a href="https://orieg.github.io/expanse/">Expanse Engine</a> &bull;
+      <a href="https://orieg.github.io/">Nicolas Brousse (Hub)</a>
     </div>
-    <p>&copy; 2026 Nicolas Brousse. Discipline is dual-licensed under MIT or Apache-2.0.</p>
+    <p>
+      <strong>Discipline</strong> is open source software released under dual MIT / Apache-2.0 licenses.<br>
+      Maintained by <a href="https://nicolas.brousse.info/">Nicolas Brousse</a> &bull;
+      <a href="https://github.com/orieg/discipline">GitHub</a> &bull;
+      <a href="./">Docs</a>
+    </p>
   </div>
 </footer>
 
 <script>
-  // Theme toggle
-  const themeToggle = document.getElementById('themeToggle');
-  const themeIcon = document.getElementById('themeIcon');
-
-  function updateThemeIcon(theme) {
-    themeIcon.textContent = theme === 'light' ? '\u2600\ufe0f' : '\ud83c\udf19';
+  // Theme toggle (3-state cycle: system -> light -> dark -> system)
+  function toggleTheme() {
+    var KEY = 'orieg-theme';
+    var LEGACY_KEY = 'discipline-theme';
+    var v = null;
+    try { v = localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY); } catch (e) {}
+    var mode = (v === 'light' || v === 'dark') ? v : 'system';
+    var next = mode === 'system' ? 'light' : (mode === 'light' ? 'dark' : 'system');
+    try {
+      if (next === 'system') {
+        localStorage.removeItem(KEY);
+        localStorage.removeItem(LEGACY_KEY);
+      } else {
+        localStorage.setItem(KEY, next);
+        localStorage.removeItem(LEGACY_KEY);
+      }
+    } catch (e) {}
+    if (window.__disciplineApplyTheme) { window.__disciplineApplyTheme(); }
   }
-
-  const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
-  updateThemeIcon(currentTheme);
-
-  themeToggle.addEventListener('click', () => {
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    const nextTheme = isDark ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', nextTheme);
-    localStorage.setItem('discipline-theme', nextTheme);
-    updateThemeIcon(nextTheme);
-  });
 
   // Platform tabs
   const platformButtons = document.querySelectorAll('#platformNav .platform-btn');

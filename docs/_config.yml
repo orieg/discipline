@@ -1,0 +1,8 @@
+title: Discipline
+description: Universal CI/CD Diff Sentinel & AI Coding Agent Gatekeeper
+baseurl: /discipline
+url: https://orieg.github.io
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge

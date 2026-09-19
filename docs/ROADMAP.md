@@ -1,3 +1,9 @@
+---
+layout: default
+title: Roadmap & Milestones
+permalink: /roadmap/
+---
+
 # Discipline Roadmap & Milestones
 
 This document establishes the delivery phases, dependency graph, go/no-go gates, shipped gates, planned extensions, and outstanding checks for `discipline`.

@@ -18,7 +18,7 @@
 //! 4. Missing baseline entry for an existing head benchmark (rename/add) -> FAIL (exit 1).
 //! 5. Provenance tracking: Mismatched host/runner tags fail unless `--allow-cross-host-bench` is set.
 //! 6. Mathematical bounds: Wall-clock regressions with confidence intervals are evaluated using
-//!    conservative interval clearing (Vershynin 2018; Brook 2014); overlapping CIs do not fail.
+//!    conservative interval clearing derived from interval arithmetic; overlapping CIs do not fail.
 
 pub mod bounds;
 
@@ -318,7 +318,9 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
                                 &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", h.name, h.name),
                             );
                         }
-                    } else if decision.point_delta_pct > settings.tolerance_pct {
+                    } else if decision.method == "not_comparable_no_ci"
+                        || decision.point_delta_pct > settings.tolerance_pct
+                    {
                         out.notes
                             .push(format!("benchmark `{}`: {}", h.name, decision.note));
                     }
@@ -458,8 +460,14 @@ fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
     if let Some(mean_val) = val.get("mean") {
         if let Some(point) = mean_val.get("point_estimate").and_then(|p| p.as_f64()) {
             let ci = if let Some(ci_obj) = mean_val.get("confidence_interval") {
-                let lower = ci_obj.get("lower_limit").and_then(|l| l.as_f64());
-                let upper = ci_obj.get("upper_limit").and_then(|u| u.as_f64());
+                let lower = ci_obj
+                    .get("lower_bound")
+                    .or_else(|| ci_obj.get("lower_limit"))
+                    .and_then(|l| l.as_f64());
+                let upper = ci_obj
+                    .get("upper_bound")
+                    .or_else(|| ci_obj.get("upper_limit"))
+                    .and_then(|u| u.as_f64());
                 let level = ci_obj
                     .get("confidence_level")
                     .and_then(|c| c.as_f64())

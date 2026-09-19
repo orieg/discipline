@@ -1,3 +1,9 @@
+---
+layout: default
+title: Configuration & Integration Reference
+permalink: /configuration/
+---
+
 # Configuration & Integration Reference
 
 This document provides the complete specification of `discipline`'s configuration layers, schema, GitHub/Gitea/Forgejo Action inputs and outputs, CLI commands, override directives, trust model, and reference adoption configurations.
@@ -250,3 +256,165 @@ exempt_paths = [
     "docs/archive/**",
 ]
 ```
+
+---
+
+## Platform Quickstarts
+
+Discipline delivers a single static binary and a composite shell action that runs identically across modern CI/CD engines.
+
+> **Status: Pre-release.** No released version tag exists yet. Code snippets below pin the verified commit SHA `d77059689f7fda42cc52a2b17ea8dd118af2e6f6` or specify `binary_path`. Upon tag release (`v0.1.0`), snippets will track `@v0` / `v0.1.0`.
+
+### GitHub Actions
+
+```yaml
+name: CI Sentinel
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  discipline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # merge base must be reachable
+      - uses: orieg/discipline@d77059689f7fda42cc52a2b17ea8dd118af2e6f6
+        with:
+          fail_on_warnings: true
+```
+
+### GitLab CI/CD
+
+Include the remote pipeline template directly:
+
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/orieg/discipline/d77059689f7fda42cc52a2b17ea8dd118af2e6f6/templates/discipline.gitlab-ci.yml'
+```
+
+Or configure a standalone job emitting native GitLab Code Quality diffs:
+
+```yaml
+discipline:gate:
+  stage: test
+  image:
+    name: ghcr.io/orieg/discipline:latest
+    entrypoint: [""]
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME --depth=100 || true
+  script:
+    - discipline check
+  artifacts:
+    reports:
+      codequality: gl-codequality.json
+      junit: junit.xml
+    paths:
+      - gl-codequality.json
+      - junit.xml
+    when: always
+```
+
+### Forgejo Actions
+
+Forgejo Actions runs natively via `forgejo-runner` using workflows in `.forgejo/workflows/`. The composite action is shell-only and requires zero JavaScript runtime:
+
+```yaml
+      - uses: https://github.com/orieg/discipline@d77059689f7fda42cc52a2b17ea8dd118af2e6f6
+        with:
+          binary_path: /opt/discipline/discipline
+```
+
+### Gitea Actions
+
+The same composite action runs under Gitea's `act_runner` without modification:
+
+```yaml
+      - uses: https://github.com/orieg/discipline@d77059689f7fda42cc52a2b17ea8dd118af2e6f6
+        with:
+          binary_path: /opt/discipline/discipline
+```
+
+### Argo Workflows
+
+Use [`templates/argo-workflow-template.yaml`](https://github.com/orieg/discipline/blob/main/templates/argo-workflow-template.yaml) in GitOps pipelines to execute pre-merge diff checks:
+
+```yaml
+- name: run-discipline-gate
+  templateRef:
+    name: discipline-sentinel
+    template: discipline-gate
+  arguments:
+    parameters:
+      - name: repo-url
+        value: "https://github.com/my-org/my-repo.git"
+      - name: target-branch
+        value: "main"
+      - name: source-branch
+        value: "feat/my-feature"
+```
+
+### pre-commit Hook
+
+```yaml
+repos:
+  - repo: https://github.com/orieg/discipline
+    rev: d77059689f7fda42cc52a2b17ea8dd118af2e6f6
+    hooks:
+      - id: discipline          # compiles via cargo
+      # Or: - id: discipline-system # uses pre-installed binary on PATH
+```
+
+Or run staged inspection directly in git pre-commit hooks:
+```bash
+discipline check --staged
+```
+
+### Docker Container
+
+```bash
+docker run --rm -v "$PWD":/workspace ghcr.io/orieg/discipline:latest check --base origin/main
+```
+
+### Standalone CLI
+
+```bash
+discipline check --base origin/main   # compare working tree against merge base
+discipline check --staged             # check staged index against HEAD
+discipline gates                      # print effective gate configuration
+discipline self-test                  # execute positive and negative controls
+discipline schema                     # output JSON Schema for discipline.toml
+```
+
+---
+
+## Report Formats
+
+Discipline produces multi-target reports from a single execution run:
+
+| Format | Option / Artifact | Destination & Use Case |
+|---|---|---|
+| **Human Terminal (stdout)** | Default stdout | ANSI-colored terminal summary with per-gate examined counts, notes, and file/line locations. |
+| **Machine JSON Report** | `--report <path>` | Full JSON outcome with detailed violation records, notes, examined tallies, and applied overrides. |
+| **GitHub Step Summary** | `GITHUB_STEP_SUMMARY` | Formatted Markdown table appended to GitHub Actions run summaries. |
+| **GitLab Code Quality** | `gl-codequality.json` | JSON format rendered directly in GitLab Merge Request diff widgets. |
+| **SARIF** | `--sarif <path>` | OASIS SARIF v2.1.0 report for GitHub Code Scanning, VS Code, and security dashboards. |
+| **JUnit XML** | `--junit <path>` | Standard test results XML for CI test summary dashboards and flaky test tracking. |
+
+---
+
+## Override Audit Trail
+
+When an authorized directive is parsed and applied:
+1. **Audit Record:** The gate outcome records the override in its result structure, naming the gate, subject, and reason.
+2. **Action Outputs:** Outputs `overrides` (total count of applied overrides) and `overridden_gates` (comma-separated list of gate ids) are populated.
+3. **Machine Report:** Included in the JSON report under `overrides_applied` for compliance logging.
+4. **Enforced Sign-off:** Setting `directives.fail_on_overrides = true` (or passing `--fail-on-overrides`) causes Discipline to exit `1` whenever any override is present. This blocks automated merge and mandates human sign-off while preserving the audit trail.

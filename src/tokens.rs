@@ -310,7 +310,8 @@ fn reason_names(reason: &str, subject: &str) -> bool {
     let file_name = subject.rsplit('/').next().unwrap_or(subject);
     for raw_token in raw_tokens {
         let has_slash = raw_token.contains('/');
-        let token = raw_token.trim_matches(|c| matches!(c, '.' | '/'));
+        let trimmed_leading = raw_token.strip_prefix("./").unwrap_or(raw_token);
+        let token = trimmed_leading.trim_end_matches('.').trim_matches('/');
         if token.is_empty() {
             continue;
         }
@@ -423,6 +424,14 @@ removes: tests/old.rs inside a fence
         let with_slash =
             directive_reasons("removes: tests/ were refactored into benchmarks", REMOVES);
         assert!(covers(&with_slash, "tests/a.rs"));
+
+        // Dotfile and dotdirectory paths preserve leading dot
+        let dotfile = directive_reasons("removes: .github/workflows/pages.yml retired", REMOVES);
+        assert!(covers(&dotfile, ".github/workflows/pages.yml"));
+        assert!(!covers(&dotfile, ".github/workflows/ci.yml"));
+
+        let dotdir = directive_reasons("removes: .github/workflows/ retired", REMOVES);
+        assert!(covers(&dotdir, ".github/workflows/pages.yml"));
     }
 
     #[test]

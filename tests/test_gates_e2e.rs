@@ -2399,17 +2399,33 @@ fn bench_regression_tracks_callgrind_instructions_and_accepts_override() {
 #[test]
 fn bench_regression_tracks_go_benchmarks_and_accepts_override() {
     let repo = Repo::new();
-    repo.commit_base(
-        "benchmarks/go.txt",
-        "BenchmarkSearch-8  100000  12.40 ns/op\n",
-        "base: go benchmark baseline",
-    );
+    let base_txt = "goos: darwin\ngoarch: arm64\npkg: gobench\ncpu: Apple M1\nBenchmarkSearch-8   \t200000000\t         5.835 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkInsert-8   \t100000000\t        10.200 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n";
+    repo.commit_base("benchmarks/go.txt", base_txt, "base: go baseline");
 
-    // +4.8% regression
-    repo.write(
-        "benchmarks/go.txt",
-        "BenchmarkSearch-8  100000  13.00 ns/op\n",
+    // Wall-clock data without CI: point-estimate increase degrades to not_comparable (exit 0)
+    let head_regressed = "goos: darwin\ngoarch: arm64\npkg: gobench\ncpu: Apple M1\nBenchmarkSearch-8   \t200000000\t        10.500 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkInsert-8   \t100000000\t        10.200 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n";
+    repo.write("benchmarks/go.txt", head_regressed);
+    let run_not_comparable = repo.check(&["--suite", "bench"]);
+    assert_eq!(
+        run_not_comparable.code, 0,
+        "wall-clock benchmark without CI must degrade to not comparable, never a point-estimate failure"
     );
+    let json = run_not_comparable.json();
+    assert_eq!(json["errors"], 0);
+    let outcome = json["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "bench-regression")
+        .unwrap();
+    assert!(outcome["notes"].as_array().unwrap().iter().any(|n| n
+        .as_str()
+        .unwrap()
+        .contains("not comparable (no CI available)")));
+
+    // Removing BenchmarkSearch without an override fails (exit 1)
+    let head_removed = "goos: darwin\ngoarch: arm64\npkg: gobench\ncpu: Apple M1\nBenchmarkInsert-8   \t100000000\t        10.200 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n";
+    repo.write("benchmarks/go.txt", head_removed);
     let run_fail = repo.check(&["--suite", "bench"]);
     assert_eq!(run_fail.code, 1);
     let json_fail = run_fail.json();
@@ -2420,14 +2436,11 @@ fn bench_regression_tracks_go_benchmarks_and_accepts_override() {
         .iter()
         .find(|o| o["gate"] == "bench-regression")
         .unwrap();
-    assert_eq!(
-        outcome_fail["violations"][0]["title"],
-        "Benchmark Performance Regressed"
-    );
+    assert_eq!(outcome_fail["violations"][0]["title"], "Benchmark Removed");
 
     let run_pass = repo.check_with_pr(
         &["--suite", "bench"],
-        "allow-regression: BenchmarkSearch justified for safety",
+        "allow-regression: BenchmarkSearch justified for removal",
     );
     assert_eq!(run_pass.code, 0);
     assert_eq!(run_pass.json()["overrides"], 1);
@@ -2436,14 +2449,41 @@ fn bench_regression_tracks_go_benchmarks_and_accepts_override() {
 #[test]
 fn bench_regression_tracks_google_benchmark_json_and_accepts_override() {
     let repo = Repo::new();
-    let base_json =
-        r#"{"benchmarks": [{"name": "BM_StringCreation", "cpu_time": 120.0, "time_unit": "ns"}]}"#;
+    let base_json = r#"{"benchmarks": [
+        {"name": "BM_StringCreation", "cpu_time": 120.0, "time_unit": "ns"},
+        {"name": "BM_StringCopy", "cpu_time": 50.0, "time_unit": "ns"}
+    ]}"#;
     repo.commit_base("build/benchmarks.json", base_json, "base: gbench baseline");
 
-    // +8.3% regression
-    let head_json =
-        r#"{"benchmarks": [{"name": "BM_StringCreation", "cpu_time": 130.0, "time_unit": "ns"}]}"#;
-    repo.write("build/benchmarks.json", head_json);
+    // Wall-clock data without CI: point-estimate increase degrades to not_comparable (exit 0)
+    let head_regressed = r#"{"benchmarks": [
+        {"name": "BM_StringCreation", "cpu_time": 999.0, "time_unit": "ns"},
+        {"name": "BM_StringCopy", "cpu_time": 50.0, "time_unit": "ns"}
+    ]}"#;
+    repo.write("build/benchmarks.json", head_regressed);
+    let run_not_comparable = repo.check(&["--suite", "bench"]);
+    assert_eq!(
+        run_not_comparable.code, 0,
+        "wall-clock benchmark without CI must degrade to not comparable, never a point-estimate failure"
+    );
+    let json = run_not_comparable.json();
+    assert_eq!(json["errors"], 0);
+    let outcome = json["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "bench-regression")
+        .unwrap();
+    assert!(outcome["notes"].as_array().unwrap().iter().any(|n| n
+        .as_str()
+        .unwrap()
+        .contains("not comparable (no CI available)")));
+
+    // Removing BM_StringCreation entirely without an override fails (exit 1)
+    let head_removed = r#"{"benchmarks": [
+        {"name": "BM_StringCopy", "cpu_time": 50.0, "time_unit": "ns"}
+    ]}"#;
+    repo.write("build/benchmarks.json", head_removed);
     let run_fail = repo.check(&["--suite", "bench"]);
     assert_eq!(run_fail.code, 1);
     let json_fail = run_fail.json();
@@ -2454,14 +2494,11 @@ fn bench_regression_tracks_google_benchmark_json_and_accepts_override() {
         .iter()
         .find(|o| o["gate"] == "bench-regression")
         .unwrap();
-    assert_eq!(
-        outcome_fail["violations"][0]["title"],
-        "Benchmark Performance Regressed"
-    );
+    assert_eq!(outcome_fail["violations"][0]["title"], "Benchmark Removed");
 
     let run_pass = repo.check_with_pr(
         &["--suite", "bench"],
-        "allow-regression: BM_StringCreation justified for unicode support",
+        "allow-regression: BM_StringCreation justified for removal",
     );
     assert_eq!(run_pass.code, 0);
     assert_eq!(run_pass.json()["overrides"], 1);
@@ -2470,16 +2507,45 @@ fn bench_regression_tracks_google_benchmark_json_and_accepts_override() {
 #[test]
 fn bench_regression_tracks_pytest_benchmark_json_and_accepts_override() {
     let repo = Repo::new();
-    let base_json = r#"{"benchmarks": [{"name": "test_serialize", "stats": {"mean": 0.0010}}]}"#;
+    let base_json = r#"{"benchmarks": [
+        {"name": "test_serialize", "stats": {"mean": 0.0010}},
+        {"name": "test_deserialize", "stats": {"mean": 0.0020}}
+    ]}"#;
     repo.commit_base(
         "reports/pytest_bench.json",
         base_json,
         "base: pytest baseline",
     );
 
-    // +20% regression
-    let head_json = r#"{"benchmarks": [{"name": "test_serialize", "stats": {"mean": 0.0012}}]}"#;
-    repo.write("reports/pytest_bench.json", head_json);
+    // Wall-clock data without CI: point-estimate increase degrades to not_comparable (exit 0)
+    let head_regressed = r#"{"benchmarks": [
+        {"name": "test_serialize", "stats": {"mean": 0.050}},
+        {"name": "test_deserialize", "stats": {"mean": 0.0020}}
+    ]}"#;
+    repo.write("reports/pytest_bench.json", head_regressed);
+    let run_not_comparable = repo.check(&["--suite", "bench"]);
+    assert_eq!(
+        run_not_comparable.code, 0,
+        "wall-clock benchmark without CI must degrade to not comparable, never a point-estimate failure"
+    );
+    let json = run_not_comparable.json();
+    assert_eq!(json["errors"], 0);
+    let outcome = json["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "bench-regression")
+        .unwrap();
+    assert!(outcome["notes"].as_array().unwrap().iter().any(|n| n
+        .as_str()
+        .unwrap()
+        .contains("not comparable (no CI available)")));
+
+    // Removing test_serialize without an override fails (exit 1)
+    let head_removed = r#"{"benchmarks": [
+        {"name": "test_deserialize", "stats": {"mean": 0.0020}}
+    ]}"#;
+    repo.write("reports/pytest_bench.json", head_removed);
     let run_fail = repo.check(&["--suite", "bench"]);
     assert_eq!(run_fail.code, 1);
     let json_fail = run_fail.json();
@@ -2490,14 +2556,11 @@ fn bench_regression_tracks_pytest_benchmark_json_and_accepts_override() {
         .iter()
         .find(|o| o["gate"] == "bench-regression")
         .unwrap();
-    assert_eq!(
-        outcome_fail["violations"][0]["title"],
-        "Benchmark Performance Regressed"
-    );
+    assert_eq!(outcome_fail["violations"][0]["title"], "Benchmark Removed");
 
     let run_pass = repo.check_with_pr(
         &["--suite", "bench"],
-        "allow-regression: test_serialize justified for additional serialization fields",
+        "allow-regression: test_serialize justified for removal",
     );
     assert_eq!(run_pass.code, 0);
     let json_pass = run_pass.json();
@@ -2517,8 +2580,8 @@ fn bench_audit_case1_overlapping_ci_point_regression_passes() {
         "point_estimate": 1000.0,
         "confidence_interval": {
           "confidence_level": 0.95,
-          "lower_limit": 900.0,
-          "upper_limit": 1100.0
+          "lower_bound": 900.0,
+          "upper_bound": 1100.0
         }
       }
     }"#;
@@ -2533,8 +2596,8 @@ fn bench_audit_case1_overlapping_ci_point_regression_passes() {
         "point_estimate": 1020.0,
         "confidence_interval": {
           "confidence_level": 0.95,
-          "lower_limit": 920.0,
-          "upper_limit": 1120.0
+          "lower_bound": 920.0,
+          "upper_bound": 1120.0
         }
       }
     }"#;
@@ -2554,6 +2617,56 @@ fn bench_audit_case1_overlapping_ci_point_regression_passes() {
         .find(|o| o["gate"] == "bench-regression")
         .unwrap();
     assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn bench_real_criterion_fixtures_regression_and_override() {
+    let repo = Repo::new();
+    let base_json = include_str!("fixtures/bench/criterion/base/estimates.json");
+    repo.commit_base(
+        "target/criterion/fib_20/estimates.json",
+        base_json,
+        "base: real criterion baseline",
+    );
+
+    // Overlapping run with head estimates.json passes (exit 0)
+    let head_json = include_str!("fixtures/bench/criterion/head/estimates.json");
+    repo.write("target/criterion/fib_20/estimates.json", head_json);
+    let run_pass = repo.check(&["--suite", "bench"]);
+    assert_eq!(run_pass.code, 0);
+
+    // Statistically verified regression: lower_bound (30,000) > base upper_bound (22,140)
+    let regressed_json = r#"{
+      "mean": {
+        "point_estimate": 31000.0,
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_bound": 30000.0,
+          "upper_bound": 32000.0
+        }
+      }
+    }"#;
+    repo.write("target/criterion/fib_20/estimates.json", regressed_json);
+    let run_fail = repo.check(&["--suite", "bench"]);
+    assert_eq!(run_fail.code, 1);
+    let json_fail = run_fail.json();
+    assert_eq!(json_fail["errors"], 1);
+    assert_eq!(
+        json_fail["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["gate"] == "bench-regression")
+            .unwrap()["violations"][0]["title"],
+        "Benchmark Performance Regressed"
+    );
+
+    let run_override = repo.check_with_pr(
+        &["--suite", "bench"],
+        "allow-regression: fib_20 algorithmic refactor to recursive formulation",
+    );
+    assert_eq!(run_override.code, 0);
+    assert_eq!(run_override.json()["overrides"], 1);
 }
 
 #[test]

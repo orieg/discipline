@@ -1,3 +1,9 @@
+---
+layout: default
+title: Gate Specifications & Enforcement Rules
+permalink: /gates/
+---
+
 # Gate Specifications & Enforcement Rules
 
 This document establishes the normative enforcement rules, detection capabilities, limits, and configuration keys for all gates in `discipline`.
@@ -70,6 +76,20 @@ When a change touches source files in a language without an active pack, each AS
   - Assertion weakening (e.g. `assert_eq!(a, b)` -> `assert!(a == b)` or `assert!(a.is_some())`).
   - Replacing strong matchers with truthiness checks (e.g. `expect(x).toEqual(y)` -> `expect(x).toBeTruthy()`).
   - Replacing assertions with tautologies (`assert!(true)`, `assert_eq!(x, x)`).
+- **Failing diff example (rejected):**
+  ```rust
+  // BASE:
+  #[test]
+  fn test_lookup() {
+      assert_eq!(cache.get("key"), Some(&100));
+  }
+
+  // HEAD (weakened — rejected by assertion-reduction):
+  #[test]
+  fn test_lookup() {
+      assert!(cache.get("key").is_some());
+  }
+  ```
 - **What it does NOT catch:**
   - Assertions inside dynamically evaluated strings or macro expansions (e.g. `proptest! { ... }`).
   - Assertions inside unconfigured helper functions (configure via `assert_helper_fns` or `extra_assert_macros`).
@@ -85,6 +105,19 @@ When a change touches source files in a language without an active pack, each AS
   - Verbatim tautologies: `assert_eq!(x, x)`, `assert_eq!(1, 1)`, `assert!(true)`.
   - Constant expression tautologies: `assert!(1 == 1)`, `assert!(1 + 1 > 0)`, `assert_ne!(1, 2)`.
   - Empty PHPT expectation sections.
+- **Failing diff example (rejected):**
+  ```python
+  # Newly added test without non-tautological assertion — rejected by vacuous-tests:
+  def test_compute():
+      result = compute_values()
+      assert 1 == 1
+  ```
+- **Passing diff example (accepted):**
+  ```python
+  def test_compute():
+      result = compute_values()
+      assert result == [10, 20, 30]
+  ```
 - **What it does NOT catch:**
   - Semantic non-assertions that involve external function calls (e.g. `assert!(check_validity())` where `check_validity()` returns `true` unconditionally).
   - Tests whose assertions occur in deeply nested helper callbacks not tracked by static analysis.
@@ -99,6 +132,13 @@ When a change touches source files in a language without an active pack, each AS
   - Python: `@pytest.mark.skip`, `@pytest.mark.skipif`, `@pytest.mark.xfail`, `@unittest.skip`, `@unittest.skipIf`.
   - JavaScript / TypeScript: `it.skip`, `test.skip`, `xit`, `xtest`, `describe.skip`, `xdescribe`, `it.todo`.
   - PHPT: newly added `--SKIPIF--` or `--XFAIL--` sections.
+- **Failing diff example (rejected):**
+  ```typescript
+  // Skipping failing test instead of fixing — rejected by ignored-tests:
+  test.skip('parses unicode payload', () => {
+    expect(parse('payload')).toBeDefined();
+  });
+  ```
 - **What it does NOT catch:**
   - Conditional runtime early-returns (`if condition { return; }`).
   - Dynamic test framework skips invoked within function bodies (`pytest.skip(...)`).
@@ -114,6 +154,21 @@ When a change touches source files in a language without an active pack, each AS
   - Deletion of an existing `// SAFETY:` comment above an untouched `unsafe` block.
   - Vacuous placeholder comments: `// SAFETY: todo`, `// SAFETY: tbd`, `// SAFETY: safe`, `// SAFETY: trust me`, `// SAFETY: noop`, `// SAFETY: fine`.
   - Misplaced comments (comments trailing after the block or lowercase `safety:`).
+- **Failing diff example (rejected):**
+  ```rust
+  // Missing justification — rejected by unsafe-safety-comment:
+  let val = unsafe { *ptr };
+
+  // Placeholder comment — rejected by unsafe-safety-comment:
+  // SAFETY: safe
+  let val = unsafe { *ptr };
+  ```
+- **Passing diff example (accepted):**
+  ```rust
+  // SAFETY: ptr is guaranteed non-null, 8-byte aligned, and points to
+  // an initialized u64 allocated in buffer_init().
+  let val = unsafe { *ptr };
+  ```
 - **What it does NOT catch:**
   - Flawed or mathematically invalid justifications (static AST cannot verify human semantic correctness beyond placeholder rejection).
   - `unsafe` hidden inside macro invocations outside tree-sitter Rust AST parsing.
@@ -126,6 +181,15 @@ When a change touches source files in a language without an active pack, each AS
 - **What it catches:**
   - Silent file deletions across all tracked paths.
   - Silent test removals from surviving test files.
+- **Failing diff example (rejected):**
+  ```diff
+  - deleted file: tests/test_concurrency.rs
+  ```
+  *(Without `removes:` directive in commit message or PR body — rejected by deletion-rationale)*
+- **Passing commit / PR body (accepted):**
+  ```text
+  removes: tests/test_concurrency.rs replaced by proptest model in tests/test_model.rs
+  ```
 - **What it does NOT catch:**
   - File renames where `git` detects similarity above rename thresholds (properly treated as modifications).
 - **Lifting directive:** `removes: <path-or-test> <reason>` or `deletes: <path-or-test> <reason>`.
@@ -137,6 +201,11 @@ When a change touches source files in a language without an active pack, each AS
 - **What it catches:**
   - Missing `AGENTS.md`.
   - Independent or divergent edits made directly to `CLAUDE.md` or `GEMINI.md`.
+- **Passing setup (accepted):**
+  ```bash
+  ln -sf AGENTS.md CLAUDE.md
+  ln -sf AGENTS.md GEMINI.md
+  ```
 - **What it does NOT catch:**
   - Non-standard guide names outside `CLAUDE.md`, `GEMINI.md`, and `AGENTS.md`.
 - **Lifting directive:** Ensure `CLAUDE.md` and `GEMINI.md` are symlinks: `ln -sf AGENTS.md CLAUDE.md`.
@@ -152,6 +221,14 @@ When a change touches source files in a language without an active pack, each AS
 - **What it catches:**
   - Calendar intervals: "1-2 days", "3 weeks", "next sprint", "Q2", "Phase 2 (1 week)". <!-- discipline:allow(time-estimates) -->
   - Aggregate durations: "~10 engineer-days", "three deliverables in 2 weeks". <!-- discipline:allow(time-estimates) -->
+- **Failing diff example (rejected):**
+  ```markdown
+  ### Phase 2: Complete AST Parser (estimated: 2 weeks)
+  ```
+- **Passing diff example (accepted):**
+  ```markdown
+  ### Phase 2: Complete AST Parser (blocked on grammar stabilization)
+  ```
 - **What it does NOT catch:**
   - Operational TTLs, cache expiration, and timeouts (`timeout: 30s`, `retention: 7 days`). <!-- discipline:allow(time-estimates) -->
   - Benchmark measurements ("ran in 4.2 seconds").
@@ -168,6 +245,17 @@ When a change touches source files in a language without an active pack, each AS
   - Private IPv4 LAN addresses: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`.
   - Whole-token matches of denylisted internal hostnames.
   - Leaks inside decoded JSON string literals.
+- **Failing diff example (rejected):**
+  ```rust
+  // Workstation path leak — rejected by pii:
+  let default_path = "/Users/dev-user/project/data.bin"; // discipline:allow(pii)
+  let target_node = "192.168.1.42"; // discipline:allow(pii)
+  ```
+- **Passing diff example (accepted):**
+  ```rust
+  let default_path = "/var/data/project/data.bin";
+  let target_node = "127.0.0.1";
+  ```
 - **What it does NOT catch:**
   - Standard documentation placeholders: `runner`, `user`, `username`, `example`, `shared`.
   - RFC 1918 CIDR network notations in routing documentation (`10.0.0.0/8`, `192.168.0.0/16`).
@@ -181,6 +269,19 @@ When a change touches source files in a language without an active pack, each AS
 - **What it catches:**
   - Committing directories: `.claude/`, `.gemini/`, `.antigravity/`, `.cursor/`, `scratch/`.
   - Session files: `*.session.*`, `.aider*`.
+- **Failing commit (rejected):**
+  ```bash
+  git add .gemini/scratch/notes.md && git commit -m "add scratch notes"
+  ```
+- **Passing setup (accepted):**
+  Agent artifacts kept untracked or in `.gitignore`:
+  ```text
+  .claude/
+  .gemini/
+  .antigravity/
+  *.session.*
+  scratch/
+  ```
 - **What it does NOT catch:**
   - Files untracked in `.gitignore` (safely ignored).
 - **Lifting directive:** Remove tracked scratch files from git (`git rm --cached`).
@@ -199,6 +300,17 @@ When a change touches source files in a language without an active pack, each AS
   - Growing loosening lists (`exempt_paths`, `allowed_users`, `allow_patterns`, `assert_helper_fns`).
   - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`).
   - Deleting `discipline.toml`.
+- **Failing diff example (rejected):**
+  ```diff
+  [gates.vacuous-tests]
+  -enabled = true
+  +enabled = false
+  ```
+  *(Without `allow-gate-weakening: vacuous-tests <reason>` — rejected by config-integrity)*
+- **Passing PR description (accepted):**
+  ```text
+  allow-gate-weakening: vacuous-tests test suite refactor in progress
+  ```
 - **What it does NOT catch:**
   - Tightening edits (enabling gates, adding denylists, raising severity) — tightening is permitted freely.
   - Workflow-level switches (`disable:` in GitHub Actions steps) — protected by planned `ci-integrity`.
@@ -211,6 +323,16 @@ When a change touches source files in a language without an active pack, each AS
 - **What it catches:**
   - Edits or deletions of files matching `paths` (`**/golden/**`, `**/snapshots/**`, `**/*.snap`, `tests/fixtures/**/output*`).
   - Stealth snapshot re-blessing to mask test regressions.
+- **Failing diff example (rejected):**
+  ```diff
+  // Modified golden output file: tests/golden/api_response.json
+  - "status": "active", "count": 42
+  + "status": "unknown", "count": 0
+  ```
+- **Passing commit / PR description (accepted):**
+  ```text
+  allow-golden-update: tests/golden/api_response.json schema upgrade for version 2 endpoint
+  ```
 - **What it does NOT catch:**
   - Newly added snapshot files for newly created tests.
 - **Lifting directive:** `allow-golden-update: <path> <reason>`.
@@ -225,13 +347,18 @@ When a change touches source files in a language without an active pack, each AS
 - **Languages:** Rust, C/C++, Go, Python.
 - **What it catches:**
   - Regressions where conservative confidence intervals clear the tolerance threshold ($\Delta_{min} = \frac{L_{head} - U_{base}}{U_{base}} > \text{tolerance}$).
-  - Point-estimate comparisons when sampling distributions overlap (enforces non-rejection of null hypothesis).
   - Exact instruction count regressions in Callgrind / IAI outputs (`events: Ir`).
   - Missing merge-base benchmark artifacts (fails closed with exit 2).
   - Garbage or corrupted benchmark output files (fails closed with exit 2).
   - Deleted benchmark files without authorization (exit 1).
   - Benchmarks renamed away without baseline (exit 1).
   - Unmatched host/runner provenance tags between base and head.
+- **Degradation without failure:**
+  When wall-clock benchmarks lack confidence intervals on either base or head, the engine degrades the verdict to **"not comparable (no CI available)"** in notes and does not fail the build on bare point estimates.
+- **Passing override directive (accepted):**
+  ```text
+  allow-regression: search_bench intentional algorithmic trade-off for zero-allocation scan
+  ```
 - **What it does NOT catch:**
   - Uncommitted benchmark results (benchmark files must be committed or generated in CI workspace).
   - Wall-clock variance from co-resident CPU contention without sample distribution statistics.

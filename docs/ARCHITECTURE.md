@@ -1,3 +1,9 @@
+---
+layout: default
+title: Architecture & Engineering Sentinel Design
+permalink: /architecture/
+---
+
 # Architecture & Engineering Sentinel Design
 
 Engine design, fail-closed contracts, CI/CD pipeline architecture, and verification discipline for `discipline`.

@@ -41,6 +41,8 @@ jobs:
         run: cargo run -- docs --check
       - name: Validate relative documentation links and forbid obsolete references
         run: python3 tests/action/check-links.py
+      - name: Check ecosystem theme contract
+        run: python3 tests/action/check_ecosystem_theme.py --local-only
 
   test:
     strategy:

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ page.title }} — Discipline</title>
+  <meta name="description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1f6e1;&#xfe0f;</text></svg>">
+  <link rel="stylesheet" href="{{ site.baseurl }}/assets/css/style.css">
+
+  <script>
+    (function() {
+      'use strict';
+      var KEY = 'orieg-theme';
+      var LEGACY_KEY = 'discipline-theme';
+      var LABELS = {
+        system: 'Color theme: system (click to switch to light)',
+        light: 'Color theme: light (click to switch to dark)',
+        dark: 'Color theme: dark (click to switch to system)'
+      };
+      function stored() {
+        try {
+          var v = localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY);
+          return (v === 'light' || v === 'dark') ? v : null;
+        } catch (e) { return null; }
+      }
+      function systemTheme() {
+        return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      }
+      function apply() {
+        var override = stored();
+        var theme = override || systemTheme();
+        var mode = override || 'system';
+        var root = document.documentElement;
+        root.setAttribute('data-theme', theme);
+        root.setAttribute('data-theme-mode', mode);
+        var buttons = document.querySelectorAll('.theme-toggle');
+        for (var i = 0; i < buttons.length; i++) {
+          buttons[i].setAttribute('aria-label', LABELS[mode]);
+          buttons[i].setAttribute('title', LABELS[mode]);
+        }
+      }
+      window.__disciplineApplyTheme = apply;
+      apply();
+      if (window.matchMedia) {
+        var mq = window.matchMedia('(prefers-color-scheme: dark)');
+        if (mq.addEventListener) { mq.addEventListener('change', apply); }
+        else if (mq.addListener) { mq.addListener(apply); }
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', apply);
+      }
+    })();
+  </script>
+</head>
+<body>
+
+  <header class="navbar">
+    <div class="nav-top">
+      <a href="{{ site.baseurl }}/" class="nav-brand">
+        <div class="nav-logo">&#x1f6e1;&#xfe0f;</div>
+        <span>Discipline</span>
+      </a>
+      <button class="theme-toggle theme-toggle-mobile" type="button" onclick="toggleTheme()" aria-label="Toggle color theme" title="Toggle color theme">
+        <span class="theme-icon-system" aria-hidden="true">&#9681;</span>
+        <span class="theme-icon-sun" aria-hidden="true">&#9728;</span>
+        <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
+      </button>
+    </div>
+    <nav class="nav-scroll" aria-label="Documentation Navigation">
+      <ul class="nav-links">
+        <li><a href="{{ site.baseurl }}/">Overview</a></li>
+        <li><a href="{{ site.baseurl }}/gates/">Gates</a></li>
+        <li><a href="{{ site.baseurl }}/configuration/">Configuration</a></li>
+        <li><a href="{{ site.baseurl }}/architecture/">Architecture</a></li>
+        <li><a href="{{ site.baseurl }}/roadmap/">Roadmap</a></li>
+        <li><a href="https://github.com/orieg/discipline" class="nav-pill" target="_blank" rel="noopener">GitHub</a></li>
+      </ul>
+      <button class="theme-toggle theme-toggle-desktop" type="button" onclick="toggleTheme()" aria-label="Toggle color theme" title="Toggle color theme">
+        <span class="theme-icon-system" aria-hidden="true">&#9681;</span>
+        <span class="theme-icon-sun" aria-hidden="true">&#9728;</span>
+        <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
+      </button>
+    </nav>
+  </header>
+
+  <main class="container page-content">
+    {{ content }}
+  </main>
+
+  <footer>
+    <div class="container">
+      <p style="margin-bottom: 0.75rem; color: var(--text-muted); font-size: 0.85rem;">
+        Judy &amp; Systems Ecosystem:
+        <a href="https://orieg.github.io/judy-cache/">Judy Cache PSR-16</a> &bull;
+        <a href="https://orieg.github.io/php-judy/">PHP Judy</a> &bull;
+        <a href="https://orieg.github.io/judy-polyfill/">Judy Polyfill</a> &bull;
+        <a href="https://orieg.github.io/expanse/">Expanse Engine</a> &bull;
+        <a href="https://orieg.github.io/">Nicolas Brousse (Hub)</a>
+      </p>
+      <p>
+        <strong>Discipline</strong> is open source software released under dual MIT / Apache-2.0 licenses.<br>
+        Maintained by <a href="https://nicolas.brousse.info/">Nicolas Brousse</a> &bull;
+        <a href="https://github.com/orieg/discipline">GitHub</a> &bull;
+        <a href="{{ site.baseurl }}/">Docs</a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    function toggleTheme() {
+      var KEY = 'orieg-theme';
+      var LEGACY_KEY = 'discipline-theme';
+      var v = null;
+      try { v = localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY); } catch (e) {}
+      var mode = (v === 'light' || v === 'dark') ? v : 'system';
+      var next = mode === 'system' ? 'light' : (mode === 'light' ? 'dark' : 'system');
+      try {
+        if (next === 'system') {
+          localStorage.removeItem(KEY);
+          localStorage.removeItem(LEGACY_KEY);
+        } else {
+          localStorage.setItem(KEY, next);
+          localStorage.removeItem(LEGACY_KEY);
+        }
+      } catch (e) {}
+      if (window.__disciplineApplyTheme) { window.__disciplineApplyTheme(); }
+    }
+  </script>
+</body>
+</html>

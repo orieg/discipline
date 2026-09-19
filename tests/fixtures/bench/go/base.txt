@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: gobench
+cpu: Apple M1
+BenchmarkSearch-8   	211887568	         5.532 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	gobench	2.027s
