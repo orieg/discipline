@@ -115,6 +115,12 @@ pub const ALLOW_NUL: &[&str] = &[
     "allow(vacuous-tests)",
 ];
 
+pub const ALLOW_REGRESSION: &[&str] = &[
+    "allow-regression",
+    "discipline:allow(bench-regression)",
+    "allow(bench-regression)",
+];
+
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
     "deletes",
@@ -134,6 +140,9 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-golden-update",
     "discipline:allow(golden-output)",
     "allow(golden-output)",
+    "allow-regression",
+    "discipline:allow(bench-regression)",
+    "allow(bench-regression)",
     "allow-nul",
     "allow-nul-byte",
     "allow-corrupt",

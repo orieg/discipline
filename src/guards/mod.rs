@@ -1,6 +1,7 @@
 pub mod agent_diff;
 pub mod hygiene;
 pub mod integrity;
+pub mod perf;
 
 use crate::cli::SuiteChoice;
 use crate::config::{gate_info, DisciplineConfig, GateSettings, Severity, Suite, GATES};
@@ -198,6 +199,7 @@ pub fn run_checks(
             "agent-scratch" => hygiene::agent_scratch(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
             "golden-output" => integrity::golden_output(ctx),
+            "bench-regression" => perf::bench_regression(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -230,6 +232,8 @@ pub fn run_checks(
             "config-integrity"
         } else if note.contains("allow-golden-update") {
             "golden-output"
+        } else if note.contains("allow-regression") {
+            "bench-regression"
         } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
             "assertion-reduction"
         } else {
@@ -244,6 +248,7 @@ pub fn run_checks(
                         | "ignored-tests"
                         | "config-integrity"
                         | "golden-output"
+                        | "bench-regression"
                 ) {
                     o.notes.push(note.clone());
                 }

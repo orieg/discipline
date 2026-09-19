@@ -545,6 +545,32 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 3)
         },
     ),
+    (
+        "bench: callgrind and criterion benchmark parsing and delta calculation discriminate",
+        || {
+            use crate::guards::perf::parse_metrics;
+            use crate::tokens::ALLOW_REGRESSION;
+            let callgrind_sample = "events: Ir\nsummary: 10000\n";
+            let criterion_sample = r#"{"mean": {"point_estimate": 500.0}}"#;
+            let cg_m = parse_metrics("target/iai/bench/callgrind.out", callgrind_sample);
+            let cr_m = parse_metrics("target/criterion/bench/estimates.json", criterion_sample);
+            let armed = directive_reasons(
+                "allow-regression: bench perf justification",
+                ALLOW_REGRESSION,
+            );
+            let prose =
+                directive_reasons("just mention of allow-regression: bench", ALLOW_REGRESSION);
+            Ok(cg_m.len() == 1
+                && cg_m[0].count == 10000.0
+                && cg_m[0].unit == "Ir"
+                && cr_m.len() == 1
+                && cr_m[0].count == 500.0
+                && cr_m[0].unit == "ns"
+                && covers(&armed, "bench")
+                && !covers(&armed, "other")
+                && prose.is_empty())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

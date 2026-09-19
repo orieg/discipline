@@ -190,7 +190,7 @@ pub const GATES: &[GateInfo] = &[
         id: "bench-regression",
         suite: Suite::Bench,
         summary: "benchmark drift via harness adapters (deterministic counts or BCa intervals)",
-        available: false,
+        available: true,
     },
 ];
 
@@ -256,6 +256,7 @@ pub struct Gates {
     pub agent_scratch: ScratchGate,
     pub config_integrity: BasicGate,
     pub golden_output: GoldenGate,
+    pub bench_regression: BenchRegressionGate,
 }
 
 /// Settings every gate shares.
@@ -281,7 +282,8 @@ impl_gate_settings!(
     TimeEstimateGate,
     PiiGate,
     ScratchGate,
-    GoldenGate
+    GoldenGate,
+    BenchRegressionGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -480,6 +482,31 @@ impl Default for GoldenGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BenchRegressionGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub tolerance_pct: f64,
+    pub paths: Vec<String>,
+}
+
+impl Default for BenchRegressionGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            tolerance_pct: 0.5,
+            paths: ["target/iai/**", "**/callgrind.*", "target/criterion/**"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -494,6 +521,7 @@ impl Gates {
             "agent-scratch" => &self.agent_scratch,
             "config-integrity" => &self.config_integrity,
             "golden-output" => &self.golden_output,
+            "bench-regression" => &self.bench_regression,
             _ => return None,
         })
     }

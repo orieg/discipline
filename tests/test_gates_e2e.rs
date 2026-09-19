@@ -2341,3 +2341,79 @@ fn f6_golden_pack_depth_e2e() {
         .iter()
         .any(|v| v["title"] == "Source File Could Not Be Fully Parsed"));
 }
+
+// ---- bench-regression ------------------------------------------------------
+
+#[test]
+fn bench_regression_tracks_callgrind_instructions_and_accepts_override() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let callgrind_base =
+        "version: 1\ncreator: callgrind-3.18.1\ncmd: target/release/bench\nevents: Ir\nsummary: 10000\n";
+    repo.write("target/iai/bench/callgrind.bench.out", callgrind_base);
+    repo.commit("bench: baseline callgrind counts");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // 1. Regression > 0.5% tolerance fails
+    let callgrind_regressed =
+        "version: 1\ncreator: callgrind-3.18.1\ncmd: target/release/bench\nevents: Ir\nsummary: 10100\n";
+    repo.write("target/iai/bench/callgrind.bench.out", callgrind_regressed);
+    repo.commit("bench: regressed counts");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("bench-regression"),
+        vec!["Instruction Count Regressed"]
+    );
+
+    // 2. Scoped directive lifts regression
+    repo.write(
+        "body.md",
+        "Summary\n\nallow-regression: bench cryptographic security hardened\n",
+    );
+    let run = repo.check(&["--pr-body-file", "body.md"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.titles("bench-regression").is_empty());
+
+    // 3. Positive control: minor fluctuation within tolerance (<= 0.5%) passes
+    let callgrind_ok =
+        "version: 1\ncreator: callgrind-3.18.1\ncmd: target/release/bench\nevents: Ir\nsummary: 10030\n";
+    repo.write("target/iai/bench/callgrind.bench.out", callgrind_ok);
+    repo.commit("bench: within tolerance");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.titles("bench-regression").is_empty());
+}
+
+#[test]
+fn bench_regression_tracks_criterion_estimates_and_accepts_override() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let criterion_base = r#"{"mean": {"point_estimate": 1000.0}}"#;
+    repo.write("target/criterion/my_func/estimates.json", criterion_base);
+    repo.commit("bench: baseline criterion estimates");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // 1. Regression > 0.5% tolerance fails
+    let criterion_regressed = r#"{"mean": {"point_estimate": 1020.0}}"#; // +2.0% regression
+    repo.write(
+        "target/criterion/my_func/estimates.json",
+        criterion_regressed,
+    );
+    repo.commit("bench: regressed criterion estimates");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("bench-regression"),
+        vec!["Benchmark Performance Regressed"]
+    );
+
+    // 2. Scoped directive lifts regression
+    repo.write(
+        "body.md",
+        "Summary\n\nallow-regression: my_func expanded algorithmic depth\n",
+    );
+    let run = repo.check(&["--pr-body-file", "body.md"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.titles("bench-regression").is_empty());
+}

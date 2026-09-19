@@ -38,6 +38,29 @@
       },
       "type": "object"
     },
+    "BenchRegressionGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "tolerance_pct": {
+          "description": "Maximum allowed regression percentage",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "DeletionGate": {
       "additionalProperties": false,
       "properties": {
@@ -253,6 +276,14 @@
             }
           ],
           "description": "assertion count / strength must not drop in an existing test"
+        },
+        "bench-regression": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BenchRegressionGate"
+            }
+          ],
+          "description": "benchmark drift via harness adapters (deterministic counts or BCa intervals)"
         },
         "config-integrity": {
           "allOf": [
