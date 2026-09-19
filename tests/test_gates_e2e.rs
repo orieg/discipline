@@ -536,7 +536,37 @@ fn r1_pure_rename_opposite_names_passes() {
 }
 
 #[test]
-fn r1_one_test_split_into_two_with_total_assertions_not_lower_passes() {
+fn f1_repro_gutted_test_with_unrelated_offsetting_test_fails_without_directive() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/math.rs",
+        "#[test]\nfn adds() {\n    assert_eq!(1 + 1, 2);\n    assert_eq!(2 + 2, 4);\n}\n#[test]\nfn multiplies() {\n    assert_eq!(2 * 3, 6);\n}\n",
+    );
+    repo.commit("feat: base math tests");
+
+    // Change `adds` to a single `assert!(x > 0)` and append a new `unrelated` test with 2x assert_eq!
+    repo.write(
+        "tests/math.rs",
+        "#[test]\nfn adds() {\n    let x = 1;\n    assert!(x > 0);\n}\n#[test]\nfn multiplies() {\n    assert_eq!(2 * 3, 6);\n}\n#[test]\nfn unrelated() {\n    assert_eq!(10, 10);\n    assert_eq!(20, 20);\n}\n",
+    );
+    repo.commit("feat: gut adds and add unrelated");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 1,
+        "gutted test must fail closed even when offset: {}{}",
+        run.stdout, run.stderr
+    );
+    let outcome = run.outcome("assertion-reduction");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 1);
+    assert!(outcome["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("adds"));
+}
+
+#[test]
+fn r1_test_split_requires_allow_assertion_drop_directive() {
     let repo = Repo::new();
     repo.write(
         "tests/a.rs",
@@ -548,14 +578,119 @@ fn r1_one_test_split_into_two_with_total_assertions_not_lower_passes() {
         "#[test]\nfn test_part1() {\n    let x = 1;\n    assert_eq!(x, 1);\n    assert_eq!(x + 1, 2);\n}\n#[test]\nfn test_part2() {\n    let x = 3;\n    assert!(x > 0);\n}\n",
     );
     repo.commit("refactor: split test_combo into part1 and part2");
+
+    // Without directive: must fail because test_combo's assertions dropped
     let run = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
-        run.code, 0,
-        "stdout: {}\nstderr: {}",
+        run.code, 1,
+        "split without directive must fail assertion-reduction"
+    );
+    let outcome = run.outcome("assertion-reduction");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 1);
+
+    // With directive naming old test: passes
+    let run_pass = repo.run(
+        &["check", "--base", "HEAD~1", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-assertion-drop: test_combo split into part1 and part2",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("assertion-reduction");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn f1_repro_python_gutted_test_with_unrelated_offsetting_test_fails_without_directive() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/test_math.py",
+        "def test_adds():\n    assert 1 + 1 == 2\n    assert 2 + 2 == 4\n\ndef test_multiplies():\n    assert 2 * 3 == 6\n",
+    );
+    repo.commit("feat: python math tests");
+
+    repo.write(
+        "tests/test_math.py",
+        "def test_adds():\n    assert 1 > 0\n\ndef test_multiplies():\n    assert 2 * 3 == 6\n\ndef test_unrelated():\n    assert 10 == 10\n    assert 20 == 20\n",
+    );
+    repo.commit("feat: gut adds and add unrelated");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 1,
+        "python gutted test must fail closed: {}{}",
         run.stdout, run.stderr
     );
-    assert!(run.titles("assertion-reduction").is_empty());
-    assert!(run.titles("deletion-rationale").is_empty());
+    let outcome = run.outcome("assertion-reduction");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 1);
+    assert!(outcome["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("test_adds"));
+}
+
+#[test]
+fn f1_repro_javascript_gutted_test_with_unrelated_offsetting_test_fails_without_directive() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/math.test.js",
+        "test('adds', () => {\n    expect(1 + 1).toBe(2);\n    expect(2 + 2).toBe(4);\n});\ntest('multiplies', () => {\n    expect(2 * 3).toBe(6);\n});\n",
+    );
+    repo.commit("feat: js math tests");
+
+    repo.write(
+        "tests/math.test.js",
+        "test('adds', () => {\n    expect(1 > 0).toBeTruthy();\n});\ntest('multiplies', () => {\n    expect(2 * 3).toBe(6);\n});\ntest('unrelated', () => {\n    expect(10).toBe(10);\n    expect(20).toBe(20);\n});\n",
+    );
+    repo.commit("feat: gut adds and add unrelated");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 1,
+        "js gutted test must fail closed: {}{}",
+        run.stdout, run.stderr
+    );
+    let outcome = run.outcome("assertion-reduction");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 1);
+    assert!(outcome["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("adds"));
+}
+
+#[test]
+fn f1_repro_phpt_gutted_test_with_unrelated_offsetting_test_fails_without_directive() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/adds.phpt",
+        "--TEST--\nadds test\n--FILE--\n<?php\necho '1\n2\n3\n4\n';\n--EXPECT--\n1\n2\n3\n4\n",
+    );
+    repo.commit("feat: phpt base test");
+
+    repo.write(
+        "tests/adds.phpt",
+        "--TEST--\nadds test\n--FILE--\n<?php\necho '1\n';\n--EXPECT--\n1\n",
+    );
+    repo.write(
+        "tests/unrelated.phpt",
+        "--TEST--\nunrelated test\n--FILE--\n<?php\necho '10\n20\n30\n';\n--EXPECT--\n10\n20\n30\n",
+    );
+    repo.commit("feat: gut adds and add unrelated");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 1,
+        "phpt gutted test must fail closed: {}{}",
+        run.stdout, run.stderr
+    );
+    let outcome = run.outcome("assertion-reduction");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 1);
+    assert!(outcome["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("adds test"));
 }
 
 #[test]

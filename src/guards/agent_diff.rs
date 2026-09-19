@@ -495,7 +495,7 @@ pub(crate) fn report_parse_errors(
 
 pub fn evaluate_assertion_reduction(
     pairs: &[TestPair],
-    added: &[Located],
+    _added: &[Located],
     settings: &crate::config::AssertionGate,
     directives: &[crate::tokens::ParsedDirective],
     is_staged: bool,
@@ -505,17 +505,6 @@ pub fn evaluate_assertion_reduction(
     let mut out = GateOutcome::new(GATE);
     out.examined = pairs.len();
 
-    // Track surplus assertions per file from tests added in the head side.
-    // When a test is split into multiple tests, the surplus assertions in the same file
-    // absorb the apparent assertion drop of the paired test.
-    let mut surplus_per_file: std::collections::BTreeMap<&str, (usize, usize)> =
-        std::collections::BTreeMap::new();
-    for a in added {
-        let entry = surplus_per_file.entry(a.path).or_insert((0, 0));
-        entry.0 += a.test.effective_asserts();
-        entry.1 += a.test.strong_asserts;
-    }
-
     for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
         let (b, h) = (p.base, p.head);
         let b_eff = b.effective_asserts();
@@ -524,18 +513,6 @@ pub fn evaluate_assertion_reduction(
         let strong_drop = h.strong_asserts < b.strong_asserts;
         if !(total_drop || strong_drop) {
             continue;
-        }
-
-        let eff_drop_count = b_eff.saturating_sub(h_eff);
-        let str_drop_count = b.strong_asserts.saturating_sub(h.strong_asserts);
-
-        // Check if surplus assertions in this file can absorb the drop (test split)
-        if let Some(surplus) = surplus_per_file.get_mut(p.path) {
-            if surplus.0 >= eff_drop_count && surplus.1 >= str_drop_count {
-                surplus.0 -= eff_drop_count;
-                surplus.1 -= str_drop_count;
-                continue;
-            }
         }
 
         // For forced pairs (unrelated names forced together), the override directive MUST name
@@ -1001,15 +978,15 @@ mod tests {
         assert_eq!(out_override.violations.len(), 0);
         assert_eq!(out_override.overrides.len(), 1);
 
-        // Split absorption: added test with strong assert absorbs the drop
+        // Added test does NOT absorb the drop: reductions are strictly per-paired test
         let added_split = [Located {
             path: "tests/a.rs",
             file_survives: true,
             test: &b, // has 2 asserts
         }];
-        let out_absorbed =
+        let out_unabsorbed =
             evaluate_assertion_reduction(&pair_drop, &added_split, &settings, &[], false).unwrap();
-        assert_eq!(out_absorbed.violations.len(), 0);
+        assert_eq!(out_unabsorbed.violations.len(), 1);
     }
 
     #[test]

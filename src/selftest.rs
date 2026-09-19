@@ -290,8 +290,20 @@ const CASES: &[Case] = &[
                 hidden: false,
             }];
             let excused = evaluate_assertion_reduction(&pair, &[], &settings, &directives, false)?;
+
+            // An added test must NOT offset the paired test's reduction
+            use crate::guards::agent_diff::Located;
+            let added_test = [Located {
+                path: "tests/pure.rs",
+                file_survives: true,
+                test: &b,
+            }];
+            let with_added =
+                evaluate_assertion_reduction(&pair, &added_test, &settings, &[], false)?;
+
             Ok(unexcused.violations.len() == 1
                 && unexcused.overrides.is_empty()
+                && with_added.violations.len() == 1
                 && excused.violations.is_empty()
                 && excused.overrides.len() == 1)
         },
