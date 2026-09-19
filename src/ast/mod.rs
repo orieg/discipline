@@ -162,7 +162,7 @@ pub fn extension(path: &str) -> Option<&str> {
     name.rsplit_once('.').map(|(_, ext)| ext)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TestFn {
     /// Module-qualified name or test identity, e.g. `tests::inserts_in_order`.
     pub name: String,
@@ -173,6 +173,10 @@ pub struct TestFn {
     pub strong_asserts: usize,
     pub tautologies: usize,
     pub ignored: bool,
+    /// Specific conditional predicate (e.g. `miri`, `target_os = "..."`), or `None` if unconditionally ignored.
+    pub conditional_ignore: Option<String>,
+    /// Fatal assertions that abort execution on failure (e.g. `require.*`, `ASSERT_*`).
+    pub fatal_asserts: usize,
     pub should_panic: bool,
 }
 
@@ -229,6 +233,10 @@ pub struct ParsedFileFacts {
     pub compile_time_test: Option<TestFn>,
     /// The grammar could not parse part of the file; facts may be incomplete.
     pub has_parse_errors: bool,
+    /// Line of the first parse or preprocessor syntax error (if any).
+    pub first_parse_error_line: Option<usize>,
+    /// Number of skipped ERROR/MISSING regions in the AST.
+    pub skipped_error_nodes_count: usize,
 }
 
 impl Default for ParsedFileFacts {
@@ -246,9 +254,13 @@ impl Default for ParsedFileFacts {
                 strong_asserts: 0,
                 tautologies: 0,
                 ignored: false,
+                conditional_ignore: None,
+                fatal_asserts: 0,
                 should_panic: false,
             }),
             has_parse_errors: false,
+            first_parse_error_line: None,
+            skipped_error_nodes_count: 0,
         }
     }
 }
@@ -263,6 +275,8 @@ impl ParsedFileFacts {
             strong_asserts: self.compile_time_asserts,
             tautologies: 0,
             ignored: false,
+            conditional_ignore: None,
+            fatal_asserts: 0,
             should_panic: false,
         });
     }
@@ -326,6 +340,7 @@ mod tests {
                     tautologies: 0,
                     ignored: false,
                     should_panic: false,
+                    ..Default::default()
                 });
             }
             Ok(facts)

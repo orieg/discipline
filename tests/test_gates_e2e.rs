@@ -3607,6 +3607,37 @@ timeout_seconds = 1
 }
 
 #[test]
+fn command_gate_staged_mode_fails_closed_on_failure() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+command = "sh -c 'exit 1'"
+"#,
+    );
+    repo.commit("ci: configure failing command gate");
+
+    // Stage a file to enter staged mode
+    repo.write("README.md", "# Test\n");
+    repo.git(&["add", "README.md"]);
+
+    let run_staged = repo.check(&["--staged"]);
+    assert_eq!(
+        run_staged.code, 1,
+        "command failure in --staged mode must exit 1 (fail-closed), not 0:\nstdout: {}\nstderr: {}",
+        run_staged.stdout, run_staged.stderr
+    );
+    assert!(run_staged
+        .titles("command")
+        .contains(&"Command Exited With Error".to_string()));
+}
+
+#[test]
 fn dependency_delta_fires_on_wildcard_and_accepts_override() {
     let repo = Repo::new();
     repo.commit_base(
@@ -3716,6 +3747,124 @@ fn dependency_delta_language_neutral_package_json_and_pyproject() {
     );
     assert_eq!(run_pass.code, 0);
     assert_eq!(run_pass.json()["overrides"], 2);
+}
+
+#[test]
+fn dependency_delta_fires_on_new_direct_dependency_in_cargo_toml() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "Cargo.toml",
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0.0\"\n",
+        "base: init cargo",
+    );
+
+    // Add base64 as a new direct dependency
+    repo.write(
+        "Cargo.toml",
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0.0\"\nbase64 = \"0.22\"\n",
+    );
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert!(run
+        .titles("dependency-delta")
+        .contains(&"New Direct Dependency Added".to_string()));
+
+    // Override with allow-dependency
+    let run_pass = repo.check_with_pr(
+        &[],
+        "allow-dependency: base64 added for base64 encoding support",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 1);
+}
+
+#[test]
+fn dependency_delta_fires_on_new_direct_dependency_in_package_json() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "package.json",
+        "{\n  \"name\": \"app\",\n  \"dependencies\": {\n    \"lodash\": \"4.17.21\"\n  }\n}\n",
+        "base: init npm",
+    );
+
+    // Add totally-real-pkg as a new direct dependency
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"app\",\n  \"dependencies\": {\n    \"lodash\": \"4.17.21\",\n    \"totally-real-pkg\": \"^1.0.0\"\n  }\n}\n",
+    );
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert!(run
+        .titles("dependency-delta")
+        .contains(&"New Direct Dependency Added".to_string()));
+}
+
+#[test]
+fn dependency_delta_fires_on_loosened_constraint_and_source_shift() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "Cargo.toml",
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"=1.0.0\"\ntokio = \"1.0.0\"\n",
+        "base: init pinned cargo",
+    );
+
+    // Loosen serde constraint to ^1.0.0, shift tokio to git
+    repo.write(
+        "Cargo.toml",
+        r#"[package]
+name = "demo"
+version = "0.1.0"
+
+[dependencies]
+serde = "^1.0.0"
+tokio = { git = "https://github.com/tokio-rs/tokio.git", tag = "tokio-1.0.0" }
+"#,
+    );
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let titles = run.titles("dependency-delta");
+    assert!(titles.contains(&"Loosened Dependency Constraint".to_string()));
+    assert!(titles.contains(&"Dependency Source Modified".to_string()));
+}
+
+#[test]
+fn dependency_delta_reports_lockfile_growth_in_notes() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0.0\"\n",
+            ),
+            (
+                "Cargo.lock",
+                "version = 3\n\n[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+            ),
+        ],
+        "base: init with lockfile",
+    );
+
+    // Grow Cargo.lock by adding another package
+    repo.write(
+        "Cargo.lock",
+        "version = 3\n\n[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\n",
+    );
+
+    let run = repo.check(&[]);
+    let outcome = run.outcome("dependency-delta");
+    let notes = outcome["notes"].as_array().unwrap();
+    let note_str = notes
+        .iter()
+        .map(|n| n.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        note_str.contains("lockfile `Cargo.lock` package count: base 1, head 2 (+1)"),
+        "notes must report lockfile package count delta:\n{note_str}"
+    );
 }
 
 #[test]
@@ -4235,6 +4384,99 @@ fn java_csharp_ruby_fixtures_parsed_and_discriminate() {
     assert!(
         ruby_facts.has_parse_errors,
         "ruby syntax error must set has_parse_errors"
+    );
+}
+
+#[test]
+fn go_php_c_cpp_fixtures_parsed_and_discriminate() {
+    let repo = Repo::new();
+
+    // 1. Clean suites in Go, PHP, C++ pass cleanly
+    let go_clean = std::fs::read_to_string("tests/fixtures/go/clean_suite.go").unwrap();
+    let php_clean = std::fs::read_to_string("tests/fixtures/php/clean_suite.php").unwrap();
+    let cpp_clean = std::fs::read_to_string("tests/fixtures/c_cpp/clean_suite.cpp").unwrap();
+
+    repo.write("tests/clean_test.go", &go_clean);
+    repo.write("tests/CleanTest.php", &php_clean);
+    repo.write("tests/clean_test.cpp", &cpp_clean);
+    repo.commit("feat: add clean test suites in go, php, cpp");
+
+    let run_clean = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_clean.code, 0,
+        "clean suites should pass: stdout: {}\nstderr: {}",
+        run_clean.stdout, run_clean.stderr
+    );
+    assert_eq!(run_clean.titles("vacuous-tests").len(), 0);
+    assert_eq!(run_clean.titles("ignored-tests").len(), 0);
+
+    // 2. Skips and vacuous suites trigger violations
+    let go_bad = std::fs::read_to_string("tests/fixtures/go/skips_and_vacuous.go").unwrap();
+    let php_bad = std::fs::read_to_string("tests/fixtures/php/skips_and_vacuous.php").unwrap();
+    let cpp_bad = std::fs::read_to_string("tests/fixtures/c_cpp/skips_and_vacuous.cpp").unwrap();
+
+    repo.write("tests/bad_test.go", &go_bad);
+    repo.write("tests/BadTest.php", &php_bad);
+    repo.write("tests/bad_test.cpp", &cpp_bad);
+    repo.commit("test: add skips and vacuous suites in go, php, cpp");
+
+    let run_bad = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_bad.code, 1, "skips and vacuous suites must fail");
+
+    let vacuous_violations = run_bad.outcome("vacuous-tests")["violations"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let ignored_violations = run_bad.outcome("ignored-tests")["violations"]
+        .as_array()
+        .unwrap()
+        .clone();
+
+    assert!(
+        !vacuous_violations.is_empty(),
+        "vacuous tests must be detected"
+    );
+    assert!(
+        !ignored_violations.is_empty(),
+        "ignored tests must be detected"
+    );
+
+    // 3. Syntax error fixtures mark parse errors
+    let go_syntax = std::fs::read_to_string("tests/fixtures/go/syntax_error.go").unwrap();
+    let php_syntax = std::fs::read_to_string("tests/fixtures/php/syntax_error.php").unwrap();
+    let cpp_syntax = std::fs::read_to_string("tests/fixtures/c_cpp/syntax_error.cpp").unwrap();
+
+    let registry = discipline::ast::default_registry();
+    let vocab = discipline::ast::AssertVocabulary::default();
+
+    let go_facts = registry
+        .find_pack("test.go")
+        .unwrap()
+        .extract("test.go", &go_syntax, &vocab)
+        .unwrap();
+    assert!(
+        go_facts.has_parse_errors,
+        "go syntax error must set has_parse_errors"
+    );
+
+    let php_facts = registry
+        .find_pack("Test.php")
+        .unwrap()
+        .extract("Test.php", &php_syntax, &vocab)
+        .unwrap();
+    assert!(
+        php_facts.has_parse_errors,
+        "php syntax error must set has_parse_errors"
+    );
+
+    let cpp_facts = registry
+        .find_pack("test.cpp")
+        .unwrap()
+        .extract("test.cpp", &cpp_syntax, &vocab)
+        .unwrap();
+    assert!(
+        cpp_facts.has_parse_errors,
+        "cpp syntax error must set has_parse_errors"
     );
 }
 

@@ -15,33 +15,33 @@ This document establishes the normative enforcement rules, detection capabilitie
 ## Gate Catalog
 
 <!-- generated:gates -->
-| Gate id | Suite | Status | Languages | Rule |
-|---|---|---|---|---|
-| `agents-md` | agent-guard | **shipped** | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
-| `assertion-reduction` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | assertion count / strength must not drop in an existing test |
-| `vacuous-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | new tests must carry a non-tautological assertion |
-| `ignored-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | tests must not be newly #[ignore]d |
-| `unsafe-safety-comment` | agent-guard | **shipped** | Rust | unsafe blocks / impls carry a // SAFETY: comment |
-| `deletion-rationale` | agent-guard | **shipped** | any | deleted files and removed tests need a scoped removes: rationale |
-| `time-estimates` | hygiene | **shipped** | any | no calendar / duration estimates in markdown or the PR body |
-| `pii` | hygiene | **shipped** | any | no home paths, LAN IPs, or denylisted hostnames in tracked text |
-| `agent-scratch` | hygiene | **shipped** | any | agent scratch state is never tracked |
-| `config-integrity` | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
-| `scope-confinement` | agent-guard | planned | any | changes stay inside authorized paths |
-| `suppression-delta` | agent-guard | planned | per pack | new #[allow], commented-out tests, cfg-gated tests |
-| `provenance-tags` | hygiene | planned | any | published numerics carry (measured|target|projected) |
-| `ci-integrity` | integrity | planned | any | workflow weakening: continue-on-error, || true, unpinned actions |
-| `test-floor` | integrity | planned | any | test-count ratchet read from the base ref |
-| `golden-output` | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override |
-| `dependency-delta` | integrity | **shipped** | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
-| `test-budget` | integrity | **shipped** | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
-| `pr-checklist` | hygiene | planned | any | ticked PR checkboxes are reconciled against the diff |
-| `command` | verification | **shipped** | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
-| `sanitizers` | verification | planned | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
-| `msrv` | quality | planned | Rust | cargo check under the pinned MSRV |
-| `miri` | verification | planned | Rust | Miri tiers with zero-tests guard |
-| `unsafe-budget` | verification | planned | Rust | unsafe count ratchet |
-| `bench-regression` | bench | **shipped** | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
+| Gate id | Suite | Status | Languages | Rule | Example / Enforces |
+|---|---|---|---|---|---|
+| `agents-md` | agent-guard | **shipped** | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it | Catches missing AGENTS.md or divergent non-symlinked CLAUDE.md / GEMINI.md |
+| `assertion-reduction` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | assertion count / strength must not drop in an existing test | Rejects assert_eq!(a, b) replaced by assert!(true) or removed assertions |
+| `vacuous-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | new tests must carry a non-tautological assertion | Rejects empty test functions or tests without any executable assertions |
+| `ignored-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | tests must not be newly #[ignore]d | Rejects newly added #[ignore] or @pytest.mark.skip without directive |
+| `unsafe-safety-comment` | agent-guard | **shipped** | Rust | unsafe blocks / impls carry a // SAFETY: comment | Rejects unsafe blocks or impls lacking a preceding // SAFETY: comment |
+| `deletion-rationale` | agent-guard | **shipped** | any | deleted files and removed tests need a scoped removes: rationale | Rejects deleted files or removed tests lacking removes: <path> <reason> |
+| `time-estimates` | hygiene | **shipped** | any | no calendar / duration estimates in markdown or the PR body | Rejects calendar deadlines, sprint projections, and duration estimates |
+| `pii` | hygiene | **shipped** | any | no home paths, LAN IPs, or denylisted hostnames in tracked text | Rejects committed workstation home directories, private LAN IPs, and hostnames |
+| `agent-scratch` | hygiene | **shipped** | any | agent scratch state is never tracked | Rejects committed agent scratch state like .claude/plans/ or scratch/*.tmp |
+| `config-integrity` | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token | Rejects changes disabling gates in discipline.toml without explicit token |
+| `scope-confinement` | agent-guard | planned | any | changes stay inside authorized paths | Rejects diffs modifying files outside authorized path boundaries |
+| `suppression-delta` | agent-guard | planned | per pack | new #[allow], commented-out tests, cfg-gated tests | Rejects newly added linter suppresses or commented-out test functions |
+| `provenance-tags` | hygiene | planned | any | published numerics carry (measured|target|projected) | Rejects published benchmark numerics lacking (measured|target|projected) |
+| `ci-integrity` | integrity | planned | any | workflow weakening: continue-on-error, || true, unpinned actions | Rejects workflow weakening such as continue-on-error: true or unpinned actions |
+| `test-floor` | integrity | planned | any | test-count ratchet read from the base ref | Rejects net test count dropping below the merge-base baseline |
+| `golden-output` | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override | Rejects edits to committed golden/snapshot fixture files without override |
+| `dependency-delta` | integrity | **shipped** | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification | Rejects unapproved new dependencies, wildcard versions, or unpinned git sources |
+| `test-budget` | integrity | **shipped** | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) | Rejects reductions in proptest cases, shrink iterations, or fuzz durations |
+| `pr-checklist` | hygiene | planned | any | ticked PR checkboxes are reconciled against the diff | Rejects ticked PR checklist items that have no matching diff changes |
+| `command` | verification | **shipped** | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet | Wraps cargo test or custom tools to enforce non-zero exit and test execution |
+| `sanitizers` | verification | planned | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary | Enforces clean memory/thread sanitizer runs without unreviewed suppressions |
+| `msrv` | quality | planned | Rust | cargo check under the pinned MSRV | Validates compilation under the minimum supported toolchain version |
+| `miri` | verification | planned | Rust | Miri tiers with zero-tests guard | Runs undefined behavior checks ensuring test suites are not silently bypassed |
+| `unsafe-budget` | verification | planned | Rust | unsafe count ratchet | Rejects any net increase in total unsafe block count across the project |
+| `bench-regression` | bench | **shipped** | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) | Detects CPU instruction regressions and non-overlapping BCa confidence intervals |
 <!-- /generated -->
 
 ---
@@ -114,14 +114,15 @@ When a change touches source files in a language without an active pack, each AS
   ```
 - **What it does NOT catch:**
   - Assertions inside dynamically evaluated strings or macro expansions (e.g. `proptest! { ... }`).
-  - Assertions inside unconfigured helper functions (configure via `assert_helper_fns` or `extra_assert_macros`).
+  - Assertions inside unconfigured helper functions (configure via `assert_helper_fns` or `extra_assert_macros`, though same-file helper functions are resolved automatically in supported packs).
   - Dynamic loops in Python (`@pytest.mark.parametrize` counts definitions, not iterations) or JS (`test.each`).
+  - Dynamic branch reachability: assertions inside unreachable branches (e.g. `if False:`, `if (0) { ... }`, or dead closures) are counted by the AST parser because runtime execution reachability is out of scope for static analysis.
 - **Lifting directive:** `allow-assertion-drop: <test-name> <reason>` in PR description or commit message.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_assert_macros`, `assert_helper_fns`.
 
 #### `vacuous-tests`
 - **Rule:** A newly added test function must carry at least one non-tautological assertion, a configured assertion helper call, `.unwrap()` / `.expect()`, `?` in a fallible test returning `Result` or `Option`, or an expected panic attribute.
-- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C/C++.
+- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C/C++, C#, Ruby.
 - **What it catches:**
   - Ghost tests containing only setup logic, variable bindings, or logging with zero assertions.
   - Verbatim tautologies: `assert_eq!(x, x)`, `assert_eq!(1, 1)`, `assert!(true)`.
@@ -143,20 +144,22 @@ When a change touches source files in a language without an active pack, each AS
 - **What it does NOT catch:**
   - Semantic non-assertions that involve external function calls (e.g. `assert!(check_validity())` where `check_validity()` returns `true` unconditionally).
   - Tests whose assertions occur in deeply nested helper callbacks not tracked by static analysis.
+  - Dynamic branch reachability: assertions inside unreachable branches (e.g. `if False:`, `if (0) { ... }`, or dead closures) are counted as syntactically present by AST static analysis because dynamic runtime reachability is out of scope.
 - **Lifting directive:** `allow-assertion-drop: <test-name> <reason>` or configuring `assert_helper_fns`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_assert_macros`, `assert_helper_fns`, `min_assertions_per_test`.
 
 #### `ignored-tests`
 - **Rule:** An existing test may not become ignored or skipped, and a new test may not arrive skipped.
-- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C/C++.
+- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C/C++, C#, Ruby.
 - **What it catches:**
-  - Rust: `#[ignore]`, `#[cfg_attr(..., ignore)]`.
+  - Rust: `#[ignore]`, `#[cfg_attr(all(), ignore)]` (conditional skips like `#[cfg_attr(miri, ignore)]` emit a warning and do not count as unconditional ignores).
   - Python: `@pytest.mark.skip`, `@pytest.mark.skipif`, `@pytest.mark.xfail`, `@unittest.skip`, `@unittest.skipIf`.
   - JavaScript / TypeScript: `it.skip`, `test.skip`, `xit`, `xtest`, `describe.skip`, `xdescribe`, `it.todo`.
   - PHPT: newly added `--SKIPIF--` or `--XFAIL--` sections.
-  - Java: `@Disabled`, `@Ignore`, `@Test(enabled = false)`.
+  - Java: `@Disabled`, `@Ignore`, `@Test(enabled = false)` (including class-level annotations propagating to all methods).
   - Go: `t.Skip`, `t.Skipf`, `t.SkipNow`.
-  - PHP: `$this->markTestSkipped()`, `$this->markTestIncomplete()`, `->skip()`, `#[Requires*]`.
+  - PHP: `$this->markTestSkipped()`, `$this->markTestIncomplete()`, `->skip()`, `#[Requires*]`, `@group skip`, `@skip` (including class docblock propagation).
+  - Ruby: `xit`, `xdescribe`, `xcontext`, `:skip`, `skip: true` (including hierarchical propagation from outer blocks).
   - C / C++: `DISABLED_` test or suite prefix, `GTEST_SKIP()`, Catch2 `SKIP()` or `[.]`/`[!hide]` hidden tags.
 - **Failing diff example (rejected):**
   ```typescript

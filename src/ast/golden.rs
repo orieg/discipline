@@ -87,6 +87,7 @@ impl LanguagePack for GoldenPack {
             tautologies,
             ignored,
             should_panic,
+            ..Default::default()
         };
 
         Ok(ParsedFileFacts {

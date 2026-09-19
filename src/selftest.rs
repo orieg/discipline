@@ -290,6 +290,7 @@ const CASES: &[Case] = &[
                 tautologies: 0,
                 ignored: false,
                 should_panic: false,
+                ..Default::default()
             };
             let h = TestFn {
                 name: "test_check".to_string(),
@@ -299,6 +300,7 @@ const CASES: &[Case] = &[
                 tautologies: 0,
                 ignored: false,
                 should_panic: false,
+                ..Default::default()
             };
             let pair = [TestPair {
                 path: "tests/pure.rs",
@@ -365,6 +367,7 @@ const CASES: &[Case] = &[
                 tautologies: 0,
                 ignored: false,
                 should_panic: false,
+                ..Default::default()
             };
             let removed_test = [Located {
                 path: "tests/suite.rs",

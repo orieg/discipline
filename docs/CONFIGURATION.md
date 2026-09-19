@@ -264,8 +264,6 @@ exempt_paths = [
 
 Discipline delivers a single static binary and a composite shell action that runs identically across modern CI/CD engines.
 
-> **Status: Pre-release.** No released version tag exists yet. Code snippets below pin the verified commit SHA `d77059689f7fda42cc52a2b17ea8dd118af2e6f6` or specify `binary_path`. Upon tag release (`v0.1.0`), snippets will track `@v0` / `v0.1.0`.
-
 ### GitHub Actions
 
 ```yaml
@@ -282,7 +280,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # merge base must be reachable
-      - uses: orieg/discipline@d77059689f7fda42cc52a2b17ea8dd118af2e6f6
+      - uses: orieg/discipline@v0
         with:
           fail_on_warnings: true
 ```
@@ -293,7 +291,7 @@ Include the remote pipeline template directly:
 
 ```yaml
 include:
-  - remote: 'https://raw.githubusercontent.com/orieg/discipline/d77059689f7fda42cc52a2b17ea8dd118af2e6f6/templates/discipline.gitlab-ci.yml'
+  - remote: 'https://raw.githubusercontent.com/orieg/discipline/main/templates/discipline.gitlab-ci.yml'
 ```
 
 Or configure a standalone job emitting native GitLab Code Quality diffs:
@@ -329,7 +327,7 @@ discipline:gate:
 Forgejo Actions runs natively via `forgejo-runner` using workflows in `.forgejo/workflows/`. The composite action is shell-only and requires zero JavaScript runtime:
 
 ```yaml
-      - uses: https://github.com/orieg/discipline@d77059689f7fda42cc52a2b17ea8dd118af2e6f6
+      - uses: https://github.com/orieg/discipline@v0
         with:
           binary_path: /opt/discipline/discipline
 ```
@@ -339,7 +337,7 @@ Forgejo Actions runs natively via `forgejo-runner` using workflows in `.forgejo/
 The same composite action runs under Gitea's `act_runner` without modification:
 
 ```yaml
-      - uses: https://github.com/orieg/discipline@d77059689f7fda42cc52a2b17ea8dd118af2e6f6
+      - uses: https://github.com/orieg/discipline@v0
         with:
           binary_path: /opt/discipline/discipline
 ```
@@ -368,7 +366,7 @@ Use [`templates/argo-workflow-template.yaml`](https://github.com/orieg/disciplin
 ```yaml
 repos:
   - repo: https://github.com/orieg/discipline
-    rev: d77059689f7fda42cc52a2b17ea8dd118af2e6f6
+    rev: v0.1.0
     hooks:
       - id: discipline          # compiles via cargo
       # Or: - id: discipline-system # uses pre-installed binary on PATH

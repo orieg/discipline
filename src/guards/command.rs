@@ -621,7 +621,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 for (title, msg, rem) in command_violations {
                     outcome.push(
-                        ctx.overridable(gate.severity()),
+                        gate.severity(),
                         title,
                         Some(ctx.config_path),
                         None,

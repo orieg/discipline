@@ -115,11 +115,12 @@ impl<'a> PhpExtractor<'a> {
         if kind == "class_declaration" {
             let name_node = node.child_by_field_name("name");
             let c_name = name_node.map(|n| self.text(n)).unwrap_or("");
+            let (_, class_ignored) = self.check_doc_or_attrs_for_test(node);
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
                     if child.kind() == "method_declaration" {
-                        self.visit_method(child, c_name);
+                        self.visit_method(child, c_name, class_ignored);
                     }
                 }
             }
@@ -171,7 +172,11 @@ impl<'a> PhpExtractor<'a> {
                 if comment.contains("@test") {
                     is_test = true;
                 }
-                if comment.contains("@requires") || comment.contains("@skip") {
+                if comment.contains("@requires")
+                    || comment.contains("@skip")
+                    || comment.contains("@group skip")
+                    || comment.contains("@group-skip")
+                {
                     is_ignored = true;
                 }
             }
@@ -180,7 +185,7 @@ impl<'a> PhpExtractor<'a> {
         (is_test, is_ignored)
     }
 
-    fn visit_method(&mut self, node: Node, class_name: &str) {
+    fn visit_method(&mut self, node: Node, class_name: &str, class_ignored: bool) {
         let name_node = node.child_by_field_name("name");
         let method_name = name_node.map(|n| self.text(n)).unwrap_or("");
 
@@ -204,8 +209,9 @@ impl<'a> PhpExtractor<'a> {
             total_asserts: 0,
             strong_asserts: 0,
             tautologies: 0,
-            ignored: is_ignored,
+            ignored: class_ignored || is_ignored,
             should_panic: false,
+            ..Default::default()
         };
 
         if let Some(body) = node.child_by_field_name("body") {
@@ -235,6 +241,7 @@ impl<'a> PhpExtractor<'a> {
             tautologies: 0,
             ignored: is_ignored,
             should_panic: false,
+            ..Default::default()
         };
 
         if let Some(body) = node.child_by_field_name("body") {
@@ -277,6 +284,7 @@ impl<'a> PhpExtractor<'a> {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
 
         // If second argument is a closure or arrow function
@@ -616,5 +624,40 @@ it('checks condition', function () {
         assert_eq!(facts.tests[1].name, "it: checks condition");
         assert_eq!(facts.tests[1].strong_asserts, 1);
         assert!(!facts.tests[1].is_vacuous());
+    }
+
+    #[test]
+    fn test_php_class_level_skips_propagate_to_methods() {
+        let src = r#"<?php
+/**
+ * @group skip
+ */
+class ClassWideSkipTest extends TestCase {
+    public function testMethodOne() {
+        $this->assertEquals(1, 1);
+    }
+    public function testMethodTwo() {
+        $this->assertTrue(true);
+    }
+}
+"#;
+        let pack = PhpPack;
+        let facts = pack
+            .extract(
+                "tests/ClassWideSkipTest.php",
+                src,
+                &AssertVocabulary::default(),
+            )
+            .unwrap();
+
+        assert_eq!(facts.tests.len(), 2);
+        assert!(
+            facts.tests[0].ignored,
+            "method 1 must inherit class-level skip"
+        );
+        assert!(
+            facts.tests[1].ignored,
+            "method 2 must inherit class-level skip"
+        );
     }
 }

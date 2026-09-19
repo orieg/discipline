@@ -1,13 +1,13 @@
 //! Override directive parser shared by every gate that accepts an escape hatch.
 //!
-//! Grammar, distilled from `orieg/expanse`'s hardened PR-body parsers:
+//! Grammar rules:
 //!   - a directive must **begin its own line** (optionally inside `<!-- -->`);
 //!     a mention mid-sentence, in a table cell, or in a code span never arms it
 //!   - lines inside fenced code blocks are ignored
 //!   - the reason must be non-empty and must not be a template placeholder
 //!   - an override is **scoped**: it only covers a subject that its reason names
 //!
-//! The expanse incident this encodes: a PR that *described* the override
+//! The defect this prevents: a PR that *described* the override
 //! mechanism in a markdown table silently approved every regression in the run.
 
 use regex::Regex;
@@ -359,7 +359,7 @@ fn reason_names(reason: &str, subject: &str) -> bool {
 fn clean_reason(raw: &str) -> String {
     let mut r = raw.trim();
     // `--!>` also closes an HTML comment; left on the reason it once let a
-    // placeholder through in expanse.
+    // placeholder through.
     for closer in ["--!>", "-->"] {
         if let Some(stripped) = r.strip_suffix(closer) {
             r = stripped.trim_end();
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn prose_table_and_code_mentions_do_not_arm_the_override() {
-        // The verbatim shape of the expanse #437 defect: documentation *about*
+        // The verbatim shape of the defect: documentation *about*
         // the directive must never act as the directive.
         let body = "\
 We use the removes: token to justify deletions.

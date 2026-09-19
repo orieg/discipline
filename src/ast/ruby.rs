@@ -103,10 +103,10 @@ impl<'a> RubyExtractor<'a> {
 
     fn visit_root(&mut self, root: Node) {
         let mut class_stack = Vec::new();
-        self.walk_scope(root, &mut class_stack);
+        self.walk_scope(root, &mut class_stack, false);
     }
 
-    fn walk_scope(&mut self, scope: Node, class_stack: &mut Vec<String>) {
+    fn walk_scope(&mut self, scope: Node, class_stack: &mut Vec<String>, parent_skipped: bool) {
         let mut cursor = scope.walk();
         for child in scope.children(&mut cursor) {
             let kind = child.kind();
@@ -117,15 +117,15 @@ impl<'a> RubyExtractor<'a> {
                     .unwrap_or_default();
                 class_stack.push(name);
                 if let Some(body) = child.child_by_field_name("body") {
-                    self.walk_scope(body, class_stack);
+                    self.walk_scope(body, class_stack, parent_skipped);
                 }
                 class_stack.pop();
             } else if kind == "method" || kind == "singleton_method" {
-                if let Some(test_fn) = self.extract_method(child, class_stack) {
+                if let Some(test_fn) = self.extract_method(child, class_stack, parent_skipped) {
                     self.facts.tests.push(test_fn);
                 }
             } else if kind == "call" {
-                if let Some(test_fn) = self.extract_block_test(child, class_stack) {
+                if let Some(test_fn) = self.extract_block_test(child, class_stack, parent_skipped) {
                     self.facts.tests.push(test_fn);
                 } else if let Some(block) = child.child_by_field_name("block") {
                     // Check for describe/context blocks
@@ -133,9 +133,17 @@ impl<'a> RubyExtractor<'a> {
                         .child_by_field_name("method")
                         .map(|m| self.text(m))
                         .unwrap_or("");
-                    if matches!(method_name, "describe" | "context" | "feature") {
+                    if matches!(
+                        method_name,
+                        "describe" | "context" | "feature" | "xdescribe" | "xcontext"
+                    ) {
+                        let is_block_skipped = parent_skipped
+                            || method_name.starts_with('x')
+                            || self.has_skip_metadata(child);
                         if let Some(body) = block.child_by_field_name("body") {
-                            self.walk_scope(body, class_stack);
+                            self.walk_scope(body, class_stack, is_block_skipped);
+                        } else {
+                            self.walk_scope(block, class_stack, is_block_skipped);
                         }
                     }
                 }
@@ -143,7 +151,12 @@ impl<'a> RubyExtractor<'a> {
         }
     }
 
-    fn extract_method(&self, node: Node, class_stack: &[String]) -> Option<TestFn> {
+    fn extract_method(
+        &self,
+        node: Node,
+        class_stack: &[String],
+        parent_skipped: bool,
+    ) -> Option<TestFn> {
         let name_node = node.child_by_field_name("name")?;
         let method_name = self.text(name_node);
 
@@ -171,8 +184,9 @@ impl<'a> RubyExtractor<'a> {
             total_asserts: 0,
             strong_asserts: 0,
             tautologies: 0,
-            ignored: false,
+            ignored: parent_skipped,
             should_panic: false,
+            ..Default::default()
         };
 
         if let Some(body) = node.child_by_field_name("body") {
@@ -182,7 +196,12 @@ impl<'a> RubyExtractor<'a> {
         Some(test_fn)
     }
 
-    fn extract_block_test(&self, node: Node, class_stack: &[String]) -> Option<TestFn> {
+    fn extract_block_test(
+        &self,
+        node: Node,
+        class_stack: &[String],
+        parent_skipped: bool,
+    ) -> Option<TestFn> {
         // e.g. it "does something" do ... end
         // test "description" do ... end
         // specify "something" do ... end
@@ -222,7 +241,7 @@ impl<'a> RubyExtractor<'a> {
             format!("{} {}", class_stack.join("::"), desc)
         };
 
-        let is_ignored = is_xit || self.has_skip_metadata(node);
+        let is_ignored = parent_skipped || is_xit || self.has_skip_metadata(node);
 
         let mut test_fn = TestFn {
             name: full_name,
@@ -232,6 +251,7 @@ impl<'a> RubyExtractor<'a> {
             tautologies: 0,
             ignored: is_ignored,
             should_panic: false,
+            ..Default::default()
         };
 
         if let Some(b) = block {
@@ -767,5 +787,52 @@ end
         // test_version has refute_nil (weak) and assert_match (strong)
         assert_eq!(facts.tests[0].total_asserts, 2);
         assert_eq!(facts.tests[0].strong_asserts, 1);
+    }
+
+    #[test]
+    fn test_ruby_hierarchical_skips_propagate_down() {
+        let src = r#"
+xdescribe "skipped outer block" do
+  it "nested test 1" do
+    expect(1).to eq(1)
+  end
+
+  context "nested context" do
+    it "nested test 2" do
+      expect(2).to eq(2)
+    end
+  end
+end
+
+describe "active block" do
+  it "active test" do
+    expect(3).to eq(3)
+  end
+end
+"#;
+        let facts = RubyPack
+            .extract("spec/foo_spec.rb", src, &AssertVocabulary::default())
+            .unwrap();
+
+        assert_eq!(facts.tests.len(), 3);
+        let t1 = facts
+            .tests
+            .iter()
+            .find(|t| t.name.contains("nested test 1"))
+            .unwrap();
+        let t2 = facts
+            .tests
+            .iter()
+            .find(|t| t.name.contains("nested test 2"))
+            .unwrap();
+        let t3 = facts
+            .tests
+            .iter()
+            .find(|t| t.name.contains("active test"))
+            .unwrap();
+
+        assert!(t1.ignored, "t1 must inherit skip from xdescribe");
+        assert!(t2.ignored, "t2 must inherit skip from nested xdescribe");
+        assert!(!t3.ignored, "t3 must be active");
     }
 }

@@ -134,6 +134,7 @@ impl<'a> GoExtractor<'a> {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
 
         if let Some(body) = node.child_by_field_name("body") {
@@ -233,6 +234,7 @@ impl<'a> GoExtractor<'a> {
                 tautologies: 0,
                 ignored: test_fn.ignored,
                 should_panic: false,
+                ..Default::default()
             };
 
             // Recursively scan callback body
@@ -243,6 +245,8 @@ impl<'a> GoExtractor<'a> {
             }
 
             self.facts.tests.push(sub_test);
+            test_fn.total_asserts += 1;
+            test_fn.strong_asserts += 1;
             return;
         }
 
@@ -261,9 +265,13 @@ impl<'a> GoExtractor<'a> {
         if call_text.ends_with(".Fatalf")
             || call_text.ends_with(".Fatal")
             || call_text.ends_with(".FailNow")
-            || call_text.ends_with(".Errorf")
-            || call_text.ends_with(".Error")
         {
+            test_fn.total_asserts += 1;
+            test_fn.strong_asserts += 1;
+            test_fn.fatal_asserts += 1;
+            return;
+        }
+        if call_text.ends_with(".Errorf") || call_text.ends_with(".Error") {
             test_fn.total_asserts += 1;
             test_fn.strong_asserts += 1;
             return;
@@ -278,6 +286,10 @@ impl<'a> GoExtractor<'a> {
         // Testify assert / require
         let method_name = call_text.rsplit('.').next().unwrap_or(call_text);
         if call_text.starts_with("assert.") || call_text.starts_with("require.") {
+            let is_require = call_text.starts_with("require.");
+            if is_require {
+                test_fn.fatal_asserts += 1;
+            }
             match method_name {
                 "True" => {
                     test_fn.total_asserts += 1;
@@ -306,8 +318,11 @@ impl<'a> GoExtractor<'a> {
                         test_fn.strong_asserts += 1;
                     }
                 }
+                "Nil" | "NotNil" => {
+                    test_fn.total_asserts += 1;
+                }
                 "NotEqual" | "NotSame" | "NoError" | "Error" | "Contains" | "NotContains"
-                | "Len" | "Panics" | "NotPanics" | "Nil" | "NotNil" | "ElementsMatch" => {
+                | "Len" | "Panics" | "NotPanics" | "ElementsMatch" => {
                     test_fn.total_asserts += 1;
                     test_fn.strong_asserts += 1;
                 }
@@ -528,5 +543,40 @@ func BenchmarkSearch(b *testing.B) {
             "only TestReal must be extracted as a test"
         );
         assert_eq!(facts.tests[0].name, "TestReal");
+    }
+
+    #[test]
+    fn test_go_testify_require_fatal_and_nil_checks() {
+        let src = r#"
+package main
+
+import (
+	"testing"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestFatalAndNil(t *testing.T) {
+	x := 1
+	y := 2
+	assert.NotNil(t, t)       // weak assert (not strong), not fatal
+	require.NotNil(t, t)      // weak assert (not strong), fatal
+	assert.Equal(t, 1, x)     // strong assert, not fatal
+	require.Equal(t, 2, y)    // strong assert, fatal
+	t.Fatalf("fatal abort")   // strong assert, fatal
+}
+"#;
+        let pack = GoPack;
+        let facts = pack
+            .extract("require_test.go", src, &AssertVocabulary::default())
+            .expect("extraction must succeed");
+
+        assert_eq!(facts.tests.len(), 1);
+        let t = &facts.tests[0];
+        assert_eq!(t.total_asserts, 5);
+        // NotNil are 2 weak asserts, 2 Equal + 1 Fatalf are 3 strong
+        assert_eq!(t.strong_asserts, 3);
+        // require.NotNil + require.Equal + t.Fatalf are 3 fatal
+        assert_eq!(t.fatal_asserts, 3);
     }
 }

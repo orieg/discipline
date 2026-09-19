@@ -5,6 +5,31 @@ use tree_sitter::{Node, Parser};
 
 use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn};
 
+fn collect_error_nodes_info(root: Node) -> (bool, Option<usize>, usize) {
+    if !root.has_error() {
+        return (false, None, 0);
+    }
+    let mut first_line = None;
+    let mut count = 0;
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            count += 1;
+            let line = node.start_position().row + 1;
+            if first_line.is_none() || Some(line) < first_line {
+                first_line = Some(line);
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.has_error() || child.is_error() || child.is_missing() {
+                stack.push(child);
+            }
+        }
+    }
+    (true, first_line.or(Some(1)), count.max(1))
+}
+
 /// C language pack implementing [`LanguagePack`].
 pub struct CPack;
 
@@ -31,13 +56,16 @@ impl LanguagePack for CPack {
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
+        let (has_errors, first_line, error_count) = collect_error_nodes_info(root);
         let mut extractor = CCppExtractor {
             src: src.as_bytes(),
             vocab,
             is_test_path: is_c_cpp_test_path(path),
             test_spans: Vec::new(),
             facts: ParsedFileFacts {
-                has_parse_errors: root.has_error(),
+                has_parse_errors: has_errors,
+                first_parse_error_line: first_line,
+                skipped_error_nodes_count: error_count,
                 ..Default::default()
             },
         };
@@ -77,13 +105,16 @@ impl LanguagePack for CppPack {
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
+        let (has_errors, first_line, error_count) = collect_error_nodes_info(root);
         let mut extractor = CCppExtractor {
             src: src.as_bytes(),
             vocab,
             is_test_path: is_c_cpp_test_path(path),
             test_spans: Vec::new(),
             facts: ParsedFileFacts {
-                has_parse_errors: root.has_error(),
+                has_parse_errors: has_errors,
+                first_parse_error_line: first_line,
+                skipped_error_nodes_count: error_count,
                 ..Default::default()
             },
         };
@@ -240,6 +271,7 @@ impl<'a> CCppExtractor<'a> {
                                     tautologies: 0,
                                     ignored: is_ignored,
                                     should_panic: false,
+                                    ..Default::default()
                                 };
                                 self.extract_assertions_in_body(body, &mut test_fn);
                                 self.test_spans.push(call.start_byte()..body.end_byte());
@@ -299,6 +331,7 @@ impl<'a> CCppExtractor<'a> {
                 tautologies: 0,
                 ignored: is_ignored,
                 should_panic: false,
+                ..Default::default()
             };
             self.extract_assertions_in_body(body, &mut test_fn);
             return Some(test_fn);
@@ -322,6 +355,7 @@ impl<'a> CCppExtractor<'a> {
                 tautologies: 0,
                 ignored: is_ignored,
                 should_panic: false,
+                ..Default::default()
             };
             self.extract_assertions_in_body(body, &mut test_fn);
             return Some(test_fn);
@@ -344,6 +378,7 @@ impl<'a> CCppExtractor<'a> {
                 tautologies: 0,
                 ignored: false,
                 should_panic: false,
+                ..Default::default()
             };
             self.extract_assertions_in_body(body, &mut test_fn);
             return Some(test_fn);
@@ -543,6 +578,9 @@ impl<'a> CCppExtractor<'a> {
 
     fn handle_gtest_assertion(&self, fn_name: &str, args: &[Node], test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
+        if fn_name.starts_with("ASSERT_") {
+            test_fn.fatal_asserts += 1;
+        }
 
         let is_strong = fn_name.contains("_EQ")
             || fn_name.contains("_NE")
@@ -591,6 +629,9 @@ impl<'a> CCppExtractor<'a> {
 
     fn handle_catch2_assertion(&self, fn_name: &str, args: &[Node], test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
+        if fn_name.starts_with("REQUIRE") {
+            test_fn.fatal_asserts += 1;
+        }
 
         if fn_name.contains("_THROWS") || fn_name.contains("_THAT") || fn_name.contains("_NOTHROW")
         {
@@ -620,6 +661,7 @@ impl<'a> CCppExtractor<'a> {
 
     fn handle_c_assert(&self, args: &[Node], test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
+        test_fn.fatal_asserts += 1;
         if let Some(arg) = args.first() {
             if self.contains_comparison(*arg) {
                 test_fn.strong_asserts += 1;
@@ -1002,5 +1044,38 @@ int test_foo(void) {
         assert_eq!(c_facts.compile_time_asserts, 2);
         assert_eq!(c_facts.compile_time_assert_line, Some(2));
         assert_eq!(c_facts.tests.len(), 1);
+    }
+
+    #[test]
+    fn test_c_cpp_fatal_assertions_gtest_and_catch2() {
+        let gtest_src = r#"
+TEST(Suite, Case) {
+    int x = 10;
+    EXPECT_EQ(x, 10);
+    ASSERT_EQ(x, 10);
+}
+"#;
+        let facts = CppPack
+            .extract("test_gtest.cpp", gtest_src, &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(facts.tests.len(), 1);
+        let t = &facts.tests[0];
+        assert_eq!(t.total_asserts, 2);
+        assert_eq!(t.fatal_asserts, 1);
+
+        let catch2_src = r#"
+TEST_CASE("Catch2 fatal vs nonfatal") {
+    int x = 5;
+    CHECK(x == 5);
+    REQUIRE(x == 5);
+}
+"#;
+        let c2_facts = CppPack
+            .extract("test_catch2.cpp", catch2_src, &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(c2_facts.tests.len(), 1);
+        let c2_t = &c2_facts.tests[0];
+        assert_eq!(c2_t.total_asserts, 2);
+        assert_eq!(c2_t.fatal_asserts, 1);
     }
 }

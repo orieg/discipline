@@ -131,8 +131,10 @@ pub fn parse_cargo_toml(content: &str, path: &str) -> Vec<DependencyRecord> {
 
     // Check workspace.dependencies
     if let Some(ws) = root.get("workspace").and_then(TomlValue::as_table) {
-        if let Some(deps) = ws.get("dependencies").and_then(TomlValue::as_table) {
-            extract_cargo_deps(deps, path, &mut records);
+        for tbl_name in &tables_to_check {
+            if let Some(deps) = ws.get(*tbl_name).and_then(TomlValue::as_table) {
+                extract_cargo_deps(deps, path, &mut records);
+            }
         }
     }
 
@@ -167,6 +169,12 @@ fn extract_cargo_deps(
                 });
             }
             TomlValue::Table(tbl) => {
+                // If renamed: `my_alias = { package = "real_pkg", version = "..." }`
+                let resolved_name = tbl
+                    .get("package")
+                    .and_then(TomlValue::as_str)
+                    .unwrap_or(name);
+
                 let ver = tbl
                     .get("version")
                     .and_then(TomlValue::as_str)
@@ -192,7 +200,7 @@ fn extract_cargo_deps(
                 };
 
                 records.push(DependencyRecord {
-                    name: name.clone(),
+                    name: resolved_name.to_string(),
                     version: ver,
                     git_url,
                     git_pin,
@@ -315,61 +323,23 @@ pub fn parse_pyproject_toml(content: &str, path: &str) -> Vec<DependencyRecord> 
         }
     }
 
-    // 2. Poetry: tool.poetry.dependencies
+    // 2. Poetry: tool.poetry.dependencies, dev-dependencies, group.<grp>.dependencies
     if let Some(tool) = root.get("tool").and_then(TomlValue::as_table) {
         if let Some(poetry) = tool.get("poetry").and_then(TomlValue::as_table) {
             if let Some(deps) = poetry.get("dependencies").and_then(TomlValue::as_table) {
-                for (name, val) in deps {
-                    if name == "python" {
-                        continue;
-                    }
-                    match val {
-                        TomlValue::String(ver) => {
-                            records.push(DependencyRecord {
-                                name: name.clone(),
-                                version: Some(ver.clone()),
-                                git_url: None,
-                                git_pin: None,
-                                is_wildcard: is_wildcard_str(ver),
-                                is_git: false,
-                                is_path: false,
-                                manifest_path: path.to_string(),
-                                line: None,
-                            });
+                extract_poetry_deps(deps, path, &mut records);
+            }
+            if let Some(dev_deps) = poetry.get("dev-dependencies").and_then(TomlValue::as_table) {
+                extract_poetry_deps(dev_deps, path, &mut records);
+            }
+            if let Some(groups) = poetry.get("group").and_then(TomlValue::as_table) {
+                for (_grp_name, grp_val) in groups {
+                    if let Some(grp_tbl) = grp_val.as_table() {
+                        if let Some(deps) =
+                            grp_tbl.get("dependencies").and_then(TomlValue::as_table)
+                        {
+                            extract_poetry_deps(deps, path, &mut records);
                         }
-                        TomlValue::Table(tbl) => {
-                            let ver = tbl
-                                .get("version")
-                                .and_then(TomlValue::as_str)
-                                .map(str::to_string);
-                            let git_url = tbl
-                                .get("git")
-                                .and_then(TomlValue::as_str)
-                                .map(str::to_string);
-                            let git_pin = tbl
-                                .get("rev")
-                                .or_else(|| tbl.get("tag"))
-                                .and_then(TomlValue::as_str)
-                                .map(str::to_string);
-                            let is_git = git_url.is_some();
-                            let is_wildcard = match &ver {
-                                Some(v) => is_wildcard_str(v),
-                                None if !is_git => true,
-                                _ => false,
-                            };
-                            records.push(DependencyRecord {
-                                name: name.clone(),
-                                version: ver,
-                                git_url,
-                                git_pin,
-                                is_wildcard,
-                                is_git,
-                                is_path: tbl.contains_key("path"),
-                                manifest_path: path.to_string(),
-                                line: None,
-                            });
-                        }
-                        _ => {}
                     }
                 }
             }
@@ -377,6 +347,66 @@ pub fn parse_pyproject_toml(content: &str, path: &str) -> Vec<DependencyRecord> 
     }
 
     records
+}
+
+fn extract_poetry_deps(
+    deps: &toml::map::Map<String, TomlValue>,
+    path: &str,
+    records: &mut Vec<DependencyRecord>,
+) {
+    for (name, val) in deps {
+        if name == "python" {
+            continue;
+        }
+        match val {
+            TomlValue::String(ver) => {
+                records.push(DependencyRecord {
+                    name: name.clone(),
+                    version: Some(ver.clone()),
+                    git_url: None,
+                    git_pin: None,
+                    is_wildcard: is_wildcard_str(ver),
+                    is_git: false,
+                    is_path: false,
+                    manifest_path: path.to_string(),
+                    line: None,
+                });
+            }
+            TomlValue::Table(tbl) => {
+                let ver = tbl
+                    .get("version")
+                    .and_then(TomlValue::as_str)
+                    .map(str::to_string);
+                let git_url = tbl
+                    .get("git")
+                    .and_then(TomlValue::as_str)
+                    .map(str::to_string);
+                let git_pin = tbl
+                    .get("rev")
+                    .or_else(|| tbl.get("tag"))
+                    .and_then(TomlValue::as_str)
+                    .map(str::to_string);
+                let is_git = git_url.is_some();
+                let is_wildcard = match &ver {
+                    Some(v) => is_wildcard_str(v),
+                    None if !is_git => true,
+                    _ => false,
+                };
+                records.push(DependencyRecord {
+                    name: name.clone(),
+                    version: ver,
+                    git_url,
+                    git_pin,
+                    is_wildcard,
+                    is_git,
+                    is_path: tbl.contains_key("path"),
+                    manifest_path: path.to_string(),
+                    line: None,
+                });
+            }
+            _ => {}
+        }
+    }
 }
 
 fn parse_pep508_string(s: &str, path: &str, records: &mut Vec<DependencyRecord>) {
@@ -673,6 +703,91 @@ pub fn parse_manifest(content: &str, path: &str) -> Vec<DependencyRecord> {
     }
 }
 
+fn count_lockfile_entries(content: &str, file_name: &str) -> usize {
+    if file_name == "Cargo.lock" || file_name == "poetry.lock" {
+        content
+            .lines()
+            .filter(|l| l.trim() == "[[package]]")
+            .count()
+    } else if file_name == "package-lock.json" {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
+            if let Some(pkgs) = val.get("packages").and_then(|p| p.as_object()) {
+                pkgs.len()
+            } else if let Some(deps) = val.get("dependencies").and_then(|d| d.as_object()) {
+                deps.len()
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    } else if file_name == "go.sum" {
+        let mut mods = HashSet::new();
+        for line in content.lines() {
+            if let Some(first) = line.split_whitespace().next() {
+                mods.insert(first);
+            }
+        }
+        mods.len()
+    } else if file_name == "yarn.lock" {
+        content
+            .lines()
+            .filter(|l| !l.starts_with(' ') && !l.starts_with('#') && l.ends_with(':'))
+            .count()
+    } else if file_name == "pnpm-lock.yaml" {
+        content
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                (t.starts_with('\'') || t.starts_with('/')) && t.ends_with(':')
+            })
+            .count()
+    } else {
+        0
+    }
+}
+
+fn is_constraint_loosened(base_ver: Option<&str>, head_ver: Option<&str>) -> bool {
+    let (Some(bv), Some(hv)) = (base_ver, head_ver) else {
+        return false;
+    };
+    let bv = bv.trim();
+    let hv = hv.trim();
+    if bv == hv {
+        return false;
+    }
+    // Wildcard head is loosened if base was not wildcard
+    if is_wildcard_str(hv) && !is_wildcard_str(bv) {
+        return true;
+    }
+    // Exact pinned base changed to prefix / range
+    let is_exact = bv.starts_with('=')
+        || bv.starts_with("==")
+        || (!bv.starts_with('^')
+            && !bv.starts_with('~')
+            && !bv.starts_with('>')
+            && !bv.starts_with('<')
+            && !bv.starts_with('*'));
+    let is_range = hv.starts_with('^')
+        || hv.starts_with('~')
+        || hv.starts_with('>')
+        || hv.starts_with('<')
+        || hv.starts_with('*')
+        || hv.contains("||");
+    if is_exact && is_range {
+        return true;
+    }
+    // Tilde ~1.2.3 loosened to caret ^1.2.3 or >=
+    if bv.starts_with('~') && (hv.starts_with('^') || hv.starts_with(">=") || hv.starts_with('>')) {
+        return true;
+    }
+    // Pinned =1.2 loosened to 1.2
+    if bv.starts_with('=') && !hv.starts_with('=') {
+        return true;
+    }
+    false
+}
+
 /// Evaluates the `dependency-delta` gate.
 pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
     let mut outcome = GateOutcome::new(GATE);
@@ -713,17 +828,53 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
 
     let changed = ctx.git.changed_files()?;
     let mut manifest_files = Vec::new();
+    let lockfile_names = [
+        "Cargo.lock",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "poetry.lock",
+        "go.sum",
+    ];
+    let mut lock_files = Vec::new();
 
     for f in &changed {
-        if manifest_matcher.is_match(&f.path) && !ex_matcher.is_match(&f.path) {
+        if ex_matcher.is_match(&f.path) {
+            continue;
+        }
+        let p = Path::new(&f.path);
+        let fname = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if lockfile_names.contains(&fname) {
+            lock_files.push((f, fname));
+        }
+        if manifest_matcher.is_match(&f.path) {
             manifest_files.push(f);
         }
     }
 
-    if manifest_files.is_empty() {
+    // Track lockfile growth
+    for (f, fname) in &lock_files {
+        let head_raw = ctx.git.head_content(&f.path)?;
+        let base_raw = ctx.git.base_content(&f.old_path)?;
+        let head_count = head_raw
+            .as_deref()
+            .map(|c| count_lockfile_entries(c, fname))
+            .unwrap_or(0);
+        let base_count = base_raw
+            .as_deref()
+            .map(|c| count_lockfile_entries(c, fname))
+            .unwrap_or(0);
+        let diff = head_count as i64 - base_count as i64;
+        outcome.notes.push(format!(
+            "lockfile `{}` package count: base {}, head {} ({:+})",
+            f.path, base_count, head_count, diff
+        ));
+    }
+
+    if manifest_files.is_empty() && lock_files.is_empty() {
         outcome
             .notes
-            .push("no dependency manifests modified in this diff".to_string());
+            .push("no dependency manifests or lockfiles modified in this diff".to_string());
         return Ok(outcome);
     }
 
@@ -750,6 +901,8 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                         || b.git_url != h.git_url
                         || b.git_pin != h.git_pin
                         || b.is_wildcard != h.is_wildcard
+                        || b.is_path != h.is_path
+                        || b.is_git != h.is_git
                 }
             };
 
@@ -758,6 +911,51 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             }
 
             let mut dep_violations = Vec::new();
+
+            // 0. Core rule: New direct dependency check
+            if matching_base.is_none() {
+                let allowed = gate.allow_dependencies.contains(&h.name)
+                    || deny_policy.allow_bans.contains(&h.name);
+                if !allowed {
+                    dep_violations.push((
+                        "New Direct Dependency Added",
+                        format!(
+                            "Direct dependency `{}` was newly added to `{}`.",
+                            h.name, f.path
+                        ),
+                        "Obtain approval and add to allow_dependencies in discipline.toml or provide `allow-dependency: <name> <reason>` in PR body or commit messages.",
+                    ));
+                }
+            } else if let Some(b) = matching_base {
+                // Check loosened version constraint
+                if is_constraint_loosened(b.version.as_deref(), h.version.as_deref()) {
+                    dep_violations.push((
+                        "Loosened Dependency Constraint",
+                        format!(
+                            "Dependency `{}` in `{}` loosened version constraint from `{}` to `{}`.",
+                            h.name,
+                            f.path,
+                            b.version.as_deref().unwrap_or(""),
+                            h.version.as_deref().unwrap_or("")
+                        ),
+                        "Retain the pinned version constraint or document the relaxation with `allow-dependency: <name> <reason>`.",
+                    ));
+                }
+                // Check source shift (registry -> git/path, git -> registry/path, etc.)
+                let source_shifted = (b.is_git != h.is_git)
+                    || (b.is_path != h.is_path)
+                    || (b.is_git && h.is_git && b.git_url != h.git_url);
+                if source_shifted {
+                    dep_violations.push((
+                        "Dependency Source Modified",
+                        format!(
+                            "Dependency `{}` in `{}` modified its source specification (git: {} -> {}, path: {} -> {}).",
+                            h.name, f.path, b.is_git, h.is_git, b.is_path, h.is_path
+                        ),
+                        "Obtain approval for dependency source shift or provide `allow-dependency: <name> <reason>`.",
+                    ));
+                }
+            }
 
             // 1. Wildcard check
             let enforce_wildcards = !gate.allow_wildcards || deny_policy.wildcards_denied;

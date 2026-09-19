@@ -172,12 +172,7 @@ impl<'a> JavaExtractor<'a> {
         let mut is_ignored = false;
         let mut is_test_annotated = false;
 
-        let Some(modifiers) = Self::get_modifiers(node) else {
-            return (false, false);
-        };
-
-        let mut cursor = modifiers.walk();
-        for child in modifiers.children(&mut cursor) {
+        let mut check_child = |child: Node| {
             match child.kind() {
                 "marker_annotation" | "annotation" => {
                     let anno_name = child
@@ -210,6 +205,19 @@ impl<'a> JavaExtractor<'a> {
                 }
                 _ => {}
             }
+        };
+
+        if let Some(modifiers) = Self::get_modifiers(node) {
+            let mut cursor = modifiers.walk();
+            for child in modifiers.children(&mut cursor) {
+                check_child(child);
+            }
+        }
+
+        // Also check direct children of node for annotations (in some grammar variants)
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            check_child(child);
         }
 
         (is_ignored, is_test_annotated)
@@ -252,6 +260,7 @@ impl<'a> JavaExtractor<'a> {
             tautologies: 0,
             ignored: parent_ignored || method_ignored,
             should_panic,
+            ..Default::default()
         };
 
         if let Some(body) = node.child_by_field_name("body") {

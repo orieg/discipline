@@ -1001,6 +1001,7 @@ discipline self-test</div>
             <th>Severity</th>
             <th>Languages</th>
             <th>Rule Description</th>
+            <th>Example / Enforces</th>
           </tr>
         </thead>
         <tbody>
@@ -1011,6 +1012,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it</td>
+            <td>Catches missing AGENTS.md or divergent non-symlinked CLAUDE.md / GEMINI.md</td>
           </tr>
           <tr>
             <td class="gate-id">assertion-reduction</td>
@@ -1018,6 +1020,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby</span></td>
             <td>assertion count / strength must not drop in an existing test</td>
+            <td>Rejects assert_eq!(a, b) replaced by assert!(true) or removed assertions</td>
           </tr>
           <tr>
             <td class="gate-id">vacuous-tests</td>
@@ -1025,6 +1028,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby</span></td>
             <td>new tests must carry a non-tautological assertion</td>
+            <td>Rejects empty test functions or tests without any executable assertions</td>
           </tr>
           <tr>
             <td class="gate-id">ignored-tests</td>
@@ -1032,6 +1036,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby</span></td>
             <td>tests must not be newly #[ignore]d</td>
+            <td>Rejects newly added #[ignore] or @pytest.mark.skip without directive</td>
           </tr>
           <tr>
             <td class="gate-id">unsafe-safety-comment</td>
@@ -1039,6 +1044,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust</span></td>
             <td>unsafe blocks / impls carry a // SAFETY: comment</td>
+            <td>Rejects unsafe blocks or impls lacking a preceding // SAFETY: comment</td>
           </tr>
           <tr>
             <td class="gate-id">deletion-rationale</td>
@@ -1046,6 +1052,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>deleted files and removed tests need a scoped removes: rationale</td>
+            <td>Rejects deleted files or removed tests lacking removes: &lt;path&gt; &lt;reason&gt;</td>
           </tr>
           <tr>
             <td class="gate-id">time-estimates</td>
@@ -1053,6 +1060,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>no calendar / duration estimates in markdown or the PR body</td>
+            <td>Rejects calendar deadlines, sprint projections, and duration estimates</td>
           </tr>
           <tr>
             <td class="gate-id">pii</td>
@@ -1060,6 +1068,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>no home paths, LAN IPs, or denylisted hostnames in tracked text</td>
+            <td>Rejects committed workstation home directories, private LAN IPs, and hostnames</td>
           </tr>
           <tr>
             <td class="gate-id">agent-scratch</td>
@@ -1067,6 +1076,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>agent scratch state is never tracked</td>
+            <td>Rejects committed agent scratch state like .claude/plans/ or scratch/*.tmp</td>
           </tr>
           <tr>
             <td class="gate-id">config-integrity</td>
@@ -1074,6 +1084,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>a change cannot weaken its own discipline.toml without a token</td>
+            <td>Rejects changes disabling gates in discipline.toml without explicit token</td>
           </tr>
           <tr>
             <td class="gate-id">golden-output</td>
@@ -1081,6 +1092,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>prevents stealth edits to committed golden/test output files without explicit override</td>
+            <td>Rejects edits to committed golden/snapshot fixture files without override</td>
           </tr>
           <tr>
             <td class="gate-id">dependency-delta</td>
@@ -1088,6 +1100,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification</td>
+            <td>Rejects unapproved new dependencies, wildcard versions, or unpinned git sources</td>
           </tr>
           <tr>
             <td class="gate-id">test-budget</td>
@@ -1095,6 +1108,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, Go, any</span></td>
             <td>property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)</td>
+            <td>Rejects reductions in proptest cases, shrink iterations, or fuzz durations</td>
           </tr>
           <tr>
             <td class="gate-id">command</td>
@@ -1102,6 +1116,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet</td>
+            <td>Wraps cargo test or custom tools to enforce non-zero exit and test execution</td>
           </tr>
           <tr>
             <td class="gate-id">bench-regression</td>
@@ -1109,6 +1124,7 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Go, Python, C/C++</span></td>
             <td>benchmark drift via harness adapters (deterministic counts or BCa intervals)</td>
+            <td>Detects CPU instruction regressions and non-overlapping BCa confidence intervals</td>
           </tr>
 <!-- /generated -->
         </tbody>
@@ -1382,7 +1398,6 @@ discipline self-test</div>
       <a href="https://orieg.github.io/judy-cache/">Judy Cache PSR-16</a> &bull;
       <a href="https://orieg.github.io/php-judy/">PHP Judy</a> &bull;
       <a href="https://orieg.github.io/judy-polyfill/">Judy Polyfill</a> &bull;
-      <a href="https://orieg.github.io/expanse/">Expanse Engine</a> &bull;
       <a href="https://orieg.github.io/">Nicolas Brousse (Hub)</a>
     </div>
     <p>

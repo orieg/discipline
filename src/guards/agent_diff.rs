@@ -484,7 +484,6 @@ fn analyzed_files(files: &[FileFacts], exempt: &PathFilter) -> usize {
         .count()
 }
 
-/// Parse errors are reported by the first enabled AST gate only.
 pub(crate) fn report_parse_errors(
     files: &[FileFacts],
     severity: crate::config::Severity,
@@ -495,18 +494,54 @@ pub(crate) fn report_parse_errors(
         if exempt.matches(&ff.file.path) {
             continue;
         }
-        if ff.head.as_ref().is_some_and(|h| h.has_parse_errors) {
-            out.push(
-                severity,
-                "Source File Could Not Be Fully Parsed",
-                Some(&ff.file.path),
-                None,
-                "The grammar reported syntax errors, so assertion and unsafe facts for \
-                 this file may be incomplete. A gate that cannot read its input does not pass."
-                    .to_string(),
-                "Fix the syntax error, or list the path under `exempt_paths` for the AST gates \
-                 if it uses syntax the bundled grammar does not know yet.",
-            );
+        if let Some(h) = ff.head.as_ref() {
+            if h.has_parse_errors {
+                let is_c_cpp = matches!(
+                    crate::ast::language_for(&ff.file.path),
+                    Some(crate::ast::Language::C | crate::ast::Language::Cpp)
+                );
+                let sev = if is_c_cpp {
+                    crate::config::Severity::Warning
+                } else {
+                    severity
+                };
+                let err_line = if is_c_cpp {
+                    h.first_parse_error_line.or(Some(1))
+                } else {
+                    h.first_parse_error_line
+                };
+                let (title, msg) = if is_c_cpp {
+                    let line_display = err_line.unwrap_or(1);
+                    out.notes.push(format!(
+                        "file `{}` had {} skipped C/C++ parse error region(s) (first error near line {})",
+                        ff.file.path, h.skipped_error_nodes_count, line_display
+                    ));
+                    (
+                        "C/C++ Preprocessor or Syntax Parse Warning",
+                        format!(
+                            "C/C++ grammar encountered preprocessor macro or syntax errors near line {line_display} ({} skipped AST error region(s)). Surrounding well-formed code was inspected, but some facts may be incomplete.",
+                            h.skipped_error_nodes_count
+                        ),
+                    )
+                } else {
+                    (
+                        "Source File Could Not Be Fully Parsed",
+                        "The grammar reported syntax errors, so assertion and unsafe facts for \
+                         this file may be incomplete. A gate that cannot read its input does not pass."
+                            .to_string(),
+                    )
+                };
+
+                out.push(
+                    sev,
+                    title,
+                    Some(&ff.file.path),
+                    err_line,
+                    msg,
+                    "Fix the syntax error, or list the path under `exempt_paths` for the AST gates \
+                     if it uses syntax the bundled grammar does not know yet.",
+                );
+            }
         }
     }
 }
@@ -572,7 +607,8 @@ pub fn evaluate_assertion_reduction(
         let h_eff = h.effective_asserts();
         let total_drop = h_eff < b_eff;
         let strong_drop = h.strong_asserts < b.strong_asserts;
-        if !(total_drop || strong_drop) {
+        let fatal_drop = h.fatal_asserts < b.fatal_asserts;
+        if !(total_drop || strong_drop || fatal_drop) {
             continue;
         }
 
@@ -617,6 +653,31 @@ pub fn evaluate_assertion_reduction(
         };
         if let Some(record) = allowed {
             out.overrides.push(record);
+            continue;
+        }
+
+        let test_label = if p.forced {
+            format!("Test `{}` -> `{}`", b.name, h.name)
+        } else {
+            format!("Test `{}`", h.name)
+        };
+        let directive_name = if p.forced { leaf_name(b) } else { leaf_name(h) };
+
+        if !total_drop && !strong_drop && fatal_drop {
+            out.push(
+                crate::config::Severity::Warning,
+                "Fatal Assertions Weakened to Non-Fatal",
+                Some(p.path),
+                Some(h.line),
+                format!(
+                    "{test_label}: fatal assertions dropped from {} to {} (weakened from abort-on-failure to non-fatal).",
+                    b.fatal_asserts, h.fatal_asserts
+                ),
+                &format!(
+                    "Restore fatal assertions (e.g. ASSERT_* or require.*), or justify the change in the PR body: `allow-assertion-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
             continue;
         }
 
@@ -788,6 +849,45 @@ pub fn evaluate_ignored_tests(
             ),
         );
     }
+
+    let newly_cond_ignored = pairs
+        .iter()
+        .filter(|p| {
+            p.head.conditional_ignore.is_some()
+                && p.base.conditional_ignore.is_none()
+                && !p.head.ignored
+        })
+        .map(|p| (p.path, p.head))
+        .chain(
+            added
+                .iter()
+                .filter(|a| a.test.conditional_ignore.is_some() && !a.test.ignored)
+                .map(|a| (a.path, a.test)),
+        );
+    for (path, test) in newly_cond_ignored {
+        if exempt.matches(path) {
+            continue;
+        }
+        if let Some(record) =
+            tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
+        {
+            out.overrides.push(record);
+            continue;
+        }
+        let cond = test.conditional_ignore.as_deref().unwrap_or("condition");
+        out.push(
+            crate::config::Severity::Warning,
+            "Test Conditionally Skipped",
+            Some(path),
+            Some(test.line),
+            format!(
+                "Test `{}` is conditionally skipped under predicate `{}`.",
+                test.name, cond
+            ),
+            "Conditional skips are monitored. If this was unintended, remove the conditional ignore attribute.",
+        );
+    }
+
     Ok(out)
 }
 
@@ -939,6 +1039,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let t2 = TestFn {
             name: "test_omega".to_string(),
@@ -948,6 +1049,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let facts = vec![FileFacts {
             file: ChangedFile {
@@ -992,6 +1094,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let b2 = TestFn {
             name: "b2".to_string(),
@@ -1001,6 +1104,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let h1 = TestFn {
             name: "h1".to_string(),
@@ -1010,6 +1114,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let facts = vec![FileFacts {
             file: ChangedFile {
@@ -1055,6 +1160,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let h_weak = TestFn {
             name: "test_something".to_string(),
@@ -1064,6 +1170,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let h_drop = TestFn {
             name: "test_something".to_string(),
@@ -1073,6 +1180,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let settings = crate::config::AssertionGate::default();
 
@@ -1133,6 +1241,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let t_tautology = TestFn {
             name: "tauto".to_string(),
@@ -1142,6 +1251,7 @@ mod tests {
             tautologies: 1,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let t_real = TestFn {
             name: "real".to_string(),
@@ -1151,6 +1261,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
 
         let loc_empty = [Located {
@@ -1195,6 +1306,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let h_ignored = TestFn {
             name: "active".to_string(),
@@ -1204,6 +1316,7 @@ mod tests {
             tautologies: 0,
             ignored: true,
             should_panic: false,
+            ..Default::default()
         };
 
         let pairs = [TestPair {
@@ -1324,6 +1437,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             should_panic: false,
+            ..Default::default()
         };
         let removed_tests = [Located {
             path: "tests/suite.rs",

@@ -153,6 +153,13 @@ flowchart TD
     REG_CALL --> FACTS
 ```
 
+### 2.4 Binary Footprint & Static Linking Profiles
+
+Discipline compiles to a standalone static binary with zero external runtime dependencies:
+- **Full Static Binary (Linux musl `x86_64` / `aarch64`):** ~22.3 MB. Statically links `libgit2` (vendored, offline) and all 11 `tree-sitter` language grammars (Rust, Python, JavaScript, TypeScript, Go, Java, C#, C, C++, Ruby, PHP). Runs in scratch containers or minimal CI runners without glibc, openssl, or package managers.
+- **Slim Distribution Profile:** ~8.3 MB when compiled with core language grammars (Rust, Python, JavaScript/TypeScript).
+- **macOS Native (`apple-darwin`):** Statically linked Mach-O binary optimized for local developer inner loops and git hooks.
+
 ---
 
 ## 3. The Fail-Closed Contract
@@ -161,17 +168,17 @@ Every gate in Discipline must satisfy the following 12 load-bearing invariant ru
 
 | Invariant | Requirement | Incident Origin / Justification |
 |---|---|---|
-| **F1** | **Three exit states.** `0` = pass, `1` = violations found, `2` = gate could not check. A defective gate or broken environment is never mistaken for a valid change. | Expanse canaries that passed when build scripts failed. |
+| **F1** | **Three exit states.** `0` = pass, `1` = violations found, `2` = gate could not check. A defective gate or broken environment is never mistaken for a valid change. | CI canaries that passed when underlying build scripts failed. |
 | **F2** | **Three-state inputs.** Found / none / could-not-determine. An unresolvable base ref, shallow clone lacking merge base, missing repository, or unreadable file exits `2`. Never an empty diff. | Initial scaffold probe reporting clean zero on invalid refs. |
 | **F3** | **Merge-base diffs with rename detection.** Diff measured from `merge-base(base, HEAD)`; moved files are tracked as modifications, not deletions. | Deletion gate false positives on renamed test suites. |
-| **F4** | **No vacuous pass.** Every report prints the exact `examined` count per gate. A suite with zero available gates or an empty tracked tree is an error. | Expanse "0 of 52 files scanned, exit 0". |
+| **F4** | **No vacuous pass.** Every report prints the exact `examined` count per gate. A suite with zero available gates or an empty tracked tree is an error. | Silent fail-open when zero files were scanned ("0 of 52 files scanned, exit 0"). |
 | **F5** | **Planned is not passed.** A gate not shipped in the binary cannot be enabled or configured (exit `2`). Every report lists planned gates under "not checked". | Scaffold config accepting and ignoring planned flags. |
 | **F6** | **Strict configuration.** Unknown keys, unknown gates, invalid regexes, malformed globs, unsupported schema versions, and contradictory switches (`enable` + `disable`) are errors. | Typo'd TOML keys accepted silently. |
-| **F7** | **Named degradation.** When a gate cannot inspect a file (unanalysed language pack, file exceeding size limits, unreadable base config), it explicitly names the file in the report. | Expanse `perf_report.py` "NO BASELINE". |
-| **F8** | **A gate is not satisfied by prose about the gate.** Directives are strictly line-anchored; mentions in tables, sentences, or code blocks never arm an override. | Expanse incident where a table describing a token waived all checks. |
-| **F9** | **A change cannot lower its own bar.** Configuration on head is diffed against base ref; loosening requires an explicit `allow-gate-weakening:` directive. | Expanse threshold constants edited in the diff that violated them. |
+| **F7** | **Named degradation.** When a gate cannot inspect a file (unanalysed language pack, file exceeding size limits, unreadable base config), it explicitly names the file in the report. | Benchmark script silently passing on "NO BASELINE". |
+| **F8** | **A gate is not satisfied by prose about the gate.** Directives are strictly line-anchored; mentions in tables, sentences, or code blocks never arm an override. | Incident where a Markdown table describing a token accidentally waived all checks. |
+| **F9** | **A change cannot lower its own bar.** Configuration on head is diffed against base ref; loosening requires an explicit `allow-gate-weakening:` directive. | Threshold constants edited in the diff that violated them. |
 | **F10** | **Secrets are not echoed.** Denylisted hostnames, local user workstation paths, and PII patterns are reported by file location only, never printed. | Hostname denylists echoed in public CI logs. |
-| **F11** | **Untrusted text never reaches a shell parser.** All action inputs pass through `env:`, never inline `${{ }}` interpolation. | Expanse inline shell injection in workflow expressions. |
+| **F11** | **Untrusted text never reaches a shell parser.** All action inputs pass through `env:`, never inline `${{ }}` interpolation. | Inline shell injection vulnerabilities in workflow expressions. |
 | **F12** | **The installer verifies what it runs.** Actions download release archives and verify them against `SHA256SUMS` with no opt-out; no fallbacks to unverified compilation. | Scaffold download failure falling back to unverified local build. |
 
 ---

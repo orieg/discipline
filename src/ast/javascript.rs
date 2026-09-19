@@ -256,6 +256,7 @@ impl<'a> JsExtractor<'a> {
                         tautologies: 0,
                         ignored: parent_ignored || is_ignored || is_todo,
                         should_panic: false,
+                        ..Default::default()
                     };
 
                     if let Some(args) = node.child_by_field_name("arguments") {

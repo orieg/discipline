@@ -46,12 +46,23 @@ impl LanguagePack for RustPack {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
             },
+            helpers: std::collections::HashMap::new(),
+            test_calls: Vec::new(),
         };
         cx.collect_comments(root);
         cx.visit(root, &mut Vec::new());
+        cx.resolve_same_file_helpers();
         cx.facts.build_compile_time_test();
         Ok(cx.facts)
     }
+}
+
+#[derive(Default, Clone)]
+struct HelperFacts {
+    total_asserts: usize,
+    strong_asserts: usize,
+    tautologies: usize,
+    fatal_asserts: usize,
 }
 
 struct Comment {
@@ -73,6 +84,8 @@ struct Extractor<'a> {
     in_const: usize,
     in_test: usize,
     facts: ParsedFileFacts,
+    helpers: std::collections::HashMap<String, HelperFacts>,
+    test_calls: Vec<Vec<String>>,
 }
 
 impl<'a> Extractor<'a> {
@@ -114,10 +127,38 @@ impl<'a> Extractor<'a> {
                 return;
             }
             "function_item" => {
-                let test_opt = self.test_fn(node, mods);
+                let mut direct_calls = Vec::new();
+                let test_opt = self.test_fn(node, mods, &mut direct_calls);
                 let is_test = test_opt.is_some();
                 if let Some(test) = test_opt {
                     self.facts.tests.push(test);
+                    self.test_calls.push(direct_calls);
+                } else if let Some(name_node) = node.child_by_field_name("name") {
+                    let fn_name = self.text(name_node).to_string();
+                    let mut helper_test = TestFn::default();
+                    let is_fallible_return = node
+                        .child_by_field_name("return_type")
+                        .map(|rt| {
+                            let text = self.text(rt);
+                            text.contains("Result") || text.contains("Option")
+                        })
+                        .unwrap_or(false);
+                    let mut dummy_calls = Vec::new();
+                    if let Some(body) = node.child_by_field_name("body") {
+                        self.count_asserts(
+                            body,
+                            &mut helper_test,
+                            is_fallible_return,
+                            &mut dummy_calls,
+                        );
+                    }
+                    let facts = HelperFacts {
+                        total_asserts: helper_test.total_asserts,
+                        strong_asserts: helper_test.strong_asserts,
+                        tautologies: helper_test.tautologies,
+                        fatal_asserts: helper_test.fatal_asserts,
+                    };
+                    self.helpers.insert(fn_name, facts);
                 }
                 self.in_fn += 1;
                 if is_test {
@@ -168,6 +209,16 @@ impl<'a> Extractor<'a> {
                 if node.children(&mut cursor).any(|c| c.kind() == "unsafe") {
                     self.unsafe_site(node, "unsafe impl");
                 }
+                self.visit_children(node, mods);
+                return;
+            }
+            "trait_item" => {
+                let mut cursor = node.walk();
+                if node.children(&mut cursor).any(|c| c.kind() == "unsafe") {
+                    self.unsafe_site(node, "unsafe trait");
+                }
+                self.visit_children(node, mods);
+                return;
             }
             _ => {}
         }
@@ -181,9 +232,33 @@ impl<'a> Extractor<'a> {
         }
     }
 
-    fn test_fn(&self, node: Node, mods: &[String]) -> Option<TestFn> {
+    fn resolve_same_file_helpers(&mut self) {
+        for (i, test) in self.facts.tests.iter_mut().enumerate() {
+            if let Some(calls) = self.test_calls.get(i) {
+                for call in calls {
+                    if let Some(h) = self.helpers.get(call) {
+                        if self.vocab.helper_fns.iter().any(|name| name == call) {
+                            test.total_asserts = test.total_asserts.saturating_sub(1);
+                        }
+                        test.total_asserts += h.total_asserts;
+                        test.strong_asserts += h.strong_asserts;
+                        test.tautologies += h.tautologies;
+                        test.fatal_asserts += h.fatal_asserts;
+                    }
+                }
+            }
+        }
+    }
+
+    fn test_fn(
+        &self,
+        node: Node,
+        mods: &[String],
+        direct_calls: &mut Vec<String>,
+    ) -> Option<TestFn> {
         let mut is_test = false;
         let mut ignored = false;
+        let mut conditional_ignore = None;
         let mut should_panic = false;
         let mut has_commented_out_test = false;
         let mut prev = node.prev_sibling();
@@ -200,8 +275,25 @@ impl<'a> Extractor<'a> {
                     };
                     check_attr(&name);
                     if name == "cfg_attr" {
-                        for sub in parse_cfg_attr_sub_attributes(text) {
-                            check_attr(&attribute_name(&sub));
+                        if let Some((cond, subs)) = parse_cfg_attr(text) {
+                            for sub in subs {
+                                let sub_name = attribute_name(&sub);
+                                if matches!(
+                                    sub_name.as_str(),
+                                    "test" | "rstest" | "test_case" | "quickcheck"
+                                ) {
+                                    is_test = true;
+                                } else if sub_name == "ignore" {
+                                    let norm = cond.replace(' ', "");
+                                    if norm == "all()" || norm == "test" {
+                                        ignored = true;
+                                    } else {
+                                        conditional_ignore = Some(cond.clone());
+                                    }
+                                } else if sub_name == "should_panic" {
+                                    should_panic = true;
+                                }
+                            }
                         }
                     }
                     if name == "cfg" && is_cfg_test_suppression(text) {
@@ -242,6 +334,8 @@ impl<'a> Extractor<'a> {
             strong_asserts: 0,
             tautologies: 0,
             ignored,
+            conditional_ignore,
+            fatal_asserts: 0,
             should_panic,
         };
         let is_fallible_return = node
@@ -252,12 +346,18 @@ impl<'a> Extractor<'a> {
             })
             .unwrap_or(false);
         if let Some(body) = node.child_by_field_name("body") {
-            self.count_asserts(body, &mut test, is_fallible_return);
+            self.count_asserts(body, &mut test, is_fallible_return, direct_calls);
         }
         Some(test)
     }
 
-    fn count_asserts(&self, node: Node, test: &mut TestFn, is_fallible_return: bool) {
+    fn count_asserts(
+        &self,
+        node: Node,
+        test: &mut TestFn,
+        is_fallible_return: bool,
+        direct_calls: &mut Vec<String>,
+    ) {
         match node.kind() {
             "function_item" => {
                 // Do not recurse into nested function items.
@@ -298,6 +398,7 @@ impl<'a> Extractor<'a> {
                         }
                     }
                     let name = last_segment(self.text(f));
+                    direct_calls.push(name.to_string());
                     if self.vocab.helper_fns.iter().any(|h| h == name) {
                         test.total_asserts += 1;
                     }
@@ -307,7 +408,7 @@ impl<'a> Extractor<'a> {
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.count_asserts(child, test, is_fallible_return);
+            self.count_asserts(child, test, is_fallible_return, direct_calls);
         }
     }
 
@@ -533,14 +634,10 @@ fn is_commented_out_test(comment_text: &str) -> bool {
     false
 }
 
-fn parse_cfg_attr_sub_attributes(attr_text: &str) -> Vec<String> {
-    let Some(start) = attr_text.find("cfg_attr") else {
-        return Vec::new();
-    };
+fn parse_cfg_attr(attr_text: &str) -> Option<(String, Vec<String>)> {
+    let start = attr_text.find("cfg_attr")?;
     let rest = &attr_text[start + "cfg_attr".len()..];
-    let Some(open_paren) = rest.find('(') else {
-        return Vec::new();
-    };
+    let open_paren = rest.find('(')?;
     let inside = &rest[open_paren + 1..];
 
     // Find first comma at paren depth 0 (relative to inside)
@@ -563,9 +660,8 @@ fn parse_cfg_attr_sub_attributes(attr_text: &str) -> Vec<String> {
         }
     }
 
-    let Some(comma_pos) = condition_end else {
-        return Vec::new();
-    };
+    let comma_pos = condition_end?;
+    let condition = inside[..comma_pos].trim().to_string();
 
     let sub_attrs_text = &inside[comma_pos + 1..];
     let mut sub_attrs = Vec::new();
@@ -599,7 +695,7 @@ fn parse_cfg_attr_sub_attributes(attr_text: &str) -> Vec<String> {
         sub_attrs.push(trimmed.to_string());
     }
 
-    sub_attrs
+    Some((condition, sub_attrs))
 }
 
 fn attribute_name(attr_text: &str) -> String {
@@ -1147,5 +1243,78 @@ fn normal_test() {
         assert_eq!(ctt.total_asserts, 5);
         assert_eq!(ctt.strong_asserts, 5);
         assert_eq!(facts.tests.len(), 1);
+    }
+
+    #[test]
+    fn cfg_attr_miri_ignore_is_conditional_not_unconditional() {
+        let src = r#"
+#[test]
+#[cfg_attr(miri, ignore)]
+fn test_miri_skipped() {
+    assert_eq!(1, 1);
+}
+
+#[test]
+#[cfg_attr(all(), ignore)]
+fn test_unconditional_skipped() {
+    assert_eq!(1, 1);
+}
+"#;
+        let pack = RustPack;
+        let facts = pack
+            .extract("tests/cfg_attr.rs", src, &AssertVocabulary::default())
+            .unwrap();
+
+        let miri_test = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_miri_skipped")
+            .unwrap();
+        assert!(
+            !miri_test.ignored,
+            "miri test must NOT be unconditionally ignored"
+        );
+        assert_eq!(miri_test.conditional_ignore.as_deref(), Some("miri"));
+
+        let unspec_test = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_unconditional_skipped")
+            .unwrap();
+        assert!(
+            unspec_test.ignored,
+            "all() condition must be unconditionally ignored"
+        );
+    }
+
+    #[test]
+    fn same_file_helper_functions_are_resolved_for_tests() {
+        let src = r#"
+fn assert_roundtrip(x: i32) {
+    assert_eq!(x, x);
+    assert_ne!(x, x + 1);
+}
+
+#[test]
+fn test_via_helper() {
+    assert_roundtrip(42);
+}
+"#;
+        let pack = RustPack;
+        let facts = pack
+            .extract("tests/helper.rs", src, &AssertVocabulary::default())
+            .unwrap();
+
+        let test = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_via_helper")
+            .unwrap();
+        assert!(
+            !test.is_vacuous(),
+            "test calling helper must not be vacuous"
+        );
+        assert_eq!(test.total_asserts, 2);
+        assert_eq!(test.strong_asserts, 2);
     }
 }

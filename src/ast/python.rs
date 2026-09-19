@@ -330,6 +330,7 @@ impl<'a> PythonExtractor<'a> {
             tautologies: 0,
             ignored,
             should_panic: false,
+            ..Default::default()
         };
 
         if let Some(body) = node.child_by_field_name("body") {
