@@ -43,27 +43,44 @@ pub struct GitCtx {
 /// 5. GitLab Default Branch: `CI_DEFAULT_BRANCH` (`origin/<branch>`)
 /// 6. Default fallback: `"origin/main"`
 pub fn detect_base_ref(explicit_base: Option<&str>) -> String {
+    detect_base_ref_with_env(explicit_base, |k| std::env::var(k).ok())
+}
+
+pub fn detect_base_ref_with_env<F>(explicit_base: Option<&str>, get_env: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
     if let Some(b) = explicit_base.filter(|s| !s.trim().is_empty()) {
         return b.to_string();
     }
-    if let Ok(b) = std::env::var("DISCIPLINE_BASE_REF") {
+    if let Some(b) = get_env("DISCIPLINE_BASE_REF") {
         if !b.trim().is_empty() {
             return b.trim().to_string();
         }
     }
-    if let Ok(target_branch) = std::env::var("CI_MERGE_REQUEST_TARGET_BRANCH_NAME") {
+    if let Some(target_branch) = get_env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME") {
         if !target_branch.trim().is_empty() {
-            return format!("origin/{}", target_branch.trim());
+            let trimmed = target_branch.trim();
+            if trimmed.starts_with("origin/") {
+                return trimmed.to_string();
+            } else {
+                return format!("origin/{}", trimmed);
+            }
         }
     }
-    if let Ok(diff_base) = std::env::var("CI_MERGE_REQUEST_DIFF_BASE_SHA") {
+    if let Some(diff_base) = get_env("CI_MERGE_REQUEST_DIFF_BASE_SHA") {
         if !diff_base.trim().is_empty() {
             return diff_base.trim().to_string();
         }
     }
-    if let Ok(default_branch) = std::env::var("CI_DEFAULT_BRANCH") {
+    if let Some(default_branch) = get_env("CI_DEFAULT_BRANCH") {
         if !default_branch.trim().is_empty() {
-            return format!("origin/{}", default_branch.trim());
+            let trimmed = default_branch.trim();
+            if trimmed.starts_with("origin/") {
+                return trimmed.to_string();
+            } else {
+                return format!("origin/{}", trimmed);
+            }
         }
     }
     "origin/main".to_string()
@@ -472,38 +489,68 @@ mod tests {
 
     #[test]
     fn test_detect_base_ref_explicit() {
-        assert_eq!(detect_base_ref(Some("my-branch")), "my-branch");
+        assert_eq!(
+            detect_base_ref_with_env(Some("my-branch"), |_| None),
+            "my-branch"
+        );
+    }
+
+    #[test]
+    fn test_detect_base_ref_discipline_base_ref() {
+        let lookup = |k: &str| {
+            if k == "DISCIPLINE_BASE_REF" {
+                Some("upstream/dev".to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(detect_base_ref_with_env(None, lookup), "upstream/dev");
     }
 
     #[test]
     fn test_detect_base_ref_gitlab_target_branch() {
-        std::env::set_var("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "feature/pr-123");
-        assert_eq!(detect_base_ref(None), "origin/feature/pr-123");
-        std::env::remove_var("CI_MERGE_REQUEST_TARGET_BRANCH_NAME");
+        let lookup = |k: &str| {
+            if k == "CI_MERGE_REQUEST_TARGET_BRANCH_NAME" {
+                Some("feature/pr-123".to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            detect_base_ref_with_env(None, lookup),
+            "origin/feature/pr-123"
+        );
     }
 
     #[test]
     fn test_detect_base_ref_gitlab_diff_base_sha() {
-        std::env::set_var(
-            "CI_MERGE_REQUEST_DIFF_BASE_SHA",
-            "1234567890abcdef1234567890abcdef12345678",
-        );
+        let lookup = |k: &str| {
+            if k == "CI_MERGE_REQUEST_DIFF_BASE_SHA" {
+                Some("1234567890abcdef1234567890abcdef12345678".to_string())
+            } else {
+                None
+            }
+        };
         assert_eq!(
-            detect_base_ref(None),
+            detect_base_ref_with_env(None, lookup),
             "1234567890abcdef1234567890abcdef12345678"
         );
-        std::env::remove_var("CI_MERGE_REQUEST_DIFF_BASE_SHA");
     }
 
     #[test]
     fn test_detect_base_ref_gitlab_default_branch() {
-        std::env::set_var("CI_DEFAULT_BRANCH", "master");
-        assert_eq!(detect_base_ref(None), "origin/master");
-        std::env::remove_var("CI_DEFAULT_BRANCH");
+        let lookup = |k: &str| {
+            if k == "CI_DEFAULT_BRANCH" {
+                Some("master".to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(detect_base_ref_with_env(None, lookup), "origin/master");
     }
 
     #[test]
     fn test_detect_base_ref_fallback() {
-        assert_eq!(detect_base_ref(None), "origin/main");
+        assert_eq!(detect_base_ref_with_env(None, |_| None), "origin/main");
     }
 }
