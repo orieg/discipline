@@ -8,6 +8,8 @@ use anyhow::Result;
 
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
 pub mod c_cpp;
+#[cfg(feature = "lang-csharp")]
+pub mod csharp;
 #[cfg(feature = "lang-go")]
 pub mod r#go;
 #[cfg(feature = "lang-golden")]
@@ -95,6 +97,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(c_cpp::CPack));
     #[cfg(feature = "lang-cpp")]
     reg.register(Box::new(c_cpp::CppPack));
+    #[cfg(feature = "lang-csharp")]
+    reg.register(Box::new(csharp::CSharpPack));
     reg
 }
 
@@ -110,6 +114,7 @@ pub enum Language {
     Php,
     C,
     Cpp,
+    CSharp,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
@@ -130,6 +135,7 @@ pub fn language_for(path: &str) -> Option<Language> {
         "php" | "phtml" | "inc" => Some(Language::Php),
         "c" | "h" => Some(Language::C),
         "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Language::Cpp),
+        "cs" => Some(Language::CSharp),
         _ => None,
     }
 }
@@ -288,6 +294,7 @@ mod tests {
         assert_eq!(language_for("src/a.php"), Some(Language::Php));
         assert_eq!(language_for("src/a.c"), Some(Language::C));
         assert_eq!(language_for("src/a.cpp"), Some(Language::Cpp));
+        assert_eq!(language_for("src/a.cs"), Some(Language::CSharp));
         assert!(!is_unsupported_source("pkg/mod/a.py"));
         assert!(!is_unsupported_source("web/App.tsx"));
         assert!(!is_unsupported_source("service.java"));
@@ -295,6 +302,7 @@ mod tests {
         assert!(!is_unsupported_source("src/a.php"));
         assert!(!is_unsupported_source("src/a.c"));
         assert!(!is_unsupported_source("src/a.cpp"));
+        assert!(!is_unsupported_source("src/a.cs"));
         assert!(is_unsupported_source("service.kt"));
         assert!(is_unsupported_source("service.rb"));
         assert!(!is_unsupported_source("src/a.rs"));
@@ -360,6 +368,13 @@ mod tests {
             let cpp_pack = reg.find_pack("test.cpp").expect("cpp pack found");
             assert_eq!(cpp_pack.id(), "cpp");
             assert_eq!(cpp_pack.name(), "C++");
+        }
+        #[cfg(feature = "lang-csharp")]
+        {
+            assert!(reg.is_supported("bindings/dotnet/tests/Expanse.NET.Tests/ExpanseMapTests.cs"));
+            let csharp_pack = reg.find_pack("test.cs").expect("csharp pack found");
+            assert_eq!(csharp_pack.id(), "csharp");
+            assert_eq!(csharp_pack.name(), "C#");
         }
     }
 

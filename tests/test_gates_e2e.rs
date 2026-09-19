@@ -125,10 +125,10 @@ fn unanalysed_languages_are_named_not_silently_passed() {
 #[test]
 fn unsupported_source_files_group_by_extension() {
     let repo = Repo::new();
-    repo.write("ext/judy.cs", "class Foo {}\n");
+    repo.write("ext/judy.scala", "class Foo {}\n");
     repo.write("ext/judy.swift", "class Bar {}\n");
     repo.write("tests/001.rb", "def test_foo; end\n");
-    repo.commit("feat: csharp, swift, and ruby");
+    repo.commit("feat: scala, swift, and ruby");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0);
     for gate in [
@@ -140,7 +140,7 @@ fn unsupported_source_files_group_by_extension() {
         let notes = run.outcome(gate)["notes"].to_string();
         assert!(
             notes.contains("3 changed source file(s)")
-                && notes.contains("1 .cs, 1 .rb, 1 .swift")
+                && notes.contains("1 .rb, 1 .scala, 1 .swift")
                 && notes.contains("NOT analysed"),
             "gate {gate} should format extension breakdown: {notes}"
         );
@@ -228,6 +228,25 @@ fn c_cpp_source_files_are_analysed_by_c_cpp_pack() {
         assert!(
             !notes.contains("NOT analysed"),
             "gate {gate} should analyse c/cpp files: {notes}"
+        );
+    }
+}
+
+#[test]
+fn csharp_source_files_are_analysed_by_csharp_pack() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/ExpanseMapTests.cs",
+        "using Xunit;\npublic class ExpanseMapTests {\n    [Fact]\n    public void BasicCrud() { int val = 42; Assert.Equal(42, val); }\n}\n",
+    );
+    repo.commit("feat: csharp tests");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for gate in ["assertion-reduction", "vacuous-tests", "ignored-tests"] {
+        let notes = run.outcome(gate)["notes"].to_string();
+        assert!(
+            !notes.contains("NOT analysed"),
+            "gate {gate} should analyse csharp files: {notes}"
         );
     }
 }
@@ -3221,6 +3240,91 @@ TEST(SkipSuite, DISABLED_Skipped) {
         &[(
             "PR_BODY",
             "allow-ignore: SkipSuite::DISABLED_Skipped skipped for refactoring",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("ignored-tests");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn csharp_assertion_reduction_and_vacuous_tests_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_cs = r#"
+using Xunit;
+public class CalcTests {
+    [Fact]
+    public void TestCalc() {
+        Assert.Equal(2, 1 + 1);
+        Assert.Equal(4, 2 + 2);
+    }
+}
+"#;
+    repo.write("tests/CalcTests.cs", base_cs);
+    repo.commit("feat: initial csharp test");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Weaken assertions: 2 assertions reduced to 1
+    let weaker_cs = r#"
+using Xunit;
+public class CalcTests {
+    [Fact]
+    public void TestCalc() {
+        Assert.Equal(2, 1 + 1);
+    }
+}
+"#;
+    repo.write("tests/CalcTests.cs", weaker_cs);
+    repo.commit("test: weaken assertions in csharp");
+
+    let run_weak = repo.check(&[]);
+    assert_eq!(run_weak.code, 1);
+    let outcome_weak = run_weak.outcome("assertion-reduction");
+    assert_eq!(outcome_weak["violations"].as_array().unwrap().len(), 1);
+
+    // Vacuous test addition
+    let repo2 = Repo::new();
+    repo2.write(
+        "tests/EmptyTests.cs",
+        "using Xunit;\npublic class EmptyTests {\n    [Fact]\n    public void Empty() {}\n}\n",
+    );
+    repo2.commit("test: add empty csharp test");
+    let run_vac = repo2.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let outcome_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn csharp_skipped_tests_detected_and_accepts_override() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/SkipTests.cs",
+        r#"
+using Xunit;
+public class SkipTests {
+    [Fact(Skip = "temporary skip")]
+    public void SkippedTest() {
+        Assert.Equal(2, 1 + 1);
+    }
+}
+"#,
+    );
+    repo.commit("test: add skipped csharp test");
+
+    let run_skip = repo.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let outcome_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(outcome_skip["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: SkippedTest skipped for refactoring",
         )],
     );
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);

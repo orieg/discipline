@@ -28,6 +28,7 @@ tree-sitter-go = { version = "0.25", optional = true }
 tree-sitter-php = { version = "0.24", optional = true }
 tree-sitter-c = { version = "0.24", optional = true }
 tree-sitter-cpp = { version = "0.23", optional = true }
+tree-sitter-c-sharp = { version = "0.23", optional = true }
 # No network features: discipline only reads the local object database, and
 # dropping `https` keeps openssl out of the static musl build.
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
@@ -45,6 +46,7 @@ default = [
     "lang-php",
     "lang-c",
     "lang-cpp",
+    "lang-csharp",
 ]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-golden = []
@@ -55,6 +57,7 @@ lang-go = ["dep:tree-sitter-go"]
 lang-php = ["dep:tree-sitter-php"]
 lang-c = ["dep:tree-sitter-c"]
 lang-cpp = ["dep:tree-sitter-cpp"]
+lang-csharp = ["dep:tree-sitter-c-sharp"]
 
 [dev-dependencies]
 tempfile = "3.10"

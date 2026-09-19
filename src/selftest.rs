@@ -673,6 +673,38 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 2)
         },
     ),
+    #[cfg(feature = "lang-csharp")]
+    (
+        "csharp: xUnit extraction catches assertions, vacuous tests, and Fact(Skip = ...)",
+        || {
+            use crate::ast::LanguagePack;
+            let cs_pack = crate::ast::csharp::CSharpPack;
+            let vocab = AssertVocabulary::default();
+            let src = "public class CalcTests {\n    [Fact]\n    public void TestOne() { Assert.Equal(1, 2); }\n    [Fact]\n    public void TestTwo() { Assert.True(true); }\n    [Fact(Skip = \"not ready\")]\n    public void TestThree() { Assert.Equal(1, 2); }\n}\n";
+            let facts = cs_pack.extract("tests/CalcTests.cs", src, &vocab)?;
+            Ok(facts.tests.len() == 3
+                && facts.tests[0].total_asserts == 1
+                && !facts.tests[0].is_vacuous()
+                && facts.tests[1].is_vacuous()
+                && facts.tests[2].ignored)
+        },
+    ),
+    #[cfg(feature = "lang-csharp")]
+    (
+        "csharp: Assert.Equal vs Assert.True assertion weakening is detected",
+        || {
+            use crate::ast::LanguagePack;
+            let cs_pack = crate::ast::csharp::CSharpPack;
+            let vocab = AssertVocabulary::default();
+            let strong_src = "public class T {\n    [Fact]\n    public void TestA() { Assert.Equal(a, b); Assert.NotEqual(c, d); }\n}\n";
+            let weak_src = "public class T {\n    [Fact]\n    public void TestA() { Assert.True(x); Assert.True(y); }\n}\n";
+            let strong_facts = cs_pack.extract("tests/T.cs", strong_src, &vocab)?;
+            let weak_facts = cs_pack.extract("tests/T.cs", weak_src, &vocab)?;
+            Ok(strong_facts.tests[0].strong_asserts == 2
+                && weak_facts.tests[0].strong_asserts == 0
+                && weak_facts.tests[0].total_asserts == 2)
+        },
+    ),
     (
         "bench: callgrind and criterion benchmark parsing and delta calculation discriminate",
         || {
