@@ -1015,6 +1015,13 @@ discipline self-test</div>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>Prevents pull requests from silently disabling gates or loosening configuration in <code>discipline.toml</code>.</td>
           </tr>
+          <tr>
+            <td class="gate-id">bench-regression</td>
+            <td>Performance</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust, C/C++, Go, Python</span></td>
+            <td>Guards against micro-benchmark regressions using conservative confidence intervals and exact instruction counts.</td>
+          </tr>
         </tbody>
       </table>
     </div>

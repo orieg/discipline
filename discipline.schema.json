@@ -41,6 +41,10 @@
     "BenchRegressionGate": {
       "additionalProperties": false,
       "properties": {
+        "allow_cross_host": {
+          "description": "Allow benchmark comparison across mismatched host/runner provenance",
+          "type": "boolean"
+        },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"
@@ -50,6 +54,10 @@
         },
         "paths": {
           "$ref": "#/$defs/StringListOrReset"
+        },
+        "provenance": {
+          "description": "Expected host/runner provenance tag for benchmark artifacts",
+          "type": "string"
         },
         "severity": {
           "$ref": "#/$defs/Severity"
@@ -296,6 +304,14 @@
             }
           ],
           "description": "assertion count / strength must not drop in an existing test"
+        },
+        "bench-regression": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BenchRegressionGate"
+            }
+          ],
+          "description": "benchmark drift via harness adapters (deterministic counts or BCa intervals)"
         },
         "config-integrity": {
           "allOf": [

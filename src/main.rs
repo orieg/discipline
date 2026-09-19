@@ -40,6 +40,8 @@ fn run() -> Result<bool> {
             report_gitlab: args.report_gitlab,
             report_junit: args.report_junit,
             report_sarif: args.report_sarif,
+            bench_provenance: None,
+            allow_cross_host_bench: false,
         }),
         Commands::Init(args) => init(args.name),
         Commands::Gates(args) => gates(&args.config),
@@ -163,6 +165,8 @@ fn check(args: CheckArgs) -> Result<bool> {
         pr_body,
         directives,
         directive_notes,
+        bench_provenance: args.bench_provenance.clone(),
+        allow_cross_host_bench: args.allow_cross_host_bench,
     };
     let summary = run_checks(&config, args.suite, &ctx)?;
     let fail_on_overrides = config.directives.fail_on_overrides;

@@ -109,7 +109,7 @@ Every escape hatch uses one parser (`src/tokens.rs`) and one grammar.
 | `allow-ignore:` | `ignored-tests` | test fn |
 | `allow-gate-weakening:` | `config-integrity` | gate id |
 | `allow-golden-update:` | `golden-output` | golden/snapshot path or directory prefix |
-| `allow-regression:` (planned) | `bench-regression` | benchmark arm, name, or file stem, plus a non-empty rationale |
+| `allow-regression:` | `bench-regression` | benchmark arm, name, or file stem, plus a non-empty rationale |
 | `allow-test-shrink:` (planned) | `test-floor` | — |
 
 Directives may also use the uniform HTML comment syntax: `<!-- discipline:allow(<gate-id>): <subject> <reason> -->` (or without colon).
@@ -394,17 +394,17 @@ Rules every command gate inherits from expanse:
 
 ### Pillar 5 — Benchmark drift (`bench`)
 
-Planned: `bench-regression`. The benchmark drift sentinel is planned pending mathematical bounds derivation and formal statistical decision rules (§11; PRD §6 Pillar 5). Harness support will use adapters turning tool outputs into conservative confidence intervals and exact deterministic counters.
+Implemented: `bench-regression` (`available: true`). The benchmark drift sentinel enforces mathematical bounds and formal statistical decision rules (§11; PRD §6 Pillar 5; Vershynin 2018 §2; Brook 2014; Wilson 1927). It parses continuous and discrete benchmark formats across Rust, C/C++, Go, and Python.
 
-| Measurement | Where it is valid | Planned Adapters |
+| Measurement | Where it is valid | Adapters |
 |---|---|---|
 | **Deterministic counts** (instructions, allocations, fuel) — compared exactly against merge base | Ahead-of-time compiled native code (Rust, C, C++, Wasm fuel). Zero-variance native baseline. | `iai-callgrind`, raw `callgrind`, Wasm fuel |
 | **Wall-clock samples** — gated on BCa bootstrap intervals or ratio intervals | Everywhere, provided harness exports per-iteration samples or estimates with confidence intervals | `criterion` (Rust), `google-benchmark` (C / C++), `go test -bench` (Go), `pytest-benchmark` (Python) |
 
-Rules (PRD requirements before re-enabling):
-- Evaluated on conservative confidence interval bounds, never bare point estimates.
-- Matching host and runner provenance required for wall-clock comparisons.
-- Fail-closed on missing baselines, deletions, or malformed artifacts; `removes:` does not lift benchmark deletions without `allow-regression:`.
+Rules and Invariants (tested via audit fixtures in `tests/test_gates_e2e.rs`):
+- Evaluated on conservative confidence interval bounds ($\Delta_{min} = \frac{L_{head} - U_{base}}{U_{base}} \times 100\%$), never bare point estimates. If intervals overlap, $\Delta_{min} \le 0\%$, proving no statistically verified regression.
+- Matching host and runner provenance required for wall-clock comparisons (`--bench-provenance`, `--allow-cross-host-bench`).
+- Fail-closed on missing baselines (exit 2), unparseable/garbage artifacts (exit 2), deleted artifacts without scoped directive (exit 1), or new/renamed benchmarks without baseline (exit 1); generic `removes:` does not lift benchmark deletions without `allow-regression:`.
 
 
 ---

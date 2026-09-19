@@ -2347,80 +2347,363 @@ fn f6_golden_pack_depth_e2e() {
 #[test]
 fn bench_regression_tracks_callgrind_instructions_and_accepts_override() {
     let repo = Repo::new();
-    let gates = repo.run(&["gates"], &[]);
-    assert_eq!(gates.code, 0);
-    assert!(gates
-        .stdout
-        .lines()
-        .any(|l| l.starts_with("bench-regression ") && l.contains("planned")));
-    let run = repo.check(&["--suite", "bench"]);
-    assert_eq!(run.code, 2);
-    assert_eq!(run.code, 2);
-    assert_eq!(run.code, 2);
-    assert!(run.stdout.is_empty());
-    assert!(run.stderr.contains("suite `bench` has no gates available in this version of discipline (its gates are planned)"));
-}
+    repo.commit_base(
+        "target/iai/bench/callgrind.bench.out",
+        "events: Ir\nsummary: 100000\n",
+        "base: callgrind baseline",
+    );
 
-#[test]
-fn bench_regression_tracks_criterion_estimates_and_accepts_override() {
-    let repo = Repo::new();
-    let gates = repo.run(&["gates", "--enable", "bench-regression"], &[]);
-    assert_eq!(gates.code, 2);
-    assert_eq!(repo.check(&[]).code, 0);
-    assert_eq!(gates.code, 2);
-    assert!(gates.stderr.contains("planned"));
+    // +1.0% regression (> 0.5% tolerance)
+    repo.write(
+        "target/iai/bench/callgrind.bench.out",
+        "events: Ir\nsummary: 101000\n",
+    );
+    let run_fail = repo.check(&["--suite", "bench"]);
+    assert_eq!(run_fail.code, 1);
+    let json_fail = run_fail.json();
+    assert_eq!(json_fail["errors"], 1);
+    assert_eq!(json_fail["warnings"], 0);
+    let outcome_fail = json_fail["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "bench-regression")
+        .unwrap();
+    assert_eq!(
+        outcome_fail["violations"][0]["title"],
+        "Instruction Count Regressed"
+    );
+    assert!(outcome_fail["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("+1.00%"));
+
+    // Override with allow-regression: bench <reason>
+    let run_pass = repo.check_with_pr(
+        &["--suite", "bench"],
+        "allow-regression: bench trade instructions for lower memory",
+    );
+    assert_eq!(run_pass.code, 0);
+    let json_pass = run_pass.json();
+    assert_eq!(json_pass["errors"], 0);
+    assert_eq!(json_pass["overrides"], 1);
 }
 
 #[test]
 fn bench_regression_tracks_go_benchmarks_and_accepts_override() {
     let repo = Repo::new();
-    repo.write(
-        "discipline.toml",
-        "[gates.bench-regression]\nenabled = true\n",
+    repo.commit_base(
+        "benchmarks/go.txt",
+        "BenchmarkSearch-8  100000  12.40 ns/op\n",
+        "base: go benchmark baseline",
     );
-    let run = repo.check(&[]);
-    assert_eq!(run.code, 2);
-    assert_eq!(run.code, 2);
-    assert_eq!(run.code, 2);
-    assert!(run.stderr.contains("bench-regression"));
+
+    // +4.8% regression
+    repo.write(
+        "benchmarks/go.txt",
+        "BenchmarkSearch-8  100000  13.00 ns/op\n",
+    );
+    let run_fail = repo.check(&["--suite", "bench"]);
+    assert_eq!(run_fail.code, 1);
+    let json_fail = run_fail.json();
+    assert_eq!(json_fail["errors"], 1);
+    let outcome_fail = json_fail["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "bench-regression")
+        .unwrap();
+    assert_eq!(
+        outcome_fail["violations"][0]["title"],
+        "Benchmark Performance Regressed"
+    );
+
+    let run_pass = repo.check_with_pr(
+        &["--suite", "bench"],
+        "allow-regression: BenchmarkSearch justified for safety",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 1);
 }
 
 #[test]
 fn bench_regression_tracks_google_benchmark_json_and_accepts_override() {
     let repo = Repo::new();
-    let run = repo.run(
-        &[
-            "check",
-            "--config-override",
-            "[gates.bench-regression]\nenabled = true\n",
-        ],
-        &[],
+    let base_json =
+        r#"{"benchmarks": [{"name": "BM_StringCreation", "cpu_time": 120.0, "time_unit": "ns"}]}"#;
+    repo.commit_base("build/benchmarks.json", base_json, "base: gbench baseline");
+
+    // +8.3% regression
+    let head_json =
+        r#"{"benchmarks": [{"name": "BM_StringCreation", "cpu_time": 130.0, "time_unit": "ns"}]}"#;
+    repo.write("build/benchmarks.json", head_json);
+    let run_fail = repo.check(&["--suite", "bench"]);
+    assert_eq!(run_fail.code, 1);
+    let json_fail = run_fail.json();
+    assert_eq!(json_fail["errors"], 1);
+    let outcome_fail = json_fail["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "bench-regression")
+        .unwrap();
+    assert_eq!(
+        outcome_fail["violations"][0]["title"],
+        "Benchmark Performance Regressed"
     );
-    assert_eq!(run.code, 2);
-    assert_eq!(run.code, 2);
-    assert_eq!(run.code, 2);
-    assert!(run.stderr.contains("bench-regression"));
+
+    let run_pass = repo.check_with_pr(
+        &["--suite", "bench"],
+        "allow-regression: BM_StringCreation justified for unicode support",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 1);
 }
 
 #[test]
 fn bench_regression_tracks_pytest_benchmark_json_and_accepts_override() {
     let repo = Repo::new();
-    let run = repo.check(&[]);
-    assert_eq!(run.code, 0);
+    let base_json = r#"{"benchmarks": [{"name": "test_serialize", "stats": {"mean": 0.0010}}]}"#;
+    repo.commit_base(
+        "reports/pytest_bench.json",
+        base_json,
+        "base: pytest baseline",
+    );
+
+    // +20% regression
+    let head_json = r#"{"benchmarks": [{"name": "test_serialize", "stats": {"mean": 0.0012}}]}"#;
+    repo.write("reports/pytest_bench.json", head_json);
+    let run_fail = repo.check(&["--suite", "bench"]);
+    assert_eq!(run_fail.code, 1);
+    let json_fail = run_fail.json();
+    assert_eq!(json_fail["errors"], 1);
+    let outcome_fail = json_fail["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "bench-regression")
+        .unwrap();
+    assert_eq!(
+        outcome_fail["violations"][0]["title"],
+        "Benchmark Performance Regressed"
+    );
+
+    let run_pass = repo.check_with_pr(
+        &["--suite", "bench"],
+        "allow-regression: test_serialize justified for additional serialization fields",
+    );
+    assert_eq!(run_pass.code, 0);
+    let json_pass = run_pass.json();
+    assert_eq!(json_pass["errors"], 0);
+    assert_eq!(json_pass["overrides"], 1);
+}
+
+#[test]
+fn bench_audit_case1_overlapping_ci_point_regression_passes() {
+    // Audit Case 1: Point estimate +2%, but 95% CIs [900, 1100] vs [920, 1120] at 0.5% tolerance.
+    // Under naive point-estimate comparison: +2% > 0.5% -> FAILED (statistically invalid).
+    // Under conservative interval bounds: L_head (920) <= U_base (1100) -> delta_min <= 0 -> PASSES.
+    // Mutant: naive point-estimate comparison fails with exit 1.
+    let repo = Repo::new();
+    let base_json = r#"{
+      "mean": {
+        "point_estimate": 1000.0,
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_limit": 900.0,
+          "upper_limit": 1100.0
+        }
+      }
+    }"#;
+    repo.commit_base(
+        "target/criterion/algo/estimates.json",
+        base_json,
+        "base: criterion baseline with 95% CI",
+    );
+
+    let head_json = r#"{
+      "mean": {
+        "point_estimate": 1020.0,
+        "confidence_interval": {
+          "confidence_level": 0.95,
+          "lower_limit": 920.0,
+          "upper_limit": 1120.0
+        }
+      }
+    }"#;
+    repo.write("target/criterion/algo/estimates.json", head_json);
+
+    let run = repo.check(&["--suite", "bench"]);
+    assert_eq!(
+        run.code, 0,
+        "Overlapping confidence intervals must pass without requiring an override directive"
+    );
     let json = run.json();
-    let planned: Vec<_> = json["planned_gates"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|g| g.as_str())
-        .filter(|g| *g == "bench-regression")
-        .collect();
-    assert_eq!(planned, vec!["bench-regression"]);
-    assert_eq!(run.code, 0);
     assert_eq!(json["errors"], 0);
-    assert!(json["planned_gates"]
+    let outcome = json["outcomes"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|g| g == "bench-regression"));
+        .find(|o| o["gate"] == "bench-regression")
+        .unwrap();
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn bench_audit_case2_regression_deleted_with_removes_fails() {
+    // Audit Case 2: 3x regression + artifact deleted with `removes:` -> FAIL (exit 1).
+    // A generic `removes:` on the file does NOT silently lift benchmark deletions;
+    // benchmark removal requires its own scoped `allow-regression:` directive.
+    // Mutant: `removes:` lifts deletion.
+    let repo = Repo::new();
+    repo.commit_base(
+        "target/iai/bench/callgrind.bench.out",
+        "events: Ir\nsummary: 100000\n",
+        "base: callgrind artifact",
+    );
+
+    repo.remove("target/iai/bench/callgrind.bench.out");
+
+    // Generic `removes:` directive
+    let run_fail = repo.check_with_pr(
+        &["--suite", "bench"],
+        "removes: target/iai/bench/callgrind.bench.out deleted old benchmarks",
+    );
+    assert_eq!(
+        run_fail.code, 1,
+        "Generic removes: must NOT lift deleted benchmark artifact"
+    );
+    let json_fail = run_fail.json();
+    assert_eq!(
+        json_fail["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["gate"] == "bench-regression")
+            .unwrap()["violations"][0]["title"],
+        "Benchmark Artifact Deleted"
+    );
+
+    // Scoped allow-regression directive
+    let run_pass = repo.check_with_pr(
+        &["--suite", "bench"],
+        "allow-regression: target/iai/bench/callgrind.bench.out intentionally retired obsolete benchmark suite",
+    );
+    assert_eq!(
+        run_pass.code, 0,
+        "allow-regression: directive lifts benchmark artifact deletion"
+    );
+    assert_eq!(run_pass.json()["overrides"], 1);
+}
+
+#[test]
+fn bench_audit_case3_head_artifact_garbage_fails_exit_2() {
+    // Audit Case 3: Head artifact garbage (`{"mean":"n/a"}`) -> FAIL (exit 2).
+    // Mutant: silent skip.
+    let repo = Repo::new();
+    let base_json = r#"{"mean": {"point_estimate": 1000.0}}"#;
+    repo.commit_base(
+        "target/criterion/algo/estimates.json",
+        base_json,
+        "base: valid estimates.json",
+    );
+
+    repo.write("target/criterion/algo/estimates.json", r#"{"mean":"n/a"}"#);
+    let run = repo.check(&["--suite", "bench"]);
+    assert_eq!(
+        run.code, 2,
+        "Garbage/unparseable benchmark artifact must fail-closed with exit code 2"
+    );
+    assert!(
+        run.stderr.contains("unparseable") || run.stderr.contains("malformed"),
+        "stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn bench_audit_case4_benchmark_renamed_lacks_baseline_fails() {
+    // Audit Case 4: Benchmark renamed (no base entry) -> FAIL (exit 1).
+    // Mutant: silent pass.
+    let repo = Repo::new();
+    let base_json =
+        r#"{"benchmarks": [{"name": "BM_OldName", "cpu_time": 100.0, "time_unit": "ns"}]}"#;
+    repo.commit_base(
+        "build/benchmarks.json",
+        base_json,
+        "base: original benchmark name",
+    );
+
+    let head_json =
+        r#"{"benchmarks": [{"name": "BM_RenamedSearch", "cpu_time": 100.0, "time_unit": "ns"}]}"#;
+    repo.write("build/benchmarks.json", head_json);
+
+    let run_fail = repo.check(&["--suite", "bench"]);
+    assert_eq!(
+        run_fail.code, 1,
+        "Renamed or new benchmark lacking baseline entry must fail exit 1"
+    );
+    let json_fail = run_fail.json();
+    let outcome = json_fail["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "bench-regression")
+        .unwrap();
+    let titles: Vec<_> = outcome["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["title"].as_str().unwrap())
+        .collect();
+    assert!(
+        titles.contains(&"New or Renamed Benchmark Lacks Baseline"),
+        "violations: {:?}",
+        titles
+    );
+
+    let run_pass = repo.check_with_pr(
+        &["--suite", "bench"],
+        "allow-regression: build/benchmarks.json renamed benchmark",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert!(run_pass.json()["overrides"].as_u64().unwrap() >= 1);
+}
+
+#[test]
+fn bench_provenance_tracking_and_cross_host_flag() {
+    // Provenance tracking: Mismatched host -> FAIL (exit 1) unless --allow-cross-host-bench
+    let repo = Repo::new();
+    let base_json = r#"{
+      "host": "github-actions-ubuntu-x86_64",
+      "benchmarks": [{"name": "BM_Process", "cpu_time": 100.0, "time_unit": "ns"}]
+    }"#;
+    repo.commit_base(
+        "build/benchmarks.json",
+        base_json,
+        "base: runner provenance recorded",
+    );
+
+    let head_json = r#"{
+      "host": "developer-laptop-m2-mac",
+      "benchmarks": [{"name": "BM_Process", "cpu_time": 100.0, "time_unit": "ns"}]
+    }"#;
+    repo.write("build/benchmarks.json", head_json);
+
+    let run_fail = repo.check(&["--suite", "bench"]);
+    assert_eq!(run_fail.code, 1);
+    let json_fail = run_fail.json();
+    assert_eq!(
+        json_fail["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["gate"] == "bench-regression")
+            .unwrap()["violations"][0]["title"],
+        "Cross-Host Benchmark Comparison Mismatch"
+    );
+
+    // Bypass flag --allow-cross-host-bench allows cross-host diff
+    let run_pass = repo.check(&["--suite", "bench", "--allow-cross-host-bench"]);
+    assert_eq!(run_pass.code, 0);
 }

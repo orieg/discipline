@@ -106,6 +106,17 @@ pub struct CheckArgs {
     /// Write SARIF report to this path
     #[arg(long, env = "DISCIPLINE_REPORT_SARIF")]
     pub report_sarif: Option<PathBuf>,
+
+    /// Expected host or runner provenance tag for benchmark artifacts
+    #[arg(long = "bench-provenance", env = "DISCIPLINE_BENCH_PROVENANCE")]
+    pub bench_provenance: Option<String>,
+
+    /// Allow benchmark comparison across mismatched host/runner provenance tags
+    #[arg(
+        long = "allow-cross-host-bench",
+        env = "DISCIPLINE_ALLOW_CROSS_HOST_BENCH"
+    )]
+    pub allow_cross_host_bench: bool,
 }
 
 #[derive(Args, Debug)]

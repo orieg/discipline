@@ -54,11 +54,14 @@ Per-pack detection capabilities and boundaries:
 ### Micro-benchmark regression tracking (`bench-regression`)
 
 The `bench-regression` gate watches benchmark output files across revisions, comparing performance metrics against the merge-base baseline with configurable tolerance (`tolerance_pct = 0.5` by default):
+- **Conservative confidence intervals (Vershynin 2018 §2; Brook 2014):** Gated on conservative interval clearing ($\Delta_{min} = \frac{L_{head} - U_{base}}{U_{base}} \times 100\%$), never bare point estimates. If 95% confidence intervals overlap, $\Delta_{min} \le 0\%$, correctly recognizing that data cannot reject the null hypothesis of no regression.
 - **Deterministic instruction counts (IAI / Callgrind):** Parses `events: Ir` and `summary: <instructions>` from Callgrind output files (`callgrind.*`, `*.callgrind`).
-- **Rust Criterion estimates:** Parses Criterion JSON files (`estimates.json`, `**/criterion/**`), tracking `mean.point_estimate`.
+- **Rust Criterion estimates:** Parses Criterion JSON files (`estimates.json`, `**/criterion/**`), extracting point estimates and `mean.confidence_interval`.
 - **Go benchmarks:** Parses standard Go benchmark text (`go test -bench`), extracting nanoseconds per operation (`<name> ... <value> ns/op`). Automatically normalizes `GOMAXPROCS` suffixes (`BenchmarkSearch-8` -> `BenchmarkSearch`) so overrides match without guessing CPU count.
 - **Python pytest-benchmark:** Parses `pytest-benchmark` JSON outputs (`benchmarks[].stats.mean`), tracking sub-millisecond execution times.
 - **Google Benchmark (C / C++):** Parses JSON outputs generated via `--benchmark_format=json`, tracking `cpu_time` or `real_time` with declared `time_unit`.
+- **Runner & host provenance:** Evaluates benchmark host tags; flags cross-host comparisons unless explicitly authorized via `--allow-cross-host-bench`.
+- **Fail-closed contract:** Missing baseline artifacts exit `2`; unparseable artifacts exit `2`; deleted benchmark artifacts without `allow-regression:` exit `1` (generic `removes:` does not lift benchmark deletions); new or renamed benchmarks lacking baseline exit `1`.
 - **Scoped override:** `allow-regression: <benchmark-or-file> <reason>` permits intentional algorithmic trade-offs when documented in the PR body or commit message.
 
 ## Fail-closed by construction

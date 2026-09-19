@@ -552,8 +552,8 @@ const CASES: &[Case] = &[
             use crate::tokens::ALLOW_REGRESSION;
             let callgrind_sample = "events: Ir\nsummary: 10000\n";
             let criterion_sample = r#"{"mean": {"point_estimate": 500.0}}"#;
-            let cg_m = parse_metrics("target/iai/bench/callgrind.out", callgrind_sample);
-            let cr_m = parse_metrics("target/criterion/bench/estimates.json", criterion_sample);
+            let cg_m = parse_metrics("target/iai/bench/callgrind.out", callgrind_sample)?;
+            let cr_m = parse_metrics("target/criterion/bench/estimates.json", criterion_sample)?;
             let armed = directive_reasons(
                 "allow-regression: bench perf justification",
                 ALLOW_REGRESSION,
@@ -579,9 +579,9 @@ const CASES: &[Case] = &[
             let gbench_sample = r#"{"benchmarks": [{"name": "BM_SetInsert/1024", "cpu_time": 440.0, "time_unit": "ns"}]}"#;
             let pytest_sample = r#"{"benchmarks": [{"name": "test_serialize", "stats": {"mean": 0.000135}}]}"#;
 
-            let go_m = parse_metrics("benchmarks/go.txt", go_sample);
-            let gb_m = parse_metrics("build/bench.json", gbench_sample);
-            let py_m = parse_metrics("reports/pytest.json", pytest_sample);
+            let go_m = parse_metrics("benchmarks/go.txt", go_sample)?;
+            let gb_m = parse_metrics("build/bench.json", gbench_sample)?;
+            let py_m = parse_metrics("reports/pytest.json", pytest_sample)?;
 
             let go_subjects = benchmark_subjects("benchmarks/go.txt", &go_m[0].name);
             let gb_subjects = benchmark_subjects("build/bench.json", &gb_m[0].name);

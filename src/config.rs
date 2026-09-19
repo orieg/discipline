@@ -190,7 +190,7 @@ pub const GATES: &[GateInfo] = &[
         id: "bench-regression",
         suite: Suite::Bench,
         summary: "benchmark drift via harness adapters (deterministic counts or BCa intervals)",
-        available: false,
+        available: true,
     },
 ];
 
@@ -256,6 +256,7 @@ pub struct Gates {
     pub agent_scratch: ScratchGate,
     pub config_integrity: BasicGate,
     pub golden_output: GoldenGate,
+    pub bench_regression: BenchRegressionGate,
 }
 
 /// Settings every gate shares.
@@ -518,6 +519,8 @@ pub struct BenchRegressionGate {
     pub exempt_paths: Vec<String>,
     pub tolerance_pct: f64,
     pub paths: Vec<String>,
+    pub provenance: Option<String>,
+    pub allow_cross_host: bool,
 }
 
 impl Default for BenchRegressionGate {
@@ -531,14 +534,15 @@ impl Default for BenchRegressionGate {
                 "target/iai/**",
                 "**/callgrind.*",
                 "target/criterion/**",
-                "**/*benchmark*.json",
-                "**/*benchmarks*.json",
-                "**/*benchmark*.log",
-                "**/*benchmark*.txt",
+                "**/*bench*.json",
+                "**/*bench*.log",
+                "**/*bench*.txt",
             ]
             .iter()
             .map(|s| s.to_string())
             .collect(),
+            provenance: None,
+            allow_cross_host: false,
         }
     }
 }
@@ -557,6 +561,7 @@ impl Gates {
             "agent-scratch" => &self.agent_scratch,
             "config-integrity" => &self.config_integrity,
             "golden-output" => &self.golden_output,
+            "bench-regression" => &self.bench_regression,
             _ => return None,
         })
     }

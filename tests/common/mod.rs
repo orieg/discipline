@@ -130,6 +130,38 @@ impl Repo {
         self.run(&args, &[])
     }
 
+    /// `discipline check --format json --base main <extra>` with PR_BODY
+    pub fn check_with_pr(&self, extra: &[&str], pr_body: &str) -> Run {
+        let mut args = vec!["check", "--format", "json"];
+        if !extra.contains(&"--staged") && !extra.contains(&"--base") {
+            args.extend(["--base", "main"]);
+        }
+        args.extend(extra);
+        self.run(&args, &[("PR_BODY", pr_body)])
+    }
+
+    pub fn commit_base(&self, rel: &str, content: &str, message: &str) {
+        self.commit_base_files(&[(rel, content)], message);
+    }
+
+    pub fn commit_base_files(&self, files: &[(&str, &str)], message: &str) {
+        self.git(&["checkout", "-q", "main"]);
+        for (rel, content) in files {
+            self.write(rel, content);
+        }
+        self.commit(message);
+        self.git(&["checkout", "-q", "-B", "work", "main"]);
+    }
+
+    pub fn remove(&self, rel: &str) {
+        let p = self.file(rel);
+        if p.is_file() {
+            std::fs::remove_file(p).unwrap();
+        } else if p.is_dir() {
+            std::fs::remove_dir_all(p).unwrap();
+        }
+    }
+
     pub fn run(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
         cmd.args(args).current_dir(self.path());

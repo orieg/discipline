@@ -202,7 +202,9 @@ pub fn generate_schema() -> Value {
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "tolerance_pct": { "type": "number", "description": "Maximum allowed regression percentage" },
-                    "paths": { "$ref": "#/$defs/StringListOrReset" }
+                    "paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "provenance": { "type": "string", "description": "Expected host/runner provenance tag for benchmark artifacts" },
+                    "allow_cross_host": { "type": "boolean", "description": "Allow benchmark comparison across mismatched host/runner provenance" }
                 }
             },
             "UnsafeSafetyCommentGate": {
