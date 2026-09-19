@@ -42,6 +42,10 @@ const CASES: &[Case] = &[
         || {
             let v = AssertVocabulary::default();
             let ok = analyze(
+                "fn a(p:*const u8)->u8{\n// SAFETY: pointer is valid for reads\nunsafe { *p }\n}",
+                &v,
+            )?;
+            let short = analyze(
                 "fn a(p:*const u8)->u8{\n// SAFETY: valid\nunsafe { *p }\n}",
                 &v,
             )?;
@@ -49,7 +53,9 @@ const CASES: &[Case] = &[
                 "fn a(p:*const u8)->u8{\nlet _ = \"// SAFETY: x\";\nunsafe{ *p }\n}",
                 &v,
             )?;
-            Ok(ok.unsafe_sites[0].documented && !bad.unsafe_sites[0].documented)
+            Ok(ok.unsafe_sites[0].documented
+                && !short.unsafe_sites[0].documented
+                && !bad.unsafe_sites[0].documented)
         },
     ),
     ("tokens: directive is line-anchored and scoped", || {

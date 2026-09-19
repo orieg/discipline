@@ -75,12 +75,13 @@ impl<'a> Extractor<'a> {
 
     fn collect_comments(&mut self, node: Node) {
         if matches!(node.kind(), "line_comment" | "block_comment") {
+            let text = self.text(node);
             self.comments.push(Comment {
                 start_row: node.start_position().row,
                 end_row: node.end_position().row,
                 start_byte: node.start_byte(),
                 end_byte: node.end_byte(),
-                has_safety: self.text(node).contains("SAFETY:"),
+                has_safety: has_valid_safety_comment(text),
             });
             return;
         }
@@ -130,6 +131,7 @@ impl<'a> Extractor<'a> {
         let mut is_test = false;
         let mut ignored = false;
         let mut should_panic = false;
+        let mut has_commented_out_test = false;
         let mut prev = node.prev_sibling();
         while let Some(p) = prev {
             match p.kind() {
@@ -148,11 +150,24 @@ impl<'a> Extractor<'a> {
                             check_attr(&attribute_name(&sub));
                         }
                     }
+                    if name == "cfg" && is_cfg_test_suppression(text) {
+                        ignored = true;
+                    }
                     prev = p.prev_sibling();
                 }
-                "line_comment" | "block_comment" => prev = p.prev_sibling(),
+                "line_comment" | "block_comment" => {
+                    let text = self.text(p);
+                    if is_commented_out_test(text) {
+                        has_commented_out_test = true;
+                    }
+                    prev = p.prev_sibling();
+                }
                 _ => break,
             }
+        }
+        if !is_test && has_commented_out_test {
+            is_test = true;
+            ignored = true;
         }
         if !is_test {
             return None;
@@ -305,21 +320,38 @@ impl<'a> Extractor<'a> {
 
     fn safety_run_above(&self, row: usize) -> bool {
         let mut row = row;
+        let mut run_comments = Vec::new();
         while row > 0 {
             row -= 1;
             let line = self.lines.get(row).copied().unwrap_or("").trim_start();
             if let Some(c) = self.comment_on_row(row) {
-                if c.has_safety {
-                    return true;
-                }
+                run_comments.push(c);
                 row = c.start_row;
             } else if line.starts_with("#[") {
                 continue;
             } else {
-                return false;
+                break;
             }
         }
-        false
+        if run_comments.is_empty() {
+            return false;
+        }
+        if run_comments.iter().any(|c| c.has_safety) {
+            return true;
+        }
+        run_comments.reverse();
+        let mut combined = String::new();
+        for c in run_comments {
+            let start = c.start_byte;
+            let end = c.end_byte;
+            if end <= self.src.len() && start < end {
+                if let Ok(text) = std::str::from_utf8(&self.src[start..end]) {
+                    combined.push_str(text);
+                    combined.push('\n');
+                }
+            }
+        }
+        has_valid_safety_comment(&combined)
     }
 
     /// A comment node that *begins the line* on `row` (or spans it), so a
@@ -333,6 +365,57 @@ impl<'a> Extractor<'a> {
                 || (c.start_row == row && c.start_byte == line_start + indent)
         })
     }
+}
+
+pub(crate) fn has_valid_safety_comment(text: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(rel_idx) = text[search_from..].find("SAFETY:") {
+        let idx = search_from + rel_idx + "SAFETY:".len();
+        let after = &text[idx..];
+        let word_count = after
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+            .filter(|w| !w.is_empty())
+            .count();
+        if word_count >= 4 {
+            return true;
+        }
+        search_from = idx;
+    }
+    false
+}
+
+fn is_cfg_test_suppression(attr_text: &str) -> bool {
+    let normalized: String = attr_text.chars().filter(|c| !c.is_whitespace()).collect();
+    let lower = normalized.to_lowercase();
+    lower.contains("not(ci)")
+        || lower.contains("not(test)")
+        || lower.contains("not(any(ci")
+        || lower.contains("not(all(ci")
+        || lower.contains("skip_ci")
+        || lower.contains("ci_skip")
+}
+
+fn is_commented_out_test(comment_text: &str) -> bool {
+    for line in comment_text.lines() {
+        let trimmed = line
+            .trim()
+            .trim_start_matches('/')
+            .trim_start_matches('*')
+            .trim_end_matches('*')
+            .trim_end_matches('/')
+            .trim();
+        if trimmed.starts_with("#[") || trimmed.starts_with("#![") {
+            let attr = attribute_name(trimmed);
+            if matches!(
+                attr.as_str(),
+                "test" | "rstest" | "test_case" | "quickcheck"
+            ) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn parse_cfg_attr_sub_attributes(attr_text: &str) -> Vec<String> {
@@ -623,6 +706,22 @@ mod tests {
         );
         assert!(!f3.tests[0].ignored);
         assert_eq!(f3.tests.len(), 1);
+
+        let f4 = facts("// #[test]\nfn t4() { assert_eq!(a(), 1); }");
+        assert_eq!(f4.tests.len(), 1);
+        assert!(f4.tests[0].ignored);
+
+        let f5 = facts("/* #[test] */\nfn t5() { assert_eq!(a(), 1); }");
+        assert_eq!(f5.tests.len(), 1);
+        assert!(f5.tests[0].ignored);
+
+        let f6 = facts("#[test]\n#[cfg(not(ci))]\nfn t6() { assert_eq!(a(), 1); }");
+        assert_eq!(f6.tests.len(), 1);
+        assert!(f6.tests[0].ignored);
+
+        let f7 = facts("#[test]\n#[cfg(not(test))]\nfn t7() { assert_eq!(a(), 1); }");
+        assert_eq!(f7.tests.len(), 1);
+        assert!(f7.tests[0].ignored);
     }
 
     #[test]
@@ -639,10 +738,10 @@ fn b(p: *const u8) -> u8 {
     v
 }
 fn c(p: *const u8) -> u8 {
-    let v = /* SAFETY: valid */ unsafe { *p };
+    let v = /* SAFETY: pointer is valid for reads */ unsafe { *p };
     v
 }
-// SAFETY: T is Send.
+// SAFETY: T is safe to send across threads.
 unsafe impl Send for X {}
 "#,
         );
@@ -671,16 +770,28 @@ fn c(p: *const u8) -> u8 {
 fn d(p: *const u8) -> u8 {
     unsafe { *p } // SAFETY: trailing comment is after the fact
 }
+fn e(p: *const u8) -> u8 {
+    // SAFETY: ok
+    unsafe { *p }
+}
+fn f(p: *const u8) -> u8 {
+    // SAFETY: valid
+    unsafe { *p }
+}
+fn g(p: *const u8) -> u8 {
+    // SAFETY: needed here
+    unsafe { *p }
+}
 unsafe impl Sync for X {}
 "#,
         );
-        assert_eq!(f.unsafe_sites.len(), 5);
+        assert_eq!(f.unsafe_sites.len(), 8);
         assert!(
             f.unsafe_sites.iter().all(|s| !s.documented),
             "{:?}",
             f.unsafe_sites
         );
-        assert_eq!(f.escape_hatches.len(), 5);
+        assert_eq!(f.escape_hatches.len(), 8);
     }
 
     #[test]
