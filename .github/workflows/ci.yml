@@ -235,6 +235,7 @@ jobs:
           binary_path: .ci-bin/discipline
           working_directory: ${{ runner.temp }}/fx-clean
           base_ref: main
+          pr_title: "test: fixture (#1)"
           pr_body: "Plan: ship in 3 weeks."
       - name: PR body time estimate fails with time-estimates gate
         shell: bash
@@ -256,6 +257,7 @@ jobs:
           binary_path: .ci-bin/discipline
           working_directory: ${{ runner.temp }}/fx-del
           base_ref: main
+          pr_title: "test: fixture (#1)"
           pr_body: "discipline:allow(deletion-rationale) tests"
       - name: Bare-word directive was rejected by deletion-rationale gate
         shell: bash
@@ -277,6 +279,7 @@ jobs:
           binary_path: .ci-bin/discipline
           working_directory: ${{ runner.temp }}/fx-del
           base_ref: main
+          pr_title: "test: fixture (#1)"
           pr_body: "<!-- discipline:allow(deletion-rationale) tests/legacy/ -->"
       - name: Hidden directive was rejected by default
         shell: bash
@@ -297,6 +300,7 @@ jobs:
           binary_path: .ci-bin/discipline
           working_directory: ${{ runner.temp }}/fx-del
           base_ref: main
+          pr_title: "test: fixture (#1)"
           pr_body: "discipline:allow(deletion-rationale) tests/legacy/"
       - name: Scoped directory prefix directive passed
         shell: bash
@@ -318,6 +322,7 @@ jobs:
           binary_path: .ci-bin/discipline
           working_directory: ${{ runner.temp }}/fx-del
           base_ref: main
+          pr_title: "test: fixture (#1)"
           config_override: |
             [directives]
             sources = ["__reset__", "commits"]
