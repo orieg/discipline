@@ -4,32 +4,35 @@
 [![Documentation](https://img.shields.io/badge/docs-orieg.github.io%2Fdiscipline-blue.svg)](https://orieg.github.io/discipline/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)](#license)
 [![Rust 1.90+](https://img.shields.io/badge/rustc-1.90%2B-orange.svg)](Cargo.toml)
-[![Status](https://img.shields.io/badge/status-pre--release-yellow.svg)](docs/PRD.md)
+[![Status](https://img.shields.io/badge/status-pre--release-yellow.svg)](docs/ROADMAP.md)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](.pre-commit-hooks.yaml)
 
 **CI gatekeeper and AI coding agent diff sentinel.** One static binary, the same in GitHub Actions, GitLab CI/CD, Forgejo Actions, Gitea Actions, a pre-commit hook, and an agent's inner loop. Full documentation and interactive guides: [orieg.github.io/discipline](https://orieg.github.io/discipline/).
 
 Coding agents in an iterate-until-green loop weaken assertions, add tests that assert nothing, mark tests `#[ignore]`, delete what is in the way, drop `// SAFETY:` comments, and — when a gate blocks them — edit the gate. `discipline` inspects the *change* (tree-sitter over a `git2` merge-base diff) and refuses those moves, with the fail-closed engineering distilled from [`orieg/expanse`](https://github.com/orieg/expanse).
 
-> **Status: pre-release.** No version is published yet. Eleven gates are implemented and tested; verification and benchmark gates are planned and the binary refuses to pretend otherwise. See [`docs/PRD.md`](docs/PRD.md) for the roadmap and §11 for known limits.
+> **Status: pre-release.** No version is published yet. Twelve gates are implemented and tested; verification and benchmark gates are planned and the binary refuses to pretend otherwise. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for milestones and [`docs/ARCHITECTURE.md#known-limits`](docs/ARCHITECTURE.md#known-limits) for known limits.
 
 ## Gates
 
-`discipline gates` prints this table with each gate's effective state.
+`discipline gates` prints this table with each gate's effective state. Detailed rules, boundaries, and detection limits are documented in [`docs/GATES.md`](docs/GATES.md).
 
+<!-- generated:gates -->
 | Gate | Suite | Languages | Rule |
 |---|---|---|---|
-| `assertion-reduction` | agent-guard | Rust, Python, JS/TS, PHPT | assertion count and strength may not drop in an existing test |
-| `vacuous-tests` | agent-guard | Rust, Python, JS/TS, PHPT | a new test needs a non-tautological assertion |
-| `ignored-tests` | agent-guard | Rust, Python, JS/TS, PHPT | a test may not become ignored or skipped |
-| `unsafe-safety-comment` | agent-guard | Rust | `unsafe` needs a `// SAFETY:` comment; deleting one is caught |
-| `deletion-rationale` | agent-guard | any | deleted files and removed tests need a scoped `removes:` |
-| `agents-md` | agent-guard | any | `AGENTS.md` exists; `CLAUDE.md` / `GEMINI.md` do not fork it |
-| `time-estimates` | hygiene | any | no calendar or duration estimates in markdown or the PR body |
-| `pii` | hygiene | any | no home paths, LAN addresses, or denylisted hostnames in tracked text |
+| `agents-md` | agent-guard | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
+| `assertion-reduction` | agent-guard | Rust, Python, JS/TS, PHPT | assertion count / strength must not drop in an existing test |
+| `vacuous-tests` | agent-guard | Rust, Python, JS/TS, PHPT | new tests must carry a non-tautological assertion |
+| `ignored-tests` | agent-guard | Rust, Python, JS/TS, PHPT | tests must not be newly #[ignore]d |
+| `unsafe-safety-comment` | agent-guard | Rust | unsafe blocks / impls carry a // SAFETY: comment |
+| `deletion-rationale` | agent-guard | any | deleted files and removed tests need a scoped removes: rationale |
+| `time-estimates` | hygiene | any | no calendar / duration estimates in markdown or the PR body |
+| `pii` | hygiene | any | no home paths, LAN IPs, or denylisted hostnames in tracked text |
 | `agent-scratch` | hygiene | any | agent scratch state is never tracked |
-| `config-integrity` | integrity | any | a change cannot weaken its own `discipline.toml` without saying so |
-| `golden-output` | integrity | any | committed snapshots and golden files cannot be modified or deleted without a scoped `allow-golden-update:` |
+| `config-integrity` | integrity | any | a change cannot weaken its own discipline.toml without a token |
+| `golden-output` | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
+| `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
+<!-- /generated -->
 
 Seven gates work on a repository in any language. The four AST gates use a per-language pack; Rust, Python, JavaScript / TypeScript, and PHPT ship today, and Java / Kotlin, C / C++ and Go are planned. When a change touches source in a language without a pack, the AST gates **say so in the report** rather than showing a clean zero.
 
@@ -251,7 +254,7 @@ The same from a workflow, without touching the file:
 
 A single line can opt out with `discipline:allow(<gate-id>)` (for markdown, inside an HTML comment). The report counts how many lines did.
 
-Loosening an existing `discipline.toml` (disabling a gate, lowering a severity, growing an exemption list, shrinking a denylist) is itself a violation of `config-integrity` unless the change says why. Full schema: [`docs/PRD.md` §5](docs/PRD.md).
+Loosening an existing `discipline.toml` (disabling a gate, lowering a severity, growing an exemption list, shrinking a denylist) is itself a violation of `config-integrity` unless the change says why. Full schema: [`docs/CONFIGURATION.md#configuration-schema`](docs/CONFIGURATION.md#configuration-schema).
 
 ## Override directives
 
@@ -263,6 +266,7 @@ allow-assertion-drop: inserts_in_order second case moved to proptest
 allow-ignore: big_alloc needs the new allocator first
 allow-gate-weakening: vacuous-tests suite asserts through snapshot macros
 allow-golden-update: tests/snapshots/result.snap re-blessed output
+allow-regression: search_bench algorithmic pivot to linear scan
 ```
 
 Directives policy can be configured via `[directives]` in `discipline.toml`:
@@ -270,9 +274,17 @@ Directives policy can be configured via `[directives]` in `discipline.toml`:
 - `allow_hidden = false` — when false (default), HTML-comment-wrapped directives are rejected.
 - `fail_on_overrides = false` — when true (or via `--fail-on-overrides`), any applied override fails the check, requiring explicit human sign-off.
 
-## Action outputs
+## Action reference
 
-`status`, `errors`, `warnings`, `failed_gates`, `overrides`, `overridden_gates`, `report` (path of the JSON report), `install_error`.
+Action inputs and outputs are documented in [`docs/CONFIGURATION.md#action-reference`](docs/CONFIGURATION.md#action-reference).
+
+## Documentation
+
+- [`docs/GATES.md`](docs/GATES.md) — Shipped gate specifications, detection boundaries, and what gates do not catch
+- [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — Configuration layers, schema, action inputs/outputs, CLI reference
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Engine architecture, fail-closed contracts (F1–F12), and CI/release pipelines
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — Delivery milestones, planned gates, and outstanding checks
+- [orieg.github.io/discipline](https://orieg.github.io/discipline/) — Interactive guides and documentation
 
 ## Development
 
@@ -280,7 +292,7 @@ Directives policy can be configured via `[directives]` in `discipline.toml`:
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-Every gate needs a unit test, an end-to-end test through the binary, a mutation that the suite kills, and a `self-test` case; see [`AGENTS.md`](AGENTS.md) §3.4. Releases are cut by pushing a `vX.Y.Z` tag ([`docs/PRD.md` §8.2](docs/PRD.md)).
+Every gate needs a unit test, an end-to-end test through the binary, a mutation that the suite kills, and a `self-test` case; see [`AGENTS.md`](AGENTS.md) §3.4. Releases are cut by pushing a `vX.Y.Z` tag ([`docs/ARCHITECTURE.md#release-pipeline`](docs/ARCHITECTURE.md#release-pipeline)).
 
 ## License
 

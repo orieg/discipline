@@ -80,7 +80,7 @@ pub struct CheckSummary {
     pub warnings: usize,
     pub overrides: usize,
     pub outcomes: Vec<GateOutcome>,
-    /// Gates the PRD plans but this binary does not ship. Listed in every
+    /// Gates the roadmap plans but this binary does not ship. Listed in every
     /// report so their absence is never mistaken for coverage.
     pub planned_gates: Vec<&'static str>,
 }
@@ -340,7 +340,7 @@ mod tests {
         let f = PathFilter::new(&["docs/archive/**".into(), "*.lock".into()]).unwrap();
         assert!(f.matches("docs/archive/2020/x.md"));
         assert!(f.matches("Cargo.lock"));
-        assert!(!f.matches("docs/PRD.md"));
+        assert!(!f.matches("docs/GATES.md"));
         assert!(PathFilter::new(&["[".into()]).is_err());
     }
 }

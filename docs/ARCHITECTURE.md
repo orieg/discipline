@@ -1,113 +1,195 @@
-# Architecture
+# Architecture & Engineering Sentinel Design
 
-Engine design for `discipline`. Requirements and roadmap live in `docs/PRD.md`; this document explains how the code meets them and where its edges are.
+Engine design, fail-closed contracts, CI/CD pipeline architecture, and verification discipline for `discipline`.
 
-**Superseded when:** the engine is restructured (for example the Phase 3 extractor-trait split). Update in place; do not fork.
+**Superseded when:** The engine is restructured, pipeline architecture changes, or gate contracts are modified. Update in place; do not fork.
 
-## Module map
+---
+
+## 1. Overview & System Mission
+
+Discipline is a universal CI/CD gatekeeper and AI coding agent diff sentinel built in Rust. It compiles to a self-contained static binary with zero external runtime dependencies, providing identical diff analysis across GitHub Actions, GitLab CI/CD, Forgejo Actions, Gitea Actions, pre-commit hooks, and local developer environments.
+
+### 1.1 Agent Drift and Test Erosion
+
+Autonomous coding agents operating in iterate-until-green loops frequently introduce subtle test erosion patterns:
+1. **Assertion weakening:** `assert_eq!(trie.get(k), Some(&v))` degraded to `assert!(trie.get(k).is_some())` or `assert!(true)`.
+2. **Vacuous and ghost tests:** Newly added tests that compile and execute but assert nothing.
+3. **Stealth deletions:** Flaky tests, fixtures, or benchmarks removed without justification, or tests renamed or marked `#[ignore]`.
+4. **Safety decay:** `unsafe` code introduced without explicit `// SAFETY:` justifications, or safety comments deleted from above untouched blocks.
+5. **Editing the gate instead of the code:** Silently disabling gates, lowering severities, or growing exemption lists in `discipline.toml`.
+6. **Documentation drift:** Introducing unverified calendar estimates, leaking developer environment paths/IPs, or committing agent transcripts.
+7. **Benchmark drift:** Small algorithmic or execution regressions slipping past wall-clock tests lacking statistical rigor.
+
+### 1.2 Heritage and Prior Art
+
+Discipline inherits its operational rigors from [`orieg/expanse`](https://github.com/orieg/expanse), which defended against these regressions through dozens of repository scripts. However:
+- Expanse had no AST-level detection: test erosion was guarded solely by aggregate counts and pull request token checks. Discipline's tree-sitter AST diff gates represent new engineering.
+- What Discipline inherits from Expanse is **adversarial hardening**: the specific failure modes, bypasses, and fail-open traps recorded across Expanse incidents form the binding requirements of the Fail-Closed Contract below.
+
+---
+
+## 2. Architecture Diagram & Binary Design
+
+```text
+                 discipline.toml  ◄── base-ref copy compared by `config-integrity`
+                        │
+   built-in defaults ─► │ ◄─ action inputs / CLI flags / env (layered)
+                        ▼
+              ┌───────────────────────┐
+              │  discipline (Rust)    │  git2: merge-base diff, index, blobs
+              │  gate registry        │  tree-sitter: tests, assertions, unsafe
+              └───┬─────────┬─────────┘
+                  │         │
+      GitHub/Forgejo/Gitea  pre-commit hook      agent inner loop
+      composite action      (`check --staged`)   (`check --base …`)
+```
+
+1. **Binary-first & zero-dependency:** Statically linked musl binaries (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) and native macOS binaries (`x86_64-apple-darwin`, `aarch64-apple-darwin`). No Node.js, Python, or container bootstrap required at runtime.
+2. **Offline execution & no transport stack:** Built with `vendored-libgit2` with all network and transport features disabled. The binary interacts exclusively with the local git object database.
+3. **AST-aware, never regex-naive:** `unsafe` or `assert!` appearing within comments, string literals, or doc tests are never counted as code nodes. Regular expressions are reserved exclusively for prose scanning (markdown, PR bodies).
+4. **Unified gate registry:** Every gate possesses a stable kebab-case identifier in `src/config.rs::GATES`.
+5. **Language packs behind a shared fact model:** Tree-sitter grammars and extractors map diverse ecosystems onto language-neutral facts (`TestFn`, `UnsafeSite`, assertion counts).
+
+---
+
+## 3. The Fail-Closed Contract
+
+Every gate in Discipline must satisfy the following 12 load-bearing invariant rules:
+
+| Invariant | Requirement | Incident Origin / Justification |
+|---|---|---|
+| **F1** | **Three exit states.** `0` = pass, `1` = violations found, `2` = gate could not check. A defective gate or broken environment is never mistaken for a valid change. | Expanse canaries that passed when build scripts failed. |
+| **F2** | **Three-state inputs.** Found / none / could-not-determine. An unresolvable base ref, shallow clone lacking merge base, missing repository, or unreadable file exits `2`. Never an empty diff. | Initial scaffold probe reporting clean zero on invalid refs. |
+| **F3** | **Merge-base diffs with rename detection.** Diff measured from `merge-base(base, HEAD)`; moved files are tracked as modifications, not deletions. | Deletion gate false positives on renamed test suites. |
+| **F4** | **No vacuous pass.** Every report prints the exact `examined` count per gate. A suite with zero available gates or an empty tracked tree is an error. | Expanse "0 of 52 files scanned, exit 0". |
+| **F5** | **Planned is not passed.** A gate not shipped in the binary cannot be enabled or configured (exit `2`). Every report lists planned gates under "not checked". | Scaffold config accepting and ignoring planned flags. |
+| **F6** | **Strict configuration.** Unknown keys, unknown gates, invalid regexes, malformed globs, unsupported schema versions, and contradictory switches (`enable` + `disable`) are errors. | Typo'd TOML keys accepted silently. |
+| **F7** | **Named degradation.** When a gate cannot inspect a file (unanalysed language pack, file exceeding size limits, unreadable base config), it explicitly names the file in the report. | Expanse `perf_report.py` "NO BASELINE". |
+| **F8** | **A gate is not satisfied by prose about the gate.** Directives are strictly line-anchored; mentions in tables, sentences, or code blocks never arm an override. | Expanse incident where a table describing a token waived all checks. |
+| **F9** | **A change cannot lower its own bar.** Configuration on head is diffed against base ref; loosening requires an explicit `allow-gate-weakening:` directive. | Expanse threshold constants edited in the diff that violated them. |
+| **F10** | **Secrets are not echoed.** Denylisted hostnames, local user workstation paths, and PII patterns are reported by file location only, never printed. | Hostname denylists echoed in public CI logs. |
+| **F11** | **Untrusted text never reaches a shell parser.** All action inputs pass through `env:`, never inline `${{ }}` interpolation. | Expanse inline shell injection in workflow expressions. |
+| **F12** | **The installer verifies what it runs.** Actions download release archives and verify them against `SHA256SUMS` with no opt-out; no fallbacks to unverified compilation. | Scaffold download failure falling back to unverified local build. |
+
+---
+
+## 4. Module Map
 
 | Module | Responsibility |
 |---|---|
-| `src/config.rs` | Gate registry (`GATES`), schema, layered resolution |
-| `src/gitctx.rs` | All git access: base resolution, merge-base diff, blobs, index |
-| `src/tokens.rs` | Override-directive parser shared by every gate |
-| `src/ast.rs` | Language dispatch and the Rust fact extractor (tree-sitter) |
-| `src/guards/agent_diff.rs` | Diff gates over base-vs-head facts |
-| `src/guards/hygiene.rs` | Whole-tree sweeps: `time-estimates`, `pii`, `agent-scratch`, `agents-md` |
-| `src/guards/integrity.rs` | `config-integrity` (shipped), `golden-output` (shipped) |
-| `src/guards/perf/` | `bench-regression` (shipped): mathematical bounds engine (`bounds.rs`) and fail-closed gate (`mod.rs`) |
-| `src/guards/mod.rs` | Gate scheduling, `GateOutcome`, path filters, inline markers |
-| `src/report/` | Terminal, annotations, job summary, step outputs, JSON |
-| `src/selftest.rs` | Controls compiled into the binary |
-| `src/style.rs` | ANSI styling (in-tree: the usual crate is MPL-2.0, outside `deny.toml`'s allow-list) |
+| `src/config.rs` | Gate registry (`GATES`), schema definition, layered configuration resolution |
+| `src/gitctx.rs` | Git interaction via `libgit2`: base ref detection, merge-base computation, blob streaming, index inspection |
+| `src/tokens.rs` | Line-anchored override directive parser and validation |
+| `src/ast.rs` | Tree-sitter dispatch and language-specific fact extraction |
+| `src/guards/agent_diff.rs` | Semantic diff inspection across base vs. head AST facts |
+| `src/guards/hygiene.rs` | Repository sweeps: `time-estimates`, `pii`, `agent-scratch`, `agents-md` |
+| `src/guards/integrity.rs` | Structural integrity gates: `config-integrity`, `golden-output` |
+| `src/guards/perf/` | Benchmark regression sentinel (`bench-regression`): mathematical bounds engine (`bounds.rs`) and harness adapter (`mod.rs`) |
+| `src/guards/mod.rs` | Gate execution scheduling, `GateOutcome`, path filtering, inline marker accounting |
+| `src/report/` | Multi-format reporting: terminal, GitHub summary, GitLab Code Quality, JUnit XML, SARIF, JSON |
+| `src/docs.rs` | Automated reference docs generator and schema validation sentinel |
+| `src/selftest.rs` | Embedded positive and negative controls compiled into binary |
+| `src/style.rs` | Zero-dependency ANSI terminal styling |
 
-## Control flow of `check`
+---
 
-1. **Resolve configuration.** Defaults, file, inline override, gate switches, and the secret denylist are merged as `toml::Value` trees and deserialized once under `deny_unknown_fields`. Gate ids are checked against the registry first, so a planned gate yields "planned, not available" rather than a generic unknown-key error.
-2. **Open the git context.** `--staged` measures the index against `HEAD` (or the empty tree before the first commit). Otherwise `base` and `origin/<base>` are tried, then `merge-base(base, HEAD)`. In CI environments (GitHub, Gitea, Forgejo Actions), the base ref is auto-detected from environment variables (`GITHUB_BASE_REF`, `GITEA_BASE_REF`, `FORGEJO_BASE_REF`). Any failure is an `Err`, which `main` turns into exit `2`.
-3. **Collect directive text:** the PR body (read from `--pr-body-file`, `PR_BODY`, or auto-extracted from CI webhook event payloads via `GITHUB_EVENT_PATH`, `GITEA_EVENT_PATH`, or `FORGEJO_EVENT_PATH`) plus every commit message from the merge base to `HEAD`.
-4. **Run gates** in registry order. The five diff gates share one computation (`agent_diff::run`), performed once.
-5. **Render**, then exit `0` or `1`.
+## 5. AST Fact Model & Extraction Rules
 
-Every gate returns a `GateOutcome`: violations, an `examined` count, the number of lines exempted by inline markers, and `notes` for anything it could not verify. The report prints all four for every gate on every run.
+### Fact Representation
 
-## The fact model and language packs
+Tree-sitter AST extraction translates source files into language-neutral fact structures:
+- `TestFn`: Qualified name, line number, assertion counts (total, strong, tautological), skip state (`ignored`), expected panic (`should_panic`).
+- `UnsafeSite`: Line number, block kind, documentation status (`documented`).
+- `has_parse_errors`: Tracks whether unparseable syntax was encountered.
 
-Gates never look at syntax. `ast::analyze` turns source into:
+### SAFETY: Invariant Comments
 
-- `TestFn` — qualified name, line, total / strong / tautological assertion counts, `ignored`, `should_panic`
-- `UnsafeSite` — line, kind, `documented`
-- `has_parse_errors`
+An `unsafe` block or implementation is documented iff a comment containing `SAFETY:` is positioned:
+1. In the contiguous run of comments directly preceding the `unsafe` node or its parent statement; or
+2. Inline between the start of the statement and the `unsafe` keyword.
 
-`language_for(path)` selects an extractor by extension; today only Rust has one. Extensions of other common source languages are listed in `UNSUPPORTED_SOURCE_EXTS` so that a change touching them is named in the AST gates' notes instead of reading as a clean zero.
+**Placeholder Rejection:** Comments consisting entirely of placeholder tokens (`todo`, `tbd`, `n/a`, `safe`, `ok`, `fine`, `valid`, `trust me`, `temporary`, `placeholder`, `fixme`, `wip`, `noop`) or keyword restatements are rejected. Substantive justifications naming actual memory safety invariants are required.
 
-A language pack is a grammar plus an extractor that fills the same facts from its ecosystem's conventions (PRD §6.1). Two parts of the current code are Rust-shaped and move behind the pack boundary in Phase 3:
+### Assertion Strength & Tautologies
 
-- **Test identity.** `match_tests` pairs tests by module-qualified function name within a file, then by leaf name across files (a moved test). Callback-style frameworks identify a test by its description string and nesting, so identity must become a per-pack function.
-- **Escape hatches.** `UnsafeSite` generalizes to "a site the language lets you opt out of a check, and whether it is justified".
+Assertions are classified into two levels:
+- **Strong:** Equality and pattern assertions (`assert_eq!`, `assert_ne!`, `matches!`, `toEqual`, `toStrictEqual`).
+- **Weak:** General truthiness (`assert!`, `toBeTruthy`, `.unwrap()`, `.expect()`, `?` in fallible tests).
 
-### `SAFETY:` documentation rule
+**Tautology Filtering:** Tautological assertions are deducted from effective assertion counts:
+- Verbatim equality: `assert_eq!(x, x)`.
+- Constant expression tautologies: `assert!(true)`, `assert!(1 == 1)`, `assert!(1 + 1 > 0)`, `assert_ne!(1, 2)`.
 
-A site is documented when a comment containing `SAFETY:` is found:
+---
 
-1. in the contiguous run of comment and attribute lines directly above the `unsafe` node, or above any ancestor up to its enclosing statement (so a comment above `let v = unsafe { … };` or above a match arm counts); or
-2. inline between the start of that statement and the `unsafe` keyword.
+## 6. Golden-Output Gate Design
 
-Only real comment nodes that begin their line qualify. A string literal containing the text, a trailing comment after the block, and a lower-case `Safety:` do not.
+Committed test snapshots (e.g. `insta` `.snap`), serialized fixtures, and golden files are common drift vectors. Agents frequently re-bless or edit fixtures to make broken tests pass.
+- **Blob diff inspection:** Tracks modifications and deletions across configured file globs (`**/golden/**`, `**/snapshots/**`, `**/*.snap`, `tests/fixtures/**/output*`).
+- **Scoped authorization:** Requires explicit `allow-golden-update: <path> <reason>` directive.
 
-Scope: a site is reported when its line was added, or when the file's count of undocumented sites rose relative to the base. The second clause catches a `SAFETY:` comment deleted from above a block whose own line did not change.
+---
 
-#### Invariant Quality and Placeholder Rejection
-Rather than relying on naive word-count thresholds, Discipline enforces substantive safety invariants:
-- **Placeholder rejection:** Comments consisting solely of vacuous placeholders (`todo`, `tbd`, `n/a`, `safe`, `ok`, `fine`, `valid`, `trust me`, `temporary`, `placeholder`, `fixme`, `wip`, `noop`) or keyword restatements (`unsafe`, `safety`) are rejected.
-- **Substantive threshold:** A comment is accepted if and only if it contains at least one substantive non-placeholder word, regardless of total length (e.g. `// SAFETY: caller-checked non-null.` passes; `// SAFETY: this is totally fine ok` fails).
-- **Configurable placeholders:** Additional placeholder terms can be declared per-repository under `[gates.unsafe-safety-comment]` via `placeholders = [...]` in `discipline.toml`.
+## 7. Reporter Architecture & Zero-Dependency Cryptography
 
-### Assertion strength
-
-Two levels: *strong* (names containing `_eq`, `_ne`, `matches`) and everything else. A drop in either the effective total or the strong count is a reduction.
-
-#### Tautologies
-Tautologies are subtracted from the effective total:
-1. **Verbatim equality:** `assert_eq!(x, x)` where arguments are textually identical non-empty tokens.
-2. **Constant-expression tautologies:** For all assert macros, if tested operands consist exclusively of literals (integer, float, boolean, string, char) and operators (arithmetic, comparison, logical, unary, binary), with no identifiers, function calls, method calls, field accesses, or macro invocations. Examples include `assert!(true)`, `assert!(1 == 1)`, `assert!(1 + 1 > 0)`, `assert_eq!(1, 1)`, and `assert_ne!(1, 2)`. Dynamic expressions such as `assert!(f() == 1)`, `assert_eq!(N, 4)` (named const), and `assert!(x.len() > 0)` are preserved as valid assertions.
-
-#### Implicit & Weak Assertions
-1. **Fallible tests with `?`:** A `?` operator (`try_expression`) within a test function returning `Result` or `Option` represents a failing execution path; each counts as a weak assertion. A test returning `Result` or `Option` with no `?` and no assertions remains vacuous.
-2. **`.unwrap()` and `.expect(...)` calls:** Counted as weak assertions across all test bodies. In test code, calling `.unwrap()` or `.expect("msg")` on a fallible value acts as an invariant assertion that panics on `Err` or `None`. They increment `total_asserts` (preventing vacuous test flags on pure happy-path unwrapping) while not inflating `strong_asserts` (equality/pattern match).
-
-## Golden-output gate design
-
-The planned `golden-output` gate guards against stealth re-blessing or silent modification of committed test outputs, snapshots (e.g. `insta` `.snap`), and serialized test fixtures.
-- **Diff inspection:** Compares base vs. head blobs for all modified or deleted paths matching the gate's `paths` pattern.
-- **Scoped escape hatch:** Requires an explicit `allow-golden-update: <path> <reason>` or `discipline:allow(golden-output): <path> <reason>` directive parsed through `src/tokens.rs`.
-- **Integrity synergy:** Complements AST gates (`vacuous-tests`, `assertion-reduction`) by ensuring that tests asserting against external serialized data cannot be weakened by mutating the baseline fixture.
-
-## Reporter architecture & Zero-Dependency SHA-256
-
-Discipline emits structured reports across standard developer and enterprise interfaces:
+Discipline exports standard structured formats:
 - **GitLab Code Quality (`gl-codequality.json`):** Code Climate JSON array consumed natively by GitLab Merge Request widgets.
-- **JUnit XML (`junit.xml`):** Validated offline against Jenkins `junit-10.xsd` with testsuite-level `<properties>` and testcase-level examined / override execution diagnostics in `<system-out>`.
-- **SARIF (`discipline.sarif`):** OASIS Static Analysis Results Interchange Format v2.1.0 schema-compliant report with rule configuration overrides and examined counter property bags in `runs[0].invocations[0]`.
+- **JUnit XML (`junit.xml`):** Validated offline against Jenkins `junit-10.xsd` with testsuite-level `<properties>` and testcase execution diagnostics.
+- **SARIF (`discipline.sarif`):** OASIS Static Analysis Results Interchange Format v2.1.0 schema-compliant report.
+- **Terminal & GitHub Job Summaries:** ANSI-styled summaries and GitHub workflow annotations.
 
-### Pure-Rust SHA-256 Fingerprint Rationale
-GitLab Code Quality issues require a unique, deterministic 32-byte hex fingerprint to track issues across commits and prevent duplicate alerts. Discipline maintains a pure-Rust, zero-dependency SHA-256 implementation (`src/report/gitlab.rs`) adhering strictly to NIST FIPS 180-4:
-1. **Zero crypto dependency footprint:** Relying on external cryptography crates (`ring`, `openssl`, `sha2`) would pull in large dependency graphs, C or assembly toolchain requirements, and potential licensing friction that complicates static musl binary compilation.
-2. **Deterministic invariant:** Fingerprints are computed as `SHA-256(check_name:path:line:title:message)`.
-3. **High-assurance test vectors:** The implementation is verified directly in unit tests against official NIST Cryptographic Algorithm Validation Program (CAVP) test vectors (`test_sha256_nist_vectors`: empty input, single-block `abc`, and 448-bit multi-block vectors).
+### Pure-Rust SHA-256 Implementation
 
-## Known limits
+GitLab Code Quality requires unique, deterministic 32-byte hex fingerprints for issue tracking:
+- Discipline implements a zero-dependency NIST FIPS 180-4 compliant SHA-256 algorithm in `src/report/gitlab.rs`.
+- Avoids pulling in external cryptographic dependencies (`ring`, `openssl`, `sha2`), preserving zero-dependency static musl compilation.
+- Verified directly against NIST CAVP test vectors.
 
-- Macro bodies are unparsed token trees: tests generated inside `proptest! { … }` and assertions nested inside another macro's arguments are invisible. `assert_helper_fns` and `extra_assert_macros` are the workaround.
-- Syntax newer than the bundled grammar is a parse error, which blocks by design; `exempt_paths` is the escape.
-- Untracked files are not part of a non-staged diff. CI sees only commits, so this affects local runs only.
-- Content scanners stream text files line-by-line without arbitrary size caps; lossy UTF-8 conversion scans NUL-containing text files.
+---
 
-## Exit codes
+## 8. CI and Release Pipelines
 
-| Code | Meaning |
+### 8.1 CI Pipeline (`.github/workflows/ci.yml`)
+
+Third-party GitHub Actions are pinned by full commit SHA. Tooling binaries (`act`, `actionlint`) are installed by version with pinned SHA-256 checksums. The `ci-gate` rollup enforces an **allow-list**: every required job must succeed, and the total job count is asserted.
+
+| Job | Verification Scope |
 |---|---|
-| `0` | every enabled gate ran and found nothing blocking |
-| `1` | violations (errors, or warnings under `--fail-on-warnings`) |
-| `2` | the check could not run: bad configuration, no repository, unresolvable base, unreadable input, a suite with no available gates |
+| `lint` | `cargo fmt --check`, `cargo clippy -- -D warnings`, `actionlint` on workflows, `shellcheck`, `lint-action.py` (F11), `docs --check` (G7), and link integrity validator. |
+| `test` (Linux & macOS) | Full test suite execution asserting at least 65 test cases ran, followed by embedded `self-test`. |
+| `msrv` | `cargo check` under the pinned Minimum Supported Rust Version (`1.90`). |
+| `supply-chain` | `cargo-deny` validation of advisories, bans, license allow-list, and sources. |
+| `build-static` | Cross-compiles `x86_64` and `aarch64` musl binaries; validates static linkage and executes `self-test`. |
+| `action-github` | Exercises composite action on hosted runner: clean fixture passes, bad fixture fails for expected gates, overrides take effect, unresolvable base exits 2, tampered archive rejected. |
+| `action-gitea` | Runs action under `act` using Gitea runner images with mandatory log assertions. |
+| `pre-commit` | Runs `pre-commit try-repo` against staged fixtures. |
+| `dogfood` | Executes Discipline against its own repository diff. |
 
+### 8.2 Release Pipeline (`.github/workflows/release.yml`)
+
+Releases are triggered exclusively by pushing a `vX.Y.Z` tag:
+1. **Verify:** Asserts tag matches `Cargo.toml` version, tagged commit resides on `main`, and tests/lints/deny pass.
+2. **Build:** Compiles 4 static release targets (`x86_64-musl`, `aarch64-musl`, `x86_64-darwin`, `aarch64-darwin`); executes `self-test` on each.
+3. **Publish:** Generates `SHA256SUMS`, attaches build-provenance attestations, creates GitHub release.
+4. **Smoke test:** Action downloads published release assets on Linux and macOS, validates checksums, tests clean and negative fixtures, and verifies GitHub attestations.
+5. **Move major tag:** Advances floating major version tag (`v0`) only after all smoke tests succeed.
+
+---
+
+## 9. Test Discipline for Gates
+
+Every gate implemented in Discipline must satisfy the 4-point testing contract before shipping:
+1. **Unit tests:** Detector-level unit tests with both positive and negative controls (`src/**` `#[cfg(test)]`).
+2. **End-to-end binary tests:** Real binary executions driving throwaway git repositories and parsing JSON outputs (`tests/test_gates_e2e.rs`).
+3. **Mutation evidence:** Detectors must be deliberately inverted or broken, with proof that the test suite fails on the mutant.
+4. **Self-test cases:** Compiled directly into the binary (`src/selftest.rs`) to allow deployed binaries to verify their own discriminators.
+
+---
+
+## 10. Known Limits
+
+- **Macro opacity:** Tests generated inside macro invocations (`proptest! { ... }`, `quickcheck! { ... }`) are invisible to tree-sitter AST extractors without macro expansion. Configure `extra_assert_macros` and `assert_helper_fns`.
+- **Grammar lag:** Source syntax newer than bundled tree-sitter grammars triggers parse errors, failing closed by design. Use `exempt_paths` until grammars are updated.
+- **Untracked files:** Untracked files are excluded from non-staged git diffs. CI inspects committed history and is unaffected.
+- **Workflow-level edits:** Edits to `.github/workflows/` within a PR are unguarded until the `ci-integrity` gate ships.

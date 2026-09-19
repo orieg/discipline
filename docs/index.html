@@ -968,90 +968,92 @@ discipline self-test</div>
           </tr>
         </thead>
         <tbody>
+<!-- generated:gates -->
           <tr>
             <td class="gate-id">agents-md</td>
             <td>Agent Guard</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>Ensures <code>AGENTS.md</code> exists and agent guides (<code>CLAUDE.md</code>, <code>GEMINI.md</code>) do not fork from it.</td>
+            <td>AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it</td>
           </tr>
           <tr>
             <td class="gate-id">assertion-reduction</td>
             <td>Agent Guard</td>
             <td><span class="gate-badge badge-error">Error</span></td>
-            <td><span class="gate-badge badge-lang">Rust, Python, TS, PHPT</span></td>
-            <td>Ensures the total count and strength of assertions does not decrease in modified test cases.</td>
+            <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, PHPT</span></td>
+            <td>assertion count / strength must not drop in an existing test</td>
           </tr>
           <tr>
             <td class="gate-id">vacuous-tests</td>
             <td>Agent Guard</td>
             <td><span class="gate-badge badge-error">Error</span></td>
-            <td><span class="gate-badge badge-lang">Rust, Python, TS, PHPT</span></td>
-            <td>Rejects tautological tests like <code>assert!(true)</code>, <code>assert_eq!(x, x)</code>, or <code>assert_eq!(1, 1)</code>.</td>
+            <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, PHPT</span></td>
+            <td>new tests must carry a non-tautological assertion</td>
           </tr>
           <tr>
             <td class="gate-id">ignored-tests</td>
             <td>Agent Guard</td>
             <td><span class="gate-badge badge-error">Error</span></td>
-            <td><span class="gate-badge badge-lang">Rust, Python, TS, PHPT</span></td>
-            <td>Flags addition of skip decorators or attributes (<code>#[ignore]</code>, <code>@pytest.mark.skip</code>, <code>it.skip</code>).</td>
+            <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, PHPT</span></td>
+            <td>tests must not be newly #[ignore]d</td>
           </tr>
           <tr>
             <td class="gate-id">unsafe-safety-comment</td>
             <td>Agent Guard</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust</span></td>
-            <td>Mandates that every <code>unsafe</code> block is preceded by a load-bearing <code>// SAFETY:</code> comment.</td>
+            <td>unsafe blocks / impls carry a // SAFETY: comment</td>
           </tr>
           <tr>
             <td class="gate-id">deletion-rationale</td>
-            <td>Integrity</td>
+            <td>Agent Guard</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>Requires a scoped <code>removes: &lt;path&gt; &lt;reason&gt;</code> directive when deleting files or test suites.</td>
-          </tr>
-          <tr>
-            <td class="gate-id">golden-output</td>
-            <td>Integrity</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
-            <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>Guards test snapshots from unauthorized updates without an explicit <code>allow-golden-update:</code> directive.</td>
+            <td>deleted files and removed tests need a scoped removes: rationale</td>
           </tr>
           <tr>
             <td class="gate-id">time-estimates</td>
             <td>Hygiene</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>Rejects calendar durations ("2 days", "3 weeks", "next sprint") in docs, plans, and PR bodies.</td>
+            <td>no calendar / duration estimates in markdown or the PR body</td>
           </tr>
           <tr>
             <td class="gate-id">pii</td>
             <td>Hygiene</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>Blocks leaks of internal hostnames, LAN IPv4/IPv6 addresses, or local developer workstation paths.</td>
+            <td>no home paths, LAN IPs, or denylisted hostnames in tracked text</td>
           </tr>
           <tr>
             <td class="gate-id">agent-scratch</td>
             <td>Hygiene</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>Prevents tracking agent transcripts and scratch folders (<code>.claude/</code>, <code>.gemini/</code>, <code>scratch/</code>).</td>
+            <td>agent scratch state is never tracked</td>
           </tr>
           <tr>
             <td class="gate-id">config-integrity</td>
             <td>Integrity</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>Prevents pull requests from silently disabling gates or loosening configuration in <code>discipline.toml</code>.</td>
+            <td>a change cannot weaken its own discipline.toml without a token</td>
+          </tr>
+          <tr>
+            <td class="gate-id">golden-output</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>prevents stealth edits to committed golden/test output files without explicit override</td>
           </tr>
           <tr>
             <td class="gate-id">bench-regression</td>
             <td>Performance</td>
             <td><span class="gate-badge badge-error">Error</span></td>
-            <td><span class="gate-badge badge-lang">Rust, C/C++, Go, Python</span></td>
-            <td>Guards against micro-benchmark regressions using conservative confidence intervals and exact instruction counts.</td>
+            <td><span class="gate-badge badge-lang">Rust, Go, Python, C/C++</span></td>
+            <td>benchmark drift via harness adapters (deterministic counts or BCa intervals)</td>
           </tr>
+<!-- /generated -->
         </tbody>
       </table>
     </div>
@@ -1067,6 +1069,157 @@ discipline self-test</div>
         allow-assertion-drop: test_allocator single large allocation split into benchmark<br>
         allow-ignore: test_darwin_kqueue requires macos runner environment<br>
         allow-golden-update: tests/snapshots/v2.snap updated for new serializer format
+      </div>
+    </div>
+
+    <!-- Action inputs & outputs reference -->
+    <div style="margin-top: 2.5rem;">
+      <h3 style="font-size: 1.15rem; color: var(--heading); margin-bottom: 0.5rem;">Composite Action Inputs</h3>
+      <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+        Complete input parameters for GitHub Actions, Gitea Actions, and Forgejo Actions:
+      </p>
+      <div class="gate-table-wrapper">
+<!-- generated:action-inputs -->
+<table class="gate-table">
+  <thead>
+    <tr>
+      <th>Input</th>
+      <th>Default</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="gate-id">config</td>
+      <td><code>discipline.toml</code></td>
+      <td>Path to discipline.toml. When the file is absent, built-in defaults apply (every available gate on).</td>
+    </tr>
+    <tr>
+      <td class="gate-id">suite</td>
+      <td><code>all</code></td>
+      <td>Suite to run: all, agent-guard, hygiene, integrity</td>
+    </tr>
+    <tr>
+      <td class="gate-id">base_ref</td>
+      <td><em>(none)</em></td>
+      <td>Branch or commit the change is measured against. Default: PR base branch, else the pushed-from commit, else the default branch.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">enable</td>
+      <td><em>(none)</em></td>
+      <td>Gate ids to force on (comma or newline separated). See `discipline gates`.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">disable</td>
+      <td><em>(none)</em></td>
+      <td>Gate ids to force off (comma or newline separated), e.g. &quot;time-estimates, pii&quot;.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">config_override</td>
+      <td><em>(none)</em></td>
+      <td>Inline TOML merged over discipline.toml: tables merge, lists append, scalars replace.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">hostname_denylist</td>
+      <td><em>(none)</em></td>
+      <td>Hostnames the pii gate must reject (comma or newline separated). Pass a secret; matches are never echoed.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">fail_on_warnings</td>
+      <td><code>false</code></td>
+      <td>Treat warnings as failures.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">fail_on_overrides</td>
+      <td><code>false</code></td>
+      <td>Treat applied overrides as failures (requires human sign-off).</td>
+    </tr>
+    <tr>
+      <td class="gate-id">directive_sources</td>
+      <td><em>(none)</em></td>
+      <td>Comma-separated list of allowed directive sources (pr-body, commits).</td>
+    </tr>
+    <tr>
+      <td class="gate-id">pr_body</td>
+      <td><code>${{ github.event.pull_request.body }}</code></td>
+      <td>PR description: carries override directives and is itself scanned by hygiene gates.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">working_directory</td>
+      <td><code>.</code></td>
+      <td>Directory of the repository to check.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">version</td>
+      <td><em>(none)</em></td>
+      <td>Release to download (e.g. v0.1.0). Default: the tag this action was referenced by, else the latest release.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">binary_path</td>
+      <td><em>(none)</em></td>
+      <td>Use this discipline binary instead of downloading one (air-gapped Gitea/Forgejo runners, self-tests).</td>
+    </tr>
+    <tr>
+      <td class="gate-id">download_url</td>
+      <td><code>https://github.com/orieg/discipline/releases</code></td>
+      <td>Base URL of the release store, for mirrors.</td>
+    </tr>
+  </tbody>
+</table>
+<!-- /generated -->
+      </div>
+    </div>
+
+    <div style="margin-top: 2rem;">
+      <h3 style="font-size: 1.15rem; color: var(--heading); margin-bottom: 0.5rem;">Composite Action Outputs</h3>
+      <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+        Step outputs emitted by the composite action:
+      </p>
+      <div class="gate-table-wrapper">
+<!-- generated:action-outputs -->
+<table class="gate-table">
+  <thead>
+    <tr>
+      <th>Output</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="gate-id">status</td>
+      <td>pass, fail, or error</td>
+    </tr>
+    <tr>
+      <td class="gate-id">errors</td>
+      <td>Number of blocking violations</td>
+    </tr>
+    <tr>
+      <td class="gate-id">warnings</td>
+      <td>Number of non-blocking violations</td>
+    </tr>
+    <tr>
+      <td class="gate-id">failed_gates</td>
+      <td>Comma separated ids of the gates that reported a violation</td>
+    </tr>
+    <tr>
+      <td class="gate-id">overrides</td>
+      <td>Number of applied override directives</td>
+    </tr>
+    <tr>
+      <td class="gate-id">overridden_gates</td>
+      <td>Comma separated ids of the gates that had an override applied</td>
+    </tr>
+    <tr>
+      <td class="gate-id">report</td>
+      <td>Path of the JSON report</td>
+    </tr>
+    <tr>
+      <td class="gate-id">install_error</td>
+      <td>Why installing the binary failed (empty on success)</td>
+    </tr>
+  </tbody>
+</table>
+<!-- /generated -->
       </div>
     </div>
   </section>
@@ -1169,7 +1322,7 @@ discipline self-test</div>
   <div class="container">
     <div class="footer-links">
       <a href="https://github.com/orieg/discipline" target="_blank" rel="noopener">GitHub</a>
-      <a href="https://github.com/orieg/discipline/blob/main/docs/PRD.md" target="_blank" rel="noopener">PRD & Roadmap</a>
+      <a href="https://github.com/orieg/discipline/blob/main/docs/ROADMAP.md" target="_blank" rel="noopener">Roadmap & Milestones</a>
       <a href="https://github.com/orieg/discipline/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener">Architecture</a>
       <a href="https://orieg.github.io/expanse/">Expanse Engine</a>
       <a href="https://orieg.github.io/php-judy/">PHP Judy</a>

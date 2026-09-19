@@ -3,7 +3,7 @@
 //! # Methodological Foundation & Primary Sources
 //!
 //! Statistical performance regression gating follows high-assurance evaluation rules:
-//! 1. **Conservative Confidence Interval Rule (PRD §6 Pillar 5; Vershynin 2018 §2):**
+//! 1. **Conservative Confidence Interval Rule (docs/GATES.md#pillar-5-benchmark-drift; Vershynin 2018 §2):**
 //!    A wall-clock regression claim against tolerance `tau` is statistically verified
 //!    iff the conservative lower bound of the performance difference exceeds `tau`.
 //!    For baseline interval `[L_base, U_base]` and head interval `[L_head, U_head]`:

@@ -37,6 +37,10 @@ jobs:
       - run: shellcheck tests/action/*.sh
       - name: Composite action shell blocks pass shellcheck
         run: python3 tests/action/lint-action.py action.yml
+      - name: Check reference documentation and schemas are up to date
+        run: cargo run -- docs --check
+      - name: Validate relative documentation links and forbid obsolete references
+        run: python3 tests/action/check-links.py
 
   test:
     strategy:
@@ -370,7 +374,7 @@ jobs:
 
   # Gitea's act_runner is built on nektos/act: run the Gitea workflow under act
   # with Gitea's runner image. A live Gitea server is the stronger check and is
-  # tracked in docs/PRD.md; this proves the action has no GitHub-only dependency.
+  # tracked in docs/ROADMAP.md; this proves the action has no GitHub-only dependency.
   action-gitea:
     needs: build-static
     runs-on: ubuntu-latest

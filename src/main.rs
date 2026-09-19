@@ -1,6 +1,6 @@
 use anyhow::{bail, Context as _, Result};
 use clap::Parser;
-use discipline::cli::{CheckArgs, Cli, Commands, ConfigArgs, SuiteChoice};
+use discipline::cli::{CheckArgs, Cli, Commands, ConfigArgs, DocsArgs, SuiteChoice};
 use discipline::config::{split_list, DisciplineConfig, Overrides, GATES, HOSTNAME_DENYLIST_ENV};
 use discipline::gitctx::GitCtx;
 use discipline::guards::{run_checks, Context};
@@ -47,7 +47,17 @@ fn run() -> Result<bool> {
         Commands::Gates(args) => gates(&args.config),
         Commands::Schema => schema(),
         Commands::SelfTest => discipline::selftest::run(),
+        Commands::Docs(args) => docs(args),
     }
+}
+
+fn docs(args: DocsArgs) -> Result<bool> {
+    let repo = git2::Repository::discover(".").ok();
+    let root = repo
+        .as_ref()
+        .and_then(|r| r.workdir())
+        .unwrap_or_else(|| Path::new("."));
+    discipline::docs::run_docs_check_or_write(root, args.write)
 }
 
 fn load_config(

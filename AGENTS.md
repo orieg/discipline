@@ -23,8 +23,10 @@ Do not scatter notes into arbitrary files. Update canonical documents; do not pr
 
 | Content | Canonical Home | Superseded When |
 |---|---|---|
-| Product requirements & roadmap | `docs/PRD.md` | Major architecture or scope shift |
-| AST & diff engine architecture | `docs/ARCHITECTURE.md` | Engine redesign |
+| Gate specifications & rules | `docs/GATES.md` | Gate rule evolution or new gate addition |
+| Configuration & integration reference | `docs/CONFIGURATION.md` | Configuration schema version bump or parameter change |
+| Engine architecture & fail-closed contract | `docs/ARCHITECTURE.md` | Engine redesign or contract change |
+| Project roadmap & milestones | `docs/ROADMAP.md` | Milestone completion or phase evolution |
 | Agent rules & engineering standards | `AGENTS.md` (this file) | Project-level policy evolution |
 | Reference configuration schema | `discipline.toml` | Schema version bump |
 | Action runner definition | `action.yml` | Action input/runtime change |
@@ -32,7 +34,7 @@ Do not scatter notes into arbitrary files. Update canonical documents; do not pr
 | Argo Workflow template | `templates/argo-workflow-template.yaml` | Task spec or parameter change |
 | Documentation site (GitHub Pages) | `docs/index.html` | UI, layout, or documentation updates |
 | Pre-commit hook definitions | `.pre-commit-hooks.yaml` | Hook interface change |
-| CI and release pipelines | `.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/` (described in `docs/PRD.md` §8) | Pipeline redesign |
+| CI and release pipelines | `.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/` (described in `docs/ARCHITECTURE.md` §8) | Pipeline redesign |
 | Dependency policy | `deny.toml` | License or source policy change |
 
 ---
@@ -40,7 +42,7 @@ Do not scatter notes into arbitrary files. Update canonical documents; do not pr
 ## 2. Core Principles & Strict Rules
 
 ### 2.1 No Time Estimates
-Never include time estimates, durations, or week/sprint projections in plans, PRDs, READMEs, proposals, review reports, expert-panel outputs, or any documentation or chat response.
+Never include time estimates, durations, or week/sprint projections in plans, specifications, READMEs, proposals, review reports, expert-panel outputs, or any documentation or chat response.
 - **Banned:** "1-2 days", "3 weeks", "next sprint", "Phase 2 (1 week)", "~10 engineer-days". <!-- discipline:allow(time-estimates) -->
 - **Allowed substitutes:** ordering ("Phase 1 ... Phase 2"), dependencies ("blocked on X"), relative size ("smallest of the three"), gate criteria ("ships when all AST tests pass"), parallelism.
 
@@ -80,14 +82,14 @@ Every contribution must satisfy:
 All CI builds target `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` for container execution, and native macOS targets for local developer workflows. The binary has no network features; do not add a dependency that pulls in openssl or a TLS stack.
 
 ### 3.4 Adding or Changing a Gate
-A gate is not done until all of these hold (full contract: `docs/PRD.md` §3 and §9):
+A gate is not done until all of these hold (full contract: `docs/ARCHITECTURE.md` §3 and §9):
 1. It has a stable kebab-case id in `src/config.rs::GATES` and its own `[gates.<id>]` table with `enabled`, `severity`, `exempt_paths`. A gate that is designed but not implemented is registered with `available: false`; it is never accepted as configuration.
 2. It returns a `GateOutcome` with a truthful `examined` count and a `notes` entry for anything it could not verify.
 3. **Unit test** with a positive and a negative control; **end-to-end test** in `tests/test_gates_e2e.rs` driving the real binary; a **`self-test` case**.
 4. **Mutation evidence:** break the detector, watch a test fail, restore it. State which test killed the mutant in the PR.
 5. Any escape hatch goes through `src/tokens.rs` (line-anchored, placeholder-rejecting, scoped). No in-source override comments.
 6. If a finding could echo a secret or a user name, report the location only.
-7. `docs/PRD.md` §6 and `README.md` list the gate with its true status.
+7. `docs/GATES.md` and `README.md` list the gate with its true status.
 
 ### 3.5 Workflow and Action Rules
 - Pin third-party actions by commit SHA; pin downloaded tools by version and checksum.

@@ -23,6 +23,20 @@ pub enum Commands {
     Schema,
     /// Run the embedded negative / positive controls against this binary
     SelfTest,
+    /// Generate or check reference docs and schemas against sources of truth
+    #[command(hide = true)]
+    Docs(DocsArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DocsArgs {
+    /// Check that reference documentation is up to date with sources
+    #[arg(long, conflicts_with = "write")]
+    pub check: bool,
+
+    /// Regenerate and write reference documentation across the repository
+    #[arg(long, conflicts_with = "check")]
+    pub write: bool,
 }
 
 #[derive(Args, Debug, Clone)]
