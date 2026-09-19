@@ -14,6 +14,8 @@ pub mod golden;
 pub mod java;
 #[cfg(feature = "lang-javascript")]
 pub mod javascript;
+#[cfg(feature = "lang-php")]
+pub mod php;
 #[cfg(feature = "lang-python")]
 pub mod python;
 #[cfg(feature = "lang-rust")]
@@ -85,6 +87,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(java::JavaPack));
     #[cfg(feature = "lang-go")]
     reg.register(Box::new(r#go::GoPack));
+    #[cfg(feature = "lang-php")]
+    reg.register(Box::new(php::PhpPack));
     reg
 }
 
@@ -97,6 +101,7 @@ pub enum Language {
     TypeScript,
     Java,
     Go,
+    Php,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
@@ -114,6 +119,7 @@ pub fn language_for(path: &str) -> Option<Language> {
         "ts" | "tsx" | "mts" | "cts" => Some(Language::TypeScript),
         "java" => Some(Language::Java),
         "go" => Some(Language::Go),
+        "php" | "phtml" | "inc" => Some(Language::Php),
         _ => None,
     }
 }
@@ -269,10 +275,12 @@ mod tests {
         assert_eq!(language_for("web/App.tsx"), Some(Language::TypeScript));
         assert_eq!(language_for("service.java"), Some(Language::Java));
         assert_eq!(language_for("src/a.go"), Some(Language::Go));
+        assert_eq!(language_for("src/a.php"), Some(Language::Php));
         assert!(!is_unsupported_source("pkg/mod/a.py"));
         assert!(!is_unsupported_source("web/App.tsx"));
         assert!(!is_unsupported_source("service.java"));
         assert!(!is_unsupported_source("src/a.go"));
+        assert!(!is_unsupported_source("src/a.php"));
         assert!(is_unsupported_source("service.kt"));
         assert!(is_unsupported_source("main.c"));
         assert!(!is_unsupported_source("src/a.rs"));
@@ -298,6 +306,8 @@ mod tests {
         #[cfg(feature = "lang-javascript")]
         {
             assert!(reg.is_supported("web/app.test.tsx"));
+            assert!(reg.is_supported("web/app.test.jsx"));
+            assert!(reg.is_supported("web/app.test.js"));
             let js_pack = reg.find_pack("index.js").expect("javascript pack found");
             assert_eq!(js_pack.id(), "javascript");
             assert_eq!(js_pack.name(), "JavaScript/TypeScript");
@@ -315,6 +325,13 @@ mod tests {
             let go_pack = reg.find_pack("calc_test.go").expect("go pack found");
             assert_eq!(go_pack.id(), "go");
             assert_eq!(go_pack.name(), "Go");
+        }
+        #[cfg(feature = "lang-php")]
+        {
+            assert!(reg.is_supported("bindings/php/tests/ExpanseTest.php"));
+            let php_pack = reg.find_pack("Test.php").expect("php pack found");
+            assert_eq!(php_pack.id(), "php");
+            assert_eq!(php_pack.name(), "PHP");
         }
     }
 

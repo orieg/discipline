@@ -190,6 +190,25 @@ fn go_source_files_are_analysed_by_go_pack() {
     }
 }
 
+#[test]
+fn php_source_files_are_analysed_by_php_pack() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/CalcTest.php",
+        "<?php\nclass CalcTest extends TestCase {\n  public function testCalc() { $this->assertEquals(2, 1 + 1); }\n}\n",
+    );
+    repo.commit("feat: php test");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0);
+    for gate in ["assertion-reduction", "vacuous-tests", "ignored-tests"] {
+        let notes = run.outcome(gate)["notes"].to_string();
+        assert!(
+            !notes.contains("NOT analysed"),
+            "gate {gate} should analyse php files: {notes}"
+        );
+    }
+}
+
 // ---- vacuous-tests ---------------------------------------------------------
 
 #[test]
@@ -3029,6 +3048,86 @@ func TestSkipped(t *testing.T) {
         &[(
             "PR_BODY",
             "allow-ignore: TestSkipped skipped for refactoring",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("ignored-tests");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn php_assertion_reduction_and_vacuous_tests_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_php = r#"<?php
+class CalcTest extends TestCase {
+    public function testCalc() {
+        $this->assertEquals(2, 1 + 1);
+        $this->assertEquals(4, 2 + 2);
+    }
+}
+"#;
+    repo.write("tests/CalcTest.php", base_php);
+    repo.commit("feat: initial php test");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Weaken assertions: 2 assertions reduced to 1
+    let weaker_php = r#"<?php
+class CalcTest extends TestCase {
+    public function testCalc() {
+        $this->assertEquals(2, 1 + 1);
+    }
+}
+"#;
+    repo.write("tests/CalcTest.php", weaker_php);
+    repo.commit("test: weaken assertions in php");
+
+    let run_weak = repo.check(&[]);
+    assert_eq!(run_weak.code, 1);
+    let outcome_weak = run_weak.outcome("assertion-reduction");
+    assert_eq!(outcome_weak["violations"].as_array().unwrap().len(), 1);
+
+    // Vacuous test addition
+    let repo2 = Repo::new();
+    repo2.write(
+        "tests/EmptyTest.php",
+        "<?php\nclass EmptyTest extends TestCase {\n    public function testEmpty() {}\n}\n",
+    );
+    repo2.commit("test: add empty php test");
+    let run_vac = repo2.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let outcome_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn php_skipped_tests_detected_and_accepts_override() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/SkipTest.php",
+        r#"<?php
+class SkipTest extends TestCase {
+    public function testSkipped() {
+        $this->markTestSkipped("temporarily skipped");
+        $this->assertEquals(2, 1 + 1);
+    }
+}
+"#,
+    );
+    repo.commit("test: add skipped php test");
+
+    let run_skip = repo.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let outcome_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(outcome_skip["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: SkipTest::testSkipped skipped for refactoring",
         )],
     );
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);

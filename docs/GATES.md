@@ -18,9 +18,9 @@ This document establishes the normative enforcement rules, detection capabilitie
 | Gate id | Suite | Status | Languages | Rule |
 |---|---|---|---|---|
 | `agents-md` | agent-guard | **shipped** | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
-| `assertion-reduction` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go | assertion count / strength must not drop in an existing test |
-| `vacuous-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go | new tests must carry a non-tautological assertion |
-| `ignored-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go | tests must not be newly #[ignore]d |
+| `assertion-reduction` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP | assertion count / strength must not drop in an existing test |
+| `vacuous-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP | new tests must carry a non-tautological assertion |
+| `ignored-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP | tests must not be newly #[ignore]d |
 | `unsafe-safety-comment` | agent-guard | **shipped** | Rust | unsafe blocks / impls carry a // SAFETY: comment |
 | `deletion-rationale` | agent-guard | **shipped** | any | deleted files and removed tests need a scoped removes: rationale |
 | `time-estimates` | hygiene | **shipped** | any | no calendar / duration estimates in markdown or the PR body |
@@ -62,6 +62,7 @@ When a change touches source files in a language without an active pack, each AS
 | **Kotlin** | `@Test`, `@ParameterizedTest` | JUnit `assert*`, AssertJ, Kotest | `@Disabled`, `@Ignore` | `@Suppress` | *planned* |
 | **C / C++** | GoogleTest `TEST*`, Catch2 `TEST_CASE`, doctest | `EXPECT_*` / `ASSERT_*`, `REQUIRE` / `CHECK`; strong: `_EQ`, `_STREQ` | `DISABLED_` prefix, `GTEST_SKIP()` | `reinterpret_cast`, `const_cast`, `// NOLINT` | *planned* |
 | **Go** | `func Test*(t *testing.T)`, subtests | `t.Error*` / `t.Fatal*`, testify `assert.*` / `require.*`; strong: `Equal`, `DeepEqual` | `t.Skip*` | `unsafe` package, `//nolint` | **shipped** |
+| **PHP** | PHPUnit `test*` methods, `@test` docblock / attribute, Pest `test(` / `it(` | PHPUnit `assert*`, Pest matchers (`->toBe`, `->toEqual`); strong: `assertEquals`, `assertSame`, `assertCount` | `$this->markTestSkipped()`, `$this->markTestIncomplete()`, `->skip()`, `#[Requires*]` | `// @psalm-suppress`, `// @phpstan-ignore`, `// phpcs:ignore` | **shipped** |
 
 ---
 
@@ -71,7 +72,7 @@ When a change touches source files in a language without an active pack, each AS
 
 #### `assertion-reduction`
 - **Rule:** For each test present on both sides (matched by module-qualified name within a file, or by name across files for moved tests), neither the count of effective assertions nor the count of strong assertions may drop.
-- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go.
+- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP.
 - **What it catches:**
   - Deleting assertion statements or macros within existing tests.
   - Assertion weakening (e.g. `assert_eq!(a, b)` -> `assert!(a == b)` or `assert!(a.is_some())`).
@@ -100,7 +101,7 @@ When a change touches source files in a language without an active pack, each AS
 
 #### `vacuous-tests`
 - **Rule:** A newly added test function must carry at least one non-tautological assertion, a configured assertion helper call, `.unwrap()` / `.expect()`, `?` in a fallible test returning `Result` or `Option`, or an expected panic attribute.
-- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go.
+- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP.
 - **What it catches:**
   - Ghost tests containing only setup logic, variable bindings, or logging with zero assertions.
   - Verbatim tautologies: `assert_eq!(x, x)`, `assert_eq!(1, 1)`, `assert!(true)`.
@@ -127,7 +128,7 @@ When a change touches source files in a language without an active pack, each AS
 
 #### `ignored-tests`
 - **Rule:** An existing test may not become ignored or skipped, and a new test may not arrive skipped.
-- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go.
+- **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP.
 - **What it catches:**
   - Rust: `#[ignore]`, `#[cfg_attr(..., ignore)]`.
   - Python: `@pytest.mark.skip`, `@pytest.mark.skipif`, `@pytest.mark.xfail`, `@unittest.skip`, `@unittest.skipIf`.
@@ -135,6 +136,7 @@ When a change touches source files in a language without an active pack, each AS
   - PHPT: newly added `--SKIPIF--` or `--XFAIL--` sections.
   - Java: `@Disabled`, `@Ignore`, `@Test(enabled = false)`.
   - Go: `t.Skip`, `t.Skipf`, `t.SkipNow`.
+  - PHP: `$this->markTestSkipped()`, `$this->markTestIncomplete()`, `->skip()`, `#[Requires*]`.
 - **Failing diff example (rejected):**
   ```typescript
   // Skipping failing test instead of fixing — rejected by ignored-tests:

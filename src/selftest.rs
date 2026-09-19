@@ -609,6 +609,38 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 2)
         },
     ),
+    #[cfg(feature = "lang-php")]
+    (
+        "php: PHPUnit extraction catches assertions, vacuous tests, and markTestSkipped",
+        || {
+            use crate::ast::LanguagePack;
+            let php_pack = crate::ast::php::PhpPack;
+            let vocab = AssertVocabulary::default();
+            let src = "<?php\nclass JTest extends TestCase {\n  public function testOne() { $this->assertEquals(1, 2); }\n  public function testTwo() { $this->assertTrue(true); }\n  public function testThree() { $this->markTestSkipped('skip'); }\n}\n";
+            let facts = php_pack.extract("tests/JTest.php", src, &vocab)?;
+            Ok(facts.tests.len() == 3
+                && facts.tests[0].total_asserts == 1
+                && !facts.tests[0].is_vacuous()
+                && facts.tests[1].is_vacuous()
+                && facts.tests[2].ignored)
+        },
+    ),
+    #[cfg(feature = "lang-php")]
+    (
+        "php: assertEquals vs assertTrue assertion weakening is detected",
+        || {
+            use crate::ast::LanguagePack;
+            let php_pack = crate::ast::php::PhpPack;
+            let vocab = AssertVocabulary::default();
+            let strong_src = "<?php\nclass JTest extends TestCase {\n  public function testA() { $this->assertEquals($a, $b); $this->expectException(E::class); }\n}\n";
+            let weak_src = "<?php\nclass JTest extends TestCase {\n  public function testA() { $this->assertTrue($x); $this->assertTrue($y); }\n}\n";
+            let strong_facts = php_pack.extract("tests/JTest.php", strong_src, &vocab)?;
+            let weak_facts = php_pack.extract("tests/JTest.php", weak_src, &vocab)?;
+            Ok(strong_facts.tests[0].strong_asserts == 2
+                && weak_facts.tests[0].strong_asserts == 0
+                && weak_facts.tests[0].total_asserts == 2)
+        },
+    ),
     (
         "bench: callgrind and criterion benchmark parsing and delta calculation discriminate",
         || {
