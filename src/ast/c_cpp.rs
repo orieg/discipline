@@ -40,6 +40,8 @@ impl LanguagePack for CPack {
             vocab,
             is_test_path: is_c_cpp_test_path(path),
             test_spans: Vec::new(),
+            helpers: std::collections::HashMap::new(),
+            test_calls: Vec::new(),
             facts: ParsedFileFacts {
                 has_parse_errors: has_errors,
                 first_parse_error_line: first_line,
@@ -89,6 +91,8 @@ impl LanguagePack for CppPack {
             vocab,
             is_test_path: is_c_cpp_test_path(path),
             test_spans: Vec::new(),
+            helpers: std::collections::HashMap::new(),
+            test_calls: Vec::new(),
             facts: ParsedFileFacts {
                 has_parse_errors: has_errors,
                 first_parse_error_line: first_line,
@@ -136,6 +140,8 @@ struct CCppExtractor<'a> {
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     test_spans: Vec<std::ops::Range<usize>>,
+    helpers: std::collections::HashMap<String, super::HelperFacts>,
+    test_calls: Vec<Vec<String>>,
     facts: ParsedFileFacts,
 }
 
@@ -175,8 +181,27 @@ impl<'a> CCppExtractor<'a> {
 
     fn visit_root(&mut self, root: Node) {
         self.walk_scope(root);
+        self.resolve_same_file_helpers();
         self.collect_compile_time_asserts(root);
         self.facts.build_compile_time_test();
+    }
+
+    fn resolve_same_file_helpers(&mut self) {
+        for (i, test) in self.facts.tests.iter_mut().enumerate() {
+            if let Some(calls) = self.test_calls.get(i) {
+                for call in calls {
+                    if let Some(h) = self.helpers.get(call) {
+                        if self.vocab.helper_fns.iter().any(|name| name == call) {
+                            test.total_asserts = test.total_asserts.saturating_sub(1);
+                        }
+                        test.total_asserts += h.total_asserts;
+                        test.strong_asserts += h.strong_asserts;
+                        test.tautologies += h.tautologies;
+                        test.fatal_asserts += h.fatal_asserts;
+                    }
+                }
+            }
+        }
     }
 
     fn is_compile_time_assert_node(&self, node: Node) -> bool {
@@ -222,6 +247,25 @@ impl<'a> CCppExtractor<'a> {
                 if let Some(test_fn) = self.try_extract_function_definition_test(node) {
                     self.test_spans.push(node.start_byte()..node.end_byte());
                     self.facts.tests.push(test_fn);
+                } else if let (Some(decl), Some(body)) = (
+                    node.child_by_field_name("declarator"),
+                    node.child_by_field_name("body"),
+                ) {
+                    let (fn_name, _) = self.inspect_declarator(decl);
+                    if !fn_name.is_empty() {
+                        let mut helper_fn = TestFn::default();
+                        let mut dummy_calls = Vec::new();
+                        self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
+                        self.helpers.insert(
+                            fn_name.to_string(),
+                            super::HelperFacts {
+                                total_asserts: helper_fn.total_asserts,
+                                strong_asserts: helper_fn.strong_asserts,
+                                tautologies: helper_fn.tautologies,
+                                fatal_asserts: helper_fn.fatal_asserts,
+                            },
+                        );
+                    }
                 }
                 i += 1;
                 continue;
@@ -251,7 +295,9 @@ impl<'a> CCppExtractor<'a> {
                                     should_panic: false,
                                     ..Default::default()
                                 };
-                                self.extract_assertions_in_body(body, &mut test_fn);
+                                let mut calls = Vec::new();
+                                self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
+                                self.test_calls.push(calls);
                                 self.test_spans.push(call.start_byte()..body.end_byte());
                                 self.facts.tests.push(test_fn);
                                 i += 2; // skip compound_statement
@@ -278,7 +324,7 @@ impl<'a> CCppExtractor<'a> {
         }
     }
 
-    fn try_extract_function_definition_test(&self, node: Node) -> Option<TestFn> {
+    fn try_extract_function_definition_test(&mut self, node: Node) -> Option<TestFn> {
         let declarator_node = node.child_by_field_name("declarator")?;
         let body = node.child_by_field_name("body")?;
 
@@ -311,7 +357,9 @@ impl<'a> CCppExtractor<'a> {
                 should_panic: false,
                 ..Default::default()
             };
-            self.extract_assertions_in_body(body, &mut test_fn);
+            let mut calls = Vec::new();
+            self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
+            self.test_calls.push(calls);
             return Some(test_fn);
         }
 
@@ -335,7 +383,9 @@ impl<'a> CCppExtractor<'a> {
                 should_panic: false,
                 ..Default::default()
             };
-            self.extract_assertions_in_body(body, &mut test_fn);
+            let mut calls = Vec::new();
+            self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
+            self.test_calls.push(calls);
             return Some(test_fn);
         }
 
@@ -358,7 +408,9 @@ impl<'a> CCppExtractor<'a> {
                 should_panic: false,
                 ..Default::default()
             };
-            self.extract_assertions_in_body(body, &mut test_fn);
+            let mut calls = Vec::new();
+            self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
+            self.test_calls.push(calls);
             return Some(test_fn);
         }
 
@@ -468,7 +520,12 @@ impl<'a> CCppExtractor<'a> {
         self.text(f)
     }
 
-    fn extract_assertions_in_body(&self, node: Node, test_fn: &mut TestFn) {
+    fn extract_assertions_in_body(
+        &self,
+        node: Node,
+        test_fn: &mut TestFn,
+        calls: &mut Vec<String>,
+    ) {
         let kind = node.kind();
 
         if kind == "static_assert_declaration" {
@@ -477,12 +534,63 @@ impl<'a> CCppExtractor<'a> {
             return;
         }
 
+        if kind == "throw_statement" {
+            test_fn.total_asserts += 1;
+            test_fn.strong_asserts += 1;
+            return;
+        }
+
+        if kind == "return_statement" {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.is_named() {
+                    let text = self.text(child).trim();
+                    if text != "0"
+                        && text != "EXIT_SUCCESS"
+                        && text != "NULL"
+                        && text != "nullptr"
+                        && text != "false"
+                        && text != "{}"
+                    {
+                        test_fn.total_asserts += 1;
+                        test_fn.strong_asserts += 1;
+                        return;
+                    }
+                }
+            }
+        }
+
         if kind == "call_expression" {
             let fn_name = self.get_call_fn_name(node);
+            if !fn_name.is_empty() {
+                calls.push(fn_name.to_string());
+            }
 
             // Skip detection inside test body
             if matches!(fn_name, "GTEST_SKIP" | "SKIP") {
                 test_fn.ignored = true;
+                return;
+            }
+
+            // Aborting and terminating calls (failure path in C/C++ drivers)
+            if matches!(
+                fn_name,
+                "abort"
+                    | "exit"
+                    | "_exit"
+                    | "_Exit"
+                    | "quick_exit"
+                    | "terminate"
+                    | "__builtin_trap"
+                    | "panic"
+                    | "fail"
+                    | "fatal"
+            ) || fn_name.ends_with("::abort")
+                || fn_name.ends_with("::exit")
+                || fn_name.ends_with("::terminate")
+            {
+                test_fn.total_asserts += 1;
+                test_fn.strong_asserts += 1;
                 return;
             }
 
@@ -550,7 +658,7 @@ impl<'a> CCppExtractor<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_assertions_in_body(child, test_fn);
+            self.extract_assertions_in_body(child, test_fn, calls);
         }
     }
 
@@ -1055,5 +1163,50 @@ TEST_CASE("Catch2 fatal vs nonfatal") {
         let c2_t = &c2_facts.tests[0];
         assert_eq!(c2_t.total_asserts, 2);
         assert_eq!(c2_t.fatal_asserts, 1);
+    }
+
+    #[test]
+    fn test_c_cpp_main_failure_paths_and_helper_resolution() {
+        let src_nonzero_return = r#"
+int main() {
+    if (!check_ready()) {
+        return 1;
+    }
+    return 0;
+}
+"#;
+        let facts = CppPack
+            .extract(
+                "tests/test_driver.cc",
+                src_nonzero_return,
+                &AssertVocabulary::default(),
+            )
+            .unwrap();
+        assert_eq!(facts.tests.len(), 1);
+        assert!(!facts.tests[0].is_vacuous());
+        assert_eq!(facts.tests[0].strong_asserts, 1);
+
+        let src_helper_abort = r#"
+void fail_if_bad(int v) {
+    if (v < 0) {
+        abort();
+    }
+}
+
+int main() {
+    fail_if_bad(-5);
+    return 0;
+}
+"#;
+        let facts2 = CppPack
+            .extract(
+                "tests/test_memtable.cc",
+                src_helper_abort,
+                &AssertVocabulary::default(),
+            )
+            .unwrap();
+        assert_eq!(facts2.tests.len(), 1);
+        assert!(!facts2.tests[0].is_vacuous());
+        assert_eq!(facts2.tests[0].strong_asserts, 1);
     }
 }

@@ -25,6 +25,12 @@ pub struct ChangedFile {
     pub added_lines: BTreeSet<usize>,
 }
 
+impl ChangedFile {
+    pub fn is_deleted(&self) -> bool {
+        matches!(self.kind, ChangeKind::Deleted)
+    }
+}
+
 pub struct GitCtx {
     repo: Repository,
     /// Tree the change is measured against; `None` = empty tree (first commit).
@@ -243,12 +249,24 @@ impl GitCtx {
         Ok(files.into_values().collect())
     }
 
+    pub fn normalize_repo_path<'a>(&self, path: &'a str) -> &'a str {
+        let p = path.trim_start_matches("./");
+        if let Some(root_str) = self.root().to_str() {
+            let root_clean = root_str.trim_end_matches('/');
+            if let Some(stripped) = p.strip_prefix(root_clean) {
+                return stripped.trim_start_matches('/');
+            }
+        }
+        p
+    }
+
     /// Raw bytes of `path` on the base side; `None` when it did not exist there.
     pub fn base_bytes(&self, path: &str) -> Result<Option<Vec<u8>>> {
         let Some(tree) = self.base_tree()? else {
             return Ok(None);
         };
-        match tree.get_path(std::path::Path::new(path)) {
+        let rel_path = self.normalize_repo_path(path);
+        match tree.get_path(std::path::Path::new(rel_path)) {
             Ok(entry) => {
                 let blob = self.repo.find_blob(entry.id())?;
                 Ok(Some(blob.content().to_vec()))
@@ -271,9 +289,10 @@ impl GitCtx {
 
     /// Raw bytes of `path` on the head side (index when staged, else worktree).
     pub fn head_bytes(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        let rel_path = self.normalize_repo_path(path);
         if self.staged {
             let index = self.repo.index()?;
-            let Some(entry) = index.get_path(std::path::Path::new(path), 0) else {
+            let Some(entry) = index.get_path(std::path::Path::new(rel_path), 0) else {
                 return Ok(None);
             };
             Ok(Some(self.repo.find_blob(entry.id)?.content().to_vec()))
@@ -282,7 +301,7 @@ impl GitCtx {
                 .repo
                 .workdir()
                 .ok_or_else(|| anyhow!("repository has no working tree"))?;
-            let full_path = root.join(path);
+            let full_path = root.join(rel_path);
             if !full_path.exists() {
                 return Ok(None);
             }

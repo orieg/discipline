@@ -14,6 +14,7 @@ pub fn generate_schema() -> Value {
     for g in GATES.iter().filter(|g| g.available) {
         let ref_name = match g.id {
             "assertion-reduction" | "vacuous-tests" => "#/$defs/AssertionGate",
+            "ignored-tests" => "#/$defs/IgnoredTestsGate",
             "deletion-rationale" => "#/$defs/DeletionGate",
             "time-estimates" => "#/$defs/TimeEstimateGate",
             "pii" => "#/$defs/PiiGate",
@@ -151,6 +152,16 @@ pub fn generate_schema() -> Value {
                     "paths": { "$ref": "#/$defs/StringListOrReset" }
                 }
             },
+            "IgnoredTestsGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "approved_predicates": { "$ref": "#/$defs/StringListOrReset", "description": "Conditional ignore predicates (e.g. miri) approved by policy" }
+                }
+            },
             "TimeEstimateGate": {
                 "type": "object",
                 "additionalProperties": false,
@@ -161,7 +172,8 @@ pub fn generate_schema() -> Value {
                     "include": { "$ref": "#/$defs/StringListOrReset" },
                     "extra_patterns": { "$ref": "#/$defs/StringListOrReset" },
                     "allow_patterns": { "$ref": "#/$defs/StringListOrReset" },
-                    "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" }
+                    "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" },
+                    "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" }
                 }
             },
             "PiiGate": {
@@ -178,7 +190,8 @@ pub fn generate_schema() -> Value {
                     "hostname_denylist": { "$ref": "#/$defs/StringListOrReset" },
                     "extra_patterns": { "$ref": "#/$defs/StringListOrReset" },
                     "allow_patterns": { "$ref": "#/$defs/StringListOrReset" },
-                    "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" }
+                    "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" },
+                    "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" }
                 }
             },
             "ScratchGate": {
@@ -305,7 +318,8 @@ pub fn generate_schema() -> Value {
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "extra_secret_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional custom regex patterns for sensitive secret variable names" },
-                    "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Custom regex patterns exempted from violation" }
+                    "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Custom regex patterns exempted from violation" },
+                    "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" }
                 }
             },
             "IssueLinkGate": {

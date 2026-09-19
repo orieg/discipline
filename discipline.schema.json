@@ -279,6 +279,26 @@
       },
       "type": "object"
     },
+    "IgnoredTestsGate": {
+      "additionalProperties": false,
+      "properties": {
+        "approved_predicates": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Conditional ignore predicates (e.g. miri) approved by policy"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "IssueLinkGate": {
       "additionalProperties": false,
       "properties": {
@@ -311,6 +331,10 @@
         },
         "allowed_users": {
           "$ref": "#/$defs/StringListOrReset"
+        },
+        "diff_only": {
+          "description": "When true, scans only modified lines in the git diff rather than all tracked files",
+          "type": "boolean"
         },
         "enabled": {
           "description": "Whether this gate is active",
@@ -381,6 +405,10 @@
         "allow_patterns": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Custom regex patterns exempted from violation"
+        },
+        "diff_only": {
+          "description": "When true, scans only modified lines in the git diff rather than all tracked files",
+          "type": "boolean"
         },
         "enabled": {
           "description": "Whether this gate is active",
@@ -465,6 +493,10 @@
       "properties": {
         "allow_patterns": {
           "$ref": "#/$defs/StringListOrReset"
+        },
+        "diff_only": {
+          "description": "When true, scans only modified lines in the git diff rather than all tracked files",
+          "type": "boolean"
         },
         "enabled": {
           "description": "Whether this gate is active",
@@ -612,7 +644,7 @@
         "ignored-tests": {
           "allOf": [
             {
-              "$ref": "#/$defs/BasicGate"
+              "$ref": "#/$defs/IgnoredTestsGate"
             }
           ],
           "description": "tests must not be newly #[ignore]d or skipped without directive"

@@ -1261,6 +1261,56 @@ command = "cargo test"
             Ok(hit_bare && hit_fixes && hit_closes && hit_none && waiver_ok && waiver_placeholder)
         },
     ),
+    (
+        "ast: python test extraction discriminates test methods from helpers",
+        || {
+            use crate::ast::LanguagePack;
+            let v = AssertVocabulary::default();
+            let py_code = "class TestSuite(unittest.TestCase):\n    def _helper(self):\n        pass\n    @staticmethod\n    def util():\n        pass\n    def test_real(self):\n        assert 1 == 1\n";
+            let parsed = crate::ast::python::PythonPack.extract("test_suite.py", py_code, &v)?;
+            Ok(parsed.tests.len() == 1 && parsed.tests[0].name == "TestSuite::test_real")
+        },
+    ),
+    (
+        "ast: c_cpp test extraction recognises non-zero return and abort as assertions",
+        || {
+            use crate::ast::LanguagePack;
+            let v = AssertVocabulary::default();
+            let cpp_code = "void fail_if_bad() { abort(); }\nint main() {\n    fail_if_bad();\n    return 1;\n}\n";
+            let parsed = crate::ast::c_cpp::CppPack.extract("test_driver.cpp", cpp_code, &v)?;
+            let main_test = parsed.tests.iter().find(|t| t.name == "main").unwrap();
+            Ok(main_test.strong_asserts >= 1 && !main_test.is_vacuous())
+        },
+    ),
+    (
+        "ignored-tests: approved predicates waive conditional ignores",
+        || {
+            use crate::ast::TestFn;
+            use crate::config::IgnoredTestsGate;
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+
+            let miri_test = TestFn {
+                name: "miri_test".to_string(),
+                line: 1,
+                conditional_ignore: Some("miri".to_string()),
+                ..Default::default()
+            };
+            let added = [Located {
+                path: "tests/m.rs",
+                file_survives: true,
+                test: &miri_test,
+            }];
+
+            let default_settings = IgnoredTestsGate::default();
+            let unapproved = evaluate_ignored_tests(&[], &added, &default_settings, &[], false)?;
+
+            let mut approved_settings = default_settings.clone();
+            approved_settings.approved_predicates = vec!["miri".to_string()];
+            let approved = evaluate_ignored_tests(&[], &added, &approved_settings, &[], false)?;
+
+            Ok(unapproved.violations.len() == 1 && approved.violations.is_empty())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

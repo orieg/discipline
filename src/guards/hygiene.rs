@@ -417,7 +417,10 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
     let allowed = compile(&settings.allow_patterns, "allow_patterns")?;
     let mut out = GateOutcome::new(GATE);
 
-    let mut scan = |label: &str, text: &str, out: &mut GateOutcome| {
+    let scan = |label: &str,
+                text: &str,
+                added_lines: Option<&std::collections::BTreeSet<usize>>,
+                out: &mut GateOutcome| {
         let mut fence: Option<&str> = None;
         for (idx, line) in text.lines().enumerate() {
             let trimmed = line.trim_start();
@@ -432,7 +435,9 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
             if fence.is_some() {
                 continue;
             }
-            if line_allows(line, GATE) && banned.iter().any(|re| re.is_match(line)) {
+            let line_num = idx + 1;
+            let in_scope = added_lines.is_none_or(|lines| lines.contains(&line_num));
+            if in_scope && line_allows(line, GATE) && banned.iter().any(|re| re.is_match(line)) {
                 out.inline_exemptions += 1;
                 out.overrides.push(crate::tokens::OverrideRecord {
                     gate: GATE.to_string(),
@@ -450,6 +455,11 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
 
         let violations = scan_text_for_time_estimates(text, &banned, &allowed);
         for (line_num, hit_str) in violations {
+            if let Some(lines) = added_lines {
+                if !lines.contains(&line_num) {
+                    continue;
+                }
+            }
             out.push(
                 settings.severity(),
                 "Time Estimate",
@@ -462,19 +472,40 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
         }
     };
 
-    for path in ctx.git.tracked_files()? {
-        if !include.matches(&path) || exempt.matches(&path) {
-            continue;
-        }
-        match ctx.git.head_content(&path)? {
-            Some(text) => {
-                out.examined += 1;
-                scan(&path, &text, &mut out);
+    if settings.diff_only {
+        let changed = ctx.git.changed_files()?;
+        for f in &changed {
+            if f.is_deleted() || !include.matches(&f.path) || exempt.matches(&f.path) {
+                continue;
             }
-            None => out.notes.push(format!("skipped `{path}` (binary file)")),
+            match ctx.git.head_content(&f.path)? {
+                Some(text) => {
+                    out.examined += 1;
+                    scan(&f.path, &text, Some(&f.added_lines), &mut out);
+                }
+                None => out
+                    .notes
+                    .push(format!("skipped `{}` (binary file)", f.path)),
+            }
+        }
+    } else {
+        for path in ctx.git.tracked_files()? {
+            if !include.matches(&path) || exempt.matches(&path) {
+                continue;
+            }
+            match ctx.git.head_content(&path)? {
+                Some(text) => {
+                    out.examined += 1;
+                    scan(&path, &text, None, &mut out);
+                }
+                None => out.notes.push(format!("skipped `{path}` (binary file)")),
+            }
         }
     }
-    scan_pr_body(ctx, settings.scan_pr_body, &mut out, &mut scan);
+    let mut scan_body = |label: &str, text: &str, out: &mut GateOutcome| {
+        scan(label, text, None, out);
+    };
+    scan_pr_body(ctx, settings.scan_pr_body, &mut out, &mut scan_body);
     Ok(out)
 }
 
@@ -652,15 +683,16 @@ fn collect_json_strings<'a>(val: &'a serde_json::Value, out: &mut Vec<&'a str>) 
     }
 }
 
-fn scan_json(
-    label: &str,
-    text: &str,
-    rules: &[PiiRule],
-    settings: &PiiGate,
-    allowed: &[Regex],
+struct PiiScanOptions<'a> {
+    label: &'a str,
+    rules: &'a [PiiRule],
+    settings: &'a PiiGate,
+    allowed: &'a [Regex],
     is_active_config: bool,
-    out: &mut GateOutcome,
-) -> bool {
+    added_lines: Option<&'a std::collections::BTreeSet<usize>>,
+}
+
+fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bool {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
         return false;
     };
@@ -669,8 +701,8 @@ fn scan_json(
     collect_json_strings(&val, &mut tokens);
 
     for token in tokens {
-        for rule in rules {
-            if is_active_config && rule.label == "denylisted hostname" {
+        for rule in opts.rules {
+            if opts.is_active_config && rule.label == "denylisted hostname" {
                 continue;
             }
             for caps in rule.re.captures_iter(token) {
@@ -682,7 +714,7 @@ fn scan_json(
                 }
                 let allowed_user = rule.user_group
                     && caps.get(1).is_some_and(|u| {
-                        settings
+                        opts.settings
                             .allowed_users
                             .iter()
                             .any(|a| a.eq_ignore_ascii_case(u.as_str()))
@@ -690,7 +722,7 @@ fn scan_json(
                 if allowed_user {
                     continue;
                 }
-                if allowed.iter().any(|re| re.is_match(token)) {
+                if opts.allowed.iter().any(|re| re.is_match(token)) {
                     continue;
                 }
                 let detail = match (rule.redact, m.as_str()) {
@@ -702,10 +734,15 @@ fn scan_json(
                     .position(|l| l.contains(token))
                     .map(|p| p + 1)
                     .unwrap_or(1);
+                if let Some(lines) = opts.added_lines {
+                    if !lines.contains(&line_num) {
+                        continue;
+                    }
+                }
                 out.push(
-                    settings.severity(),
+                    opts.settings.severity(),
                     "Host / PII Leak",
-                    Some(label),
+                    Some(opts.label),
                     Some(line_num),
                     format!("Found a {detail}."),
                     "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
@@ -732,9 +769,18 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
         l == c || l == "discipline.toml"
     };
 
-    let mut scan = |label: &str, text: &str, out: &mut GateOutcome| {
+    let scan = |label: &str,
+                text: &str,
+                added_lines: Option<&std::collections::BTreeSet<usize>>,
+                out: &mut GateOutcome| {
         let active_cfg = is_active_config(label);
         for (idx, line) in text.lines().enumerate() {
+            let line_num = idx + 1;
+            if let Some(lines) = added_lines {
+                if !lines.contains(&line_num) {
+                    continue;
+                }
+            }
             let hit = rules.iter().find_map(|rule| {
                 if active_cfg && rule.label == "denylisted hostname" {
                     return None;
@@ -791,36 +837,64 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
         }
     };
 
-    for path in ctx.git.tracked_files()? {
-        if exempt.matches(&path) {
-            continue;
-        }
-        match ctx.git.head_content(&path)? {
-            Some(text) => {
-                out.examined += 1;
-                if path.ends_with(".json")
-                    && scan_json(
-                        &path,
-                        &text,
-                        &rules,
-                        settings,
-                        &allowed,
-                        is_active_config(&path),
-                        &mut out,
-                    )
-                {
-                    continue;
-                }
-                scan(&path, &text, &mut out);
+    if settings.diff_only {
+        let changed = ctx.git.changed_files()?;
+        for f in &changed {
+            if f.is_deleted() || exempt.matches(&f.path) {
+                continue;
             }
-            None => binary += 1,
+            match ctx.git.head_content(&f.path)? {
+                Some(text) => {
+                    out.examined += 1;
+                    let opts = PiiScanOptions {
+                        label: &f.path,
+                        rules: &rules,
+                        settings,
+                        allowed: &allowed,
+                        is_active_config: is_active_config(&f.path),
+                        added_lines: Some(&f.added_lines),
+                    };
+                    if f.path.ends_with(".json") && scan_json(&opts, &text, &mut out) {
+                        continue;
+                    }
+                    scan(&f.path, &text, Some(&f.added_lines), &mut out);
+                }
+                None => binary += 1,
+            }
+        }
+    } else {
+        for path in ctx.git.tracked_files()? {
+            if exempt.matches(&path) {
+                continue;
+            }
+            match ctx.git.head_content(&path)? {
+                Some(text) => {
+                    out.examined += 1;
+                    let opts = PiiScanOptions {
+                        label: &path,
+                        rules: &rules,
+                        settings,
+                        allowed: &allowed,
+                        is_active_config: is_active_config(&path),
+                        added_lines: None,
+                    };
+                    if path.ends_with(".json") && scan_json(&opts, &text, &mut out) {
+                        continue;
+                    }
+                    scan(&path, &text, None, &mut out);
+                }
+                None => binary += 1,
+            }
         }
     }
     if binary > 0 {
         out.notes
             .push(format!("{binary} binary file(s) not scanned"));
     }
-    scan_pr_body(ctx, settings.scan_pr_body, &mut out, &mut scan);
+    let mut scan_body = |label: &str, text: &str, out: &mut GateOutcome| {
+        scan(label, text, None, out);
+    };
+    scan_pr_body(ctx, settings.scan_pr_body, &mut out, &mut scan_body);
     Ok(out)
 }
 

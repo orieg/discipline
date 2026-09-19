@@ -289,19 +289,37 @@ impl<'a> PythonExtractor<'a> {
             .map(|n| self.text(n).to_string())
             .unwrap_or_default();
 
-        // Check if this is a test function:
-        // 1. Name starts with `test_` or `test`
-        // 2. Or is inside a test class (`Test*`) and name starts with `test`
-        // 3. Or file is a test path and function name starts with `test`
+        // In Python unittest and pytest:
+        // A test function/method MUST have a name starting with `test_` or equal to `test` (or inside a test file / test class, start with `test`).
+        // It is NEVER a test function if:
+        // 1. Its name starts with `_` (e.g. `_cell`, `_helper`, `__init__`)
+        // 2. It is a unittest lifecycle method: setUp, tearDown, setUpClass, tearDownClass, setUpModule, tearDownModule
+        // 3. It has a non-test decorator like @staticmethod, @classmethod, @property
+        if fn_name.starts_with('_')
+            || matches!(
+                fn_name.as_str(),
+                "setUp"
+                    | "tearDown"
+                    | "setUpClass"
+                    | "tearDownClass"
+                    | "setUpModule"
+                    | "tearDownModule"
+            )
+        {
+            return;
+        }
+
+        if let Some(decs) = decorators {
+            if decs.iter().any(|d| self.is_non_test_decorator(*d)) {
+                return;
+            }
+        }
+
         let is_test_name = fn_name.starts_with("test_")
             || fn_name == "test"
             || (self.is_test_path && fn_name.starts_with("test"));
 
-        let is_in_test_class = scope
-            .iter()
-            .any(|s| s.starts_with("Test") || s.ends_with("Test") || s.ends_with("Tests"));
-
-        if !is_test_name && !is_in_test_class {
+        if !is_test_name {
             return;
         }
 
@@ -351,6 +369,11 @@ impl<'a> PythonExtractor<'a> {
             || text.starts_with("@unittest.skip")
             || text.starts_with("@pytest.mark.skip")
             || text.starts_with("@pytest.mark.xfail")
+    }
+
+    fn is_non_test_decorator(&self, dec: Node) -> bool {
+        let text = self.text(dec).trim();
+        text.contains("staticmethod") || text.contains("classmethod") || text.contains("property")
     }
 
     fn scan_test_body(&self, body: Node, test: &mut TestFn) {
@@ -887,5 +910,31 @@ class TestClassPytestmark(unittest.TestCase):
             .extract("tests/broken.py", src, &vocab)
             .expect("extract broken");
         assert!(facts.has_parse_errors);
+    }
+
+    #[test]
+    fn test_class_helpers_and_lifecycle_hooks_are_ignored() {
+        let src = r#"
+class TestWriterTarget930:
+    @staticmethod
+    def _cell(arg):
+        return arg * 2
+
+    def setUp(self):
+        self.x = 1
+
+    def helper_calc(self):
+        return 42
+
+    def test_real_case(self):
+        assert self.helper_calc() == 42
+"#;
+        let vocab = AssertVocabulary::default();
+        let facts = PythonPack
+            .extract("tests/test_writer.py", src, &vocab)
+            .expect("extract test_writer");
+        assert_eq!(facts.tests.len(), 1);
+        assert_eq!(facts.tests[0].name, "TestWriterTarget930::test_real_case");
+        assert!(!facts.tests[0].is_vacuous());
     }
 }

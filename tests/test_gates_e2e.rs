@@ -4780,3 +4780,146 @@ fn issue_link_gate_e2e() {
     );
     assert_eq!(run_waiver_bad.code, 1);
 }
+
+// ---- Phase A Parity Extensions ----------------------------------------------
+
+#[test]
+fn diff_only_mode_ignores_preexisting_findings_in_untouched_lines() {
+    let repo = Repo::new();
+    repo.write("docs/old_plan.md", "# Old Plan\n\nShips in 3 weeks.\n");
+    repo.write("docs/old_notes.md", "# Notes\n\nRun at /Users/alice/repo\n"); // discipline:allow(pii)
+    repo.commit("docs: initial notes");
+
+    // PR touches src/new_code.rs with clean code, does NOT touch docs/
+    repo.write("src/new_code.rs", "pub fn answer() -> u32 { 42 }\n");
+    repo.commit("feat: add answer");
+
+    // 1. In default sweep mode, both gates fail on pre-existing files
+    let sweep_run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(sweep_run.code, 1);
+    assert_eq!(sweep_run.titles("time-estimates").len(), 1);
+    assert_eq!(sweep_run.titles("pii").len(), 1);
+
+    // 2. In diff_only mode, pre-existing files are not flagged
+    let diff_run = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.time-estimates]\ndiff_only = true\n[gates.pii]\ndiff_only = true\n",
+    ]);
+    assert_eq!(diff_run.titles("time-estimates").len(), 0);
+    assert_eq!(diff_run.titles("pii").len(), 0);
+
+    // 3. But if PR diff introduces a time-estimate on an added line, diff_only catches it
+    repo.write(
+        "docs/new_plan.md",
+        "# New Plan\n\nPlanned ship in 2 weeks\n",
+    );
+    repo.commit("docs: new plan");
+    let diff_bad = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.time-estimates]\ndiff_only = true\n",
+    ]);
+    assert_eq!(diff_bad.titles("time-estimates").len(), 1);
+}
+
+#[test]
+fn ignored_tests_distinguishes_arrives_ignored_from_no_longer_runs_and_honors_approved_predicates()
+{
+    let repo = Repo::new();
+    repo.write(
+        "tests/suite.rs",
+        "#[test]\nfn test_existing() { assert_eq!(1, 1); }\n",
+    );
+    repo.commit("test: initial suite");
+
+    // 1. Modify existing test to become ignored -> "Test Newly Skipped" ("no longer runs")
+    repo.write(
+        "tests/suite.rs",
+        "#[test]\n#[ignore]\nfn test_existing() { assert_eq!(1, 1); }\n",
+    );
+    repo.commit("test: disable existing");
+
+    let run_modified = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_modified.code, 1);
+    let out_mod = run_modified.outcome("ignored-tests");
+    assert_eq!(out_mod["violations"][0]["title"], "Test Newly Skipped");
+    assert!(out_mod["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("no longer runs"));
+
+    // 2. Add brand new test that arrives ignored -> "Test Arrives Ignored" ("arrives ignored")
+    repo.write(
+        "tests/new_suite.rs",
+        "#[test]\n#[ignore]\nfn test_brand_new() { assert_eq!(2, 2); }\n",
+    );
+    repo.commit("test: add new ignored test");
+    let run_added = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_added.code, 1);
+    let out_add = run_added.outcome("ignored-tests");
+    let arr_violation = out_add["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["title"] == "Test Arrives Ignored")
+        .expect("arrives ignored violation");
+    assert!(arr_violation["message"]
+        .as_str()
+        .unwrap()
+        .contains("arrives ignored"));
+
+    // 3. Conditional ignore under approved_predicates produces zero violations
+    repo.write(
+        "tests/miri_suite.rs",
+        "#[test]\n#[cfg_attr(miri, ignore)]\nfn test_miri() { assert_eq!(3, 3); }\n",
+    );
+    repo.commit("test: add miri conditional ignore");
+    let run_miri_unapproved = repo.check(&["--base", "HEAD~1"]);
+    let out_unapproved = run_miri_unapproved.outcome("ignored-tests");
+    assert_eq!(
+        out_unapproved["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v["title"] == "Test Conditionally Skipped")
+            .count(),
+        1
+    );
+
+    let run_miri_approved = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.ignored-tests]\napproved_predicates = [\"miri\"]\n",
+    ]);
+    let out_approved = run_miri_approved.outcome("ignored-tests");
+    assert_eq!(
+        out_approved["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v["title"] == "Test Conditionally Skipped")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn vacuous_tests_precision_python_and_cpp_expanse_patterns() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/test_helpers.py",
+        "import unittest\n\nclass CellTest(unittest.TestCase):\n    def _cell(self):\n        return 42\n    @staticmethod\n    def helper():\n        pass\n    def test_cell_works(self):\n        self.assertEqual(self._cell(), 42)\n",
+    );
+    repo.write(
+        "tests/driver.cpp",
+        "#include <cstdlib>\nvoid fail_bad() { abort(); }\nint main() {\n    fail_bad();\n    return 1;\n}\n",
+    );
+    repo.commit("test: add python class with helper and cpp driver");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run.titles("vacuous-tests").len(), 0, "{}", run.stdout);
+}

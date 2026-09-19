@@ -184,7 +184,7 @@ When a change touches source files in a language without an active pack, each AS
   - Dynamic test framework skips invoked within function bodies (`pytest.skip(...)`).
   - Commented-out test functions (covered by planned `suppression-delta`).
 - **Lifting directive:** `allow-ignore: <test-name> <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `approved_predicates`.
 
 #### `unsafe-safety-comment`
 - **Rule:** Every `unsafe` block, `unsafe fn`, or `unsafe impl` on an added line must be preceded by a load-bearing `// SAFETY:` comment. Deleting a `// SAFETY:` comment above an existing block is also blocked.
@@ -275,7 +275,7 @@ When a change touches source files in a language without an active pack, each AS
   - Historical durations ("was maintained for three years"). <!-- discipline:allow(time-estimates) -->
   - Code inside fenced blocks (` ``` `).
 - **Lifting directive:** In markdown: `<!-- discipline:allow(time-estimates) -->` on the matching line.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `include`, `extra_patterns`, `allow_patterns`, `scan_pr_body`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `include`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 
 #### `pii`
 - **Rule:** No leaked developer workstation home directories, private RFC 1918 LAN IPs, or denylisted hostnames in tracked text files or the PR body.
@@ -301,7 +301,7 @@ When a change touches source files in a language without an active pack, each AS
   - RFC 1918 CIDR network notations in routing documentation (`10.0.0.0/8`, `192.168.0.0/16`).
   - Binary files (non-text).
 - **Lifting directive:** `<!-- discipline:allow(pii) -->` on the matching line.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 
 #### `agent-scratch`
 - **Rule:** Agent transcripts, session files, and scratch artifacts must never be tracked in git.
@@ -324,8 +324,28 @@ When a change touches source files in a language without an active pack, each AS
   ```
 - **What it does NOT catch:**
   - Files untracked in `.gitignore` (safely ignored).
-- **Lifting directive:** Remove tracked scratch files from git (`git rm --cached`).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `paths`.
+
+#### `shell-secrets`
+- **Rule:** No command-line argument secrets or unverified piped script execution in shell scripts, Dockerfiles, or CI workflow files.
+- **Languages:** Shell (`*.sh`, `*.bash`, `*.zsh`), Dockerfiles, CI workflows (`.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/`, `.gitlab-ci.yml`).
+- **What it catches:**
+  - `ARGV-ENV`: Passing secrets via command-line arguments to `env` (e.g. `env TOKEN=$MY_TOKEN ./script.sh`).
+  - `ARGV-DOCKER`: Passing secret arguments via `docker run -e TOKEN=$SECRET` or `-e TOKEN="secret"`.
+  - `ARGV-INLINE`: Expanding secret variables inside inline script strings `sh -c "... $SECRET ..."`.
+  - `INJECT-XARGS`: Metacharacter command injection via `xargs -I {} sh -c '... {} ...'`.
+  - `INJECT-PIPE`: Piping remote network downloads directly into shell interpreters `curl ... | bash`.
+- **Lifting directive:** `secrets-argv-ok: <file-or-line> <reason>` in PR body or commit, or inline `discipline:allow(shell-secrets)`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_secret_patterns`, `allow_patterns`, `diff_only`.
+
+#### `issue-link`
+- **Rule:** Every pull request title or description must reference a tracking issue (`#123`, `Fixes #123`, `Closes #123`), or carry an explicit `no-issue:` rationale.
+- **Languages:** Any.
+- **What it catches:**
+  - PRs with no referenced issue in the PR title or PR description.
+  - Placeholder waiver values like `no-issue: <reason>` or empty waivers.
+- **Lifting directive:** `no-issue: <reason>` on its own line in the PR description.
+- **Config keys:** `enabled`, `severity`, `pattern`.
 
 ---
 

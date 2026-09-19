@@ -300,7 +300,7 @@ pub struct Gates {
     pub agents_md: BasicGate,
     pub assertion_reduction: AssertionGate,
     pub vacuous_tests: AssertionGate,
-    pub ignored_tests: BasicGate,
+    pub ignored_tests: IgnoredTestsGate,
     pub unsafe_safety_comment: UnsafeSafetyCommentGate,
     pub deletion_rationale: DeletionGate,
     pub time_estimates: TimeEstimateGate,
@@ -334,6 +334,7 @@ macro_rules! impl_gate_settings {
 }
 impl_gate_settings!(
     BasicGate,
+    IgnoredTestsGate,
     UnsafeSafetyCommentGate,
     AssertionGate,
     DeletionGate,
@@ -363,6 +364,27 @@ impl Default for BasicGate {
             enabled: true,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IgnoredTestsGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Conditional ignore predicates (e.g. `miri`) that are approved by repository policy.
+    pub approved_predicates: Vec<String>,
+}
+
+impl Default for IgnoredTestsGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            approved_predicates: Vec::new(),
         }
     }
 }
@@ -457,6 +479,8 @@ pub struct TimeEstimateGate {
     /// A line matching any of these is not a violation.
     pub allow_patterns: Vec<String>,
     pub scan_pr_body: bool,
+    /// When true, scans only modified lines in the git diff rather than all tracked files.
+    pub diff_only: bool,
 }
 
 impl Default for TimeEstimateGate {
@@ -469,6 +493,7 @@ impl Default for TimeEstimateGate {
             extra_patterns: Vec::new(),
             allow_patterns: Vec::new(),
             scan_pr_body: true,
+            diff_only: false,
         }
     }
 }
@@ -492,6 +517,8 @@ pub struct PiiGate {
     /// A line matching any of these is not a violation.
     pub allow_patterns: Vec<String>,
     pub scan_pr_body: bool,
+    /// When true, scans only modified lines in the git diff rather than all tracked files.
+    pub diff_only: bool,
 }
 
 impl Default for PiiGate {
@@ -513,6 +540,7 @@ impl Default for PiiGate {
             extra_patterns: Vec::new(),
             allow_patterns: Vec::new(),
             scan_pr_body: true,
+            diff_only: false,
         }
     }
 }
@@ -791,6 +819,8 @@ pub struct ShellSecretsGate {
     pub exempt_paths: Vec<String>,
     pub extra_secret_patterns: Vec<String>,
     pub allow_patterns: Vec<String>,
+    /// When true, scans only modified lines in the git diff rather than all tracked files.
+    pub diff_only: bool,
 }
 
 impl Default for ShellSecretsGate {
@@ -801,6 +831,7 @@ impl Default for ShellSecretsGate {
             exempt_paths: Vec::new(),
             extra_secret_patterns: Vec::new(),
             allow_patterns: Vec::new(),
+            diff_only: false,
         }
     }
 }

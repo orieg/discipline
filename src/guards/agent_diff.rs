@@ -783,7 +783,7 @@ pub fn evaluate_vacuous_tests(
 pub fn evaluate_ignored_tests(
     pairs: &[TestPair],
     added: &[Located],
-    settings: &crate::config::BasicGate,
+    settings: &crate::config::IgnoredTestsGate,
     directives: &[crate::tokens::ParsedDirective],
     is_staged: bool,
 ) -> Result<GateOutcome> {
@@ -792,17 +792,16 @@ pub fn evaluate_ignored_tests(
     let mut out = GateOutcome::new(GATE);
     out.examined = pairs.len() + added.len();
 
-    let newly_ignored = pairs
+    let newly_ignored_existing = pairs
         .iter()
         .filter(|p| p.head.ignored && !p.base.ignored)
-        .map(|p| (p.path, p.head))
-        .chain(
-            added
-                .iter()
-                .filter(|a| a.test.ignored)
-                .map(|a| (a.path, a.test)),
-        );
-    for (path, test) in newly_ignored {
+        .map(|p| (p.path, p.head, false));
+    let newly_ignored_added = added
+        .iter()
+        .filter(|a| a.test.ignored)
+        .map(|a| (a.path, a.test, true));
+
+    for (path, test, arrives_ignored) in newly_ignored_existing.chain(newly_ignored_added) {
         if exempt.matches(path) {
             continue;
         }
@@ -844,12 +843,23 @@ pub fn evaluate_ignored_tests(
         } else {
             settings.severity()
         };
+        let (title, message) = if arrives_ignored {
+            (
+                "Test Arrives Ignored",
+                format!("Test `{}` arrives ignored.", test.name),
+            )
+        } else {
+            (
+                "Test Newly Skipped",
+                format!("Test `{}` no longer runs.", test.name),
+            )
+        };
         out.push(
             severity,
-            "Test Newly Skipped",
+            title,
             Some(path),
             Some(test.line),
-            format!("Test `{}` no longer runs.", test.name),
+            message,
             &format!(
                 "Fix the test, or justify it on its own line in the PR body or a commit \
                  message: `allow-ignore: {} <reason>`.",
@@ -876,13 +886,20 @@ pub fn evaluate_ignored_tests(
         if exempt.matches(path) {
             continue;
         }
+        let cond = test.conditional_ignore.as_deref().unwrap_or("condition");
+        if settings
+            .approved_predicates
+            .iter()
+            .any(|p| cond == p || cond.contains(p) || p.contains(cond))
+        {
+            continue;
+        }
         if let Some(record) =
             tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
         {
             out.overrides.push(record);
             continue;
         }
-        let cond = test.conditional_ignore.as_deref().unwrap_or("condition");
         out.push(
             crate::config::Severity::Warning,
             "Test Conditionally Skipped",
@@ -1305,7 +1322,7 @@ mod tests {
 
     #[test]
     fn test_ignored_tests_pure() {
-        let settings = crate::config::BasicGate::default();
+        let settings = crate::config::IgnoredTestsGate::default();
         let b = TestFn {
             name: "active".to_string(),
             line: 1,
@@ -1335,6 +1352,52 @@ mod tests {
         }];
         let out = evaluate_ignored_tests(&pairs, &[], &settings, &[], false).unwrap();
         assert_eq!(out.violations.len(), 1);
+        assert_eq!(out.violations[0].title, "Test Newly Skipped");
+        assert!(out.violations[0].message.contains("no longer runs"));
+
+        // Test arriving ignored
+        let added_ignored = [Located {
+            path: "tests/new.rs",
+            file_survives: true,
+            test: &h_ignored,
+        }];
+        let out_added = evaluate_ignored_tests(&[], &added_ignored, &settings, &[], false).unwrap();
+        assert_eq!(out_added.violations.len(), 1);
+        assert_eq!(out_added.violations[0].title, "Test Arrives Ignored");
+        assert!(out_added.violations[0].message.contains("arrives ignored"));
+
+        // Test conditional ignore with and without approved_predicates
+        let h_miri = TestFn {
+            name: "miri_test".to_string(),
+            line: 10,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 0,
+            ignored: false,
+            conditional_ignore: Some("miri".to_string()),
+            should_panic: false,
+            ..Default::default()
+        };
+        let added_miri = [Located {
+            path: "tests/miri.rs",
+            file_survives: true,
+            test: &h_miri,
+        }];
+        // Without approved predicate -> warning violation
+        let out_unapproved =
+            evaluate_ignored_tests(&[], &added_miri, &settings, &[], false).unwrap();
+        assert_eq!(out_unapproved.violations.len(), 1);
+        assert_eq!(
+            out_unapproved.violations[0].title,
+            "Test Conditionally Skipped"
+        );
+
+        // With approved predicate -> 0 violations
+        let mut approved_settings = settings.clone();
+        approved_settings.approved_predicates = vec!["miri".to_string()];
+        let out_approved =
+            evaluate_ignored_tests(&[], &added_miri, &approved_settings, &[], false).unwrap();
+        assert_eq!(out_approved.violations.len(), 0);
 
         let directives = [crate::tokens::ParsedDirective {
             directive: "allow-ignore".to_string(),

@@ -273,16 +273,24 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
 
     let scanner = ShellSecretScanner::new(settings)?;
 
-    let tracked = ctx.git.tracked_files()?;
-    let mut target_files = Vec::new();
-    for file in &tracked {
-        if exempt.matches(file) {
-            continue;
-        }
-        if is_shell_secret_target(file) {
-            target_files.push(file.clone());
-        }
-    }
+    let target_files: Vec<(String, Option<std::collections::BTreeSet<usize>>)> =
+        if settings.diff_only {
+            let changed = ctx.git.changed_files()?;
+            changed
+                .into_iter()
+                .filter(|f| {
+                    !f.is_deleted() && !exempt.matches(&f.path) && is_shell_secret_target(&f.path)
+                })
+                .map(|f| (f.path, Some(f.added_lines)))
+                .collect()
+        } else {
+            let tracked = ctx.git.tracked_files()?;
+            tracked
+                .into_iter()
+                .filter(|file| !exempt.matches(file) && is_shell_secret_target(file))
+                .map(|file| (file, None))
+                .collect()
+        };
 
     if target_files.is_empty() {
         out.examined = 0;
@@ -295,7 +303,7 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
 
     out.examined = target_files.len();
 
-    for file in &target_files {
+    for (file, added_lines) in &target_files {
         // Scoped file-level PR body override
         if let Some(record) = ctx.find_override(GATE, tokens::SECRETS_ARGV_OK, file) {
             out.overrides.push(record);
@@ -314,6 +322,11 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
 
         for (idx, line) in content.lines().enumerate() {
             let line_num = idx + 1;
+            if let Some(lines) = added_lines {
+                if !lines.contains(&line_num) {
+                    continue;
+                }
+            }
 
             if let Some(rule) = scanner.check_line(line) {
                 // Line-level PR body override or inline exemption

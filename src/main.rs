@@ -90,7 +90,13 @@ fn load_config(
     };
 
     let config_path_for_ctx = if let Some(root) = repo_root {
-        if let Ok(rel) = resolved_path.strip_prefix(root) {
+        let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let res_canon = resolved_path
+            .canonicalize()
+            .unwrap_or_else(|_| resolved_path.clone());
+        if let Ok(rel) = res_canon.strip_prefix(&root_canon) {
+            rel.to_string_lossy().replace('\\', "/")
+        } else if let Ok(rel) = resolved_path.strip_prefix(root) {
             rel.to_string_lossy().replace('\\', "/")
         } else {
             args.config.to_string_lossy().replace('\\', "/")
