@@ -456,7 +456,7 @@ Trigger: a `vX.Y.Z` tag. Order and gates:
 4. **smoke** — on three runner types, the action at the tagged commit **downloads the published assets**, verifies the checksum, passes the clean fixture, rejects the bad one for the expected gates, and `gh attestation verify` succeeds.
 5. **move-major-tag** — the floating `v<major>` tag moves last, only for stable versions, only after smoke passes.
 
-Not in scope yet: crates.io publication, Homebrew, a container image.
+Container image (`Dockerfile`) and Argo Workflow template (`templates/argo-workflow-template.yaml`) are provided in-tree. Not in scope yet: crates.io publication, Homebrew.
 
 ---
 

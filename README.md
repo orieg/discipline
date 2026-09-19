@@ -101,6 +101,34 @@ repos:
 
 Or as a plain git hook: `discipline check --staged`. Staged mode runs before a commit message exists, so findings that an override directive could lift are warnings locally and errors in CI.
 
+### Container (Docker)
+
+A minimal, statically linked non-root Alpine container image is available:
+
+```bash
+docker build -t discipline .
+docker run --rm -v "$PWD":/workspace discipline check --base origin/main
+```
+
+### Argo Workflows
+
+Use [`templates/argo-workflow-template.yaml`](templates/argo-workflow-template.yaml) to run `discipline` as a pre-merge gate in GitOps pipelines, capturing JUnit XML and SARIF reports:
+
+```yaml
+- name: run-discipline-gate
+  templateRef:
+    name: discipline-sentinel
+    template: discipline-gate
+  arguments:
+    parameters:
+      - name: repo-url
+        value: "https://github.com/my-org/my-repo.git"
+      - name: target-branch
+        value: "main"
+      - name: source-branch
+        value: "feat/my-feature"
+```
+
 ### CLI
 
 ```bash

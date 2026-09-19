@@ -1,0 +1,141 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: discipline-sentinel
+  annotations:
+    workflows.argoproj.io/description: >-
+      Universal CI/CD sentinel and AI coding agent diff guardrail.
+      Enforces AST diff inspection (preventing assertion weakening, vacuous tests,
+      and test suppression), repository hygiene, and micro-benchmark regression bounds.
+spec:
+  entrypoint: pre-merge-pipeline
+  arguments:
+    parameters:
+      - name: repo-url
+        description: "Git repository URL to check"
+      - name: target-branch
+        value: "main"
+        description: "Target base branch for diff analysis"
+      - name: source-branch
+        description: "Source branch or PR head commit to inspect"
+      - name: pr-body
+        value: ""
+        description: "Pull request body markdown text for directive and hygiene inspection"
+      - name: discipline-image
+        value: "ghcr.io/orieg/discipline:latest"
+        description: "Discipline container image"
+
+  templates:
+    # -------------------------------------------------------------------------
+    # Pipeline entrypoint demonstrating discipline as a mandatory pre-merge gate
+    # -------------------------------------------------------------------------
+    - name: pre-merge-pipeline
+      inputs:
+        parameters:
+          - name: repo-url
+          - name: target-branch
+          - name: source-branch
+          - name: pr-body
+          - name: discipline-image
+      dag:
+        tasks:
+          # Phase 1: Diff Sentinel Gate Check (Fails closed on drift or regression)
+          - name: run-discipline-gate
+            template: discipline-gate
+            arguments:
+              parameters:
+                - name: repo-url
+                  value: "{{inputs.parameters.repo-url}}"
+                - name: target-branch
+                  value: "{{inputs.parameters.target-branch}}"
+                - name: source-branch
+                  value: "{{inputs.parameters.source-branch}}"
+                - name: pr-body
+                  value: "{{inputs.parameters.pr-body}}"
+                - name: discipline-image
+                  value: "{{inputs.parameters.discipline-image}}"
+
+          # Phase 2: Downstream Build & Test (Blocked if discipline gate fails)
+          - name: downstream-build
+            dependencies: [run-discipline-gate]
+            template: sample-downstream-task
+            arguments:
+              parameters:
+                - name: message
+                  value: "Discipline sentinel passed cleanly. Proceeding to compilation."
+
+    # -------------------------------------------------------------------------
+    # Task Template: Discipline Gate execution with JUnit & SARIF artifact capture
+    # -------------------------------------------------------------------------
+    - name: discipline-gate
+      inputs:
+        parameters:
+          - name: repo-url
+          - name: target-branch
+          - name: source-branch
+          - name: pr-body
+          - name: discipline-image
+      outputs:
+        artifacts:
+          # Captured JUnit XML report for test dashboard integration
+          - name: junit-report
+            path: /workspace/reports/junit.xml
+            archive:
+              none: {}
+            optional: true
+          # Captured SARIF report for static security / code scanning
+          - name: sarif-report
+            path: /workspace/reports/sarif.sarif
+            archive:
+              none: {}
+            optional: true
+          # Full JSON execution summary
+          - name: discipline-summary
+            path: /workspace/reports/discipline.json
+            archive:
+              none: {}
+            optional: true
+      container:
+        image: "{{inputs.parameters.discipline-image}}"
+        workingDir: /workspace
+        env:
+          - name: PR_BODY
+            value: "{{inputs.parameters.pr-body}}"
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -euo pipefail
+            mkdir -p /workspace/repo /workspace/reports
+            cd /workspace/repo
+
+            echo "Cloning repository..."
+            git init
+            git remote add origin "{{inputs.parameters.repo-url}}"
+            git fetch origin --depth=50 "{{inputs.parameters.target-branch}}"
+            git fetch origin --depth=50 "{{inputs.parameters.source-branch}}"
+            git checkout -b inspected "origin/{{inputs.parameters.source-branch}}"
+
+            echo "Executing discipline check with JUnit XML and JSON report generation..."
+            discipline check \
+              --base "origin/{{inputs.parameters.target-branch}}" \
+              --format junit \
+              --output-file /workspace/reports/junit.xml \
+              --json-out /workspace/reports/discipline.json
+
+            echo "Executing discipline diff inspection with SARIF report generation..."
+            discipline diff \
+              --base "origin/{{inputs.parameters.target-branch}}" \
+              --format sarif \
+              --output-file /workspace/reports/sarif.sarif
+
+    # -------------------------------------------------------------------------
+    # Task Template: Placeholder downstream job
+    # -------------------------------------------------------------------------
+    - name: sample-downstream-task
+      inputs:
+        parameters:
+          - name: message
+      container:
+        image: alpine:3.21
+        command: ["/bin/echo"]
+        args: ["{{inputs.parameters.message}}"]
