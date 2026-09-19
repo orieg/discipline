@@ -577,6 +577,38 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 2)
         },
     ),
+    #[cfg(feature = "lang-go")]
+    (
+        "go: testing.T extraction catches assertions, vacuous tests, and t.Skip",
+        || {
+            use crate::ast::LanguagePack;
+            let go_pack = crate::ast::r#go::GoPack;
+            let vocab = AssertVocabulary::default();
+            let src = "package pkg\nfunc TestOne(t *testing.T) { t.Fatalf(\"err\") }\nfunc TestTwo(t *testing.T) { assert.True(t, true) }\nfunc TestThree(t *testing.T) { t.Skip(\"reason\") }\n";
+            let facts = go_pack.extract("pkg_test.go", src, &vocab)?;
+            Ok(facts.tests.len() == 3
+                && facts.tests[0].total_asserts == 1
+                && !facts.tests[0].is_vacuous()
+                && facts.tests[1].is_vacuous()
+                && facts.tests[2].ignored)
+        },
+    ),
+    #[cfg(feature = "lang-go")]
+    (
+        "go: t.Fatalf assertion drop is detected",
+        || {
+            use crate::ast::LanguagePack;
+            let go_pack = crate::ast::r#go::GoPack;
+            let vocab = AssertVocabulary::default();
+            let strong_src = "package pkg\nfunc TestA(t *testing.T) {\n  t.Fatalf(\"err\")\n  require.Equal(t, a, b)\n}\n";
+            let weak_src = "package pkg\nfunc TestA(t *testing.T) {\n  t.Fail()\n  t.Fail()\n}\n";
+            let strong_facts = go_pack.extract("pkg_test.go", strong_src, &vocab)?;
+            let weak_facts = go_pack.extract("pkg_test.go", weak_src, &vocab)?;
+            Ok(strong_facts.tests[0].strong_asserts == 2
+                && weak_facts.tests[0].strong_asserts == 0
+                && weak_facts.tests[0].total_asserts == 2)
+        },
+    ),
     (
         "bench: callgrind and criterion benchmark parsing and delta calculation discriminate",
         || {

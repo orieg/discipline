@@ -36,9 +36,9 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 | Gate | Suite | Languages | Rule |
 |---|---|---|---|
 | `agents-md` | agent-guard | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
-| `assertion-reduction` | agent-guard | Rust, Python, JS/TS, PHPT, Java | assertion count / strength must not drop in an existing test |
-| `vacuous-tests` | agent-guard | Rust, Python, JS/TS, PHPT, Java | new tests must carry a non-tautological assertion |
-| `ignored-tests` | agent-guard | Rust, Python, JS/TS, PHPT, Java | tests must not be newly #[ignore]d |
+| `assertion-reduction` | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go | assertion count / strength must not drop in an existing test |
+| `vacuous-tests` | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go | new tests must carry a non-tautological assertion |
+| `ignored-tests` | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go | tests must not be newly #[ignore]d |
 | `unsafe-safety-comment` | agent-guard | Rust | unsafe blocks / impls carry a // SAFETY: comment |
 | `deletion-rationale` | agent-guard | any | deleted files and removed tests need a scoped removes: rationale |
 | `time-estimates` | hygiene | any | no calendar / duration estimates in markdown or the PR body |
@@ -98,7 +98,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 ### Phase 7: Language Packs II
 - **Deliverables:** Java / Kotlin pack (JUnit 5, AssertJ, Hamcrest); C / C++ pack (GoogleTest, Catch2); Go pack (`testing.T`, `testify`).
 - **Go / no-go gate:** 100% discriminating test coverage per language pack.
-- **Status:** Planned.
+- **Status:** In progress (Java and Go packs shipped; Kotlin and C / C++ planned).
 
 ---
 

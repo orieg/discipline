@@ -81,7 +81,7 @@ fn adding_assertions_is_not_a_reduction() {
 #[test]
 fn unanalysed_languages_are_named_not_silently_passed() {
     let repo = Repo::new();
-    repo.write("tools/check.go", "package main\nfunc TestNothing() {}\n");
+    repo.write("tools/check.rb", "def test_nothing; end\n");
     repo.write("src/App.kt", "class App {}\n");
     repo.commit("feat: tooling");
     let run = repo.check(&[]);
@@ -127,8 +127,8 @@ fn unsupported_source_files_group_by_extension() {
     let repo = Repo::new();
     repo.write("ext/judy.c", "void foo() {}\n");
     repo.write("ext/judy.h", "#define FOO 1\n");
-    repo.write("tests/001.go", "package main\nfunc TestFoo() {}\n");
-    repo.commit("feat: c and go");
+    repo.write("tests/001.rb", "def test_foo; end\n");
+    repo.commit("feat: c and ruby");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0);
     for gate in [
@@ -140,7 +140,7 @@ fn unsupported_source_files_group_by_extension() {
         let notes = run.outcome(gate)["notes"].to_string();
         assert!(
             notes.contains("3 changed source file(s)")
-                && notes.contains("2 .c/.h, 1 .go")
+                && notes.contains("2 .c/.h, 1 .rb")
                 && notes.contains("NOT analysed"),
             "gate {gate} should format extension breakdown: {notes}"
         );
@@ -167,6 +167,29 @@ fn phpt_source_files_are_analysed_by_golden_pack() {
         assert!(
             !notes.contains("NOT analysed"),
             "gate {gate} should analyse phpt files: {notes}"
+        );
+    }
+}
+
+#[test]
+fn go_source_files_are_analysed_by_go_pack() {
+    let repo = Repo::new();
+    repo.write(
+        "calc_test.go",
+        "package calc_test\nimport \"testing\"\nfunc TestCalc(t *testing.T) { if 1+1 != 2 { t.Fatalf(\"fail\") } }\n",
+    );
+    repo.commit("feat: go test");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0);
+    for gate in [
+        "assertion-reduction",
+        "vacuous-tests",
+        "ignored-tests",
+    ] {
+        let notes = run.outcome(gate)["notes"].to_string();
+        assert!(
+            !notes.contains("NOT analysed"),
+            "gate {gate} should analyse go files: {notes}"
         );
     }
 }
@@ -2919,6 +2942,97 @@ class SkipTest {
         &[(
             "PR_BODY",
             "allow-ignore: SkipTest.skipsThisTest disabled for refactoring",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("ignored-tests");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn go_assertion_reduction_and_vacuous_tests_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_go = r#"package calc_test
+
+import "testing"
+
+func TestCalc(t *testing.T) {
+    if 1+1 != 2 {
+        t.Fatalf("unexpected")
+    }
+    if 2+2 != 4 {
+        t.Fatalf("unexpected")
+    }
+}
+"#;
+    repo.write("calc_test.go", base_go);
+    repo.commit("feat: initial go test");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Weaken assertions: 2 assertions reduced to 1
+    let weaker_go = r#"package calc_test
+
+import "testing"
+
+func TestCalc(t *testing.T) {
+    if 1+1 != 2 {
+        t.Fatalf("unexpected")
+    }
+}
+"#;
+    repo.write("calc_test.go", weaker_go);
+    repo.commit("test: weaken assertions in go");
+
+    let run_weak = repo.check(&[]);
+    assert_eq!(run_weak.code, 1);
+    let outcome_weak = run_weak.outcome("assertion-reduction");
+    assert_eq!(outcome_weak["violations"].as_array().unwrap().len(), 1);
+
+    // Vacuous test addition
+    let repo2 = Repo::new();
+    repo2.write(
+        "empty_test.go",
+        "package empty_test\n\nimport \"testing\"\n\nfunc TestEmpty(t *testing.T) {}\n",
+    );
+    repo2.commit("test: add empty go test");
+    let run_vac = repo2.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let outcome_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn go_skipped_tests_detected_and_accepts_override() {
+    let repo = Repo::new();
+    repo.write(
+        "skip_test.go",
+        r#"package skip_test
+
+import "testing"
+
+func TestSkipped(t *testing.T) {
+    t.Skip("temporarily skipped")
+    if 1+1 != 2 {
+        t.Fatalf("unexpected")
+    }
+}
+"#,
+    );
+    repo.commit("test: add skipped go test");
+
+    let run_skip = repo.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let outcome_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(outcome_skip["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: TestSkipped skipped for refactoring",
         )],
     );
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);

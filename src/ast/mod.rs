@@ -6,6 +6,8 @@
 
 use anyhow::Result;
 
+#[cfg(feature = "lang-go")]
+pub mod r#go;
 #[cfg(feature = "lang-golden")]
 pub mod golden;
 #[cfg(feature = "lang-java")]
@@ -81,6 +83,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(javascript::JavaScriptPack));
     #[cfg(feature = "lang-java")]
     reg.register(Box::new(java::JavaPack));
+    #[cfg(feature = "lang-go")]
+    reg.register(Box::new(r#go::GoPack));
     reg
 }
 
@@ -92,13 +96,14 @@ pub enum Language {
     JavaScript,
     TypeScript,
     Java,
+    Go,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
 /// touching these is *named* in the report: the AST gates did not look at it.
 pub const UNSUPPORTED_SOURCE_EXTS: &[&str] = &[
-    "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "kt", "kts", "scala", "go", "c", "h", "cc",
-    "cpp", "cxx", "hpp", "hh", "cs", "rb", "swift", "php", "phpt", "m", "mm",
+    "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "kt", "kts", "scala", "c", "h", "cc", "cpp",
+    "cxx", "hpp", "hh", "cs", "rb", "swift", "php", "phpt", "m", "mm",
 ];
 
 pub fn language_for(path: &str) -> Option<Language> {
@@ -108,6 +113,7 @@ pub fn language_for(path: &str) -> Option<Language> {
         "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
         "ts" | "tsx" | "mts" | "cts" => Some(Language::TypeScript),
         "java" => Some(Language::Java),
+        "go" => Some(Language::Go),
         _ => None,
     }
 }
@@ -262,12 +268,13 @@ mod tests {
         assert_eq!(language_for("src/a.js"), Some(Language::JavaScript));
         assert_eq!(language_for("web/App.tsx"), Some(Language::TypeScript));
         assert_eq!(language_for("service.java"), Some(Language::Java));
-        assert_eq!(language_for("src/a.go"), None);
+        assert_eq!(language_for("src/a.go"), Some(Language::Go));
         assert!(!is_unsupported_source("pkg/mod/a.py"));
         assert!(!is_unsupported_source("web/App.tsx"));
         assert!(!is_unsupported_source("service.java"));
+        assert!(!is_unsupported_source("src/a.go"));
         assert!(is_unsupported_source("service.kt"));
-        assert!(is_unsupported_source("main.go"));
+        assert!(is_unsupported_source("main.c"));
         assert!(!is_unsupported_source("src/a.rs"));
         assert!(!is_unsupported_source("tests/001.phpt"));
         assert!(!is_unsupported_source("docs/plan.md"));
@@ -302,6 +309,13 @@ mod tests {
             assert_eq!(java_pack.id(), "java");
             assert_eq!(java_pack.name(), "Java");
         }
+        #[cfg(feature = "lang-go")]
+        {
+            assert!(reg.is_supported("calc_test.go"));
+            let go_pack = reg.find_pack("calc_test.go").expect("go pack found");
+            assert_eq!(go_pack.id(), "go");
+            assert_eq!(go_pack.name(), "Go");
+        }
     }
 
     #[test]
@@ -327,18 +341,18 @@ mod tests {
     #[test]
     fn unsupported_source_respects_active_registry() {
         let mut reg = default_registry();
-        assert!(is_unsupported_source_in("main.go", &reg));
+        assert!(is_unsupported_source_in("main.kt", &reg));
 
-        struct GoDummy;
-        impl LanguagePack for GoDummy {
+        struct KotlinDummy;
+        impl LanguagePack for KotlinDummy {
             fn id(&self) -> &'static str {
-                "go"
+                "kotlin"
             }
             fn name(&self) -> &'static str {
-                "Go"
+                "Kotlin"
             }
             fn matches(&self, path: &str) -> bool {
-                extension(path) == Some("go")
+                extension(path) == Some("kt")
             }
             fn extract(
                 &self,
@@ -350,7 +364,7 @@ mod tests {
             }
         }
 
-        reg.register(Box::new(GoDummy));
-        assert!(!is_unsupported_source_in("main.go", &reg));
+        reg.register(Box::new(KotlinDummy));
+        assert!(!is_unsupported_source_in("main.kt", &reg));
     }
 }
