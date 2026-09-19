@@ -11,6 +11,7 @@
 //! - Untrusted PR text guard: commands cannot be modified in PR diff without runner authorization
 
 use crate::config::{DisciplineConfig, GateSettings};
+use crate::guards::presets;
 use crate::guards::{Context, GateOutcome};
 use crate::tokens;
 use anyhow::{bail, Context as _, Result};
@@ -187,14 +188,18 @@ fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
     let base_cmd = &base_cfg.gates.command;
 
     let mut modified = false;
-    if head_cmd.command != base_cmd.command {
+    if head_cmd.command != base_cmd.command || head_cmd.preset != base_cmd.preset {
         modified = true;
     }
     if head_cmd.commands.len() != base_cmd.commands.len() {
         modified = true;
     } else {
         for (h, b) in head_cmd.commands.iter().zip(base_cmd.commands.iter()) {
-            if h.name != b.name || h.command != b.command || h.canary_command != b.canary_command {
+            if h.name != b.name
+                || h.command != b.command
+                || h.preset != b.preset
+                || h.canary_command != b.canary_command
+            {
                 modified = true;
                 break;
             }
@@ -249,6 +254,7 @@ struct ResolvedCommand {
     allow_zero: bool,
     canary_command: Option<String>,
     canary_expected_diagnostic: Option<String>,
+    policy_files: &'static [&'static str],
 }
 
 /// Evaluates the `command` verification gate.
@@ -274,62 +280,151 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         return Ok(outcome);
     }
 
-    // Collect resolved commands (from top-level command and commands list)
+    // Collect resolved commands (from top-level command/preset and commands list)
     let mut resolved = Vec::new();
 
     let runner_default = std::env::var("DISCIPLINE_COMMAND").ok();
-    let primary_cmd = runner_default.or_else(|| gate.command.clone());
+    let preset_def = match gate.preset.as_deref() {
+        Some(name) => match presets::resolve_preset(name) {
+            Some(def) => Some(def),
+            None => bail!("unknown command preset `{name}` in `[gates.command]`"),
+        },
+        None => None,
+    };
+
+    let primary_cmd = runner_default
+        .or_else(|| gate.command.clone())
+        .or_else(|| preset_def.map(|d| d.default_command.to_string()));
 
     if let Some(cmd) = primary_cmd {
+        let mut forbid = gate.forbid_output.clone();
+        if let Some(def) = preset_def {
+            for p in def.forbid_output {
+                if !forbid.iter().any(|existing| existing == p) {
+                    forbid.push(p.to_string());
+                }
+            }
+        }
+        let timeout = gate
+            .timeout_seconds
+            .or_else(|| preset_def.map(|d| d.default_timeout_seconds))
+            .unwrap_or(60);
+        let zero_pattern = gate
+            .zero_items_pattern
+            .clone()
+            .or_else(|| preset_def.and_then(|d| d.zero_items_pattern.map(|s| s.to_string())));
+        let canary_cmd = gate
+            .canary_command
+            .clone()
+            .or_else(|| preset_def.and_then(|d| d.canary_command.map(|s| s.to_string())));
+        let canary_diag = gate.canary_expected_diagnostic.clone().or_else(|| {
+            preset_def.and_then(|d| d.canary_expected_diagnostic.map(|s| s.to_string()))
+        });
+        let policy_files = preset_def.map(|d| d.policy_files).unwrap_or(&[]);
+
         resolved.push(ResolvedCommand {
-            name: "default".to_string(),
+            name: gate.preset.clone().unwrap_or_else(|| "default".to_string()),
             command: cmd,
-            timeout_seconds: gate.timeout_seconds,
+            timeout_seconds: timeout,
             count_pattern: gate.count_pattern.clone(),
             min_count: gate.min_count,
-            forbid_output: gate.forbid_output.clone(),
-            zero_items_pattern: gate.zero_items_pattern.clone(),
+            forbid_output: forbid,
+            zero_items_pattern: zero_pattern,
             allow_zero: gate.allow_zero,
-            canary_command: gate.canary_command.clone(),
-            canary_expected_diagnostic: gate.canary_expected_diagnostic.clone(),
+            canary_command: canary_cmd,
+            canary_expected_diagnostic: canary_diag,
+            policy_files,
         });
     }
 
     for entry in &gate.commands {
+        let preset_def = match entry.preset.as_deref() {
+            Some(name) => match presets::resolve_preset(name) {
+                Some(def) => Some(def),
+                None => bail!(
+                    "unknown command preset `{name}` in command entry `{}`",
+                    entry.name
+                ),
+            },
+            None => None,
+        };
+
         let env_key = format!(
             "DISCIPLINE_COMMAND_{}",
             entry.name.replace('-', "_").to_uppercase()
         );
-        let effective_cmd = std::env::var(&env_key).unwrap_or_else(|_| entry.command.clone());
+        let effective_cmd = std::env::var(&env_key)
+            .ok()
+            .or_else(|| entry.command.clone())
+            .or_else(|| preset_def.map(|d| d.default_command.to_string()));
+
+        let effective_cmd = match effective_cmd {
+            Some(c) => c,
+            None => {
+                bail!(
+                    "command entry `{}` must specify `command` or a valid `preset`",
+                    entry.name
+                );
+            }
+        };
+
         let mut forbid = gate.forbid_output.clone();
+        if let Some(def) = preset_def {
+            for p in def.forbid_output {
+                if !forbid.iter().any(|e| e == p) {
+                    forbid.push(p.to_string());
+                }
+            }
+        }
         for p in &entry.forbid_output {
-            if !forbid.contains(p) {
+            if !forbid.iter().any(|e| e == p) {
                 forbid.push(p.clone());
             }
         }
+
+        let timeout = entry
+            .timeout_seconds
+            .or_else(|| preset_def.map(|d| d.default_timeout_seconds))
+            .or(gate.timeout_seconds)
+            .unwrap_or(60);
+
+        let zero_pattern = entry
+            .zero_items_pattern
+            .clone()
+            .or_else(|| preset_def.and_then(|d| d.zero_items_pattern.map(|s| s.to_string())))
+            .or_else(|| gate.zero_items_pattern.clone());
+
+        let canary_cmd = entry
+            .canary_command
+            .clone()
+            .or_else(|| preset_def.and_then(|d| d.canary_command.map(|s| s.to_string())))
+            .or_else(|| gate.canary_command.clone());
+
+        let canary_diag = entry
+            .canary_expected_diagnostic
+            .clone()
+            .or_else(|| {
+                preset_def.and_then(|d| d.canary_expected_diagnostic.map(|s| s.to_string()))
+            })
+            .or_else(|| gate.canary_expected_diagnostic.clone());
+
+        let policy_files = preset_def.map(|d| d.policy_files).unwrap_or(&[]);
+
         resolved.push(ResolvedCommand {
             name: entry.name.clone(),
             command: effective_cmd,
-            timeout_seconds: entry.timeout_seconds.unwrap_or(gate.timeout_seconds),
+            timeout_seconds: timeout,
             count_pattern: entry
                 .count_pattern
                 .clone()
                 .or_else(|| gate.count_pattern.clone()),
             min_count: entry.min_count.or(gate.min_count),
             forbid_output: forbid,
-            zero_items_pattern: entry
-                .zero_items_pattern
-                .clone()
-                .or_else(|| gate.zero_items_pattern.clone()),
+            zero_items_pattern: zero_pattern,
             allow_zero: entry.allow_zero || gate.allow_zero,
-            canary_command: entry
-                .canary_command
-                .clone()
-                .or_else(|| gate.canary_command.clone()),
-            canary_expected_diagnostic: entry
-                .canary_expected_diagnostic
-                .clone()
-                .or_else(|| gate.canary_expected_diagnostic.clone()),
+            canary_command: canary_cmd,
+            canary_expected_diagnostic: canary_diag,
+            policy_files,
         });
     }
 
@@ -339,9 +434,34 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     }
 
     for item in resolved {
-        // Check for override directive covering this command name
-        let override_rec = ctx.find_override(GATE, tokens::ALLOW_COMMAND, &item.name);
+        // Check for override directive covering this command name or "default"
+        let override_rec = ctx
+            .find_override(GATE, tokens::ALLOW_COMMAND, &item.name)
+            .or_else(|| {
+                if item.name != "default" {
+                    ctx.find_override(GATE, tokens::ALLOW_COMMAND, "default")
+                } else {
+                    None
+                }
+            });
         let mut command_violations = Vec::new();
+
+        // 0. Check required policy files for stealth deletion
+        for pf in item.policy_files {
+            if let Ok(Some(_)) = ctx.git.base_content(pf) {
+                let pf_path = ctx.git.root().join(pf);
+                if !pf_path.exists() {
+                    command_violations.push((
+                        "Policy File Deleted",
+                        format!(
+                            "Command `{}` required policy file `{pf}` was deleted in this change.",
+                            item.name
+                        ),
+                        "Restore the policy file or justify its removal.",
+                    ));
+                }
+            }
+        }
 
         // 1. Negative-control canary execution
         if let Some(ref canary_cmd) = item.canary_command {
@@ -574,5 +694,23 @@ mod tests {
             msg.contains("timed out after 1s"),
             "expected timeout message, got: {msg}"
         );
+    }
+
+    #[test]
+    fn test_preset_catalog_resolution_invariants() {
+        let p = presets::resolve_preset("cargo-mutants").expect("cargo-mutants preset exists");
+        assert_eq!(p.category, "mutation");
+        assert_eq!(p.default_command, "cargo mutants --in-diff");
+        assert_eq!(p.zero_items_pattern, Some("0 mutants tested"));
+        assert!(p.forbid_output.contains(&"survived"));
+        assert_eq!(p.policy_files, &[".cargo/mutants.toml"]);
+
+        let loom = presets::resolve_preset("loom").expect("loom preset exists");
+        assert_eq!(loom.category, "concurrency");
+        assert_eq!(loom.zero_items_pattern, Some("running 0 tests"));
+
+        let deny = presets::resolve_preset("cargo-deny").expect("cargo-deny preset exists");
+        assert_eq!(deny.category, "supply-chain");
+        assert_eq!(deny.policy_files, &["deny.toml"]);
     }
 }

@@ -104,6 +104,10 @@
           "description": "Name or identifier of the command",
           "type": "string"
         },
+        "preset": {
+          "description": "Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom)",
+          "type": "string"
+        },
         "timeout_seconds": {
           "description": "Execution timeout in seconds",
           "type": "integer"
@@ -114,8 +118,7 @@
         }
       },
       "required": [
-        "name",
-        "command"
+        "name"
       ],
       "type": "object"
     },
@@ -163,6 +166,10 @@
         "min_count": {
           "description": "Minimum count required",
           "type": "integer"
+        },
+        "preset": {
+          "description": "Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom)",
+          "type": "string"
         },
         "severity": {
           "$ref": "#/$defs/Severity"

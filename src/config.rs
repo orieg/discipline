@@ -607,10 +607,12 @@ pub struct CommandGate {
     pub enabled: bool,
     pub severity: Severity,
     pub exempt_paths: Vec<String>,
+    /// Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom).
+    pub preset: Option<String>,
     /// Primary command to execute.
     pub command: Option<String>,
     /// Execution timeout in seconds (default: 60s). Exceeding this triggers exit 2.
-    pub timeout_seconds: u64,
+    pub timeout_seconds: Option<u64>,
     /// Regex pattern to extract an integer count (e.g. `test result: ok. (\\d+) passed`).
     pub count_pattern: Option<String>,
     /// Minimum count required. If base ref has a higher count, the base count acts as ratchet floor.
@@ -635,8 +637,9 @@ impl Default for CommandGate {
             enabled: true,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
+            preset: None,
             command: None,
-            timeout_seconds: 60,
+            timeout_seconds: None,
             count_pattern: None,
             min_count: None,
             forbid_output: Vec::new(),
@@ -653,7 +656,8 @@ impl Default for CommandGate {
 #[serde(default, deny_unknown_fields)]
 pub struct CommandEntry {
     pub name: String,
-    pub command: String,
+    pub preset: Option<String>,
+    pub command: Option<String>,
     pub timeout_seconds: Option<u64>,
     pub count_pattern: Option<String>,
     pub min_count: Option<u64>,

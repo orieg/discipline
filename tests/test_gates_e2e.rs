@@ -3859,3 +3859,163 @@ fn test_budget_fires_on_hypothesis_and_fuzz_target_removal() {
     assert_eq!(run_pass.code, 0);
     assert_eq!(run_pass.json()["overrides"], 2);
 }
+
+#[test]
+fn command_preset_cargo_mutants_zero_selected_and_failure_controls() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+preset = "cargo-mutants"
+"#,
+    );
+    repo.commit("ci: configure cargo-mutants preset");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control 1: Zero mutants tested
+    let run_zero = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("DISCIPLINE_COMMAND", "echo \"0 mutants tested\"")],
+    );
+    assert_eq!(run_zero.code, 1);
+    assert!(run_zero
+        .titles("command")
+        .contains(&"Zero Items Selected Or Executed".to_string()));
+
+    // Negative control 2: Mutant survived
+    let run_survived = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "DISCIPLINE_COMMAND",
+            "echo \"2 mutants tested: 1 survived\"",
+        )],
+    );
+    assert_eq!(run_survived.code, 1);
+    assert!(run_survived
+        .titles("command")
+        .contains(&"Forbidden Output Detected".to_string()));
+
+    // Positive control: Clean mutation run
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("DISCIPLINE_COMMAND", "echo \"5 mutants tested: 5 caught\"")],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("command");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+
+    // Override directive covers the preset by name
+    let run_override = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[
+            ("DISCIPLINE_COMMAND", "echo \"0 mutants tested\""),
+            (
+                "PR_BODY",
+                "allow-command: cargo-mutants no mutants generated on doc diff",
+            ),
+        ],
+    );
+    assert_eq!(run_override.code, 0);
+    let outcome_ov = run_override.outcome("command");
+    assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn command_preset_loom_zero_tests_guard_and_pass() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+preset = "loom"
+"#,
+    );
+    repo.commit("ci: configure loom preset");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: 0 tests run
+    let run_zero = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("DISCIPLINE_COMMAND", "echo \"running 0 tests\"")],
+    );
+    assert_eq!(run_zero.code, 1);
+    assert!(run_zero
+        .titles("command")
+        .contains(&"Zero Items Selected Or Executed".to_string()));
+
+    // Positive control: Permutations executed and passed
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "DISCIPLINE_COMMAND",
+            "echo \"running 4 tests\ntest loom_concurrent_ring ... ok\ntest result: ok. 4 passed\"",
+        )],
+    );
+    assert_eq!(run_pass.code, 0);
+    let outcome_pass = run_pass.outcome("command");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn command_preset_cargo_deny_enforces_policy_file_retention_and_accepts_override() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("deny.toml", "[bans]\ndeny = []\n"),
+            (
+                "discipline.toml",
+                r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.deletion-rationale]
+enabled = false
+
+[gates.command]
+preset = "cargo-deny"
+"#,
+            ),
+        ],
+        "base: init deny and command preset",
+    );
+
+    // Delete policy file deny.toml on head branch
+    repo.git(&["rm", "-q", "deny.toml"]);
+    let run_del = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("DISCIPLINE_COMMAND", "echo \"deny check ok\"")],
+    );
+    assert_eq!(run_del.code, 1);
+    assert!(run_del
+        .titles("command")
+        .contains(&"Policy File Deleted".to_string()));
+
+    // Override with allow-command
+    let run_override = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[
+            ("DISCIPLINE_COMMAND", "echo \"deny check ok\""),
+            (
+                "PR_BODY",
+                "allow-command: cargo-deny removing legacy deny policy in favor of new checker",
+            ),
+        ],
+    );
+    assert_eq!(run_override.code, 0);
+    assert_eq!(
+        run_override.outcome("command")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}

@@ -403,8 +403,14 @@ When a change touches source files in a language without an active pack, each AS
 ### Pillar 4: Verification Suite (`verification`)
 
 #### `command`
-- **Rule:** Universal, language-neutral fail-closed wrapper for external verification commands. Discipline executes the command directly without shell pipes, captures stdout/stderr concurrently, bounds runtime (timeout = exit 2), detects missing binaries in PATH (exit 2), enforces a test count ratchet against the merge base ref, forbids declared output patterns, fails when zero items/tests are executed, and verifies negative-control canaries produce stated diagnostics.
-- **Untrusted PR Text Guard:** PR diffs cannot alter or introduce commands in `discipline.toml` without runner environment authorization (`DISCIPLINE_COMMAND` or `DISCIPLINE_ALLOW_COMMAND_CHANGE`).
+- **Rule:** Universal, language-neutral fail-closed wrapper for external verification commands. Discipline executes the command directly without shell pipes, captures stdout/stderr concurrently, bounds runtime (timeout = exit 2), detects missing binaries in PATH (exit 2), enforces a test count ratchet against the merge base ref, forbids declared output patterns, fails when zero items/tests are executed, verifies negative-control canaries produce stated diagnostics, and protects preset policy files against stealth deletion.
+- **Untrusted PR Text Guard:** PR diffs cannot alter or introduce commands or preset selections in `discipline.toml` without runner environment authorization (`DISCIPLINE_COMMAND` or `DISCIPLINE_ALLOW_COMMAND_CHANGE`).
+- **Turnkey Presets:** Turnkey data-driven configurations providing pre-calibrated defaults for common high-assurance tools:
+  - **Diff-Scoped Mutation Testing:** `cargo-mutants` (`cargo mutants --in-diff`, zero-mutants guard `0 mutants tested`, forbids `survived`, `MISSED`), `mutmut` (`mutmut run`), `stryker` (`npx stryker run`), `pit` (`mvn org.pitest:pitest-maven:mutationCoverage`).
+  - **Diff Coverage:** `lcov` (`lcov --summary lcov.info`), `cobertura` (`coverage.xml`).
+  - **Semver & API Compatibility:** `cargo-semver-checks` (`cargo semver-checks check-release`), `api-snapshot` (`git diff --exit-code api.snapshot`).
+  - **Supply Chain & Advisory Wrappers:** `cargo-deny` (`cargo deny check`, guarded policy file `deny.toml`), `pip-audit` (`pip-audit`), `npm-audit` (`npm audit --audit-level=high`), `govulncheck` (`govulncheck ./...`).
+  - **Deterministic Concurrency Testing:** `loom` (`cargo test --test loom -- --nocapture`, zero-tests guard `running 0 tests`).
 - **Languages:** any.
 - **What it catches:**
   - Non-zero command exit codes (exit 1).
@@ -412,14 +418,15 @@ When a change touches source files in a language without an active pack, each AS
   - Command timeouts exceeding `timeout_seconds` (fails closed with exit 2).
   - Forbidden strings or regexes detected in stdout or stderr.
   - Zero tests or items executed when `allow_zero = false`.
+  - Stealth deletion of preset policy files (e.g. `deny.toml`, `api.snapshot`).
   - Extracted count dropping below the `min_count` ratchet floor established on the merge base ref.
   - Negative-control canaries failing to produce their declared diagnostic message or unexpectedly succeeding.
 - **Passing override directive (accepted):**
   ```text
-  allow-command: integration_suite offline network tests disabled during maintenance
+  allow-command: cargo-mutants no mutants generated on documentation diff
   ```
-- **Lifting directive:** `allow-command: <command-name> <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `commands`.
+- **Lifting directive:** `allow-command: <command-or-preset-name> <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `preset`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `commands`.
 
 ---
 

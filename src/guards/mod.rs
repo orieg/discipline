@@ -4,6 +4,7 @@ pub mod dependency;
 pub mod hygiene;
 pub mod integrity;
 pub mod perf;
+pub mod presets;
 pub mod test_budget;
 
 use crate::cli::SuiteChoice;

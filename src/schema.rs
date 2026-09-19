@@ -227,6 +227,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "preset": { "type": "string", "description": "Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom)" },
                     "command": { "type": "string", "description": "Primary command to execute" },
                     "timeout_seconds": { "type": "integer", "description": "Execution timeout in seconds (default: 60s)" },
                     "count_pattern": { "type": "string", "description": "Regex pattern to extract an integer count" },
@@ -246,9 +247,10 @@ pub fn generate_schema() -> Value {
             "CommandEntry": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["name", "command"],
+                "required": ["name"],
                 "properties": {
                     "name": { "type": "string", "description": "Name or identifier of the command" },
+                    "preset": { "type": "string", "description": "Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom)" },
                     "command": { "type": "string", "description": "Command string to execute" },
                     "timeout_seconds": { "type": "integer", "description": "Execution timeout in seconds" },
                     "count_pattern": { "type": "string", "description": "Regex pattern to extract an integer count" },

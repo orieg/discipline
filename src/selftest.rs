@@ -1046,6 +1046,88 @@ allow-git = [
             Ok(prop_drop && time_drop && runs_drop && fuzztime_drop && target_removed && covers_named && !covers_other && placeholder.is_empty())
         },
     ),
+    (
+        "presets: turnkey preset resolution merges defaults and explicit overrides",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::presets;
+
+            let toml_text = r#"
+[meta]
+version = 1
+name = "test"
+
+[gates.command]
+enabled = true
+preset = "cargo-mutants"
+timeout_seconds = 120
+forbid_output = ["CUSTOM_FORBID"]
+
+[[gates.command.commands]]
+name = "semver"
+preset = "cargo-semver-checks"
+
+[[gates.command.commands]]
+name = "custom"
+command = "cargo test"
+"#;
+            let cfg = DisciplineConfig::from_toml_str(toml_text)?;
+            let cmd_gate = &cfg.gates.command;
+
+            // 1. Top-level preset resolves with user override
+            let mutants_preset = presets::resolve_preset(cmd_gate.preset.as_deref().unwrap()).unwrap();
+            let effective_cmd = cmd_gate.command.as_deref().unwrap_or(mutants_preset.default_command);
+            let effective_timeout = cmd_gate.timeout_seconds.unwrap_or(mutants_preset.default_timeout_seconds);
+
+            // 2. CommandEntry preset resolves default command
+            let semver_entry = &cmd_gate.commands[0];
+            let semver_preset = presets::resolve_preset(semver_entry.preset.as_deref().unwrap()).unwrap();
+            let semver_cmd = semver_entry.command.as_deref().unwrap_or(semver_preset.default_command);
+
+            // 3. Unknown preset fails lookup
+            let unknown = presets::resolve_preset("nonexistent-tool");
+
+            Ok(effective_cmd == "cargo mutants --in-diff"
+                && effective_timeout == 120
+                && cmd_gate.forbid_output.contains(&"CUSTOM_FORBID".to_string())
+                && semver_cmd == "cargo semver-checks check-release"
+                && unknown.is_none())
+        },
+    ),
+    (
+        "presets: cargo-mutants, cargo-deny, and loom definitions enforce zero-items and forbid patterns",
+        || {
+            use crate::guards::presets;
+
+            let mutants = presets::resolve_preset("cargo-mutants").unwrap();
+            let deny = presets::resolve_preset("cargo-deny").unwrap();
+            let loom = presets::resolve_preset("loom").unwrap();
+            let lcov = presets::resolve_preset("lcov").unwrap();
+
+            // Check mutation testing invariants
+            let mutants_ok = mutants.category == "mutation"
+                && mutants.zero_items_pattern == Some("0 mutants tested")
+                && mutants.forbid_output.contains(&"survived")
+                && mutants.forbid_output.contains(&"MISSED");
+
+            // Check supply chain invariants & policy files
+            let deny_ok = deny.category == "supply-chain"
+                && deny.policy_files.contains(&"deny.toml")
+                && deny.default_command == "cargo deny check";
+
+            // Check concurrency test invariants
+            let loom_ok = loom.category == "concurrency"
+                && loom.zero_items_pattern == Some("running 0 tests")
+                && loom.default_command == "cargo test --test loom -- --nocapture";
+
+            // Check coverage report invariants
+            let lcov_ok = lcov.category == "coverage"
+                && lcov.zero_items_pattern.is_some()
+                && lcov.policy_files.contains(&"lcov.info");
+
+            Ok(mutants_ok && deny_ok && loom_ok && lcov_ok)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {
