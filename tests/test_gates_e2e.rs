@@ -81,7 +81,7 @@ fn adding_assertions_is_not_a_reduction() {
 #[test]
 fn unanalysed_languages_are_named_not_silently_passed() {
     let repo = Repo::new();
-    repo.write("tools/check.rb", "def test_nothing; end\n");
+    repo.write("tools/check.swift", "func testNothing() {}\n");
     repo.write("src/App.kt", "class App {}\n");
     repo.commit("feat: tooling");
     let run = repo.check(&[]);
@@ -127,8 +127,8 @@ fn unsupported_source_files_group_by_extension() {
     let repo = Repo::new();
     repo.write("ext/judy.scala", "class Foo {}\n");
     repo.write("ext/judy.swift", "class Bar {}\n");
-    repo.write("tests/001.rb", "def test_foo; end\n");
-    repo.commit("feat: scala, swift, and ruby");
+    repo.write("tests/001.kt", "fun testFoo() {}\n");
+    repo.commit("feat: scala, swift, and kotlin");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0);
     for gate in [
@@ -140,7 +140,7 @@ fn unsupported_source_files_group_by_extension() {
         let notes = run.outcome(gate)["notes"].to_string();
         assert!(
             notes.contains("3 changed source file(s)")
-                && notes.contains("1 .rb, 1 .scala, 1 .swift")
+                && notes.contains("1 .kt, 1 .scala, 1 .swift")
                 && notes.contains("NOT analysed"),
             "gate {gate} should format extension breakdown: {notes}"
         );
@@ -247,6 +247,25 @@ fn csharp_source_files_are_analysed_by_csharp_pack() {
         assert!(
             !notes.contains("NOT analysed"),
             "gate {gate} should analyse csharp files: {notes}"
+        );
+    }
+}
+
+#[test]
+fn ruby_source_files_are_analysed_by_ruby_pack() {
+    let repo = Repo::new();
+    repo.write(
+        "test/test_expanse.rb",
+        "class TestExpanse < Minitest::Test\n  def test_crud\n    val = 42\n    assert_equal 42, val\n  end\nend\n",
+    );
+    repo.commit("feat: ruby tests");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for gate in ["assertion-reduction", "vacuous-tests", "ignored-tests"] {
+        let notes = run.outcome(gate)["notes"].to_string();
+        assert!(
+            !notes.contains("NOT analysed"),
+            "gate {gate} should analyse ruby files: {notes}"
         );
     }
 }
@@ -3325,6 +3344,86 @@ public class SkipTests {
         &[(
             "PR_BODY",
             "allow-ignore: SkippedTest skipped for refactoring",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("ignored-tests");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn ruby_assertion_reduction_and_vacuous_tests_detected() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_rb = r#"
+class CalcTest < Minitest::Test
+  def test_calc
+    assert_equal 2, 1 + 1
+    assert_equal 4, 2 + 2
+  end
+end
+"#;
+    repo.write("test/test_calc.rb", base_rb);
+    repo.commit("feat: initial ruby test");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // Weaken assertions: 2 assertions reduced to 1
+    let weaker_rb = r#"
+class CalcTest < Minitest::Test
+  def test_calc
+    assert_equal 2, 1 + 1
+  end
+end
+"#;
+    repo.write("test/test_calc.rb", weaker_rb);
+    repo.commit("test: weaken assertions in ruby");
+
+    let run_weak = repo.check(&[]);
+    assert_eq!(run_weak.code, 1);
+    let outcome_weak = run_weak.outcome("assertion-reduction");
+    assert_eq!(outcome_weak["violations"].as_array().unwrap().len(), 1);
+
+    // Vacuous test addition
+    let repo2 = Repo::new();
+    repo2.write(
+        "test/test_empty.rb",
+        "class EmptyTest < Minitest::Test\n  def test_empty\n  end\nend\n",
+    );
+    repo2.commit("test: add empty ruby test");
+    let run_vac = repo2.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let outcome_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn ruby_skipped_tests_detected_and_accepts_override() {
+    let repo = Repo::new();
+    repo.write(
+        "test/test_skip.rb",
+        r#"
+class SkipTest < Minitest::Test
+  def test_skipped
+    skip "work in progress"
+    assert_equal 2, 1 + 1
+  end
+end
+"#,
+    );
+    repo.commit("test: add skipped ruby test");
+
+    let run_skip = repo.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let outcome_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(outcome_skip["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: test_skipped skipped for refactoring",
         )],
     );
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);

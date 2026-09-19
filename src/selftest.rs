@@ -705,6 +705,38 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 2)
         },
     ),
+    #[cfg(feature = "lang-ruby")]
+    (
+        "ruby: Minitest extraction catches assertions, vacuous tests, and skip",
+        || {
+            use crate::ast::LanguagePack;
+            let rb_pack = crate::ast::ruby::RubyPack;
+            let vocab = AssertVocabulary::default();
+            let src = "class CalcTest < Minitest::Test\n  def test_one; assert_equal 1, 2; end\n  def test_two; assert true; end\n  def test_three; skip; assert_equal 1, 2; end\nend\n";
+            let facts = rb_pack.extract("test/test_calc.rb", src, &vocab)?;
+            Ok(facts.tests.len() == 3
+                && facts.tests[0].total_asserts == 1
+                && !facts.tests[0].is_vacuous()
+                && facts.tests[1].is_vacuous()
+                && facts.tests[2].ignored)
+        },
+    ),
+    #[cfg(feature = "lang-ruby")]
+    (
+        "ruby: assert_equal vs assert assertion weakening is detected",
+        || {
+            use crate::ast::LanguagePack;
+            let rb_pack = crate::ast::ruby::RubyPack;
+            let vocab = AssertVocabulary::default();
+            let strong_src = "class T < Minitest::Test\n  def test_a; assert_equal a, b; assert_match c, d; end\nend\n";
+            let weak_src = "class T < Minitest::Test\n  def test_a; assert x; assert y; end\nend\n";
+            let strong_facts = rb_pack.extract("test/test_t.rb", strong_src, &vocab)?;
+            let weak_facts = rb_pack.extract("test/test_t.rb", weak_src, &vocab)?;
+            Ok(strong_facts.tests[0].strong_asserts == 2
+                && weak_facts.tests[0].strong_asserts == 0
+                && weak_facts.tests[0].total_asserts == 2)
+        },
+    ),
     (
         "bench: callgrind and criterion benchmark parsing and delta calculation discriminate",
         || {

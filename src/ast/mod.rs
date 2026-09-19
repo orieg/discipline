@@ -22,6 +22,8 @@ pub mod javascript;
 pub mod php;
 #[cfg(feature = "lang-python")]
 pub mod python;
+#[cfg(feature = "lang-ruby")]
+pub mod ruby;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
 
@@ -99,6 +101,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(c_cpp::CppPack));
     #[cfg(feature = "lang-csharp")]
     reg.register(Box::new(csharp::CSharpPack));
+    #[cfg(feature = "lang-ruby")]
+    reg.register(Box::new(ruby::RubyPack));
     reg
 }
 
@@ -115,6 +119,7 @@ pub enum Language {
     C,
     Cpp,
     CSharp,
+    Ruby,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
@@ -136,6 +141,7 @@ pub fn language_for(path: &str) -> Option<Language> {
         "c" | "h" => Some(Language::C),
         "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Language::Cpp),
         "cs" => Some(Language::CSharp),
+        "rb" | "rake" | "gemspec" => Some(Language::Ruby),
         _ => None,
     }
 }
@@ -295,6 +301,7 @@ mod tests {
         assert_eq!(language_for("src/a.c"), Some(Language::C));
         assert_eq!(language_for("src/a.cpp"), Some(Language::Cpp));
         assert_eq!(language_for("src/a.cs"), Some(Language::CSharp));
+        assert_eq!(language_for("src/a.rb"), Some(Language::Ruby));
         assert!(!is_unsupported_source("pkg/mod/a.py"));
         assert!(!is_unsupported_source("web/App.tsx"));
         assert!(!is_unsupported_source("service.java"));
@@ -303,8 +310,9 @@ mod tests {
         assert!(!is_unsupported_source("src/a.c"));
         assert!(!is_unsupported_source("src/a.cpp"));
         assert!(!is_unsupported_source("src/a.cs"));
+        assert!(!is_unsupported_source("src/a.rb"));
         assert!(is_unsupported_source("service.kt"));
-        assert!(is_unsupported_source("service.rb"));
+        assert!(is_unsupported_source("service.swift"));
         assert!(!is_unsupported_source("src/a.rs"));
         assert!(!is_unsupported_source("tests/001.phpt"));
         assert!(!is_unsupported_source("docs/plan.md"));
@@ -375,6 +383,13 @@ mod tests {
             let csharp_pack = reg.find_pack("test.cs").expect("csharp pack found");
             assert_eq!(csharp_pack.id(), "csharp");
             assert_eq!(csharp_pack.name(), "C#");
+        }
+        #[cfg(feature = "lang-ruby")]
+        {
+            assert!(reg.is_supported("bindings/ruby/test/test_expanse.rb"));
+            let ruby_pack = reg.find_pack("test.rb").expect("ruby pack found");
+            assert_eq!(ruby_pack.id(), "ruby");
+            assert_eq!(ruby_pack.name(), "Ruby");
         }
     }
 

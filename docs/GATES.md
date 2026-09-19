@@ -18,9 +18,9 @@ This document establishes the normative enforcement rules, detection capabilitie
 | Gate id | Suite | Status | Languages | Rule |
 |---|---|---|---|---|
 | `agents-md` | agent-guard | **shipped** | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
-| `assertion-reduction` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C# | assertion count / strength must not drop in an existing test |
-| `vacuous-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C# | new tests must carry a non-tautological assertion |
-| `ignored-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C# | tests must not be newly #[ignore]d |
+| `assertion-reduction` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | assertion count / strength must not drop in an existing test |
+| `vacuous-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | new tests must carry a non-tautological assertion |
+| `ignored-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | tests must not be newly #[ignore]d |
 | `unsafe-safety-comment` | agent-guard | **shipped** | Rust | unsafe blocks / impls carry a // SAFETY: comment |
 | `deletion-rationale` | agent-guard | **shipped** | any | deleted files and removed tests need a scoped removes: rationale |
 | `time-estimates` | hygiene | **shipped** | any | no calendar / duration estimates in markdown or the PR body |

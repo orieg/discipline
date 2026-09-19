@@ -457,6 +457,7 @@ pub fn match_tests(files: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>,
 
 pub(crate) fn leaf_name(test: &TestFn) -> &str {
     let s = test.name.rsplit("::").next().unwrap_or(&test.name);
+    let s = s.rsplit('#').next().unwrap_or(s);
     s.rsplit(" > ").next().unwrap_or(s)
 }
 
