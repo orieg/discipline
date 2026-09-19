@@ -277,14 +277,6 @@
           ],
           "description": "assertion count / strength must not drop in an existing test"
         },
-        "bench-regression": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/BenchRegressionGate"
-            }
-          ],
-          "description": "benchmark drift via harness adapters (deterministic counts or BCa intervals)"
-        },
         "config-integrity": {
           "allOf": [
             {

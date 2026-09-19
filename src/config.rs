@@ -190,7 +190,7 @@ pub const GATES: &[GateInfo] = &[
         id: "bench-regression",
         suite: Suite::Bench,
         summary: "benchmark drift via harness adapters (deterministic counts or BCa intervals)",
-        available: true,
+        available: false,
     },
 ];
 
@@ -256,7 +256,6 @@ pub struct Gates {
     pub agent_scratch: ScratchGate,
     pub config_integrity: BasicGate,
     pub golden_output: GoldenGate,
-    pub bench_regression: BenchRegressionGate,
 }
 
 /// Settings every gate shares.
@@ -529,7 +528,6 @@ impl Gates {
             "agent-scratch" => &self.agent_scratch,
             "config-integrity" => &self.config_integrity,
             "golden-output" => &self.golden_output,
-            "bench-regression" => &self.bench_regression,
             _ => return None,
         })
     }

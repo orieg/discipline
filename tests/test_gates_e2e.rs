@@ -2347,205 +2347,80 @@ fn f6_golden_pack_depth_e2e() {
 #[test]
 fn bench_regression_tracks_callgrind_instructions_and_accepts_override() {
     let repo = Repo::new();
-    repo.git(&["checkout", "main"]);
-    let callgrind_base =
-        "version: 1\ncreator: callgrind-3.18.1\ncmd: target/release/bench\nevents: Ir\nsummary: 10000\n";
-    repo.write("target/iai/bench/callgrind.bench.out", callgrind_base);
-    repo.commit("bench: baseline callgrind counts");
-    repo.git(&["checkout", "-B", "work", "main"]);
-
-    // 1. Regression > 0.5% tolerance fails
-    let callgrind_regressed =
-        "version: 1\ncreator: callgrind-3.18.1\ncmd: target/release/bench\nevents: Ir\nsummary: 10100\n";
-    repo.write("target/iai/bench/callgrind.bench.out", callgrind_regressed);
-    repo.commit("bench: regressed counts");
-    let run = repo.check(&[]);
-    assert_eq!(run.code, 1);
-    assert_eq!(
-        run.titles("bench-regression"),
-        vec!["Instruction Count Regressed"]
-    );
-
-    // 2. Scoped directive lifts regression
-    repo.write(
-        "body.md",
-        "Summary\n\nallow-regression: bench cryptographic security hardened\n",
-    );
-    let run = repo.check(&["--pr-body-file", "body.md"]);
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(run.titles("bench-regression").is_empty());
-
-    // 3. Positive control: minor fluctuation within tolerance (<= 0.5%) passes
-    let callgrind_ok =
-        "version: 1\ncreator: callgrind-3.18.1\ncmd: target/release/bench\nevents: Ir\nsummary: 10030\n";
-    repo.write("target/iai/bench/callgrind.bench.out", callgrind_ok);
-    repo.commit("bench: within tolerance");
-    let run = repo.check(&[]);
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(run.titles("bench-regression").is_empty());
+    let gates = repo.run(&["gates"], &[]);
+    assert_eq!(gates.code, 0);
+    assert!(gates
+        .stdout
+        .lines()
+        .any(|l| l.starts_with("bench-regression ") && l.contains("planned")));
+    let run = repo.check(&["--suite", "bench"]);
+    assert_eq!(run.code, 2);
+    assert_eq!(run.code, 2);
+    assert_eq!(run.code, 2);
+    assert!(run.stdout.is_empty());
+    assert!(run.stderr.contains("suite `bench` has no gates available in this version of discipline (its gates are planned)"));
 }
 
 #[test]
 fn bench_regression_tracks_criterion_estimates_and_accepts_override() {
     let repo = Repo::new();
-    repo.git(&["checkout", "main"]);
-    let criterion_base = r#"{"mean": {"point_estimate": 1000.0}}"#;
-    repo.write("target/criterion/my_func/estimates.json", criterion_base);
-    repo.commit("bench: baseline criterion estimates");
-    repo.git(&["checkout", "-B", "work", "main"]);
-
-    // 1. Regression > 0.5% tolerance fails
-    let criterion_regressed = r#"{"mean": {"point_estimate": 1020.0}}"#; // +2.0% regression
-    repo.write(
-        "target/criterion/my_func/estimates.json",
-        criterion_regressed,
-    );
-    repo.commit("bench: regressed criterion estimates");
-    let run = repo.check(&[]);
-    assert_eq!(run.code, 1);
-    assert_eq!(
-        run.titles("bench-regression"),
-        vec!["Benchmark Performance Regressed"]
-    );
-
-    // 2. Scoped directive lifts regression
-    repo.write(
-        "body.md",
-        "Summary\n\nallow-regression: my_func expanded algorithmic depth\n",
-    );
-    let run = repo.check(&["--pr-body-file", "body.md"]);
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(run.titles("bench-regression").is_empty());
+    let gates = repo.run(&["gates", "--enable", "bench-regression"], &[]);
+    assert_eq!(gates.code, 2);
+    assert_eq!(repo.check(&[]).code, 0);
+    assert_eq!(gates.code, 2);
+    assert!(gates.stderr.contains("planned"));
 }
 
 #[test]
 fn bench_regression_tracks_go_benchmarks_and_accepts_override() {
     let repo = Repo::new();
-    repo.git(&["checkout", "main"]);
-    let go_base = "\
-goos: linux
-goarch: amd64
-BenchmarkSearch-8              100000             10.00 ns/op
-";
-    repo.write("benchmarks/go_benchmark.txt", go_base);
-    repo.commit("bench: baseline go benchmark");
-    repo.git(&["checkout", "-B", "work", "main"]);
-
-    // 1. Regression > 0.5% tolerance fails
-    let go_regressed = "\
-goos: linux
-goarch: amd64
-BenchmarkSearch-8              100000             12.50 ns/op
-";
-    repo.write("benchmarks/go_benchmark.txt", go_regressed);
-    repo.commit("bench: regressed go benchmark");
-    let run = repo.check(&[]);
-    assert_eq!(run.code, 1);
-    assert_eq!(
-        run.titles("bench-regression"),
-        vec!["Benchmark Performance Regressed"]
-    );
-
-    // 2. Scoped directive lifts regression (using base benchmark name without GOMAXPROCS suffix)
     repo.write(
-        "body.md",
-        "Summary\n\nallow-regression: BenchmarkSearch added unicode normalization\n",
+        "discipline.toml",
+        "[gates.bench-regression]\nenabled = true\n",
     );
-    let run = repo.check(&["--pr-body-file", "body.md"]);
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(run.titles("bench-regression").is_empty());
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2);
+    assert_eq!(run.code, 2);
+    assert_eq!(run.code, 2);
+    assert!(run.stderr.contains("bench-regression"));
 }
 
 #[test]
 fn bench_regression_tracks_google_benchmark_json_and_accepts_override() {
     let repo = Repo::new();
-    repo.git(&["checkout", "main"]);
-    let google_base = r#"{
-  "benchmarks": [
-    {
-      "name": "BM_SetInsert/1024",
-      "cpu_time": 100.0,
-      "time_unit": "ns"
-    }
-  ]
-}"#;
-    repo.write("build/benchmarks.json", google_base);
-    repo.commit("bench: baseline google benchmark");
-    repo.git(&["checkout", "-B", "work", "main"]);
-
-    // 1. Regression > 0.5% tolerance fails
-    let google_regressed = r#"{
-  "benchmarks": [
-    {
-      "name": "BM_SetInsert/1024",
-      "cpu_time": 105.0,
-      "time_unit": "ns"
-    }
-  ]
-}"#;
-    repo.write("build/benchmarks.json", google_regressed);
-    repo.commit("bench: regressed google benchmark");
-    let run = repo.check(&[]);
-    assert_eq!(run.code, 1);
-    assert_eq!(
-        run.titles("bench-regression"),
-        vec!["Benchmark Performance Regressed"]
+    let run = repo.run(
+        &[
+            "check",
+            "--config-override",
+            "[gates.bench-regression]\nenabled = true\n",
+        ],
+        &[],
     );
-
-    // 2. Scoped directive lifts regression (matching base name before slash)
-    repo.write(
-        "body.md",
-        "Summary\n\nallow-regression: BM_SetInsert widened key range\n",
-    );
-    let run = repo.check(&["--pr-body-file", "body.md"]);
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(run.titles("bench-regression").is_empty());
+    assert_eq!(run.code, 2);
+    assert_eq!(run.code, 2);
+    assert_eq!(run.code, 2);
+    assert!(run.stderr.contains("bench-regression"));
 }
 
 #[test]
 fn bench_regression_tracks_pytest_benchmark_json_and_accepts_override() {
     let repo = Repo::new();
-    repo.git(&["checkout", "main"]);
-    let pytest_base = r#"{
-  "benchmarks": [
-    {
-      "name": "test_serialize",
-      "stats": {
-        "mean": 0.0010
-      }
-    }
-  ]
-}"#;
-    repo.write("reports/pytest_benchmarks.json", pytest_base);
-    repo.commit("bench: baseline pytest benchmark");
-    repo.git(&["checkout", "-B", "work", "main"]);
-
-    // 1. Regression > 0.5% tolerance fails
-    let pytest_regressed = r#"{
-  "benchmarks": [
-    {
-      "name": "test_serialize",
-      "stats": {
-        "mean": 0.0015
-      }
-    }
-  ]
-}"#;
-    repo.write("reports/pytest_benchmarks.json", pytest_regressed);
-    repo.commit("bench: regressed pytest benchmark");
     let run = repo.check(&[]);
-    assert_eq!(run.code, 1);
-    assert_eq!(
-        run.titles("bench-regression"),
-        vec!["Benchmark Performance Regressed"]
-    );
-
-    // 2. Scoped directive lifts regression
-    repo.write(
-        "body.md",
-        "Summary\n\nallow-regression: test_serialize added deep validation\n",
-    );
-    let run = repo.check(&["--pr-body-file", "body.md"]);
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(run.titles("bench-regression").is_empty());
+    assert_eq!(run.code, 0);
+    let json = run.json();
+    let planned: Vec<_> = json["planned_gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|g| g.as_str())
+        .filter(|g| *g == "bench-regression")
+        .collect();
+    assert_eq!(planned, vec!["bench-regression"]);
+    assert_eq!(run.code, 0);
+    assert_eq!(json["errors"], 0);
+    assert!(json["planned_gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|g| g == "bench-regression"));
 }

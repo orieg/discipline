@@ -15,7 +15,7 @@ Engine design for `discipline`. Requirements and roadmap live in `docs/PRD.md`; 
 | `src/guards/agent_diff.rs` | Diff gates over base-vs-head facts |
 | `src/guards/hygiene.rs` | Whole-tree sweeps: `time-estimates`, `pii`, `agent-scratch`, `agents-md` |
 | `src/guards/integrity.rs` | `config-integrity` (shipped), `golden-output` (shipped) |
-| `src/guards/perf.rs` | `bench-regression` (shipped): Callgrind/IAI, Criterion, Go, pytest-benchmark, Google Benchmark |
+| `src/guards/perf.rs` | `bench-regression` (planned; statistical bounds module in progress) |
 | `src/guards/mod.rs` | Gate scheduling, `GateOutcome`, path filters, inline markers |
 | `src/report/` | Terminal, annotations, job summary, step outputs, JSON |
 | `src/selftest.rs` | Controls compiled into the binary |

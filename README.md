@@ -11,7 +11,7 @@
 
 Coding agents in an iterate-until-green loop weaken assertions, add tests that assert nothing, mark tests `#[ignore]`, delete what is in the way, drop `// SAFETY:` comments, and — when a gate blocks them — edit the gate. `discipline` inspects the *change* (tree-sitter over a `git2` merge-base diff) and refuses those moves, with the fail-closed engineering distilled from [`orieg/expanse`](https://github.com/orieg/expanse).
 
-> **Status: pre-release.** No version is published yet. Twelve gates are implemented and tested; verification and advanced integrity gates are planned and the binary refuses to pretend otherwise. See [`docs/PRD.md`](docs/PRD.md) for the roadmap and §11 for known limits.
+> **Status: pre-release.** No version is published yet. Eleven gates are implemented and tested; verification and benchmark gates are planned and the binary refuses to pretend otherwise. See [`docs/PRD.md`](docs/PRD.md) for the roadmap and §11 for known limits.
 
 ## Gates
 
@@ -30,7 +30,6 @@ Coding agents in an iterate-until-green loop weaken assertions, add tests that a
 | `agent-scratch` | hygiene | any | agent scratch state is never tracked |
 | `config-integrity` | integrity | any | a change cannot weaken its own `discipline.toml` without saying so |
 | `golden-output` | integrity | any | committed snapshots and golden files cannot be modified or deleted without a scoped `allow-golden-update:` |
-| `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (Callgrind/IAI, Criterion, Go, pytest, Google Benchmark) |
 
 Seven gates work on a repository in any language. The four AST gates use a per-language pack; Rust, Python, JavaScript / TypeScript, and PHPT ship today, and Java / Kotlin, C / C++ and Go are planned. When a change touches source in a language without a pack, the AST gates **say so in the report** rather than showing a clean zero.
 
@@ -253,7 +252,6 @@ allow-assertion-drop: inserts_in_order second case moved to proptest
 allow-ignore: big_alloc needs the new allocator first
 allow-gate-weakening: vacuous-tests suite asserts through snapshot macros
 allow-golden-update: tests/snapshots/result.snap re-blessed output
-allow-regression: BenchmarkSearch added unicode normalization
 ```
 
 Directives policy can be configured via `[directives]` in `discipline.toml`:

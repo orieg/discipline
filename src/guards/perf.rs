@@ -26,8 +26,8 @@ pub struct BenchmarkMetric {
 }
 
 pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
-    let settings = &ctx.config.gates.bench_regression;
-    let exempt = exempt_filter(settings)?;
+    let settings = crate::config::BenchRegressionGate::default();
+    let exempt = exempt_filter(&settings)?;
     let watched = PathFilter::new(&settings.paths)?;
 
     let mut out = GateOutcome::new(GATE);

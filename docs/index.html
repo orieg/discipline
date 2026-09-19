@@ -655,7 +655,7 @@
     <!-- Stat Bar -->
     <div class="stat-bar">
       <div class="stat-item">
-        <h3>12</h3>
+        <h3>11</h3>
         <p>Active Fail-Closed Gates</p>
       </div>
       <div class="stat-item">
@@ -704,21 +704,6 @@
           <span class="card-tag">Claude Code</span>
           <span class="card-tag">Gemini CLI</span>
           <span class="card-tag">Codex / Copilot</span>
-        </div>
-      </div>
-
-      <div class="card">
-        <div>
-          <div class="card-icon-box">&#x23f1;&#xfe0f;</div>
-          <h3>Multi-Language Benchmark Sentinel</h3>
-          <p>Watches micro-benchmark results across revisions, flagging performance cliffs against the merge-base. Natively parses Callgrind instruction counts, Criterion estimates, Go benchmarks, pytest-benchmark, and Google Benchmark JSON.</p>
-        </div>
-        <div class="card-tags">
-          <span class="card-tag">Callgrind / IAI</span>
-          <span class="card-tag">Criterion</span>
-          <span class="card-tag">Go ns/op</span>
-          <span class="card-tag">pytest</span>
-          <span class="card-tag">Google Benchmark</span>
         </div>
       </div>
 
@@ -1001,13 +986,6 @@ discipline self-test</div>
             <td>Guards test snapshots from unauthorized updates without an explicit <code>allow-golden-update:</code> directive.</td>
           </tr>
           <tr>
-            <td class="gate-id">bench-regression</td>
-            <td>Bench</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
-            <td><span class="gate-badge badge-lang">Rust, Go, Python, C/C++</span></td>
-            <td>Tracks micro-benchmark regressions across IAI/Callgrind, Criterion, Go (ns/op), pytest, and Google Benchmark JSON.</td>
-          </tr>
-          <tr>
             <td class="gate-id">time-estimates</td>
             <td>Hygiene</td>
             <td><span class="gate-badge badge-error">Error</span></td>
@@ -1049,8 +1027,7 @@ discipline self-test</div>
         removes: tests/legacy/ replaced by proptest property suite<br>
         allow-assertion-drop: test_allocator single large allocation split into benchmark<br>
         allow-ignore: test_darwin_kqueue requires macos runner environment<br>
-        allow-golden-update: tests/snapshots/v2.snap updated for new serializer format<br>
-        allow-regression: BenchmarkSearch added unicode normalization
+        allow-golden-update: tests/snapshots/v2.snap updated for new serializer format
       </div>
     </div>
   </section>

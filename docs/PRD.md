@@ -109,7 +109,7 @@ Every escape hatch uses one parser (`src/tokens.rs`) and one grammar.
 | `allow-ignore:` | `ignored-tests` | test fn |
 | `allow-gate-weakening:` | `config-integrity` | gate id |
 | `allow-golden-update:` | `golden-output` | golden/snapshot path or directory prefix |
-| `allow-regression:` | `bench-regression` | benchmark arm, name, or file stem, plus a non-empty rationale |
+| `allow-regression:` (planned) | `bench-regression` | benchmark arm, name, or file stem, plus a non-empty rationale |
 | `allow-test-shrink:` (planned) | `test-floor` | — |
 
 Directives may also use the uniform HTML comment syntax: `<!-- discipline:allow(<gate-id>): <subject> <reason> -->` (or without colon).
@@ -279,7 +279,7 @@ Status: **shipped** = implemented with discriminating tests (§9); **planned** =
 
 ### 6.1 Language scope
 
-Eight of the twelve shipped gates are language-independent (or use harness output adapters) and work on any repository today: `deletion-rationale` (file level), `agents-md`, `time-estimates`, `pii`, `agent-scratch`, `config-integrity`, `golden-output`, and `bench-regression` (IAI/Callgrind, Criterion, Go, pytest-benchmark, Google Benchmark). The four AST gates need a language pack. When a change touches source files in a language with no pack, each AST gate **says so by name** in its report ("N changed source file(s) … NOT analysed") rather than showing a quiet zero (F7).
+Seven of the eleven shipped gates are language-independent and work on any repository today: `deletion-rationale` (file level), `agents-md`, `time-estimates`, `pii`, `agent-scratch`, `config-integrity`, `golden-output`. The four AST gates need a language pack. When a change touches source files in a language with no pack, each AST gate **says so by name** in its report ("N changed source file(s) … NOT analysed") rather than showing a quiet zero (F7).
 
 A pack maps its ecosystem onto the shared fact model:
 
@@ -394,17 +394,17 @@ Rules every command gate inherits from expanse:
 
 ### Pillar 5 — Benchmark drift (`bench`)
 
-Status: **shipped** (`bench-regression`). The benchmark drift sentinel compares baseline metrics from the merge base against head across watched benchmark output files (`target/iai/**`, `**/callgrind.*`, `target/criterion/**`, `**/*benchmark*.json`, `**/*benchmarks*.json`, `**/*benchmark*.log`, `**/*benchmark*.txt`).
+Planned: `bench-regression`. The benchmark drift sentinel is planned pending mathematical bounds derivation and formal statistical decision rules (§11; PRD §6 Pillar 5). Harness support will use adapters turning tool outputs into conservative confidence intervals and exact deterministic counters.
 
-| Measurement | Supported Adapters | Description & Units |
+| Measurement | Where it is valid | Planned Adapters |
 |---|---|---|
-| **Deterministic counts** (instructions, fuel) | `iai-callgrind`, Callgrind | Compares instruction counts (`events: Ir`, `summary: <count>`). Zero-variance native baseline. |
-| **Statistical estimates & wall-clock times** | Criterion (Rust), Google Benchmark (C/C++), Go benchmarks, pytest-benchmark (Python) | Tracks point estimates and mean execution times across formats: Criterion JSON (`mean.point_estimate` in ns), Google Benchmark JSON (`cpu_time`/`real_time` in declared `time_unit`), Go benchmark text (`BenchmarkName ... ns/op`), and Python `pytest-benchmark` JSON (`stats.mean` in seconds). |
+| **Deterministic counts** (instructions, allocations, fuel) — compared exactly against merge base | Ahead-of-time compiled native code (Rust, C, C++, Wasm fuel). Zero-variance native baseline. | `iai-callgrind`, raw `callgrind`, Wasm fuel |
+| **Wall-clock samples** — gated on BCa bootstrap intervals or ratio intervals | Everywhere, provided harness exports per-iteration samples or estimates with confidence intervals | `criterion` (Rust), `google-benchmark` (C / C++), `go test -bench` (Go), `pytest-benchmark` (Python) |
 
-Rules:
-- Regressions exceeding `tolerance_pct` (default: 0.5%) are flagged as errors (or configured severity).
-- Directives (`allow-regression: <benchmark-name-or-file> <reason>`) lift regressions for specific subjects. Go benchmark `GOMAXPROCS` suffixes (`BenchmarkSearch-8` -> `BenchmarkSearch`), parameterized sub-benchmarks (`BM_SetInsert/1024` -> `BM_SetInsert`), and pytest test module prefixes are normalized so overrides match reliably.
-- Missing baseline files or unparseable non-empty files fail closed.
+Rules (PRD requirements before re-enabling):
+- Evaluated on conservative confidence interval bounds, never bare point estimates.
+- Matching host and runner provenance required for wall-clock comparisons.
+- Fail-closed on missing baselines, deletions, or malformed artifacts; `removes:` does not lift benchmark deletions without `allow-regression:`.
 
 
 ---

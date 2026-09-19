@@ -199,7 +199,6 @@ pub fn run_checks(
             "agent-scratch" => hygiene::agent_scratch(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
             "golden-output" => integrity::golden_output(ctx),
-            "bench-regression" => perf::bench_regression(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
