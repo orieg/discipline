@@ -419,3 +419,86 @@ When an authorized directive is parsed and applied:
 2. **Action Outputs:** Outputs `overrides` (total count of applied overrides) and `overridden_gates` (comma-separated list of gate ids) are populated.
 3. **Machine Report:** Included in the JSON report under `overrides_applied` for compliance logging.
 4. **Enforced Sign-off:** Setting `directives.fail_on_overrides = true` (or passing `--fail-on-overrides`) causes Discipline to exit `1` whenever any override is present. This blocks automated merge and mandates human sign-off while preserving the audit trail.
+
+---
+
+## Recipes & Monorepo Setup
+
+Discipline natively supports polyglot monorepos and multi-tier architectures using path scoping, vocabulary extension, and command gate presets.
+
+### Polyglot Monorepo: Rust Core + TypeScript Frontend + Python Tooling
+
+In a repository containing multiple language stacks (e.g. `crates/` for Rust services, `apps/web/` for Next.js TypeScript frontend, and `scripts/` for Python data pipelines):
+
+```toml
+[meta]
+version = 1
+name = "polyglot-monorepo"
+
+[gates.assertion-reduction]
+enabled = true
+severity = "error"
+extra_assert_macros = ["custom_assert!", "verify_invariant!"]
+assert_helper_fns = ["assert_response_ok", "check_bounds"]
+
+[gates.vacuous-tests]
+enabled = true
+severity = "error"
+
+[gates.unsafe-safety-comment]
+enabled = true
+severity = "error"
+exempt_paths = ["tests/**"]
+
+[gates.golden-output]
+enabled = true
+paths = ["**/fixtures/**", "apps/web/__snapshots__/**", "**/*.snap"]
+
+[gates.dependency-delta]
+enabled = true
+severity = "error"
+banned_dependencies = ["left-pad", "evil-package"]
+forbid_wildcards = true
+require_git_pins = true
+
+[gates.command]
+enabled = true
+commands = [
+  { name = "cargo-mutants", preset = "cargo-mutants", timeout_seconds = 300 },
+  { name = "frontend-coverage", preset = "lcov", policy_files = ["apps/web/coverage/lcov.info"] }
+]
+```
+
+### High-Assurance Agent Guard Configuration
+
+For automated coding agents running in iterative development loops, combine `fail_on_overrides = true` with `--format agent-prompt` to enforce that agents repair defects rather than bypassing gates:
+
+```toml
+[meta]
+version = 1
+name = "high-assurance-agent"
+
+[directives]
+sources = ["pr-body"]
+allow_hidden = false
+fail_on_overrides = true
+
+[gates.time-estimates]
+enabled = true
+severity = "error"
+
+[gates.pii]
+enabled = true
+severity = "error"
+home_paths = true
+lan_ips = true
+
+[gates.agent-scratch]
+enabled = true
+severity = "error"
+```
+
+In CI, run:
+```bash
+discipline check --base origin/main --format agent-prompt
+```

@@ -36,8 +36,8 @@ RUN apk add --no-cache ca-certificates git \
 # Copy statically compiled discipline binary from builder stage
 COPY --from=builder /src/target/release/discipline /usr/local/bin/discipline
 
-# Use non-root user
-USER discipline:discipline
+# Use unprivileged non-root user (numeric UID:GID for strict container security policies)
+USER 10001:10001
 WORKDIR /workspace
 VOLUME ["/workspace"]
 

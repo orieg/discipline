@@ -460,6 +460,7 @@ pub struct PiiGate {
     pub exempt_paths: Vec<String>,
     pub home_paths: bool,
     pub lan_ips: bool,
+    pub secrets: bool,
     /// Home-directory user names that are not a leak (CI users, placeholders).
     pub allowed_users: Vec<String>,
     /// Hostnames that must never appear. Matched as whole tokens,
@@ -480,6 +481,7 @@ impl Default for PiiGate {
             exempt_paths: Vec::new(),
             home_paths: true,
             lan_ips: true,
+            secrets: true,
             allowed_users: [
                 "runner", "user", "username", "you", "me", "name", "example", "shared",
             ]
@@ -814,8 +816,33 @@ impl DisciplineConfig {
 
     /// Parse a `discipline.toml` body with no overrides applied.
     pub fn from_toml_str(content: &str) -> Result<Self> {
-        let value: Value = toml::from_str(content).context("discipline.toml is not valid TOML")?;
-        Self::from_value(value)
+        let value: Value = match toml::from_str(content) {
+            Ok(v) => v,
+            Err(e) => {
+                bail!(
+                    "{}",
+                    format_toml_error("discipline.toml is not valid TOML", content, &e)
+                );
+            }
+        };
+        match Self::from_value(value) {
+            Ok(cfg) => Ok(cfg),
+            Err(orig_err) => {
+                if orig_err.to_string().contains("failed schema validation") {
+                    if let Err(direct_err) = toml::from_str::<DisciplineConfig>(content) {
+                        bail!(
+                            "{}",
+                            format_toml_error(
+                                "discipline configuration failed schema validation",
+                                content,
+                                &direct_err
+                            )
+                        );
+                    }
+                }
+                Err(orig_err)
+            }
+        }
     }
 
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -824,13 +851,27 @@ impl DisciplineConfig {
 
     /// Resolve the effective configuration. `path = None` starts from defaults.
     pub fn resolve(path: Option<&Path>, overrides: &Overrides) -> Result<Self> {
+        let mut source_info: Option<(std::path::PathBuf, String)> = None;
         let mut value = match path {
             Some(p) => {
                 let content = std::fs::read_to_string(p).with_context(|| {
                     format!("failed to read configuration file {}", p.display())
                 })?;
-                toml::from_str::<Value>(&content)
-                    .with_context(|| format!("{} is not valid TOML", p.display()))?
+                let val = match toml::from_str::<Value>(&content) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        bail!(
+                            "{}",
+                            format_toml_error(
+                                &format!("{} is not valid TOML", p.display()),
+                                &content,
+                                &e
+                            )
+                        );
+                    }
+                };
+                source_info = Some((p.to_path_buf(), content));
+                val
             }
             None => Value::try_from(Self::default_for_repo("workspace"))?,
         };
@@ -903,7 +944,26 @@ impl DisciplineConfig {
             );
         }
 
-        Self::from_value(value)
+        match Self::from_value(value) {
+            Ok(cfg) => Ok(cfg),
+            Err(orig_err) => {
+                if orig_err.to_string().contains("failed schema validation") {
+                    if let Some((p, content)) = source_info {
+                        if let Err(direct_err) = toml::from_str::<DisciplineConfig>(&content) {
+                            bail!(
+                                "{}",
+                                format_toml_error(
+                                    &format!("{} failed schema validation", p.display()),
+                                    &content,
+                                    &direct_err
+                                )
+                            );
+                        }
+                    }
+                }
+                Err(orig_err)
+            }
+        }
     }
 
     fn from_value(value: Value) -> Result<Self> {
@@ -925,6 +985,34 @@ impl DisciplineConfig {
             );
         }
         Ok(config)
+    }
+}
+
+/// Helper to convert a byte offset in TOML content to 1-based (line, column).
+pub fn byte_offset_to_line_col(content: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, c) in content.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+/// Helper to format a `toml::de::Error` with human-readable line and column spans.
+fn format_toml_error(prefix: &str, content: &str, err: &toml::de::Error) -> String {
+    if let Some(range) = err.span() {
+        let (line, col) = byte_offset_to_line_col(content, range.start);
+        format!("{prefix} at line {line}, column {col}: {err}")
+    } else {
+        format!("{prefix}: {err}")
     }
 }
 

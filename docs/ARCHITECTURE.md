@@ -57,6 +57,53 @@ Discipline inherits its operational rigors from [`orieg/expanse`](https://github
 4. **Unified gate registry:** Every gate possesses a stable kebab-case identifier in `src/config.rs::GATES`.
 5. **Language packs behind a shared fact model:** Tree-sitter grammars and extractors map diverse ecosystems onto language-neutral facts (`TestFn`, `UnsafeSite`, assertion counts).
 
+### 2.1 Configuration Resolution Lifecycle
+
+```mermaid
+flowchart TD
+    D["1. Built-in Defaults<br/>(All available gates ON, severity error)"] --> M1["Merge Layer 1"]
+    F["2. discipline.toml<br/>(Repository configuration)"] --> M1
+    M1 --> M2["Merge Layer 2"]
+    O["3. Inline Override<br/>(--config-override / action input)"] --> M2
+    M2 --> M3["Merge Layer 3"]
+    CLI["4. CLI Switches<br/>(--enable / --disable)"] --> M3
+    M3 --> M4["Merge Layer 4"]
+    ENV["5. DISCIPLINE_HOSTNAME_DENYLIST<br/>(CI Secret Env)"] --> M4
+    M4 --> VAL["Strict Validation<br/>(deny_unknown_fields, planned gate check)"]
+    VAL --> CFG["Effective DisciplineConfig"]
+```
+
+### 2.2 Diff Inspection & Gate Evaluation Pipeline
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CLI as Discipline CLI / Runner
+    participant Git as GitCtx (git2)
+    participant AST as Language Extractors (tree-sitter)
+    participant Gates as Gate Engine
+    participant Report as Multi-Format Reporter
+
+    CLI->>Git: Resolve merge-base(base_ref, HEAD)
+    Git-->>CLI: Changed files, blobs, index
+    CLI->>AST: Dispatch changed files by extension
+    activate AST
+    AST-->>CLI: ParsedFileFacts (base vs head TestFn, assertions, unsafe)
+    deactivate AST
+    par Agent-Guard Gates
+        CLI->>Gates: evaluate_assertion_reduction, vacuous_tests, etc.
+    and Hygiene Sweeps
+        CLI->>Gates: time_estimates, pii, agent_scratch
+    and Integrity Gates
+        CLI->>Gates: config_integrity, golden_output, test_budget
+    and Verification Gates
+        CLI->>Gates: command presets, canary, count ratchet
+    end
+    Gates-->>CLI: Vec<GateOutcome> (examined counts, violations, overrides)
+    CLI->>Report: Render (Terminal, GitHub Summary, gl-codequality, JUnit, SARIF, Agent-Prompt)
+    Report-->>CLI: Exit code (0 = pass, 1 = violations, 2 = could not check)
+```
+
 ---
 
 ## 3. The Fail-Closed Contract

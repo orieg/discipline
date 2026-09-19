@@ -297,6 +297,10 @@
           "description": "Whether to scan PR description text",
           "type": "boolean"
         },
+        "secrets": {
+          "description": "Check for leaked private keys and high-entropy API tokens",
+          "type": "boolean"
+        },
         "severity": {
           "$ref": "#/$defs/Severity"
         }

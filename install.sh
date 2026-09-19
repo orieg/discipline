@@ -69,6 +69,21 @@ if [ -z "${DEST_DIR}" ]; then
     DEST_DIR="${HOME}/.local/bin"
   fi
 fi
+
+# Validate write permissions on destination directory or its parent
+if [ -d "${DEST_DIR}" ]; then
+  if [ ! -w "${DEST_DIR}" ]; then
+    fail "destination directory '${DEST_DIR}' is not writable (try running with sudo or specify a user directory with --to)"
+  fi
+else
+  parent_dir="$(dirname "${DEST_DIR}")"
+  while [ ! -d "${parent_dir}" ] && [ "${parent_dir}" != "/" ] && [ "${parent_dir}" != "." ]; do
+    parent_dir="$(dirname "${parent_dir}")"
+  done
+  if [ ! -w "${parent_dir}" ]; then
+    fail "cannot create destination directory '${DEST_DIR}': parent '${parent_dir}' is not writable"
+  fi
+fi
 mkdir -p "${DEST_DIR}"
 
 # Download URLs

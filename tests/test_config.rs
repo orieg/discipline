@@ -269,3 +269,61 @@ name = "my-test-proj"
         assert!(cfg.gates.settings(g.id).unwrap().enabled());
     }
 }
+
+#[test]
+fn toml_deserialization_errors_include_spans() {
+    // 1. Syntax error with line and column span
+    let bad_syntax = "[meta]\nversion = 1\nname = \"test\n";
+    let err = DisciplineConfig::from_toml_str(bad_syntax).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("at line") || msg.contains("line"),
+        "error message should contain line info: {msg}"
+    );
+
+    // 2. Schema validation error with line and column span
+    let bad_field =
+        "[meta]\nversion = 1\nname = \"test\"\n\n[gates.pii]\nunknown_property = true\n";
+    let err = DisciplineConfig::from_toml_str(bad_field).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("at line 6, column 1") || msg.contains("line 6"),
+        "schema error should report exact line 6: {msg}"
+    );
+
+    // 3. File loading schema validation error with file path, line, and column span
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("discipline.toml");
+    std::fs::write(&path, bad_field).unwrap();
+    let err = DisciplineConfig::load_from_file(&path).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains(&format!("{}:6:1", path.display())) || msg.contains("line 6"),
+        "file error should report file path and line 6: {msg}"
+    );
+}
+
+#[test]
+fn schema_json_def_references_resolve() {
+    let generated = discipline::schema::generate_schema();
+    let defs = generated["$defs"]
+        .as_object()
+        .expect("$defs must be an object");
+    let gates_props = generated["properties"]["gates"]["properties"]
+        .as_object()
+        .expect("gates properties must be an object");
+
+    for (gate_id, gate_val) in gates_props {
+        if let Some(all_of) = gate_val["allOf"].as_array() {
+            for item in all_of {
+                if let Some(ref_str) = item["$ref"].as_str() {
+                    let def_name = ref_str.strip_prefix("#/$defs/").expect("must be #/$defs/");
+                    assert!(
+                        defs.contains_key(def_name),
+                        "gate {gate_id} references missing def {def_name}"
+                    );
+                }
+            }
+        }
+    }
+}

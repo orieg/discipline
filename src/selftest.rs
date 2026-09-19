@@ -1185,6 +1185,33 @@ command = "cargo test"
             Ok(has_repair && !leaks_directive)
         },
     ),
+    (
+        "hygiene: pii secrets scanner detects private keys and tokens with redaction",
+        || {
+            use crate::config::PiiGate;
+            use crate::guards::hygiene::pii_rules;
+
+            let settings = PiiGate::default();
+            let rules = pii_rules(&settings)?;
+
+            // 1. Private key header
+            let priv_key = "-----BEGIN RSA PRIVATE KEY-----"; // discipline:allow(pii)
+            let priv_rule = rules.iter().find(|r| r.label == "private key header").unwrap();
+            let priv_match = priv_rule.re.is_match(priv_key);
+
+            // 2. AWS access key ID
+            let aws_key = "AKIA1234567890ABCDEF"; // discipline:allow(pii)
+            let aws_rule = rules.iter().find(|r| r.label == "AWS access key ID").unwrap();
+            let aws_match = aws_rule.re.is_match(aws_key);
+
+            // 3. GitHub personal access token
+            let gh_token = "ghp_123456789012345678901234567890123456"; // discipline:allow(pii)
+            let gh_rule = rules.iter().find(|r| r.label == "GitHub personal access token").unwrap();
+            let gh_match = gh_rule.re.is_match(gh_token);
+
+            Ok(priv_match && aws_match && gh_match && priv_rule.redact && aws_rule.redact && gh_rule.redact)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

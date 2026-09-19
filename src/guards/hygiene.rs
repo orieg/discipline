@@ -532,6 +532,32 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             redact: false,
         });
     }
+    if settings.secrets {
+        rules.push(PiiRule {
+            re: Regex::new(r"-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----")?,
+            label: "private key header",
+            user_group: false,
+            redact: true,
+        });
+        rules.push(PiiRule {
+            re: Regex::new(r"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b")?,
+            label: "AWS access key ID",
+            user_group: false,
+            redact: true,
+        });
+        rules.push(PiiRule {
+            re: Regex::new(r"\bgh[pousr]_[A-Za-z0-9_]{36,255}\b")?,
+            label: "GitHub personal access token",
+            user_group: false,
+            redact: true,
+        });
+        rules.push(PiiRule {
+            re: Regex::new(r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b")?,
+            label: "Slack token",
+            user_group: false,
+            redact: true,
+        });
+    }
     for host in &settings.hostname_denylist {
         let host = host.trim();
         if host.is_empty() {
@@ -1019,9 +1045,17 @@ mod tests {
         let off = PiiGate {
             home_paths: false,
             lan_ips: false,
+            secrets: false,
             ..PiiGate::default()
         };
         assert!(pii_rules(&off).unwrap().is_empty());
+        let secrets_only = PiiGate {
+            home_paths: false,
+            lan_ips: false,
+            secrets: true,
+            ..PiiGate::default()
+        };
+        assert_eq!(pii_rules(&secrets_only).unwrap().len(), 4);
         let extra = PiiGate {
             extra_patterns: vec![r"[a-z]+@corp\.example".into()],
             ..off.clone()

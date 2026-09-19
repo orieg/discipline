@@ -4144,3 +4144,101 @@ fn install_hooks_creates_executable_pre_commit_hook() {
     assert_eq!(run2.code, 0);
     assert!(run2.stdout.contains("already configured") || run2.stdout.contains("installed"));
 }
+
+#[test]
+fn java_csharp_ruby_fixtures_parsed_and_discriminate() {
+    let repo = Repo::new();
+
+    // 1. Clean suites in Java, C#, Ruby pass cleanly
+    let java_clean = std::fs::read_to_string("tests/fixtures/java/clean_suite.java").unwrap();
+    let csharp_clean = std::fs::read_to_string("tests/fixtures/csharp/clean_suite.cs").unwrap();
+    let ruby_clean = std::fs::read_to_string("tests/fixtures/ruby/clean_suite.rb").unwrap();
+
+    repo.write("tests/CleanTest.java", &java_clean);
+    repo.write("tests/CleanTest.cs", &csharp_clean);
+    repo.write("tests/clean_test.rb", &ruby_clean);
+    repo.commit("feat: add clean test suites");
+
+    let run_clean = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_clean.code, 0,
+        "clean suites should pass: stdout: {}\nstderr: {}",
+        run_clean.stdout, run_clean.stderr
+    );
+    assert_eq!(run_clean.titles("vacuous-tests").len(), 0);
+    assert_eq!(run_clean.titles("ignored-tests").len(), 0);
+
+    // 2. Skips and vacuous suites trigger violations
+    let java_bad = std::fs::read_to_string("tests/fixtures/java/skips_and_vacuous.java").unwrap();
+    let csharp_bad = std::fs::read_to_string("tests/fixtures/csharp/skips_and_vacuous.cs").unwrap();
+    let ruby_bad = std::fs::read_to_string("tests/fixtures/ruby/skips_and_vacuous.rb").unwrap();
+
+    repo.write("tests/BadTest.java", &java_bad);
+    repo.write("tests/BadTest.cs", &csharp_bad);
+    repo.write("tests/bad_test.rb", &ruby_bad);
+    repo.commit("test: add skips and vacuous suites");
+
+    let run_bad = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_bad.code, 1, "skips and vacuous suites must fail");
+
+    let vacuous_violations = run_bad.outcome("vacuous-tests")["violations"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let ignored_violations = run_bad.outcome("ignored-tests")["violations"]
+        .as_array()
+        .unwrap()
+        .clone();
+
+    assert!(
+        !vacuous_violations.is_empty(),
+        "vacuous tests must be detected"
+    );
+    assert!(
+        !ignored_violations.is_empty(),
+        "ignored tests must be detected"
+    );
+}
+
+#[test]
+fn pii_secrets_detection_and_redaction() {
+    let repo = Repo::new();
+
+    let priv_header = format!("{}-BEGIN RSA PRIVATE KEY-----", "----");
+    let aws_token = format!("{}1234567890ABCDEF", "AKIA");
+    let gh_token = format!("{}123456789012345678901234567890123456", "ghp_");
+
+    let secret_content = format!(
+        "\n# Config\nPRIVATE_KEY=\"{priv_header}\"\nAWS_KEY=\"{aws_token}\"\nGH_TOKEN=\"{gh_token}\"\n"
+    );
+    repo.write("config.env", &secret_content);
+    repo.commit("chore: commit credentials");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run.code, 1, "committed secrets must trigger pii violation");
+
+    let outcome = run.outcome("pii");
+    let violations = outcome["violations"].as_array().unwrap();
+    assert!(!violations.is_empty(), "expected pii secret violations");
+
+    // Check that secret token values are REDACTED and never echoed in output
+    for v in violations {
+        let msg = v["message"].as_str().unwrap();
+        assert!(!msg.contains(&aws_token), "AWS key must not be echoed");
+        assert!(!msg.contains(&gh_token), "GitHub token must not be echoed");
+    }
+
+    // Waived with inline directive on the same line
+    let waived_content = format!(
+        "\n# Config\nPRIVATE_KEY=\"{priv_header}\" <!-- discipline:allow(pii) -->\nAWS_KEY=\"{aws_token}\" <!-- discipline:allow(pii) -->\nGH_TOKEN=\"{gh_token}\" <!-- discipline:allow(pii) -->\n"
+    );
+    repo.write("config.env", &waived_content);
+    repo.commit("chore: waive secrets for testing");
+
+    let run_waived = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_waived.code, 0,
+        "waived secrets must pass: stdout: {}\nstderr: {}",
+        run_waived.stdout, run_waived.stderr
+    );
+}

@@ -1,0 +1,34 @@
+// templates/Jenkinsfile
+// Declarative Jenkins pipeline for Discipline Diff Sentinel & AI Coding Agent Gatekeeper
+// Reference: https://www.jenkins.io/doc/book/pipeline/syntax/
+
+pipeline {
+    agent {
+        docker {
+            image 'ghcr.io/orieg/discipline:latest'
+            args '--user 10001:10001'
+        }
+    }
+
+    environment {
+        DISCIPLINE_BASE_REF = "${env.CHANGE_TARGET ? 'origin/' + env.CHANGE_TARGET : 'origin/main'}"
+    }
+
+    stages {
+        stage('Discipline Gatekeeper') {
+            steps {
+                sh '''
+                    set -euo pipefail
+                    git fetch origin "${DISCIPLINE_BASE_REF#origin/}" --depth=100 || true
+                    discipline check --base "${DISCIPLINE_BASE_REF}" --json-out discipline-report.json
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'discipline-report.json', allowEmptyArchive: true
+        }
+    }
+}

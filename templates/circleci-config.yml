@@ -1,0 +1,28 @@
+# templates/circleci-config.yml
+# CircleCI configuration template for Discipline Diff Sentinel & AI Coding Agent Gatekeeper
+# Reference: https://circleci.com/docs/configuration-reference/
+
+version: 2.1
+
+jobs:
+  discipline-check:
+    docker:
+      - image: ghcr.io/orieg/discipline:latest
+        user: "10001:10001"
+    steps:
+      - checkout
+      - run:
+          name: Run Discipline Gatekeeper
+          command: |
+            set -euo pipefail
+            base_ref="${CIRCLE_BASE_REVISION:-origin/main}"
+            git fetch origin main --depth=100 || true
+            discipline check --base "${base_ref}" --json-out discipline-report.json
+      - store_artifacts:
+          path: discipline-report.json
+          destination: discipline-report.json
+
+workflows:
+  quality-gate:
+    jobs:
+      - discipline-check

@@ -1,0 +1,40 @@
+# templates/azure-pipelines.yml
+# Azure Pipelines template for Discipline Diff Sentinel & AI Coding Agent Gatekeeper
+# Reference: https://learn.microsoft.com/en-us/azure/devops/pipelines/
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+container:
+  image: ghcr.io/orieg/discipline:latest
+  options: --user 10001:10001
+
+variables:
+  # Target base ref to compare against in PR or branch builds
+  DISCIPLINE_BASE_REF: $[ coalesce(variables['System.PullRequest.TargetBranch'], 'origin/main') ]
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - script: |
+      set -euo pipefail
+      echo "Target base ref: ${DISCIPLINE_BASE_REF}"
+      git fetch origin "${DISCIPLINE_BASE_REF}" --depth=100 || true
+      discipline check --base "${DISCIPLINE_BASE_REF}" --json-out discipline-report.json
+    displayName: 'Run Discipline Gatekeeper'
+
+  - publish: $(System.DefaultWorkingDirectory)/discipline-report.json
+    artifact: DisciplineReport
+    condition: always()
+    displayName: 'Publish Discipline Report'

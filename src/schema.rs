@@ -170,6 +170,7 @@ pub fn generate_schema() -> Value {
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "home_paths": { "type": "boolean", "description": "Check for leaked home directory paths" },
                     "lan_ips": { "type": "boolean", "description": "Check for leaked private LAN IPs" },
+                    "secrets": { "type": "boolean", "description": "Check for leaked private keys and high-entropy API tokens" },
                     "allowed_users": { "$ref": "#/$defs/StringListOrReset" },
                     "hostname_denylist": { "$ref": "#/$defs/StringListOrReset" },
                     "extra_patterns": { "$ref": "#/$defs/StringListOrReset" },

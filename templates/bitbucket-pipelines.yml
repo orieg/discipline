@@ -1,0 +1,32 @@
+# templates/bitbucket-pipelines.yml
+# Bitbucket Pipelines template for Discipline Diff Sentinel & AI Coding Agent Gatekeeper
+# Reference: https://support.atlassian.com/bitbucket-cloud/docs/configure-bitbucket-pipelinesyml/
+
+image: ghcr.io/orieg/discipline:latest
+
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          name: Discipline Gatekeeper
+          clone:
+            depth: full
+          script:
+            - set -euo pipefail
+            - target_branch="${BITBUCKET_PR_DESTINATION_BRANCH:-main}"
+            - git fetch origin "${target_branch}" --depth=100 || true
+            - discipline check --base "origin/${target_branch}" --json-out discipline-report.json
+          artifacts:
+            - discipline-report.json
+
+  branches:
+    main:
+      - step:
+          name: Discipline Gatekeeper (Main Branch)
+          clone:
+            depth: full
+          script:
+            - set -euo pipefail
+            - discipline check --base HEAD~1 --json-out discipline-report.json
+          artifacts:
+            - discipline-report.json
