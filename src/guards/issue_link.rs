@@ -39,6 +39,43 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
+    if ctx.staged {
+        if settings.require_in_commit_if_no_pr {
+            let msg = ctx.pr_body.as_deref().unwrap_or("").trim();
+            if msg.is_empty() {
+                out.examined = 0;
+                out.notes.push(
+                    "staged change without commit message; issue-link check skipped".to_string(),
+                );
+                return Ok(out);
+            }
+            out.examined = 1;
+            let pattern_str = settings.pattern.as_deref().unwrap_or(DEFAULT_ISSUE_PATTERN);
+            let re_issue = Regex::new(pattern_str)?;
+            if has_issue_reference(msg, &re_issue) {
+                return Ok(out);
+            }
+            if let Some(waiver) = find_no_issue_directive(&ctx.directives) {
+                out.overrides.push(waiver);
+                return Ok(out);
+            }
+            out.push(
+                settings.severity(),
+                "Missing Tracking Issue Link in Commit Message",
+                None,
+                None,
+                "Commit message does not reference a tracking issue (#123) and lacks a no-issue waiver.".to_string(),
+                "Reference a tracking issue in the commit message, or add 'no-issue: <reason>'.",
+            );
+            return Ok(out);
+        } else {
+            out.examined = 0;
+            out.notes
+                .push("staged change (pre-commit); issue-link check skipped".to_string());
+            return Ok(out);
+        }
+    }
+
     let pattern_str = settings.pattern.as_deref().unwrap_or(DEFAULT_ISSUE_PATTERN);
     let re_issue = Regex::new(pattern_str)?;
 
