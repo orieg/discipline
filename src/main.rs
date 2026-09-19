@@ -78,6 +78,7 @@ fn load_config(
         enable: args.enable.iter().flat_map(|s| split_list(s)).collect(),
         disable: args.disable.iter().flat_map(|s| split_list(s)).collect(),
         hostname_denylist: std::env::var(HOSTNAME_DENYLIST_ENV)
+            .or_else(|_| std::env::var("DOCS_HOSTNAME_DENYLIST"))
             .map(|v| split_list(&v))
             .unwrap_or_default(),
         directive_sources: extra_directive_sources,
@@ -245,7 +246,7 @@ fn check(args: CheckArgs) -> Result<bool> {
     };
     let commits = git.commits()?;
     let (directives, directive_notes) =
-        discipline::tokens::extract_directives(pr_body.as_deref(), &commits, &config.directives);
+        discipline::tokens::extract_directives_for_config(pr_body.as_deref(), &commits, &config);
 
     let ctx = Context {
         config: &config,

@@ -248,9 +248,11 @@ impl<'a> JsExtractor<'a> {
                     };
 
                     let line = node.start_position().row + 1;
+                    let end_line = node.end_position().row + 1;
                     let mut test_fn = TestFn {
                         name: full_name,
                         line,
+                        end_line,
                         total_asserts: 0,
                         strong_asserts: 0,
                         tautologies: 0,

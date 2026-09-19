@@ -232,8 +232,9 @@ When a change touches source files in a language without an active pack, each AS
   ```
 - **What it does NOT catch:**
   - File renames where `git` detects similarity above rename thresholds (properly treated as modifications).
-- **Lifting directive:** `removes: <path-or-test> <reason>` or `deletes: <path-or-test> <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `paths`.
+  - Unscoped deletions when `require_scope = false` is configured (waives all deletions in the PR).
+- **Lifting directive:** `removes: <path-or-test> <reason>`, `deletes: <path-or-test> <reason>`, or namespaced `discipline: removes: <path-or-test> <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `paths`, `require_scope`, `allow_hidden`.
 
 #### `agents-md`
 - **Rule:** `AGENTS.md` must exist at the repository root. Tracked agent guide files (`CLAUDE.md`, `GEMINI.md`) must be symbolic links to `AGENTS.md` or textually identical to prevent split-brain instructions.
@@ -270,21 +271,23 @@ When a change touches source files in a language without an active pack, each AS
   ### Phase 2: Complete AST Parser (blocked on grammar stabilization)
   ```
 - **What it does NOT catch:**
-  - Operational TTLs, cache expiration, and timeouts (`timeout: 30s`, `retention: 7 days`). <!-- discipline:allow(time-estimates) -->
+  - Operational TTLs, cache expiration, retention, and timeouts (`timeout: 30s`, `retention: 7 days`). <!-- discipline:allow(time-estimates) -->
+  - Terms of art: metric names ("one-minute load average", "1-min average", "`load1`"), derived operational wrap windows ("~6.06 days active window", wrap window, bitfield, epoch).
   - Benchmark measurements ("ran in 4.2 seconds").
-  - Historical durations ("was maintained for three years"). <!-- discipline:allow(time-estimates) -->
+  - Historical durations and narration ("was maintained for three years", "forty minutes later — a commit ordering", "shipped a day ago"). <!-- discipline:allow(time-estimates) -->
   - Code inside fenced blocks (` ``` `).
-- **Lifting directive:** In markdown: `<!-- discipline:allow(time-estimates) -->` on the matching line.
+- **Lifting directive:** In markdown: `<!-- discipline:allow(time-estimates) -->` or inline marker `docs-lint: allow` on the matching line.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `include`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 
 #### `pii`
-- **Rule:** No leaked developer workstation home directories, private RFC 1918 LAN IPs, or denylisted hostnames in tracked text files or the PR body.
+- **Rule:** No leaked developer workstation home directories, private RFC 1918 LAN IPs, references to personal agent configurations, or denylisted hostnames in tracked text files or the PR body.
 - **Languages:** Any.
 - **What it catches:**
   - Local home directory paths: `/Users/<username>/...`, `/home/<username>/...`, `C:\Users\<username>\...`.
   - Private IPv4 LAN addresses: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`.
   - Whole-token matches of denylisted internal hostnames.
-  - Leaks inside decoded JSON string literals.
+  - References to personal maintainer agent configuration (`~/.claude`, `$HOME/.gemini`, `RESEARCH_DISCIPLINES.md`, `*_PLAYBOOK.md`) across tracked text files. <!-- discipline:allow(pii) -->
+  - Leaks inside decoded JSON keys and string literals, including escaped slashes (`\/`).
 - **Failing diff example (rejected):**
   ```rust
   // Workstation path leak — rejected by pii:
@@ -299,9 +302,10 @@ When a change touches source files in a language without an active pack, each AS
 - **What it does NOT catch:**
   - Standard documentation placeholders: `runner`, `user`, `username`, `example`, `shared`.
   - RFC 1918 CIDR network notations in routing documentation (`10.0.0.0/8`, `192.168.0.0/16`).
+  - Mock path fixtures and private LAN IPs inside AST test and self-test functions (`def test_*`, `def self_test`).
   - Binary files (non-text).
-- **Lifting directive:** `<!-- discipline:allow(pii) -->` on the matching line.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
+- **Lifting directive:** `<!-- discipline:allow(pii) -->` or `docs-lint: allow` on the matching line.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `secrets`, `agent_config_refs`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 
 #### `agent-scratch`
 - **Rule:** Agent transcripts, session files, and scratch artifacts must never be tracked in git.

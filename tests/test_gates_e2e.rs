@@ -4923,3 +4923,115 @@ fn vacuous_tests_precision_python_and_cpp_expanse_patterns() {
     let run = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(run.titles("vacuous-tests").len(), 0, "{}", run.stdout);
 }
+
+#[test]
+fn time_estimates_terms_of_art_and_docs_lint_allow() {
+    let repo = Repo::new();
+    repo.write(
+        "docs/metrics.md",
+        "# Operations\n\nThe nightly cache has a 7 days retention.\nBitfield ~6.06 days active window.\nCommit was forty minutes later — a commit ordering.\nSystem reports one-minute load average.\nProjected for 2 weeks docs-lint: allow\n",
+    );
+    repo.commit("docs: add operational notes with terms of art");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run.titles("time-estimates").len(), 0, "{}", run.stdout);
+
+    // Negative control: unexempted time estimate fails
+    repo.write(
+        "docs/metrics.md",
+        "# Operations\n\nPlan for 2 weeks without any marker\n",
+    );
+    repo.commit("docs: add plan estimate");
+    let run_bad = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_bad.titles("time-estimates").len(),
+        1,
+        "{}",
+        run_bad.stdout
+    );
+}
+
+#[test]
+fn pii_ast_test_function_exemption_and_agent_config_refs() {
+    let repo = Repo::new();
+    // Python script with self_test fixture
+    repo.write(
+        "scripts/check_hygiene.py",
+        "def self_test():\n    fake_home = \"/Users/someone/repo/\"\n    fake_lan = \"192.168.1.50\"\n    assert fake_home != fake_lan\n",
+    );
+    repo.commit("feat: add hygiene check script with self-test fixtures");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.titles("pii").len(),
+        0,
+        "AST test function must exempt home paths and lan IPs: {}",
+        run.stdout
+    );
+
+    // Escaped JSON home path is caught
+    repo.write(
+        "results/build.json",
+        "{\n  \"bin\": \"\\/home\\/someuser\\/bin\\/tool\"\n}\n",
+    );
+    repo.commit("feat: record build output with escaped slashes");
+    let run_json = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_json.titles("pii").len(), 1, "{}", run_json.stdout);
+
+    // Agent config references in tracked doc are caught
+    repo.write(
+        "docs/rules.md",
+        "# Guidelines\n\nSee ~/.claude/CLAUDE.md for rules.\n",
+    );
+    repo.commit("docs: reference personal agent config");
+    let run_agent_cfg = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_agent_cfg.titles("pii").len(),
+        2,
+        "{}",
+        run_agent_cfg.stdout
+    );
+}
+
+#[test]
+fn tokens_namespaced_discipline_prefix_and_deletion_require_scope() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/old.rs",
+        "#[test]\nfn old_test() { assert!(1 == 1); }\n",
+    );
+    repo.commit("test: add old test");
+
+    // Delete tests/old.rs
+    std::fs::remove_file(repo.file("tests/old.rs")).unwrap();
+    let body = "test: remove old test with namespaced directive\n\ndiscipline: removes: tests/old.rs refactored to tests/new.rs";
+    repo.commit(body);
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run.titles("deletion-rationale").len(), 0, "{}", run.stdout);
+
+    // Unscoped removes with require_scope = false
+    std::fs::remove_file(repo.file("src/lib.rs")).unwrap();
+    let unscoped_body =
+        "refactor: remove lib with unscoped directive\n\nremoves: wholesale restructuring";
+    repo.commit(unscoped_body);
+
+    let run_strict = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_strict.titles("deletion-rationale").len(),
+        1,
+        "strict requires scope"
+    );
+
+    let run_unstrict = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.deletion-rationale]\nrequire_scope = false\n",
+    ]);
+    assert_eq!(
+        run_unstrict.titles("deletion-rationale").len(),
+        0,
+        "unstrict accepts unscoped removes"
+    );
+}

@@ -247,10 +247,10 @@ fn is_exempt_question(clause: &str, line: &str) -> bool {
     q_re.is_match(clause) || q_re.is_match(line)
 }
 
-fn has_exemption_cue(clause: &str, _matched: &str) -> bool {
+fn has_exemption_cue(clause: &str, line: &str, _matched: &str) -> bool {
     // 1. Operational limits / timeouts / caps / budgets / TTL / retention in setting forms
     let setting_re = Regex::new(
-        r"(?i)\b(?:timeout(?:-minutes)?\s*[:=]\s*\d+|\d+[- ](?:second|sec|minute|min|hour|hr)[- ]timeout|capped\s+at\s+\d+|\d+[- ](?:minute|min|hour|hr|sec)[- ]cap|cap\s+of\s+\d+|limit\s+is\s+\d+|\d+[- ](?:minute|min|hour|hr|sec)[- ]limit|rate\s+limit\s+is\s+\d+|budget\s+of\s+\d+|\d+[- ](?:minute|min|hour|hr|sec)[- ]budget|retention\s+(?:is|of)\s+\d+|\d+[- ](?:day|hour|month)[- ]retention|ttl\s+(?:is\s+set\s+to|is|set\s+to)\s+\d+|\d+[- ](?:hour|day|min)[- ]ttl|interval\s+is\s+(?:every\s+)?\d+|\d+[- ](?:hour|minute|day)[- ]default|default\s+(?:is|of)\s+\d+|gap\s+between\s+runs)\b",
+        r"(?i)\b(?:timeout(?:-minutes)?\s*[:=]\s*\d+|\d+[- ](?:second|sec|minute|min|hour|hr)[- ]timeout|capped\s+at\s+\d+|\d+[- ](?:minute|min|hour|hr|sec)[- ]cap|cap\s+of\s+\d+|limit\s+is\s+\d+|\d+[- ](?:minute|min|hour|hr|sec)[- ]limit|rate\s+limit\s+is\s+\d+|budget\s+of\s+\d+|\d+[- ](?:minute|min|hour|hr|sec)[- ]budget|retention\s+(?:is|of)\s+\d+|\d+[- ](?:day|hour|month)[- ]retention|ttl\s+(?:is\s+set\s+to|is|set\s+to)\s+\d+|\d+[- ](?:hour|day|min)[- ]ttl|interval\s+is\s+(?:every\s+)?\d+|\d+[- ](?:hour|minute|day)[- ]default|default\s+(?:is|of)\s+\d+|gap\s+between\s+runs|retention|retained|expires?|expired|cache(?:d)?|ttl|soak|uptime|window|timeout|sleep|24-hour)\b",
     )
     .unwrap();
     if setting_re.is_match(clause) {
@@ -259,32 +259,42 @@ fn has_exemption_cue(clause: &str, _matched: &str) -> bool {
 
     // 2. Frequency
     let freq_re = Regex::new(
-        r"(?i)\b(?:every\s+\d+\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)|once\s+a\s+(?:day|week|month|year)|twice\s+a\s+(?:day|week|month|year)|triggers\s+every\s+\d+)\b",
+        r"(?i)\b(?:every\s+\d+\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)|once\s+a\s+(?:day|week|month|year)|twice\s+a\s+(?:day|week|month|year)|triggers\s+every\s+\d+|per\s+(?:day|week|month|year))\b",
     )
     .unwrap();
     if freq_re.is_match(clause) {
         return true;
     }
 
-    // 3. Performance / measurement / runtimes / latency / benchmarks / loadavg
+    // 3. Performance / measurement / runtimes / latency / benchmarks / loadavg / metrics
     let meas_re = Regex::new(
-        r"(?i)\b(?:took\s+\d+|ran\s+for\s+(?:over\s+)?(?:\d+|two)\s+|elapsed[:\s]+\d+|finished\s+in\s+\d+|measured\s+elapsed\s+time[:\s]+\d+|execution\s+took\s+\d+|mean\s+runtime\s+of\s+\d+|runtime\s+(?:was|of)\s+\d+|wall[- ]clock\s+time\s+was\s+\d+|wall\s+time\s+on\s+the\s+same\s+core|nightly\s+run\s+took\s+\d+|p\d{2,3}\s+latency|loadavg|load\s+average\s+over\s+\d+|1-min\s+average\s+decaying|\d+[- ](?:min|minute|sec|hour)\s+\d+(?:\.\d+)?)\b",
+        r"(?i)\b(?:took\s+\d+|ran\s+for\s+(?:over\s+)?(?:\d+|two)\s+|elapsed[:\s]+\d+|finished\s+in\s+\d+|measured\s+elapsed\s+time[:\s]+\d+|execution\s+took\s+\d+|mean\s+runtime\s+of\s+\d+|runtime\s+(?:was|of)\s+\d+|wall[- ]clock\s+time\s+was\s+\d+|wall\s+time\s+on\s+the\s+same\s+core|nightly\s+run\s+took\s+\d+|nightly|p\d{2,3}\s+latency|load1|loadavg|load\s+average|1-min\s+(?:load\s+)?average|one-minute\s+(?:load\s+)?average|\d+[- ](?:min|minute|sec|hour)\s+\d+(?:\.\d+)?)\b",
     )
     .unwrap();
     if meas_re.is_match(clause) {
         return true;
     }
 
-    // 4. Historical durations / ages / production stability
+    // 4. Historical durations / ages / production stability / historical narration / commit ordering
     let hist_re = Regex::new(
-        r"(?i)\b(?:\d+[- ](?:years?|months?|days?|hours?|mins?)[- ]old|(?:a|an)\s+(?:years?|months?|days?)[- ]old|\d+\s+(?:years?|months?|days?)\s+ago|for\s+(?:the\s+past|the\s+last|about|over|~)?\s*\d+\s*(?:years?|months?)|stable\s+for\s+\d+|compatibility\s+for\s+(?:over\s+)?\d+|history\s+spans\s+\d+|survived\s+\d+\s+years|undetected\s+for\s+[~]?\d+\s+years|invariants?|unchecked\s+for\s+\d+|written\s+\d+\s+years\s+ago|issue\s+was\s+resolved|production\s+history\s+spans)\b",
+        r"(?i)\b(?:\d+[- ](?:years?|months?|days?|hours?|mins?)[- ]old|(?:a|an)\s+(?:years?|months?|days?)[- ]old|\d+\s+(?:years?|months?|days?|weeks?|months?)\s+ago|a\s+day\s+ago|shipped\s+a\s+day|for\s+(?:the\s+past|the\s+last|about|over|~)?\s*\d+\s*(?:years?|months?)|stable\s+for\s+\d+|compatibility\s+for\s+(?:over\s+)?\d+|history\s+spans\s+\d+|survived\s+\d+\s+years|undetected\s+for\s+[~]?\d+\s+years|invariants?|unchecked\s+for\s+\d+|written\s+\d+\s+years\s+ago|issue\s+was\s+resolved|production\s+history\s+spans|commit\s+ordering|(?:minutes?|hours?|days?|weeks?)\s+later|(?:minutes?|hours?|days?|weeks?)\s+earlier)\b",
     )
     .unwrap();
-    if hist_re.is_match(clause) {
+    if hist_re.is_match(clause)
+        || (hist_re.is_match(line) && line.to_lowercase().contains("commit ordering"))
+    {
         return true;
     }
 
-    // 5. Reading / media time
+    // 5. Operational wrap windows / bitfield / epoch
+    let wrap_re =
+        Regex::new(r"(?i)\b(?:active\s+window|wrap\s+window|wrap\s+duration|bitfield|epoch)\b")
+            .unwrap();
+    if wrap_re.is_match(clause) || wrap_re.is_match(line) {
+        return true;
+    }
+
+    // 6. Reading / media time
     let media_re = Regex::new(
         r"(?i)\b\d+[- ](?:minute|min|hour|hr)[- ](?:read|overview|talk|presentation|paper|video|podcast|description)\b",
     )
@@ -311,6 +321,9 @@ pub(crate) fn is_time_estimate_violation(
     if matches!(matched, "Q1" | "Q2" | "Q3" | "Q4") {
         return !is_exempt_question(clause, line);
     }
+    if has_exemption_cue(clause, line, matched) {
+        return false;
+    }
     if has_plan_vocabulary(clause) {
         return true;
     }
@@ -321,9 +334,6 @@ pub(crate) fn is_time_estimate_violation(
         || lower_matched.starts_with("an-");
     if is_a_an && has_plan_vocabulary(line) {
         return true;
-    }
-    if has_exemption_cue(clause, matched) {
-        return false;
     }
     if is_a_an {
         let in_re =
@@ -442,7 +452,11 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
                 out.overrides.push(crate::tokens::OverrideRecord {
                     gate: GATE.to_string(),
                     subject: format!("{label}:{}", idx + 1),
-                    directive: format!("discipline:allow({GATE})"),
+                    directive: if line.contains("docs-lint: allow") {
+                        "docs-lint: allow".to_string()
+                    } else {
+                        format!("discipline:allow({GATE})")
+                    },
                     reason: "inline exemption marker".to_string(),
                     source: crate::tokens::OverrideSource::Inline {
                         file: label.to_string(),
@@ -467,7 +481,7 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
                 Some(line_num),
                 format!("Calendar / duration estimate `{}`.", hit_str),
                 "Replace it with ordering, dependencies, or a gate criterion. A line that \
-                 must quote the term can carry `<!-- discipline:allow(time-estimates) -->`.",
+                 must quote the term can carry `<!-- discipline:allow(time-estimates) -->` or `docs-lint: allow`.",
             );
         }
     };
@@ -589,6 +603,32 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             redact: true,
         });
     }
+    if settings.agent_config_refs {
+        let agent_dirs = [
+            "claude", "gemini", "codex", "cursor", "aider", "copilot", "continue",
+        ]
+        .join("|");
+        rules.push(PiiRule {
+            re: Regex::new(&format!(r"(?i)(?:~|\$HOME)/\.(?:{agent_dirs})\b"))?,
+            label: "home agent-config path",
+            user_group: false,
+            redact: false,
+        });
+        let res_disc = format!(r"\b{}{}\b", "RESEARCH_DISCIPLINES", r"\.md");
+        rules.push(PiiRule {
+            re: Regex::new(&res_disc)?,
+            label: "personal methodology doc",
+            user_group: false,
+            redact: false,
+        });
+        let playbook = format!(r"\b{}{}\b", r"[A-Z0-9_]*_PLAYBOOK", r"\.md");
+        rules.push(PiiRule {
+            re: Regex::new(&playbook)?,
+            label: "personal playbook",
+            user_group: false,
+            redact: false,
+        });
+    }
     for host in &settings.hostname_denylist {
         let host = host.trim();
         if host.is_empty() {
@@ -692,6 +732,27 @@ struct PiiScanOptions<'a> {
     added_lines: Option<&'a std::collections::BTreeSet<usize>>,
 }
 
+fn get_test_lines(path: &str, text: &str) -> std::collections::BTreeSet<usize> {
+    let mut test_lines = std::collections::BTreeSet::new();
+    let reg = crate::ast::default_registry();
+    if let Some(pack) = reg.find_pack(path) {
+        if let Ok(facts) = pack.extract(path, text, &crate::ast::AssertVocabulary::default()) {
+            for test in facts.tests {
+                let start = test.line;
+                let end = if test.end_line >= test.line {
+                    test.end_line
+                } else {
+                    test.line
+                };
+                for l in start..=end {
+                    test_lines.insert(l);
+                }
+            }
+        }
+    }
+    test_lines
+}
+
 fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bool {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
         return false;
@@ -725,29 +786,49 @@ fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bo
                 if opts.allowed.iter().any(|re| re.is_match(token)) {
                     continue;
                 }
-                let detail = match (rule.redact, m.as_str()) {
-                    (false, s) => format!("{} `{s}`", rule.label),
-                    _ => format!("{} (match not echoed)", rule.label),
-                };
-                let line_num = text
+                let escaped_token = token.replace('/', r"\/");
+                let matching_lines: Vec<usize> = text
                     .lines()
-                    .position(|l| l.contains(token))
-                    .map(|p| p + 1)
-                    .unwrap_or(1);
-                if let Some(lines) = opts.added_lines {
-                    if !lines.contains(&line_num) {
-                        continue;
+                    .enumerate()
+                    .filter(|(_, l)| l.contains(token) || l.contains(&escaped_token))
+                    .map(|(idx, _)| idx + 1)
+                    .collect();
+                let candidate_lines = if matching_lines.is_empty() {
+                    vec![1]
+                } else {
+                    matching_lines
+                };
+                let mut reported = false;
+                for line_num in candidate_lines {
+                    if let Some(line) = text.lines().nth(line_num.saturating_sub(1)) {
+                        if line_allows(line, "pii") {
+                            continue;
+                        }
                     }
+                    if let Some(lines) = opts.added_lines {
+                        if !lines.contains(&line_num) {
+                            continue;
+                        }
+                    }
+                    let detail = match (rule.redact, m.as_str()) {
+                        (false, s) => format!("{} `{s}`", rule.label),
+                        _ => format!("{} (match not echoed)", rule.label),
+                    };
+                    out.push(
+                        opts.settings.severity(),
+                        "Host / PII Leak",
+                        Some(opts.label),
+                        Some(line_num),
+                        format!("Found a {detail}."),
+                        "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
+                         keep it can carry `discipline:allow(pii)` or `docs-lint: allow`.",
+                    );
+                    reported = true;
+                    break;
                 }
-                out.push(
-                    opts.settings.severity(),
-                    "Host / PII Leak",
-                    Some(opts.label),
-                    Some(line_num),
-                    format!("Found a {detail}."),
-                    "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
-                     keep it can carry `discipline:allow(pii)`.",
-                );
+                if reported {
+                    break;
+                }
             }
         }
     }
@@ -763,6 +844,14 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
     let mut out = GateOutcome::new(GATE);
     let mut binary = 0usize;
 
+    if settings.hostname_denylist.is_empty() {
+        out.notes.push(
+            "hostname denylist is empty or unset; hostname leak check skipped \
+             (set DISCIPLINE_HOSTNAME_DENYLIST or DOCS_HOSTNAME_DENYLIST as a repository secret)"
+                .to_string(),
+        );
+    }
+
     let is_active_config = |label: &str| {
         let l = label.trim_start_matches("./");
         let c = ctx.config_path.trim_start_matches("./");
@@ -774,6 +863,7 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                 added_lines: Option<&std::collections::BTreeSet<usize>>,
                 out: &mut GateOutcome| {
         let active_cfg = is_active_config(label);
+        let test_lines = get_test_lines(label, text);
         for (idx, line) in text.lines().enumerate() {
             let line_num = idx + 1;
             if let Some(lines) = added_lines {
@@ -781,8 +871,21 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                     continue;
                 }
             }
+            let is_in_test = test_lines.contains(&line_num);
             let hit = rules.iter().find_map(|rule| {
                 if active_cfg && rule.label == "denylisted hostname" {
+                    return None;
+                }
+                if is_in_test
+                    && matches!(
+                        rule.label,
+                        "home-directory path"
+                            | "private LAN address"
+                            | "home agent-config path"
+                            | "personal methodology doc"
+                            | "personal playbook"
+                    )
+                {
                     return None;
                 }
                 rule.re.captures_iter(line).find_map(|caps| {
@@ -808,7 +911,11 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                 out.overrides.push(crate::tokens::OverrideRecord {
                     gate: GATE.to_string(),
                     subject: format!("{label}:{}", idx + 1),
-                    directive: format!("discipline:allow({GATE})"),
+                    directive: if line.contains("docs-lint: allow") {
+                        "docs-lint: allow".to_string()
+                    } else {
+                        format!("discipline:allow({GATE})")
+                    },
                     reason: "inline exemption marker".to_string(),
                     source: crate::tokens::OverrideSource::Inline {
                         file: label.to_string(),
@@ -832,7 +939,7 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                 Some(idx + 1),
                 format!("Found a {detail}."),
                 "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
-                 keep it can carry `discipline:allow(pii)`.",
+                 keep it can carry `discipline:allow(pii)` or `docs-lint: allow`.",
             );
         }
     };
@@ -1120,6 +1227,7 @@ mod tests {
             home_paths: false,
             lan_ips: false,
             secrets: false,
+            agent_config_refs: false,
             ..PiiGate::default()
         };
         assert!(pii_rules(&off).unwrap().is_empty());
@@ -1127,9 +1235,18 @@ mod tests {
             home_paths: false,
             lan_ips: false,
             secrets: true,
+            agent_config_refs: false,
             ..PiiGate::default()
         };
         assert_eq!(pii_rules(&secrets_only).unwrap().len(), 4);
+        let agent_cfg_only = PiiGate {
+            home_paths: false,
+            lan_ips: false,
+            secrets: false,
+            agent_config_refs: true,
+            ..PiiGate::default()
+        };
+        assert_eq!(pii_rules(&agent_cfg_only).unwrap().len(), 3);
         let extra = PiiGate {
             extra_patterns: vec![r"[a-z]+@corp\.example".into()],
             ..off.clone()
@@ -1140,5 +1257,108 @@ mod tests {
             ..off
         };
         assert!(pii_rules(&bad).is_err());
+    }
+
+    #[test]
+    fn terms_of_art_and_historical_narration_exemptions() {
+        let banned = compile(time_estimate_patterns(), "banned").unwrap();
+        let allowed = compile(Vec::<String>::new(), "allowed").unwrap();
+
+        let exempt = [
+            "The nightly cache has a 7 days retention.",
+            "Bitfield ~6.06 days active window",
+            "forty minutes later — a commit ordering",
+            "one-minute load average",
+            "1-min average decaying",
+            "`load1` metric",
+            "shipped a day ago",
+            "planned for 2 weeks docs-lint: allow",
+        ];
+        for line in exempt {
+            let hits = scan_text_for_time_estimates(line, &banned, &allowed);
+            assert!(
+                hits.is_empty(),
+                "expected line to be exempt, got hits {hits:?}: {line}"
+            );
+        }
+
+        let non_exempt = [
+            "Ship v0.1 (1-2 days).",
+            "planned for 2 weeks",
+            "delivery in 3 weeks",
+        ];
+        for line in non_exempt {
+            let hits = scan_text_for_time_estimates(line, &banned, &allowed);
+            assert!(
+                !hits.is_empty(),
+                "expected line to be flagged, got no hits: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_config_refs_detection() {
+        let s = PiiGate {
+            home_paths: false,
+            lan_ips: false,
+            secrets: false,
+            agent_config_refs: true,
+            ..PiiGate::default()
+        };
+        // Positives (must fail)
+        let bad = [
+            "with unit tests in ~/.claude/CLAUDE.md",
+            "follow $HOME/.gemini/GEMINI.md for style",
+            "Per RESEARCH_DISCIPLINES.md Rule 1",
+            "see PAPER_PUBLISHING_PLAYBOOK.md",
+        ];
+        for b in bad {
+            assert!(rule_hits(&s, b), "expected leak to be flagged: {b}");
+        }
+        // Negatives (must pass)
+        let good = [
+            "export PATH=$HOME/.cargo/bin:$PATH",
+            "AGENTS.md is the canonical guide",
+        ];
+        for g in good {
+            assert!(!rule_hits(&s, g), "expected clean line to pass: {g}");
+        }
+    }
+
+    #[test]
+    fn ast_test_function_exemption_in_python() {
+        let src = r#"
+def self_test():
+    fake_path = "/Users/someone/repo/"
+    fake_ip = "192.168.1.20"
+    assert fake_path != fake_ip
+
+def production_code():
+    real_path = "/Users/someone/repo/"
+    return real_path
+"#;
+        let test_lines = get_test_lines("scripts/check.py", src);
+        assert!(test_lines.contains(&3)); // inside self_test
+        assert!(test_lines.contains(&4)); // inside self_test
+        assert!(!test_lines.contains(&8)); // inside production_code
+    }
+
+    #[test]
+    fn json_escaped_slashes_scanned() {
+        let text = "{\n  \"bin\": \"\\/home\\/someuser\\/bin\\/x\"\n}\n";
+        let rules = pii_rules(&PiiGate::default()).unwrap();
+        let allowed = vec![];
+        let mut out = GateOutcome::new("pii");
+        let opts = PiiScanOptions {
+            label: "results/escaped.json",
+            rules: &rules,
+            settings: &PiiGate::default(),
+            allowed: &allowed,
+            is_active_config: false,
+            added_lines: None,
+        };
+        assert!(scan_json(&opts, text, &mut out));
+        assert_eq!(out.violations.len(), 1);
+        assert_eq!(out.violations[0].line, Some(2));
     }
 }

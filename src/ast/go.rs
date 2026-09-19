@@ -142,9 +142,11 @@ impl<'a> GoExtractor<'a> {
 
         if is_test {
             let line = node.start_position().row + 1;
+            let end_line = node.end_position().row + 1;
             let mut test_fn = TestFn {
                 name: func_name.to_string(),
                 line,
+                end_line,
                 total_asserts: 0,
                 strong_asserts: 0,
                 tautologies: 0,
@@ -287,9 +289,11 @@ impl<'a> GoExtractor<'a> {
             };
 
             let line = node.start_position().row + 1;
+            let end_line = node.end_position().row + 1;
             let mut sub_test = TestFn {
                 name: sub_name.clone(),
                 line,
+                end_line,
                 total_asserts: 0,
                 strong_asserts: 0,
                 tautologies: 0,

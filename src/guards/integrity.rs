@@ -201,6 +201,9 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                 (Value::Boolean(true), Value::Boolean(false)) => {
                     note(format!("`{key}` changed from true to false"))
                 }
+                (Value::Boolean(false), Value::Boolean(true)) if key == "allow_hidden" => {
+                    note("`allow_hidden` changed from false to true".to_string())
+                }
                 (Value::String(bs), Value::String(hs))
                     if key == "severity" && bs == "error" && hs == "warning" =>
                 {

@@ -149,7 +149,9 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "paths": { "$ref": "#/$defs/StringListOrReset" }
+                    "paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "require_scope": { "type": "boolean", "description": "When true, directive must name the deleted file or test" },
+                    "allow_hidden": { "type": ["boolean", "null"], "description": "When true, HTML-comment-wrapped directives are accepted for deletions" }
                 }
             },
             "IgnoredTestsGate": {
@@ -191,7 +193,8 @@ pub fn generate_schema() -> Value {
                     "extra_patterns": { "$ref": "#/$defs/StringListOrReset" },
                     "allow_patterns": { "$ref": "#/$defs/StringListOrReset" },
                     "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" },
-                    "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" }
+                    "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" },
+                    "agent_config_refs": { "type": "boolean", "description": "When true, flags references to personal agent configuration directories and playbook docs" }
                 }
             },
             "ScratchGate": {

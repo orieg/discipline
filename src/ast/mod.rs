@@ -168,6 +168,8 @@ pub struct TestFn {
     pub name: String,
     /// 1-based line of the test definition.
     pub line: usize,
+    /// 1-based line of the end of the test definition (or 0 if not tracked).
+    pub end_line: usize,
     pub total_asserts: usize,
     /// Equality / pattern assertions (`assert_eq!`, `assert_ne!`, `assert_matches!` ...).
     pub strong_asserts: usize,
@@ -259,6 +261,7 @@ impl Default for ParsedFileFacts {
             compile_time_test: Some(TestFn {
                 name: "compile-time-assertions".to_string(),
                 line: 1,
+                end_line: 1,
                 total_asserts: 0,
                 strong_asserts: 0,
                 tautologies: 0,
@@ -277,9 +280,11 @@ impl Default for ParsedFileFacts {
 impl ParsedFileFacts {
     /// Builds the synthesized `compile-time-assertions` test from facts.
     pub fn build_compile_time_test(&mut self) {
+        let line = self.compile_time_assert_line.unwrap_or(1);
         self.compile_time_test = Some(TestFn {
             name: "compile-time-assertions".to_string(),
-            line: self.compile_time_assert_line.unwrap_or(1),
+            line,
+            end_line: line,
             total_asserts: self.compile_time_asserts,
             strong_asserts: self.compile_time_asserts,
             tautologies: 0,

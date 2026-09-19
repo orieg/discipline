@@ -168,8 +168,9 @@ Legitimate test refactorings, file deletions, or configuration adjustments are a
 <directive>: <subject> <reason>
 ```
 
-Alternatively, HTML-comment syntax is accepted:
+Alternatively, namespaced or HTML-comment syntax is accepted:
 ```text
+discipline: <directive>: <subject> <reason>
 <!-- discipline:allow(<gate-id>): <subject> <reason> -->
 ```
 
@@ -177,8 +178,8 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 
 | Directive | Lifts | Subject |
 |---|---|---|
-| `removes:` / `deletes:` | `deletion-rationale` | File path, directory prefix, or test function name |
-| `allow-assertion-drop:` | `assertion-reduction` | Test function name |
+| `removes:` / `deletes:` | `deletion-rationale` | File path, directory prefix, or test function name (or unscoped with `require_scope = false`) |
+| `allow-assertion-drop:` | `assertion-reduction` | Test function name, file path, or directory prefix |
 | `allow-ignore:` | `ignored-tests` | Test function name |
 | `allow-gate-weakening:` | `config-integrity` | Gate id |
 | `allow-golden-update:` | `golden-output` | Snapshot/fixture file path or directory prefix |
@@ -186,7 +187,7 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 
 ### Inline Line Exemptions
 
-Single line exceptions in source code or documentation use inline directives:
+Single line exceptions in source code or documentation use inline directives or the `docs-lint: allow` alias:
 ```rust
 // Rust source:
 let _ = 1; // discipline:allow(pii)
@@ -194,6 +195,10 @@ let _ = 1; // discipline:allow(pii)
 ```markdown
 <!-- Markdown documentation: -->
 <!-- discipline:allow(time-estimates) -->
+```
+```text
+# General text / scripts:
+planned for 2 weeks docs-lint: allow
 ```
 
 Every report records the exact count of lines exempted by inline markers.

@@ -309,9 +309,11 @@ impl<'a> CSharpExtractor<'a> {
         }
 
         let line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
         let mut test_fn = TestFn {
             name: method_name.to_string(),
             line,
+            end_line,
             total_asserts: 0,
             strong_asserts: 0,
             tautologies: 0,

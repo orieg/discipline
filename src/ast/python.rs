@@ -315,7 +315,8 @@ impl<'a> PythonExtractor<'a> {
             }
         }
 
-        let is_test_name = fn_name.starts_with("test_")
+        let is_test_name = fn_name == "self_test"
+            || fn_name.starts_with("test_")
             || fn_name == "test"
             || (self.is_test_path && fn_name.starts_with("test"));
 
@@ -340,9 +341,11 @@ impl<'a> PythonExtractor<'a> {
         };
 
         let line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
         let mut test_fn = TestFn {
             name: full_name,
             line,
+            end_line,
             total_asserts: 0,
             strong_asserts: 0,
             tautologies: 0,

@@ -1311,6 +1311,100 @@ command = "cargo test"
             Ok(unapproved.violations.len() == 1 && approved.violations.is_empty())
         },
     ),
+    (
+        "hygiene: terms of art and historical narration exempt from time-estimates",
+        || {
+            let banned = crate::guards::hygiene::time_estimate_patterns()
+                .iter()
+                .map(|p| Regex::new(p))
+                .collect::<Result<Vec<_>, _>>()?;
+            let empty = Vec::new();
+            let check = |text: &str| {
+                crate::guards::hygiene::scan_text_for_time_estimates(text, &banned, &empty).is_empty()
+            };
+            Ok(check("The nightly cache has a 7 days retention.")
+                && check("~6.06 days active window")
+                && check("forty minutes later — a commit ordering")
+                && check("1-min average decaying")
+                && check("`load1` metric")
+                && !check("Ship v0.1 (1-2 days)."))
+        },
+    ),
+    (
+        "pii: agent config references detected across text files",
+        || {
+            let s = PiiGate {
+                home_paths: false,
+                lan_ips: false,
+                secrets: false,
+                agent_config_refs: true,
+                ..PiiGate::default()
+            };
+            let rules = pii_rules(&s)?;
+            let hit = |text: &str| rules.iter().any(|r| r.re.is_match(text));
+            Ok(hit("with unit tests in ~/.claude/CLAUDE.md") // discipline:allow(pii)
+                && hit("follow $HOME/.gemini/GEMINI.md for style") // discipline:allow(pii)
+                && hit("Per RESEARCH_DISCIPLINES.md Rule 1") // discipline:allow(pii)
+                && hit("see PAPER_PUBLISHING_PLAYBOOK.md") // discipline:allow(pii)
+                && !hit("export PATH=$HOME/.cargo/bin:$PATH")
+                && !hit("AGENTS.md is the canonical guide"))
+        },
+    ),
+    (
+        "pii: ast test functions exempt from home paths and lan ips",
+        || {
+            use crate::ast::LanguagePack;
+            let v = AssertVocabulary::default();
+            let py = "def self_test():\n    p = \"/Users/someone/repo/\"\n    ip = \"192.168.1.20\"\n    assert p != ip\n"; // discipline:allow(pii)
+            let facts = crate::ast::python::PythonPack.extract("scripts/test.py", py, &v)?;
+            let test = &facts.tests[0];
+            Ok(test.name == "self_test" && test.line == 1 && test.end_line == 4)
+        },
+    ),
+    (
+        "tokens: namespaced directive prefix discipline: accepted",
+        || {
+            let parsed = crate::tokens::parse_directives(
+                "discipline: removes: tests/old.rs refactored\n<!-- discipline: allow-regression: bench_a -->\ndiscipline: allow-ignore: miri\n",
+                crate::tokens::OverrideSource::PrBody,
+            );
+            Ok(parsed.len() == 3
+                && parsed[0].directive == "removes"
+                && parsed[1].directive == "allow-regression"
+                && parsed[2].directive == "allow-ignore")
+        },
+    ),
+    (
+        "deletion-rationale: require_scope configuration controls unscoped removes",
+        || {
+            use crate::config::DeletionGate;
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::agent_diff::evaluate_deletion_rationale;
+            use crate::tokens::{parse_directives, OverrideSource};
+
+            let directives = parse_directives("removes: general cleanup", OverrideSource::PrBody);
+            let deleted = [ChangedFile {
+                path: "src/old.rs".into(),
+                old_path: "src/old.rs".into(),
+                kind: ChangeKind::Deleted,
+                added_lines: std::collections::BTreeSet::new(),
+            }];
+
+            let strict = DeletionGate {
+                require_scope: true,
+                ..DeletionGate::default()
+            };
+            let unstrict = DeletionGate {
+                require_scope: false,
+                ..DeletionGate::default()
+            };
+
+            let out_strict = evaluate_deletion_rationale(&deleted, &[], &strict, &directives, false)?;
+            let out_unstrict = evaluate_deletion_rationale(&deleted, &[], &unstrict, &directives, false)?;
+
+            Ok(out_strict.violations.len() == 1 && out_unstrict.violations.is_empty())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

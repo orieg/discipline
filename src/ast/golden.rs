@@ -79,9 +79,11 @@ impl LanguagePack for GoldenPack {
         let ignored = has_xfail || has_skipif;
         let should_panic = has_xfail;
 
+        let end_line = src.lines().count().max(1);
         let test = TestFn {
             name,
             line: 1,
+            end_line,
             total_asserts,
             strong_asserts,
             tautologies,

@@ -217,8 +217,10 @@ pub fn parse_directives_with_names(
         })
         .collect::<Vec<_>>()
         .join("|");
-    let re = Regex::new(&format!(r"(?i)^[ \t]*(<!--[ \t]*)?({patterns})[ \t]*(.*)$"))
-        .expect("directive regex is static");
+    let re = Regex::new(&format!(
+        r"(?i)^[ \t]*(<!--[ \t]*)?(?:discipline:[ \t]+)?({patterns})[ \t]*(.*)$"
+    ))
+    .expect("directive regex is static");
 
     let mut directives = Vec::new();
     let mut fence: Option<&str> = None;
@@ -295,6 +297,72 @@ pub fn extract_directives(
         if commits_allowed {
             for d in parsed {
                 if d.hidden && !policy.allow_hidden {
+                    notes.push(format!(
+                        "hidden directive `{}: {}` in commit {oid} ignored (directives.allow_hidden is false)",
+                        d.directive, d.reason
+                    ));
+                } else {
+                    active.push(d);
+                }
+            }
+        } else if !parsed.is_empty() {
+            notes.push(format!(
+                "commit-message directives are disabled by policy; ignored directive from commit {oid}"
+            ));
+        }
+    }
+
+    (active, notes)
+}
+
+/// Extracts active valid directives taking into account both global policy and per-gate settings.
+pub fn extract_directives_for_config(
+    pr_body: Option<&str>,
+    commits: &[(String, String)],
+    config: &crate::config::DisciplineConfig,
+) -> (Vec<ParsedDirective>, Vec<String>) {
+    let policy = &config.directives;
+    let mut active = Vec::new();
+    let mut notes = Vec::new();
+
+    let pr_body_allowed = policy.sources.iter().any(|s| s == "pr-body");
+    let commits_allowed = policy.sources.iter().any(|s| s == "commits");
+
+    let is_hidden_allowed = |d: &ParsedDirective| -> bool {
+        if policy.allow_hidden {
+            return true;
+        }
+        if REMOVES.iter().any(|n| n.eq_ignore_ascii_case(&d.directive)) {
+            if let Some(gate_hidden) = config.gates.deletion_rationale.allow_hidden {
+                return gate_hidden;
+            }
+        }
+        false
+    };
+
+    if let Some(body) = pr_body {
+        let parsed = parse_directives(body, OverrideSource::PrBody);
+        if pr_body_allowed {
+            for d in parsed {
+                if d.hidden && !is_hidden_allowed(&d) {
+                    notes.push(format!(
+                        "hidden directive `{}: {}` in PR body ignored (directives.allow_hidden is false)",
+                        d.directive, d.reason
+                    ));
+                } else {
+                    active.push(d);
+                }
+            }
+        } else if !parsed.is_empty() {
+            notes.push("PR-body directives are disabled by policy; ignored".to_string());
+        }
+    }
+
+    for (oid, msg) in commits {
+        let parsed = parse_directives(msg, OverrideSource::Commit(oid.clone()));
+        if commits_allowed {
+            for d in parsed {
+                if d.hidden && !is_hidden_allowed(&d) {
                     notes.push(format!(
                         "hidden directive `{}: {}` in commit {oid} ignored (directives.allow_hidden is false)",
                         d.directive, d.reason
@@ -566,5 +634,26 @@ removes: tests/old.rs inside a fence
 
         let r4 = directive_reasons("no-issue: <reason>", NO_ISSUE);
         assert!(r4.is_empty());
+    }
+
+    #[test]
+    fn discipline_namespaced_directives_parsed() {
+        let r1 = directive_reasons("discipline: removes: old_test.rs refactored", REMOVES);
+        assert_eq!(r1, vec!["old_test.rs refactored"]);
+        assert!(covers(&r1, "old_test.rs"));
+
+        let r2 = directive_reasons(
+            "<!-- discipline: allow-assertion-drop: test_sync removed redundant assert -->",
+            ALLOW_ASSERTION_DROP,
+        );
+        assert_eq!(r2, vec!["test_sync removed redundant assert"]);
+        assert!(covers(&r2, "test_sync"));
+
+        let r3 = directive_reasons(
+            "discipline: allow-regression: bench_run #822 verified",
+            ALLOW_REGRESSION,
+        );
+        assert_eq!(r3, vec!["bench_run #822 verified"]);
+        assert!(covers(&r3, "bench_run"));
     }
 }

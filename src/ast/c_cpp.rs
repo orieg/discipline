@@ -285,9 +285,11 @@ impl<'a> CCppExtractor<'a> {
                                 let body = children[i + 1];
                                 let (name, is_ignored) = self.extract_catch2_metadata(call);
                                 let line = call.start_position().row + 1;
+                                let end_line = body.end_position().row + 1;
                                 let mut test_fn = TestFn {
                                     name,
                                     line,
+                                    end_line,
                                     total_asserts: 0,
                                     strong_asserts: 0,
                                     tautologies: 0,
@@ -347,9 +349,11 @@ impl<'a> CCppExtractor<'a> {
                 format!("{suite}::{case}")
             };
             let line = declarator_node.start_position().row + 1;
+            let end_line = body.end_position().row + 1;
             let mut test_fn = TestFn {
                 name,
                 line,
+                end_line,
                 total_asserts: 0,
                 strong_asserts: 0,
                 tautologies: 0,
@@ -373,9 +377,11 @@ impl<'a> CCppExtractor<'a> {
                 txt.contains("[.") || txt.contains("[!hide]")
             });
             let line = declarator_node.start_position().row + 1;
+            let end_line = body.end_position().row + 1;
             let mut test_fn = TestFn {
                 name,
                 line,
+                end_line,
                 total_asserts: 0,
                 strong_asserts: 0,
                 tautologies: 0,
@@ -398,9 +404,11 @@ impl<'a> CCppExtractor<'a> {
 
         if is_main_test || is_test_fn {
             let line = declarator_node.start_position().row + 1;
+            let end_line = body.end_position().row + 1;
             let mut test_fn = TestFn {
                 name: fn_name.to_string(),
                 line,
+                end_line,
                 total_asserts: 0,
                 strong_asserts: 0,
                 tautologies: 0,

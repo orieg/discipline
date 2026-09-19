@@ -625,6 +625,9 @@ pub fn evaluate_assertion_reduction(
         // naming either the old test or the new test is accepted.
         let allowed = if p.forced {
             tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(b))
+                .or_else(|| {
+                    tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, p.path)
+                })
         } else {
             tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(h))
                 .or_else(|| {
@@ -636,27 +639,7 @@ pub fn evaluate_assertion_reduction(
                     )
                 })
                 .or_else(|| {
-                    if leaf_name(h) == "compile-time-assertions"
-                        || leaf_name(b) == "compile-time-assertions"
-                    {
-                        let filename = p.path.rsplit('/').next().unwrap_or(p.path);
-                        tokens::find_override(
-                            directives,
-                            GATE,
-                            tokens::ALLOW_ASSERTION_DROP,
-                            p.path,
-                        )
-                        .or_else(|| {
-                            tokens::find_override(
-                                directives,
-                                GATE,
-                                tokens::ALLOW_ASSERTION_DROP,
-                                filename,
-                            )
-                        })
-                    } else {
-                        None
-                    }
+                    tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, p.path)
                 })
         };
         if let Some(record) = allowed {
@@ -972,12 +955,46 @@ pub fn evaluate_deletion_rationale(
     };
     let mut out = GateOutcome::new(GATE);
 
+    let check_override = |subject: &str,
+                          alt_subject: Option<&str>|
+     -> Option<crate::tokens::OverrideRecord> {
+        let rec = if settings.require_scope {
+            tokens::find_override(directives, GATE, tokens::REMOVES, subject).or_else(|| {
+                alt_subject
+                    .and_then(|alt| tokens::find_override(directives, GATE, tokens::REMOVES, alt))
+            })
+        } else {
+            directives
+                .iter()
+                .find(|d| {
+                    tokens::REMOVES
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&d.directive))
+                })
+                .map(|d| crate::tokens::OverrideRecord {
+                    gate: GATE.to_string(),
+                    subject: subject.to_string(),
+                    directive: d.directive.clone(),
+                    reason: d.reason.clone(),
+                    source: d.source.clone(),
+                    hidden: d.hidden,
+                })
+        };
+        if let Some(r) = rec {
+            if settings.allow_hidden == Some(false) && r.hidden {
+                return None;
+            }
+            return Some(r);
+        }
+        None
+    };
+
     for file in changed.iter().filter(|f| f.kind == ChangeKind::Deleted) {
         if !watched.matches(&file.path) || exempt.matches(&file.path) {
             continue;
         }
         out.examined += 1;
-        if let Some(record) = tokens::find_override(directives, GATE, tokens::REMOVES, &file.path) {
+        if let Some(record) = check_override(&file.path, None) {
             out.overrides.push(record);
             continue;
         }
@@ -1007,9 +1024,7 @@ pub fn evaluate_deletion_rationale(
             continue;
         }
         out.examined += 1;
-        if let Some(record) =
-            tokens::find_override(directives, GATE, tokens::REMOVES, leaf_name(r.test))
-        {
+        if let Some(record) = check_override(leaf_name(r.test), Some(r.path)) {
             out.overrides.push(record);
             continue;
         }

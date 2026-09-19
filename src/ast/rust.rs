@@ -324,6 +324,7 @@ impl<'a> Extractor<'a> {
         let mut test = TestFn {
             name: qualified,
             line: node.start_position().row + 1,
+            end_line: node.end_position().row + 1,
             total_asserts: 0,
             strong_asserts: 0,
             tautologies: 0,

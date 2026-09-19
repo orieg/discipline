@@ -445,6 +445,10 @@ impl Default for AssertionGate {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeletionGate {
@@ -453,6 +457,13 @@ pub struct DeletionGate {
     pub exempt_paths: Vec<String>,
     /// Globs of paths whose deletion requires a rationale.
     pub paths: Vec<String>,
+    /// When true (default), directives must name the specific file, directory, or test.
+    /// When false, an unscoped removes: directive waives all deletions.
+    #[serde(default = "default_true")]
+    pub require_scope: bool,
+    /// When Some(true), HTML-comment-wrapped directives are accepted for deletions.
+    #[serde(default)]
+    pub allow_hidden: Option<bool>,
 }
 
 impl Default for DeletionGate {
@@ -462,6 +473,8 @@ impl Default for DeletionGate {
             severity: Severity::Error,
             exempt_paths: Vec::new(),
             paths: vec!["**".to_string()],
+            require_scope: true,
+            allow_hidden: None,
         }
     }
 }
@@ -519,6 +532,9 @@ pub struct PiiGate {
     pub scan_pr_body: bool,
     /// When true, scans only modified lines in the git diff rather than all tracked files.
     pub diff_only: bool,
+    /// When true (default), flags references to personal agent configuration directories and playbooks.
+    #[serde(default = "default_true")]
+    pub agent_config_refs: bool,
 }
 
 impl Default for PiiGate {
@@ -541,6 +557,7 @@ impl Default for PiiGate {
             allow_patterns: Vec::new(),
             scan_pr_body: true,
             diff_only: false,
+            agent_config_refs: true,
         }
     }
 }

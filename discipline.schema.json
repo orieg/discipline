@@ -200,6 +200,13 @@
     "DeletionGate": {
       "additionalProperties": false,
       "properties": {
+        "allow_hidden": {
+          "description": "When true, HTML-comment-wrapped directives are accepted for deletions",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"
@@ -209,6 +216,10 @@
         },
         "paths": {
           "$ref": "#/$defs/StringListOrReset"
+        },
+        "require_scope": {
+          "description": "When true, directive must name the deleted file or test",
+          "type": "boolean"
         },
         "severity": {
           "$ref": "#/$defs/Severity"
@@ -326,6 +337,10 @@
     "PiiGate": {
       "additionalProperties": false,
       "properties": {
+        "agent_config_refs": {
+          "description": "When true, flags references to personal agent configuration directories and playbook docs",
+          "type": "boolean"
+        },
         "allow_patterns": {
           "$ref": "#/$defs/StringListOrReset"
         },

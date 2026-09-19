@@ -324,8 +324,11 @@ pub fn exempt_filter(settings: &dyn GateSettings) -> Result<PathFilter> {
     PathFilter::new(settings.exempt_paths())
 }
 
-/// `discipline:allow(gate-a, gate-b)` anywhere on a line exempts that line.
+/// `discipline:allow(gate-a, gate-b)` or `docs-lint: allow` anywhere on a line exempts that line.
 pub fn line_allows(line: &str, gate: &str) -> bool {
+    if line.contains("docs-lint: allow") {
+        return true;
+    }
     const MARKER: &str = "discipline:allow(";
     let Some(start) = line.find(MARKER) else {
         return false;
@@ -346,6 +349,14 @@ mod tests {
         assert!(line_allows("x <!-- discipline:allow(pii) -->", "pii"));
         assert!(line_allows(
             "x // discipline:allow(time-estimates, pii)",
+            "pii"
+        ));
+        assert!(line_allows(
+            "planned for 2 weeks docs-lint: allow",
+            "time-estimates"
+        ));
+        assert!(line_allows(
+            "connect to 192.168.1.20 # docs-lint: allow",
             "pii"
         ));
         assert!(!line_allows(
