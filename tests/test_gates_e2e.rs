@@ -4702,6 +4702,27 @@ fn shell_secrets_gate_e2e() {
             .len(),
         0
     );
+
+    // 4. Literal secret tokens (GitHub PAT, AWS key, command-line password)
+    let token = "ghp_123456789012345678901234567890123456";
+    let aws_key = "AKIAIOSFODNN7EXAMPLE";
+    let password = "supersecretpassword123";
+    repo.write(
+        "scripts/tokens.sh",
+        &format!("#!/usr/bin/env bash\nexport GITHUB_TOKEN=\"{token}\"\nexport AWS_ACCESS_KEY_ID={aws_key}\nmysql --password={password} -u root\n"),
+    );
+    repo.commit("feat: add token scripts");
+    let run_tokens = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_tokens.code, 1);
+    let outcome_tokens = run_tokens.outcome("shell-secrets");
+    let token_violations = outcome_tokens["violations"].as_array().unwrap();
+    assert_eq!(token_violations.len(), 3, "{}", run_tokens.stdout);
+
+    // Security invariant: raw token string must never appear in report output
+    assert!(!run_tokens.stdout.contains(token));
+    assert!(!run_tokens.stdout.contains(aws_key));
+    assert!(!run_tokens.stdout.contains(password));
+    assert!(!run_tokens.stderr.contains(token));
 }
 
 #[test]

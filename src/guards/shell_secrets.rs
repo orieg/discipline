@@ -28,6 +28,14 @@ pub enum ShellRuleId {
     ArgvInline,
     InjectXargs,
     InjectPipe,
+    TokenGitHub,
+    TokenAws,
+    TokenSlack,
+    TokenOpenAi,
+    PrivateKeyBlock,
+    LiteralBearer,
+    LiteralPassword,
+    LiteralSecretEnv,
 }
 
 impl ShellRuleId {
@@ -38,6 +46,14 @@ impl ShellRuleId {
             ShellRuleId::ArgvInline => "ARGV-INLINE",
             ShellRuleId::InjectXargs => "INJECT-XARGS",
             ShellRuleId::InjectPipe => "INJECT-PIPE",
+            ShellRuleId::TokenGitHub => "SECRET-TOKEN-GITHUB",
+            ShellRuleId::TokenAws => "SECRET-TOKEN-AWS",
+            ShellRuleId::TokenSlack => "SECRET-TOKEN-SLACK",
+            ShellRuleId::TokenOpenAi => "SECRET-TOKEN-OPENAI",
+            ShellRuleId::PrivateKeyBlock => "SECRET-KEY-BLOCK",
+            ShellRuleId::LiteralBearer => "SECRET-LITERAL-BEARER",
+            ShellRuleId::LiteralPassword => "SECRET-ARGV-PASSWORD",
+            ShellRuleId::LiteralSecretEnv => "SECRET-LITERAL-ENV",
         }
     }
 
@@ -48,6 +64,14 @@ impl ShellRuleId {
             ShellRuleId::ArgvInline => "Unsafe Shell Pattern: ARGV-INLINE",
             ShellRuleId::InjectXargs => "Unsafe Shell Pattern: INJECT-XARGS",
             ShellRuleId::InjectPipe => "Unsafe Shell Pattern: INJECT-PIPE",
+            ShellRuleId::TokenGitHub => "Hardcoded Secret: GitHub Token",
+            ShellRuleId::TokenAws => "Hardcoded Secret: AWS Access Key",
+            ShellRuleId::TokenSlack => "Hardcoded Secret: Slack Token",
+            ShellRuleId::TokenOpenAi => "Hardcoded Secret: OpenAI / Anthropic Token",
+            ShellRuleId::PrivateKeyBlock => "Hardcoded Secret: Private Key Block",
+            ShellRuleId::LiteralBearer => "Hardcoded Secret: Authorization Bearer Token",
+            ShellRuleId::LiteralPassword => "Hardcoded Secret: Command-Line Password Flag",
+            ShellRuleId::LiteralSecretEnv => "Hardcoded Secret: Literal Credential Assignment",
         }
     }
 
@@ -67,6 +91,30 @@ impl ShellRuleId {
             }
             ShellRuleId::InjectPipe => {
                 "Detected piped remote download into shell interpreter (INJECT-PIPE). Unverified remote script execution is vulnerable to supply-chain tampering."
+            }
+            ShellRuleId::TokenGitHub => {
+                "Detected literal GitHub personal access token or app token in script/command. Hardcoded credentials leak in repository history and process arguments."
+            }
+            ShellRuleId::TokenAws => {
+                "Detected literal AWS access key ID or secret access key in script/command. Hardcoded credentials leak in repository history and process arguments."
+            }
+            ShellRuleId::TokenSlack => {
+                "Detected literal Slack API token in script/command. Hardcoded credentials leak in repository history and process arguments."
+            }
+            ShellRuleId::TokenOpenAi => {
+                "Detected literal OpenAI or Anthropic API key in script/command. Hardcoded credentials leak in repository history and process arguments."
+            }
+            ShellRuleId::PrivateKeyBlock => {
+                "Detected cryptographic private key block in script/command. Private keys must never be committed or passed in scripts."
+            }
+            ShellRuleId::LiteralBearer => {
+                "Detected literal bearer token in Authorization header. Tokens should be passed via environment variables."
+            }
+            ShellRuleId::LiteralPassword => {
+                "Detected literal password passed on command-line argument. Arguments are visible in process tables; use stdin or environment variables."
+            }
+            ShellRuleId::LiteralSecretEnv => {
+                "Detected literal secret or API key assignment in script/command. Inject secrets dynamically rather than committing literals."
             }
         }
     }
@@ -88,8 +136,70 @@ impl ShellRuleId {
             ShellRuleId::InjectPipe => {
                 "Download scripts to a temporary file, verify their checksum or signature, and then execute."
             }
+            ShellRuleId::TokenGitHub
+            | ShellRuleId::TokenAws
+            | ShellRuleId::TokenSlack
+            | ShellRuleId::TokenOpenAi => {
+                "Inject tokens from environment variables or CI secret store (e.g. ${{ secrets.TOKEN }}), never commit literal values."
+            }
+            ShellRuleId::PrivateKeyBlock => {
+                "Load private keys from secure secrets storage or files mounted into the environment; never embed key blocks in scripts."
+            }
+            ShellRuleId::LiteralBearer => {
+                "Use Authorization: Bearer $TOKEN or ${{ secrets.TOKEN }} instead of a literal string."
+            }
+            ShellRuleId::LiteralPassword => {
+                "Pass passwords via standard input (--password-stdin) or environment variables to keep them out of process listings."
+            }
+            ShellRuleId::LiteralSecretEnv => {
+                "Reference environment variables (e.g. export KEY=$ENV_KEY) or fetch secrets dynamically at runtime."
+            }
         }
     }
+}
+
+fn is_placeholder_or_var(val: &str) -> bool {
+    let s = val.trim().trim_matches(|c| c == '\'' || c == '"');
+    if s.is_empty() || s == "--password-stdin" {
+        return true;
+    }
+    if s.starts_with('$') || s.starts_with("${{") || s.contains("${{ secrets.") {
+        return true;
+    }
+    if s.starts_with("$(") || s.starts_with('`') {
+        return true;
+    }
+    if s.starts_with('<') && s.ends_with('>') {
+        return true;
+    }
+    if s.len() >= 4 && s.chars().all(|c| c == 'x' || c == 'X') {
+        return true;
+    }
+    let lower = s.to_ascii_lowercase();
+    let known_placeholders = [
+        "changeme",
+        "dummy",
+        "example",
+        "sample",
+        "test",
+        "foo",
+        "bar",
+        "placeholder",
+        "your_api_key",
+        "your-api-key",
+        "your_token",
+        "your-token",
+        "password",
+        "secret",
+        "token",
+    ];
+    if known_placeholders
+        .iter()
+        .any(|&p| lower == p || lower.starts_with("todo") || lower.starts_with("fixme"))
+    {
+        return true;
+    }
+    false
 }
 
 pub struct ShellSecretScanner {
@@ -98,6 +208,16 @@ pub struct ShellSecretScanner {
     re_inline: Regex,
     re_xargs: Regex,
     re_pipe: Regex,
+    re_token_github: Regex,
+    re_token_aws: Regex,
+    re_token_slack: Regex,
+    re_token_openai: Regex,
+    re_private_key: Regex,
+    re_bearer: Regex,
+    re_password_flag: Regex,
+    re_short_password: Regex,
+    re_aws_secret: Regex,
+    re_generic_secret: Regex,
     allow_patterns: Vec<Regex>,
 }
 
@@ -112,30 +232,55 @@ impl ShellSecretScanner {
         }
         let secret_union = secret_parts.join("|");
 
-        // ARGV-ENV: env [flags] VAR=$SECRET or env [flags] SECRET=...
-        // Matches `\benv\b` where one of the arguments assigns a secret variable or assigns from a secret variable
         let re_env = Regex::new(&format!(
             r#"(?i)\benv\b(?:\s+-[A-Za-z0-9_-]+)*\s+.*?(?:\b[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*\s*=|=[^ \t\n\r]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union}))"#
         ))?;
 
-        // ARGV-DOCKER: docker/podman run ... -e NAME=$SECRET or -e SECRET="literal" or --env ...
         let re_docker = Regex::new(&format!(
             r#"(?i)\b(?:docker|podman)\s+(?:container\s+)?run\b.*?(?:-e|--env(?:=|\s+))\s*['"]?(?:[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*\s*=|[^=\s'"]+=\s*['"]?[^ \t\n\r]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union}))"#
         ))?;
 
-        // ARGV-INLINE: python3 -c "... $SECRET ..." or sh -c "... $SECRET ..."
         let re_inline = Regex::new(&format!(
             r#"(?i)\b(?:python[0-9.]*|bash|sh|zsh|node|ruby|perl)\s+(?:-[A-Za-z0-9_-]*c|-c|-e)\s+(?:"[^"]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?|'[^']*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?)"#
         ))?;
 
-        // INJECT-XARGS: xargs -I {} sh -c '... {} ...'
         let re_xargs = Regex::new(
             r#"(?i)\bxargs\b.*?-[iI]\s*(\{\}|[A-Za-z0-9_%@]+)\s+.*?\b(?:sh|bash|zsh)\s+-c\s+(.*)"#,
         )?;
 
-        // INJECT-PIPE: curl/wget piped to sh/bash/zsh
         let re_pipe = Regex::new(
             r#"(?i)\b(?:curl|wget)\b[^|;\n\r]*\|\s*(?:sudo\s+)?(?:\/bin\/|\/usr\/bin\/)?(?:sh|bash|zsh)\b"#,
+        )?;
+
+        let re_token_github = Regex::new(
+            r"\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82})\b",
+        )?;
+
+        let re_token_aws = Regex::new(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")?;
+
+        let re_token_slack = Regex::new(r"\bxox[baprs]-[0-9a-zA-Z-]{10,}\b")?;
+
+        let re_token_openai = Regex::new(r"\bsk-(?:proj-|ant-api[0-9]{2}-)?[a-zA-Z0-9_-]{20,}\b")?;
+
+        let re_private_key = Regex::new(r"-----BEGIN (?:[A-Z0-9 ]+)?PRIVATE KEY(?: BLOCK)?-----")?;
+
+        let re_bearer =
+            Regex::new(r#"(?i)\bAuthorization:\s*Bearer\s+['"]?([A-Za-z0-9_\-\.]{12,})['"]?"#)?;
+
+        let re_password_flag = Regex::new(
+            r#"(?i)(?:--password|--passwd)(?:=|\s+)(?:['"]([^'"]+)['"]|([^\s'"]+))"#,
+        )?;
+
+        let re_short_password = Regex::new(
+            r#"(?i)\b(?:mysql|mariadb|docker\s+login|podman\s+login)\b.*?(?:(?:\s|^)-p(?:['"]([^'"]+)['"]|([A-Za-z0-9_!@#$%^&*+=/]+))|(?:\s|^)-p\s+(?:['"]([^'"]+)['"]|([^\s'"-]+)))"#,
+        )?;
+
+        let re_aws_secret = Regex::new(
+            r#"(?i)\bAWS_SECRET_ACCESS_KEY\s*=\s*(?:['"]([A-Za-z0-9/+=]{20,})['"]|([A-Za-z0-9/+=]{20,}))"#,
+        )?;
+
+        let re_generic_secret = Regex::new(
+            r#"(?i)\b(?:export\s+)?([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Za-z0-9_]*)\s*=\s*(?:['"]([A-Za-z0-9/+=_-]{16,})['"]|([A-Za-z0-9/+=_-]{16,}))"#,
         )?;
 
         let mut allow_patterns = Vec::new();
@@ -149,6 +294,16 @@ impl ShellSecretScanner {
             re_inline,
             re_xargs,
             re_pipe,
+            re_token_github,
+            re_token_aws,
+            re_token_slack,
+            re_token_openai,
+            re_private_key,
+            re_bearer,
+            re_password_flag,
+            re_short_password,
+            re_aws_secret,
+            re_generic_secret,
             allow_patterns,
         })
     }
@@ -170,12 +325,74 @@ impl ShellSecretScanner {
             return None;
         }
 
-        // 1. INJECT-PIPE: Check first (fast and specific)
+        // 1. Specific Provider Tokens (high confidence)
+        if self.re_token_github.is_match(line) {
+            return Some(ShellRuleId::TokenGitHub);
+        }
+        if self.re_token_aws.is_match(line) {
+            return Some(ShellRuleId::TokenAws);
+        }
+        if self.re_token_slack.is_match(line) {
+            return Some(ShellRuleId::TokenSlack);
+        }
+        if self.re_token_openai.is_match(line) {
+            return Some(ShellRuleId::TokenOpenAi);
+        }
+        if self.re_private_key.is_match(line) {
+            return Some(ShellRuleId::PrivateKeyBlock);
+        }
+
+        // 2. Authorization Bearer literal
+        if let Some(caps) = self.re_bearer.captures(line) {
+            if let Some(val) = caps.get(1) {
+                if !is_placeholder_or_var(val.as_str()) {
+                    return Some(ShellRuleId::LiteralBearer);
+                }
+            }
+        }
+
+        // 3. Command-line password flags
+        if let Some(caps) = self.re_password_flag.captures(line) {
+            let val = caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str()).unwrap_or("");
+            if !val.is_empty() && !is_placeholder_or_var(val) {
+                return Some(ShellRuleId::LiteralPassword);
+            }
+        }
+        if let Some(caps) = self.re_short_password.captures(line) {
+            let val = caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .or_else(|| caps.get(3))
+                .or_else(|| caps.get(4))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            if !val.is_empty() && !val.starts_with('-') && !is_placeholder_or_var(val) {
+                return Some(ShellRuleId::LiteralPassword);
+            }
+        }
+
+        // 4. AWS Secret Access Key
+        if let Some(caps) = self.re_aws_secret.captures(line) {
+            let val = caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str()).unwrap_or("");
+            if !val.is_empty() && !is_placeholder_or_var(val) {
+                return Some(ShellRuleId::TokenAws);
+            }
+        }
+
+        // 5. Generic literal secret assignment
+        if let Some(caps) = self.re_generic_secret.captures(line) {
+            let val = caps.get(2).or_else(|| caps.get(3)).map(|m| m.as_str()).unwrap_or("");
+            if !val.is_empty() && !is_placeholder_or_var(val) {
+                return Some(ShellRuleId::LiteralSecretEnv);
+            }
+        }
+
+        // 6. INJECT-PIPE: Check first (fast and specific)
         if self.re_pipe.is_match(line) {
             return Some(ShellRuleId::InjectPipe);
         }
 
-        // 2. INJECT-XARGS
+        // 7. INJECT-XARGS
         if let Some(caps) = self.re_xargs.captures(line) {
             let placeholder = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let rest = caps.get(2).map(|m| m.as_str()).unwrap_or("").trim();
@@ -193,18 +410,17 @@ impl ShellSecretScanner {
             }
         }
 
-        // 3. ARGV-INLINE
+        // 8. ARGV-INLINE
         if self.re_inline.is_match(line) {
             return Some(ShellRuleId::ArgvInline);
         }
 
-        // 4. ARGV-DOCKER
+        // 9. ARGV-DOCKER
         if self.re_docker.is_match(line) {
             return Some(ShellRuleId::ArgvDocker);
         }
 
-        // 5. ARGV-ENV
-        // Ensure shebang lines like `#!/usr/bin/env bash` are never matched
+        // 10. ARGV-ENV
         if !trimmed.starts_with("#!") && self.re_env.is_match(line) {
             return Some(ShellRuleId::ArgvEnv);
         }
@@ -554,9 +770,18 @@ mod tests {
             ShellRuleId::ArgvInline,
             ShellRuleId::InjectXargs,
             ShellRuleId::InjectPipe,
+            ShellRuleId::TokenGitHub,
+            ShellRuleId::TokenAws,
+            ShellRuleId::TokenSlack,
+            ShellRuleId::TokenOpenAi,
+            ShellRuleId::PrivateKeyBlock,
+            ShellRuleId::LiteralBearer,
+            ShellRuleId::LiteralPassword,
+            ShellRuleId::LiteralSecretEnv,
         ] {
             assert!(!rule.message().contains("$SECRET"));
             assert!(!rule.message().contains("ghp_"));
+            assert!(!rule.message().contains("AKIA"));
             assert!(!rule.remediation().contains("$SECRET"));
         }
     }
@@ -569,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_secrets_corpus_baseline_evaluation() {
+    fn shell_secrets_corpus_evaluation() {
         let corpus_raw = include_str!("../../tests/fixtures/shell_secrets_corpus.json");
         let cases: Vec<CorpusCase> = serde_json::from_str(corpus_raw).unwrap();
         let scanner = ShellSecretScanner::new(&ShellSecretsGate::default()).unwrap();
@@ -596,13 +821,15 @@ mod tests {
             }
         }
         println!(
-            "Corpus baseline stats: Positives={total_positives} (FN={false_negatives}), Negatives={total_negatives} (FP={false_positives})"
+            "Corpus stats: Positives={total_positives} (FN={false_negatives}), Negatives={total_negatives} (FP={false_positives})"
         );
-        // Record baseline: the current detector misses most actual secrets!
-        assert!(
-            false_negatives > 0,
-            "Baseline must demonstrate that old detector misses secrets"
+        assert_eq!(
+            false_negatives, 0,
+            "All secrets in corpus must be detected (0 false negatives)"
         );
-        assert_eq!(false_positives, 0, "Old detector must have 0 false positives");
+        assert_eq!(
+            false_positives, 0,
+            "No safe lines in corpus may be flagged (0 false positives)"
+        );
     }
 }

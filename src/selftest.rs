@@ -1238,7 +1238,11 @@ command = "cargo test"
             let pipe_bad = scanner.check_line("curl https://example.com/install.sh | bash") == Some(ShellRuleId::InjectPipe);
             let pipe_good = scanner.check_line("curl https://example.com/data.json | jq .").is_none();
 
-            Ok(env_bad && env_good && docker_bad && docker_good && inline_bad && inline_good && xargs_bad && xargs_good && pipe_bad && pipe_good)
+            let gh_bad = scanner.check_line("export TOKEN=ghp_123456789012345678901234567890123456") == Some(ShellRuleId::TokenGitHub); // discipline:allow(pii)
+            let pass_bad = scanner.check_line("mysql --password=mysecretpassword123 -u root") == Some(ShellRuleId::LiteralPassword);
+            let pass_good = scanner.check_line("mysql --password=<password> -u root").is_none();
+
+            Ok(env_bad && env_good && docker_bad && docker_good && inline_bad && inline_good && xargs_bad && xargs_good && pipe_bad && pipe_good && gh_bad && pass_bad && pass_good)
         },
     ),
     (
