@@ -66,6 +66,28 @@ struct PythonExtractor<'a> {
     facts: ParsedFileFacts,
 }
 
+fn statement_has_skip_mark(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.starts_with("pytestmark") {
+        let rest = trimmed.strip_prefix("pytestmark").unwrap().trim_start();
+        if rest.starts_with('=') {
+            return rest.contains("skip") || rest.contains("xfail");
+        }
+    }
+    false
+}
+
+fn is_assertion_context_manager(text: &str) -> bool {
+    text.contains("pytest.raises")
+        || text.contains("pytest.warns")
+        || text.contains("assertRaises")
+        || text.contains("assertRaisesRegex")
+        || text.contains("assertWarns")
+        || text.contains("assertWarnsRegex")
+        || text.contains("assertLogs")
+        || text.contains("assertNoLogs")
+}
+
 impl<'a> PythonExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
@@ -130,14 +152,22 @@ impl<'a> PythonExtractor<'a> {
     }
 
     fn visit_root(&mut self, root: Node) {
+        let mut module_ignored = false;
+        let mut cursor = root.walk();
+        for child in root.children(&mut cursor) {
+            if statement_has_skip_mark(self.text(child)) {
+                module_ignored = true;
+                break;
+            }
+        }
         let mut scope = Vec::new();
-        self.visit_node(root, &mut scope);
+        self.visit_node(root, &mut scope, module_ignored);
     }
 
-    fn visit_node(&mut self, node: Node, scope: &mut Vec<String>) {
+    fn visit_node(&mut self, node: Node, scope: &mut Vec<String>, parent_ignored: bool) {
         match node.kind() {
             "function_definition" => {
-                self.process_function(node, scope, None);
+                self.process_function_with_inherited_ignore(node, scope, None, parent_ignored);
             }
             "decorated_definition" => {
                 let mut decorators = Vec::new();
@@ -156,19 +186,24 @@ impl<'a> PythonExtractor<'a> {
 
                 if let Some(def) = inner_def {
                     if def.kind() == "function_definition" {
-                        self.process_function(def, scope, Some(&decorators));
+                        self.process_function_with_inherited_ignore(
+                            def,
+                            scope,
+                            Some(&decorators),
+                            parent_ignored,
+                        );
                     } else if def.kind() == "class_definition" {
-                        self.process_class(def, scope, Some(&decorators));
+                        self.process_class(def, scope, Some(&decorators), parent_ignored);
                     }
                 }
             }
             "class_definition" => {
-                self.process_class(node, scope, None);
+                self.process_class(node, scope, None, parent_ignored);
             }
             _ => {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    self.visit_node(child, scope);
+                    self.visit_node(child, scope, parent_ignored);
                 }
             }
         }
@@ -179,15 +214,28 @@ impl<'a> PythonExtractor<'a> {
         node: Node,
         scope: &mut Vec<String>,
         class_decorators: Option<&[Node]>,
+        parent_ignored: bool,
     ) {
         let class_name = node
             .child_by_field_name("name")
             .map(|n| self.text(n).to_string())
             .unwrap_or_default();
 
-        let class_is_ignored = class_decorators
-            .map(|decs| decs.iter().any(|d| self.is_skip_decorator(*d)))
-            .unwrap_or(false);
+        let class_has_skip_mark = if let Some(body) = node.child_by_field_name("body") {
+            let mut cursor = body.walk();
+            let has_skip = body
+                .children(&mut cursor)
+                .any(|c| statement_has_skip_mark(self.text(c)));
+            has_skip
+        } else {
+            false
+        };
+
+        let class_is_ignored = parent_ignored
+            || class_has_skip_mark
+            || class_decorators
+                .map(|decs| decs.iter().any(|d| self.is_skip_decorator(*d)))
+                .unwrap_or(false);
 
         scope.push(class_name);
 
@@ -221,16 +269,12 @@ impl<'a> PythonExtractor<'a> {
                         );
                     }
                 } else {
-                    self.visit_node(child, scope);
+                    self.visit_node(child, scope, class_is_ignored);
                 }
             }
         }
 
         scope.pop();
-    }
-
-    fn process_function(&mut self, node: Node, scope: &[String], decorators: Option<&[Node]>) {
-        self.process_function_with_inherited_ignore(node, scope, decorators, false);
     }
 
     fn process_function_with_inherited_ignore(
@@ -296,12 +340,16 @@ impl<'a> PythonExtractor<'a> {
     }
 
     fn is_skip_decorator(&self, dec: Node) -> bool {
-        let text = self.text(dec);
+        let text = self.text(dec).trim();
         text.contains("pytest.mark.skip")
             || text.contains("pytest.mark.xfail")
             || text.contains("unittest.skip")
             || text.contains("skipIf")
             || text.contains("skipUnless")
+            || text.starts_with("@skip")
+            || text.starts_with("@unittest.skip")
+            || text.starts_with("@pytest.mark.skip")
+            || text.starts_with("@pytest.mark.xfail")
     }
 
     fn scan_test_body(&self, body: Node, test: &mut TestFn) {
@@ -334,17 +382,41 @@ impl<'a> PythonExtractor<'a> {
                 }
             }
             "with_statement" => {
-                // Check if with item is pytest.raises(...)
-                let text = self.text(node);
-                if text.contains("pytest.raises") {
-                    test.total_asserts += 1;
-                    test.strong_asserts += 1;
-                }
-                // Recursively check with body
+                let mut found_items = 0;
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    if child.kind() == "block" {
+                    if child.kind() == "with_clause" {
+                        let mut c2 = child.walk();
+                        for item in child.children(&mut c2) {
+                            if item.kind() == "with_item" {
+                                found_items += 1;
+                                if is_assertion_context_manager(self.text(item)) {
+                                    test.total_asserts += 1;
+                                    test.strong_asserts += 1;
+                                }
+                            }
+                        }
+                    } else if child.kind() == "with_item" {
+                        found_items += 1;
+                        if is_assertion_context_manager(self.text(child)) {
+                            test.total_asserts += 1;
+                            test.strong_asserts += 1;
+                        }
+                    } else if child.kind() == "block" {
                         self.scan_test_body(child, test);
+                    }
+                }
+                if found_items == 0 {
+                    let header_text = if let Some(block) = node.child_by_field_name("body") {
+                        let start = node.start_byte();
+                        let end = block.start_byte().min(self.src.len());
+                        std::str::from_utf8(&self.src[start..end]).unwrap_or("")
+                    } else {
+                        self.text(node)
+                    };
+                    if is_assertion_context_manager(header_text) {
+                        test.total_asserts += 1;
+                        test.strong_asserts += 1;
                     }
                 }
             }
@@ -430,6 +502,11 @@ impl<'a> PythonExtractor<'a> {
                 | "self.assertRegex"
                 | "self.assertNotRegex"
                 | "self.assertRaises"
+                | "self.assertRaisesRegex"
+                | "self.assertWarns"
+                | "self.assertWarnsRegex"
+                | "self.assertLogs"
+                | "self.assertNoLogs"
         )
     }
 
@@ -600,5 +677,83 @@ def test_helpers():
 
         assert_eq!(facts.tests[1].total_asserts, 1);
         assert!(!facts.tests[1].is_vacuous());
+    }
+
+    #[test]
+    fn parses_unittest_context_managers_and_pytestmark() {
+        let src = r#"
+import unittest
+import pytest
+
+pytestmark = pytest.mark.skip("module skipped")
+
+def test_module_skipped():
+    pass
+
+class TestContextManagers(unittest.TestCase):
+    def test_assert_raises(self):
+        with self.assertRaises(ValueError):
+            int("abc")
+
+    def test_assert_raises_regex(self):
+        with self.assertRaisesRegex(ValueError, r"invalid literal"):
+            int("xyz")
+
+    def test_assert_warns(self):
+        with self.assertWarns(UserWarning):
+            do_warn()
+
+    def test_assert_logs(self):
+        with self.assertLogs("app", level="INFO"):
+            log_info()
+
+@unittest.skip("class skipped")
+class TestSkippedClass(unittest.TestCase):
+    def test_one(self):
+        pass
+
+class TestClassPytestmark(unittest.TestCase):
+    pytestmark = pytest.mark.skip("class skip via mark")
+
+    def test_two(self):
+        pass
+"#;
+        let vocab = AssertVocabulary::default();
+        let facts = PythonPack.extract("tests/test_f5.py", src, &vocab).unwrap();
+
+        let by_name = |n: &str| facts.tests.iter().find(|t| t.name == n).unwrap();
+
+        // 1. Module pytestmark marks top-level test ignored
+        assert!(by_name("test_module_skipped").ignored);
+
+        // 2. with self.assertRaises counted as assertion (not vacuous, strong)
+        let t_raises = by_name("TestContextManagers::test_assert_raises");
+        assert_eq!(t_raises.total_asserts, 1);
+        assert_eq!(t_raises.strong_asserts, 1);
+        assert!(!t_raises.is_vacuous());
+
+        // 3. with self.assertRaisesRegex counted
+        let t_regex = by_name("TestContextManagers::test_assert_raises_regex");
+        assert_eq!(t_regex.total_asserts, 1);
+        assert_eq!(t_regex.strong_asserts, 1);
+        assert!(!t_regex.is_vacuous());
+
+        // 4. with self.assertWarns counted
+        let t_warns = by_name("TestContextManagers::test_assert_warns");
+        assert_eq!(t_warns.total_asserts, 1);
+        assert_eq!(t_warns.strong_asserts, 1);
+        assert!(!t_warns.is_vacuous());
+
+        // 5. with self.assertLogs counted
+        let t_logs = by_name("TestContextManagers::test_assert_logs");
+        assert_eq!(t_logs.total_asserts, 1);
+        assert_eq!(t_logs.strong_asserts, 1);
+        assert!(!t_logs.is_vacuous());
+
+        // 6. @unittest.skip on class marks method ignored
+        assert!(by_name("TestSkippedClass::test_one").ignored);
+
+        // 7. pytestmark on class marks method ignored
+        assert!(by_name("TestClassPytestmark::test_two").ignored);
     }
 }

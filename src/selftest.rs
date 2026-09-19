@@ -477,6 +477,33 @@ const CASES: &[Case] = &[
                 && facts.tests[2].ignored)
         },
     ),
+    #[cfg(feature = "lang-python")]
+    (
+        "python: context manager assertions and class/module pytestmark skips are detected",
+        || {
+            use crate::ast::LanguagePack;
+            let py_pack = crate::ast::python::PythonPack;
+            let vocab = AssertVocabulary::default();
+            let src = "import unittest\nimport pytest\n\nclass T(unittest.TestCase):\n    pytestmark = pytest.mark.skip('skip class')\n    def test_ctx(self):\n        with self.assertRaises(ValueError):\n            int('x')\n    def test_vac(self):\n        pass\n";
+            let facts = py_pack.extract("test_mod.py", src, &vocab)?;
+            let t_ctx = facts
+                .tests
+                .iter()
+                .find(|t| t.name.ends_with("test_ctx"))
+                .unwrap();
+            let t_vac = facts
+                .tests
+                .iter()
+                .find(|t| t.name.ends_with("test_vac"))
+                .unwrap();
+            Ok(t_ctx.total_asserts == 1
+                && t_ctx.strong_asserts == 1
+                && !t_ctx.is_vacuous()
+                && t_ctx.ignored
+                && t_vac.is_vacuous()
+                && t_vac.ignored)
+        },
+    ),
     #[cfg(feature = "lang-javascript")]
     (
         "javascript: describe/it extraction catches matchers, vacuous tests, and skips",

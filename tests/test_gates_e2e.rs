@@ -1980,6 +1980,47 @@ fn python_ignored_tests_and_skip_decorators_detected() {
 }
 
 #[test]
+fn f5_python_context_managers_and_pytestmark_detected() {
+    // 1. Context manager assertions (with self.assertRaises) pass vacuous-tests gate
+    let repo = Repo::new();
+    repo.write(
+        "tests/test_raises.py",
+        "import unittest\n\nclass TestErrors(unittest.TestCase):\n    def test_val_error(self):\n        with self.assertRaises(ValueError):\n            int('invalid')\n",
+    );
+    repo.commit("test: add assertRaises test");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 0,
+        "assertRaises context manager must count as assertion and not be vacuous: {}{}",
+        run.stdout, run.stderr
+    );
+    let outcome_vac = run.outcome("vacuous-tests");
+    assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 0);
+
+    // 2. Class-level pytestmark skip detected under ignored-tests gate
+    let repo2 = Repo::new();
+    repo2.write(
+        "tests/test_class_skip.py",
+        "import unittest\nimport pytest\n\nclass TestSkipped(unittest.TestCase):\n    pytestmark = pytest.mark.skip(reason='class wip')\n\n    def test_something(self):\n        self.assertEqual(1 + 1, 2)\n",
+    );
+    repo2.commit("test: add class with pytestmark skip");
+    let run_skip = repo2.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let outcome_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(outcome_skip["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo2.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: test_something class is work in progress",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+}
+
+#[test]
 fn javascript_source_files_are_analysed_by_javascript_pack() {
     let repo = Repo::new();
     repo.write(
