@@ -532,30 +532,29 @@ impl<'a> PythonExtractor<'a> {
 
     fn is_tautological_call(&self, call: Node, func_name: &str) -> bool {
         if let Some(args) = call.child_by_field_name("arguments") {
-            let text = self.text(args).trim();
-            if func_name == "self.assertTrue" && text == "(True)" {
-                return true;
+            let mut cursor = args.walk();
+            let arg_nodes: Vec<_> = args
+                .children(&mut cursor)
+                .filter(|n| {
+                    n.kind() != "(" && n.kind() != ")" && n.kind() != "," && n.kind() != "comment"
+                })
+                .collect();
+            if !arg_nodes.is_empty() {
+                let first = self.text(arg_nodes[0]).trim();
+                if func_name == "self.assertTrue" && (first == "True" || first == "1") {
+                    return true;
+                }
+                if func_name == "self.assertFalse" && (first == "False" || first == "0") {
+                    return true;
+                }
             }
-            if func_name == "self.assertFalse" && text == "(False)" {
-                return true;
-            }
-            if func_name == "self.assertEqual" || func_name == "self.assertIs" {
-                let mut cursor = args.walk();
-                let arg_nodes: Vec<_> = args
-                    .children(&mut cursor)
-                    .filter(|n| {
-                        n.kind() != "("
-                            && n.kind() != ")"
-                            && n.kind() != ","
-                            && n.kind() != "comment"
-                    })
-                    .collect();
-                if arg_nodes.len() >= 2 {
-                    let a = self.text(arg_nodes[0]).trim();
-                    let b = self.text(arg_nodes[1]).trim();
-                    if a == b && !a.is_empty() {
-                        return true;
-                    }
+            if (func_name == "self.assertEqual" || func_name == "self.assertIs")
+                && arg_nodes.len() >= 2
+            {
+                let a = self.text(arg_nodes[0]).trim();
+                let b = self.text(arg_nodes[1]).trim();
+                if a == b && !a.is_empty() {
+                    return true;
                 }
             }
         }
@@ -755,5 +754,137 @@ class TestClassPytestmark(unittest.TestCase):
 
         // 7. pytestmark on class marks method ignored
         assert!(by_name("TestClassPytestmark::test_two").ignored);
+    }
+
+    #[test]
+    fn fixture_negative_control_clean_suite_passes() {
+        let src = include_str!("../../tests/fixtures/python/clean_suite.py");
+        let vocab = AssertVocabulary::default();
+        let facts = PythonPack
+            .extract("tests/clean.py", src, &vocab)
+            .expect("extract clean");
+        assert!(!facts.has_parse_errors);
+        assert_eq!(facts.tests.len(), 3);
+        for t in &facts.tests {
+            assert!(!t.is_vacuous(), "test {} should not be vacuous", t.name);
+            assert!(!t.ignored, "test {} should not be ignored", t.name);
+            assert!(t.total_asserts >= 1);
+            assert!(t.strong_asserts >= 1);
+        }
+    }
+
+    #[test]
+    fn fixture_vacuous_and_tautologies_detected() {
+        let src = include_str!("../../tests/fixtures/python/vacuous_suite.py");
+        let vocab = AssertVocabulary::default();
+        let facts = PythonPack
+            .extract("tests/vacuous.py", src, &vocab)
+            .expect("extract vacuous");
+        assert_eq!(facts.tests.len(), 5);
+        for t in &facts.tests {
+            assert!(t.is_vacuous(), "test {} should be vacuous", t.name);
+        }
+        let empty = facts.tests.iter().find(|t| t.name == "test_empty").unwrap();
+        assert_eq!(empty.total_asserts, 0);
+
+        let t_bool = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_tautology_bool")
+            .unwrap();
+        assert!(t_bool.tautologies >= 1);
+
+        let t_math = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_tautology_math")
+            .unwrap();
+        assert!(t_math.tautologies >= 1);
+
+        let t_eq = facts
+            .tests
+            .iter()
+            .find(|t| t.name.ends_with("test_tautology_assert_equal"))
+            .unwrap();
+        assert!(t_eq.tautologies >= 1);
+
+        let t_true = facts
+            .tests
+            .iter()
+            .find(|t| t.name.ends_with("test_tautology_assert_true"))
+            .unwrap();
+        assert!(t_true.tautologies >= 1);
+    }
+
+    #[test]
+    fn fixture_implicit_assertions_detected() {
+        let src = include_str!("../../tests/fixtures/python/implicit_asserts.py");
+        let vocab = AssertVocabulary::default();
+        let facts = PythonPack
+            .extract("tests/implicit.py", src, &vocab)
+            .expect("extract implicit");
+        assert_eq!(facts.tests.len(), 5);
+        for t in &facts.tests {
+            assert!(!t.is_vacuous(), "test {} should not be vacuous", t.name);
+            assert!(t.total_asserts >= 1);
+            assert!(t.strong_asserts >= 1);
+        }
+    }
+
+    #[test]
+    fn fixture_skips_at_all_levels_detected() {
+        let src = include_str!("../../tests/fixtures/python/skips_suite.py");
+        let vocab = AssertVocabulary::default();
+        let facts = PythonPack
+            .extract("tests/skips.py", src, &vocab)
+            .expect("extract skips");
+        assert_eq!(facts.tests.len(), 4);
+        for t in &facts.tests {
+            assert!(t.ignored, "test {} should be marked ignored", t.name);
+        }
+    }
+
+    #[test]
+    fn fixture_comments_and_strings_not_counted_as_assertions() {
+        let src = include_str!("../../tests/fixtures/python/comments_and_strings.py");
+        let vocab = AssertVocabulary::default();
+        let facts = PythonPack
+            .extract("tests/comments.py", src, &vocab)
+            .expect("extract comments");
+        assert_eq!(facts.tests.len(), 1);
+        assert_eq!(facts.tests[0].total_asserts, 1);
+        assert_eq!(facts.tests[0].strong_asserts, 1);
+        assert!(!facts.tests[0].is_vacuous());
+    }
+
+    #[test]
+    fn fixture_helpers_and_lambdas_require_configuration() {
+        let src = include_str!("../../tests/fixtures/python/helpers_and_lambdas.py");
+        let unconfigured_vocab = AssertVocabulary::default();
+        let unconfigured = PythonPack
+            .extract("tests/helpers.py", src, &unconfigured_vocab)
+            .unwrap();
+        assert_eq!(unconfigured.tests.len(), 1);
+        assert!(unconfigured.tests[0].is_vacuous());
+
+        let configured_vocab = AssertVocabulary {
+            helper_fns: vec!["assert_positive".to_string()],
+            ..Default::default()
+        };
+        let configured = PythonPack
+            .extract("tests/helpers.py", src, &configured_vocab)
+            .unwrap();
+        assert_eq!(configured.tests[0].total_asserts, 2);
+        assert!(!configured.tests[0].is_vacuous());
+    }
+
+    #[test]
+    fn fixture_syntax_error_surfaces_parse_error() {
+        let src = include_str!("../../tests/fixtures/python/syntax_error.py");
+        let vocab = AssertVocabulary::default();
+        let facts = PythonPack
+            .extract("tests/broken.py", src, &vocab)
+            .expect("extract broken");
+        assert!(facts.has_parse_errors);
     }
 }

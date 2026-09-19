@@ -227,4 +227,83 @@ Unconditional Skip
             .expect("extract");
         assert!(facts_skip.tests[0].ignored);
     }
+
+    #[test]
+    fn fixture_negative_control_clean_suite_passes() {
+        let src = include_str!("../../tests/fixtures/golden/clean.phpt");
+        let vocab = AssertVocabulary::default();
+        let facts = GoldenPack
+            .extract("tests/clean.phpt", src, &vocab)
+            .expect("extract clean");
+        assert!(!facts.has_parse_errors);
+        assert_eq!(facts.tests.len(), 1);
+        assert!(!facts.tests[0].is_vacuous());
+        assert!(!facts.tests[0].ignored);
+        assert_eq!(facts.tests[0].total_asserts, 1);
+        assert_eq!(facts.tests[0].strong_asserts, 1);
+    }
+
+    #[test]
+    fn fixture_vacuous_empty_expectation_detected() {
+        let src = include_str!("../../tests/fixtures/golden/vacuous.phpt");
+        let vocab = AssertVocabulary::default();
+        let facts = GoldenPack
+            .extract("tests/vacuous.phpt", src, &vocab)
+            .expect("extract vacuous");
+        assert_eq!(facts.tests.len(), 1);
+        assert!(facts.tests[0].is_vacuous());
+    }
+
+    #[test]
+    fn fixture_implicit_assertions_detected() {
+        let src = include_str!("../../tests/fixtures/golden/implicit_asserts.phpt");
+        let vocab = AssertVocabulary::default();
+        let facts = GoldenPack
+            .extract("tests/implicit.phpt", src, &vocab)
+            .expect("extract implicit");
+        assert_eq!(facts.tests.len(), 1);
+        assert!(!facts.tests[0].is_vacuous());
+        assert_eq!(facts.tests[0].total_asserts, 1);
+        assert_eq!(facts.tests[0].strong_asserts, 1);
+    }
+
+    #[test]
+    fn fixture_skips_and_xfail_detected() {
+        let vocab = AssertVocabulary::default();
+        let skip_src = include_str!("../../tests/fixtures/golden/skips.phpt");
+        let skip_facts = GoldenPack
+            .extract("tests/skip.phpt", skip_src, &vocab)
+            .expect("extract skips");
+        assert!(skip_facts.tests[0].ignored);
+
+        let xfail_src = include_str!("../../tests/fixtures/golden/xfail.phpt");
+        let xfail_facts = GoldenPack
+            .extract("tests/xfail.phpt", xfail_src, &vocab)
+            .expect("extract xfail");
+        assert!(xfail_facts.tests[0].ignored);
+        assert!(xfail_facts.tests[0].should_panic);
+    }
+
+    #[test]
+    fn fixture_comments_and_strings_not_counted_as_expectations() {
+        let src = include_str!("../../tests/fixtures/golden/comments_and_strings.phpt");
+        let vocab = AssertVocabulary::default();
+        let facts = GoldenPack
+            .extract("tests/comments.phpt", src, &vocab)
+            .expect("extract comments");
+        assert_eq!(facts.tests.len(), 1);
+        assert_eq!(facts.tests[0].total_asserts, 1);
+        assert_eq!(facts.tests[0].strong_asserts, 1);
+        assert!(!facts.tests[0].is_vacuous());
+    }
+
+    #[test]
+    fn fixture_syntax_error_missing_file_section() {
+        let src = include_str!("../../tests/fixtures/golden/syntax_error.phpt");
+        let vocab = AssertVocabulary::default();
+        let facts = GoldenPack
+            .extract("tests/broken.phpt", src, &vocab)
+            .expect("extract broken");
+        assert!(facts.has_parse_errors);
+    }
 }

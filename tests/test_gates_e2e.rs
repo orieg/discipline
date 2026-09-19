@@ -2092,3 +2092,205 @@ fn javascript_ignored_tests_and_skips_detected() {
     assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
     assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn f6_python_pack_depth_e2e() {
+    // 1. Negative control: clean suite passes cleanly
+    let repo_clean = Repo::new();
+    repo_clean.write(
+        "tests/test_clean.py",
+        include_str!("fixtures/python/clean_suite.py"),
+    );
+    repo_clean.commit("test: add clean python tests");
+    let run_clean = repo_clean.check(&[]);
+    assert_eq!(
+        run_clean.code, 0,
+        "clean python tests must pass: {}{}",
+        run_clean.stdout, run_clean.stderr
+    );
+
+    // 2. Positive control: vacuous & tautological tests detected
+    let repo_vac = Repo::new();
+    repo_vac.write(
+        "tests/test_vacuous.py",
+        include_str!("fixtures/python/vacuous_suite.py"),
+    );
+    repo_vac.commit("test: add vacuous python tests");
+    let run_vac = repo_vac.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let out_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(out_vac["violations"].as_array().unwrap().len(), 5);
+
+    // 3. Positive control: skips detected at all levels
+    let repo_skip = Repo::new();
+    repo_skip.write(
+        "tests/test_skips.py",
+        include_str!("fixtures/python/skips_suite.py"),
+    );
+    repo_skip.commit("test: add skips python tests");
+    let run_skip = repo_skip.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let out_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(out_skip["violations"].as_array().unwrap().len(), 4);
+
+    // 4. Scoped directive lifts skip
+    let run_lift = repo_skip.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("PR_BODY", "allow-ignore: test_skipped_fn intentional skip")],
+    );
+    let out_lift = run_lift.outcome("ignored-tests");
+    assert_eq!(out_lift["overrides"].as_array().unwrap().len(), 1);
+
+    // 5. Parse error fails closed under assertion-reduction
+    let repo_err = Repo::new();
+    repo_err.write(
+        "tests/test_broken.py",
+        include_str!("fixtures/python/syntax_error.py"),
+    );
+    repo_err.commit("test: add broken python syntax");
+    let run_err = repo_err.check(&[]);
+    assert_eq!(run_err.code, 1);
+    let out_err = run_err.outcome("assertion-reduction");
+    assert!(out_err["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["title"] == "Source File Could Not Be Fully Parsed"));
+}
+
+#[test]
+fn f6_javascript_pack_depth_e2e() {
+    // 1. Negative control: clean suite passes cleanly
+    let repo_clean = Repo::new();
+    repo_clean.write(
+        "tests/clean.test.js",
+        include_str!("fixtures/javascript/clean_suite.js"),
+    );
+    repo_clean.commit("test: add clean js tests");
+    let run_clean = repo_clean.check(&[]);
+    assert_eq!(
+        run_clean.code, 0,
+        "clean js tests must pass: {}{}",
+        run_clean.stdout, run_clean.stderr
+    );
+
+    // 2. Positive control: vacuous & tautological tests detected
+    let repo_vac = Repo::new();
+    repo_vac.write(
+        "tests/vacuous.test.js",
+        include_str!("fixtures/javascript/vacuous_suite.js"),
+    );
+    repo_vac.commit("test: add vacuous js tests");
+    let run_vac = repo_vac.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let out_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(out_vac["violations"].as_array().unwrap().len(), 4);
+
+    // 3. Positive control: skips detected at all levels
+    let repo_skip = Repo::new();
+    repo_skip.write(
+        "tests/skips.test.js",
+        include_str!("fixtures/javascript/skips_suite.js"),
+    );
+    repo_skip.commit("test: add skips js tests");
+    let run_skip = repo_skip.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let out_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(out_skip["violations"].as_array().unwrap().len(), 4);
+
+    // 4. Scoped directive lifts skip
+    let run_lift = repo_skip.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: skipped test function intentional skip",
+        )],
+    );
+    let out_lift = run_lift.outcome("ignored-tests");
+    assert_eq!(out_lift["overrides"].as_array().unwrap().len(), 1);
+
+    // 5. Parse error fails closed under assertion-reduction
+    let repo_err = Repo::new();
+    repo_err.write(
+        "tests/broken.test.js",
+        include_str!("fixtures/javascript/syntax_error.js"),
+    );
+    repo_err.commit("test: add broken js syntax");
+    let run_err = repo_err.check(&[]);
+    assert_eq!(run_err.code, 1);
+    let out_err = run_err.outcome("assertion-reduction");
+    assert!(out_err["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["title"] == "Source File Could Not Be Fully Parsed"));
+}
+
+#[test]
+fn f6_golden_pack_depth_e2e() {
+    // 1. Negative control: clean PHPT suite passes cleanly
+    let repo_clean = Repo::new();
+    repo_clean.write(
+        "tests/clean.phpt",
+        include_str!("fixtures/golden/clean.phpt"),
+    );
+    repo_clean.commit("test: add clean phpt test");
+    let run_clean = repo_clean.check(&[]);
+    assert_eq!(
+        run_clean.code, 0,
+        "clean phpt test must pass: {}{}",
+        run_clean.stdout, run_clean.stderr
+    );
+
+    // 2. Positive control: vacuous empty expectation detected
+    let repo_vac = Repo::new();
+    repo_vac.write(
+        "tests/vacuous.phpt",
+        include_str!("fixtures/golden/vacuous.phpt"),
+    );
+    repo_vac.commit("test: add vacuous phpt test");
+    let run_vac = repo_vac.check(&[]);
+    assert_eq!(run_vac.code, 1);
+    let out_vac = run_vac.outcome("vacuous-tests");
+    assert_eq!(out_vac["violations"].as_array().unwrap().len(), 1);
+
+    // 3. Positive control: skips detected
+    let repo_skip = Repo::new();
+    repo_skip.write(
+        "tests/skip.phpt",
+        include_str!("fixtures/golden/skips.phpt"),
+    );
+    repo_skip.commit("test: add skipped phpt test");
+    let run_skip = repo_skip.check(&[]);
+    assert_eq!(run_skip.code, 1);
+    let out_skip = run_skip.outcome("ignored-tests");
+    assert_eq!(out_skip["violations"].as_array().unwrap().len(), 1);
+
+    // 4. Scoped directive lifts skip
+    let run_lift = repo_skip.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-ignore: Skipped PHPT Test intentional skip",
+        )],
+    );
+    assert_eq!(run_lift.code, 0, "{}{}", run_lift.stdout, run_lift.stderr);
+    let out_lift = run_lift.outcome("ignored-tests");
+    assert_eq!(out_lift["overrides"].as_array().unwrap().len(), 1);
+
+    // 5. Parse error fails closed under assertion-reduction
+    let repo_err = Repo::new();
+    repo_err.write(
+        "tests/broken.phpt",
+        include_str!("fixtures/golden/syntax_error.phpt"),
+    );
+    repo_err.commit("test: add broken phpt syntax");
+    let run_err = repo_err.check(&[]);
+    assert_eq!(run_err.code, 1);
+    let out_err = run_err.outcome("assertion-reduction");
+    assert!(out_err["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["title"] == "Source File Could Not Be Fully Parsed"));
+}
