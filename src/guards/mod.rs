@@ -7,6 +7,7 @@ pub mod integrity;
 pub mod issue_link;
 pub mod perf;
 pub mod presets;
+pub mod provenance_tags;
 pub mod shell_secrets;
 pub mod test_budget;
 pub mod test_floor;
@@ -126,6 +127,8 @@ pub struct Context<'a> {
     pub directive_notes: Vec<String>,
     pub bench_provenance: Option<String>,
     pub allow_cross_host_bench: bool,
+    pub bench_base_file: Option<std::path::PathBuf>,
+    pub bench_head_file: Option<std::path::PathBuf>,
 }
 
 impl Context<'_> {
@@ -227,6 +230,7 @@ pub fn run_checks(
             "test-budget" => test_budget::evaluate_test_budget(ctx),
             "test-floor" => test_floor::evaluate_test_floor(ctx),
             "ci-integrity" => ci_integrity::evaluate_ci_integrity(ctx),
+            "provenance-tags" => provenance_tags::evaluate_provenance_tags(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"

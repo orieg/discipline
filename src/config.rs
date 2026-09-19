@@ -157,7 +157,7 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Hygiene,
         summary: "published numerics carry (measured|target|projected)",
         languages: "any",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "ci-integrity",
@@ -316,6 +316,7 @@ pub struct Gates {
     pub ci_integrity: CiIntegrityGate,
     pub shell_secrets: ShellSecretsGate,
     pub issue_link: IssueLinkGate,
+    pub provenance_tags: ProvenanceTagsGate,
 }
 
 /// Settings every gate shares.
@@ -351,7 +352,8 @@ impl_gate_settings!(
     TestFloorGate,
     CiIntegrityGate,
     ShellSecretsGate,
-    IssueLinkGate
+    IssueLinkGate,
+    ProvenanceTagsGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -641,6 +643,18 @@ pub struct BenchRegressionGate {
     pub max_noise_cv: Option<f64>,
     /// Configurable noise margin added to tolerance_pct.
     pub noise_margin_pct: Option<f64>,
+    /// In-job base benchmark result file path for dual-file regression checks.
+    pub base_file: Option<String>,
+    /// In-job head benchmark result file path for dual-file regression checks.
+    pub head_file: Option<String>,
+    /// Noise floor percentage (default: 0.5%). Arms regressing below this are ignored as noise.
+    pub noise_floor_pct: Option<f64>,
+    /// Advisory review percentage (default: 0.1%). Regressions above this render review notices in notes.
+    pub advisory_pct: Option<f64>,
+    /// Declared exempt arms (e.g. random arms of map_get, set_contains).
+    pub exempt_arms: Vec<String>,
+    /// Require allow-regression directive reasons to carry a verifiable citation and arm names.
+    pub require_sourced_override: bool,
 }
 
 impl Default for BenchRegressionGate {
@@ -675,6 +689,42 @@ impl Default for BenchRegressionGate {
             allow_cross_host: false,
             max_noise_cv: None,
             noise_margin_pct: None,
+            base_file: None,
+            head_file: None,
+            noise_floor_pct: Some(0.5),
+            advisory_pct: Some(0.1),
+            exempt_arms: Vec::new(),
+            require_sourced_override: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProvenanceTagsGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Check markdown tables for unit-bearing numbers without table or caption provenance tags.
+    pub check_tables: bool,
+    /// Check for mechanism claims without hardware counter evidence or explicit hypothesis qualifiers.
+    pub check_mechanisms: bool,
+    /// Check published wall-clock ratios for confidence intervals or explicit qualifiers.
+    pub check_intervals: bool,
+    /// Check paired figures (e.g. 11.9 ns vs 108.9 ns) for shared workload IDs or differentiation tags.
+    pub check_paired_figures: bool,
+}
+
+impl Default for ProvenanceTagsGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            check_tables: true,
+            check_mechanisms: true,
+            check_intervals: true,
+            check_paired_figures: true,
         }
     }
 }
@@ -968,6 +1018,7 @@ impl Gates {
             "test-budget" => &self.test_budget,
             "test-floor" => &self.test_floor,
             "ci-integrity" => &self.ci_integrity,
+            "provenance-tags" => &self.provenance_tags,
             _ => return None,
         })
     }

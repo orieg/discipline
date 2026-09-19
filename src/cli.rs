@@ -145,6 +145,14 @@ pub struct CheckArgs {
         env = "DISCIPLINE_ALLOW_CROSS_HOST_BENCH"
     )]
     pub allow_cross_host_bench: bool,
+
+    /// In-job base benchmark result file for bench-regression dual-mode
+    #[arg(long = "bench-base-file", env = "DISCIPLINE_BENCH_BASE_FILE")]
+    pub bench_base_file: Option<PathBuf>,
+
+    /// In-job head benchmark result file for bench-regression dual-mode
+    #[arg(long = "bench-head-file", env = "DISCIPLINE_BENCH_HEAD_FILE")]
+    pub bench_head_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

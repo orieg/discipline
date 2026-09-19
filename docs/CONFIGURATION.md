@@ -78,8 +78,20 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.golden-output.paths` | list | `[...]` | Committed golden/snapshot globs requiring override to edit |
 | `gates.bench-regression.tolerance_pct` | number | `0.5` | Maximum allowed benchmark regression percentage |
 | `gates.bench-regression.paths` | list | `[...]` | Benchmark artifact globs tracked across revisions |
+| `gates.bench-regression.base_file` | string | `""` | Baseline benchmark output file for dual-file regression checks |
+| `gates.bench-regression.head_file` | string | `""` | Current benchmark output file for dual-file regression checks |
+| `gates.bench-regression.noise_floor_pct` | number | `0.5` | Multi-arm noise floor threshold percentage |
+| `gates.bench-regression.advisory_pct` | number | `0.1` | Advisory threshold percentage for reporting minor regressions |
+| `gates.bench-regression.exempt_arms` | list | `[]` | Benchmark arm names exempted from regression checks |
+| `gates.bench-regression.require_sourced_override` | boolean | `false` | Require regression overrides to cite CI run URL or committed artifact |
 | `gates.bench-regression.provenance` | string | `""` | Expected host or runner provenance tag for benchmark artifacts |
 | `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched provenance tags |
+| `gates.provenance-tags.include` | list | `["**/*.md"]` | Markdown file globs swept for provenance and hygiene |
+| `gates.provenance-tags.check_tables` | boolean | `true` | Verify table unit-bearing numerics carry provenance tags |
+| `gates.provenance-tags.check_mechanisms` | boolean | `true` | Verify mechanism claims cite hardware counters or hypothesis qualifiers |
+| `gates.provenance-tags.check_intervals` | boolean | `true` | Verify wall-clock ratios cite confidence intervals or provisional markers |
+| `gates.provenance-tags.check_paired_figures` | boolean | `true` | Verify paired figures cite shared workload or differentiation markers |
+| `gates.provenance-tags.scan_pr_body` | boolean | `true` | Whether to scan the PR description text |
 | `gates.shell-secrets.extra_secret_patterns` | list | `[]` | Additional custom regex patterns for sensitive secret variable names |
 | `gates.shell-secrets.allow_patterns` | list | `[]` | Custom regex patterns exempted from violation |
 | `gates.issue-link.pattern` | string | `""` | Custom regex pattern required in PR title or body |

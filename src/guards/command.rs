@@ -488,6 +488,16 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                         "Ensure negative-control canary produces the expected diagnostic or failure message.",
                     ));
                 }
+                if canary_res.status.success() {
+                    command_violations.push((
+                        "Canary Command Succeeded",
+                        format!(
+                            "Command `{}` negative-control canary exited with status 0 but was expected to fail.",
+                            item.name
+                        ),
+                        "Ensure negative-control canary fails when testing invalid or error conditions.",
+                    ));
+                }
             } else if canary_res.status.success() {
                 command_violations.push((
                     "Canary Command Succeeded",

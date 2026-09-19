@@ -29,6 +29,8 @@ use super::{exempt_filter, Context, GateOutcome, PathFilter};
 use crate::gitctx::ChangeKind;
 use crate::tokens;
 use anyhow::{bail, Context as _, Result};
+use regex::Regex;
+use std::sync::LazyLock;
 
 pub const GATE: &str = "bench-regression";
 
@@ -48,6 +50,31 @@ pub struct BenchmarkMetric {
 
 pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.bench_regression;
+
+    let env_head = std::env::var("DISCIPLINE_BENCH_HEAD_FILE")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let env_base = std::env::var("DISCIPLINE_BENCH_BASE_FILE")
+        .ok()
+        .filter(|s| !s.is_empty());
+
+    let head_file = ctx
+        .bench_head_file
+        .as_deref()
+        .and_then(|p| p.to_str())
+        .or(env_head.as_deref())
+        .or(settings.head_file.as_deref());
+    let base_file = ctx
+        .bench_base_file
+        .as_deref()
+        .and_then(|p| p.to_str())
+        .or(env_base.as_deref())
+        .or(settings.base_file.as_deref());
+
+    if head_file.is_some() || base_file.is_some() {
+        return run_dual_file_bench_regression(ctx, settings, base_file, head_file);
+    }
+
     let exempt = exempt_filter(settings)?;
     let watched = PathFilter::new(&settings.paths)?;
 
@@ -218,146 +245,530 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
             }
         }
 
-        // Check for removed benchmarks within surviving artifact
-        for b in &base_metrics {
-            if !head_metrics.iter().any(|h| h.name == b.name) {
-                let subjects = benchmark_subjects(&file.path, &b.name);
-                let allowed = subjects
-                    .iter()
-                    .find_map(|s| ctx.find_override(GATE, tokens::ALLOW_REGRESSION, s));
-                if let Some(ov) = allowed {
-                    out.overrides.push(ov);
-                } else {
-                    out.push(
-                        ctx.overridable(settings.severity),
-                        "Benchmark Removed",
-                        Some(&file.path),
-                        None,
-                        format!(
-                            "benchmark `{}` was removed from `{}` without a scoped `allow-regression:` directive",
-                            b.name, file.path
-                        ),
-                        &format!(
-                            "restore benchmark `{}` or add directive `allow-regression: {} <rationale>`",
-                            b.name, b.name
-                        ),
-                    );
-                }
-            }
+        evaluate_metrics_regression(
+            ctx,
+            settings,
+            &base_metrics,
+            &head_metrics,
+            &file.old_path,
+            &file.path,
+            &mut out,
+        )?;
+    }
+
+    Ok(out)
+}
+
+fn run_dual_file_bench_regression(
+    ctx: &Context,
+    settings: &crate::config::BenchRegressionGate,
+    base_file: Option<&str>,
+    head_file: Option<&str>,
+) -> Result<GateOutcome> {
+    let mut out = GateOutcome::new(GATE);
+    out.examined = 1;
+
+    let Some(h_path) = head_file else {
+        bail!("missing benchmark artifact at head; base benchmark file was provided without head file");
+    };
+
+    if !std::path::Path::new(h_path).exists() {
+        bail!("missing benchmark artifact `{h_path}` at head");
+    }
+
+    let head_content = std::fs::read_to_string(h_path)
+        .with_context(|| format!("failed to read head benchmark file `{h_path}`"))?;
+    if head_content.trim().is_empty() {
+        bail!("empty benchmark artifact `{h_path}` at head");
+    }
+
+    let (base_metrics, head_metrics, base_prov, head_prov, b_path_display) = if let Some(b_path) =
+        base_file
+    {
+        if !std::path::Path::new(b_path).exists() {
+            out.push(
+                    ctx.overridable(settings.severity),
+                    "Missing Benchmark Baseline",
+                    Some(b_path),
+                    None,
+                    "NO BASELINE — regression gate did not run".to_string(),
+                    "provide a valid baseline benchmark artifact via --bench-base-file or commit a baseline artifact",
+                );
+            out.notes
+                .push("NO BASELINE — regression gate did not run".to_string());
+            return Ok(out);
         }
 
-        // Check head metrics: missing baseline entries (G1.c) or regressions (G1.e)
-        for h in &head_metrics {
-            let subjects = benchmark_subjects(&file.path, &h.name);
+        let base_content = std::fs::read_to_string(b_path)
+            .with_context(|| format!("failed to read base benchmark file `{b_path}`"))?;
+        if base_content.trim().is_empty() {
+            out.push(
+                ctx.overridable(settings.severity),
+                "Missing Benchmark Baseline",
+                Some(b_path),
+                None,
+                "NO BASELINE — regression gate did not run".to_string(),
+                "base benchmark artifact is empty",
+            );
+            out.notes
+                .push("NO BASELINE — regression gate did not run".to_string());
+            return Ok(out);
+        }
+
+        let base_metrics = parse_metrics(b_path, &base_content)?;
+        if base_metrics.is_empty() {
+            out.push(
+                ctx.overridable(settings.severity),
+                "Missing Benchmark Baseline",
+                Some(b_path),
+                None,
+                "NO BASELINE — regression gate did not run".to_string(),
+                "base benchmark artifact contains no recognized benchmark metrics",
+            );
+            out.notes
+                .push("NO BASELINE — regression gate did not run".to_string());
+            return Ok(out);
+        }
+
+        let head_metrics = parse_metrics(h_path, &head_content)?;
+        if head_metrics.is_empty() {
+            bail!("unparseable or malformed benchmark artifact `{h_path}`: no recognized benchmark metrics");
+        }
+
+        let b_p = extract_provenance(&base_content);
+        let h_p = extract_provenance(&head_content);
+        (base_metrics, head_metrics, b_p, h_p, b_path.to_string())
+    } else {
+        // Single file mode with embedded baseline (e.g. iai-callgrind console output)
+        let (iai_head, iai_base) = parse_iai_callgrind_console_both(&head_content);
+        if !iai_head.is_empty() && !iai_base.is_empty() {
+            let h_p = extract_provenance(&head_content);
+            (iai_base, iai_head, h_p.clone(), h_p, h_path.to_string())
+        } else {
+            out.push(
+                    ctx.overridable(settings.severity),
+                    "Missing Benchmark Baseline",
+                    Some(h_path),
+                    None,
+                    "NO BASELINE — regression gate did not run".to_string(),
+                    "provide a valid baseline benchmark artifact via --bench-base-file or commit a baseline artifact",
+                );
+            out.notes
+                .push("NO BASELINE — regression gate did not run".to_string());
+            return Ok(out);
+        }
+    };
+
+    // G1(d): Provenance tracking
+    let allow_cross = ctx.allow_cross_host_bench || settings.allow_cross_host;
+    if let Some(req) = &ctx.bench_provenance {
+        if head_prov.as_deref() != Some(req.as_str()) {
+            out.push(
+                ctx.overridable(settings.severity),
+                "Mismatched Benchmark Provenance",
+                Some(h_path),
+                None,
+                format!(
+                    "benchmark artifact `{}` has provenance `{:?}`, which does not match required `--bench-provenance` tag `{}`",
+                    h_path, head_prov, req
+                ),
+                "ensure benchmark was run on the required runner or update --bench-provenance",
+            );
+        }
+    }
+
+    if let (Some(b_p), Some(h_p)) = (&base_prov, &head_prov) {
+        if b_p != h_p && !allow_cross {
+            out.push(
+                ctx.overridable(settings.severity),
+                "Cross-Host Benchmark Comparison Mismatch",
+                Some(h_path),
+                None,
+                format!(
+                    "benchmark artifact `{}` has provenance `{}` while baseline has `{}`; cross-host comparison is statistically invalid measurement noise",
+                    h_path, h_p, b_p
+                ),
+                "pass `--allow-cross-host-bench` or set `allow_cross_host = true` to allow cross-host comparison",
+            );
+        }
+    }
+
+    evaluate_metrics_regression(
+        ctx,
+        settings,
+        &base_metrics,
+        &head_metrics,
+        &b_path_display,
+        h_path,
+        &mut out,
+    )?;
+
+    Ok(out)
+}
+
+pub fn evaluate_metrics_regression(
+    ctx: &Context,
+    settings: &crate::config::BenchRegressionGate,
+    base_metrics: &[BenchmarkMetric],
+    head_metrics: &[BenchmarkMetric],
+    base_path: &str,
+    head_path: &str,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    evaluate_metrics_regression_with_directives(
+        &ctx.directives,
+        settings,
+        base_metrics,
+        head_metrics,
+        base_path,
+        head_path,
+        ctx.overridable(settings.severity),
+        out,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_metrics_regression_with_directives(
+    directives: &[crate::tokens::ParsedDirective],
+    settings: &crate::config::BenchRegressionGate,
+    base_metrics: &[BenchmarkMetric],
+    head_metrics: &[BenchmarkMetric],
+    base_path: &str,
+    head_path: &str,
+    severity: crate::config::Severity,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    // 1. Check for removed benchmarks within surviving artifact
+    for b in base_metrics {
+        if !head_metrics.iter().any(|h| h.name == b.name) {
+            let subjects = benchmark_subjects(head_path, &b.name);
             let allowed = subjects
                 .iter()
-                .find_map(|s| ctx.find_override(GATE, tokens::ALLOW_REGRESSION, s));
+                .find_map(|s| tokens::find_override(directives, GATE, tokens::ALLOW_REGRESSION, s));
+            if let Some(ov) = allowed {
+                out.overrides.push(ov);
+            } else {
+                out.push(
+                    severity,
+                    "Benchmark Removed",
+                    Some(head_path),
+                    None,
+                    format!(
+                        "benchmark `{}` was removed from `{}` without a scoped `allow-regression:` directive",
+                        b.name, head_path
+                    ),
+                    &format!(
+                        "restore benchmark `{}` or add directive `allow-regression: {} <rationale>`",
+                        b.name, b.name
+                    ),
+                );
+            }
+        }
+    }
 
-            let matching_base = base_metrics.iter().find(|b| b.name == h.name);
-            let Some(b) = matching_base else {
-                // G1(c): Missing base benchmark entry for existing head benchmark (rename, add) -> FAIL (exit 1).
-                if let Some(ov) = allowed {
-                    out.overrides.push(ov);
-                } else {
-                    out.push(
-                        ctx.overridable(settings.severity),
-                        "New or Renamed Benchmark Lacks Baseline",
-                        Some(&file.path),
-                        None,
-                        format!(
-                            "benchmark `{}` in `{}` lacks baseline entry in `{}`; missing base benchmark entry requires explicit scoped `allow-regression:` directive",
-                            h.name, file.path, file.old_path
-                        ),
-                        &format!(
-                            "add baseline entry for `{}` or add directive `allow-regression: {} <rationale>`",
-                            h.name, h.name
-                        ),
-                    );
+    // 2. Check head metrics: missing baseline entries (G1.c) or regressions (G1.e)
+    let noise_floor = settings.noise_floor_pct.unwrap_or(0.5);
+    let advisory_threshold = settings.advisory_pct.unwrap_or(0.1);
+    let effective_tolerance = settings.tolerance_pct + settings.noise_margin_pct.unwrap_or(0.0);
+
+    let mut discrete_regressions: Vec<(String, f64, u64, u64, String)> = Vec::new();
+
+    for h in head_metrics {
+        let is_exempt = settings.exempt_arms.iter().any(|ex| {
+            if ex == &h.name {
+                return true;
+            }
+            if let Some(prefix) = ex.strip_suffix('*') {
+                if h.name.starts_with(prefix) {
+                    return true;
                 }
-                continue;
-            };
+            }
+            if let Some(tail) = h.name.rsplit("::").next() {
+                if tail == ex || tail.split('/').next() == Some(ex) {
+                    return true;
+                }
+            }
+            false
+        });
 
-            // Evaluate regression
-            match (&b.value, &h.value) {
-                (MetricValue::Discrete(d_base), MetricValue::Discrete(d_head)) => {
-                    let effective_tolerance =
-                        settings.tolerance_pct + settings.noise_margin_pct.unwrap_or(0.0);
-                    if d_base.regressed(d_head, effective_tolerance)? {
-                        if let Some(ov) = allowed {
-                            out.overrides.push(ov);
-                        } else {
-                            let delta = d_base.delta_pct(d_head)?;
+        if is_exempt {
+            out.notes.push(format!(
+                "benchmark arm `{}` is exempt from regression checks per config",
+                h.name
+            ));
+            continue;
+        }
+
+        let matching_base = base_metrics.iter().find(|b| b.name == h.name);
+        let Some(b) = matching_base else {
+            let subjects = benchmark_subjects(head_path, &h.name);
+            let allowed = subjects
+                .iter()
+                .find_map(|s| tokens::find_override(directives, GATE, tokens::ALLOW_REGRESSION, s));
+            if let Some(ov) = allowed {
+                out.overrides.push(ov);
+            } else {
+                out.push(
+                    severity,
+                    "New or Renamed Benchmark Lacks Baseline",
+                    Some(head_path),
+                    None,
+                    format!(
+                        "benchmark `{}` in `{}` lacks baseline entry in `{}`; missing base benchmark entry requires explicit scoped `allow-regression:` directive",
+                        h.name, head_path, base_path
+                    ),
+                    &format!(
+                        "add baseline entry for `{}` or add directive `allow-regression: {} <rationale>`",
+                        h.name, h.name
+                    ),
+                );
+            }
+            continue;
+        };
+
+        match (&b.value, &h.value) {
+            (MetricValue::Discrete(d_base), MetricValue::Discrete(d_head)) => {
+                let delta = d_base.delta_pct(d_head)?;
+                if delta > advisory_threshold && delta <= noise_floor {
+                    out.notes.push(format!(
+                        "advisory notice: benchmark `{}` regressed by +{:.2}% ({} -> {} {}), within noise tolerance",
+                        h.name, delta, d_base.count, d_head.count, h.unit
+                    ));
+                }
+                if delta > noise_floor || delta > effective_tolerance {
+                    discrete_regressions.push((
+                        h.name.clone(),
+                        delta,
+                        d_base.count,
+                        d_head.count,
+                        h.unit.clone(),
+                    ));
+                }
+            }
+            (MetricValue::Continuous(c_base), MetricValue::Continuous(c_head)) => {
+                let decision = evaluate_continuous_regression(c_base, c_head, effective_tolerance)?;
+
+                if let Some(max_cv) = settings.max_noise_cv {
+                    if c_base.is_noisy(max_cv) || c_head.is_noisy(max_cv) {
+                        let base_cv_str = c_base
+                            .cv()
+                            .map(|cv| format!("{:.1}%", cv * 100.0))
+                            .unwrap_or_else(|| "n/a".into());
+                        let head_cv_str = c_head
+                            .cv()
+                            .map(|cv| format!("{:.1}%", cv * 100.0))
+                            .unwrap_or_else(|| "n/a".into());
+                        out.notes.push(format!(
+                            "warning: benchmark `{}` exhibits high variance (base CV: {base_cv_str}, head CV: {head_cv_str}, exceeds threshold {:.1}%); baseline/head comparison may be noisy",
+                            h.name, max_cv * 100.0
+                        ));
+                    }
+                }
+
+                let subjects = benchmark_subjects(head_path, &h.name);
+                let allowed = subjects.iter().find_map(|s| {
+                    tokens::find_override(directives, GATE, tokens::ALLOW_REGRESSION, s)
+                });
+
+                if decision.is_regression {
+                    if let Some(ov) = allowed {
+                        out.overrides.push(ov);
+                    } else {
+                        out.push(
+                            severity,
+                            "Benchmark Performance Regressed",
+                            Some(head_path),
+                            None,
+                            format!(
+                                "benchmark `{}` in `{}` regressed: {} (point: {:.2} -> {:.2} {})",
+                                h.name,
+                                head_path,
+                                decision.note,
+                                c_base.point_estimate,
+                                c_head.point_estimate,
+                                h.unit
+                            ),
+                            &format!(
+                                "optimize `{}` or add directive `allow-regression: {} <rationale>`",
+                                h.name, h.name
+                            ),
+                        );
+                    }
+                } else if decision.method == "not_comparable_no_ci"
+                    || decision.point_delta_pct > effective_tolerance
+                {
+                    out.notes
+                        .push(format!("benchmark `{}`: {}", h.name, decision.note));
+                }
+            }
+            _ => {
+                bail!(
+                    "mismatched metric types between baseline and head for benchmark `{}`",
+                    h.name
+                );
+            }
+        }
+    }
+
+    if !discrete_regressions.is_empty() {
+        let worst_delta = discrete_regressions
+            .iter()
+            .map(|r| r.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let above_noise_count = discrete_regressions
+            .iter()
+            .filter(|r| r.1 > noise_floor)
+            .count();
+        let is_violating = worst_delta > effective_tolerance || above_noise_count >= 2;
+
+        if is_violating {
+            let regressed_arm_names: Vec<String> =
+                discrete_regressions.iter().map(|r| r.0.clone()).collect();
+
+            if settings.require_sourced_override {
+                let regression_directive = directives.iter().find(|d| {
+                    tokens::ALLOW_REGRESSION
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&d.directive))
+                });
+
+                match regression_directive {
+                    Some(d) => {
+                        let citation = tokens::extract_citation(&d.reason);
+                        if citation.is_none() {
                             out.push(
-                                ctx.overridable(settings.severity),
+                                severity,
+                                "Regression Override Is Void — No Resolvable Citation",
+                                Some(head_path),
+                                None,
+                                format!(
+                                    "regression override `{}` is void: reason cites no CI run URL and no committed artifact path (AGENTS.md §6)",
+                                    d.reason
+                                ),
+                                "include a CI run URL or committed artifact path in the override reason",
+                            );
+                            for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
+                                out.push(
+                                    severity,
+                                    "Instruction Count Regressed",
+                                    Some(head_path),
+                                    None,
+                                    format!(
+                                        "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), exceeding tolerance",
+                                        arm, head_path, delta, base_c, head_c, unit
+                                    ),
+                                    &format!("optimize `{}` or provide a valid sourced override", arm),
+                                );
+                            }
+                        } else {
+                            let unapproved =
+                                tokens::unapproved_regressed_arms(&d.reason, &regressed_arm_names);
+                            if unapproved.len() == regressed_arm_names.len() {
+                                out.push(
+                                    severity,
+                                    "Regression Override Is Void — Names No Regressed Arm",
+                                    Some(head_path),
+                                    None,
+                                    format!(
+                                        "regression override `{}` is void: reason names none of the regressed arms ({:?}) (AGENTS.md §6)",
+                                        d.reason, regressed_arm_names
+                                    ),
+                                    "explicitly name the regressed benchmark arm(s) in the override reason",
+                                );
+                                for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
+                                    out.push(
+                                        severity,
+                                        "Instruction Count Regressed",
+                                        Some(head_path),
+                                        None,
+                                        format!(
+                                            "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {})",
+                                            arm, head_path, delta, base_c, head_c, unit
+                                        ),
+                                        &format!("name `{}` in the override reason", arm),
+                                    );
+                                }
+                            } else {
+                                for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
+                                    if unapproved.contains(&arm.as_str()) {
+                                        out.push(
+                                            severity,
+                                            "Instruction Count Regressed (Unapproved Arm)",
+                                            Some(head_path),
+                                            None,
+                                            format!(
+                                                "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), and is not named in override `{}` (AGENTS.md §6)",
+                                                arm, head_path, delta, base_c, head_c, unit, d.reason
+                                            ),
+                                            &format!("name `{}` in the override reason or optimize the benchmark", arm),
+                                        );
+                                    }
+                                }
+                                out.overrides.push(crate::tokens::OverrideRecord {
+                                    gate: GATE.to_string(),
+                                    subject: regressed_arm_names
+                                        .iter()
+                                        .filter(|a| !unapproved.contains(&a.as_str()))
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                    directive: d.directive.clone(),
+                                    reason: d.reason.clone(),
+                                    source: d.source.clone(),
+                                    hidden: d.hidden,
+                                });
+                                out.notes.push(format!(
+                                    "performance regression override acknowledged: {}",
+                                    d.reason
+                                ));
+                            }
+                        }
+                    }
+                    None => {
+                        for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
+                            out.push(
+                                severity,
                                 "Instruction Count Regressed",
-                                Some(&file.path),
+                                Some(head_path),
                                 None,
                                 format!(
-                                    "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), exceeding tolerance {:.2}%",
-                                    h.name, file.path, delta, d_base.count, d_head.count, h.unit, effective_tolerance
+                                    "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), exceeding threshold (worst: +{:.2}%, noise floor: {:.2}%)",
+                                    arm, head_path, delta, base_c, head_c, unit, worst_delta, noise_floor
                                 ),
-                                &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", h.name, h.name),
+                                &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", arm, arm),
                             );
                         }
                     }
                 }
-                (MetricValue::Continuous(c_base), MetricValue::Continuous(c_head)) => {
-                    let effective_tolerance =
-                        settings.tolerance_pct + settings.noise_margin_pct.unwrap_or(0.0);
-                    let decision =
-                        evaluate_continuous_regression(c_base, c_head, effective_tolerance)?;
-
-                    if let Some(max_cv) = settings.max_noise_cv {
-                        if c_base.is_noisy(max_cv) || c_head.is_noisy(max_cv) {
-                            let base_cv_str = c_base
-                                .cv()
-                                .map(|cv| format!("{:.1}%", cv * 100.0))
-                                .unwrap_or_else(|| "n/a".into());
-                            let head_cv_str = c_head
-                                .cv()
-                                .map(|cv| format!("{:.1}%", cv * 100.0))
-                                .unwrap_or_else(|| "n/a".into());
-                            out.notes.push(format!(
-                                "warning: benchmark `{}` exhibits high variance (base CV: {base_cv_str}, head CV: {head_cv_str}, exceeds threshold {:.1}%); baseline/head comparison may be noisy",
-                                h.name, max_cv * 100.0
-                            ));
-                        }
-                    }
-
-                    if decision.is_regression {
-                        if let Some(ov) = allowed {
+            } else {
+                for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
+                    let subjects = benchmark_subjects(head_path, arm);
+                    let allowed = subjects.iter().find_map(|s| {
+                        tokens::find_override(directives, GATE, tokens::ALLOW_REGRESSION, s)
+                    });
+                    if let Some(ov) = allowed {
+                        if !out.overrides.iter().any(|o| o.reason == ov.reason) {
                             out.overrides.push(ov);
-                        } else {
-                            out.push(
-                                ctx.overridable(settings.severity),
-                                "Benchmark Performance Regressed",
-                                Some(&file.path),
-                                None,
-                                format!(
-                                    "benchmark `{}` in `{}` regressed: {} (point: {:.2} -> {:.2} {})",
-                                    h.name, file.path, decision.note, c_base.point_estimate, c_head.point_estimate, h.unit
-                                ),
-                                &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", h.name, h.name),
-                            );
                         }
-                    } else if decision.method == "not_comparable_no_ci"
-                        || decision.point_delta_pct > effective_tolerance
-                    {
-                        out.notes
-                            .push(format!("benchmark `{}`: {}", h.name, decision.note));
+                    } else {
+                        out.push(
+                            severity,
+                            "Instruction Count Regressed",
+                            Some(head_path),
+                            None,
+                            format!(
+                                "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), exceeding tolerance {:.2}%",
+                                arm, head_path, delta, base_c, head_c, unit, effective_tolerance
+                            ),
+                            &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", arm, arm),
+                        );
                     }
-                }
-                _ => {
-                    bail!(
-                        "mismatched metric types between baseline and head for benchmark `{}`",
-                        h.name
-                    );
                 }
             }
         }
     }
 
-    Ok(out)
+    Ok(())
 }
 
 fn file_stem(path: &str) -> String {
@@ -466,17 +877,138 @@ pub fn extract_provenance(content: &str) -> Option<String> {
     None
 }
 
+static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap());
+static IAI_HEADER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^([\w:]+)::(\w+)(?:\s+([^:\s"\(]+):?.*)?$"#).unwrap());
+static IAI_METRIC: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^\s{2,}([\w+ ]+):\s+([\d,]+)(?:\|([\d,]+|N/A))?"#).unwrap());
+
+pub fn parse_iai_callgrind_console(content: &str) -> Vec<BenchmarkMetric> {
+    parse_iai_callgrind_console_both(content).0
+}
+
+pub fn parse_iai_callgrind_console_both(
+    content: &str,
+) -> (Vec<BenchmarkMetric>, Vec<BenchmarkMetric>) {
+    let mut head_metrics = Vec::new();
+    let mut base_metrics = Vec::new();
+    let clean = ANSI_RE.replace_all(content, "");
+    let mut current_bench: Option<String> = None;
+
+    for line in clean.lines() {
+        let line_trimmed = line.trim_end();
+        if let Some(cap) = IAI_HEADER.captures(line_trimmed) {
+            let bench = &cap[2];
+            let arg = cap.get(3).map(|m| m.as_str());
+            let name = if let Some(a) = arg {
+                format!("{bench}/{a}")
+            } else {
+                bench.to_string()
+            };
+            current_bench = Some(name);
+            continue;
+        }
+
+        if let Some(ref bench_name) = current_bench {
+            if let Some(cap) = IAI_METRIC.captures(line_trimmed) {
+                let metric_name = cap[1].trim();
+                if metric_name.eq_ignore_ascii_case("Instructions") {
+                    let head_raw: String = cap[2].chars().filter(|c| c.is_ascii_digit()).collect();
+                    if let Ok(head_count) = head_raw.parse::<u64>() {
+                        head_metrics.push(BenchmarkMetric {
+                            name: bench_name.clone(),
+                            count: head_count as f64,
+                            value: MetricValue::Discrete(DiscreteMetric::new(head_count)),
+                            unit: "Ir".to_string(),
+                        });
+                    }
+                    if let Some(base_match) = cap.get(3) {
+                        let base_str = base_match.as_str().trim();
+                        if base_str != "N/A" {
+                            let base_raw: String =
+                                base_str.chars().filter(|c| c.is_ascii_digit()).collect();
+                            if let Ok(base_count) = base_raw.parse::<u64>() {
+                                base_metrics.push(BenchmarkMetric {
+                                    name: bench_name.clone(),
+                                    count: base_count as f64,
+                                    value: MetricValue::Discrete(DiscreteMetric::new(base_count)),
+                                    unit: "Ir".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (head_metrics, base_metrics)
+}
+
 pub fn parse_metrics(path: &str, content: &str) -> Result<Vec<BenchmarkMetric>> {
-    if path.ends_with(".json") {
+    let trimmed = content.trim_start();
+    if path.ends_with(".json") || trimmed.starts_with('{') || trimmed.starts_with('[') {
         let val = serde_json::from_str::<serde_json::Value>(content)
             .with_context(|| format!("invalid JSON in benchmark artifact `{path}`"))?;
         return parse_json_metrics(&val);
+    }
+    let iai = parse_iai_callgrind_console(content);
+    if !iai.is_empty() {
+        return Ok(iai);
     }
     Ok(parse_text_metrics(content))
 }
 
 fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
     let mut metrics = Vec::new();
+
+    // 1b. Wasm-fuel / neutral JSON with arms: {"arms": {"...": 1000}} or {"arms": [{"name": "...", "fuel": 1000}]}
+    if let Some(arms_val) = val.get("arms") {
+        if let Some(arms_map) = arms_val.as_object() {
+            for (name, count_val) in arms_map {
+                if let Some(count) = count_val.as_f64() {
+                    metrics.push(BenchmarkMetric {
+                        name: name.clone(),
+                        count,
+                        value: MetricValue::Discrete(DiscreteMetric::new(count as u64)),
+                        unit: "fuel".to_string(),
+                    });
+                }
+            }
+            if !metrics.is_empty() {
+                return Ok(metrics);
+            }
+        } else if let Some(arms_arr) = arms_val.as_array() {
+            for arm in arms_arr {
+                let name = arm
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("arm")
+                    .to_string();
+                if let Some(count) = arm
+                    .get("fuel")
+                    .or_else(|| arm.get("instructions"))
+                    .or_else(|| arm.get("ir"))
+                    .and_then(|v| v.as_f64())
+                {
+                    let unit = if arm.get("fuel").is_some() {
+                        "fuel"
+                    } else {
+                        "Ir"
+                    };
+                    metrics.push(BenchmarkMetric {
+                        name,
+                        count,
+                        value: MetricValue::Discrete(DiscreteMetric::new(count as u64)),
+                        unit: unit.to_string(),
+                    });
+                }
+            }
+            if !metrics.is_empty() {
+                return Ok(metrics);
+            }
+        }
+    }
 
     // 1. Criterion estimates.json format
     if let Some(mean_val) = val.get("mean") {
@@ -615,17 +1147,23 @@ fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
                     unit: "s".to_string(),
                 });
             }
-            // Generic / IAI / Callgrind instruction counts
+            // Generic / IAI / Callgrind / Wasm-Fuel counts
             else if let Some(count) = b
                 .get("instructions")
                 .or_else(|| b.get("ir"))
+                .or_else(|| b.get("fuel"))
                 .and_then(|v| v.as_f64())
             {
+                let unit = if b.get("fuel").is_some() {
+                    "fuel"
+                } else {
+                    "Ir"
+                };
                 metrics.push(BenchmarkMetric {
                     name,
                     count,
                     value: MetricValue::Discrete(DiscreteMetric::new(count as u64)),
-                    unit: "Ir".to_string(),
+                    unit: unit.to_string(),
                 });
             }
         }
@@ -874,5 +1412,246 @@ PASS
     fn rejects_malformed_garbage_json() {
         let garbage = r#"{"mean":"n/a"}"#;
         assert!(parse_metrics("target/criterion/bench/estimates.json", garbage).is_err());
+    }
+
+    #[test]
+    fn parses_iai_callgrind_console_both_test() {
+        let sample = "\
+cost::map_insert random:\"random\"
+  Instructions:               1,050|1,000 (+5.0000%)
+  Estimated Cycles:           2,100|2,000 (+5.0000%)
+smoke_cost::set_contains
+  Instructions:               500|N/A (No baseline)
+";
+        let (head, base) = parse_iai_callgrind_console_both(sample);
+        assert_eq!(head.len(), 2);
+        assert_eq!(head[0].name, "map_insert/random");
+        assert_eq!(head[0].count, 1050.0);
+        assert_eq!(head[1].name, "set_contains");
+        assert_eq!(head[1].count, 500.0);
+
+        assert_eq!(base.len(), 1);
+        assert_eq!(base[0].name, "map_insert/random");
+        assert_eq!(base[0].count, 1000.0);
+    }
+
+    #[test]
+    fn test_evaluate_metrics_regression_two_tier_and_sourced_override() {
+        use crate::config::{BenchRegressionGate, Severity};
+        use crate::tokens::{OverrideSource, ParsedDirective};
+
+        let settings = BenchRegressionGate {
+            tolerance_pct: 5.0,
+            noise_floor_pct: Some(0.5),
+            advisory_pct: Some(0.1),
+            require_sourced_override: true,
+            ..Default::default()
+        };
+
+        let base = vec![
+            BenchmarkMetric {
+                name: "sync_map_insert".to_string(),
+                count: 1000.0,
+                value: MetricValue::Discrete(DiscreteMetric::new(1000)),
+                unit: "Ir".to_string(),
+            },
+            BenchmarkMetric {
+                name: "sync_set_insert".to_string(),
+                count: 1000.0,
+                value: MetricValue::Discrete(DiscreteMetric::new(1000)),
+                unit: "Ir".to_string(),
+            },
+        ];
+
+        // Case 1: single arm at 2% regression (< 5% single-worst, 1 arm > 0.5% noise floor) -> PASS
+        let head_single_2pct = vec![
+            BenchmarkMetric {
+                name: "sync_map_insert".to_string(),
+                count: 1020.0, // +2%
+                value: MetricValue::Discrete(DiscreteMetric::new(1020)),
+                unit: "Ir".to_string(),
+            },
+            BenchmarkMetric {
+                name: "sync_set_insert".to_string(),
+                count: 1000.0,
+                value: MetricValue::Discrete(DiscreteMetric::new(1000)),
+                unit: "Ir".to_string(),
+            },
+        ];
+        let mut out1 = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &[],
+            &settings,
+            &base,
+            &head_single_2pct,
+            "base.txt",
+            "head.txt",
+            Severity::Error,
+            &mut out1,
+        )
+        .unwrap();
+        assert!(
+            out1.violations.is_empty(),
+            "single 2% regression must pass 5% gate"
+        );
+
+        // Case 2: two arms at 2% regression (> 0.5% noise floor, >= 2 arms) -> VIOLATION
+        let head_two_2pct = vec![
+            BenchmarkMetric {
+                name: "sync_map_insert".to_string(),
+                count: 1020.0, // +2%
+                value: MetricValue::Discrete(DiscreteMetric::new(1020)),
+                unit: "Ir".to_string(),
+            },
+            BenchmarkMetric {
+                name: "sync_set_insert".to_string(),
+                count: 1020.0, // +2%
+                value: MetricValue::Discrete(DiscreteMetric::new(1020)),
+                unit: "Ir".to_string(),
+            },
+        ];
+        let mut out2 = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &[],
+            &settings,
+            &base,
+            &head_two_2pct,
+            "base.txt",
+            "head.txt",
+            Severity::Error,
+            &mut out2,
+        )
+        .unwrap();
+        assert_eq!(out2.violations.len(), 2, "two arms > noise floor must fail");
+
+        // Case 3: single arm at 6% regression (> 5% single-worst) -> VIOLATION
+        let head_single_6pct = vec![
+            BenchmarkMetric {
+                name: "sync_map_insert".to_string(),
+                count: 1060.0, // +6%
+                value: MetricValue::Discrete(DiscreteMetric::new(1060)),
+                unit: "Ir".to_string(),
+            },
+            BenchmarkMetric {
+                name: "sync_set_insert".to_string(),
+                count: 1000.0,
+                value: MetricValue::Discrete(DiscreteMetric::new(1000)),
+                unit: "Ir".to_string(),
+            },
+        ];
+        let mut out3 = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &[],
+            &settings,
+            &base,
+            &head_single_6pct,
+            "base.txt",
+            "head.txt",
+            Severity::Error,
+            &mut out3,
+        )
+        .unwrap();
+        assert_eq!(
+            out3.violations.len(),
+            1,
+            "single 6% regression must fail 5% gate"
+        );
+
+        // Case 4: Unsourced override -> VOID (fails closed)
+        let dir_unsourced = vec![ParsedDirective {
+            directive: "allow-regression".to_string(),
+            reason: "sync_map_insert is 45.6% faster, trust me".to_string(),
+            source: OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let mut out4 = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &dir_unsourced,
+            &settings,
+            &base,
+            &head_single_6pct,
+            "base.txt",
+            "head.txt",
+            Severity::Error,
+            &mut out4,
+        )
+        .unwrap();
+        assert!(
+            out4.violations
+                .iter()
+                .any(|v| v.title.contains("No Resolvable Citation")),
+            "unsourced override must be void"
+        );
+
+        // Case 5: Sourced override that names no regressed arm (#822 shape) -> VOID (fails closed)
+        let dir_unnamed = vec![ParsedDirective {
+            directive: "allow-regression".to_string(),
+            reason:
+                "coordination trade refs https://github.com/orieg/expanse/actions/runs/34490311084"
+                    .to_string(),
+            source: OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let mut out5 = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &dir_unnamed,
+            &settings,
+            &base,
+            &head_single_6pct,
+            "base.txt",
+            "head.txt",
+            Severity::Error,
+            &mut out5,
+        )
+        .unwrap();
+        assert!(
+            out5.violations
+                .iter()
+                .any(|v| v.title.contains("Names No Regressed Arm")),
+            "unnamed arm override must be void"
+        );
+
+        // Case 6: Sourced override naming only subset of regressed arms -> named approved, unnamed fails
+        let dir_subset = vec![ParsedDirective {
+            directive: "allow-regression".to_string(),
+            reason: "sync_map_insert pays the bracket refs https://github.com/orieg/expanse/actions/runs/34490311084".to_string(),
+            source: OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let mut out6 = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &dir_subset,
+            &settings,
+            &base,
+            &head_two_2pct,
+            "base.txt",
+            "head.txt",
+            Severity::Error,
+            &mut out6,
+        )
+        .unwrap();
+        assert_eq!(out6.overrides.len(), 1, "named arm must be approved");
+        assert_eq!(out6.violations.len(), 1, "unnamed arm must fail");
+        assert!(out6.violations[0].title.contains("Unapproved Arm"));
+
+        // Case 7: Exempt arm
+        let mut settings_exempt = settings.clone();
+        settings_exempt.exempt_arms = vec!["sync_set_insert".to_string()];
+        let mut out7 = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &[],
+            &settings_exempt,
+            &base,
+            &head_two_2pct,
+            "base.txt",
+            "head.txt",
+            Severity::Error,
+            &mut out7,
+        )
+        .unwrap();
+        assert!(
+            out7.violations.is_empty(),
+            "after exempting one arm, only 1 arm remains > noise floor, passing the gate"
+        );
     }
 }

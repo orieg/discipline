@@ -5141,3 +5141,164 @@ fn ci_integrity_gate_e2e() {
         run_inline.stdout
     );
 }
+
+// ---- Gap 8, Gap 10, Gap 11 (Parity Phase D) --------------------------------
+
+#[test]
+fn bench_regression_dual_file_mode_and_missing_baseline() {
+    let repo = Repo::new();
+    repo.commit("init");
+
+    let base_file = repo.dir.path().join("base_bench.json");
+    let head_file = repo.dir.path().join("head_bench.json");
+
+    std::fs::write(&base_file, r#"{"arms": {"sync_map_insert": 1000}}"#).unwrap();
+    // +6% regression (> 5% single-worst)
+    std::fs::write(&head_file, r#"{"arms": {"sync_map_insert": 1060}}"#).unwrap();
+
+    let run_fail = repo.check(&[
+        "--suite",
+        "bench",
+        "--bench-base-file",
+        base_file.to_str().unwrap(),
+        "--bench-head-file",
+        head_file.to_str().unwrap(),
+        "--config-override",
+        "[gates.bench-regression]\ntolerance_pct = 5.0\nrequire_sourced_override = true\n",
+    ]);
+    assert_eq!(run_fail.code, 1);
+    let titles = run_fail.titles("bench-regression");
+    assert!(titles.contains(&"Instruction Count Regressed".to_string()));
+
+    // Sourced override naming arm passes
+    let run_pass = repo.check_with_pr(
+        &[
+            "--suite", "bench",
+            "--bench-base-file", base_file.to_str().unwrap(),
+            "--bench-head-file", head_file.to_str().unwrap(),
+            "--config-override", "[gates.bench-regression]\ntolerance_pct = 5.0\nrequire_sourced_override = true\n",
+        ],
+        "allow-regression: sync_map_insert trade refs https://github.com/orieg/expanse/actions/runs/34490311084",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(
+        run_pass.outcome("bench-regression")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Missing baseline fails closed with NO BASELINE note
+    let missing_base = repo.dir.path().join("nonexistent_base.json");
+    let run_missing = repo.check(&[
+        "--suite",
+        "bench",
+        "--bench-base-file",
+        missing_base.to_str().unwrap(),
+        "--bench-head-file",
+        head_file.to_str().unwrap(),
+    ]);
+    assert_eq!(run_missing.code, 1);
+    let outcome = run_missing.outcome("bench-regression");
+    let notes = outcome["notes"].as_array().unwrap();
+    assert!(notes.iter().any(|n| n
+        .as_str()
+        .unwrap()
+        .contains("NO BASELINE — regression gate did not run")));
+}
+
+#[test]
+fn provenance_tags_e2e_detects_unprovenanced_tables_and_mechanism_claims() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "docs/perf.md",
+        "# Performance\nBaseline docs.\n",
+        "base: perf docs",
+    );
+
+    // Unprovenanced table and unsupported mechanism claim
+    repo.write(
+        "docs/perf.md",
+        "# Performance\n\n| Arm | Latency |\n|---|---|\n| map_get | 12.4 ns |\n\nThe implementation is memory-latency-bound at all scales.\n",
+    );
+    repo.commit("docs: add perf table");
+
+    let run_fail = repo.check(&[
+        "--config-override",
+        "[gates.provenance-tags]\nenabled = true\n",
+    ]);
+    assert_eq!(run_fail.code, 1);
+    let titles = run_fail.titles("provenance-tags");
+    assert!(titles.contains(&"Unprovenanced Table Numerics".to_string()));
+    assert!(titles.contains(&"Mechanism Claim Without Evidence".to_string()));
+
+    // Tag table and add hypothesis qualifier
+    repo.write(
+        "docs/perf.md",
+        "# Performance\n\n| Arm | Latency |\n|---|---|\n| map_get | 12.4 ns |\n\n*(measured: Apple M1, abc1234)*\n\nHypothesis: the implementation is memory-latency-bound at all scales.\n",
+    );
+    repo.commit("docs: fix provenance tags");
+
+    let run_pass = repo.check(&[
+        "--config-override",
+        "[gates.provenance-tags]\nenabled = true\n",
+    ]);
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.titles("provenance-tags").len(), 0);
+}
+
+#[test]
+fn command_preset_cargo_public_api_enforces_policy_file_and_accepts_override() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("public-api.txt", "pub fn public_api_symbol();\n"),
+            (
+                "discipline.toml",
+                r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.deletion-rationale]
+enabled = false
+
+[gates.command]
+preset = "cargo-public-api"
+"#,
+            ),
+        ],
+        "base: init public api and command preset",
+    );
+
+    // Delete policy file public-api.txt on head branch
+    repo.git(&["rm", "-q", "public-api.txt"]);
+    let run_del = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("DISCIPLINE_COMMAND", "echo \"public-api check ok\"")],
+    );
+    assert_eq!(run_del.code, 1);
+    assert!(run_del
+        .titles("command")
+        .contains(&"Policy File Deleted".to_string()));
+
+    // Override with allow-command
+    let run_override = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[
+            ("DISCIPLINE_COMMAND", "echo \"public-api check ok\""),
+            (
+                "PR_BODY",
+                "allow-command: cargo-public-api intentional breaking change removing public api file",
+            ),
+        ],
+    );
+    assert_eq!(run_override.code, 0);
+    assert_eq!(
+        run_override.outcome("command")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}

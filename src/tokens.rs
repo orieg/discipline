@@ -186,6 +186,15 @@ pub const NO_ISSUE: &[&str] = &[
     "allow(issue-link)",
 ];
 
+pub const ALLOW_PROVENANCE: &[&str] = &[
+    "allow-provenance",
+    "discipline:allow(provenance-tags)",
+    "allow(provenance-tags)",
+    "allow-unpaired-figures",
+    "docs-lint: allow",
+    "docs-lint:allow",
+];
+
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
     "deletes",
@@ -235,6 +244,12 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "no-issue",
     "discipline:allow(issue-link)",
     "allow(issue-link)",
+    "allow-provenance",
+    "discipline:allow(provenance-tags)",
+    "allow(provenance-tags)",
+    "allow-unpaired-figures",
+    "docs-lint: allow",
+    "docs-lint:allow",
 ];
 
 const PLACEHOLDERS: &[&str] = &[
@@ -507,6 +522,42 @@ fn is_placeholder(reason: &str) -> bool {
     PLACEHOLDERS.contains(&r.to_lowercase().as_str())
 }
 
+static CITATION_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)https?://[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/(?:actions/runs/\d+|pipelines/\d+|jobs/\d+)|(?:results|docs|crates|scripts|benches|tests|src|target)/[a-zA-Z0-9_./-]+\.(?:json|txt|csv|md|svg|log|out)").unwrap()
+});
+
+/// Extracts a verifiable citation (CI run URL or committed artifact path) from an override reason.
+pub fn extract_citation(reason: &str) -> Option<String> {
+    CITATION_RE.find(reason).map(|m| m.as_str().to_string())
+}
+
+/// Checks whether an override reason explicitly names a benchmark arm (in full, tail, or stem).
+pub fn reason_cites_arm(reason: &str, arm: &str) -> bool {
+    let haystack = reason.to_lowercase();
+    let arm_lower = arm.to_lowercase();
+    if haystack.contains(&arm_lower) {
+        return true;
+    }
+    let tail = arm.rsplit("::").next().unwrap_or(arm).to_lowercase();
+    if haystack.contains(&tail) {
+        return true;
+    }
+    let stem = tail.split('/').next().unwrap_or(&tail);
+    if haystack.contains(stem) {
+        return true;
+    }
+    false
+}
+
+/// Returns the subset of regressed arms that the override reason does NOT name.
+pub fn unapproved_regressed_arms<'a>(reason: &str, regressed: &'a [String]) -> Vec<&'a str> {
+    regressed
+        .iter()
+        .filter(|arm| !reason_cites_arm(reason, arm))
+        .map(|s| s.as_str())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,5 +748,62 @@ removes: tests/old.rs inside a fence
         );
         assert_eq!(r3, vec!["bench_run #822 verified"]);
         assert!(covers(&r3, "bench_run"));
+    }
+
+    #[test]
+    fn test_extract_citation_and_arm_naming() {
+        assert_eq!(
+            extract_citation("#480 trade: reduces random lookup branch mispredictions by 45.6% (1.49 vs 2.74 per probe) via independent L1 loads"),
+            None
+        );
+        assert_eq!(extract_citation("intentional SIMD trade-off"), None);
+        assert_eq!(extract_citation("approved by review"), None);
+        assert_eq!(extract_citation("measured at commit 4c4e852"), None);
+        assert_eq!(
+            extract_citation(
+                "TLB win, run https://github.com/orieg/expanse/actions/runs/33325789949"
+            ),
+            Some("https://github.com/orieg/expanse/actions/runs/33325789949".to_string())
+        );
+        assert_eq!(
+            extract_citation("paired CI in results/baseline_vs_libjudy.json"),
+            Some("results/baseline_vs_libjudy.json".to_string())
+        );
+        assert_eq!(
+            extract_citation(
+                "fallback in docs/benchmarks/concurrency/results/fallback_maturity.json"
+            ),
+            Some("docs/benchmarks/concurrency/results/fallback_maturity.json".to_string())
+        );
+
+        let pr822 = "zero-sharing per-writer coordination under feature lock-padded (refs CI run https://github.com/orieg/expanse/actions/runs/34490311084)";
+        assert!(extract_citation(pr822).is_some());
+        let regressed = vec![
+            "instructions::cost::sync_map_insert/random".to_string(),
+            "instructions::cost::sync_set_insert/random".to_string(),
+        ];
+        assert_eq!(
+            unapproved_regressed_arms(pr822, &regressed),
+            vec![
+                "instructions::cost::sync_map_insert/random",
+                "instructions::cost::sync_set_insert/random"
+            ]
+        );
+
+        let reason_named = "sync_map_insert pays for the OLC bracket, run https://x/actions/runs/1";
+        assert_eq!(
+            unapproved_regressed_arms(
+                reason_named,
+                &["instructions::cost::sync_map_insert/random".to_string()]
+            ),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            unapproved_regressed_arms(
+                "sync_map_insert only, run https://x/actions/runs/1",
+                &regressed
+            ),
+            vec!["instructions::cost::sync_set_insert/random"]
+        );
     }
 }

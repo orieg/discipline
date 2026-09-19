@@ -45,19 +45,39 @@
     "BenchRegressionGate": {
       "additionalProperties": false,
       "properties": {
+        "advisory_pct": {
+          "description": "Advisory review percentage (default: 0.1%)",
+          "type": "number"
+        },
         "allow_cross_host": {
           "description": "Allow benchmark comparison across mismatched host/runner provenance",
           "type": "boolean"
+        },
+        "base_file": {
+          "description": "In-job base benchmark result file path for dual-file regression checks",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"
         },
+        "exempt_arms": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Declared exempt benchmark arms"
+        },
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"
         },
+        "head_file": {
+          "description": "In-job head benchmark result file path for dual-file regression checks",
+          "type": "string"
+        },
         "max_noise_cv": {
           "description": "Maximum acceptable coefficient of variation (std_dev / mean)",
+          "type": "number"
+        },
+        "noise_floor_pct": {
+          "description": "Noise floor percentage (default: 0.5%)",
           "type": "number"
         },
         "noise_margin_pct": {
@@ -70,6 +90,10 @@
         "provenance": {
           "description": "Expected host/runner provenance tag for benchmark artifacts",
           "type": "string"
+        },
+        "require_sourced_override": {
+          "description": "Require allow-regression reasons to cite a CI run URL or artifact path and name the arms",
+          "type": "boolean"
         },
         "severity": {
           "$ref": "#/$defs/Severity"
@@ -438,6 +462,38 @@
       },
       "type": "object"
     },
+    "ProvenanceTagsGate": {
+      "additionalProperties": false,
+      "properties": {
+        "check_intervals": {
+          "description": "Check published wall-clock ratios for confidence intervals or explicit qualifiers",
+          "type": "boolean"
+        },
+        "check_mechanisms": {
+          "description": "Check for mechanism claims without hardware counter evidence or explicit hypothesis qualifiers",
+          "type": "boolean"
+        },
+        "check_paired_figures": {
+          "description": "Check paired figures for shared workload IDs or differentiation tags",
+          "type": "boolean"
+        },
+        "check_tables": {
+          "description": "Check markdown tables for unit-bearing numbers without table or caption provenance tags",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "ScratchGate": {
       "additionalProperties": false,
       "properties": {
@@ -775,6 +831,14 @@
             }
           ],
           "description": "no home paths, LAN IPs, or denylisted hostnames in tracked text"
+        },
+        "provenance-tags": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ProvenanceTagsGate"
+            }
+          ],
+          "description": "published numerics carry (measured|target|projected)"
         },
         "shell-secrets": {
           "allOf": [

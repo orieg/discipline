@@ -45,6 +45,8 @@ fn run() -> Result<bool> {
             report_sarif: args.report_sarif,
             bench_provenance: None,
             allow_cross_host_bench: false,
+            bench_base_file: None,
+            bench_head_file: None,
         }),
         Commands::Init(args) => init(args.name),
         Commands::Gates(args) => gates(&args.config),
@@ -259,6 +261,8 @@ fn check(args: CheckArgs) -> Result<bool> {
         directive_notes,
         bench_provenance: args.bench_provenance.clone(),
         allow_cross_host_bench: args.allow_cross_host_bench,
+        bench_base_file: args.bench_base_file.clone(),
+        bench_head_file: args.bench_head_file.clone(),
     };
     let summary = run_checks(&config, args.suite, &ctx)?;
     let fail_on_overrides = config.directives.fail_on_overrides;

@@ -29,6 +29,7 @@ pub fn generate_schema() -> Value {
             "ci-integrity" => "#/$defs/CiIntegrityGate",
             "shell-secrets" => "#/$defs/ShellSecretsGate",
             "issue-link" => "#/$defs/IssueLinkGate",
+            "provenance-tags" => "#/$defs/ProvenanceTagsGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -232,7 +233,26 @@ pub fn generate_schema() -> Value {
                     "max_noise_cv": { "type": "number", "description": "Maximum acceptable coefficient of variation (std_dev / mean)" },
                     "paths": { "$ref": "#/$defs/StringListOrReset" },
                     "provenance": { "type": "string", "description": "Expected host/runner provenance tag for benchmark artifacts" },
-                    "allow_cross_host": { "type": "boolean", "description": "Allow benchmark comparison across mismatched host/runner provenance" }
+                    "allow_cross_host": { "type": "boolean", "description": "Allow benchmark comparison across mismatched host/runner provenance" },
+                    "base_file": { "type": "string", "description": "In-job base benchmark result file path for dual-file regression checks" },
+                    "head_file": { "type": "string", "description": "In-job head benchmark result file path for dual-file regression checks" },
+                    "noise_floor_pct": { "type": "number", "description": "Noise floor percentage (default: 0.5%)" },
+                    "advisory_pct": { "type": "number", "description": "Advisory review percentage (default: 0.1%)" },
+                    "exempt_arms": { "$ref": "#/$defs/StringListOrReset", "description": "Declared exempt benchmark arms" },
+                    "require_sourced_override": { "type": "boolean", "description": "Require allow-regression reasons to cite a CI run URL or artifact path and name the arms" }
+                }
+            },
+            "ProvenanceTagsGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "check_tables": { "type": "boolean", "description": "Check markdown tables for unit-bearing numbers without table or caption provenance tags" },
+                    "check_mechanisms": { "type": "boolean", "description": "Check for mechanism claims without hardware counter evidence or explicit hypothesis qualifiers" },
+                    "check_intervals": { "type": "boolean", "description": "Check published wall-clock ratios for confidence intervals or explicit qualifiers" },
+                    "check_paired_figures": { "type": "boolean", "description": "Check paired figures for shared workload IDs or differentiation tags" }
                 }
             },
             "UnsafeSafetyCommentGate": {

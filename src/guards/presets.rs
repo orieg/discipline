@@ -181,6 +181,43 @@ pub static PRESETS: &[PresetDefinition] = &[
         policy_files: &[],
         description: "Rust loom deterministic concurrency permutation test runner",
     },
+    PresetDefinition {
+        id: "miri",
+        category: "concurrency",
+        default_command: "cargo miri test",
+        default_timeout_seconds: 600,
+        zero_items_pattern: Some("running 0 tests"),
+        forbid_output: &[],
+        canary_command: None,
+        canary_expected_diagnostic: None,
+        policy_files: &[],
+        description: "Rust Undefined Behavior detection with Miri and zero-tests guard",
+    },
+    PresetDefinition {
+        id: "cargo-public-api",
+        category: "semver",
+        default_command: "cargo public-api diff",
+        default_timeout_seconds: 180,
+        zero_items_pattern: None,
+        forbid_output: &[],
+        canary_command: None,
+        canary_expected_diagnostic: None,
+        policy_files: &["public-api.txt"],
+        description: "Rust public API surface diff inspector using cargo-public-api",
+    },
+    // 6. Runtime Sanitizers
+    PresetDefinition {
+        id: "sanitizers",
+        category: "sanitizer",
+        default_command: "cargo test -Zsanitizer=address",
+        default_timeout_seconds: 300,
+        zero_items_pattern: None,
+        forbid_output: &[],
+        canary_command: Some("cargo test --test race_canary"),
+        canary_expected_diagnostic: Some("ThreadSanitizer: data race"),
+        policy_files: &[],
+        description: "Runtime address and thread sanitizer runner with diagnostic verification",
+    },
 ];
 
 /// Resolves a preset by its unique identifier.
@@ -208,6 +245,9 @@ mod tests {
             "npm-audit",
             "govulncheck",
             "loom",
+            "miri",
+            "cargo-public-api",
+            "sanitizers",
         ];
 
         for id in expected_ids {

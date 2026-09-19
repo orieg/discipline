@@ -1459,6 +1459,185 @@ jobs:
             Ok(missing_test && is_sha(pinned) && !is_sha(unpinned) && masks && clean)
         },
     ),
+    (
+        "bench-regression: iai console parsing, two-tier threshold, and sourced overrides",
+        || {
+            use crate::config::{BenchRegressionGate, Severity};
+            use crate::guards::perf::bounds::DiscreteMetric;
+            use crate::guards::perf::{
+                evaluate_metrics_regression_with_directives, parse_iai_callgrind_console_both,
+                BenchmarkMetric, MetricValue,
+            };
+            use crate::guards::GateOutcome;
+            use crate::tokens::{OverrideSource, ParsedDirective};
+
+            let sample = "\
+cost::map_insert random:\"random\"
+  Instructions:               1,050|1,000 (+5.0000%)
+smoke_cost::set_contains
+  Instructions:               500|N/A (No baseline)
+";
+            let (head, base) = parse_iai_callgrind_console_both(sample);
+            if head.len() != 2 || base.len() != 1 {
+                return Ok(false);
+            }
+
+            let settings = BenchRegressionGate {
+                tolerance_pct: 5.0,
+                noise_floor_pct: Some(0.5),
+                advisory_pct: Some(0.1),
+                require_sourced_override: true,
+                ..Default::default()
+            };
+
+            let base_metrics = vec![
+                BenchmarkMetric {
+                    name: "map_get".to_string(),
+                    count: 1000.0,
+                    value: MetricValue::Discrete(DiscreteMetric::new(1000)),
+                    unit: "Ir".to_string(),
+                },
+                BenchmarkMetric {
+                    name: "map_insert".to_string(),
+                    count: 1000.0,
+                    value: MetricValue::Discrete(DiscreteMetric::new(1000)),
+                    unit: "Ir".to_string(),
+                },
+            ];
+
+            // 1 arm at 2% regression (< 5% single-worst, only 1 arm > 0.5% noise floor) -> passes
+            let head_pass = vec![
+                BenchmarkMetric {
+                    name: "map_get".to_string(),
+                    count: 1020.0,
+                    value: MetricValue::Discrete(DiscreteMetric::new(1020)),
+                    unit: "Ir".to_string(),
+                },
+                BenchmarkMetric {
+                    name: "map_insert".to_string(),
+                    count: 1000.0,
+                    value: MetricValue::Discrete(DiscreteMetric::new(1000)),
+                    unit: "Ir".to_string(),
+                },
+            ];
+            let mut out1 = GateOutcome::new("bench-regression");
+            evaluate_metrics_regression_with_directives(
+                &[],
+                &settings,
+                &base_metrics,
+                &head_pass,
+                "base.txt",
+                "head.txt",
+                Severity::Error,
+                &mut out1,
+            )?;
+            let pass_ok = out1.violations.is_empty();
+
+            // 2 arms at 2% regression (>= 2 arms > 0.5% noise floor) -> fails
+            let head_fail = vec![
+                BenchmarkMetric {
+                    name: "map_get".to_string(),
+                    count: 1020.0,
+                    value: MetricValue::Discrete(DiscreteMetric::new(1020)),
+                    unit: "Ir".to_string(),
+                },
+                BenchmarkMetric {
+                    name: "map_insert".to_string(),
+                    count: 1020.0,
+                    value: MetricValue::Discrete(DiscreteMetric::new(1020)),
+                    unit: "Ir".to_string(),
+                },
+            ];
+            let mut out2 = GateOutcome::new("bench-regression");
+            evaluate_metrics_regression_with_directives(
+                &[],
+                &settings,
+                &base_metrics,
+                &head_fail,
+                "base.txt",
+                "head.txt",
+                Severity::Error,
+                &mut out2,
+            )?;
+            let fail_ok = out2.violations.len() == 2;
+
+            // Sourced override naming map_get: approved for map_get, map_insert fails
+            let dirs = vec![ParsedDirective {
+                directive: "allow-regression".to_string(),
+                reason: "map_get trade refs https://github.com/orieg/expanse/actions/runs/34490311084".to_string(),
+                source: OverrideSource::PrBody,
+                hidden: false,
+            }];
+            let mut out3 = GateOutcome::new("bench-regression");
+            evaluate_metrics_regression_with_directives(
+                &dirs,
+                &settings,
+                &base_metrics,
+                &head_fail,
+                "base.txt",
+                "head.txt",
+                Severity::Error,
+                &mut out3,
+            )?;
+            let override_subset_ok = out3.overrides.len() == 1 && out3.violations.len() == 1;
+
+            Ok(pass_ok && fail_ok && override_subset_ok)
+        },
+    ),
+    (
+        "provenance-tags: table provenance, mechanism claims, wall-clock intervals, and paired figures",
+        || {
+            use crate::guards::provenance_tags::scan_markdown_text;
+
+            // 1. Table with numbers without tag -> fires
+            let bad_table = "| Arm | Latency |\n|---|---|\n| get | 12.4 ns |\n";
+            let v_table_bad = scan_markdown_text(bad_table, "docs/perf.md", true, true, true, true);
+            let good_table = "| Arm | Latency |\n|---|---|\n| get | 12.4 ns |\n\n(measured: Apple M1, abc1234)\n";
+            let v_table_good = scan_markdown_text(good_table, "docs/perf.md", true, true, true, true);
+
+            // 2. Mechanism claim without evidence -> fires
+            let bad_mech = "The speedup is memory-latency-bound across all sizes.";
+            let v_mech_bad = scan_markdown_text(bad_mech, "docs/perf.md", true, true, true, true);
+            let good_mech = "The speedup is memory-latency-bound (measured via LLC-load-misses in results/cache.json).";
+            let v_mech_good = scan_markdown_text(good_mech, "docs/perf.md", true, true, true, true);
+
+            // 3. Bare wall-clock ratio -> fires
+            let bad_ratio = "The new algorithm is 2.9x faster on realistic workloads.";
+            let v_ratio_bad = scan_markdown_text(bad_ratio, "docs/perf.md", true, true, true, true);
+            let good_ratio = "The new algorithm is 2.9x faster [2.7x, 3.1x] on realistic workloads.";
+            let v_ratio_good = scan_markdown_text(good_ratio, "docs/perf.md", true, true, true, true);
+
+            // 4. Paired figures without workload tag -> fires
+            let bad_pair = "Lookup takes 11.9 ns vs 108.9 ns in the competitor.";
+            let v_pair_bad = scan_markdown_text(bad_pair, "docs/perf.md", true, true, true, true);
+            let good_pair = "Lookup takes 11.9 ns vs 108.9 ns (workload: uniform-random) in the competitor.";
+            let v_pair_good = scan_markdown_text(good_pair, "docs/perf.md", true, true, true, true);
+
+            Ok(!v_table_bad.is_empty()
+                && v_table_good.is_empty()
+                && !v_mech_bad.is_empty()
+                && v_mech_good.is_empty()
+                && !v_ratio_bad.is_empty()
+                && v_ratio_good.is_empty()
+                && !v_pair_bad.is_empty()
+                && v_pair_good.is_empty())
+        },
+    ),
+    (
+        "presets: cargo-public-api, miri, and sanitizers preset resolution",
+        || {
+            use crate::guards::presets::resolve_preset;
+            let api = resolve_preset("cargo-public-api").expect("cargo-public-api preset exists");
+            let miri = resolve_preset("miri").expect("miri preset exists");
+            let san = resolve_preset("sanitizers").expect("sanitizers preset exists");
+
+            let api_ok = api.default_command.contains("public-api") && api.policy_files.contains(&"public-api.txt");
+            let miri_ok = miri.default_command.contains("miri") && miri.zero_items_pattern.is_some();
+            let san_ok = san.canary_expected_diagnostic == Some("ThreadSanitizer: data race");
+
+            Ok(api_ok && miri_ok && san_ok)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

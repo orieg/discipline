@@ -31,7 +31,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | `config-integrity` | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
 | `scope-confinement` | agent-guard | planned | any | changes stay inside authorized paths |
 | `suppression-delta` | agent-guard | planned | per pack | new #[allow], commented-out tests, cfg-gated tests |
-| `provenance-tags` | hygiene | planned | any | published numerics carry (measured|target|projected) |
+| `provenance-tags` | hygiene | **shipped** | any | published numerics carry (measured|target|projected) |
 | `ci-integrity` | integrity | **shipped** | any | workflow weakening: continue-on-error, || true, unpinned actions |
 | `test-floor` | integrity | **shipped** | any | test-count ratchet read from the base ref |
 | `golden-output` | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override |
@@ -350,6 +350,22 @@ When a change touches source files in a language without an active pack, each AS
   - Placeholder waiver values like `no-issue: <reason>` or empty waivers.
 - **Lifting directive:** `no-issue: <reason>` on its own line in the PR description.
 - **Config keys:** `enabled`, `severity`, `pattern`.
+
+#### `provenance-tags`
+- **Rule:** Published numeric claims, tables, mechanism assertions, wall-clock intervals, and paired comparisons in markdown files and PR bodies must carry truthful provenance tags, hardware counter evidence, confidence intervals, or explicit hypothesis/differentiation qualifiers.
+- **Languages:** Markdown (`*.md`) and PR description.
+- **What it catches:**
+  - Markdown tables containing unit-bearing numbers (`ns`, `µs`, `ms`, `ops/s`, `Mops/s`, `B/key`, etc.) without a provenance tag (`(measured: host, commit)`, `(target)`, or `(projected)`).
+  - Unverified mechanism claims (`memory-latency-bound`, `branch-misprediction`, `TLB-bound`, etc.) without citing hardware counters (`perf stat`, `cycle_activity`, etc.) or marking as `hypothesis` / `unmeasured`.
+  - Wall-clock ratios (`2.9x faster`, `3.1x speedup`) without confidence intervals (`[lo, hi]`, `BCa`, `CI`) or provisional markers.
+  - Paired comparison figures (`11.9 ns vs 108.9 ns`, cross-metric comparisons) without shared workload tags (`(workload: id)`) or documented differentiation markers.
+- **Passing examples (accepted):**
+  - Table caption carrying `*(measured: host, commit)*` or `*(target)*`.
+  - Mechanism claim citing `perf stat` counters or labeled as `(hypothesis — unmeasured pending PMU counters)`.
+  - Wall-clock speedup citing `[2.7x, 3.1x] BCa 95% CI` or `(provisional pending re-measurement)`.
+  - Paired comparison citing `(workload: uniform-random)`.
+- **Lifting directive:** `allow-provenance: <file-or-path> <reason>` in PR body or commit, or inline `<!-- discipline:allow(provenance-tags) -->`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `include`, `check_tables`, `check_mechanisms`, `check_intervals`, `check_paired_figures`, `scan_pr_body`.
 
 ---
 
@@ -764,7 +780,6 @@ The following gates are registered with `available: false` in the gate registry.
 
 - `scope-confinement` (Suite: Agent Guard) — Changes stay inside authorized directory paths.
 - `suppression-delta` (Suite: Agent Guard) — Tracks net increases in compiler/linter suppression attributes (`#[allow]`, `@ts-ignore`, `# noqa`).
-- `provenance-tags` (Suite: Hygiene) — Published numeric claims must carry `(measured)`, `(target)`, or `(projected)`.
 - `pr-checklist` (Suite: Hygiene) — Reconciles ticked PR checkboxes against actual diffs.
 - `sanitizers` (Suite: Verification) — Memory and thread sanitizer presets with race canaries.
 - `msrv` (Suite: Quality) — Verifies build against minimum supported Rust version.
