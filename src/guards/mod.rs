@@ -230,6 +230,8 @@ pub fn run_checks(
             "config-integrity"
         } else if note.contains("allow-golden-update") {
             "golden-output"
+        } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
+            "assertion-reduction"
         } else {
             ""
         };

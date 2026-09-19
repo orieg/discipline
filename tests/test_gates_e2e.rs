@@ -1369,14 +1369,53 @@ fn md_file_with_nul_byte_still_fires_pii() {
 }
 
 #[test]
-fn rs_file_with_nul_byte_fails_closed_exit_2() {
+fn newly_added_nul_byte_in_source_flags_violation_exit_1_and_accepts_directive() {
     let repo = Repo::new();
-    repo.write("src/bad.rs", "pub fn foo() {}\0");
-    repo.commit("feat: add bad.rs");
+    repo.write(
+        "tests/string_to_entry_005.phpt",
+        "--TEST--\nJudy string with nul\n--FILE--\n<?php $j->set(\"foo\0bar\", 123);\n--EXPECT--\nok\n",
+    );
+    repo.commit("feat: add phpt with nul");
     let run = repo.check(&[]);
     assert_eq!(
-        run.code, 2,
-        "stdout: {}\nstderr: {}",
+        run.code, 1,
+        "newly added NUL byte must flag violation with exit 1: stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    let outcome = run.outcome("assertion-reduction");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 1);
+
+    // Lifted with scoped override
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-nul: tests/string_to_entry_005.phpt binary cache payload",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("assertion-reduction");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn pre_existing_nul_on_base_analyzed_lossily_without_exit_2() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tests/string_to_entry_005.phpt",
+        "--TEST--\nJudy string with nul\n--FILE--\n<?php $j->set(\"foo\0bar\", 123);\n--EXPECT--\nok\n",
+    );
+    repo.commit("feat: add phpt with nul on main");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("docs/note.md", "# Note\nClean update.\n");
+    repo.commit("docs: update note");
+
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 0,
+        "pre-existing NUL on base must analyze lossily and pass with exit 0: stdout: {}\nstderr: {}",
         run.stdout, run.stderr
     );
 }

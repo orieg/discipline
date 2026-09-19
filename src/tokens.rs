@@ -104,6 +104,16 @@ pub const ALLOW_GOLDEN_UPDATE: &[&str] = &[
     "discipline:allow(golden-output)",
     "allow(golden-output)",
 ];
+pub const ALLOW_NUL: &[&str] = &[
+    "allow-nul",
+    "allow-nul-byte",
+    "allow-corrupt",
+    "allow-assertion-drop",
+    "discipline:allow(assertion-reduction)",
+    "allow(assertion-reduction)",
+    "discipline:allow(vacuous-tests)",
+    "allow(vacuous-tests)",
+];
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
@@ -124,6 +134,9 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-golden-update",
     "discipline:allow(golden-output)",
     "allow(golden-output)",
+    "allow-nul",
+    "allow-nul-byte",
+    "allow-corrupt",
 ];
 
 const PLACEHOLDERS: &[&str] = &[
@@ -439,5 +452,31 @@ removes: tests/old.rs inside a fence
         );
         assert!(covers(&r2, "skips this test"));
         assert!(!covers(&r2, "other test"));
+    }
+
+    #[test]
+    fn allow_nul_directives_parsed_and_discriminate() {
+        let r1 = directive_reasons(
+            "allow-nul: tests/string_to_entry_005.phpt binary cache payload",
+            ALLOW_NUL,
+        );
+        assert!(covers(&r1, "tests/string_to_entry_005.phpt"));
+        assert!(!covers(&r1, "tests/other.phpt"));
+
+        let r1_by_name = directive_reasons(
+            "allow-nul: string_to_entry_005.phpt binary cache payload",
+            ALLOW_NUL,
+        );
+        assert!(covers(&r1_by_name, "tests/string_to_entry_005.phpt"));
+
+        let r2 = directive_reasons(
+            "allow-nul-byte: src/bad.rs test fixture with binary payload",
+            ALLOW_NUL,
+        );
+        assert!(covers(&r2, "src/bad.rs"));
+        assert!(!covers(&r2, "src/good.rs"));
+
+        let r3 = directive_reasons("allow-corrupt: tests/fixture.bin raw fuzz input", ALLOW_NUL);
+        assert!(covers(&r3, "tests/fixture.bin"));
     }
 }

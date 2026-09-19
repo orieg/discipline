@@ -215,6 +215,7 @@ const CASES: &[Case] = &[
                 },
                 base: Some(b),
                 head: Some(h),
+                newly_added_nul: false,
             }];
             let (pairs, removed, added) = match_tests(&facts);
             Ok(pairs.len() == 1
@@ -381,6 +382,53 @@ const CASES: &[Case] = &[
                 && unexcused_test.violations.len() == 1
                 && excused_test.violations.is_empty()
                 && excused_test.overrides.len() == 1)
+        },
+    ),
+    (
+        "agent-diff: newly added NUL byte flags violation and is lifted by allow-nul directive",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::agent_diff::{report_newly_added_nul_bytes, FileFacts};
+            use crate::guards::GateOutcome;
+            let facts = [FileFacts {
+                file: ChangedFile {
+                    path: "tests/payload.phpt".into(),
+                    old_path: "tests/payload.phpt".into(),
+                    kind: ChangeKind::Added,
+                    added_lines: std::collections::BTreeSet::new(),
+                },
+                base: None,
+                head: None,
+                newly_added_nul: true,
+            }];
+            let mut out_unexcused = GateOutcome::new("assertion-reduction");
+            report_newly_added_nul_bytes(
+                &facts,
+                crate::config::Severity::Error,
+                &mut out_unexcused,
+                &[],
+                false,
+            );
+
+            let directives = [crate::tokens::ParsedDirective {
+                directive: "allow-nul".to_string(),
+                reason: "tests/payload.phpt binary cache test payload".to_string(),
+                source: crate::tokens::OverrideSource::PrBody,
+                hidden: false,
+            }];
+            let mut out_excused = GateOutcome::new("assertion-reduction");
+            report_newly_added_nul_bytes(
+                &facts,
+                crate::config::Severity::Error,
+                &mut out_excused,
+                &directives,
+                false,
+            );
+
+            Ok(out_unexcused.violations.len() == 1
+                && out_unexcused.overrides.is_empty()
+                && out_excused.violations.is_empty()
+                && out_excused.overrides.len() == 1)
         },
     ),
     (

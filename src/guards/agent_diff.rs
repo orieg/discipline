@@ -8,12 +8,13 @@ use crate::ast::{
 use crate::config::GateSettings;
 use crate::gitctx::{ChangeKind, ChangedFile};
 use crate::tokens;
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 
 pub struct FileFacts {
     pub file: ChangedFile,
     pub base: Option<ParsedFileFacts>,
     pub head: Option<ParsedFileFacts>,
+    pub newly_added_nul: bool,
 }
 
 pub struct TestPair<'a> {
@@ -54,21 +55,12 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         .iter()
         .filter(|f| registry.is_supported(&f.path) || registry.is_supported(&f.old_path))
     {
-        let base = match ctx.git.base_bytes(&file.old_path)? {
+        let base_bytes = ctx.git.base_bytes(&file.old_path)?;
+        let base_had_nul = base_bytes.as_ref().is_some_and(|b| b.contains(&0));
+        let base = match base_bytes {
             Some(bytes) => {
                 if let Some(pack) = registry.find_pack(&file.old_path) {
-                    if bytes.contains(&0) {
-                        bail!(
-                            "source file `{}` on base contains a NUL byte; refusing to analyze corrupted or binary source",
-                            file.old_path
-                        );
-                    }
-                    let src = String::from_utf8(bytes).map_err(|e| {
-                        anyhow!(
-                            "source file `{}` on base is not valid UTF-8: {e}",
-                            file.old_path
-                        )
-                    })?;
+                    let src = String::from_utf8_lossy(&bytes);
                     Some(pack.extract(&file.old_path, &src, &vocab)?)
                 } else {
                     None
@@ -76,32 +68,27 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
             }
             None => None,
         };
-        let head = match file.kind {
-            ChangeKind::Deleted => None,
+        let (head, newly_added_nul) = match file.kind {
+            ChangeKind::Deleted => (None, false),
             _ => match ctx.git.head_bytes(&file.path)? {
                 Some(bytes) => {
+                    let has_nul = bytes.contains(&0);
+                    let newly_added = has_nul && !base_had_nul;
                     if let Some(pack) = registry.find_pack(&file.path) {
-                        if bytes.contains(&0) {
-                            bail!(
-                                "source file `{}` contains a NUL byte; refusing to analyze corrupted or binary source",
-                                file.path
-                            );
-                        }
-                        let src = String::from_utf8(bytes).map_err(|e| {
-                            anyhow!("source file `{}` is not valid UTF-8: {e}", file.path)
-                        })?;
-                        Some(pack.extract(&file.path, &src, &vocab)?)
+                        let src = String::from_utf8_lossy(&bytes);
+                        (Some(pack.extract(&file.path, &src, &vocab)?), newly_added)
                     } else {
-                        None
+                        (None, newly_added)
                     }
                 }
-                None => None,
+                None => (None, false),
             },
         };
         analyzed_files.push(FileFacts {
             file: file.clone(),
             base,
             head,
+            newly_added_nul,
         });
     }
 
@@ -145,6 +132,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
                 .settings(target)
                 .map_or(crate::config::Severity::Error, |s| s.severity());
             report_parse_errors(&analyzed_files, sev, outcome);
+            report_newly_added_nul_bytes(&analyzed_files, sev, outcome, &ctx.directives, is_staged);
         }
     }
 
@@ -488,6 +476,45 @@ pub(crate) fn report_parse_errors(
                     .to_string(),
                 "Fix the syntax error, or list the path under `exempt_paths` for the AST gates \
                  if it uses syntax the bundled grammar does not know yet.",
+            );
+        }
+    }
+}
+
+/// Newly added NUL bytes in source files flag a violation, liftable by directive.
+pub(crate) fn report_newly_added_nul_bytes(
+    files: &[FileFacts],
+    severity: crate::config::Severity,
+    out: &mut GateOutcome,
+    directives: &[crate::tokens::ParsedDirective],
+    is_staged: bool,
+) {
+    for ff in files {
+        if ff.newly_added_nul {
+            if let Some(record) =
+                tokens::find_override(directives, out.gate, tokens::ALLOW_NUL, &ff.file.path)
+            {
+                out.overrides.push(record);
+                continue;
+            }
+            let sev = if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                severity
+            };
+            out.push(
+                sev,
+                "Source File Contains Newly Added NUL Byte",
+                Some(&ff.file.path),
+                None,
+                format!(
+                    "Source file `{}` contains a newly added NUL byte; refusing corrupted or binary source without directive.",
+                    ff.file.path
+                ),
+                &format!(
+                    "Remove the NUL byte, or justify it on its own line in the PR body or a commit message: `allow-nul: {} <reason>` (or `discipline:allow({}): {} <reason>`).",
+                    ff.file.path, out.gate, ff.file.path
+                ),
             );
         }
     }
@@ -841,6 +868,7 @@ mod tests {
                 escape_hatches: vec![],
                 has_parse_errors: false,
             }),
+            newly_added_nul: false,
         }];
 
         let (pairs, removed, added) = match_tests(&facts);
@@ -900,6 +928,7 @@ mod tests {
                 escape_hatches: vec![],
                 has_parse_errors: false,
             }),
+            newly_added_nul: false,
         }];
 
         let (pairs, removed, added) = match_tests(&facts);
@@ -1122,6 +1151,7 @@ mod tests {
                 escape_hatches: vec![],
                 has_parse_errors: false,
             }),
+            newly_added_nul: false,
         }];
         let out_bad = evaluate_unsafe_safety_comment(&facts_undocumented, &settings).unwrap();
         assert_eq!(out_bad.violations.len(), 1);
@@ -1145,6 +1175,7 @@ mod tests {
                 escape_hatches: vec![],
                 has_parse_errors: false,
             }),
+            newly_added_nul: false,
         }];
         let out_good = evaluate_unsafe_safety_comment(&facts_documented, &settings).unwrap();
         assert_eq!(out_good.violations.len(), 0);
