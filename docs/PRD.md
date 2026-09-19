@@ -109,7 +109,7 @@ Every escape hatch uses one parser (`src/tokens.rs`) and one grammar.
 | `allow-ignore:` | `ignored-tests` | test fn |
 | `allow-gate-weakening:` | `config-integrity` | gate id |
 | `allow-golden-update:` | `golden-output` | golden/snapshot path or directory prefix |
-| `allow-regression:` (planned) | `bench-regression` | benchmark arm, plus a resolvable, fresh citation |
+| `allow-regression:` | `bench-regression` | benchmark arm, name, or file stem, plus a non-empty rationale |
 | `allow-test-shrink:` (planned) | `test-floor` | — |
 
 Directives may also use the uniform HTML comment syntax: `<!-- discipline:allow(<gate-id>): <subject> <reason> -->` (or without colon).
@@ -279,7 +279,7 @@ Status: **shipped** = implemented with discriminating tests (§9); **planned** =
 
 ### 6.1 Language scope
 
-Seven of the eleven shipped gates are language-independent and work on any repository today: `deletion-rationale` (file level), `agents-md`, `time-estimates`, `pii`, `agent-scratch`, `config-integrity`, `golden-output`. The four AST gates need a language pack. When a change touches source files in a language with no pack, each AST gate **says so by name** in its report ("N changed source file(s) … NOT analysed") rather than showing a quiet zero (F7).
+Eight of the twelve shipped gates are language-independent (or use harness output adapters) and work on any repository today: `deletion-rationale` (file level), `agents-md`, `time-estimates`, `pii`, `agent-scratch`, `config-integrity`, `golden-output`, and `bench-regression` (IAI/Callgrind, Criterion, Go, pytest-benchmark, Google Benchmark). The four AST gates need a language pack. When a change touches source files in a language with no pack, each AST gate **says so by name** in its report ("N changed source file(s) … NOT analysed") rather than showing a quiet zero (F7).
 
 A pack maps its ecosystem onto the shared fact model:
 
@@ -394,23 +394,18 @@ Rules every command gate inherits from expanse:
 
 ### Pillar 5 — Benchmark drift (`bench`)
 
-Planned: `bench-regression`. The statistical gate is independent of how samples were produced; harness support is an **adapter** that turns a tool's output into the common sample format.
+Status: **shipped** (`bench-regression`). The benchmark drift sentinel compares baseline metrics from the merge base against head across watched benchmark output files (`target/iai/**`, `**/callgrind.*`, `target/criterion/**`, `**/*benchmark*.json`, `**/*benchmarks*.json`, `**/*benchmark*.log`, `**/*benchmark*.txt`).
 
-| Measurement | Where it is valid | Adapters |
+| Measurement | Supported Adapters | Description & Units |
 |---|---|---|
-| **Deterministic counts** (instructions, allocations, fuel) — compared exactly against the merge base, tolerance as configured | Ahead-of-time compiled native code: Rust, C, C++, and Wasm fuel. Not meaningful where a JIT, a garbage collector, or an interpreter loop dominates the count (JVM, V8, CPython), so it is never the default there. | `iai-callgrind`, raw `callgrind`, Wasm fuel |
-| **Wall-clock samples** — gated on a BCa bootstrap 95% interval | Everywhere, provided the harness exports per-iteration or per-round samples | `criterion` (Rust), `google-benchmark` (C / C++), `jmh` (JVM), `pytest-benchmark` / `pyperf` (Python), `tinybench` / `vitest bench` / `benchmark.js` (JS / TS), `go test -bench` (Go), `hyperfine` (any CLI) |
-| **Anything else** | Any harness, any language | `samples-json`: a documented file of `{arm, unit, direction, samples[]}`; a project with a bespoke harness writes this and gets the full gate |
+| **Deterministic counts** (instructions, fuel) | `iai-callgrind`, Callgrind | Compares instruction counts (`events: Ir`, `summary: <count>`). Zero-variance native baseline. |
+| **Statistical estimates & wall-clock times** | Criterion (Rust), Google Benchmark (C/C++), Go benchmarks, pytest-benchmark (Python) | Tracks point estimates and mean execution times across formats: Criterion JSON (`mean.point_estimate` in ns), Google Benchmark JSON (`cpu_time`/`real_time` in declared `time_unit`), Go benchmark text (`BenchmarkName ... ns/op`), and Python `pytest-benchmark` JSON (`stats.mean` in seconds). |
 
-Rules, from expanse's benchmark history:
+Rules:
+- Regressions exceeding `tolerance_pct` (default: 0.5%) are flagged as errors (or configured severity).
+- Directives (`allow-regression: <benchmark-name-or-file> <reason>`) lift regressions for specific subjects. Go benchmark `GOMAXPROCS` suffixes (`BenchmarkSearch-8` -> `BenchmarkSearch`), parameterized sub-benchmarks (`BM_SetInsert/1024` -> `BM_SetInsert`), and pytest test module prefixes are normalized so overrides match reliably.
+- Missing baseline files or unparseable non-empty files fail closed.
 
-- The claim passes only if the interval's **conservative bound** clears the floor; a point estimate is never compared. A degraded interval method (`bc`, `clamped`, `degenerate`) is reported by name, never silently substituted.
-- Head and base are measured **in the same job on the same machine**; a missing or unbuildable baseline is exit `2`, not "no regressions" (expanse's residual gap), and fewer than half of the base's arms parsed is fatal.
-- JIT and GC runtimes need warm-up and fork isolation; the adapter records the harness's own settings (JMH forks and warm-up iterations, V8 flags) in the artifact so two runs are comparable or visibly not.
-- Benchmark artifacts carry host class, estimator, and load-snapshot provenance; a contaminated run is discarded, not averaged in.
-- `allow-regression:` per §4.
-
-Per the math-first rule, the statistics ship as cited, unit-tested functions with pinned reference values **before** this gate is enabled anywhere.
 
 ---
 

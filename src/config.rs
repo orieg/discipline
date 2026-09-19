@@ -499,10 +499,18 @@ impl Default for BenchRegressionGate {
             severity: Severity::Error,
             exempt_paths: Vec::new(),
             tolerance_pct: 0.5,
-            paths: ["target/iai/**", "**/callgrind.*", "target/criterion/**"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            paths: [
+                "target/iai/**",
+                "**/callgrind.*",
+                "target/criterion/**",
+                "**/*benchmark*.json",
+                "**/*benchmarks*.json",
+                "**/*benchmark*.log",
+                "**/*benchmark*.txt",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         }
     }
 }

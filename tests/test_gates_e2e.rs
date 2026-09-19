@@ -2417,3 +2417,135 @@ fn bench_regression_tracks_criterion_estimates_and_accepts_override() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(run.titles("bench-regression").is_empty());
 }
+
+#[test]
+fn bench_regression_tracks_go_benchmarks_and_accepts_override() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let go_base = "\
+goos: linux
+goarch: amd64
+BenchmarkSearch-8              100000             10.00 ns/op
+";
+    repo.write("benchmarks/go_benchmark.txt", go_base);
+    repo.commit("bench: baseline go benchmark");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // 1. Regression > 0.5% tolerance fails
+    let go_regressed = "\
+goos: linux
+goarch: amd64
+BenchmarkSearch-8              100000             12.50 ns/op
+";
+    repo.write("benchmarks/go_benchmark.txt", go_regressed);
+    repo.commit("bench: regressed go benchmark");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("bench-regression"),
+        vec!["Benchmark Performance Regressed"]
+    );
+
+    // 2. Scoped directive lifts regression (using base benchmark name without GOMAXPROCS suffix)
+    repo.write(
+        "body.md",
+        "Summary\n\nallow-regression: BenchmarkSearch added unicode normalization\n",
+    );
+    let run = repo.check(&["--pr-body-file", "body.md"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.titles("bench-regression").is_empty());
+}
+
+#[test]
+fn bench_regression_tracks_google_benchmark_json_and_accepts_override() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let google_base = r#"{
+  "benchmarks": [
+    {
+      "name": "BM_SetInsert/1024",
+      "cpu_time": 100.0,
+      "time_unit": "ns"
+    }
+  ]
+}"#;
+    repo.write("build/benchmarks.json", google_base);
+    repo.commit("bench: baseline google benchmark");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // 1. Regression > 0.5% tolerance fails
+    let google_regressed = r#"{
+  "benchmarks": [
+    {
+      "name": "BM_SetInsert/1024",
+      "cpu_time": 105.0,
+      "time_unit": "ns"
+    }
+  ]
+}"#;
+    repo.write("build/benchmarks.json", google_regressed);
+    repo.commit("bench: regressed google benchmark");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("bench-regression"),
+        vec!["Benchmark Performance Regressed"]
+    );
+
+    // 2. Scoped directive lifts regression (matching base name before slash)
+    repo.write(
+        "body.md",
+        "Summary\n\nallow-regression: BM_SetInsert widened key range\n",
+    );
+    let run = repo.check(&["--pr-body-file", "body.md"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.titles("bench-regression").is_empty());
+}
+
+#[test]
+fn bench_regression_tracks_pytest_benchmark_json_and_accepts_override() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let pytest_base = r#"{
+  "benchmarks": [
+    {
+      "name": "test_serialize",
+      "stats": {
+        "mean": 0.0010
+      }
+    }
+  ]
+}"#;
+    repo.write("reports/pytest_benchmarks.json", pytest_base);
+    repo.commit("bench: baseline pytest benchmark");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    // 1. Regression > 0.5% tolerance fails
+    let pytest_regressed = r#"{
+  "benchmarks": [
+    {
+      "name": "test_serialize",
+      "stats": {
+        "mean": 0.0015
+      }
+    }
+  ]
+}"#;
+    repo.write("reports/pytest_benchmarks.json", pytest_regressed);
+    repo.commit("bench: regressed pytest benchmark");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("bench-regression"),
+        vec!["Benchmark Performance Regressed"]
+    );
+
+    // 2. Scoped directive lifts regression
+    repo.write(
+        "body.md",
+        "Summary\n\nallow-regression: test_serialize added deep validation\n",
+    );
+    let run = repo.check(&["--pr-body-file", "body.md"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.titles("bench-regression").is_empty());
+}

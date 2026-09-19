@@ -655,7 +655,7 @@
     <!-- Stat Bar -->
     <div class="stat-bar">
       <div class="stat-item">
-        <h3>11+</h3>
+        <h3>12</h3>
         <p>Active Fail-Closed Gates</p>
       </div>
       <div class="stat-item">
@@ -709,6 +709,21 @@
 
       <div class="card">
         <div>
+          <div class="card-icon-box">&#x23f1;&#xfe0f;</div>
+          <h3>Multi-Language Benchmark Sentinel</h3>
+          <p>Watches micro-benchmark results across revisions, flagging performance cliffs against the merge-base. Natively parses Callgrind instruction counts, Criterion estimates, Go benchmarks, pytest-benchmark, and Google Benchmark JSON.</p>
+        </div>
+        <div class="card-tags">
+          <span class="card-tag">Callgrind / IAI</span>
+          <span class="card-tag">Criterion</span>
+          <span class="card-tag">Go ns/op</span>
+          <span class="card-tag">pytest</span>
+          <span class="card-tag">Google Benchmark</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div>
           <div class="card-icon-box">&#x1f512;</div>
           <h3>Fail-Closed Engineering</h3>
           <p>If git history cannot be resolved, a clone is shallow, or a configuration file is malformed, Discipline exits with code <code>2</code>. It never yields a false-positive pass on broken pipelines or empty diff outputs.</p>
@@ -723,7 +738,7 @@
       <div class="card">
         <div>
           <div class="card-icon-box">&#x1f4ca;</div>
-          <h3>Native Native MR & PR Reporting</h3>
+          <h3>Native MR & PR Reporting</h3>
           <p>Discipline emits industry-standard reports without external plugins: GitLab Code Quality diffs, JUnit test widgets, GitHub PR comments, GitHub Actions Annotations, and SARIF security tabs.</p>
         </div>
         <div class="card-tags">
@@ -937,6 +952,13 @@ discipline self-test</div>
         </thead>
         <tbody>
           <tr>
+            <td class="gate-id">agents-md</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>Ensures <code>AGENTS.md</code> exists and agent guides (<code>CLAUDE.md</code>, <code>GEMINI.md</code>) do not fork from it.</td>
+          </tr>
+          <tr>
             <td class="gate-id">assertion-reduction</td>
             <td>Agent Guard</td>
             <td><span class="gate-badge badge-error">Error</span></td>
@@ -977,6 +999,13 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>Guards test snapshots from unauthorized updates without an explicit <code>allow-golden-update:</code> directive.</td>
+          </tr>
+          <tr>
+            <td class="gate-id">bench-regression</td>
+            <td>Bench</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust, Go, Python, C/C++</span></td>
+            <td>Tracks micro-benchmark regressions across IAI/Callgrind, Criterion, Go (ns/op), pytest, and Google Benchmark JSON.</td>
           </tr>
           <tr>
             <td class="gate-id">time-estimates</td>
@@ -1020,7 +1049,8 @@ discipline self-test</div>
         removes: tests/legacy/ replaced by proptest property suite<br>
         allow-assertion-drop: test_allocator single large allocation split into benchmark<br>
         allow-ignore: test_darwin_kqueue requires macos runner environment<br>
-        allow-golden-update: tests/snapshots/v2.snap updated for new serializer format
+        allow-golden-update: tests/snapshots/v2.snap updated for new serializer format<br>
+        allow-regression: BenchmarkSearch added unicode normalization
       </div>
     </div>
   </section>

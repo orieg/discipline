@@ -571,6 +571,36 @@ const CASES: &[Case] = &[
                 && prose.is_empty())
         },
     ),
+    (
+        "bench: multi-language parsing (go, google benchmark, pytest) and subject resolution discriminate",
+        || {
+            use crate::guards::perf::{benchmark_subjects, parse_metrics};
+            let go_sample = "BenchmarkSearch-8   100000   12.40 ns/op\n";
+            let gbench_sample = r#"{"benchmarks": [{"name": "BM_SetInsert/1024", "cpu_time": 440.0, "time_unit": "ns"}]}"#;
+            let pytest_sample = r#"{"benchmarks": [{"name": "test_serialize", "stats": {"mean": 0.000135}}]}"#;
+
+            let go_m = parse_metrics("benchmarks/go.txt", go_sample);
+            let gb_m = parse_metrics("build/bench.json", gbench_sample);
+            let py_m = parse_metrics("reports/pytest.json", pytest_sample);
+
+            let go_subjects = benchmark_subjects("benchmarks/go.txt", &go_m[0].name);
+            let gb_subjects = benchmark_subjects("build/bench.json", &gb_m[0].name);
+            let py_subjects = benchmark_subjects("reports/pytest.json", &py_m[0].name);
+
+            Ok(go_m.len() == 1
+                && go_m[0].count == 12.40
+                && go_m[0].unit == "ns/op"
+                && go_subjects.contains(&"BenchmarkSearch".to_string())
+                && gb_m.len() == 1
+                && gb_m[0].count == 440.0
+                && gb_m[0].unit == "ns"
+                && gb_subjects.contains(&"BM_SetInsert".to_string())
+                && py_m.len() == 1
+                && py_m[0].count == 0.000135
+                && py_m[0].unit == "s"
+                && py_subjects.contains(&"test_serialize".to_string()))
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {
