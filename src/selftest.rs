@@ -493,6 +493,22 @@ const CASES: &[Case] = &[
                 && facts.tests[2].ignored)
         },
     ),
+    #[cfg(feature = "lang-javascript")]
+    (
+        "javascript: strong vs weak matcher weakening is detected",
+        || {
+            use crate::ast::LanguagePack;
+            let js_pack = crate::ast::javascript::JavaScriptPack;
+            let vocab = AssertVocabulary::default();
+            let strong_src = "test('a', () => {\n  expect(x).toBe(1);\n  expect(y).toEqual(2);\n  expect(z).toHaveLength(3);\n});";
+            let weak_src = "test('a', () => {\n  expect(x).toBeTruthy();\n  expect(y).toBeDefined();\n  expect(z).toBeDefined();\n});";
+            let strong_facts = js_pack.extract("test.js", strong_src, &vocab)?;
+            let weak_facts = js_pack.extract("test.js", weak_src, &vocab)?;
+            Ok(strong_facts.tests[0].strong_asserts == 3
+                && weak_facts.tests[0].strong_asserts == 0
+                && weak_facts.tests[0].total_asserts == 3)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

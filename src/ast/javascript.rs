@@ -56,6 +56,103 @@ impl LanguagePack for JavaScriptPack {
     }
 }
 
+/// Matcher strength classification for JavaScript and TypeScript testing frameworks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatcherClass {
+    /// Strong matchers asserting specific values, equality, structures, patterns, or exceptions.
+    Strong,
+    /// Weak matchers asserting truthiness, definedness, existence, or calls without argument checks.
+    Weak,
+    /// Unknown or non-matcher methods.
+    Unknown,
+}
+
+/// Classifies a matcher property name into strong, weak, or unknown.
+pub fn classify_matcher(name: &str) -> MatcherClass {
+    match name {
+        // Strong equality / identity matchers
+        "toBe"
+        | "toEqual"
+        | "toStrictEqual"
+        | "toReturnWith"
+        | "toHaveReturnedWith"
+        | "toHaveBeenLastCalledWith"
+        | "toHaveBeenNthCalledWith"
+        | "toHaveBeenCalledWith"
+        | "toBeCalledWith"
+        | "equal"
+        | "deepEqual"
+        | "strictEqual"
+        | "eq" => MatcherClass::Strong,
+
+        // Strong pattern / snapshot / structural / numeric matchers
+        "toMatch"
+        | "toMatchObject"
+        | "toMatchSnapshot"
+        | "toMatchInlineSnapshot"
+        | "toContain"
+        | "toContainEqual"
+        | "include"
+        | "members"
+        | "deepMembers"
+        | "toHaveLength"
+        | "toHaveProperty"
+        | "lengthOf"
+        | "property"
+        | "toBeCloseTo"
+        | "toBeGreaterThan"
+        | "toBeGreaterThanOrEqual"
+        | "toBeLessThan"
+        | "toBeLessThanOrEqual"
+        | "toBeInstanceOf"
+        | "toThrow"
+        | "toThrowError"
+        | "throws"
+        | "toBeNull"
+        | "toBeNaN"
+        | "toHaveBeenCalledTimes"
+        | "toBeCalledTimes"
+        | "toHaveReturnedTimes" => MatcherClass::Strong,
+
+        // Weak matchers: existence / truthiness / broad check without payload
+        "toBeTruthy" | "toBeFalsy" | "toBeDefined" | "toBeUndefined" | "exist" | "ok"
+        | "toHaveBeenCalled" | "toBeCalled" | "toHaveReturned" | "toReturn" => MatcherClass::Weak,
+
+        _ => {
+            if name.starts_with("toBe") || name.starts_with("to") || name.starts_with("toHave") {
+                MatcherClass::Strong
+            } else {
+                MatcherClass::Unknown
+            }
+        }
+    }
+}
+
+/// True if `name` is a recognized or plausible expect matcher name.
+pub fn is_matcher(name: &str) -> bool {
+    classify_matcher(name) != MatcherClass::Unknown
+        || name.starts_with("to")
+        || name.starts_with("toHave")
+        || name.starts_with("toBe")
+}
+
+/// Returns true if `node` is part of an `expect(...)` call or method chain.
+fn is_expect_chain_node(mut node: Node, src: &[u8]) -> bool {
+    while node.kind() == "member_expression" {
+        if let Some(obj) = node.child_by_field_name("object") {
+            node = obj;
+        } else {
+            break;
+        }
+    }
+    if node.kind() == "call_expression" {
+        if let Some(func) = node.child_by_field_name("function") {
+            return func.utf8_text(src).unwrap_or("") == "expect";
+        }
+    }
+    false
+}
+
 struct JsExtractor<'a> {
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
@@ -264,13 +361,14 @@ impl<'a> JsExtractor<'a> {
         if let Some(func) = call.child_by_field_name("function") {
             let func_text = self.text(func);
 
-            // expect(x).to* matcher chain
-            if func_text.starts_with("expect(") || func.kind() == "member_expression" {
+            // expect(x).matcher() chain
+            if is_expect_chain_node(func, self.src) || func_text.starts_with("expect(") {
                 if let Some(prop) = func.child_by_field_name("property") {
                     let prop_name = self.text(prop);
-                    if prop_name.starts_with("to") {
+                    let class = classify_matcher(prop_name);
+                    if class != MatcherClass::Unknown || is_matcher(prop_name) {
                         test.total_asserts += 1;
-                        if self.is_strong_matcher(prop_name) {
+                        if class == MatcherClass::Strong {
                             test.strong_asserts += 1;
                         }
                         if self.is_tautological_expect(call, prop_name) {
@@ -302,28 +400,9 @@ impl<'a> JsExtractor<'a> {
             {
                 test.total_asserts += 1;
             }
-        } else if text.contains("expect(") && text.contains(".to") {
+        } else if text.contains("expect(") && (text.contains(".to") || text.contains(".toHave")) {
             test.total_asserts += 1;
         }
-    }
-
-    fn is_strong_matcher(&self, prop_name: &str) -> bool {
-        matches!(
-            prop_name,
-            "toBe"
-                | "toEqual"
-                | "toStrictEqual"
-                | "toMatch"
-                | "toMatchObject"
-                | "toMatchInlineSnapshot"
-                | "toMatchSnapshot"
-                | "toContain"
-                | "toContainEqual"
-                | "toHaveLength"
-                | "toHaveProperty"
-                | "toThrow"
-                | "toThrowError"
-        )
     }
 
     fn is_strong_assert_fn(&self, func_text: &str) -> bool {
@@ -511,5 +590,40 @@ describe("<Button />", () => {
         assert_eq!(facts.tests[0].name, "<Button /> > renders children");
         assert_eq!(facts.tests[0].total_asserts, 2);
         assert_eq!(facts.tests[0].tautologies, 1);
+    }
+
+    #[test]
+    fn js_matcher_classes_discriminate_strong_and_weak() {
+        let strong_src = r#"
+test("strong matchers", () => {
+    expect(a).toBe(42);
+    expect(b).toEqual({ id: 1 });
+    expect(c).toHaveLength(3);
+    expect(d).toHaveProperty("foo", "bar");
+    expect(e).toHaveBeenCalledWith(1, 2);
+});
+"#;
+        let weak_src = r#"
+test("weak matchers", () => {
+    expect(a).toBeTruthy();
+    expect(b).toBeDefined();
+    expect(c).toHaveBeenCalled();
+    expect(d).toBeFalsy();
+    expect(e).toBeUndefined();
+});
+"#;
+        let vocab = AssertVocabulary::default();
+        let strong_facts = JavaScriptPack
+            .extract("test/strong.test.js", strong_src, &vocab)
+            .unwrap();
+        let weak_facts = JavaScriptPack
+            .extract("test/weak.test.js", weak_src, &vocab)
+            .unwrap();
+
+        assert_eq!(strong_facts.tests[0].total_asserts, 5);
+        assert_eq!(strong_facts.tests[0].strong_asserts, 5);
+
+        assert_eq!(weak_facts.tests[0].total_asserts, 5);
+        assert_eq!(weak_facts.tests[0].strong_asserts, 0);
     }
 }

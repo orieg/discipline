@@ -661,6 +661,51 @@ fn f1_repro_javascript_gutted_test_with_unrelated_offsetting_test_fails_without_
 }
 
 #[test]
+fn f4_javascript_matcher_weakening_detected_and_accepts_directive() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/calc.test.js",
+        "test('calc', () => {\n    expect(1 + 1).toBe(2);\n    expect({ a: 1 }).toEqual({ a: 1 });\n    expect([1, 2]).toHaveLength(2);\n    expect({ a: 1 }).toHaveProperty('a', 1);\n    expect(spy).toHaveBeenCalledWith(42);\n});\n",
+    );
+    repo.commit("feat: initial strong js tests");
+
+    // Matcher count unchanged (5 assertions), but all weakened to weak matchers:
+    // toBe -> toBeTruthy, toEqual -> toBeDefined, toHaveLength -> toBeDefined,
+    // toHaveProperty -> toBeTruthy, toHaveBeenCalledWith -> toHaveBeenCalled
+    repo.write(
+        "tests/calc.test.js",
+        "test('calc', () => {\n    expect(1 + 1).toBeTruthy();\n    expect({ a: 1 }).toBeDefined();\n    expect([1, 2]).toBeDefined();\n    expect({ a: 1 }).toBeTruthy();\n    expect(spy).toHaveBeenCalled();\n});\n",
+    );
+    repo.commit("feat: weaken matchers to truthy and defined");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.code, 1,
+        "js matcher weakening must flag violation with exit 1: {}{}",
+        run.stdout, run.stderr
+    );
+    let outcome = run.outcome("assertion-reduction");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 1);
+    assert!(outcome["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("dropped from 5 to 0"));
+
+    // Can be excused by directive
+    let run_pass = repo.run(
+        &["check", "--base", "HEAD~1", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "allow-assertion-drop: calc intentional matcher weakening for broad compatibility",
+        )],
+    );
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("assertion-reduction");
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_pass["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn f1_repro_phpt_gutted_test_with_unrelated_offsetting_test_fails_without_directive() {
     let repo = Repo::new();
     repo.write(
