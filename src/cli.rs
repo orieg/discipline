@@ -26,6 +26,15 @@ pub enum Commands {
     /// Generate or check reference docs and schemas against sources of truth
     #[command(hide = true)]
     Docs(DocsArgs),
+    /// Install pre-commit hook in the local git repository
+    InstallHooks(InstallHooksArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct InstallHooksArgs {
+    /// Overwrite existing pre-commit hook if present
+    #[arg(short, long)]
+    pub force: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -199,4 +208,5 @@ pub enum OutputFormat {
     Junit,
     Sarif,
     Gitlab,
+    AgentPrompt,
 }

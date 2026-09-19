@@ -39,6 +39,9 @@ impl LanguagePack for RustPack {
                 .collect(),
             vocab,
             comments: Vec::new(),
+            in_fn: 0,
+            in_const: 0,
+            in_test: 0,
             facts: ParsedFileFacts {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
@@ -46,6 +49,7 @@ impl LanguagePack for RustPack {
         };
         cx.collect_comments(root);
         cx.visit(root, &mut Vec::new());
+        cx.facts.build_compile_time_test();
         Ok(cx.facts)
     }
 }
@@ -65,6 +69,9 @@ struct Extractor<'a> {
     line_starts: Vec<usize>,
     vocab: &'a AssertVocabulary,
     comments: Vec<Comment>,
+    in_fn: usize,
+    in_const: usize,
+    in_test: usize,
     facts: ParsedFileFacts,
 }
 
@@ -107,8 +114,52 @@ impl<'a> Extractor<'a> {
                 return;
             }
             "function_item" => {
-                if let Some(test) = self.test_fn(node, mods) {
+                let test_opt = self.test_fn(node, mods);
+                let is_test = test_opt.is_some();
+                if let Some(test) = test_opt {
                     self.facts.tests.push(test);
+                }
+                self.in_fn += 1;
+                if is_test {
+                    self.in_test += 1;
+                }
+                self.visit_children(node, mods);
+                if is_test {
+                    self.in_test -= 1;
+                }
+                self.in_fn -= 1;
+                return;
+            }
+            "const_item" => {
+                self.in_const += 1;
+                self.visit_children(node, mods);
+                self.in_const -= 1;
+                return;
+            }
+            "macro_invocation" => {
+                if self.in_test == 0 {
+                    if let Some(m) = node.child_by_field_name("macro") {
+                        let full_name = self.text(m);
+                        let short_name = last_segment(full_name);
+                        let is_cta = if self.in_const > 0 {
+                            self.is_assert_macro(short_name)
+                                || short_name.starts_with("const_assert")
+                                || full_name.contains("static_assertions")
+                        } else if self.in_fn == 0 {
+                            short_name.starts_with("const_assert")
+                                || full_name.contains("static_assertions")
+                                || short_name.starts_with("assert_")
+                        } else {
+                            false
+                        };
+                        if is_cta {
+                            self.facts.compile_time_asserts += 1;
+                            if self.facts.compile_time_assert_line.is_none() {
+                                self.facts.compile_time_assert_line =
+                                    Some(node.start_position().row + 1);
+                            }
+                        }
+                    }
                 }
             }
             "unsafe_block" => self.unsafe_site(node, "unsafe block"),
@@ -1055,5 +1106,46 @@ mod tests {
             "// SAFETY: custom_filler with non_null pointer",
             &custom
         ));
+    }
+
+    #[test]
+    fn compile_time_assertions_outside_tests_are_extracted() {
+        let src = r#"
+struct MyStruct {
+    a: u64,
+    b: u64,
+}
+
+const _: () = assert!(std::mem::size_of::<MyStruct>() == 16);
+const _: () = {
+    assert!(std::mem::align_of::<MyStruct>() == 8);
+    assert_eq!(std::mem::size_of::<u64>(), 8);
+};
+
+static_assertions::assert_eq_size!(MyStruct, [u8; 16]);
+const_assert!(std::mem::size_of::<MyStruct>() > 0);
+
+fn runtime_fn(x: i32) {
+    assert!(x > 0);
+}
+
+#[test]
+fn normal_test() {
+    assert_eq!(1, 1);
+}
+"#;
+        let pack = RustPack;
+        let facts = pack
+            .extract("src/lib.rs", src, &AssertVocabulary::default())
+            .unwrap();
+
+        assert_eq!(facts.compile_time_asserts, 5);
+        assert_eq!(facts.compile_time_assert_line, Some(7));
+        assert!(facts.compile_time_test.is_some());
+        let ctt = facts.compile_time_test.unwrap();
+        assert_eq!(ctt.name, "compile-time-assertions");
+        assert_eq!(ctt.total_asserts, 5);
+        assert_eq!(ctt.strong_asserts, 5);
+        assert_eq!(facts.tests.len(), 1);
     }
 }

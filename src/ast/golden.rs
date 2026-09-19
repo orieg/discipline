@@ -94,6 +94,7 @@ impl LanguagePack for GoldenPack {
             unsafe_sites: Vec::new(),
             escape_hatches: Vec::new(),
             has_parse_errors,
+            ..Default::default()
         })
     }
 }

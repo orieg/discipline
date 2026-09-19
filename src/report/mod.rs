@@ -25,6 +25,7 @@ pub fn format_report_content(
         OutputFormat::Junit => Ok(junit::format_junit(summary, fail_on_warnings)),
         OutputFormat::Sarif => Ok(serde_json::to_string_pretty(&sarif::format_sarif(summary))?),
         OutputFormat::Gitlab => Ok(gitlab::format_gitlab(summary)),
+        OutputFormat::AgentPrompt => Ok(format_agent_prompt(summary)),
     }
 }
 
@@ -51,6 +52,7 @@ pub fn render_report(
             )
         }
         OutputFormat::Gitlab => println!("{}", gitlab::format_gitlab(summary)),
+        OutputFormat::AgentPrompt => print!("{}", format_agent_prompt(summary)),
     }
     Ok(())
 }
@@ -326,4 +328,247 @@ fn render_step_outputs(
     writeln!(file, "failed_gates={}", fired.join(","))?;
     writeln!(file, "overridden_gates={}", overridden.join(","))?;
     Ok(())
+}
+
+/// Formats check violations into an actionable prompt for autonomous AI coding agents.
+/// Guarantees that override directive syntax is never exposed to the agent.
+pub fn format_agent_prompt(summary: &CheckSummary) -> String {
+    let violations: Vec<&Violation> = summary.violations().collect();
+
+    if violations.is_empty() {
+        return "No discipline violations found.\n".to_string();
+    }
+
+    let mut out = String::new();
+    out.push_str(
+        "Discipline gatekeeper detected violations in your changes. Please fix each issue:\n\n",
+    );
+
+    for (idx, v) in violations.iter().enumerate() {
+        let loc = location(v).unwrap_or_else(|| "global".to_string());
+        let repair = repair_action_for_violation(v);
+        out.push_str(&format!(
+            "### Issue {} [{}]: {}\n- Location: {}\n- Problem: {}\n- Repair: {}\n\n",
+            idx + 1,
+            v.gate,
+            v.title,
+            loc,
+            v.message,
+            repair
+        ));
+    }
+
+    scrub_override_directives(&out)
+}
+
+/// Provides direct, actionable repair guidance for a violation without mentioning escape hatches.
+pub fn repair_action_for_violation(v: &Violation) -> String {
+    let raw = match v.gate {
+        "assertion-reduction" => {
+            "Restore the assertions that were removed or weakened to match or exceed the original assertion count.".to_string()
+        }
+        "vacuous-tests" => {
+            "Add substantive assertions that verify the behavior of the unit under test so the test can fail if behavior regresses.".to_string()
+        }
+        "ignored-tests" => {
+            "Remove #[ignore] or skip annotations and fix the test so it passes cleanly.".to_string()
+        }
+        "unsafe-safety-comment" => {
+            "Add a substantive `// SAFETY:` invariant comment directly preceding the unsafe block or impl explaining why the operation is sound.".to_string()
+        }
+        "deletion-rationale" => {
+            "Restore the deleted file or test function.".to_string()
+        }
+        "time-estimates" => {
+            "Remove all time estimates, calendar durations, or sprint projections from the text. Express timelines using ordering, dependencies, or completion gates instead.".to_string()
+        }
+        "forbidden-words" => {
+            "Remove the forbidden term and replace it with precise architectural or technical layer terminology (e.g. engine, runtime, AST parser, memory hierarchy).".to_string()
+        }
+        "host-leaks" => {
+            "Remove local absolute paths, usernames, LAN IPs, or private hostnames from the file.".to_string()
+        }
+        "command" => {
+            "Fix the code or configuration so that the verification command passes cleanly.".to_string()
+        }
+        "dependency-delta" => {
+            "Remove the added dependency from the manifest and use existing in-tree dependencies or standard library features.".to_string()
+        }
+        "test-budget" => {
+            "Restore the property test runs, shrink iterations, or fuzzing parameters to meet or exceed previous thresholds.".to_string()
+        }
+        "bench-regression" => {
+            "Optimize the code to eliminate the performance or cycle count regression.".to_string()
+        }
+        "golden-tests" => {
+            "Restore or regenerate the golden test output to match expected behavior.".to_string()
+        }
+        "nul-bytes" => {
+            "Remove the null bytes from the source file.".to_string()
+        }
+        "parse-errors" => {
+            "Fix the syntax error so that the file parses cleanly.".to_string()
+        }
+        _ => {
+            if let Some(ref rem) = v.remediation {
+                if let Some(idx) = rem.find(", or justify") {
+                    format!("{}.", &rem[..idx])
+                } else if let Some(idx) = rem.find(", or document") {
+                    format!("{}.", &rem[..idx])
+                } else {
+                    rem.clone()
+                }
+            } else {
+                "Fix the violation in the indicated file and line.".to_string()
+            }
+        }
+    };
+    scrub_override_directives(&raw)
+}
+
+/// Strictly scrubs any override directive syntax, ensuring AI coding agents cannot learn bypass tokens.
+pub fn scrub_override_directives(input: &str) -> String {
+    let directive_patterns = [
+        "allow-assertion-drop",
+        "allow-command",
+        "allow-dependency",
+        "allow-test-shrink",
+        "allow-test-budget",
+        "allow-gate-weakening",
+        "allow-golden-update",
+        "allow-nul-byte",
+        "allow-nul",
+        "allow-corrupt",
+        "allow-regression",
+        "allow-bench-regression",
+        "allow-ignored-test",
+        "allow-ignore",
+        "allow-vacuous-test",
+        "allow-unsafe",
+        "discipline:allow",
+        "allow(",
+        "removes:",
+        "deletes:",
+    ];
+
+    let mut result = input.to_string();
+    for pat in &directive_patterns {
+        result = result.replace(pat, "[redacted-directive]");
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Severity;
+    use crate::guards::GateOutcome;
+
+    #[test]
+    fn test_agent_prompt_format_never_emits_directives() {
+        let mut o1 = GateOutcome::new("assertion-reduction");
+        o1.violations.push(Violation {
+            gate: "assertion-reduction",
+            severity: Severity::Error,
+            title: "Assertion Reduction In Existing Test".into(),
+            file: Some("tests/foo.rs".into()),
+            line: Some(42),
+            message: "Test `test_bar`: effective assertions dropped from 5 to 2.".into(),
+            remediation: Some("Restore the assertions, or justify the drop on its own line in the PR body or a commit message: `allow-assertion-drop: test_bar <reason>`.".into()),
+        });
+
+        let mut o2 = GateOutcome::new("command");
+        o2.violations.push(Violation {
+            gate: "command",
+            severity: Severity::Error,
+            title: "Command Gate Failed".into(),
+            file: None,
+            line: None,
+            message: "Verification command `cargo test` exited with code 101.".into(),
+            remediation: Some("Fix command failures, or bypass on its own line in PR body: `allow-command: cargo test <reason>`.".into()),
+        });
+
+        let mut o3 = GateOutcome::new("dependency-delta");
+        o3.violations.push(Violation {
+            gate: "dependency-delta",
+            severity: Severity::Error,
+            title: "Disallowed Dependency Added".into(),
+            file: Some("Cargo.toml".into()),
+            line: Some(15),
+            message: "Disallowed dependency `tokio` added.".into(),
+            remediation: Some(
+                "Remove dependency or justify: `allow-dependency: tokio <reason>`.".into(),
+            ),
+        });
+
+        let mut o4 = GateOutcome::new("deletion-rationale");
+        o4.violations.push(Violation {
+            gate: "deletion-rationale",
+            severity: Severity::Error,
+            title: "Undocumented Test Deletion".into(),
+            file: Some("tests/old.rs".into()),
+            line: Some(1),
+            message: "Deleted test `tests/old.rs`.".into(),
+            remediation: Some("Revert or document: `removes: tests/old.rs <reason>`.".into()),
+        });
+
+        let mut o5 = GateOutcome::new("unsafe-safety-comment");
+        o5.violations.push(Violation {
+            gate: "unsafe-safety-comment",
+            severity: Severity::Error,
+            title: "Undocumented Unsafe Block".into(),
+            file: Some("src/lib.rs".into()),
+            line: Some(10),
+            message: "Unsafe block lacks a // SAFETY: comment.".into(),
+            remediation: Some(
+                "Add // SAFETY: comment or `discipline:allow(unsafe-safety-comment)`.".into(),
+            ),
+        });
+
+        let summary = CheckSummary {
+            base: "main".to_string(),
+            errors: 5,
+            warnings: 0,
+            overrides: 0,
+            outcomes: vec![o1, o2, o3, o4, o5],
+            planned_gates: vec![],
+        };
+
+        let prompt = format_agent_prompt(&summary);
+
+        assert!(prompt.contains("Discipline gatekeeper detected violations"));
+        assert!(prompt.contains("Location: tests/foo.rs:42"));
+        assert!(
+            prompt.contains("Problem: Test `test_bar`: effective assertions dropped from 5 to 2.")
+        );
+        assert!(prompt.contains("Repair: Restore the assertions"));
+        assert!(prompt.contains("Repair: Add a substantive `// SAFETY:` invariant comment"));
+
+        let forbidden_tokens = [
+            "allow-assertion-drop",
+            "allow-command",
+            "allow-dependency",
+            "allow-test-shrink",
+            "allow-test-budget",
+            "allow-gate-weakening",
+            "allow-golden-update",
+            "allow-nul",
+            "allow-regression",
+            "allow-ignore",
+            "allow-ignored-test",
+            "allow-vacuous-test",
+            "allow-unsafe",
+            "discipline:allow",
+            "allow(",
+            "removes:",
+            "deletes:",
+        ];
+
+        for token in forbidden_tokens {
+            assert!(
+                !prompt.contains(token),
+                "agent-prompt leaked forbidden directive token: '{token}'\nFull prompt:\n{prompt}"
+            );
+        }
+    }
 }

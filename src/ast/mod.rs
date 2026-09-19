@@ -216,13 +216,56 @@ pub enum EscapeHatchSite {
     },
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ParsedFileFacts {
     pub tests: Vec<TestFn>,
     pub unsafe_sites: Vec<UnsafeSite>,
     pub escape_hatches: Vec<EscapeHatchSite>,
+    /// Number of compile-time assertions outside tests (e.g. `const _: () = assert!(...)`, `static_assert`).
+    pub compile_time_asserts: usize,
+    /// Line of the first compile-time assertion (if any).
+    pub compile_time_assert_line: Option<usize>,
+    /// Synthesized test representing compile-time assertions for pair matching.
+    pub compile_time_test: Option<TestFn>,
     /// The grammar could not parse part of the file; facts may be incomplete.
     pub has_parse_errors: bool,
+}
+
+impl Default for ParsedFileFacts {
+    fn default() -> Self {
+        Self {
+            tests: Vec::new(),
+            unsafe_sites: Vec::new(),
+            escape_hatches: Vec::new(),
+            compile_time_asserts: 0,
+            compile_time_assert_line: None,
+            compile_time_test: Some(TestFn {
+                name: "compile-time-assertions".to_string(),
+                line: 1,
+                total_asserts: 0,
+                strong_asserts: 0,
+                tautologies: 0,
+                ignored: false,
+                should_panic: false,
+            }),
+            has_parse_errors: false,
+        }
+    }
+}
+
+impl ParsedFileFacts {
+    /// Builds the synthesized `compile-time-assertions` test from facts.
+    pub fn build_compile_time_test(&mut self) {
+        self.compile_time_test = Some(TestFn {
+            name: "compile-time-assertions".to_string(),
+            line: self.compile_time_assert_line.unwrap_or(1),
+            total_asserts: self.compile_time_asserts,
+            strong_asserts: self.compile_time_asserts,
+            tautologies: 0,
+            ignored: false,
+            should_panic: false,
+        });
+    }
 }
 
 /// Backwards compatibility alias for [`ParsedFileFacts`].

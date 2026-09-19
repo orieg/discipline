@@ -80,6 +80,24 @@ When a change touches source files in a language without an active pack, each AS
   - Assertion weakening (e.g. `assert_eq!(a, b)` -> `assert!(a == b)` or `assert!(a.is_some())`).
   - Replacing strong matchers with truthiness checks (e.g. `expect(x).toEqual(y)` -> `expect(x).toBeTruthy()`).
   - Replacing assertions with tautologies (`assert!(true)`, `assert_eq!(x, x)`).
+  - Deleting compile-time invariant assertions outside tests (e.g. `const _: () = assert!(...);`, `static_assertions::*`, `const_assert!`, C/C++ `static_assert`).
+- **Compile-Time Invariant Protection:**
+  In addition to test functions, `assertion-reduction` tracks compile-time assertions outside test functions (struct sizes, field alignments, type layout invariants, and C/C++ `static_assert`). Deleting or removing compile-time guards triggers an assertion reduction violation on `Test compile-time-assertions`:
+  ```rust
+  // BASE (protected layout guard):
+  const _: () = assert!(std::mem::size_of::<PacketHeader>() == 64);
+  const _: () = assert!(std::mem::align_of::<PacketHeader>() == 8);
+
+  // HEAD (align_of guard stealthily deleted — rejected):
+  const _: () = assert!(std::mem::size_of::<PacketHeader>() == 64);
+  ```
+  Can be lifted when intentionally modifying type layouts using `allow-assertion-drop: compile-time-assertions <reason>` or `allow-assertion-drop: <file> <reason>`.
+- **Zero-Allocation Test Pattern:**
+  High-assurance repositories enforce zero-allocation invariants in critical hot paths by asserting allocator counters (e.g., comparing before-and-after allocated byte counts) or calling zero-allocation harnesses (`assert_no_alloc(|| { ... })`). Existing gates protect this pattern end-to-end without requiring an intrusive runtime allocator sentinel inside Discipline:
+  - If an agent removes or weakens the allocation assertion (`assert_eq!(before, after)`), `assertion-reduction` catches the reduction.
+  - If an agent empties the allocation test body or uses a constant check, `vacuous-tests` rejects it.
+  - If an agent stealth-deletes the zero-allocation test function, `deletion-rationale` blocks the deletion unless justified with `removes:`.
+  - If an agent marks the test `#[ignore]` or skips it, `ignored-tests` flags the change.
 - **Failing diff example (rejected):**
   ```rust
   // BASE:

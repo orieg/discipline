@@ -1,6 +1,8 @@
 use anyhow::{bail, Context as _, Result};
 use clap::Parser;
-use discipline::cli::{CheckArgs, Cli, Commands, ConfigArgs, DocsArgs, SuiteChoice};
+use discipline::cli::{
+    CheckArgs, Cli, Commands, ConfigArgs, DocsArgs, InstallHooksArgs, SuiteChoice,
+};
 use discipline::config::{split_list, DisciplineConfig, Overrides, GATES, HOSTNAME_DENYLIST_ENV};
 use discipline::gitctx::GitCtx;
 use discipline::guards::{run_checks, Context};
@@ -48,6 +50,7 @@ fn run() -> Result<bool> {
         Commands::Schema => schema(),
         Commands::SelfTest => discipline::selftest::run(),
         Commands::Docs(args) => docs(args),
+        Commands::InstallHooks(args) => install_hooks(args),
     }
 }
 
@@ -347,5 +350,86 @@ fn gates(args: &ConfigArgs) -> Result<bool> {
             g.summary
         );
     }
+    Ok(true)
+}
+
+fn install_hooks(args: InstallHooksArgs) -> Result<bool> {
+    let repo = git2::Repository::discover(".").context(
+        "cannot install hooks: current directory is not a git repository (no .git directory found)",
+    )?;
+    let git_dir = repo.path();
+    let hooks_dir = git_dir.join("hooks");
+    if !hooks_dir.exists() {
+        std::fs::create_dir_all(&hooks_dir).with_context(|| {
+            format!("failed to create hooks directory: {}", hooks_dir.display())
+        })?;
+    }
+
+    let pre_commit_path = hooks_dir.join("pre-commit");
+    let hook_content =
+        "#!/bin/sh\n# Discipline pre-commit sentinel\nexec discipline check --staged\n";
+
+    if pre_commit_path.exists() {
+        let existing = std::fs::read_to_string(&pre_commit_path).with_context(|| {
+            format!(
+                "failed to read existing hook: {}",
+                pre_commit_path.display()
+            )
+        })?;
+        if existing.contains("discipline check") {
+            println!(
+                "{} pre-commit hook already configured for discipline at {}",
+                style::green("ok:"),
+                pre_commit_path.display()
+            );
+            return Ok(true);
+        }
+
+        if args.force {
+            std::fs::write(&pre_commit_path, hook_content).with_context(|| {
+                format!("failed to overwrite hook: {}", pre_commit_path.display())
+            })?;
+            println!(
+                "{} overwrote pre-commit hook with discipline sentinel at {}",
+                style::green("ok:"),
+                pre_commit_path.display()
+            );
+        } else {
+            let mut updated = existing;
+            if !updated.ends_with('\n') {
+                updated.push('\n');
+            }
+            updated
+                .push_str("\n# Discipline pre-commit sentinel\nexec discipline check --staged\n");
+            std::fs::write(&pre_commit_path, updated)
+                .with_context(|| format!("failed to update hook: {}", pre_commit_path.display()))?;
+            println!(
+                "{} appended discipline pre-commit sentinel to {}",
+                style::green("ok:"),
+                pre_commit_path.display()
+            );
+        }
+    } else {
+        std::fs::write(&pre_commit_path, hook_content)
+            .with_context(|| format!("failed to write hook: {}", pre_commit_path.display()))?;
+        println!(
+            "{} installed discipline pre-commit hook at {}",
+            style::green("ok:"),
+            pre_commit_path.display()
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(&pre_commit_path, perms).with_context(|| {
+            format!(
+                "failed to set 0755 permissions on {}",
+                pre_commit_path.display()
+            )
+        })?;
+    }
+
     Ok(true)
 }

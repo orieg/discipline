@@ -452,6 +452,22 @@ pub fn match_tests(files: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>,
         }
     }
 
+    // 5. Compile-time assertion pairing
+    for ff in files {
+        if let (Some(b_facts), Some(h_facts)) = (&ff.base, &ff.head) {
+            if let (Some(b), Some(h)) = (&b_facts.compile_time_test, &h_facts.compile_time_test) {
+                if b.total_asserts > 0 || h.total_asserts > 0 {
+                    pairs.push(TestPair {
+                        path: &ff.file.path,
+                        base: b,
+                        head: h,
+                        forced: false,
+                    });
+                }
+            }
+        }
+    }
+
     (pairs, removed, added)
 }
 
@@ -575,6 +591,29 @@ pub fn evaluate_assertion_reduction(
                         leaf_name(b),
                     )
                 })
+                .or_else(|| {
+                    if leaf_name(h) == "compile-time-assertions"
+                        || leaf_name(b) == "compile-time-assertions"
+                    {
+                        let filename = p.path.rsplit('/').next().unwrap_or(p.path);
+                        tokens::find_override(
+                            directives,
+                            GATE,
+                            tokens::ALLOW_ASSERTION_DROP,
+                            p.path,
+                        )
+                        .or_else(|| {
+                            tokens::find_override(
+                                directives,
+                                GATE,
+                                tokens::ALLOW_ASSERTION_DROP,
+                                filename,
+                            )
+                        })
+                    } else {
+                        None
+                    }
+                })
         };
         if let Some(record) = allowed {
             out.overrides.push(record);
@@ -606,11 +645,13 @@ pub fn evaluate_assertion_reduction(
             settings.severity()
         };
 
+        let violation_line = if h.total_asserts > 0 { h.line } else { b.line };
+
         out.push(
             severity,
             "Assertion Reduction In Existing Test",
             Some(p.path),
-            Some(h.line),
+            Some(violation_line),
             format!("{test_label}: {what}."),
             &format!(
                 "Restore the assertions, or justify the drop on its own line in the PR body or \
@@ -879,12 +920,14 @@ mod tests {
                 unsafe_sites: vec![],
                 escape_hatches: vec![],
                 has_parse_errors: false,
+                ..Default::default()
             }),
             head: Some(RustFacts {
                 tests: vec![t2],
                 unsafe_sites: vec![],
                 escape_hatches: vec![],
                 has_parse_errors: false,
+                ..Default::default()
             }),
             newly_added_nul: false,
         }];
@@ -939,12 +982,14 @@ mod tests {
                 unsafe_sites: vec![],
                 escape_hatches: vec![],
                 has_parse_errors: false,
+                ..Default::default()
             }),
             head: Some(RustFacts {
                 tests: vec![h1],
                 unsafe_sites: vec![],
                 escape_hatches: vec![],
                 has_parse_errors: false,
+                ..Default::default()
             }),
             newly_added_nul: false,
         }];
@@ -1168,6 +1213,7 @@ mod tests {
                 }],
                 escape_hatches: vec![],
                 has_parse_errors: false,
+                ..Default::default()
             }),
             newly_added_nul: false,
         }];
@@ -1192,6 +1238,7 @@ mod tests {
                 }],
                 escape_hatches: vec![],
                 has_parse_errors: false,
+                ..Default::default()
             }),
             newly_added_nul: false,
         }];
@@ -1258,5 +1305,77 @@ mod tests {
                 .unwrap();
         assert_eq!(out_test_excused.violations.len(), 0);
         assert_eq!(out_test_excused.overrides.len(), 1);
+    }
+
+    #[test]
+    fn test_compile_time_assertions_drop_detected_and_overridden() {
+        let mut base_facts = ParsedFileFacts {
+            compile_time_asserts: 3,
+            compile_time_assert_line: Some(10),
+            ..Default::default()
+        };
+        base_facts.build_compile_time_test();
+
+        let mut head_facts = ParsedFileFacts {
+            compile_time_asserts: 1,
+            compile_time_assert_line: Some(10),
+            ..Default::default()
+        };
+        head_facts.build_compile_time_test();
+
+        let files = vec![FileFacts {
+            file: ChangedFile {
+                path: "src/types.rs".into(),
+                old_path: "src/types.rs".into(),
+                kind: ChangeKind::Modified,
+                added_lines: std::collections::BTreeSet::new(),
+            },
+            base: Some(base_facts),
+            head: Some(head_facts),
+            newly_added_nul: false,
+        }];
+
+        let (pairs, _removed, _added) = match_tests(&files);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].base.name, "compile-time-assertions");
+
+        let settings = crate::config::AssertionGate {
+            enabled: true,
+            severity: crate::config::Severity::Error,
+            exempt_paths: vec![],
+            ..Default::default()
+        };
+
+        // Without override -> violation
+        let out = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 1);
+        assert!(out.violations[0]
+            .message
+            .contains("effective assertions dropped from 3 to 1"));
+        assert_eq!(out.violations[0].line, Some(10));
+
+        // With override targeting compile-time-assertions -> pass
+        let directive = [crate::tokens::ParsedDirective {
+            directive: "allow-assertion-drop".to_string(),
+            reason: "compile-time-assertions size refactor".to_string(),
+            source: crate::tokens::OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let out_override =
+            evaluate_assertion_reduction(&pairs, &[], &settings, &directive, false).unwrap();
+        assert_eq!(out_override.violations.len(), 0);
+        assert_eq!(out_override.overrides.len(), 1);
+
+        // With override targeting file path -> pass
+        let file_directive = [crate::tokens::ParsedDirective {
+            directive: "allow-assertion-drop".to_string(),
+            reason: "src/types.rs size refactor".to_string(),
+            source: crate::tokens::OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let out_file_override =
+            evaluate_assertion_reduction(&pairs, &[], &settings, &file_directive, false).unwrap();
+        assert_eq!(out_file_override.violations.len(), 0);
+        assert_eq!(out_file_override.overrides.len(), 1);
     }
 }

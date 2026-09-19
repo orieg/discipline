@@ -140,6 +140,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `gates` | List every gate: id, suite, availability, and effective state |
 | `schema` | Print the JSON Schema for discipline.toml |
 | `self-test` | Run the embedded negative / positive controls against this binary |
+| `install-hooks` | Install pre-commit hook in the local git repository |
 <!-- /generated -->
 
 ### Exit Codes

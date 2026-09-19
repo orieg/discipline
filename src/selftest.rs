@@ -1128,6 +1128,63 @@ command = "cargo test"
             Ok(mutants_ok && deny_ok && loom_ok && lcov_ok)
         },
     ),
+    (
+        "ast: compile-time assertions in Rust and C/C++ are extracted outside tests",
+        || {
+            use crate::ast::LanguagePack;
+            let rust_pack = crate::ast::rust::RustPack;
+            let vocab = AssertVocabulary::default();
+            let rust_src = "const _: () = assert!(std::mem::size_of::<u64>() == 8);\nconst _: () = { assert!(true); };\n#[test]\nfn test_normal() { assert!(true); }\n";
+            let rust_facts = rust_pack.extract("src/types.rs", rust_src, &vocab)?;
+
+            let c_pack = crate::ast::c_cpp::CPack;
+            let c_src = "static_assert(sizeof(int) == 4, \"int size\");\nint test_main() { assert(1); return 0; }\n";
+            let c_facts = c_pack.extract("src/types.c", c_src, &vocab)?;
+
+            Ok(rust_facts.compile_time_asserts == 2
+                && rust_facts.compile_time_test.as_ref().map(|t| t.total_asserts) == Some(2)
+                && rust_facts.tests.len() == 1
+                && c_facts.compile_time_asserts == 1
+                && c_facts.compile_time_test.as_ref().map(|t| t.total_asserts) == Some(1)
+                && c_facts.tests.len() == 1)
+        },
+    ),
+    (
+        "report: agent-prompt format emits repair instructions with zero directive tokens",
+        || {
+            use crate::guards::{CheckSummary, GateOutcome, Violation};
+            use crate::config::Severity;
+            use crate::report::format_agent_prompt;
+
+            let mut o = GateOutcome::new("assertion-reduction");
+            o.violations.push(Violation {
+                gate: "assertion-reduction",
+                severity: Severity::Error,
+                title: "Assertion Reduction In Existing Test".into(),
+                file: Some("src/lib.rs".into()),
+                line: Some(10),
+                message: "effective assertions dropped from 2 to 0".into(),
+                remediation: Some("Restore the assertions, or justify the drop: `allow-assertion-drop: foo <reason>`.".into()),
+            });
+
+            let summary = CheckSummary {
+                base: "main".into(),
+                errors: 1,
+                warnings: 0,
+                overrides: 0,
+                outcomes: vec![o],
+                planned_gates: vec![],
+            };
+
+            let prompt = format_agent_prompt(&summary);
+            let has_repair = prompt.contains("Repair: Restore the assertions");
+            let leaks_directive = prompt.contains("allow-assertion-drop")
+                || prompt.contains("discipline:allow")
+                || prompt.contains("removes:");
+
+            Ok(has_repair && !leaks_directive)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

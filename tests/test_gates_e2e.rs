@@ -4019,3 +4019,128 @@ preset = "cargo-deny"
         1
     );
 }
+
+#[test]
+fn compile_time_assertions_deletion_triggers_assertion_reduction_and_accepts_override() {
+    let repo = Repo::new();
+    let base_src = r#"
+pub struct Invariant {
+    pub a: u64,
+    pub b: u64,
+}
+
+const _: () = assert!(std::mem::size_of::<Invariant>() == 16);
+const _: () = assert!(std::mem::align_of::<Invariant>() == 8);
+"#;
+    repo.commit_base("src/lib.rs", base_src, "base: layout assertions");
+
+    // Deleting align_of assert reduces compile-time assertions from 2 to 1
+    let head_src = r#"
+pub struct Invariant {
+    pub a: u64,
+    pub b: u64,
+}
+
+const _: () = assert!(std::mem::size_of::<Invariant>() == 16);
+"#;
+    repo.write("src/lib.rs", head_src);
+
+    let run_fail = repo.check(&["--suite", "agent-guard"]);
+    assert_eq!(run_fail.code, 1);
+    let outcome_fail = run_fail.outcome("assertion-reduction");
+    assert_eq!(outcome_fail["violations"].as_array().unwrap().len(), 1);
+    let v = &outcome_fail["violations"][0];
+    assert_eq!(v["title"], "Assertion Reduction In Existing Test");
+    assert!(v["message"]
+        .as_str()
+        .unwrap()
+        .contains("compile-time-assertions"));
+    assert!(v["message"]
+        .as_str()
+        .unwrap()
+        .contains("dropped from 2 to 1"));
+
+    // Passing with allow-assertion-drop override
+    let run_pass = repo.check_with_pr(
+        &["--suite", "agent-guard"],
+        "allow-assertion-drop: compile-time-assertions align_of check no longer needed",
+    );
+    assert_eq!(run_pass.code, 0);
+    assert_eq!(run_pass.json()["overrides"], 1);
+}
+
+#[test]
+fn agent_prompt_format_produces_repair_and_never_emits_directives() {
+    let repo = Repo::new();
+    let base_src = r#"
+#[test]
+fn test_calc() {
+    assert_eq!(1 + 1, 2);
+    assert_eq!(2 + 2, 4);
+}
+"#;
+    repo.commit_base("tests/calc.rs", base_src, "base: calc tests");
+
+    // Remove one assertion on head
+    let head_src = r#"
+#[test]
+fn test_calc() {
+    assert_eq!(1 + 1, 2);
+}
+"#;
+    repo.write("tests/calc.rs", head_src);
+
+    let run = repo.run(
+        &["check", "--base", "main", "--format", "agent-prompt"],
+        &[],
+    );
+    assert_eq!(run.code, 1);
+    let out = run.stdout;
+
+    assert!(out.contains("Discipline gatekeeper detected violations in your changes"));
+    assert!(out.contains("Location: tests/calc.rs:3"));
+    assert!(out
+        .contains("Problem: Test `test_calc`: equality / pattern assertions dropped from 2 to 1"));
+    assert!(out.contains("Repair: Restore the assertions that were removed or weakened"));
+
+    // Verify ZERO directive syntax leaked
+    let forbidden = [
+        "allow-assertion-drop",
+        "allow-command",
+        "allow-dependency",
+        "discipline:allow",
+        "allow(",
+        "removes:",
+        "deletes:",
+    ];
+    for tok in forbidden {
+        assert!(!out.contains(tok), "agent-prompt leaked directive: {tok}");
+    }
+}
+
+#[test]
+fn install_hooks_creates_executable_pre_commit_hook() {
+    let repo = Repo::new();
+    let hook_path = repo.path().join(".git").join("hooks").join("pre-commit");
+    assert!(!hook_path.exists());
+
+    // Run discipline install-hooks via binary
+    let run = repo.run(&["install-hooks"], &[]);
+    assert_eq!(run.code, 0);
+    assert!(hook_path.exists());
+
+    let content = std::fs::read_to_string(&hook_path).unwrap();
+    assert!(content.contains("exec discipline check --staged"));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::metadata(&hook_path).unwrap().permissions();
+        assert_ne!(perms.mode() & 0o111, 0, "hook must be executable");
+    }
+
+    // Running again is idempotent
+    let run2 = repo.run(&["install-hooks"], &[]);
+    assert_eq!(run2.code, 0);
+    assert!(run2.stdout.contains("already configured") || run2.stdout.contains("installed"));
+}

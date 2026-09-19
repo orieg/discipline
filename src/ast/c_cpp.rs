@@ -35,6 +35,7 @@ impl LanguagePack for CPack {
             src: src.as_bytes(),
             vocab,
             is_test_path: is_c_cpp_test_path(path),
+            test_spans: Vec::new(),
             facts: ParsedFileFacts {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
@@ -80,6 +81,7 @@ impl LanguagePack for CppPack {
             src: src.as_bytes(),
             vocab,
             is_test_path: is_c_cpp_test_path(path),
+            test_spans: Vec::new(),
             facts: ParsedFileFacts {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
@@ -124,6 +126,7 @@ struct CCppExtractor<'a> {
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
+    test_spans: Vec<std::ops::Range<usize>>,
     facts: ParsedFileFacts,
 }
 
@@ -163,6 +166,38 @@ impl<'a> CCppExtractor<'a> {
 
     fn visit_root(&mut self, root: Node) {
         self.walk_scope(root);
+        self.collect_compile_time_asserts(root);
+        self.facts.build_compile_time_test();
+    }
+
+    fn is_compile_time_assert_node(&self, node: Node) -> bool {
+        let kind = node.kind();
+        if kind == "static_assert_declaration" {
+            return true;
+        }
+        if kind == "call_expression" {
+            let name = self.get_call_fn_name(node);
+            if matches!(name, "static_assert" | "_Static_assert") {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn collect_compile_time_asserts(&mut self, node: Node) {
+        let byte_pos = node.start_byte();
+        let in_test = self.test_spans.iter().any(|r| r.contains(&byte_pos));
+        if !in_test && self.is_compile_time_assert_node(node) {
+            self.facts.compile_time_asserts += 1;
+            if self.facts.compile_time_assert_line.is_none() {
+                self.facts.compile_time_assert_line = Some(node.start_position().row + 1);
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_compile_time_asserts(child);
+        }
     }
 
     fn walk_scope(&mut self, scope: Node) {
@@ -176,6 +211,7 @@ impl<'a> CCppExtractor<'a> {
             // 1. function_definition (GoogleTest macros, C ABI smoke test main, test_* fns)
             if kind == "function_definition" {
                 if let Some(test_fn) = self.try_extract_function_definition_test(node) {
+                    self.test_spans.push(node.start_byte()..node.end_byte());
                     self.facts.tests.push(test_fn);
                 }
                 i += 1;
@@ -206,6 +242,7 @@ impl<'a> CCppExtractor<'a> {
                                     should_panic: false,
                                 };
                                 self.extract_assertions_in_body(body, &mut test_fn);
+                                self.test_spans.push(call.start_byte()..body.end_byte());
                                 self.facts.tests.push(test_fn);
                                 i += 2; // skip compound_statement
                                 continue;
@@ -420,6 +457,12 @@ impl<'a> CCppExtractor<'a> {
 
     fn extract_assertions_in_body(&self, node: Node, test_fn: &mut TestFn) {
         let kind = node.kind();
+
+        if kind == "static_assert_declaration" {
+            test_fn.total_asserts += 1;
+            test_fn.strong_asserts += 1;
+            return;
+        }
 
         if kind == "call_expression" {
             let fn_name = self.get_call_fn_name(node);
@@ -911,5 +954,53 @@ void test_custom() {
             &facts.escape_hatches[1],
             EscapeHatchSite::LinterDisable { rule, .. } if rule.contains("NOLINTNEXTLINE")
         ));
+    }
+
+    #[test]
+    fn test_c_cpp_compile_time_assertions_outside_tests_are_extracted() {
+        let cpp_src = r#"
+struct InvariantStruct {
+    int x;
+    long long y;
+    static_assert(sizeof(int) == 4, "int size");
+};
+
+static_assert(sizeof(InvariantStruct) >= 8, "struct minimum size");
+
+TEST(MySuite, MyTest) {
+    EXPECT_EQ(1, 1);
+}
+"#;
+        let cpp_pack = CppPack;
+        let facts = cpp_pack
+            .extract("src/foo.cpp", cpp_src, &AssertVocabulary::default())
+            .expect("extract succeeds");
+
+        assert_eq!(facts.compile_time_asserts, 2);
+        assert_eq!(facts.compile_time_assert_line, Some(5));
+        assert!(facts.compile_time_test.is_some());
+        let ctt = facts.compile_time_test.unwrap();
+        assert_eq!(ctt.name, "compile-time-assertions");
+        assert_eq!(ctt.total_asserts, 2);
+        assert_eq!(ctt.strong_asserts, 2);
+        assert_eq!(facts.tests.len(), 1);
+
+        let c_src = r#"
+_Static_assert(sizeof(int) == 4, "int size");
+_Static_assert(sizeof(long) >= 4, "long size");
+
+int test_foo(void) {
+    assert(1);
+    return 0;
+}
+"#;
+        let c_pack = CPack;
+        let c_facts = c_pack
+            .extract("tests/test_c.c", c_src, &AssertVocabulary::default())
+            .expect("extract succeeds");
+
+        assert_eq!(c_facts.compile_time_asserts, 2);
+        assert_eq!(c_facts.compile_time_assert_line, Some(2));
+        assert_eq!(c_facts.tests.len(), 1);
     }
 }
