@@ -33,6 +33,22 @@ pub enum Commands {
     InstallHooks(InstallHooksArgs),
 }
 
+impl Commands {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Commands::Check(_) => "check",
+            Commands::Diff(_) => "diff",
+            Commands::Baseline(_) => "baseline",
+            Commands::Init(_) => "init",
+            Commands::Gates(_) => "gates",
+            Commands::Schema => "schema",
+            Commands::SelfTest => "self-test",
+            Commands::Docs(_) => "docs",
+            Commands::InstallHooks(_) => "install-hooks",
+        }
+    }
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct InstallHooksArgs {
     /// Overwrite existing pre-commit hook if present

@@ -359,8 +359,10 @@ fn render_step_outputs(
         "fail"
     };
     let mut fired: Vec<&str> = summary.violations().map(|v| v.gate).collect();
+    fired.sort_unstable();
     fired.dedup();
     let mut overridden: Vec<&str> = summary.overrides().map(|o| o.gate.as_str()).collect();
+    overridden.sort_unstable();
     overridden.dedup();
     let (passed, _failed, _disabled, examined) =
         summary.gate_counts(fail_on_warnings, fail_on_overrides);

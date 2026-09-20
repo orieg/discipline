@@ -41,10 +41,11 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
         let mut location = json!({});
         if let Some(file) = &v.file {
             let line = v.line.unwrap_or(1);
+            let uri = sanitize_sarif_uri(file);
             location = json!({
                 "physicalLocation": {
                     "artifactLocation": {
-                        "uri": file
+                        "uri": uri
                     },
                     "region": {
                         "startLine": line
@@ -134,6 +135,18 @@ fn to_pascal_case(s: &str) -> String {
     out
 }
 
+fn sanitize_sarif_uri(file: &str) -> String {
+    if file == "<pr-body>" {
+        "pr-body".to_string()
+    } else if file == "<pr-title>" {
+        "pr-title".to_string()
+    } else if file.starts_with('<') && file.ends_with('>') {
+        file.trim_matches(|c| c == '<' || c == '>').to_string()
+    } else {
+        file.replace('<', "%3C").replace('>', "%3E")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +198,44 @@ mod tests {
             res["locations"][0]["physicalLocation"]["region"]["startLine"],
             42
         );
+    }
+
+    #[test]
+    fn sanitizes_synthetic_pr_body_uri() {
+        let summary = CheckSummary {
+            base: "origin/main".to_string(),
+            errors: 1,
+            warnings: 0,
+            notes: 0,
+            overrides: 0,
+            baselined: 0,
+            outcomes: vec![GateOutcome {
+                gate: "time-estimates",
+                suite: "hygiene",
+                enabled: true,
+                examined: 1,
+                inline_exemptions: 0,
+                baselined: 0,
+                notes: Vec::new(),
+                violations: vec![Violation {
+                    gate: "time-estimates",
+                    severity: Severity::Error,
+                    title: "Time estimate in PR body".to_string(),
+                    file: Some("<pr-body>".to_string()),
+                    line: Some(1),
+                    message: "Banned duration".to_string(),
+                    remediation: Some("Remove duration".to_string()),
+                }],
+                overrides: Vec::new(),
+            }],
+            planned_gates: Vec::new(),
+        };
+
+        let val = format_sarif(&summary);
+        let uri = &val["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+            ["artifactLocation"]["uri"];
+        assert_eq!(uri, "pr-body");
+        assert!(!uri.as_str().unwrap().contains('<'));
+        assert!(!uri.as_str().unwrap().contains('>'));
     }
 }

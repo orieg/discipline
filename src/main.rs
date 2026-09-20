@@ -14,18 +14,29 @@ use std::process::ExitCode;
 /// 0 = pass, 1 = violations, 2 = the check itself could not run. Keeping the
 /// last two apart lets CI tell "the change is bad" from "the gate is broken".
 fn main() -> ExitCode {
-    match run() {
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = e.print();
+            return ExitCode::from(2);
+        }
+    };
+    let cmd_name = cli.command.name();
+    match run_command(cli.command) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
         Err(e) => {
-            eprintln!("{} {e:#}", style::red("discipline: could not check:"));
+            eprintln!(
+                "{}: {e:#}",
+                style::red(&format!("discipline {cmd_name}: error"))
+            );
             ExitCode::from(2)
         }
     }
 }
 
-fn run() -> Result<bool> {
-    match Cli::parse().command {
+fn run_command(command: Commands) -> Result<bool> {
+    match command {
         Commands::Check(args) => check(args),
         Commands::Diff(args) => check(CheckArgs {
             config: args.config,
