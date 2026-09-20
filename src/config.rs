@@ -276,6 +276,7 @@ pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
 pub enum Severity {
     Error,
     Warning,
+    Note,
 }
 
 impl std::fmt::Display for Severity {
@@ -283,6 +284,7 @@ impl std::fmt::Display for Severity {
         match self {
             Severity::Error => write!(f, "error"),
             Severity::Warning => write!(f, "warning"),
+            Severity::Note => write!(f, "note"),
         }
     }
 }
@@ -340,7 +342,7 @@ impl Default for MetaConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Gates {
-    pub agents_md: BasicGate,
+    pub agents_md: AgentsMdGate,
     pub assertion_reduction: AssertionGate,
     pub vacuous_tests: AssertionGate,
     pub ignored_tests: IgnoredTestsGate,
@@ -390,6 +392,7 @@ macro_rules! impl_gate_settings {
 }
 impl_gate_settings!(
     BasicGate,
+    AgentsMdGate,
     IgnoredTestsGate,
     UnsafeSafetyCommentGate,
     AssertionGate,
@@ -418,6 +421,24 @@ impl_gate_settings!(
     MiriGate,
     SanitizersGate
 );
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentsMdGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+}
+
+impl Default for AgentsMdGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Warning,
+            exempt_paths: Vec::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -569,7 +590,7 @@ impl Default for TimeEstimateGate {
     fn default() -> Self {
         Self {
             enabled: true,
-            severity: Severity::Error,
+            severity: Severity::Warning,
             exempt_paths: Vec::new(),
             include: vec!["**/*.md".to_string()],
             extra_patterns: Vec::new(),
@@ -588,6 +609,8 @@ pub struct PiiGate {
     pub exempt_paths: Vec<String>,
     pub home_paths: bool,
     pub lan_ips: bool,
+    /// When true, redacts private RFC 1918 LAN IP addresses in findings instead of echoing them for triage.
+    pub redact_lan_ips: bool,
     pub secrets: bool,
     /// Home-directory user names that are not a leak (CI users, placeholders).
     pub allowed_users: Vec<String>,
@@ -614,6 +637,7 @@ impl Default for PiiGate {
             exempt_paths: Vec::new(),
             home_paths: true,
             lan_ips: true,
+            redact_lan_ips: false,
             secrets: true,
             allowed_users: [
                 "runner", "user", "username", "you", "me", "name", "example", "shared",
@@ -724,7 +748,7 @@ impl Default for BenchRegressionGate {
     fn default() -> Self {
         Self {
             enabled: true,
-            severity: Severity::Error,
+            severity: Severity::Warning,
             exempt_paths: [
                 ".github/**",
                 ".gitea/**",

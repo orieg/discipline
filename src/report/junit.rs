@@ -18,6 +18,7 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
             let has_failure = o.violations.iter().any(|v| match v.severity {
                 Severity::Error => true,
                 Severity::Warning => fail_on_warnings,
+                Severity::Note => false,
             });
             if has_failure {
                 total_failures += 1;
@@ -50,6 +51,7 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
                 let has_failure = o.violations.iter().any(|v| match v.severity {
                     Severity::Error => true,
                     Severity::Warning => fail_on_warnings,
+                    Severity::Note => false,
                 });
                 if has_failure {
                     suite_failures += 1;
@@ -122,6 +124,7 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
                     let sev_type = match v.severity {
                         Severity::Error => "error",
                         Severity::Warning => "warning",
+                        Severity::Note => "note",
                     };
                     let title = escape_xml(&v.title);
                     let mut details = String::new();
@@ -179,7 +182,9 @@ mod tests {
             base: "origin/main".to_string(),
             errors: 0,
             warnings: 0,
+            notes: 0,
             overrides: 0,
+            baselined: 0,
             outcomes: vec![
                 GateOutcome {
                     gate: "agents-md",
@@ -187,6 +192,7 @@ mod tests {
                     enabled: true,
                     examined: 1,
                     inline_exemptions: 0,
+                    baselined: 0,
                     notes: Vec::new(),
                     violations: Vec::new(),
                     overrides: Vec::new(),
@@ -197,6 +203,7 @@ mod tests {
                     enabled: false,
                     examined: 0,
                     inline_exemptions: 0,
+                    baselined: 0,
                     notes: Vec::new(),
                     violations: Vec::new(),
                     overrides: Vec::new(),
@@ -221,13 +228,16 @@ mod tests {
             base: "origin/main".to_string(),
             errors: 1,
             warnings: 0,
+            notes: 0,
             overrides: 0,
+            baselined: 0,
             outcomes: vec![GateOutcome {
                 gate: "assertion-reduction",
                 suite: "agent-guard",
                 enabled: true,
                 examined: 1,
                 inline_exemptions: 0,
+                baselined: 0,
                 notes: Vec::new(),
                 violations: vec![Violation {
                     gate: "assertion-reduction",

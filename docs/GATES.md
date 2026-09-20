@@ -79,6 +79,40 @@ When a change touches source files in a language without an active pack, each AS
 
 ---
 
+## Confidence & Stakes Severity Hierarchy
+
+Discipline organizes violation severity into a 3-tier hierarchy based on detection confidence and operational stakes:
+
+1. **`error` (Blocking, Exit 1):** High-confidence violations representing clear security compromises, assertion drops, or intentional test erosions. Fails CI by default.
+2. **`warning` (Non-blocking, Exit 0 unless `--fail-on-warnings`):** Heuristic or prose scans where context matters, or performance/benchmark gates that may fluctuate across hardware. Visible in all reports; promoted to blocking with `--fail-on-warnings`.
+3. **`note` (Informational, Exit 0):** Advisory annotations (e.g. conditional skips on target platforms, stale baseline entries, unanalysed languages). Mapped to `note` in SARIF, `info` in GitLab Code Quality, and GitHub Actions `notice` annotations.
+
+### Default Severity by Gate
+
+While most integrity and correctness gates default to `error`, gates with higher false-positive susceptibility on brownfield repositories default to `warning`:
+
+| Gate | Default Severity | Rationale |
+|---|---|---|
+| `time-estimates` | `warning` | Prose sweeps can catch calendar references or historical notes in documentation. Measured at v0.4.2: 51 errors across `orieg/expanse` and 26 in `orieg/php-judy`, nearly all pre-existing documentation. Defaults to warning so new adopters can triage without blocking PRs. |
+| `bench-regression` | `warning` | Hardware jitter, noisy CI environments, and varying runner CPUs can trigger spurious regressions on wall-clock benchmarks. Projects requiring strict performance gates can configure `severity = "error"` or run with `--fail-on-warnings`. |
+| `agents-md` | `warning` | Forked or missing `AGENTS.md` guidance is an engineering hygiene issue rather than a broken build or code safety defect. |
+| *All other gates* | `error` | Syntactic regressions, assertion drops, vacuous tests, safety decay, and secret leaks default to blocking errors. |
+
+### Finding-Level Severity Overrides
+
+Certain gates distinguish high-confidence rules from heuristic indicators within the same gate:
+
+- **`shell-secrets`:**
+  - **High-confidence token rules (`error`):** Structured secrets matching canonical token entropy or formats (`TOKEN-GHP` `ghp_`, `TOKEN-AWS` `AKIA...`, `TOKEN-SLACK` `xox[bap]-`, `TOKEN-OPENAI` `sk-...`, `TOKEN-ANTHROPIC`, `TOKEN-PRIVATE-KEY` PEM headers).
+  - **Heuristic rules (`warning`):** Command-line arguments and pipe constructs (`ARGV-ENV`, `FLAG-PASSWD`, `INJECT-PIPE`).
+- **`ignored-tests`:**
+  - **Unconditional skips (`error`):** Tests newly disabled via `#[ignore]`, `@pytest.mark.skip`, `xit`, or `@Disabled` without justification.
+  - **Conditional target skips (`note`):** Platform-predicated skips (`#[cfg_attr(windows, ignore)]`, `skipif(sys.platform == 'win32')`).
+- **`pii` / Workstation Hygiene:**
+  - Private RFC 1918 LAN IPs (`192.168.x.x`, `10.x.x.x`, `172.16.x.x`) default to warning/redaction, but can be exempted for local triage via `gates.pii.lan_ips = false`.
+
+---
+
 ## Shipped Gates
 
 ### Pillar 1: Agent Conformance and Diff Guard (`agent-guard`)
@@ -350,6 +384,9 @@ When a change touches source files in a language without an active pack, each AS
   - `INJECT-PIPE` flags piping remote network streams directly into shell interpreters (`curl ... | sh` / `curl ... | bash`) because uninspected piped execution is vulnerable to network truncation, connection drops leading to partial execution, and unverified execution.
   - Checksum-verifying installers that inspect payloads internally: when an installer script internally fetches release assets, verifies their cryptographic SHA-256 checksum against `SHA256SUMS`, and only unpacks or executes upon hash verification, the downloaded binary payload is verified.
   - However, download-verify-run (`curl -fsSL -o install.sh ... && bash install.sh`) remains the primary recommended pattern so operators can inspect the script before execution and avoid partial execution on interrupted connections.
+- **Finding Severity Breakdown:**
+  - `error`: High-entropy/structured secret tokens (`TOKEN-GHP` `ghp_`, `TOKEN-AWS` `AKIA...`, `TOKEN-SLACK` `xox[bap]-`, `TOKEN-OPENAI` `sk-...`, `TOKEN-ANTHROPIC`, `TOKEN-PRIVATE-KEY` PEM blocks).
+  - `warning`: Heuristic argument and piping patterns (`ARGV-ENV`, `ARGV-DOCKER`, `ARGV-INLINE`, `FLAG-PASSWD`, `INJECT-PIPE`, `INJECT-XARGS`).
 - **Lifting directive:** `secrets-argv-ok: <file-or-line> <reason>` in PR body or commit, or inline `discipline:allow(shell-secrets)`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_secret_patterns`, `allow_patterns`, `diff_only`.
 

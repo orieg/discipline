@@ -144,6 +144,7 @@ fn render_terminal_to_writer<W: Write>(
         let icon = match v.severity {
             Severity::Error => style::red("error"),
             Severity::Warning => style::yellow("warning"),
+            Severity::Note => style::cyan("note"),
         };
         let loc = location(v).map(|l| format!(" [{l}]")).unwrap_or_default();
         writeln!(
@@ -173,9 +174,14 @@ fn render_terminal_to_writer<W: Write>(
         "\ngates:  {} passed, {} failed{} ({} {} examined)",
         passed, failed, disabled_suffix, examined, items_label
     )?;
+    let baselined_suffix = if summary.baselined > 0 {
+        format!("  baselined: {}", summary.baselined)
+    } else {
+        String::new()
+    };
     writeln!(
         w,
-        "errors: {}  warnings: {}  overrides: {}",
+        "errors: {}  warnings: {}  overrides: {}{baselined_suffix}",
         summary.errors, summary.warnings, total_ov
     )?;
     if fail_on_overrides && total_ov > 0 {
@@ -205,6 +211,7 @@ fn render_annotations(summary: &CheckSummary) {
         let level = match v.severity {
             Severity::Error => "error",
             Severity::Warning => "warning",
+            Severity::Note => "notice",
         };
         let mut props = format!(
             "title={}",
@@ -251,10 +258,15 @@ fn render_step_summary(
     };
     let items_label = if examined == 1 { "item" } else { "items" };
     let total_ov = summary.total_overrides();
+    let baselined_part = if summary.baselined > 0 {
+        format!(" · {} baselined", summary.baselined)
+    } else {
+        String::new()
+    };
     writeln!(
         file,
-        "**Summary:** {} passed, {} failed{} ({} {} examined) · {} errors · {} warnings · {} overrides\n",
-        passed, failed, disabled_suffix, examined, items_label, summary.errors, summary.warnings, total_ov
+        "**Summary:** {} passed, {} failed{} ({} {} examined) · {} errors · {} warnings · {} overrides{}\n",
+        passed, failed, disabled_suffix, examined, items_label, summary.errors, summary.warnings, total_ov, baselined_part
     )?;
 
     writeln!(
@@ -355,6 +367,7 @@ fn render_step_outputs(
     writeln!(file, "errors={}", summary.errors)?;
     writeln!(file, "warnings={}", summary.warnings)?;
     writeln!(file, "overrides={}", summary.total_overrides())?;
+    writeln!(file, "baselined={}", summary.baselined)?;
     writeln!(file, "status={status}")?;
     writeln!(file, "failed_gates={}", fired.join(","))?;
     writeln!(file, "overridden_gates={}", overridden.join(","))?;
@@ -371,8 +384,13 @@ pub fn format_agent_prompt(summary: &CheckSummary) -> String {
     if violations.is_empty() {
         let (passed, _, _, examined) = summary.gate_counts(false, false);
         let items_label = if examined == 1 { "item" } else { "items" };
+        let baselined_part = if summary.baselined > 0 {
+            format!(" · {} baselined findings not blocking", summary.baselined)
+        } else {
+            String::new()
+        };
         return format!(
-            "No discipline violations found ({passed} gates passed, {examined} {items_label} examined).\n"
+            "No discipline violations found ({passed} gates passed, {examined} {items_label} examined{baselined_part}).\n"
         );
     }
 
@@ -566,7 +584,9 @@ mod tests {
             base: "main".to_string(),
             errors: 5,
             warnings: 0,
+            notes: 0,
             overrides: 0,
+            baselined: 0,
             outcomes: vec![o1, o2, o3, o4, o5],
             planned_gates: vec![],
         };
@@ -624,7 +644,9 @@ mod tests {
             base: "main".to_string(),
             errors: 0,
             warnings: 0,
+            notes: 0,
             overrides: 0,
+            baselined: 0,
             outcomes: vec![o1, o2, o3],
             planned_gates: vec![],
         };
@@ -659,7 +681,9 @@ mod tests {
             base: "main".to_string(),
             errors: 1,
             warnings: 0,
+            notes: 0,
             overrides: 0,
+            baselined: 0,
             outcomes: vec![o1],
             planned_gates: vec![],
         };
@@ -687,7 +711,9 @@ mod tests {
             base: "main".to_string(),
             errors: 0,
             warnings: 0,
+            notes: 0,
             overrides: 0,
+            baselined: 0,
             outcomes: vec![o1, o2],
             planned_gates: vec![],
         };

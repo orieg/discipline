@@ -1174,7 +1174,9 @@ command = "cargo test"
                 base: "main".into(),
                 errors: 1,
                 warnings: 0,
+                notes: 0,
                 overrides: 0,
+                baselined: 0,
                 outcomes: vec![o],
                 planned_gates: vec![],
             };

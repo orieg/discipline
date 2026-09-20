@@ -77,6 +77,14 @@ inputs:
     description: 'Base URL of the release store, for mirrors.'
     required: false
     default: 'https://github.com/orieg/discipline/releases'
+  baseline_file:
+    description: 'Path to grandfathering baseline file (defaults to discipline-baseline.toml if present).'
+    required: false
+    default: ''
+  no_baseline:
+    description: 'Ignore grandfathering baseline even if present.'
+    required: false
+    default: 'false'
 
 outputs:
   status:
@@ -94,6 +102,9 @@ outputs:
   overrides:
     description: 'Number of applied override directives'
     value: ${{ steps.run.outputs.overrides }}
+  baselined:
+    description: 'Number of grandfathered findings matching baseline (not blocking)'
+    value: ${{ steps.run.outputs.baselined }}
   overridden_gates:
     description: 'Comma separated ids of the gates that had an override applied'
     value: ${{ steps.run.outputs.overridden_gates }}
@@ -242,6 +253,8 @@ runs:
         DISCIPLINE_FAIL_ON_OVERRIDES: ${{ inputs.fail_on_overrides == 'true' && 'true' || 'false' }}
         DISCIPLINE_ACTOR: ${{ inputs.actor || github.actor }}
         DISCIPLINE_DIRECTIVE_SOURCES: ${{ inputs.directive_sources }}
+        DISCIPLINE_BASELINE: ${{ inputs.baseline_file }}
+        DISCIPLINE_NO_BASELINE: ${{ inputs.no_baseline == 'true' && 'true' || '' }}
         INPUT_SUITE: ${{ inputs.suite }}
         PR_BODY: ${{ inputs.pr_body }}
         PR_TITLE: ${{ inputs.pr_title }}

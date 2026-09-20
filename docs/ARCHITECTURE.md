@@ -271,12 +271,21 @@ Discipline exports standard structured formats:
 - **SARIF (`discipline.sarif`):** OASIS Static Analysis Results Interchange Format v2.1.0 schema-compliant report.
 - **Terminal & GitHub Job Summaries:** ANSI-styled summaries and GitHub workflow annotations.
 
-### Pure-Rust SHA-256 Implementation
+### 7.1 Pure-Rust SHA-256 Implementation & Cryptographic Hygiene
 
-GitLab Code Quality requires unique, deterministic 32-byte hex fingerprints for issue tracking:
-- Discipline implements a zero-dependency NIST FIPS 180-4 compliant SHA-256 algorithm in `src/report/gitlab.rs`.
-- Avoids pulling in external cryptographic dependencies (`ring`, `openssl`, `sha2`), preserving zero-dependency static musl compilation.
+GitLab Code Quality issue tracking and Discipline's grandfathering baseline engine require unique, deterministic 32-byte hex fingerprints:
+- Discipline implements a zero-dependency NIST FIPS 180-4 compliant SHA-256 algorithm in `src/report/gitlab.rs` (reused across reporting and `src/baseline.rs`).
+- Avoids pulling in external cryptographic dependencies (`ring`, `openssl`, `sha2`), preserving zero-dependency static musl compilation and strict license purity.
 - Verified directly against NIST CAVP test vectors.
+
+### 7.2 Grandfathering Baseline Architecture
+
+To support brownfield adoption without weakening gates or ignoring violations, Discipline provides a line-number-independent grandfathering baseline:
+- **Fingerprinting Formula:** Each violation is identified by `sha256(gate:rule:path:sha256(trimmed_line))`. Because line numbers are excluded, upstream or downstream line shifts caused by unrelated edits never churn baseline hashes.
+- **Fail-Closed Baseline Storage:** Recorded in a committed `discipline-baseline.toml` file at the repository root.
+- **Non-Blocking Grandfathering:** Pre-existing baselined findings are reported as non-blocking notes across all output formats (terminal, GitHub step summaries, JSON, JUnit, SARIF, GitLab) and reflected in the `baselined` output of `action.yml`.
+- **Ratchet Enforcement:** Covered under the `config-integrity` gate. Adding new entries to `discipline-baseline.toml` is classified as gate weakening and requires an authorized directive: `allow-gate-weakening: baseline <reason>`.
+- **Ratchet-Down Cleanup:** When a previously baselined finding is resolved in source code, the baseline engine reports the stale entry as an informational note, guiding repository maintainers to burn down technical debt.
 
 ---
 
@@ -309,8 +318,10 @@ Releases are triggered exclusively by pushing a `vX.Y.Z` tag:
 
 ### 8.3 CodeQL Security Pipeline (`.github/workflows/codeql.yml`)
 
-Static security analysis runs on pull requests, pushes to `main`, and on a weekly schedule using GitHub CodeQL Advanced setup (`github/codeql-action` pinned by SHA):
-- **Matrix analysis:** Analyzes `rust`, `actions`, and `python` with `build-mode: none`.
+Static security analysis runs on pull requests, pushes to `main`, and on a weekly Monday schedule (`cron: '30 6 * * 1'`) using GitHub CodeQL Advanced setup (`github/codeql-action` pinned by SHA):
+- **Matrix analysis:** Analyzes `rust`, `actions`, and `python`.
+- **Rust build-mode: none:** Rust analysis uses `build-mode: none`, powered solely by `rust-analyzer` extraction without driving `cargo build`.
+- **Advisory status:** CodeQL scanning is an advisory security sentinel; it operates independently of the blocking `ci-gate` rollup in `ci.yml`. Findings are reviewed weekly and addressed via hardening PRs or documented dismissals with positive and negative regression controls.
 - **Query suite:** Configured with `queries: security-extended` for deep vulnerability scanning.
 - **Toolchain:** Pins `dtolnay/rust-toolchain` stable for Rust AST and macro expansion.
 

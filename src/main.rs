@@ -1,7 +1,7 @@
 use anyhow::{bail, Context as _, Result};
 use clap::Parser;
 use discipline::cli::{
-    CheckArgs, Cli, Commands, ConfigArgs, DocsArgs, InstallHooksArgs, SuiteChoice,
+    BaselineArgs, CheckArgs, Cli, Commands, ConfigArgs, DocsArgs, InstallHooksArgs, SuiteChoice,
 };
 use discipline::config::{split_list, DisciplineConfig, Overrides, GATES, HOSTNAME_DENYLIST_ENV};
 use discipline::gitctx::GitCtx;
@@ -51,8 +51,11 @@ fn run() -> Result<bool> {
             allow_cross_host_bench: false,
             bench_base_file: None,
             bench_head_file: None,
+            baseline_file: args.baseline_file,
+            no_baseline: args.no_baseline,
             trust_workspace: args.trust_workspace,
         }),
+        Commands::Baseline(args) => baseline(args),
         Commands::Init(args) => init(args.name),
         Commands::Gates(args) => gates(&args.config),
         Commands::Schema => schema(),
@@ -288,10 +291,32 @@ fn check(args: CheckArgs) -> Result<bool> {
         None
     };
 
+    let baseline_filename = args
+        .baseline_file
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| discipline::baseline::DEFAULT_BASELINE_FILE.to_string());
+
+    let (baseline_path_ref, loaded_baseline) = if !args.no_baseline {
+        let baseline_path = git.root().join(&baseline_filename);
+        if baseline_path.exists() {
+            let b = discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path)?;
+            (Some(baseline_filename), Some(b))
+        } else if args.baseline_file.is_some() {
+            bail!("baseline file `{}` does not exist", baseline_path.display());
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
+
     let ctx = Context {
         config: &config,
         git: &git,
         config_path: &config_path,
+        baseline_path: baseline_path_ref.as_deref(),
+        baseline: loaded_baseline.as_ref(),
         staged: args.staged,
         pr_title,
         pr_body,
@@ -311,6 +336,7 @@ fn check(args: CheckArgs) -> Result<bool> {
                 enabled: true,
                 examined: 0,
                 inline_exemptions: 0,
+                baselined: 0,
                 notes: Vec::new(),
                 violations: Vec::new(),
                 overrides: Vec::new(),
@@ -326,7 +352,9 @@ fn check(args: CheckArgs) -> Result<bool> {
                 base: git.base_label().to_string(),
                 errors: 1,
                 warnings: 0,
+                notes: 0,
                 overrides: 0,
+                baselined: 0,
                 planned_gates: discipline::config::GATES
                     .iter()
                     .filter(|g| !g.available)
@@ -506,37 +534,130 @@ fn schema() -> Result<bool> {
     Ok(true)
 }
 
+fn baseline(args: BaselineArgs) -> Result<bool> {
+    if args.trust_workspace {
+        std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
+    }
+    let base_ref = discipline::gitctx::detect_base_ref(args.base.as_deref(), None, None);
+    let git = GitCtx::open(&base_ref, false)?;
+    let (config, config_path) = load_config(&args.config, Some(git.root()), None, None)?;
+
+    let commits = git.commits()?;
+    let (directives, directive_notes) =
+        discipline::tokens::extract_directives_for_config(None, &commits, &config);
+
+    let ctx = Context {
+        config: &config,
+        git: &git,
+        config_path: &config_path,
+        baseline_path: None,
+        baseline: None,
+        staged: false,
+        pr_title: None,
+        pr_body: None,
+        directives,
+        directive_notes,
+        bench_provenance: None,
+        allow_cross_host_bench: false,
+        bench_base_file: None,
+        bench_head_file: None,
+    };
+
+    let summary = run_checks(&config, args.suite, &ctx)?;
+
+    let baseline_path = git.root().join(&args.baseline_file);
+    let mut entries = Vec::new();
+
+    for o in &summary.outcomes {
+        if !o.enabled {
+            continue;
+        }
+        for v in &o.violations {
+            let fp = discipline::baseline::compute_violation_fingerprint(git.root(), v);
+            entries.push(discipline::baseline::BaselineEntry {
+                gate: v.gate.to_string(),
+                rule: v.title.clone(),
+                path: v.file.clone().unwrap_or_default(),
+                fingerprint: fp,
+            });
+        }
+    }
+
+    let baseline_obj = discipline::baseline::DisciplineBaseline {
+        version: 1,
+        findings: entries,
+    };
+
+    if args.write {
+        baseline_obj.write_to_file(&baseline_path)?;
+        println!(
+            "{} recorded {} grandfathered finding{} to {}",
+            style::green("ok:"),
+            baseline_obj.findings.len(),
+            if baseline_obj.findings.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            args.baseline_file.display()
+        );
+        Ok(true)
+    } else {
+        println!(
+            "Found {} finding{} eligible for grandfathering.",
+            baseline_obj.findings.len(),
+            if baseline_obj.findings.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+        println!(
+            "Run `discipline baseline --write` to record them to {}.",
+            args.baseline_file.display()
+        );
+        Ok(true)
+    }
+}
+
 fn gates(args: &ConfigArgs) -> Result<bool> {
     let repo = discipline::gitctx::discover_repository(".").ok();
     let repo_root = repo.as_ref().and_then(|r| r.workdir());
     let (config, _) = load_config(args, repo_root, None, None)?;
     println!(
-        "{:<24} {:<13} {:<9} {:<10} SUMMARY",
+        "{:<24} {:<13} {:<9} {:<42} SUMMARY",
         "GATE", "SUITE", "STATE", "SEVERITY"
     );
     for g in GATES {
+        let finding_overrides = match g.id {
+            "shell-secrets" => " (tokens: error, heuristics: warn)",
+            "ignored-tests" => " (conditional skips: note)",
+            _ => "",
+        };
         let (state, severity) = match config.gates.settings(g.id) {
             _ if !g.available => (
                 style::dim(&format!("{:<9}", "planned")),
-                format!("{:<10}", "-"),
+                format!("{:<42}", "-"),
             ),
             Some(s) if s.enabled() => {
                 let sev = s.severity().to_string();
+                let full = format!("{sev}{finding_overrides}");
                 (
                     style::green(&format!("{:<9}", "on")),
-                    format!("{:<10}", sev),
+                    format!("{:<42}", full),
                 )
             }
             Some(s) => {
                 let sev = s.severity().to_string();
+                let full = format!("{sev}{finding_overrides}");
                 (
                     style::yellow(&format!("{:<9}", "off")),
-                    format!("{:<10}", sev),
+                    format!("{:<42}", full),
                 )
             }
             _ => (
                 style::yellow(&format!("{:<9}", "off")),
-                format!("{:<10}", "-"),
+                format!("{:<42}", "-"),
             ),
         };
         println!(

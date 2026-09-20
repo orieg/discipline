@@ -127,6 +127,8 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `version` | *(none)* | Release to download (e.g. v0.1.0). Default: the tag this action was referenced by, else the latest release. |
 | `binary_path` | *(none)* | Use this discipline binary instead of downloading one (air-gapped Gitea/Forgejo runners, self-tests). |
 | `download_url` | `https://github.com/orieg/discipline/releases` | Base URL of the release store, for mirrors. |
+| `baseline_file` | *(none)* | Path to grandfathering baseline file (defaults to discipline-baseline.toml if present). |
+| `no_baseline` | `false` | Ignore grandfathering baseline even if present. |
 <!-- /generated -->
 
 ### Action Outputs
@@ -139,6 +141,7 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `warnings` | Number of non-blocking violations |
 | `failed_gates` | Comma separated ids of the gates that reported a violation |
 | `overrides` | Number of applied override directives |
+| `baselined` | Number of grandfathered findings matching baseline (not blocking) |
 | `overridden_gates` | Comma separated ids of the gates that had an override applied |
 | `passed_gates` | Number of passing gates |
 | `examined_items` | Total number of items examined across all enabled gates |
@@ -157,6 +160,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 |---|---|
 | `check` | Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check |
 | `diff` | Shorthand for `check --suite agent-guard` against `HEAD~1` |
+| `baseline` | Record or manage grandfathered finding baselines |
 | `init` | Write a discipline.toml with every available gate at its default |
 | `gates` | List every gate: id, suite, availability, and effective state |
 | `schema` | Print the JSON Schema for discipline.toml |
@@ -551,6 +555,58 @@ When an authorized directive is parsed and applied:
 2. **Action Outputs:** Outputs `overrides` (total count of applied overrides) and `overridden_gates` (comma-separated list of gate ids) are populated.
 3. **Machine Report:** Included in the JSON report under `overrides_applied` for compliance logging.
 4. **Enforced Sign-off:** Setting `directives.fail_on_overrides = true` (or passing `--fail-on-overrides`) causes Discipline to exit `1` whenever any override is present. This blocks automated merge and mandates human sign-off while preserving the audit trail.
+
+---
+
+## Grandfathering Baseline Mode
+
+When adopting Discipline on existing brownfield repositories, pre-existing code may trigger numerous violations across historical files (measured at v0.4.2: 51 findings on `orieg/expanse` and 26 on `orieg/php-judy`, nearly all pre-existing). Rather than disabling gates or littering inline directives across legacy files, Discipline provides a grandfathering baseline mode.
+
+### 1. Generating a Baseline
+
+Run `discipline baseline --write` to record all current findings to a committed `discipline-baseline.toml` file at repository root:
+
+```bash
+discipline baseline --write --base origin/main
+```
+
+This creates a `discipline-baseline.toml` file recording deterministic, line-number-independent SHA-256 fingerprints for every existing finding:
+
+```toml
+version = 1
+created_at = "2026-09-20T13:40:00Z"
+generator = "discipline v0.4.2"
+total_entries = 51
+
+[[entries]]
+gate = "time-estimates"
+rule = "duration-estimate"
+path = "docs/old_plan.md"
+fingerprint = "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+```
+
+Because fingerprints are computed from `sha256(gate:rule:path:sha256(trimmed_line))` rather than physical line numbers, line shifts caused by unrelated edits elsewhere in the file do not invalidate or churn the baseline.
+
+### 2. Subsequent CI Execution
+
+Subsequent runs automatically detect `discipline-baseline.toml` if present:
+- **Pre-existing findings:** Grandfathered and reported as a non-blocking note: `"N baselined findings not blocking"`. They do not cause non-zero exit codes.
+- **New violations:** Fail CI immediately with exit code 1.
+- **Transparency:** The baselined count is reported in every output format (terminal, GitHub step summaries, JSON, JUnit, SARIF, GitLab) and exposed to GitHub Actions workflows via the `steps.<id>.outputs.baselined` step output.
+- **Bypassing Baseline:** Pass `--no-baseline` (or set `no_baseline: true` in the action) to evaluate the diff without grandfathering.
+- **Custom Baseline Path:** Pass `--baseline-file <path>` (or set `baseline_file` in the action).
+
+### 3. Ratchet Protection & Technical Debt Burndown
+
+1. **Ratchet Against Growth:** The baseline is protected by the `config-integrity` gate. Attempting to add new findings to `discipline-baseline.toml` is classified as gate weakening and fails CI unless accompanied by a scoped directive:
+   ```text
+   allow-gate-weakening: baseline grandfathering legacy modules for migration
+   ```
+2. **Ratchet Down (Stale Entry Notes):** When a grandfathered finding is fixed in source code, Discipline reports the stale baseline entry as an informational note:
+   ```text
+   NOTE: baseline entry docs/old_plan.md (time-estimates:duration-estimate) is stale — violation resolved in source. Run `discipline baseline --write` to burn down baseline debt.
+   ```
+   Maintainers can re-run `discipline baseline --write` to remove the stale entry and lock in the improvement without needing an override.
 
 ---
 

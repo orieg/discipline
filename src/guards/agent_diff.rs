@@ -884,7 +884,7 @@ pub fn evaluate_ignored_tests(
             continue;
         }
         out.push(
-            crate::config::Severity::Warning,
+            crate::config::Severity::Note,
             "Test Conditionally Skipped",
             Some(path),
             Some(test.line),

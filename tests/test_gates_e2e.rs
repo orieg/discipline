@@ -874,7 +874,7 @@ fn time_estimates_fire_in_prose_not_in_fences_or_marked_lines() {
         "# Plan\n\nPhase 2 (1 week).\n\n```\nsleep for 3 days\n```\n\nBanned: \"2 weeks\" <!-- discipline:allow(time-estimates) -->\n\nArtifact retention is 30 days.\n",
     );
     repo.commit("docs: plan");
-    let run = repo.check(&[]);
+    let run = repo.check(&["--fail-on-warnings"]);
     assert_eq!(run.code, 1);
     let outcome = run.outcome("time-estimates");
     assert_eq!(
@@ -935,7 +935,14 @@ fn pr_body_is_scanned_for_time_estimates() {
     repo.write("docs/x.md", "fine\n");
     repo.commit("docs: x");
     let run = repo.run(
-        &["check", "--format", "json", "--base", "main"],
+        &[
+            "check",
+            "--format",
+            "json",
+            "--base",
+            "main",
+            "--fail-on-warnings",
+        ],
         &[("PR_BODY", "Will land next sprint.")],
     );
     assert_eq!(run.code, 1);
@@ -1002,7 +1009,7 @@ Working for 3 weeks on migration.
 "#,
     );
     bad_repo.commit("docs: bad");
-    let bad_run = bad_repo.check(&[]);
+    let bad_run = bad_repo.check(&["--fail-on-warnings"]);
     assert_eq!(bad_run.code, 1);
     let outcome = bad_run.outcome("time-estimates");
     let violations = outcome["violations"].as_array().unwrap();
@@ -1055,7 +1062,7 @@ Phase 3 (1 week).
 "#,
     );
     bad_repo.commit("docs: bad");
-    let bad_run = bad_repo.check(&[]);
+    let bad_run = bad_repo.check(&["--fail-on-warnings"]);
     assert_eq!(bad_run.code, 1);
     let outcome = bad_run.outcome("time-estimates");
     let violations = outcome["violations"].as_array().unwrap();
@@ -1475,7 +1482,7 @@ fn md_file_with_nul_byte_still_fires_time_estimates() {
     let repo = Repo::new();
     repo.write("docs/roadmap.md", "Ships in 3 weeks.\0\n");
     repo.commit("docs: add roadmap");
-    let run = repo.check(&[]);
+    let run = repo.check(&["--fail-on-warnings"]);
     assert_eq!(
         run.code, 1,
         "stdout: {}\nstderr: {}",
@@ -2554,7 +2561,12 @@ fn bench_regression_tracks_callgrind_instructions_and_accepts_override() {
         "target/iai/bench/callgrind.bench.out",
         "events: Ir\nsummary: 101000\n",
     );
-    let run_fail = repo.check(&["--suite", "bench"]);
+    let run_fail = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    ]);
     assert_eq!(run_fail.code, 1);
     let json_fail = run_fail.json();
     assert_eq!(json_fail["errors"], 1);
@@ -2615,7 +2627,12 @@ fn bench_regression_tracks_go_benchmarks_and_accepts_override() {
     // Removing BenchmarkSearch without an override fails (exit 1)
     let head_removed = "goos: darwin\ngoarch: arm64\npkg: gobench\ncpu: Apple M1\nBenchmarkInsert-8   \t100000000\t        10.200 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n";
     repo.write("benchmarks/go.txt", head_removed);
-    let run_fail = repo.check(&["--suite", "bench"]);
+    let run_fail = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    ]);
     assert_eq!(run_fail.code, 1);
     let json_fail = run_fail.json();
     assert_eq!(json_fail["errors"], 1);
@@ -2673,7 +2690,12 @@ fn bench_regression_tracks_google_benchmark_json_and_accepts_override() {
         {"name": "BM_StringCopy", "cpu_time": 50.0, "time_unit": "ns"}
     ]}"#;
     repo.write("build/benchmarks.json", head_removed);
-    let run_fail = repo.check(&["--suite", "bench"]);
+    let run_fail = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    ]);
     assert_eq!(run_fail.code, 1);
     let json_fail = run_fail.json();
     assert_eq!(json_fail["errors"], 1);
@@ -2735,7 +2757,12 @@ fn bench_regression_tracks_pytest_benchmark_json_and_accepts_override() {
         {"name": "test_deserialize", "stats": {"mean": 0.0020}}
     ]}"#;
     repo.write("reports/pytest_bench.json", head_removed);
-    let run_fail = repo.check(&["--suite", "bench"]);
+    let run_fail = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    ]);
     assert_eq!(run_fail.code, 1);
     let json_fail = run_fail.json();
     assert_eq!(json_fail["errors"], 1);
@@ -2836,7 +2863,12 @@ fn bench_real_criterion_fixtures_regression_and_override() {
       }
     }"#;
     repo.write("target/criterion/fib_20/estimates.json", regressed_json);
-    let run_fail = repo.check(&["--suite", "bench"]);
+    let run_fail = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    ]);
     assert_eq!(run_fail.code, 1);
     let json_fail = run_fail.json();
     assert_eq!(json_fail["errors"], 1);
@@ -2875,7 +2907,12 @@ fn bench_audit_case2_regression_deleted_with_removes_fails() {
 
     // Generic `removes:` directive
     let run_fail = repo.check_with_pr(
-        &["--suite", "bench"],
+        &[
+            "--suite",
+            "bench",
+            "--config-override",
+            "[gates.bench-regression]\nseverity = \"error\"\n",
+        ],
         "removes: target/iai/bench/callgrind.bench.out deleted old benchmarks",
     );
     assert_eq!(
@@ -2947,7 +2984,12 @@ fn bench_audit_case4_benchmark_renamed_lacks_baseline_fails() {
         r#"{"benchmarks": [{"name": "BM_RenamedSearch", "cpu_time": 100.0, "time_unit": "ns"}]}"#;
     repo.write("build/benchmarks.json", head_json);
 
-    let run_fail = repo.check(&["--suite", "bench"]);
+    let run_fail = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    ]);
     assert_eq!(
         run_fail.code, 1,
         "Renamed or new benchmark lacking baseline entry must fail exit 1"
@@ -2999,7 +3041,12 @@ fn bench_provenance_tracking_and_cross_host_flag() {
     }"#;
     repo.write("build/benchmarks.json", head_json);
 
-    let run_fail = repo.check(&["--suite", "bench"]);
+    let run_fail = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    ]);
     assert_eq!(run_fail.code, 1);
     let json_fail = run_fail.json();
     assert_eq!(
@@ -4748,7 +4795,14 @@ fn shell_secrets_gate_e2e() {
     );
     repo.commit("feat: add deploy script");
 
-    let run_bad = repo.check(&["--base", "HEAD~1"]);
+    let run_warn = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_warn.code, 0,
+        "shell secrets heuristics default to warning"
+    );
+    assert_eq!(run_warn.json()["warnings"], 2);
+
+    let run_bad = repo.check(&["--base", "HEAD~1", "--fail-on-warnings"]);
     assert_eq!(run_bad.code, 1);
     let outcome = run_bad.outcome("shell-secrets");
     let violations = outcome["violations"].as_array().unwrap();
@@ -5629,7 +5683,7 @@ fn bench_regression_dual_file_mode_and_missing_baseline() {
         "--bench-head-file",
         head_file.to_str().unwrap(),
         "--config-override",
-        "[gates.bench-regression]\ntolerance_pct = 5.0\nrequire_sourced_override = true\n",
+        "[gates.bench-regression]\nseverity = \"error\"\ntolerance_pct = 5.0\nrequire_sourced_override = true\n",
     ]);
     assert_eq!(run_fail.code, 1);
     let titles = run_fail.titles("bench-regression");
@@ -5663,6 +5717,8 @@ fn bench_regression_dual_file_mode_and_missing_baseline() {
         missing_base.to_str().unwrap(),
         "--bench-head-file",
         head_file.to_str().unwrap(),
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\n",
     ]);
     assert_eq!(run_missing.code, 1);
     let outcome = run_missing.outcome("bench-regression");
@@ -6117,7 +6173,12 @@ paths = ["benchmarks/results.json"]
     repo.write("benchmarks/results.json", head_json);
     repo.commit("perf: altered algorithm with severe regression");
 
-    let run_fail = repo.check(&["--suite", "bench"]);
+    let run_fail = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    ]);
     assert_eq!(run_fail.code, 1);
     let titles_fail = run_fail.titles("bench-regression");
     assert!(titles_fail.iter().any(|t| t.contains("Regressed")));

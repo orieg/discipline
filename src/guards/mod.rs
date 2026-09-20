@@ -51,6 +51,8 @@ pub struct GateOutcome {
     pub examined: usize,
     /// Lines skipped through an inline `discipline:allow(<gate>)` marker.
     pub inline_exemptions: usize,
+    /// Findings matching the grandfathering baseline (not blocking).
+    pub baselined: usize,
     /// Named degradations: what the gate could not verify, and why.
     pub notes: Vec<String>,
     pub violations: Vec<Violation>,
@@ -66,6 +68,7 @@ impl GateOutcome {
             enabled: true,
             examined: 0,
             inline_exemptions: 0,
+            baselined: 0,
             notes: Vec::new(),
             violations: Vec::new(),
             overrides: Vec::new(),
@@ -118,7 +121,9 @@ pub struct CheckSummary {
     pub base: String,
     pub errors: usize,
     pub warnings: usize,
+    pub notes: usize,
     pub overrides: usize,
+    pub baselined: usize,
     pub outcomes: Vec<GateOutcome>,
     /// Gates the roadmap plans but this binary does not ship. Listed in every
     /// report so their absence is never mistaken for coverage.
@@ -164,6 +169,7 @@ impl CheckSummary {
                 let has_failure = o.violations.iter().any(|v| match v.severity {
                     Severity::Error => true,
                     Severity::Warning => fail_on_warnings,
+                    Severity::Note => false,
                 }) || (fail_on_overrides && !o.overrides.is_empty());
 
                 if has_failure {
@@ -184,6 +190,10 @@ pub struct Context<'a> {
     pub git: &'a GitCtx,
     /// Repo-relative path of the configuration file (for config-integrity).
     pub config_path: &'a str,
+    /// Repo-relative path of the baseline file if grandfathering is active.
+    pub baseline_path: Option<&'a str>,
+    /// Loaded baseline if grandfathering is active.
+    pub baseline: Option<&'a crate::baseline::DisciplineBaseline>,
     pub staged: bool,
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
@@ -411,6 +421,11 @@ pub fn run_checks(
         });
     }
 
+    // Grandfathered findings baseline matching
+    if let Some(baseline) = ctx.baseline {
+        crate::baseline::apply_baseline(ctx.git.root(), baseline, &mut outcomes);
+    }
+
     let count = |s: Severity| {
         outcomes
             .iter()
@@ -419,11 +434,14 @@ pub fn run_checks(
             .count()
     };
     let total_overrides = outcomes.iter().map(|o| o.overrides.len()).sum();
+    let total_baselined = outcomes.iter().map(|o| o.baselined).sum();
     Ok(CheckSummary {
         base: ctx.git.base_label().to_string(),
         errors: count(Severity::Error),
         warnings: count(Severity::Warning),
+        notes: count(Severity::Note),
         overrides: total_overrides,
+        baselined: total_baselined,
         planned_gates: GATES
             .iter()
             .filter(|g| !g.available)

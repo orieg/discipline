@@ -68,6 +68,7 @@ pub fn generate_gitlab_issues(summary: &CheckSummary) -> Vec<GitlabCodeQualityIs
             let severity = match v.severity {
                 Severity::Error => "major",
                 Severity::Warning => "minor",
+                Severity::Note => "info",
             };
 
             // Deterministic SHA-256 fingerprint over rule, path, line, title, and message
@@ -231,7 +232,9 @@ mod tests {
             base: "main".to_string(),
             errors: 0,
             warnings: 0,
+            notes: 0,
             overrides: 0,
+            baselined: 0,
             planned_gates: Vec::new(),
             outcomes: Vec::new(),
         };
@@ -256,7 +259,9 @@ mod tests {
             base: "origin/main".to_string(),
             errors: 1,
             warnings: 0,
+            notes: 0,
             overrides: 0,
+            baselined: 0,
             planned_gates: Vec::new(),
             outcomes: vec![outcome],
         };

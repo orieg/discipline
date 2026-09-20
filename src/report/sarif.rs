@@ -30,6 +30,7 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
         let level = match v.severity {
             Severity::Error => "error",
             Severity::Warning => "warning",
+            Severity::Note => "note",
         };
 
         let mut message_text = v.message.clone();
@@ -144,13 +145,16 @@ mod tests {
             base: "origin/main".to_string(),
             errors: 1,
             warnings: 0,
+            notes: 0,
             overrides: 0,
+            baselined: 0,
             outcomes: vec![GateOutcome {
                 gate: "unsafe-safety-comment",
                 suite: "agent-guard",
                 enabled: true,
                 examined: 1,
                 inline_exemptions: 0,
+                baselined: 0,
                 notes: Vec::new(),
                 violations: vec![Violation {
                     gate: "unsafe-safety-comment",

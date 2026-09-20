@@ -1,13 +1,24 @@
 # discipline.toml — dogfood configuration for orieg/discipline.
 #
-# Every available gate is on at severity "error" by default, so this file only
-# needs to state what differs. `discipline gates` prints the effective state;
-# the annotated reference lives in README.md ("Configuration").
+# Most available gates are on at severity "error" by default, so this file only
+# needs to state what differs. In dogfood, we configure time-estimates,
+# bench-regression, and agents-md to severity "error" for maximum verification rigor.
+# `discipline gates` prints the effective state; the annotated reference lives in
+# README.md ("Configuration").
 
 [meta]
 version = 1
 name = "discipline"
 description = "Universal CI/CD gatekeeper and AI coding agent diff sentinel"
+
+[gates.agents-md]
+severity = "error"
+
+[gates.time-estimates]
+severity = "error"
+
+[gates.bench-regression]
+severity = "error"
 
 [gates.assertion-reduction]
 exempt_paths = ["tests/fixtures/**"]

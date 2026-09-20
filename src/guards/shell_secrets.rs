@@ -10,7 +10,7 @@
 //!
 //! Security Invariant: Matched lines containing secret tokens MUST NEVER be echoed in reports.
 
-use crate::config::{GateSettings, ShellSecretsGate};
+use crate::config::{GateSettings, Severity, ShellSecretsGate};
 use crate::guards::{exempt_filter, line_allows, Context, GateOutcome};
 use crate::tokens::{self, OverrideRecord, OverrideSource};
 use anyhow::Result;
@@ -725,8 +725,16 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
                 }
 
                 // Security Invariant: NEVER include matched line content or secret token in message
+                let rule_sev = match rule {
+                    ShellRuleId::TokenGitHub
+                    | ShellRuleId::TokenAws
+                    | ShellRuleId::TokenSlack
+                    | ShellRuleId::TokenOpenAi
+                    | ShellRuleId::PrivateKeyBlock => settings.severity(),
+                    _ => Severity::Warning,
+                };
                 out.push(
-                    settings.severity(),
+                    rule_sev,
                     rule.title(),
                     Some(file),
                     Some(log_line.primary_line),

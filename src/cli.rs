@@ -16,6 +16,8 @@ pub enum Commands {
     Check(CheckArgs),
     /// Shorthand for `check --suite agent-guard` against `HEAD~1`
     Diff(DiffArgs),
+    /// Record or manage grandfathered finding baselines
+    Baseline(BaselineArgs),
     /// Write a discipline.toml with every available gate at its default
     Init(InitArgs),
     /// List every gate: id, suite, availability, and effective state
@@ -175,6 +177,14 @@ pub struct CheckArgs {
     /// In-job head benchmark result file for bench-regression dual-mode
     #[arg(long = "bench-head-file", env = "DISCIPLINE_BENCH_HEAD_FILE")]
     pub bench_head_file: Option<PathBuf>,
+
+    /// Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)
+    #[arg(long, env = "DISCIPLINE_BASELINE")]
+    pub baseline_file: Option<PathBuf>,
+
+    /// Ignore grandfathering baseline even if present
+    #[arg(long, env = "DISCIPLINE_NO_BASELINE")]
+    pub no_baseline: bool,
 }
 
 #[derive(Args, Debug)]
@@ -210,7 +220,45 @@ pub struct DiffArgs {
     #[arg(long, env = "DISCIPLINE_REPORT_SARIF")]
     pub report_sarif: Option<PathBuf>,
 
+    /// Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)
+    #[arg(long, env = "DISCIPLINE_BASELINE")]
+    pub baseline_file: Option<PathBuf>,
+
+    /// Ignore grandfathering baseline even if present
+    #[arg(long, env = "DISCIPLINE_NO_BASELINE")]
+    pub no_baseline: bool,
+
     /// Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)
+    #[arg(long)]
+    pub trust_workspace: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct BaselineArgs {
+    #[command(flatten)]
+    pub config: ConfigArgs,
+
+    /// Record current findings to the baseline file
+    #[arg(long)]
+    pub write: bool,
+
+    /// Path to grandfathering baseline file (defaults to discipline-baseline.toml)
+    #[arg(
+        long,
+        default_value = "discipline-baseline.toml",
+        env = "DISCIPLINE_BASELINE"
+    )]
+    pub baseline_file: PathBuf,
+
+    /// Base branch or commit ref to compare against
+    #[arg(short, long, env = "DISCIPLINE_BASE_REF")]
+    pub base: Option<String>,
+
+    /// Specific suite to run: all, agent-guard, hygiene, integrity ...
+    #[arg(short, long, value_enum, default_value_t = SuiteChoice::All)]
+    pub suite: SuiteChoice,
+
+    /// Trust the workspace and disable libgit2 repository owner validation
     #[arg(long)]
     pub trust_workspace: bool,
 }

@@ -39,53 +39,104 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
         None if ctx.config_path != "discipline.toml" => ctx.git.base_content("discipline.toml")?,
         None => None,
     };
-    let Some(base_src) = base_src else {
+    if let Some(base_src) = base_src {
+        match DisciplineConfig::from_toml_str(&base_src) {
+            Ok(base) => {
+                let head = ctx.config;
+                let weakenings = diff_configs(&base, head)?;
+                out.examined = Value::try_from(&base.gates)?
+                    .as_table()
+                    .map(|t| t.len())
+                    .unwrap_or(0);
+                for w in weakenings {
+                    if let Some(record) =
+                        ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, &w.gate)
+                    {
+                        out.overrides.push(record);
+                        continue;
+                    }
+                    out.push(
+                        ctx.overridable(settings.severity()),
+                        "Gate Weakened By This Change",
+                        Some(ctx.config_path),
+                        None,
+                        format!("[{}] {}.", w.gate, w.what),
+                        &format!(
+                            "Revert the change, or justify it on its own line in the PR body or a commit \
+                             message: `allow-gate-weakening: {} <reason>`.",
+                            w.gate
+                        ),
+                    );
+                }
+            }
+            Err(e) => {
+                // Blocking here would deadlock the PR that repairs the base config.
+                out.push(
+                    Severity::Warning,
+                    "Base Configuration Unreadable",
+                    Some(ctx.config_path),
+                    None,
+                    format!("The base-side configuration does not load with this binary ({e:#}); weakening could not be checked."),
+                    "Repair the configuration on the base branch.",
+                );
+            }
+        }
+    } else {
         out.notes.push(format!(
             "`{}` does not exist on the base side; nothing to compare against",
             ctx.config_path
         ));
-        return Ok(out);
-    };
-    let base = match DisciplineConfig::from_toml_str(&base_src) {
-        Ok(c) => c,
-        Err(e) => {
-            // Blocking here would deadlock the PR that repairs the base config.
-            out.push(
-                Severity::Warning,
-                "Base Configuration Unreadable",
-                Some(ctx.config_path),
-                None,
-                format!("The base-side configuration does not load with this binary ({e:#}); weakening could not be checked."),
-                "Repair the configuration on the base branch.",
-            );
-            return Ok(out);
-        }
-    };
-    let head = ctx.config;
-
-    let weakenings = diff_configs(&base, head)?;
-    out.examined = Value::try_from(&base.gates)?
-        .as_table()
-        .map(|t| t.len())
-        .unwrap_or(0);
-    for w in weakenings {
-        if let Some(record) = ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, &w.gate) {
-            out.overrides.push(record);
-            continue;
-        }
-        out.push(
-            ctx.overridable(settings.severity()),
-            "Gate Weakened By This Change",
-            Some(ctx.config_path),
-            None,
-            format!("[{}] {}.", w.gate, w.what),
-            &format!(
-                "Revert the change, or justify it on its own line in the PR body or a commit \
-                 message: `allow-gate-weakening: {} <reason>`.",
-                w.gate
-            ),
-        );
     }
+
+    // Baseline file integrity: growing grandfathered baseline is a weakening
+    let baseline_filename = ctx
+        .baseline_path
+        .unwrap_or(crate::baseline::DEFAULT_BASELINE_FILE);
+    let base_baseline_count = match ctx.git.base_content(baseline_filename)? {
+        Some(s) => match toml::from_str::<crate::baseline::DisciplineBaseline>(&s) {
+            Ok(b) => Some(b.findings.len()),
+            Err(_) => None,
+        },
+        None => None,
+    };
+
+    let head_baseline_path = ctx.git.root().join(baseline_filename);
+    let head_baseline_count = if head_baseline_path.exists() {
+        match std::fs::read_to_string(&head_baseline_path) {
+            Ok(s) => match toml::from_str::<crate::baseline::DisciplineBaseline>(&s) {
+                Ok(b) => Some(b.findings.len()),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    if let Some(h_count) = head_baseline_count {
+        let b_count = base_baseline_count.unwrap_or(0);
+        if h_count > b_count {
+            let diff = h_count - b_count;
+            if let Some(record) = ctx
+                .find_override(GATE, tokens::ALLOW_GATE_WEAKENING, "baseline")
+                .or_else(|| {
+                    ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, baseline_filename)
+                })
+            {
+                out.overrides.push(record);
+            } else {
+                out.push(
+                    ctx.overridable(settings.severity()),
+                    "Baseline Grew Without Directive",
+                    Some(baseline_filename),
+                    None,
+                    format!("[baseline] Grandfathered baseline grew from {b_count} to {h_count} findings ({diff} new grandfathered findings)."),
+                    "Revert the baseline growth, or justify it on its own line in the PR body or a commit message: `allow-gate-weakening: baseline <reason>`.",
+                );
+            }
+        }
+    }
+
     Ok(out)
 }
 
@@ -205,9 +256,11 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                     note("`allow_hidden` changed from false to true".to_string())
                 }
                 (Value::String(bs), Value::String(hs))
-                    if key == "severity" && bs == "error" && hs == "warning" =>
+                    if key == "severity"
+                        && ((bs == "error" && (hs == "warning" || hs == "note"))
+                            || (bs == "warning" && hs == "note")) =>
                 {
-                    note("`severity` lowered from error to warning".to_string())
+                    note(format!("`severity` lowered from {bs} to {hs}"))
                 }
                 (Value::Array(ba), Value::Array(ha)) => {
                     let gained: Vec<_> = ha.iter().filter(|x| !ba.contains(x)).collect();
@@ -249,7 +302,7 @@ mod tests {
         let head = cfg(
             "[gates.pii]\nlan_ips = false\nexempt_paths = [\"docs/**\"]\n\
              [gates.vacuous-tests]\nenabled = false\n\
-             [gates.time-estimates]\nseverity = \"warning\"\n",
+             [gates.agent-scratch]\nseverity = \"warning\"\n",
         );
         let found = diff_configs(&base, &head).unwrap();
         let has = |gate: &str, needle: &str| {
@@ -261,7 +314,7 @@ mod tests {
         assert!(has("pii", "`exempt_paths` gained 1"));
         assert!(has("pii", "`hostname_denylist` lost 1"));
         assert!(has("vacuous-tests", "`enabled` changed from true to false"));
-        assert!(has("time-estimates", "`severity` lowered"));
+        assert!(has("agent-scratch", "`severity` lowered"));
         assert_eq!(found.len(), 5, "{found:?}");
     }
 }

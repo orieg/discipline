@@ -1446,6 +1446,16 @@ discipline self-test</div>
       <td><code>https://github.com/orieg/discipline/releases</code></td>
       <td>Base URL of the release store, for mirrors.</td>
     </tr>
+    <tr>
+      <td class="gate-id">baseline_file</td>
+      <td><em>(none)</em></td>
+      <td>Path to grandfathering baseline file (defaults to discipline-baseline.toml if present).</td>
+    </tr>
+    <tr>
+      <td class="gate-id">no_baseline</td>
+      <td><code>false</code></td>
+      <td>Ignore grandfathering baseline even if present.</td>
+    </tr>
   </tbody>
 </table>
 <!-- /generated -->
@@ -1486,6 +1496,10 @@ discipline self-test</div>
     <tr>
       <td class="gate-id">overrides</td>
       <td>Number of applied override directives</td>
+    </tr>
+    <tr>
+      <td class="gate-id">baselined</td>
+      <td>Number of grandfathered findings matching baseline (not blocking)</td>
     </tr>
     <tr>
       <td class="gate-id">overridden_gates</td>

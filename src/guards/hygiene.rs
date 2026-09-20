@@ -593,7 +593,7 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             )?,
             label: "private LAN address",
             user_group: false,
-            redact: false,
+            redact: settings.redact_lan_ips,
         });
     }
     if settings.secrets {
@@ -1367,5 +1367,50 @@ mod tests {
         assert!(scan_json(&opts, text, &mut out));
         assert_eq!(out.violations.len(), 1);
         assert_eq!(out.violations[0].line, Some(2));
+    }
+
+    #[test]
+    fn test_lan_ip_redaction_config() {
+        let json_text = "{\"target\": \"192.168.1.42\"}"; // discipline:allow(pii)
+
+        // Default: redact_lan_ips = false -> IP is echoed for triage
+        let default_settings = PiiGate::default();
+        assert!(!default_settings.redact_lan_ips);
+        let rules_default = pii_rules(&default_settings).unwrap();
+        let mut out_default = GateOutcome::new("pii");
+        let allowed = vec![];
+        let opts_default = PiiScanOptions {
+            label: "test.json",
+            rules: &rules_default,
+            settings: &default_settings,
+            allowed: &allowed,
+            is_active_config: false,
+            added_lines: None,
+        };
+        assert!(scan_json(&opts_default, json_text, &mut out_default));
+        assert_eq!(out_default.violations.len(), 1);
+        assert!(out_default.violations[0].message.contains("192.168.1.42")); // discipline:allow(pii)
+
+        // Opt-in: redact_lan_ips = true -> IP is masked
+        let masked_settings = PiiGate {
+            redact_lan_ips: true,
+            ..Default::default()
+        };
+        let rules_masked = pii_rules(&masked_settings).unwrap();
+        let mut out_masked = GateOutcome::new("pii");
+        let opts_masked = PiiScanOptions {
+            label: "test.json",
+            rules: &rules_masked,
+            settings: &masked_settings,
+            allowed: &allowed,
+            is_active_config: false,
+            added_lines: None,
+        };
+        assert!(scan_json(&opts_masked, json_text, &mut out_masked));
+        assert_eq!(out_masked.violations.len(), 1);
+        assert!(!out_masked.violations[0].message.contains("192.168.1.42")); // discipline:allow(pii)
+        assert!(out_masked.violations[0]
+            .message
+            .contains("(match not echoed)"));
     }
 }
