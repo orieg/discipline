@@ -36,13 +36,13 @@
 - id: discipline-commit-msg
   name: discipline (commit message & staged change)
   description: Agent diff sentinel and hygiene gates with commit message inspection
-  entry: discipline check --staged --commit-msg-file
+  entry: discipline check --staged --fail-on-warnings --commit-msg-file
   language: rust
   stages: [commit-msg]
 
 - id: discipline-commit-msg-system
   name: discipline (commit message & staged change, binary from PATH)
   description: Agent diff sentinel and hygiene gates with commit message inspection
-  entry: discipline check --staged --commit-msg-file
+  entry: discipline check --staged --fail-on-warnings --commit-msg-file
   language: system
   stages: [commit-msg]

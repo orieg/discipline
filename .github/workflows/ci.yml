@@ -237,6 +237,7 @@ jobs:
           base_ref: main
           pr_title: "test: fixture (#1)"
           pr_body: "Plan: ship in 3 weeks."
+          fail_on_warnings: true
       - name: PR body time estimate fails with time-estimates gate
         shell: bash
         env:
