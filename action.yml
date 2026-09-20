@@ -120,6 +120,9 @@ outputs:
   install_error:
     description: 'Why installing the binary failed (empty on success)'
     value: ${{ steps.install.outputs.install_error }}
+  bin:
+    description: 'Path to the installed discipline executable'
+    value: ${{ steps.install.outputs.bin }}
 
 runs:
   using: 'composite'
@@ -199,6 +202,7 @@ runs:
 
         "${bin}" --version
         echo "bin=${bin}" >> "${GITHUB_OUTPUT}"
+        dirname "${bin}" >> "${GITHUB_PATH}"
 
     - name: Resolve base ref
       id: base
