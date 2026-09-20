@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+# Minimal OCI container image for discipline: universal CI/CD sentinel and AI agent diff guard.
+# Packaged with statically linked musl binary and git for containerized CI execution.
+
+FROM alpine:3.21
+
+# Install CA certificates for secure checkouts and git for local repository operations
+RUN apk add --no-cache ca-certificates git \
+    && addgroup -g 10001 -S discipline \
+    && adduser -u 10001 -S -G discipline -h /workspace -s /bin/sh discipline \
+    && mkdir -p /workspace \
+    && chown -R discipline:discipline /workspace
+
+# Multi-arch static binary placement (populated from release artifacts)
+ARG TARGETARCH
+COPY bin-${TARGETARCH}/discipline /usr/local/bin/discipline
+RUN chmod +x /usr/local/bin/discipline
+
+# Use unprivileged non-root user (numeric UID:GID for strict container security policies)
+USER 10001:10001
+WORKDIR /workspace
+VOLUME ["/workspace"]
+
+ENTRYPOINT ["discipline"]
+CMD ["check"]

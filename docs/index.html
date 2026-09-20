@@ -1358,6 +1358,11 @@ discipline self-test</div>
       <td>Treat applied overrides as failures (requires human sign-off).</td>
     </tr>
     <tr>
+      <td class="gate-id">actor</td>
+      <td><code>${{ github.actor }}</code></td>
+      <td>Actor executing the check (defaults to github.actor or forge equivalent; used for allowed_override_actors).</td>
+    </tr>
+    <tr>
       <td class="gate-id">directive_sources</td>
       <td><em>(none)</em></td>
       <td>Comma-separated list of allowed directive sources (pr-body, commits).</td>

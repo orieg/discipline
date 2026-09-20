@@ -54,6 +54,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `directives.sources` | list | `["pr-body", "commits"]` | Allowed directive source channels |
 | `directives.allow_hidden` | boolean | `false` | Allow directives inside HTML comments `<!-- -->` |
 | `directives.fail_on_overrides` | boolean | `false` | Treat applied overrides as failures requiring human sign-off |
+| `directives.allowed_override_actors` | list | `[]` | Actors authorized to apply overrides even when fail_on_overrides is true |
 | `gates.<id>.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.<id>.severity` | string | `"error"` | Violation severity: `"error"` (blocking) or `"warning"` (non-blocking) |
 | `gates.<id>.exempt_paths` | list | `[]` | File path globs exempted from gate evaluation |
@@ -118,6 +119,7 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `hostname_denylist` | *(none)* | Hostnames the pii gate must reject (comma or newline separated). Pass a secret; matches are never echoed. |
 | `fail_on_warnings` | `false` | Treat warnings as failures. |
 | `fail_on_overrides` | `false` | Treat applied overrides as failures (requires human sign-off). |
+| `actor` | `${{ github.actor }}` | Actor executing the check (defaults to github.actor or forge equivalent; used for allowed_override_actors). |
 | `directive_sources` | *(none)* | Comma-separated list of allowed directive sources (pr-body, commits). |
 | `pr_body` | `${{ github.event.pull_request.body }}` | PR description: carries override directives and is itself scanned by hygiene gates. |
 | `pr_title` | `${{ github.event.pull_request.title }}` | PR title: checked by hygiene gates (e.g. issue-link). |
@@ -390,8 +392,36 @@ discipline check --staged
 
 ### Docker Container
 
+Official multi-arch (`linux/amd64`, `linux/arm64`) minimal OCI container images are published to GitHub Container Registry:
+- `ghcr.io/orieg/discipline:latest`
+- `ghcr.io/orieg/discipline:v0.2`
+
+Images are built on Alpine Linux with the statically linked musl `discipline` binary and `git` on `PATH`, requiring no Node.js runtime or external package managers.
+
+Run directly against any repository mounted to `/workspace`:
 ```bash
 docker run --rm -v "$PWD":/workspace ghcr.io/orieg/discipline:latest check --base origin/main
+```
+
+Use in container-native CI environments (such as Forgejo, Gitea Actions with `act_runner`, or GitLab CI):
+
+```yaml
+# Forgejo / Gitea Actions
+jobs:
+  discipline:
+    runs-on: docker://ghcr.io/orieg/discipline:latest
+    steps:
+      - run: discipline check --base main
+```
+
+```yaml
+# GitLab CI (.gitlab-ci.yml)
+discipline:
+  image:
+    name: ghcr.io/orieg/discipline:latest
+    entrypoint: [""]
+  script:
+    - discipline check --base origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-main}
 ```
 
 ### Standalone CLI

@@ -111,15 +111,35 @@ def validate_ruby_syntax(content: str) -> bool:
         return True
 
 
-def push_to_tap_repo(tap_repo: str, token: str, formula_content: str, version: str) -> None:
-    """Clone or push formula to the specified Homebrew tap repository."""
+def push_to_tap_repo(
+    tap_repo: str,
+    token: str | None,
+    deploy_key: str | None,
+    formula_content: str,
+    version: str,
+) -> None:
+    """Clone or push formula to the specified Homebrew tap repository via SSH deploy key or HTTPS token."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        clone_url = f"https://x-access-token:{token}@github.com/{tap_repo}.git"
+        git_env = os.environ.copy()
+        if deploy_key:
+            key_file = Path(tmpdir) / "id_deploy"
+            key_file.write_text(deploy_key.strip() + "\n", encoding="utf-8")
+            os.chmod(key_file, 0o600)
+            git_env["GIT_SSH_COMMAND"] = (
+                f"ssh -i {key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+            )
+            clone_url = f"git@github.com:{tap_repo}.git"
+        elif token:
+            clone_url = f"https://x-access-token:{token}@github.com/{tap_repo}.git"
+        else:
+            raise ValueError("Either deploy_key or token must be provided to push to tap repository")
+
         print(f"Cloning tap repository {tap_repo}...")
         subprocess.run(
             ["git", "clone", "--depth", "1", clone_url, tmpdir],
             check=True,
             capture_output=True,
+            env=git_env,
         )
 
         formula_dir = Path(tmpdir) / "Formula"
@@ -130,6 +150,7 @@ def push_to_tap_repo(tap_repo: str, token: str, formula_content: str, version: s
         subprocess.run(
             ["git", "-C", tmpdir, "config", "user.name", "github-actions[bot]"],
             check=True,
+            env=git_env,
         )
         subprocess.run(
             [
@@ -141,11 +162,18 @@ def push_to_tap_repo(tap_repo: str, token: str, formula_content: str, version: s
                 "41898282+github-actions[bot]@users.noreply.github.com",
             ],
             check=True,
+            env=git_env,
         )
-        subprocess.run(["git", "-C", tmpdir, "add", "Formula/discipline.rb"], check=True)
+        subprocess.run(
+            ["git", "-C", tmpdir, "add", "Formula/discipline.rb"],
+            check=True,
+            env=git_env,
+        )
 
         diff = subprocess.run(
-            ["git", "-C", tmpdir, "diff", "--staged", "--quiet"], check=False
+            ["git", "-C", tmpdir, "diff", "--staged", "--quiet"],
+            check=False,
+            env=git_env,
         )
         if diff.returncode == 0:
             print(f"No changes to Formula/discipline.rb in {tap_repo}; already up to date.")
@@ -161,8 +189,13 @@ def push_to_tap_repo(tap_repo: str, token: str, formula_content: str, version: s
                 f"chore(discipline): bump formula to v{version}",
             ],
             check=True,
+            env=git_env,
         )
-        subprocess.run(["git", "-C", tmpdir, "push", "origin", "HEAD"], check=True)
+        subprocess.run(
+            ["git", "-C", tmpdir, "push", "origin", "HEAD"],
+            check=True,
+            env=git_env,
+        )
         print(f"Successfully pushed updated formula to {tap_repo} for v{version}!")
 
 
@@ -199,6 +232,11 @@ def main():
         help="Target tap repository to push to (e.g. orieg/homebrew-tap)",
     )
     parser.add_argument(
+        "--deploy-key",
+        default=None,
+        help="SSH private key (deploy key) with write access to the tap repository",
+    )
+    parser.add_argument(
         "--tap-token",
         default=None,
         help="GitHub token with repo write access to the tap repository",
@@ -228,14 +266,15 @@ def main():
     print(f"Generated Homebrew formula (v{version}) at {out_file}")
 
     if args.push_to_tap:
+        deploy_key = args.deploy_key or os.environ.get("HOMEBREW_TAP_DEPLOY_KEY")
         token = args.tap_token or os.environ.get("HOMEBREW_TAP_TOKEN")
-        if not token:
+        if not deploy_key and not token:
             print(
-                f"::notice::Push to {args.push_to_tap} requested but no token provided; skipping tap push.",
+                f"::notice::Push to {args.push_to_tap} requested but neither deploy key nor token provided; skipping tap push.",
                 file=sys.stderr,
             )
         else:
-            push_to_tap_repo(args.push_to_tap, token, content, version)
+            push_to_tap_repo(args.push_to_tap, token, deploy_key, content, version)
 
 
 if __name__ == "__main__":
