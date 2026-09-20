@@ -387,6 +387,8 @@ jobs:
           [ -z "${STATUS}" ] || { echo "::error::a verdict was produced by an unverified binary"; exit 1; }
       - name: "Standalone installer: install.sh positive and negative controls"
         run: tests/action/test-install-script.sh .ci-bin/discipline "${RUNNER_TEMP}"
+      - name: "Homebrew formula generator: positive and negative controls"
+        run: tests/action/test-update-homebrew-formula.sh
 
   # Gitea's act_runner is built on nektos/act: run the Gitea workflow under act
   # with Gitea's runner image. A live Gitea server is the stronger check and is

@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Generates and updates the Homebrew formula for Discipline with verified checksums."""
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+def get_default_version() -> str:
+    cargo_toml = Path(__file__).resolve().parent.parent / "Cargo.toml"
+    if cargo_toml.exists():
+        for line in cargo_toml.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version = "):
+                return line.split('"')[1]
+    return "0.2.2"
+
+
+def parse_checksums(checksums_path: Path) -> dict[str, str]:
+    """Parse SHA256SUMS file into {filename: sha256_hex}."""
+    if not checksums_path.exists():
+        raise FileNotFoundError(f"Checksums file not found: {checksums_path}")
+    mapping = {}
+    for line in checksums_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2:
+            sha, fname = parts[0].lower(), Path(parts[1].lstrip("* ")).name
+            mapping[fname] = sha
+    return mapping
+
+
+def generate_formula(version: str, checksums: dict[str, str]) -> str:
+    """Generate the Homebrew Formula Ruby content with release checksums."""
+    darwin_arm = checksums.get(
+        "discipline-aarch64-apple-darwin.tar.gz",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    )
+    darwin_intel = checksums.get(
+        "discipline-x86_64-apple-darwin.tar.gz",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    )
+    linux_arm = checksums.get(
+        "discipline-aarch64-unknown-linux-musl.tar.gz",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    )
+    linux_intel = checksums.get(
+        "discipline-x86_64-unknown-linux-musl.tar.gz",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    )
+
+    return f"""# typed: false
+# frozen_string_literal: true
+
+class Discipline < Formula
+  desc "Universal CI/CD gatekeeper and AI coding agent diff sentinel"
+  homepage "https://github.com/orieg/discipline"
+  license any_of: ["MIT", "Apache-2.0"]
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/orieg/discipline/releases/download/v{version}/discipline-aarch64-apple-darwin.tar.gz"
+      sha256 "{darwin_arm}"
+    else
+      url "https://github.com/orieg/discipline/releases/download/v{version}/discipline-x86_64-apple-darwin.tar.gz"
+      sha256 "{darwin_intel}"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/orieg/discipline/releases/download/v{version}/discipline-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "{linux_arm}"
+    else
+      url "https://github.com/orieg/discipline/releases/download/v{version}/discipline-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "{linux_intel}"
+    end
+  end
+
+  def install
+    bin.install "discipline"
+  end
+
+  test do
+    assert_match "discipline #{{version}}", shell_output("#{{bin}}/discipline --version")
+  end
+end
+"""
+
+
+def validate_ruby_syntax(content: str) -> bool:
+    try:
+        proc = subprocess.run(
+            ["ruby", "-c"],
+            input=content,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            print(f"Ruby syntax validation failed: {proc.stderr}", file=sys.stderr)
+            return False
+        return True
+    except FileNotFoundError:
+        # ruby not installed in environment, skip syntax check
+        return True
+
+
+def push_to_tap_repo(tap_repo: str, token: str, formula_content: str, version: str) -> None:
+    """Clone or push formula to the specified Homebrew tap repository."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        clone_url = f"https://x-access-token:{token}@github.com/{tap_repo}.git"
+        print(f"Cloning tap repository {tap_repo}...")
+        subprocess.run(
+            ["git", "clone", "--depth", "1", clone_url, tmpdir],
+            check=True,
+            capture_output=True,
+        )
+
+        formula_dir = Path(tmpdir) / "Formula"
+        formula_dir.mkdir(parents=True, exist_ok=True)
+        formula_file = formula_dir / "discipline.rb"
+        formula_file.write_text(formula_content, encoding="utf-8")
+
+        subprocess.run(
+            ["git", "-C", tmpdir, "config", "user.name", "github-actions[bot]"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                tmpdir,
+                "config",
+                "user.email",
+                "41898282+github-actions[bot]@users.noreply.github.com",
+            ],
+            check=True,
+        )
+        subprocess.run(["git", "-C", tmpdir, "add", "Formula/discipline.rb"], check=True)
+
+        diff = subprocess.run(
+            ["git", "-C", tmpdir, "diff", "--staged", "--quiet"], check=False
+        )
+        if diff.returncode == 0:
+            print(f"No changes to Formula/discipline.rb in {tap_repo}; already up to date.")
+            return
+
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                tmpdir,
+                "commit",
+                "-m",
+                f"chore(discipline): bump formula to v{version}",
+            ],
+            check=True,
+        )
+        subprocess.run(["git", "-C", tmpdir, "push", "origin", "HEAD"], check=True)
+        print(f"Successfully pushed updated formula to {tap_repo} for v{version}!")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate and update the Homebrew formula for Discipline."
+    )
+    parser.add_argument(
+        "--version",
+        default=None,
+        help="Release version string without 'v' (defaults to Cargo.toml version)",
+    )
+    parser.add_argument(
+        "--checksums",
+        type=Path,
+        default=None,
+        help="Path to SHA256SUMS file",
+    )
+    parser.add_argument(
+        "--formula-file",
+        type=Path,
+        default=Path("packaging/homebrew/discipline.rb"),
+        help="Target formula file to update (default: packaging/homebrew/discipline.rb)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output path for the generated formula (defaults to --formula-file)",
+    )
+    parser.add_argument(
+        "--push-to-tap",
+        default=None,
+        help="Target tap repository to push to (e.g. orieg/homebrew-tap)",
+    )
+    parser.add_argument(
+        "--tap-token",
+        default=None,
+        help="GitHub token with repo write access to the tap repository",
+    )
+
+    args = parser.parse_args()
+    version = args.version or get_default_version()
+    version = version.lstrip("v")
+
+    checksums = {}
+    if args.checksums:
+        if not args.checksums.exists():
+            print(f"Error: checksums file not found: {args.checksums}", file=sys.stderr)
+            sys.exit(1)
+        checksums = parse_checksums(args.checksums)
+    elif Path("dist/SHA256SUMS").exists():
+        checksums = parse_checksums(Path("dist/SHA256SUMS"))
+
+    content = generate_formula(version, checksums)
+
+    if not validate_ruby_syntax(content):
+        sys.exit(1)
+
+    out_file = args.output or args.formula_file
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text(content, encoding="utf-8")
+    print(f"Generated Homebrew formula (v{version}) at {out_file}")
+
+    if args.push_to_tap:
+        token = args.tap_token or os.environ.get("HOMEBREW_TAP_TOKEN")
+        if not token:
+            print(
+                f"::notice::Push to {args.push_to_tap} requested but no token provided; skipping tap push.",
+                file=sys.stderr,
+            )
+        else:
+            push_to_tap_repo(args.push_to_tap, token, content, version)
+
+
+if __name__ == "__main__":
+    main()

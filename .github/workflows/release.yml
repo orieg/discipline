@@ -177,6 +177,27 @@ jobs:
             dist/discipline-*.tar.gz
             dist/discipline_*.deb
             dist/discipline-*.rpm
+      - name: Generate Homebrew formula
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/update_homebrew_formula.py \
+            --version "${VERSION}" \
+            --checksums dist/SHA256SUMS \
+            --formula-file packaging/homebrew/discipline.rb \
+            --output dist/discipline.rb
+          if [ -n "${HOMEBREW_TAP_TOKEN}" ]; then
+            python3 scripts/update_homebrew_formula.py \
+              --version "${VERSION}" \
+              --checksums dist/SHA256SUMS \
+              --push-to-tap orieg/homebrew-tap \
+              --tap-token "${HOMEBREW_TAP_TOKEN}"
+          else
+            echo "::notice::HOMEBREW_TAP_TOKEN not configured; skipping automatic push to orieg/homebrew-tap"
+          fi
       - name: Create the GitHub release
         shell: bash
         env:
@@ -205,7 +226,7 @@ jobs:
           else
             gh release create "${TAG}" --draft "${flags[@]}"
           fi
-          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/discipline_*.deb dist/discipline-*.rpm dist/SHA256SUMS --clobber
+          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/discipline_*.deb dist/discipline-*.rpm dist/discipline.rb dist/SHA256SUMS --clobber
           gh release edit "${TAG}" --draft=false
 
   # Consume the release exactly as a user does: download, verify the checksum,
