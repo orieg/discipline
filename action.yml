@@ -157,7 +157,7 @@ runs:
           esac
 
           version="${INPUT_VERSION}"
-          if [ -z "${version}" ] && [[ "${ACTION_REF}" =~ ^v[0-9]+(\.[0-9]+)* ]]; then
+          if [ -z "${version}" ] && [[ "${ACTION_REF}" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)* ]]; then
             version="${ACTION_REF}"
           fi
           if [ -n "${version}" ]; then
