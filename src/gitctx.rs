@@ -228,11 +228,11 @@ pub fn discover_repository(path: impl AsRef<std::path::Path>) -> Result<Reposito
                 || err.message().contains("not owned by current user");
             if is_owner_error {
                 bail!(
-                    "repository path '{}' is not owned by current user (libgit2 owner validation rejected access; code=Owner (-36)).\n\
+                    "repository at '{}' is not owned by current user (libgit2 owner validation rejected access; code=Owner (-36)).\n\
                     To resolve this:\n\
-                      1. In containerized environments, pass `-e DISCIPLINE_TRUST_WORKSPACE=1` (or configure `ENV DISCIPLINE_TRUST_WORKSPACE=1`).\n\
-                      2. Or run the container matching the host UID/GID: `--user \"$(id -u):$(id -g)\"`.\n\
-                      3. Or add the directory to git's safe directory: `git config --global --add safe.directory '{}'`.",
+                      1. Add the path to git's safe directory: git config --global --add safe.directory '{}' (or '*' in ephemeral environments).\n\
+                      2. Or run the container matching the host UID/GID: --user \"$(id -u):$(id -g)\".\n\
+                      3. Or opt in to trust the workspace: --trust-workspace (or pass DISCIPLINE_TRUST_WORKSPACE=1).",
                     path.as_ref().display(),
                     path.as_ref().display()
                 );

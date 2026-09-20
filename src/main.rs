@@ -51,6 +51,7 @@ fn run() -> Result<bool> {
             allow_cross_host_bench: false,
             bench_base_file: None,
             bench_head_file: None,
+            trust_workspace: args.trust_workspace,
         }),
         Commands::Init(args) => init(args.name),
         Commands::Gates(args) => gates(&args.config),
@@ -200,6 +201,9 @@ fn detect_pr_title_from_ci() -> Option<String> {
 }
 
 fn check(args: CheckArgs) -> Result<bool> {
+    if args.trust_workspace {
+        std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
+    }
     let is_gitlab = is_gitlab_ci();
     let base_ref = discipline::gitctx::detect_base_ref(
         args.base.as_deref(),

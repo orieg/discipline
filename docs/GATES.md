@@ -874,6 +874,26 @@ Discipline provides universal static binary drop-in replacements for the legacy 
 
 ---
 
+## Repository Security Boundary & Workspace Ownership
+
+Discipline inspects git history and diffs using `libgit2`. Access to the underlying git repository enforces strict security boundaries that differ between host workstations and containerized environments:
+
+### Host Binary Enforcement (CVE-2022-24765 Protection)
+On developer workstations and multi-tenant hosts, the native `discipline` binary enforces strict repository owner validation by default.
+- **Threat Model (CVE-2022-24765):** In multi-user systems, an attacker can create a malicious `.git` directory in a shared location (such as `/tmp` or a shared parent directory) with poisoned configuration, hooks, or executable aliases. If a tool traverses into that directory without checking ownership, it could execute arbitrary code under the invoking user's credentials.
+- **Fail-Closed Guard:** If the repository at the discovered path is not owned by the current user, `discipline` fails closed with code `code=Owner (-36)` and prints an actionable diagnostic naming the cause and resolution paths.
+- **Opt-In Override:** In automated or specialized host environments where cross-user repository access is intentional and audited, owner validation can be disabled via the `--trust-workspace` CLI flag or by passing `DISCIPLINE_TRUST_WORKSPACE=1`.
+
+### Container Image Relaxation
+The official container image (`ghcr.io/orieg/discipline`) intentionally relaxes repository owner validation out-of-the-box (via system-wide `safe.directory '*'`, an entrypoint wrapper registering the active directory, and `ENV DISCIPLINE_TRUST_WORKSPACE=1`).
+- **Operational Reality:** In containerized CI/CD runners (Docker volume mounts, Gitea Act Runner, Forgejo Runner, GitLab CI `/builds`, Kubernetes/Argo `/workspace`), checkout volumes are frequently owned by root (`0:0`) or the host runner UID, while the container executes as unprivileged `USER 10001:10001`. Requiring manual `--user` overrides or volume-mounted git configs adds significant friction and causes false-positive failures on normal setups.
+- **Security Assessment:** Relaxing owner validation within the official container image is safe because:
+  1. **Ephemeral Single-Purpose Sandbox:** The container executes inside an isolated container namespace with a dedicated filesystem and unprivileged user credentials (`USER 10001:10001`).
+  2. **No Hook or Pager Execution:** `discipline` and `libgit2` do not invoke external git hooks, custom diff filters, or pager binaries, which eliminated the execution vector exploited in CVE-2022-24765.
+  3. **No Root Escalation:** The container lacks `setuid` binaries or root escalation capabilities.
+
+---
+
 ## Planned Gates
 
 The following gates are registered with `available: false` in the gate registry. Attempting to enable or configure them exits non-zero (F5). Full roadmaps, dependencies, and go/no-go gates are documented in [ROADMAP.md](ROADMAP.md).

@@ -482,12 +482,42 @@ jobs:
           sudo chown -R 0:0 "${RUNNER_TEMP}/fx-root"
       - name: "Smoke test container against root-owned workspace (positive control)"
         run: |
-          docker run --rm -v "${RUNNER_TEMP}/fx-root":/workspace discipline:test check --base main
-      - name: "Negative control: bad fixture is detected and rejected"
+          docker run --rm -v "${RUNNER_TEMP}/fx-root":/workspace discipline:test check --base main --format json > "${RUNNER_TEMP}/fx-root-clean.json"
+          tests/action/assert-report.sh "${RUNNER_TEMP}/fx-root-clean.json" pass
+      - name: "Negative control: bad fixture is detected and rejected with real gate verdicts"
         run: |
           tests/action/make-fixture.sh "${RUNNER_TEMP}/fx-root-bad" bad
           sudo chown -R 0:0 "${RUNNER_TEMP}/fx-root-bad"
-          ! docker run --rm -v "${RUNNER_TEMP}/fx-root-bad":/workspace discipline:test check --base main
+          ! docker run --rm -v "${RUNNER_TEMP}/fx-root-bad":/workspace discipline:test check --base main --format json > "${RUNNER_TEMP}/fx-root-bad.json"
+          tests/action/assert-report.sh "${RUNNER_TEMP}/fx-root-bad.json" fail assertion-reduction pii time-estimates unsafe-safety-comment vacuous-tests
+      - name: "Smoke test container in-container checkout (GitLab/Woodpecker pipeline reproduction)"
+        run: |
+          docker run --rm discipline:test sh -c '
+            set -euo pipefail
+            git init -b main
+            git config user.email "ci@example.invalid"
+            git config user.name "ci"
+            echo "# Agents Guide" > AGENTS.md
+            cat > tests.rs << "EOF"
+          #[test]
+          fn works() {
+              assert_eq!(1 + 1, 2);
+          }
+          EOF
+            git add -A
+            git commit -m "chore: base"
+            git checkout -b work
+            cat >> tests.rs << "EOF"
+
+          #[test]
+          fn extra() {
+              assert_eq!(2 + 2, 4);
+          }
+          EOF
+            git add -A
+            git commit -m "test: add extra test"
+            discipline check --base main
+          '
 
   ci-gate:
     if: always()

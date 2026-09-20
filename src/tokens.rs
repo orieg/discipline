@@ -187,6 +187,7 @@ pub const SECRETS_ARGV_OK: &[&str] = &[
 
 pub const NO_ISSUE: &[&str] = &[
     "no-issue",
+    "discipline:no-issue",
     "discipline:allow(issue-link)",
     "allow(issue-link)",
 ];
@@ -303,6 +304,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "discipline:allow(shell-secrets)",
     "allow(shell-secrets)",
     "no-issue",
+    "discipline:no-issue",
     "discipline:allow(issue-link)",
     "allow(issue-link)",
     "allow-provenance",

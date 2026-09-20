@@ -6799,6 +6799,24 @@ fn test_discover_repository_trust_workspace_r1() {
         "{}{}",
         run_trusted_bool.stdout, run_trusted_bool.stderr
     );
+
+    // 3. With --trust-workspace CLI flag, check succeeds
+    let run_trusted_cli = repo.run(
+        &[
+            "check",
+            "--trust-workspace",
+            "--base",
+            "main",
+            "--format",
+            "json",
+        ],
+        &[],
+    );
+    assert_eq!(
+        run_trusted_cli.code, 0,
+        "{}{}",
+        run_trusted_cli.stdout, run_trusted_cli.stderr
+    );
 }
 
 #[test]
@@ -6816,16 +6834,17 @@ fn test_owner_validation_actionable_error_diagnostic_r1() {
 
     // Verify actionable remediation strings
     let owner_remediation = format!(
-        "repository path '{}' is not owned by current user (libgit2 owner validation rejected access; code=Owner (-36)).\n\
+        "repository at '{}' is not owned by current user (libgit2 owner validation rejected access; code=Owner (-36)).\n\
         To resolve this:\n\
-          1. In containerized environments, pass `-e DISCIPLINE_TRUST_WORKSPACE=1` (or configure `ENV DISCIPLINE_TRUST_WORKSPACE=1`).\n\
-          2. Or run the container matching the host UID/GID: `--user \"$(id -u):$(id -g)\"`.\n\
-          3. Or add the directory to git's safe directory: `git config --global --add safe.directory '{}'`.",
+          1. Add the path to git's safe directory: git config --global --add safe.directory '{}' (or '*' in ephemeral environments).\n\
+          2. Or run the container matching the host UID/GID: --user \"$(id -u):$(id -g)\".\n\
+          3. Or opt in to trust the workspace: --trust-workspace (or pass DISCIPLINE_TRUST_WORKSPACE=1).",
         path.display(),
         path.display()
     );
     assert!(owner_remediation.contains("code=Owner (-36)"));
     assert!(owner_remediation.contains("DISCIPLINE_TRUST_WORKSPACE=1"));
+    assert!(owner_remediation.contains("--trust-workspace"));
     assert!(owner_remediation.contains("--user"));
     assert!(owner_remediation.contains("safe.directory"));
 }

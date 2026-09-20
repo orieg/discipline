@@ -27,22 +27,26 @@ RUN cargo build --release --locked
 FROM alpine:3.21
 
 # Install CA certificates for secure checkouts and git for local repository operations
+# Configure system-wide safe.directory = '*' while still root before switching to unprivileged user
 RUN apk add --no-cache ca-certificates git \
     && addgroup -g 10001 -S discipline \
     && adduser -u 10001 -S -G discipline -h /workspace -s /bin/sh discipline \
     && mkdir -p /workspace \
-    && chown -R discipline:discipline /workspace
+    && chown -R discipline:discipline /workspace \
+    && git config --system --add safe.directory '*'
 
-# Copy statically compiled discipline binary from builder stage
+# Copy statically compiled discipline binary and entrypoint wrapper
 COPY --from=builder /src/target/release/discipline /usr/local/bin/discipline
+COPY packaging/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/discipline /usr/local/bin/docker-entrypoint.sh
 
 # Use unprivileged non-root user (numeric UID:GID for strict container security policies)
 USER 10001:10001
 WORKDIR /workspace
 VOLUME ["/workspace"]
 
-# Trust mounted workspace directory to avoid libgit2 repository ownership errors (CVE-2022-24765)
+# Trust mounted workspace directory in ephemeral container sandbox (CVE-2022-24765 relaxed in container)
 ENV DISCIPLINE_TRUST_WORKSPACE=1
 
-ENTRYPOINT ["discipline"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["check"]

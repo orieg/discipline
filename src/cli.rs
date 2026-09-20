@@ -125,6 +125,10 @@ pub struct CheckArgs {
     #[arg(long, env = "DISCIPLINE_DIRECTIVE_SOURCES", value_delimiter = ',')]
     pub directive_sources: Vec<String>,
 
+    /// Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)
+    #[arg(long)]
+    pub trust_workspace: bool,
+
     /// Suppress output on success (only print output when violations are found)
     #[arg(short, long)]
     pub quiet: bool,
@@ -205,6 +209,10 @@ pub struct DiffArgs {
     /// Write SARIF report to this path
     #[arg(long, env = "DISCIPLINE_REPORT_SARIF")]
     pub report_sarif: Option<PathBuf>,
+
+    /// Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)
+    #[arg(long)]
+    pub trust_workspace: bool,
 }
 
 #[derive(Args, Debug)]
