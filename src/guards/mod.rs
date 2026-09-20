@@ -205,15 +205,6 @@ impl Context<'_> {
         crate::tokens::find_override(&self.directives, gate, names, subject)
     }
 
-    pub fn find_gate_or_subject_override(
-        &self,
-        gate: &str,
-        names: &[&str],
-        subject: &str,
-    ) -> Option<crate::tokens::OverrideRecord> {
-        crate::tokens::find_gate_or_subject_override(&self.directives, gate, names, subject)
-    }
-
     /// A finding that an override directive could lift is only a warning in
     /// `--staged` mode without a PR body: a pre-commit hook runs before the
     /// commit message exists, so there is nowhere to put the directive yet.

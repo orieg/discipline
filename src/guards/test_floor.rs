@@ -53,16 +53,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                     base_floor_const = Some(val);
                 } else {
                     let subject = const_name.as_str();
-                    if let Some(ov) = ctx
-                        .find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, subject)
-                        .or_else(|| {
-                            ctx.find_gate_or_subject_override(
-                                GATE,
-                                tokens::ALLOW_TEST_SHRINK,
-                                const_file,
-                            )
-                        })
-                    {
+                    if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, subject) {
                         out.overrides.push(ov);
                     } else {
                         out.violations.push(Violation {
@@ -84,9 +75,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                 }
             }
             Ok(None) => {
-                if let Some(ov) =
-                    ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, const_file)
-                {
+                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, const_file) {
                     out.overrides.push(ov);
                 } else {
                     out.violations.push(Violation {
@@ -127,19 +116,8 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                     if let Some(caps) = re.captures(&head_src) {
                         if let Ok(head_val) = caps[1].parse::<usize>() {
                             if head_val < base_floor {
-                                if let Some(ov) = ctx
-                                    .find_gate_or_subject_override(
-                                        GATE,
-                                        tokens::ALLOW_TEST_SHRINK,
-                                        const_name,
-                                    )
-                                    .or_else(|| {
-                                        ctx.find_gate_or_subject_override(
-                                            GATE,
-                                            tokens::ALLOW_TEST_SHRINK,
-                                            const_file,
-                                        )
-                                    })
+                                if let Some(ov) =
+                                    ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, const_name)
                                 {
                                     out.overrides.push(ov);
                                 } else {
@@ -200,16 +178,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     for suite in &settings.required_suites {
         let full = Path::new(ctx.git.root()).join(suite);
         if !full.is_file() {
-            if let Some(ov) = ctx
-                .find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, suite)
-                .or_else(|| {
-                    ctx.find_gate_or_subject_override(
-                        GATE,
-                        tokens::ALLOW_TEST_SHRINK,
-                        "required_suites",
-                    )
-                })
-            {
+            if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, suite) {
                 out.overrides.push(ov);
             } else {
                 out.violations.push(Violation {
@@ -295,29 +264,64 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
 }
 
 fn find_test_floor_override(ctx: &Context) -> Option<crate::tokens::OverrideRecord> {
-    ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, "test-floor")
-        .or_else(|| ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, "tests"))
-        .or_else(|| ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, "min_tests"))
-        .or_else(|| {
-            for d in &ctx.directives {
-                if d.directive.eq_ignore_ascii_case("allow-test-shrink")
-                    || d.directive.eq_ignore_ascii_case("allow-floor-drop")
-                    || d.directive
-                        .eq_ignore_ascii_case("discipline:allow(test-floor)")
-                    || d.directive.eq_ignore_ascii_case("allow(test-floor)")
-                {
-                    return Some(crate::tokens::OverrideRecord {
-                        gate: GATE.to_string(),
-                        subject: "test-floor".to_string(),
-                        directive: d.directive.clone(),
-                        reason: d.reason.clone(),
-                        source: d.source.clone(),
-                        hidden: d.hidden,
-                    });
+    if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, GATE) {
+        return Some(ov);
+    }
+    if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, "min_tests") {
+        return Some(ov);
+    }
+    if let Ok(changed) = ctx.git.changed_files() {
+        let registry = crate::ast::default_registry();
+        let v = crate::ast::AssertVocabulary::default();
+
+        for cf in &changed {
+            if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, &cf.path) {
+                return Some(ov);
+            }
+            if cf.old_path != cf.path {
+                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, &cf.old_path) {
+                    return Some(ov);
                 }
             }
-            None
-        })
+            if let Some(file_name) = cf.path.rsplit('/').next() {
+                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, file_name) {
+                    return Some(ov);
+                }
+            }
+            if let Some(stem) = Path::new(&cf.path).file_stem().and_then(|s| s.to_str()) {
+                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, stem) {
+                    return Some(ov);
+                }
+            }
+
+            if let Ok(Some(base_src)) = ctx.git.base_content(&cf.old_path) {
+                if let Some(pack) = registry.find_pack(&cf.old_path) {
+                    if let Ok(base_facts) = pack.extract(&cf.old_path, &base_src, &v) {
+                        let head_names: std::collections::HashSet<String> = if cf.is_deleted() {
+                            std::collections::HashSet::new()
+                        } else if let Ok(Some(head_src)) = ctx.git.head_content(&cf.path) {
+                            pack.extract(&cf.path, &head_src, &v)
+                                .map(|f| f.tests.into_iter().map(|t| t.name).collect())
+                                .unwrap_or_default()
+                        } else {
+                            std::collections::HashSet::new()
+                        };
+
+                        for t in base_facts.tests {
+                            if !head_names.contains(&t.name) {
+                                if let Some(ov) =
+                                    ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, &t.name)
+                                {
+                                    return Some(ov);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Counts test functions across all supported language packs in tracked repository files.

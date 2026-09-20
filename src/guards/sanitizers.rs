@@ -39,7 +39,10 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
             let combined = format!("{}\n{}", canary_res.stdout, canary_res.stderr);
             let expected = preset.canary_expected_diagnostic.unwrap_or("Sanitizer");
             if !combined.contains(expected) {
-                if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_SANITIZERS, GATE) {
+                if let Some(ov) = ctx
+                    .find_override(GATE, ALLOW_SANITIZERS, "canary")
+                    .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "sanitizers"))
+                {
                     out.overrides.push(ov.clone());
                     out.notes.push(format!(
                         "override applied: `{}: {}` (canary diagnostic mismatch allowed) ({})",
@@ -70,7 +73,12 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
     let res = match run_command_bounded("sanitizers", &cmd, timeout_secs, root) {
         Ok(r) => r,
         Err(e) => {
-            if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_SANITIZERS, GATE) {
+            if let Some(ov) = ctx
+                .find_override(GATE, ALLOW_SANITIZERS, "execution")
+                .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "sanitizers"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "toolchain"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "nightly"))
+            {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (sanitizer execution error allowed) ({})",
@@ -90,7 +98,12 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
     };
 
     if !res.status.success() {
-        if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_SANITIZERS, GATE) {
+        if let Some(ov) = ctx
+            .find_override(GATE, ALLOW_SANITIZERS, "failure")
+            .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "sanitizers"))
+            .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "toolchain"))
+            .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "nightly"))
+        {
             out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` (sanitizer failure allowed) ({})",

@@ -381,11 +381,60 @@ fn schema_json_file_in_sync_with_code() {
 fn test_all_directives_documented_in_configuration_md() {
     let doc =
         std::fs::read_to_string("docs/CONFIGURATION.md").expect("docs/CONFIGURATION.md must exist");
-    for directive in discipline::tokens::ALL_DIRECTIVE_NAMES {
+
+    let mut table_directives = std::collections::BTreeSet::new();
+    let mut in_table = false;
+    for line in doc.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("| Directive | Lifts | Subject |") {
+            in_table = true;
+            continue;
+        }
+        if in_table {
+            if !trimmed.starts_with('|') || trimmed.is_empty() {
+                break;
+            }
+            if trimmed.starts_with("|---|") {
+                continue;
+            }
+            let parts: Vec<&str> = trimmed.split('|').collect();
+            if parts.len() >= 2 {
+                let cell = parts[1].trim();
+                for entry in cell.split('/') {
+                    let cleaned = entry.trim().trim_matches('`').trim_end_matches(':').trim();
+                    if !cleaned.is_empty() {
+                        table_directives.insert(cleaned.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let code_directives: std::collections::BTreeSet<String> =
+        discipline::tokens::ALL_DIRECTIVE_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+    // 1. Every code directive must be in the documentation table
+    for dir in &code_directives {
         assert!(
-            doc.contains(directive),
-            "Directive '{}' known to src/tokens.rs is missing from docs/CONFIGURATION.md",
-            directive
+            table_directives.contains(dir),
+            "Directive '{dir}' known to src/tokens.rs is missing from the directive table in docs/CONFIGURATION.md"
         );
     }
+
+    // 2. Every documented table directive must be known to src/tokens.rs
+    for dir in &table_directives {
+        assert!(
+            code_directives.contains(dir),
+            "Directive '{dir}' documented in docs/CONFIGURATION.md table is unknown to src/tokens.rs"
+        );
+    }
+
+    // 3. Exact set equality
+    assert_eq!(
+        table_directives, code_directives,
+        "Mismatch between documented directive table and src/tokens.rs::ALL_DIRECTIVE_NAMES"
+    );
 }

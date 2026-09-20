@@ -431,7 +431,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 coe_line,
                                 format!("Job '{job_id}' carries 'continue-on-error: true', which masks failures in CI."),
                                 "Remove continue-on-error or provide an allow-gate-weakening: ci-integrity <reason> directive.",
-                                "continue-on-error",
+                                job_id,
                             );
                         }
                     }
@@ -569,7 +569,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                                         uses_line,
                                                         format!("Third-party action '{action}' is unpinned ('@{ref_str}'). Must be pinned by a 40-character commit SHA."),
                                                         "Pin the action by its immutable 40-character commit SHA, or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                                        action,
+                                                        uses,
                                                     );
                                                 }
                                             }
@@ -821,18 +821,23 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                         approx_line.unwrap_or(1),
                                     )
                                     .or(approx_line);
+                                    let step_subject = step
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .or_else(|| step.get("id").and_then(|i| i.as_str()))
+                                        .unwrap_or("continue-on-error");
                                     record_or_excuse(
-                                            ctx,
-                                            Some(&head_content),
-                                            &mut out,
-                                            settings.severity,
-                                            "continue-on-error Masks Failure",
-                                            Some(path.clone()),
-                                            coe_line,
-                                            "Step carries 'continue-on-error: true', which masks failures in CI.".to_string(),
-                                            "Remove continue-on-error or provide an allow-gate-weakening: ci-integrity <reason> directive.",
-                                            "continue-on-error",
-                                        );
+                                        ctx,
+                                        Some(&head_content),
+                                        &mut out,
+                                        settings.severity,
+                                        "continue-on-error Masks Failure",
+                                        Some(path.clone()),
+                                        coe_line,
+                                        "Step carries 'continue-on-error: true', which masks failures in CI.".to_string(),
+                                        "Remove continue-on-error or provide an allow-gate-weakening: ci-integrity <reason> directive.",
+                                        step_subject,
+                                    );
                                 }
                             }
 
@@ -866,6 +871,11 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                                 )
                                             })
                                             .or(approx_line);
+                                            let step_subject = step
+                                                .get("name")
+                                                .and_then(|n| n.as_str())
+                                                .or_else(|| step.get("id").and_then(|i| i.as_str()))
+                                                .unwrap_or("or-true");
                                             record_or_excuse(
                                                 ctx,
                                                 Some(&head_content),
@@ -876,7 +886,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                                 mask_line,
                                                 "Command uses '|| true' or 'set +e' to mask command failure.".to_string(),
                                                 "Remove '|| true' or provide an allow-gate-weakening: ci-integrity <reason> directive.",
-                                                "or-true",
+                                                step_subject,
                                             );
                                         }
                                     }
@@ -1106,17 +1116,13 @@ fn record_or_excuse(
     }
 
     let ov = ctx
-        .find_gate_or_subject_override(GATE, tokens::ALLOW_CI_WEAKENING, subject)
+        .find_override(GATE, tokens::ALLOW_CI_WEAKENING, subject)
         .or_else(|| {
-            ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_CI_WEAKENING, "ci-integrity")
+            subject
+                .split_once('@')
+                .and_then(|(act, _)| ctx.find_override(GATE, tokens::ALLOW_CI_WEAKENING, act))
         })
-        .or_else(|| {
-            if let Some(ref f) = file {
-                ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_CI_WEAKENING, f)
-            } else {
-                None
-            }
-        });
+        .or_else(|| ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, GATE));
 
     if let Some(record) = ov {
         out.overrides.push(record);

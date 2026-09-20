@@ -51,7 +51,12 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
             out.examined = 0;
             return Ok(out);
         }
-        if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MSRV, GATE) {
+        if let Some(ov) = ctx
+            .find_override(GATE, ALLOW_MSRV, "rust-version")
+            .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, "Cargo.toml"))
+            .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, "msrv"))
+            .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, "crate"))
+        {
             out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` (missing MSRV declaration allowed) ({})",
@@ -75,7 +80,11 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
     if let Some(cmd) = &settings.command {
         let (status, stdout, stderr) = run_msrv_command(cmd, root)?;
         if !status {
-            if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MSRV, GATE) {
+            if let Some(ov) = ctx
+                .find_override(GATE, ALLOW_MSRV, "command")
+                .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, "msrv"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, cmd))
+            {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (MSRV command failure allowed) ({})",

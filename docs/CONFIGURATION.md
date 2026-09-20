@@ -194,7 +194,7 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 
 | Directive | Lifts | Subject |
 |---|---|---|
-| `removes:` / `deletes:` / `remove:` / `delete:` / `discipline:allow(deletion-rationale)` / `allow(deletion-rationale)` | `deletion-rationale` | File path, directory prefix, or test function name (or unscoped with `require_scope = false`) |
+| `removes:` / `deletes:` / `discipline:allow(deletion-rationale)` / `allow(deletion-rationale)` | `deletion-rationale` | File path, directory prefix, or test function name (or unscoped with `require_scope = false`) |
 | `allow-assertion-drop:` / `discipline:allow(assertion-reduction)` / `allow(assertion-reduction)` | `assertion-reduction` | Test function name, file path, or directory prefix |
 | `allow-ignore:` / `discipline:allow(ignored-tests)` / `allow(ignored-tests)` | `ignored-tests` | Test function name |
 | `allow-gate-weakening:` / `discipline:allow(config-integrity)` / `allow(config-integrity)` | `config-integrity` | Gate id |
@@ -202,18 +202,18 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 | `allow-regression:` / `discipline:allow(bench-regression)` / `allow(bench-regression)` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
 | `allow-command:` / `discipline:allow(command)` / `allow(command)` | `command` | Subcommand or command line invocation, plus non-empty rationale |
 | `allow-dependency:` / `discipline:allow(dependency-delta)` / `allow(dependency-delta)` | `dependency-delta` | Dependency package name or manifest path |
-| `allow-test-shrink:` / `allow-test-budget:` / `allow-floor-drop:` / `discipline:allow(test-budget)` / `allow(test-budget)` / `discipline:allow(test-floor)` / `allow(test-floor)` | `test-budget`, `test-floor` | Test count delta, budget parameter, or suite name |
-| `allow-ci-weakening:` / `allow-unpinned-action:` / `allow-ci-change:` / `discipline:allow(ci-integrity)` / `allow(ci-integrity)` | `ci-integrity` | Workflow path, job id, or security check rationale |
-| `allow-nul:` / `allow-nul-byte:` / `allow-corrupt:` | `assertion-reduction`, `vacuous-tests` | Corrupt or NUL-byte fixture file path |
+| `allow-test-shrink:` / `allow-floor-drop:` / `discipline:allow(test-budget)` / `allow(test-budget)` / `discipline:allow(test-floor)` / `allow(test-floor)` | `test-budget`, `test-floor` | Test count delta, budget parameter, or suite name |
+| `allow-ci-weakening:` / `allow-unpinned-action:` / `discipline:allow(ci-integrity)` / `allow(ci-integrity)` | `ci-integrity` | Workflow path, job id, or security check rationale |
+| `allow-nul:` / `allow-nul-byte:` / `discipline:allow(vacuous-tests)` / `allow(vacuous-tests)` | `assertion-reduction`, `vacuous-tests` | Corrupt or NUL-byte fixture file path |
 | `secrets-argv-ok:` / `discipline:allow(shell-secrets)` / `allow(shell-secrets)` | `shell-secrets` | Shell script path or CLI command line |
 | `no-issue:` / `discipline:no-issue:` / `discipline:allow(issue-link)` / `allow(issue-link)` | `issue-link` | PR or commit justification for omitted tracking issue |
-| `allow-provenance:` / `allow-unpaired-figures:` / `docs-lint: allow` / `docs-lint:allow` / `discipline:allow(provenance-tags)` / `allow(provenance-tags)` | `provenance-tags` | Unmeasured figure, claim, or doc file path |
+| `allow-provenance:` / `allow-unpaired-figures:` / `discipline:allow(provenance-tags)` / `allow(provenance-tags)` | `provenance-tags` | Unmeasured figure, claim, or doc file path |
 | `allow-archive-leak:` / `discipline:allow(archive-contents)` / `allow(archive-contents)` | `archive-contents` | Archive file path or leaked entry name |
 | `allow-manifest-drift:` / `discipline:allow(manifest-sync)` / `allow(manifest-sync)` | `manifest-sync` | Manifest path or package field name |
 | `allow-version-mismatch:` / `discipline:allow(version-lockstep)` / `allow(version-lockstep)` | `version-lockstep` | Mismatched crate name or manifest path |
 | `allow-scope:` / `allow-scope-confinement:` / `discipline:allow(scope-confinement)` / `allow(scope-confinement)` | `scope-confinement` | Out-of-scope file path or module prefix |
 | `allow-suppression:` / `allow-suppression-delta:` / `discipline:allow(suppression-delta)` / `allow(suppression-delta)` | `suppression-delta` | Specific suppression rule (`dead_code`, `noqa`, `type: ignore`) and/or file path |
-| `allow-checklist:` / `allow-pr-checklist:` / `discipline:allow(pr-checklist)` / `allow(pr-checklist)` | `pr-checklist` | PR checklist item text or section |
+| `allow-pr-checklist:` / `allow-checklist:` / `discipline:allow(pr-checklist)` / `allow(pr-checklist)` | `pr-checklist` | PR checklist item text or section |
 | `allow-unsafe:` / `allow-unsafe-budget:` / `discipline:allow(unsafe-budget)` / `allow(unsafe-budget)` | `unsafe-budget` | Rust file path, function name, or module |
 | `allow-msrv:` / `discipline:allow(msrv)` / `allow(msrv)` | `msrv` | Crate name or MSRV error diagnostic |
 | `allow-miri:` / `discipline:allow(miri)` / `allow(miri)` | `miri` | Test name or unsupported Miri operation |

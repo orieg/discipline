@@ -101,7 +101,13 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
 
     if let Some(max) = settings.max_unsafe {
         if head_unsafe_count > max {
-            if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_UNSAFE, GATE) {
+            if let Some(ov) = ctx
+                .find_override(GATE, ALLOW_UNSAFE, "max_unsafe")
+                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "unsafe-budget"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "budget"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "FFI"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "pointer"))
+            {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (unsafe count {} exceeds cap of {}) ({})",
@@ -124,23 +130,36 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
 
     if !settings.allow_increase && head_unsafe_count > base_unsafe_count {
         let delta = head_unsafe_count - base_unsafe_count;
-        if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_UNSAFE, GATE) {
-            out.overrides.push(ov.clone());
-            out.notes.push(format!(
-                "override applied: `{}: {}` (+{} unsafe sites admitted) ({})",
-                ov.directive, ov.reason, delta, ov.source
-            ));
-        } else {
-            for (path, line, kind) in &new_unsafe_sites {
+        for (path, line, kind) in &new_unsafe_sites {
+            let file_stem = std::path::Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str());
+            let ov = ctx
+                .find_override(GATE, ALLOW_UNSAFE, path)
+                .or_else(|| file_stem.and_then(|s| ctx.find_override(GATE, ALLOW_UNSAFE, s)))
+                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "FFI"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "unsafe-budget"));
+
+            if let Some(record) = ov {
+                out.overrides.push(record.clone());
+                out.notes.push(format!(
+                    "override applied: `{}: {}` (unsafe {kind} in `{path}:{line}` allowed) ({})",
+                    record.directive, record.reason, record.source
+                ));
+            } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
                     path,
                     *line,
                     format!("unsafe {} added without budget increase authorization (+{} net)", kind, delta),
-                    format!("unsafe count increased from {} to {}; use `discipline:allow(unsafe-budget): <reason>` to waive", base_unsafe_count, head_unsafe_count),
+                    format!("unsafe count increased from {} to {}; use `allow-unsafe: <path> <reason>` to waive", base_unsafe_count, head_unsafe_count),
                 );
             }
-            if new_unsafe_sites.is_empty() {
+        }
+        if new_unsafe_sites.is_empty() {
+            if let Some(ov) = ctx.find_override(GATE, ALLOW_UNSAFE, "unsafe-budget") {
+                out.overrides.push(ov.clone());
+            } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
                     "workspace",
@@ -149,7 +168,7 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
                         "unsafe count increased from {} to {} (+{})",
                         base_unsafe_count, head_unsafe_count, delta
                     ),
-                    "use `discipline:allow(unsafe-budget): <reason>` to waive",
+                    "use `allow-unsafe: <path> <reason>` to waive",
                 );
             }
         }

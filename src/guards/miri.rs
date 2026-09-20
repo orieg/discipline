@@ -41,7 +41,12 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     let res = match run_command_bounded("miri", &full_cmd, timeout_secs, root) {
         Ok(r) => r,
         Err(e) => {
-            if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MIRI, GATE) {
+            if let Some(ov) = ctx
+                .find_override(GATE, ALLOW_MIRI, "execution")
+                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "miri"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "cargo-miri"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "toolchain"))
+            {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (miri execution error allowed) ({})",
@@ -66,7 +71,13 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     // Check zero-tests guard
     if let Some(zero_pat) = preset.zero_items_pattern {
         if stdout.contains(zero_pat) || stderr.contains(zero_pat) {
-            if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MIRI, GATE) {
+            if let Some(ov) = ctx
+                .find_override(GATE, ALLOW_MIRI, "zero-tests")
+                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "tests"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "miri"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "cargo-miri"))
+                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "toolchain"))
+            {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (miri 0 tests allowed) ({})",
@@ -86,7 +97,12 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     }
 
     if !res.status.success() {
-        if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MIRI, GATE) {
+        if let Some(ov) = ctx
+            .find_override(GATE, ALLOW_MIRI, "failure")
+            .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "miri"))
+            .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "cargo-miri"))
+            .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "toolchain"))
+        {
             out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` (miri failure allowed) ({})",

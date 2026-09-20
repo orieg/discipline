@@ -61,11 +61,15 @@ pub fn find_override(
     names: &[&str],
     subject: &str,
 ) -> Option<OverrideRecord> {
+    let trimmed = subject.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
     for d in directives {
-        if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive)) && d.covers(subject) {
+        if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive)) && d.covers(trimmed) {
             return Some(OverrideRecord {
                 gate: gate.to_string(),
-                subject: subject.to_string(),
+                subject: trimmed.to_string(),
                 directive: d.directive.clone(),
                 reason: d.reason.clone(),
                 source: d.source.clone(),
@@ -76,37 +80,252 @@ pub fn find_override(
     None
 }
 
-pub fn find_gate_or_subject_override(
-    directives: &[ParsedDirective],
-    gate: &str,
-    names: &[&str],
-    subject: &str,
-) -> Option<OverrideRecord> {
-    for d in directives {
-        if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive))
-            && (d.covers(subject)
-                || (!gate.is_empty() && d.covers(gate))
-                || (subject.is_empty() && gate != "suppression-delta")
-                || (subject == gate && gate != "suppression-delta"))
-        {
-            return Some(OverrideRecord {
-                gate: gate.to_string(),
-                subject: subject.to_string(),
-                directive: d.directive.clone(),
-                reason: d.reason.clone(),
-                source: d.source.clone(),
-                hidden: d.hidden,
-            });
-        }
-    }
-    None
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectiveSubjectKind {
+    /// Test function name, suite path, or count ratchet (e.g. `test_foo`, `tests/e2e.rs`, `test-floor`)
+    TestName,
+    /// Third-party action reference (e.g. `actions/checkout`)
+    ActionRef,
+    /// Workflow job or step identifier (e.g. `security`, `test`, `step_name`)
+    WorkflowJobOrStep,
+    /// File path or directory prefix (e.g. `src/lib.rs`, `tests/golden/api.json`)
+    FilePath,
+    /// Specific rule name or diagnostic identifier (e.g. `dead_code`, `noqa`, `type: ignore`, `pull_request_target`)
+    RuleName,
+    /// Benchmark arm, file stem, or benchmark function name
+    BenchmarkArm,
+    /// Command line or subcommand invocation
+    CommandName,
+    /// Dependency package or crate name
+    DependencyName,
+    /// PR checklist section or item identifier
+    ChecklistItem,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectiveSpec {
+    pub canonical: &'static str,
+    pub deprecated: Option<&'static str>,
+    pub gate: &'static str,
+    pub subject_kind: DirectiveSubjectKind,
+    pub subject_doc: &'static str,
+}
+
+pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
+    DirectiveSpec {
+        canonical: "removes",
+        deprecated: Some("deletes"),
+        gate: "deletion-rationale",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "File path, directory prefix, or test function name",
+    },
+    DirectiveSpec {
+        canonical: "allow-assertion-drop",
+        deprecated: None,
+        gate: "assertion-reduction",
+        subject_kind: DirectiveSubjectKind::TestName,
+        subject_doc: "Test function name, file path, or directory prefix",
+    },
+    DirectiveSpec {
+        canonical: "allow-ignore",
+        deprecated: None,
+        gate: "ignored-tests",
+        subject_kind: DirectiveSubjectKind::TestName,
+        subject_doc: "Test function name",
+    },
+    DirectiveSpec {
+        canonical: "allow-gate-weakening",
+        deprecated: None,
+        gate: "config-integrity",
+        subject_kind: DirectiveSubjectKind::RuleName,
+        subject_doc: "Gate id",
+    },
+    DirectiveSpec {
+        canonical: "allow-golden-update",
+        deprecated: None,
+        gate: "golden-output",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "Snapshot/fixture file path or directory prefix",
+    },
+    DirectiveSpec {
+        canonical: "allow-regression",
+        deprecated: None,
+        gate: "bench-regression",
+        subject_kind: DirectiveSubjectKind::BenchmarkArm,
+        subject_doc: "Benchmark name, file stem, or arm, plus non-empty rationale",
+    },
+    DirectiveSpec {
+        canonical: "allow-command",
+        deprecated: None,
+        gate: "command",
+        subject_kind: DirectiveSubjectKind::CommandName,
+        subject_doc: "Subcommand or command line invocation, plus non-empty rationale",
+    },
+    DirectiveSpec {
+        canonical: "allow-dependency",
+        deprecated: None,
+        gate: "dependency-delta",
+        subject_kind: DirectiveSubjectKind::DependencyName,
+        subject_doc: "Dependency package name or manifest path",
+    },
+    DirectiveSpec {
+        canonical: "allow-test-shrink",
+        deprecated: Some("allow-floor-drop"),
+        gate: "test-floor",
+        subject_kind: DirectiveSubjectKind::TestName,
+        subject_doc: "Test count delta, budget parameter, or suite name",
+    },
+    DirectiveSpec {
+        canonical: "allow-ci-weakening",
+        deprecated: Some("allow-unpinned-action"),
+        gate: "ci-integrity",
+        subject_kind: DirectiveSubjectKind::ActionRef,
+        subject_doc: "Workflow path, job id, or security check rationale",
+    },
+    DirectiveSpec {
+        canonical: "allow-nul",
+        deprecated: Some("allow-nul-byte"),
+        gate: "vacuous-tests",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "Corrupt or NUL-byte fixture file path",
+    },
+    DirectiveSpec {
+        canonical: "secrets-argv-ok",
+        deprecated: None,
+        gate: "shell-secrets",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "Shell script path or CLI command line",
+    },
+    DirectiveSpec {
+        canonical: "no-issue",
+        deprecated: Some("discipline:no-issue"),
+        gate: "issue-link",
+        subject_kind: DirectiveSubjectKind::RuleName,
+        subject_doc: "PR or commit justification for omitted tracking issue",
+    },
+    DirectiveSpec {
+        canonical: "allow-provenance",
+        deprecated: Some("allow-unpaired-figures"),
+        gate: "provenance-tags",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "Unmeasured figure, claim, or doc file path",
+    },
+    DirectiveSpec {
+        canonical: "allow-archive-leak",
+        deprecated: None,
+        gate: "archive-contents",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "Archive file path or leaked entry name",
+    },
+    DirectiveSpec {
+        canonical: "allow-manifest-drift",
+        deprecated: None,
+        gate: "manifest-sync",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "Manifest path or package field name",
+    },
+    DirectiveSpec {
+        canonical: "allow-version-mismatch",
+        deprecated: None,
+        gate: "version-lockstep",
+        subject_kind: DirectiveSubjectKind::DependencyName,
+        subject_doc: "Mismatched crate name or manifest path",
+    },
+    DirectiveSpec {
+        canonical: "allow-scope",
+        deprecated: Some("allow-scope-confinement"),
+        gate: "scope-confinement",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "Out-of-scope file path or module prefix",
+    },
+    DirectiveSpec {
+        canonical: "allow-suppression",
+        deprecated: Some("allow-suppression-delta"),
+        gate: "suppression-delta",
+        subject_kind: DirectiveSubjectKind::RuleName,
+        subject_doc:
+            "Specific suppression rule (`dead_code`, `noqa`, `type: ignore`) and/or file path",
+    },
+    DirectiveSpec {
+        canonical: "allow-pr-checklist",
+        deprecated: Some("allow-checklist"),
+        gate: "pr-checklist",
+        subject_kind: DirectiveSubjectKind::ChecklistItem,
+        subject_doc: "PR checklist item text or section",
+    },
+    DirectiveSpec {
+        canonical: "allow-unsafe",
+        deprecated: Some("allow-unsafe-budget"),
+        gate: "unsafe-budget",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "Rust file path, function name, or module",
+    },
+    DirectiveSpec {
+        canonical: "allow-msrv",
+        deprecated: None,
+        gate: "msrv",
+        subject_kind: DirectiveSubjectKind::DependencyName,
+        subject_doc: "Crate name or MSRV error diagnostic",
+    },
+    DirectiveSpec {
+        canonical: "allow-miri",
+        deprecated: None,
+        gate: "miri",
+        subject_kind: DirectiveSubjectKind::TestName,
+        subject_doc: "Test name or unsupported Miri operation",
+    },
+    DirectiveSpec {
+        canonical: "allow-sanitizers",
+        deprecated: None,
+        gate: "sanitizers",
+        subject_kind: DirectiveSubjectKind::TestName,
+        subject_doc: "Test or binary name with memory check rationale",
+    },
+];
+
+/// The 34 named directives recognized by discipline (24 canonical + 10 deprecated aliases).
+pub const KNOWN_DIRECTIVES: &[&str] = &[
+    // 24 Canonical
+    "removes",
+    "allow-assertion-drop",
+    "allow-ignore",
+    "allow-gate-weakening",
+    "allow-golden-update",
+    "allow-regression",
+    "allow-command",
+    "allow-dependency",
+    "allow-test-shrink",
+    "allow-ci-weakening",
+    "allow-nul",
+    "secrets-argv-ok",
+    "no-issue",
+    "allow-provenance",
+    "allow-archive-leak",
+    "allow-manifest-drift",
+    "allow-version-mismatch",
+    "allow-scope",
+    "allow-suppression",
+    "allow-pr-checklist",
+    "allow-unsafe",
+    "allow-msrv",
+    "allow-miri",
+    "allow-sanitizers",
+    // 10 Deprecated aliases
+    "deletes",
+    "allow-floor-drop",
+    "allow-unpinned-action",
+    "allow-nul-byte",
+    "discipline:no-issue",
+    "allow-unpaired-figures",
+    "allow-scope-confinement",
+    "allow-suppression-delta",
+    "allow-checklist",
+    "allow-unsafe-budget",
+];
 
 pub const REMOVES: &[&str] = &[
     "removes",
     "deletes",
-    "remove",
-    "delete",
     "discipline:allow(deletion-rationale)",
     "allow(deletion-rationale)",
 ];
@@ -133,10 +352,6 @@ pub const ALLOW_GOLDEN_UPDATE: &[&str] = &[
 pub const ALLOW_NUL: &[&str] = &[
     "allow-nul",
     "allow-nul-byte",
-    "allow-corrupt",
-    "allow-assertion-drop",
-    "discipline:allow(assertion-reduction)",
-    "allow(assertion-reduction)",
     "discipline:allow(vacuous-tests)",
     "allow(vacuous-tests)",
 ];
@@ -160,9 +375,7 @@ pub const ALLOW_DEPENDENCY: &[&str] = &[
 ];
 
 pub const ALLOW_TEST_SHRINK: &[&str] = &[
-    "allow-gate-weakening",
     "allow-test-shrink",
-    "allow-test-budget",
     "allow-floor-drop",
     "discipline:allow(test-budget)",
     "allow(test-budget)",
@@ -171,10 +384,8 @@ pub const ALLOW_TEST_SHRINK: &[&str] = &[
 ];
 
 pub const ALLOW_CI_WEAKENING: &[&str] = &[
-    "allow-gate-weakening",
     "allow-ci-weakening",
     "allow-unpinned-action",
-    "allow-ci-change",
     "discipline:allow(ci-integrity)",
     "allow(ci-integrity)",
 ];
@@ -194,11 +405,9 @@ pub const NO_ISSUE: &[&str] = &[
 
 pub const ALLOW_PROVENANCE: &[&str] = &[
     "allow-provenance",
+    "allow-unpaired-figures",
     "discipline:allow(provenance-tags)",
     "allow(provenance-tags)",
-    "allow-unpaired-figures",
-    "docs-lint: allow",
-    "docs-lint:allow",
 ];
 
 pub const ALLOW_ARCHIVE_LEAK: &[&str] = &[
@@ -234,8 +443,8 @@ pub const ALLOW_SUPPRESSION: &[&str] = &[
 ];
 
 pub const ALLOW_PR_CHECKLIST: &[&str] = &[
-    "allow-checklist",
     "allow-pr-checklist",
+    "allow-checklist",
     "discipline:allow(pr-checklist)",
     "allow(pr-checklist)",
 ];
@@ -257,94 +466,133 @@ pub const ALLOW_SANITIZERS: &[&str] = &[
     "allow(sanitizers)",
 ];
 
+/// Returns the slice of aliases accepted for a given directive name.
+pub fn names_for_directive(name: &str) -> &'static [&'static str] {
+    let lower = name.to_ascii_lowercase();
+    match lower.as_str() {
+        "removes" | "deletes" => REMOVES,
+        "allow-assertion-drop" => ALLOW_ASSERTION_DROP,
+        "allow-ignore" => ALLOW_IGNORE,
+        "allow-gate-weakening" => ALLOW_GATE_WEAKENING,
+        "allow-golden-update" => ALLOW_GOLDEN_UPDATE,
+        "allow-regression" => ALLOW_REGRESSION,
+        "allow-command" => ALLOW_COMMAND,
+        "allow-dependency" => ALLOW_DEPENDENCY,
+        "allow-test-shrink" | "allow-floor-drop" => ALLOW_TEST_SHRINK,
+        "allow-ci-weakening" | "allow-unpinned-action" => ALLOW_CI_WEAKENING,
+        "allow-nul" | "allow-nul-byte" => ALLOW_NUL,
+        "secrets-argv-ok" => SECRETS_ARGV_OK,
+        "no-issue" | "discipline:no-issue" => NO_ISSUE,
+        "allow-provenance" | "allow-unpaired-figures" => ALLOW_PROVENANCE,
+        "allow-archive-leak" => ALLOW_ARCHIVE_LEAK,
+        "allow-manifest-drift" => ALLOW_MANIFEST_DRIFT,
+        "allow-version-mismatch" => ALLOW_VERSION_MISMATCH,
+        "allow-scope" | "allow-scope-confinement" => ALLOW_SCOPE,
+        "allow-suppression" | "allow-suppression-delta" => ALLOW_SUPPRESSION,
+        "allow-pr-checklist" | "allow-checklist" => ALLOW_PR_CHECKLIST,
+        "allow-unsafe" | "allow-unsafe-budget" => ALLOW_UNSAFE,
+        "allow-msrv" => ALLOW_MSRV,
+        "allow-miri" => ALLOW_MIRI,
+        "allow-sanitizers" => ALLOW_SANITIZERS,
+        _ => &[],
+    }
+}
+
+/// Returns the specification for the given directive name, if known.
+pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
+    let lower = name.to_ascii_lowercase();
+    DIRECTIVE_SPECS.iter().find(|s| {
+        s.canonical.eq_ignore_ascii_case(&lower)
+            || s.deprecated.is_some_and(|d| d.eq_ignore_ascii_case(&lower))
+    })
+}
+
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
+    // 24 Canonical
     "removes",
+    "allow-assertion-drop",
+    "allow-ignore",
+    "allow-gate-weakening",
+    "allow-golden-update",
+    "allow-regression",
+    "allow-command",
+    "allow-dependency",
+    "allow-test-shrink",
+    "allow-ci-weakening",
+    "allow-nul",
+    "secrets-argv-ok",
+    "no-issue",
+    "allow-provenance",
+    "allow-archive-leak",
+    "allow-manifest-drift",
+    "allow-version-mismatch",
+    "allow-scope",
+    "allow-suppression",
+    "allow-pr-checklist",
+    "allow-unsafe",
+    "allow-msrv",
+    "allow-miri",
+    "allow-sanitizers",
+    // 10 Deprecated aliases
     "deletes",
-    "remove",
-    "delete",
+    "allow-floor-drop",
+    "allow-unpinned-action",
+    "allow-nul-byte",
+    "discipline:no-issue",
+    "allow-unpaired-figures",
+    "allow-scope-confinement",
+    "allow-suppression-delta",
+    "allow-checklist",
+    "allow-unsafe-budget",
+    // Namespaced forms
     "discipline:allow(deletion-rationale)",
     "allow(deletion-rationale)",
-    "allow-assertion-drop",
     "discipline:allow(assertion-reduction)",
     "allow(assertion-reduction)",
-    "allow-ignore",
     "discipline:allow(ignored-tests)",
     "allow(ignored-tests)",
-    "allow-gate-weakening",
     "discipline:allow(config-integrity)",
     "allow(config-integrity)",
-    "allow-golden-update",
     "discipline:allow(golden-output)",
     "allow(golden-output)",
-    "allow-regression",
     "discipline:allow(bench-regression)",
     "allow(bench-regression)",
-    "allow-command",
     "discipline:allow(command)",
     "allow(command)",
-    "allow-dependency",
     "discipline:allow(dependency-delta)",
     "allow(dependency-delta)",
-    "allow-test-shrink",
-    "allow-test-budget",
-    "allow-floor-drop",
     "discipline:allow(test-budget)",
     "allow(test-budget)",
     "discipline:allow(test-floor)",
     "allow(test-floor)",
-    "allow-ci-weakening",
-    "allow-unpinned-action",
-    "allow-ci-change",
     "discipline:allow(ci-integrity)",
     "allow(ci-integrity)",
-    "allow-nul",
-    "allow-nul-byte",
-    "allow-corrupt",
-    "secrets-argv-ok",
+    "discipline:allow(vacuous-tests)",
+    "allow(vacuous-tests)",
     "discipline:allow(shell-secrets)",
     "allow(shell-secrets)",
-    "no-issue",
-    "discipline:no-issue",
     "discipline:allow(issue-link)",
     "allow(issue-link)",
-    "allow-provenance",
     "discipline:allow(provenance-tags)",
     "allow(provenance-tags)",
-    "allow-unpaired-figures",
-    "docs-lint: allow",
-    "docs-lint:allow",
-    "allow-archive-leak",
     "discipline:allow(archive-contents)",
     "allow(archive-contents)",
-    "allow-manifest-drift",
     "discipline:allow(manifest-sync)",
     "allow(manifest-sync)",
-    "allow-version-mismatch",
     "discipline:allow(version-lockstep)",
     "allow(version-lockstep)",
-    "allow-scope",
-    "allow-scope-confinement",
     "discipline:allow(scope-confinement)",
     "allow(scope-confinement)",
-    "allow-suppression",
-    "allow-suppression-delta",
     "discipline:allow(suppression-delta)",
     "allow(suppression-delta)",
-    "allow-checklist",
-    "allow-pr-checklist",
     "discipline:allow(pr-checklist)",
     "allow(pr-checklist)",
-    "allow-unsafe",
-    "allow-unsafe-budget",
     "discipline:allow(unsafe-budget)",
     "allow(unsafe-budget)",
-    "allow-msrv",
     "discipline:allow(msrv)",
     "allow(msrv)",
-    "allow-miri",
     "discipline:allow(miri)",
     "allow(miri)",
-    "allow-sanitizers",
     "discipline:allow(sanitizers)",
     "allow(sanitizers)",
 ];
@@ -590,7 +838,7 @@ pub fn covers(reasons: &[String], subject: &str) -> bool {
 }
 
 fn reason_names(reason: &str, subject: &str) -> bool {
-    let is_token_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/');
+    let is_token_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '@');
     let trimmed_subject = subject.trim();
 
     if !trimmed_subject.is_empty() {
@@ -624,13 +872,13 @@ fn reason_names(reason: &str, subject: &str) -> bool {
             }
         }
 
-        // 3. Multi-word subject at the beginning of the reason (e.g. `allow-ignore: my test name <reason>`).
-        if trimmed_subject.contains(' ') {
-            let unquoted_reason = reason.trim_start_matches(['"', '\'', '`']);
-            if let Some(rest) = unquoted_reason.strip_prefix(trimmed_subject) {
-                if rest.is_empty() || rest.starts_with(|c: char| !is_token_char(c)) {
-                    return true;
-                }
+        // 3. Subject at the beginning of the reason (e.g. `allow-ignore: my test name <reason>` or `allow-unpinned-action: actions/checkout@v4 <reason>`).
+        let unquoted_reason = reason.trim_start_matches(['"', '\'', '`']);
+        if let Some(rest) = unquoted_reason.strip_prefix(trimmed_subject) {
+            if rest.is_empty()
+                || rest.starts_with(|c: char| (!is_token_char(c) && c != ':') || c == '@')
+            {
+                return true;
             }
         }
     }
@@ -861,8 +1109,10 @@ removes: tests/old.rs inside a fence
         assert!(covers(&r2, "src/bad.rs"));
         assert!(!covers(&r2, "src/good.rs"));
 
+        // Per S3 alias collapsing, allow-corrupt is dropped; only canonical allow-nul
+        // and deprecated alias allow-nul-byte are recognized.
         let r3 = directive_reasons("allow-corrupt: tests/fixture.bin raw fuzz input", ALLOW_NUL);
-        assert!(covers(&r3, "tests/fixture.bin"));
+        assert!(r3.is_empty());
     }
 
     #[test]
@@ -928,9 +1178,8 @@ removes: tests/old.rs inside a fence
             source: OverrideSource::Commit("abc".to_string()),
             hidden: false,
         }];
-        // Before the fix, passing subject == gate bypassed checking the reason.
         // With the fix, an unrelated reason returns None.
-        assert!(find_gate_or_subject_override(
+        assert!(find_override(
             &dirs,
             "suppression-delta",
             ALLOW_SUPPRESSION,

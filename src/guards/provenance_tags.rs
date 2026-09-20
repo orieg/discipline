@@ -426,11 +426,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
         );
 
         for f in findings {
-            let override_rec = ctx
-                .find_override(GATE, tokens::ALLOW_PROVENANCE, path)
-                .or_else(|| {
-                    ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_PROVENANCE, path)
-                });
+            let override_rec = ctx.find_override(GATE, tokens::ALLOW_PROVENANCE, path);
 
             if let Some(ov) = override_rec {
                 out.overrides.push(ov);

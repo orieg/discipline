@@ -44,8 +44,7 @@ pub fn evaluate_pr_checklist(ctx: &Context) -> Result<GateOutcome> {
 
     let claims = find_unsupported_claims(pr_body, has_tests, has_docs, has_benches);
     for claim in claims {
-        if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_PR_CHECKLIST, claim.subject)
-        {
+        if let Some(ov) = ctx.find_override(GATE, ALLOW_PR_CHECKLIST, claim.subject) {
             out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` for {} checklist claim ({})",

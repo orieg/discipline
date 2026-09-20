@@ -49,6 +49,10 @@ This document establishes the normative enforcement rules, detection capabilitie
 | `version-lockstep` | integrity | **shipped** | any | version declarations across headers, manifests, and files must remain in lockstep |
 <!-- /generated -->
 
+### Directive Policy
+
+Each gate gets exactly one canonical directive (with at most one documented deprecated spelling). Directives must be scoped to their natural subject (file path, test name, action ref, workflow job, dependency name, or rule identifier). Blanket waivers without subjects are rejected.
+
 ---
 
 ## Language Scope & Detection Boundaries
@@ -478,7 +482,7 @@ When a change touches source files in a language without an active pack, each AS
 - **What it does NOT catch:**
   - Increases or additions of property-testing iterations or new fuzz targets (ratchet permits tightening).
   - Reductions explicitly excused by scoped directive `allow-test-shrink: <target/metric> <reason>`.
-- **Lifting directive:** `allow-test-shrink: <target-or-metric> <reason>` or `allow-test-budget: <target-or-metric> <reason>`.
+- **Lifting directive:** `allow-test-shrink: <target-or-metric> <reason>`.
 #### `ci-integrity`
 - **Rule:** CI/CD workflow integrity and rollup sentinel. Enforces complete rollup jobs (`ci-gate` must `needs:` all verification jobs), pins third-party actions by 40-character commit SHA, bans masked failures (`continue-on-error: true`), and bans exit-code suppression (`|| true`, `set +e`).
 - **Languages:** CI workflow files (`.github/workflows/*.yml`, `.github/workflows/*.yaml`).
@@ -520,8 +524,8 @@ When a change touches source files in a language without an active pack, each AS
 - **What it does NOT catch:**
   - Test count increases (ratchet permits additions).
   - Reductions within configured `tolerance`.
-  - Reductions excused with `allow-test-shrink: <reason>` or `allow-gate-weakening: test-floor <reason>`.
-- **Lifting directive:** `allow-test-shrink: <reason>` or `allow-gate-weakening: test-floor <reason>`.
+  - Reductions excused with `allow-test-shrink: <subject> <reason>` or `allow-gate-weakening: test-floor <reason>`.
+- **Lifting directive:** `allow-test-shrink: <subject> <reason>` or `allow-gate-weakening: test-floor <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `min_tests`, `tolerance`, `constant_file`, `constant_name`, `required_suites`, `test_command`.
 
 #### `archive-contents`

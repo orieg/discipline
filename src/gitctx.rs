@@ -202,9 +202,29 @@ where
 /// Kubernetes) where mounted workspaces are owned by a different UID than the container's
 /// unprivileged user (UID 10001).
 ///
-/// If discovery fails due to libgit2 owner validation (`code=Owner (-36)`), a clear,
-/// actionable diagnostic is returned naming the exact remediations instead of a generic
-/// "not inside a git repository".
+/// Formats a repository discovery error, providing ownership-specific diagnostics
+/// and actionable remediations when libgit2 owner validation fails (`code=Owner (-36)`).
+pub fn format_discover_error(err: &git2::Error, path: &std::path::Path) -> anyhow::Error {
+    let is_owner_error = err.code() == git2::ErrorCode::Owner
+        || err.raw_code() == -36
+        || err.message().contains("not owned by current user");
+    if is_owner_error {
+        anyhow::anyhow!(
+            "repository at '{}' is not owned by current user (libgit2 owner validation rejected access; code=Owner (-36)).\n\
+            To resolve this:\n\
+              1. Add the path to git's safe directory: git config --global --add safe.directory '{}' (or '*' in ephemeral environments).\n\
+              2. Or run the container matching the host UID/GID: --user \"$(id -u):$(id -g)\".\n\
+              3. Or opt in to trust the workspace: --trust-workspace (or pass DISCIPLINE_TRUST_WORKSPACE=1).",
+            path.display(),
+            path.display()
+        )
+    } else {
+        anyhow::anyhow!("{err}").context(
+            "not inside a git repository: discipline measures a change, so it needs git history",
+        )
+    }
+}
+
 pub fn discover_repository(path: impl AsRef<std::path::Path>) -> Result<Repository> {
     let trust_workspace = std::env::var("DISCIPLINE_TRUST_WORKSPACE")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -222,23 +242,7 @@ pub fn discover_repository(path: impl AsRef<std::path::Path>) -> Result<Reposito
 
     match Repository::discover(path.as_ref()) {
         Ok(repo) => Ok(repo),
-        Err(err) => {
-            let is_owner_error = err.code() == git2::ErrorCode::Owner
-                || err.raw_code() == -36
-                || err.message().contains("not owned by current user");
-            if is_owner_error {
-                bail!(
-                    "repository at '{}' is not owned by current user (libgit2 owner validation rejected access; code=Owner (-36)).\n\
-                    To resolve this:\n\
-                      1. Add the path to git's safe directory: git config --global --add safe.directory '{}' (or '*' in ephemeral environments).\n\
-                      2. Or run the container matching the host UID/GID: --user \"$(id -u):$(id -g)\".\n\
-                      3. Or opt in to trust the workspace: --trust-workspace (or pass DISCIPLINE_TRUST_WORKSPACE=1).",
-                    path.as_ref().display(),
-                    path.as_ref().display()
-                );
-            }
-            Err(err).context("not inside a git repository: discipline measures a change, so it needs git history")
-        }
+        Err(err) => Err(format_discover_error(&err, path.as_ref())),
     }
 }
 
@@ -970,6 +974,69 @@ mod tests {
         assert_eq!(
             detect_base_ref_with_env(None, None, None, |_| None),
             "origin/main"
+        );
+    }
+
+    #[test]
+    fn test_format_discover_error_owner_code() {
+        let err = git2::Error::new(
+            git2::ErrorCode::Owner,
+            git2::ErrorClass::Config,
+            "repository path '/workspace' is not owned by current user",
+        );
+        let path = std::path::Path::new("/workspace");
+        let formatted = format_discover_error(&err, path).to_string();
+
+        assert!(
+            formatted.contains("code=Owner (-36)"),
+            "diagnostic must name code=Owner (-36): {formatted}"
+        );
+        assert!(
+            formatted.contains("safe.directory"),
+            "diagnostic must recommend safe.directory remediation: {formatted}"
+        );
+        assert!(
+            formatted.contains("--user"),
+            "diagnostic must recommend matching --user remediation: {formatted}"
+        );
+        assert!(
+            formatted.contains("DISCIPLINE_TRUST_WORKSPACE")
+                && formatted.contains("--trust-workspace"),
+            "diagnostic must recommend --trust-workspace / DISCIPLINE_TRUST_WORKSPACE: {formatted}"
+        );
+    }
+
+    #[test]
+    fn test_format_discover_error_owner_message() {
+        let err = git2::Error::from_str(
+            "fatal: repository path '/workspace' is not owned by current user",
+        );
+        let path = std::path::Path::new("/workspace");
+        let formatted = format_discover_error(&err, path).to_string();
+
+        assert!(
+            formatted.contains("code=Owner (-36)"),
+            "message containing 'not owned by current user' must trigger ownership diagnostic: {formatted}"
+        );
+    }
+
+    #[test]
+    fn test_format_discover_error_not_git_repo() {
+        let err = git2::Error::new(
+            git2::ErrorCode::NotFound,
+            git2::ErrorClass::Repository,
+            "could not find repository",
+        );
+        let path = std::path::Path::new("/tmp/not-a-repo");
+        let formatted = format_discover_error(&err, path).to_string();
+
+        assert!(
+            formatted.contains("not inside a git repository"),
+            "non-owner error must report generic not inside git repository context: {formatted}"
+        );
+        assert!(
+            !formatted.contains("code=Owner (-36)"),
+            "non-owner error must not claim code=Owner: {formatted}"
         );
     }
 }
