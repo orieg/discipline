@@ -70,6 +70,15 @@ pub fn is_push_event_environment() -> bool {
     is_push_event_environment_with_env(|k| std::env::var(k).ok())
 }
 
+fn extract_before_sha_from_event_path(path_str: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path_str).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+    parsed
+        .get("before")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
 pub fn is_push_event_environment_with_env<F>(get_env: F) -> bool
 where
     F: Fn(&str) -> Option<String>,
@@ -90,6 +99,17 @@ where
         if let Some(before) = get_env(var) {
             let trimmed = before.trim();
             if !trimmed.is_empty() {
+                return true;
+            }
+        }
+    }
+    for event_path_var in &[
+        "GITHUB_EVENT_PATH",
+        "GITEA_EVENT_PATH",
+        "FORGEJO_EVENT_PATH",
+    ] {
+        if let Some(path_str) = get_env(event_path_var) {
+            if extract_before_sha_from_event_path(&path_str).is_some() {
                 return true;
             }
         }
@@ -148,6 +168,26 @@ where
                         return "HEAD~1".to_string();
                     } else if trimmed.len() >= 7 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
                         return trimmed.to_string();
+                    }
+                }
+            }
+        }
+        for event_path_var in &[
+            "GITHUB_EVENT_PATH",
+            "GITEA_EVENT_PATH",
+            "FORGEJO_EVENT_PATH",
+        ] {
+            if let Some(path_str) = get_env(event_path_var) {
+                if let Some(before) = extract_before_sha_from_event_path(&path_str) {
+                    let trimmed = before.trim();
+                    if !trimmed.is_empty() {
+                        if trimmed.chars().all(|c| c == '0') {
+                            return "HEAD~1".to_string();
+                        } else if trimmed.len() >= 7
+                            && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+                        {
+                            return trimmed.to_string();
+                        }
                     }
                 }
             }
@@ -287,7 +327,12 @@ impl GitCtx {
             let (_base_commit, merge_base) = match resolve_base(&candidates) {
                 Some(pair) => pair,
                 None => {
-                    deepen_git_history(&candidates, base_ref, &repo);
+                    let fetch_errors = deepen_git_history(&candidates, base_ref, &repo);
+                    let fetch_detail = if fetch_errors.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\ngit fetch diagnostics:\n  {}", fetch_errors.join("\n  "))
+                    };
                     let base_commit = candidates
                         .iter()
                         .find_map(|name| {
@@ -297,13 +342,13 @@ impl GitCtx {
                             anyhow!(
                                 "base ref `{base_ref}` does not resolve. In CI, check out with \
                                  `fetch-depth: 0` or fetch the base branch first. Refusing to \
-                                 treat an unknown base as an empty diff."
+                                 treat an unknown base as an empty diff.{fetch_detail}"
                             )
                         })?;
                     let merge_base = repo.merge_base(base_commit, head).map_err(|e| {
                         anyhow!(
                             "no merge base between `{base_ref}` and HEAD ({e}); the clone is \
-                             probably shallow — fetch full history"
+                             probably shallow — fetch full history.{fetch_detail}"
                         )
                     })?;
                     (base_commit, merge_base)
@@ -617,47 +662,62 @@ fn is_ci_environment() -> bool {
         || std::env::var("FORGEJO_ACTIONS").is_ok()
 }
 
-fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) {
+fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) -> Vec<String> {
+    let mut fetch_errors = Vec::new();
     if !is_ci_environment() {
         // Do not make unsolicited network requests in local developer environments
-        return;
+        return fetch_errors;
     }
 
     let root = match repo.workdir() {
         Some(r) => r,
-        None => return,
+        None => return fetch_errors,
     };
     // repo.path() resolves the real gitdir even in worktrees where .git is a gitdir reference file
     let is_shallow = repo.path().join("shallow").exists();
 
-    let run_fetch = |args: &[&str]| {
+    let mut run_fetch = |args: &[&str]| {
         use std::process::Stdio;
         use std::time::{Duration, Instant};
-        let _ = std::process::Command::new("git")
-            .current_dir(root)
+        let mut cmd = std::process::Command::new("git");
+        cmd.current_dir(root)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .and_then(|mut child| {
-                let start = Instant::now();
-                let timeout = Duration::from_secs(30);
-                loop {
-                    match child.try_wait()? {
-                        Some(status) => return Ok(status),
-                        None => {
-                            if start.elapsed() >= timeout {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                                break;
-                            }
-                            std::thread::sleep(Duration::from_millis(50));
-                        }
+            .stderr(Stdio::piped());
+
+        let Ok(mut child) = cmd.spawn() else {
+            return;
+        };
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs(30);
+        let mut timed_out = false;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_status)) => break,
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        timed_out = true;
+                        break;
                     }
+                    std::thread::sleep(Duration::from_millis(50));
                 }
-                child.wait()
-            });
+                Err(_) => break,
+            }
+        }
+        let output = child.wait_with_output();
+        if timed_out {
+            fetch_errors.push(format!("git {}: timed out after 30s", args.join(" ")));
+        } else if let Ok(out) = output {
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                if !stderr.is_empty() {
+                    fetch_errors.push(format!("git {}: {stderr}", args.join(" ")));
+                }
+            }
+        }
     };
 
     // 1. If base ref is a commit SHA (>=7 hex characters), attempt targeted fetch
@@ -696,6 +756,8 @@ fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) 
     if is_shallow {
         run_fetch(&["fetch", "--no-tags", "--unshallow", "origin"]);
     }
+
+    fetch_errors
 }
 
 pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
@@ -879,6 +941,32 @@ mod tests {
         assert_eq!(
             detect_base_ref_with_env(None, None, None, lookup_zero),
             "HEAD~1"
+        );
+    }
+
+    #[test]
+    fn test_detect_base_ref_push_event_with_github_event_path() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            temp.path(),
+            r#"{"before": "fedcba9876543210fedcba9876543210fedcba98", "after": "11111111"}"#,
+        )
+        .unwrap();
+
+        let event_path = temp.path().to_string_lossy().to_string();
+        let lookup = |k: &str| {
+            if k == "GITHUB_EVENT_NAME" {
+                Some("push".to_string())
+            } else if k == "GITHUB_EVENT_PATH" {
+                Some(event_path.clone())
+            } else {
+                None
+            }
+        };
+
+        assert_eq!(
+            detect_base_ref_with_env(None, None, None, lookup),
+            "fedcba9876543210fedcba9876543210fedcba98"
         );
     }
 

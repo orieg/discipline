@@ -588,12 +588,30 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     let baseline_path = git.root().join(&args.baseline_file);
     let mut entries = Vec::new();
 
+    let examined_gates: std::collections::HashSet<&str> =
+        summary.outcomes.iter().map(|o| o.gate).collect();
+
+    // Preserve existing findings for gates that were not examined in this run (e.g. when --suite was passed)
+    if baseline_path.exists() {
+        if let Ok(existing) =
+            discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path)
+        {
+            for entry in existing.findings {
+                if !examined_gates.contains(entry.gate.as_str()) {
+                    entries.push(entry);
+                }
+            }
+        }
+    }
+
     for o in &summary.outcomes {
         if !o.enabled {
             continue;
         }
         for v in &o.violations {
-            let fp = discipline::baseline::compute_violation_fingerprint(git.root(), v);
+            let fp = discipline::baseline::compute_violation_fingerprint_with_content(v, |f| {
+                git.head_content(f).ok().flatten()
+            });
             entries.push(discipline::baseline::BaselineEntry {
                 gate: v.gate.to_string(),
                 rule: v.title.clone(),
@@ -602,6 +620,8 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             });
         }
     }
+
+    entries.sort();
 
     let baseline_obj = discipline::baseline::DisciplineBaseline {
         version: 1,

@@ -121,6 +121,11 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
                     o.overrides.len()
                 ));
                 for v in &o.violations {
+                    let is_failure = match v.severity {
+                        Severity::Error => true,
+                        Severity::Warning => fail_on_warnings,
+                        Severity::Note => false,
+                    };
                     let sev_type = match v.severity {
                         Severity::Error => "error",
                         Severity::Warning => "warning",
@@ -140,10 +145,17 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
                         details.push_str(&format!("\nRemediation: {rem}"));
                     }
 
-                    out.push_str(&format!(
-                        "      <failure message=\"{title}\" type=\"{sev_type}\">{}</failure>\n",
-                        escape_xml(&details)
-                    ));
+                    if is_failure {
+                        out.push_str(&format!(
+                            "      <failure message=\"{title}\" type=\"{sev_type}\">{}</failure>\n",
+                            escape_xml(&details)
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "      <system-err>[{sev_type}] {title}: {}</system-err>\n",
+                            escape_xml(&details)
+                        ));
+                    }
                 }
                 out.push_str("    </testcase>\n");
             }
@@ -267,5 +279,48 @@ mod tests {
         let input = "clean\ttext\nwith\rvalid and \x00null \x07bell \x1Bescape";
         let escaped = escape_xml(input);
         assert_eq!(escaped, "clean\ttext\nwith\rvalid and null bell escape");
+    }
+
+    #[test]
+    fn test_junit_warning_not_tagged_as_failure_unless_fail_on_warnings() {
+        let summary = CheckSummary {
+            base: "origin/main".to_string(),
+            errors: 0,
+            warnings: 1,
+            notes: 0,
+            overrides: 0,
+            baselined: 0,
+            outcomes: vec![GateOutcome {
+                gate: "shell-secrets",
+                suite: "hygiene",
+                enabled: true,
+                examined: 1,
+                inline_exemptions: 0,
+                baselined: 0,
+                notes: Vec::new(),
+                violations: vec![Violation {
+                    gate: "shell-secrets",
+                    severity: Severity::Warning,
+                    title: "Hardcoded Secret".to_string(),
+                    file: Some("deploy.sh".to_string()),
+                    line: Some(2),
+                    message: "Potential secret".to_string(),
+                    remediation: Some("Do not hardcode".to_string()),
+                }],
+                overrides: Vec::new(),
+            }],
+            planned_gates: Vec::new(),
+        };
+
+        // Without fail_on_warnings, failures="0" and no <failure> tag emitted
+        let xml_default = format_junit(&summary, false);
+        assert!(xml_default.contains("failures=\"0\""));
+        assert!(!xml_default.contains("<failure"));
+        assert!(xml_default.contains("<system-err>[warning] Hardcoded Secret"));
+
+        // With fail_on_warnings, failures="1" and <failure> tag emitted
+        let xml_strict = format_junit(&summary, true);
+        assert!(xml_strict.contains("failures=\"1\""));
+        assert!(xml_strict.contains("<failure message=\"Hardcoded Secret\" type=\"warning\">"));
     }
 }

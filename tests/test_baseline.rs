@@ -385,3 +385,44 @@ fn test_baseline_duplicate_fingerprint_count_decrementing() {
         "exactly 2 grandfathered findings should be baselined"
     );
 }
+
+#[test]
+fn test_baseline_partial_suite_write_preserves_other_suites() {
+    let repo = Repo::new();
+
+    // 1. Initial commit with an unsafe block (agent-guard) and scratch file (hygiene)
+    repo.write(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n",
+    );
+    repo.write(".claude/notes.md", "# Scratch\n");
+    repo.commit("feat: initial unsafe and scratch");
+
+    // Write initial baseline covering all suites
+    let init_run = repo.run(&["baseline", "--write"], &[]);
+    assert_eq!(init_run.code, 0, "{}", init_run.stdout);
+
+    let baseline_content = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert!(baseline_content.contains("unsafe-safety-comment"));
+    assert!(baseline_content.contains("agent-scratch"));
+
+    // 2. On work branch, add a second unsafe block in src/extra.rs
+    repo.write(
+        "src/extra.rs",
+        "pub fn write(p: *mut u8, v: u8) {\n    unsafe { *p = v; }\n}\n",
+    );
+    repo.commit("feat: add second unsafe");
+
+    // Write baseline specifying ONLY --suite agent-guard
+    let partial_run = repo.run(&["baseline", "--write", "--suite", "agent-guard"], &[]);
+    assert_eq!(partial_run.code, 0, "{}", partial_run.stdout);
+
+    let updated_content = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    // agent-guard findings must be updated
+    assert!(updated_content.contains("src/extra.rs"));
+    // hygiene findings MUST BE PRESERVED!
+    assert!(
+        updated_content.contains("agent-scratch"),
+        "baseline must preserve grandfathered entries from unexamined suites"
+    );
+}

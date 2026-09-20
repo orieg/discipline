@@ -70,15 +70,15 @@ impl DisciplineBaseline {
     }
 }
 
-/// Compute a stable finding fingerprint decoupled from line numbers.
-///
-/// Formula: sha256(gate + ":" + rule + ":" + path + ":" + sha256(normalized_line_content))
-pub fn compute_violation_fingerprint(repo_root: &Path, v: &Violation) -> String {
+/// Compute a stable finding fingerprint decoupled from line numbers using a custom content reader.
+pub fn compute_violation_fingerprint_with_content<F>(v: &Violation, read_file: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
     let path = v.file.as_deref().unwrap_or("");
     let line_content = match (&v.file, v.line) {
         (Some(f), Some(l)) if l > 0 => {
-            let full_path = repo_root.join(f);
-            if let Ok(content) = std::fs::read_to_string(&full_path) {
+            if let Some(content) = read_file(f) {
                 content
                     .lines()
                     .nth(l - 1)
@@ -96,6 +96,16 @@ pub fn compute_violation_fingerprint(repo_root: &Path, v: &Violation) -> String 
     sha256_hex(source.as_bytes())
 }
 
+/// Compute a stable finding fingerprint decoupled from line numbers.
+///
+/// Formula: sha256(gate + ":" + rule + ":" + path + ":" + sha256(normalized_line_content))
+pub fn compute_violation_fingerprint(repo_root: &Path, v: &Violation) -> String {
+    compute_violation_fingerprint_with_content(v, |f| {
+        let full_path = repo_root.join(f);
+        std::fs::read_to_string(&full_path).ok()
+    })
+}
+
 #[derive(Debug, Default)]
 pub struct BaselineMatchResult {
     pub baselined_count: usize,
@@ -103,17 +113,40 @@ pub struct BaselineMatchResult {
     pub stale_by_gate: BTreeMap<String, usize>,
 }
 
-/// Match detected violations against the baseline.
-///
-/// Grandfathered violations are removed from `outcome.violations` and accounted for
-/// in `outcome.baselined` and `outcome.notes`.
-/// Stale baseline entries (entries in baseline with no matching violation in this run)
-/// are reported as non-blocking notes prompting ratcheting down.
+/// Match detected violations against the baseline using repository root path.
 pub fn apply_baseline(
     repo_root: &Path,
     baseline: &DisciplineBaseline,
     outcomes: &mut [GateOutcome],
 ) -> BaselineMatchResult {
+    apply_baseline_with_reader(
+        |f| {
+            let full_path = repo_root.join(f);
+            std::fs::read_to_string(&full_path).ok()
+        },
+        baseline,
+        outcomes,
+    )
+}
+
+/// Match detected violations against the baseline using GitCtx (supports staged index blobs).
+pub fn apply_baseline_with_git(
+    git: &crate::gitctx::GitCtx,
+    baseline: &DisciplineBaseline,
+    outcomes: &mut [GateOutcome],
+) -> BaselineMatchResult {
+    apply_baseline_with_reader(|f| git.head_content(f).ok().flatten(), baseline, outcomes)
+}
+
+/// Match detected violations against the baseline with custom line reader.
+pub fn apply_baseline_with_reader<F>(
+    read_file: F,
+    baseline: &DisciplineBaseline,
+    outcomes: &mut [GateOutcome],
+) -> BaselineMatchResult
+where
+    F: Fn(&str) -> Option<String>,
+{
     let mut available_fps: HashMap<String, usize> = HashMap::new();
     for entry in &baseline.findings {
         *available_fps.entry(entry.fingerprint.clone()).or_insert(0) += 1;
@@ -131,7 +164,7 @@ pub fn apply_baseline(
         let mut gate_baselined = 0;
 
         for v in outcome.violations.drain(..) {
-            let fp = compute_violation_fingerprint(repo_root, &v);
+            let fp = compute_violation_fingerprint_with_content(&v, &read_file);
             if let Some(count) = available_fps.get_mut(&fp) {
                 if *count > 0 {
                     *count -= 1;

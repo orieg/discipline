@@ -423,7 +423,7 @@ pub fn run_checks(
 
     // Grandfathered findings baseline matching
     if let Some(baseline) = ctx.baseline {
-        crate::baseline::apply_baseline(ctx.git.root(), baseline, &mut outcomes);
+        crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes);
     }
 
     let count = |s: Severity| {
