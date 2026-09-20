@@ -44,6 +44,9 @@ This document establishes the normative enforcement rules, detection capabilitie
 | `miri` | verification | planned | Rust | Miri tiers with zero-tests guard |
 | `unsafe-budget` | verification | planned | Rust | unsafe count ratchet |
 | `bench-regression` | bench | **shipped** | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
+| `archive-contents` | integrity | **shipped** | any | distribution archive must contain required paths and zero forbidden developer artifacts |
+| `manifest-sync` | integrity | **shipped** | any | reconcile git-tracked files against packaging manifest declarations |
+| `version-lockstep` | integrity | **shipped** | any | version declarations across headers, manifests, and files must remain in lockstep |
 <!-- /generated -->
 
 ---
@@ -517,6 +520,67 @@ When a change touches source files in a language without an active pack, each AS
 - **Lifting directive:** `allow-test-shrink: <reason>` or `allow-gate-weakening: test-floor <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `min_tests`, `tolerance`, `constant_file`, `constant_name`, `required_suites`, `test_command`.
 
+#### `archive-contents`
+- **Rule:** Distribution archives (`.tar.gz`, `.tgz`, `.zip`, `.crate`, `.tar.bz2`, `.tar`) produced during packaging or release must contain all required files and zero forbidden developer artifacts, private files, or CI scripts.
+- **Languages:** Any.
+- **What it catches:**
+  - Missing distribution archives when required (fails closed with exit 2).
+  - Ambiguous archive glob patterns matching multiple candidate archives (fails closed with exit 2).
+  - Missing `required_paths` in the archive (e.g. `config.m4`, `php_judy.h`, `LICENSE`, `README.md`).
+  - Forbidden entries matching `forbidden_patterns` regexes (e.g. `.git*`, `tools/**`, `tests/**`, private keys, local dev artifacts).
+  - Supports `strip_components = 1` for archives rooted in a versioned directory (e.g. `Judy-2.6.0/config.m4`).
+- **Failing archive example (rejected):**
+  Archive containing `Judy-2.6.0/tools/check.sh` when `forbidden_patterns = ["^tools/"]`.
+- **Passing PR description (accepted):**
+  ```text
+  allow-archive-leak: ^tools/ temporary packaging tool bundled for triage
+  ```
+- **What it does NOT catch:**
+  - Files not packaged into the archive.
+  - Dynamically generated files inside archives matching non-standard extensions outside supported formats.
+- **Lifting directive:** `allow-archive-leak: <pattern> <reason>` in PR description or commit message.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `archive_path`, `required_paths`, `forbidden_patterns`, `strip_components`.
+
+#### `manifest-sync`
+- **Rule:** Reconciles git-tracked files in declared directories against file lists in packaging manifests (e.g., PECL `package.xml`, Ruby `gemspec`, Python `MANIFEST.in`, Debian `debian/install`, etc.). Bidirectional diffing detects both unmanifested git files (`+`) and ghost manifest entries (`-`).
+- **Languages:** Any.
+- **What it catches:**
+  - Missing manifest files (fails closed with exit 2).
+  - Unparseable manifest extraction regex (fails closed with exit 2).
+  - Zero manifest entries found when watched paths contain tracked files (fail-closed integrity guard).
+  - Unmanifested files (`+`): git-tracked files matching `watched_paths` (excluding `exclude_paths`) not declared in the manifest.
+  - Ghost manifest entries (`-`): files declared in the manifest that do not exist in the working directory.
+- **Failing diff example (rejected):**
+  Adding a new source file to git repository without declaring it in `package.xml`.
+- **Passing PR description (accepted):**
+  ```text
+  allow-manifest-drift: package.xml intentionally deferred manifest update during refactor
+  ```
+- **What it does NOT catch:**
+  - Untracked or gitignored files in the workspace.
+  - Files outside declared `watched_paths`.
+- **Lifting directive:** `allow-manifest-drift: <manifest-path> <reason>` in PR description or commit message.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `rules` (`manifest`, `extract_regex`, `watched_paths`, `exclude_paths`).
+
+#### `version-lockstep`
+- **Rule:** Version declarations across multiple files (C header `#define`, packaging manifest `<release><version>`, `Cargo.toml`, `pyproject.toml`, documentation, etc.) must remain in lockstep.
+- **Languages:** Any.
+- **What it catches:**
+  - Missing source files (fails closed with exit 2).
+  - Unparseable source regexes or regexes failing to match the source file (fails closed with exit 2).
+  - Mismatched extracted versions across declared files in a group (e.g., `php_judy.h` has `"2.6.0"` while `package.xml` has `"2.6.1"`).
+- **Failing diff example (rejected):**
+  Bumping version in `package.xml` to `2.6.1` while `#define PHP_JUDY_VERSION` in `php_judy.h` remains `2.6.0`.
+- **Passing PR description (accepted):**
+  ```text
+  allow-version-mismatch: php-judy-release staged release version bump across branches
+  ```
+- **What it does NOT catch:**
+  - Unconfigured files or uncaptured version substrings.
+  - Version increments in unversioned changelogs without regex capture groups.
+- **Lifting directive:** `allow-version-mismatch: <group-name> <reason>` in PR description or commit message.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `groups` (`name`, `sources` (`path`, `regex`)).
+
 ---
 
 
@@ -554,10 +618,11 @@ When a change touches source files in a language without an active pack, each AS
 
 #### `bench-regression`
 - **Rule:** Benchmark output files are tracked across revisions. Comparisons against merge-base baselines enforce formal mathematical confidence intervals and exact deterministic instruction counts.
-- **Languages:** Rust, C/C++, Go, Python.
+- **Languages:** Rust, C/C++, Go, Python, PHP.
 - **What it catches:**
   - Regressions where conservative confidence intervals clear the tolerance threshold ($\Delta_{min} = \frac{L_{head} - U_{base}}{U_{base}} > \text{tolerance}$).
   - Exact instruction count regressions in Callgrind / IAI outputs (`events: Ir`).
+  - Regressions in generic JSON sample arrays (`{"benchmarks": { "<name>": { "runs_ms": [...], "median_ms": ... } }}`) using deterministic bootstrap 95% confidence intervals ($B=2000$).
   - Missing merge-base benchmark artifacts (fails closed with exit 2).
   - Garbage or corrupted benchmark output files (fails closed with exit 2).
   - Deleted benchmark files without authorization (exit 1).

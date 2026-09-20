@@ -1167,6 +1167,102 @@ fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
                 });
             }
         }
+        if !metrics.is_empty() {
+            return Ok(metrics);
+        }
+    }
+
+    // 4. Object/map of benchmarks (e.g. php-judy / generic custom JSON: {"benchmarks": { "<name>": { "runs_ms": [...], "median_ms": ... } }})
+    if let Some(benchmarks_map) = val.get("benchmarks").and_then(|b| b.as_object()) {
+        for (name, b) in benchmarks_map {
+            let mut unit = "ms".to_string();
+            let runs_arr = b
+                .get("runs_ms")
+                .or_else(|| {
+                    if let Some(arr) = b.get("runs_ns") {
+                        unit = "ns".to_string();
+                        Some(arr)
+                    } else if let Some(arr) = b.get("runs_us") {
+                        unit = "us".to_string();
+                        Some(arr)
+                    } else if let Some(arr) = b.get("runs_s") {
+                        unit = "s".to_string();
+                        Some(arr)
+                    } else if let Some(arr) = b.get("runs") {
+                        Some(arr)
+                    } else {
+                        b.get("samples")
+                    }
+                })
+                .and_then(|r| r.as_array());
+
+            let median_val = b
+                .get("median_ms")
+                .or_else(|| {
+                    if let Some(m) = b.get("median_ns") {
+                        unit = "ns".to_string();
+                        Some(m)
+                    } else if let Some(m) = b.get("median_us") {
+                        unit = "us".to_string();
+                        Some(m)
+                    } else if let Some(m) = b.get("median_s") {
+                        unit = "s".to_string();
+                        Some(m)
+                    } else if let Some(m) = b.get("median") {
+                        Some(m)
+                    } else {
+                        b.get("mean")
+                    }
+                })
+                .and_then(|v| v.as_f64());
+
+            if let Some(runs) = runs_arr {
+                let sample_vec: Vec<f64> = runs.iter().filter_map(|v| v.as_f64()).collect();
+                if !sample_vec.is_empty() {
+                    let est = ContinuousEstimate::from_samples(&sample_vec, median_val, &unit)?;
+                    metrics.push(BenchmarkMetric {
+                        name: name.clone(),
+                        count: est.point_estimate,
+                        value: MetricValue::Continuous(est),
+                        unit,
+                    });
+                    continue;
+                }
+            }
+
+            if let Some(median) = median_val {
+                let est = ContinuousEstimate::point_only(median, &unit)?;
+                metrics.push(BenchmarkMetric {
+                    name: name.clone(),
+                    count: median,
+                    value: MetricValue::Continuous(est),
+                    unit,
+                });
+                continue;
+            }
+
+            if let Some(count) = b
+                .get("instructions")
+                .or_else(|| b.get("ir"))
+                .or_else(|| b.get("fuel"))
+                .and_then(|v| v.as_f64())
+            {
+                let unit = if b.get("fuel").is_some() {
+                    "fuel"
+                } else {
+                    "Ir"
+                };
+                metrics.push(BenchmarkMetric {
+                    name: name.clone(),
+                    count,
+                    value: MetricValue::Discrete(DiscreteMetric::new(count as u64)),
+                    unit: unit.to_string(),
+                });
+            }
+        }
+        if !metrics.is_empty() {
+            return Ok(metrics);
+        }
     }
 
     Ok(metrics)
@@ -1653,5 +1749,52 @@ smoke_cost::set_contains
             out7.violations.is_empty(),
             "after exempting one arm, only 1 arm remains > noise floor, passing the gate"
         );
+    }
+
+    #[test]
+    fn test_parse_metrics_custom_json_sample_array() {
+        let json_content = r#"{
+            "benchmarks": {
+                "core.bitset.write.judy": {
+                    "median_ms": 14.5314,
+                    "runs_ms": [14.3895, 14.476, 14.5057, 14.5314, 14.5369, 14.538, 14.5991]
+                },
+                "core.bitset.read.judy": {
+                    "median_ms": 5.12
+                }
+            }
+        }"#;
+        let metrics = parse_metrics("baselines/latest.json", json_content).unwrap();
+        assert_eq!(metrics.len(), 2);
+
+        let write_metric = metrics
+            .iter()
+            .find(|m| m.name == "core.bitset.write.judy")
+            .unwrap();
+        assert_eq!(write_metric.unit, "ms");
+        assert_eq!(write_metric.count, 14.5314);
+        match &write_metric.value {
+            MetricValue::Continuous(est) => {
+                assert_eq!(est.point_estimate, 14.5314);
+                let ci = est.ci.expect("bootstrap CI must be present");
+                assert!(ci.lower <= 14.5314);
+                assert!(ci.upper >= 14.5314);
+            }
+            _ => panic!("expected continuous metric"),
+        }
+
+        let read_metric = metrics
+            .iter()
+            .find(|m| m.name == "core.bitset.read.judy")
+            .unwrap();
+        assert_eq!(read_metric.unit, "ms");
+        assert_eq!(read_metric.count, 5.12);
+        match &read_metric.value {
+            MetricValue::Continuous(est) => {
+                assert_eq!(est.point_estimate, 5.12);
+                assert!(est.ci.is_none());
+            }
+            _ => panic!("expected continuous metric"),
+        }
     }
 }

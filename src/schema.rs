@@ -30,6 +30,9 @@ pub fn generate_schema() -> Value {
             "shell-secrets" => "#/$defs/ShellSecretsGate",
             "issue-link" => "#/$defs/IssueLinkGate",
             "provenance-tags" => "#/$defs/ProvenanceTagsGate",
+            "archive-contents" => "#/$defs/ArchiveContentsGate",
+            "manifest-sync" => "#/$defs/ManifestSyncGate",
+            "version-lockstep" => "#/$defs/VersionLockstepGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -390,6 +393,76 @@ pub fn generate_schema() -> Value {
                     "documented_job_count_path": { "type": "string", "description": "Path to catalog documentation stating job count" },
                     "documented_job_count_pattern": { "type": "string", "description": "Regex pattern to extract job count from documentation" },
                     "first_party_action_prefixes": { "$ref": "#/$defs/StringListOrReset", "description": "Action prefixes considered first-party and excused from commit SHA pinning" }
+                }
+            },
+            "ArchiveContentsGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "archive_path": { "type": "string", "description": "Glob pattern matching the built archive file" },
+                    "required_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Files required to exist inside the archive" },
+                    "forbidden_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns forbidden inside the archive" },
+                    "strip_components": { "type": "integer", "description": "Leading directory components to strip from archive paths" }
+                }
+            },
+            "ManifestSyncGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "rules": {
+                        "type": "array",
+                        "description": "Rules reconciling packaging manifests against git-tracked files",
+                        "items": {
+                            "type": "object",
+                            "required": ["manifest", "extract_regex", "watched_paths"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "manifest": { "type": "string", "description": "Path to packaging manifest (e.g. package.xml)" },
+                                "extract_regex": { "type": "string", "description": "Regex to extract relative file paths from manifest" },
+                                "watched_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Git file globs that must be registered in the manifest" },
+                                "exclude_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs excluded from manifest registration requirement" }
+                            }
+                        }
+                    }
+                }
+            },
+            "VersionLockstepGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "groups": {
+                        "type": "array",
+                        "description": "Groups of sources that must declare identical version strings",
+                        "items": {
+                            "type": "object",
+                            "required": ["name", "sources"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "name": { "type": "string", "description": "Name of the version lockstep group" },
+                                "sources": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["path", "regex"],
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "path": { "type": "string", "description": "Source file path" },
+                                            "regex": { "type": "string", "description": "Regex pattern capturing the version string in group 1" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

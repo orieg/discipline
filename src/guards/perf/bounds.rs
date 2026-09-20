@@ -140,6 +140,104 @@ impl ContinuousEstimate {
     pub fn is_noisy(&self, max_cv: f64) -> bool {
         self.cv().is_some_and(|cv| cv > max_cv)
     }
+
+    /// Constructs a `ContinuousEstimate` from empirical sample measurements, computing sample
+    /// variance and a deterministic 95% bootstrap confidence interval (B=2000 resamples).
+    pub fn from_samples(
+        samples: &[f64],
+        declared_median: Option<f64>,
+        unit: impl Into<String>,
+    ) -> Result<Self> {
+        if samples.is_empty() {
+            bail!("cannot construct estimate from empty sample slice");
+        }
+        for (i, &s) in samples.iter().enumerate() {
+            if s < 0.0 || !s.is_finite() {
+                bail!("sample {} must be non-negative and finite, got {}", i, s);
+            }
+        }
+
+        let mut sorted = samples.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = sorted.len();
+        let sample_median = if n % 2 == 1 {
+            sorted[n / 2]
+        } else {
+            (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+        };
+
+        let point_estimate = if let Some(med) = declared_median {
+            if med < 0.0 || !med.is_finite() {
+                bail!(
+                    "declared median must be non-negative and finite, got {}",
+                    med
+                );
+            }
+            med
+        } else {
+            sample_median
+        };
+
+        let unit_str = unit.into();
+        if n == 1 {
+            return Self::point_only(point_estimate, unit_str);
+        }
+
+        let mean = samples.iter().sum::<f64>() / n as f64;
+        let variance = samples.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+        let std_dev = variance.sqrt();
+
+        if variance == 0.0 {
+            let ci = ConfidenceInterval::new(point_estimate, point_estimate, 0.95)?;
+            return Ok(Self {
+                point_estimate,
+                ci: Some(ci),
+                std_dev: Some(0.0),
+                unit: unit_str,
+            });
+        }
+
+        // Deterministic bootstrap resampling (B=2000) using SplitMix64 PRNG
+        let mut rng_state = 0x9e3779b97f4a7c15u64 ^ (n as u64);
+        let mut next_usize = |limit: usize| -> usize {
+            rng_state = rng_state.wrapping_add(0x9e3779b97f4a7c15);
+            let mut z = rng_state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+            let val = z ^ (z >> 31);
+            (val % (limit as u64)) as usize
+        };
+
+        let b = 2000;
+        let mut boot_stats = Vec::with_capacity(b);
+        let mut resample_buf = vec![0.0; n];
+        for _ in 0..b {
+            for slot in &mut resample_buf {
+                *slot = samples[next_usize(n)];
+            }
+            resample_buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let stat = if n % 2 == 1 {
+                resample_buf[n / 2]
+            } else {
+                (resample_buf[n / 2 - 1] + resample_buf[n / 2]) / 2.0
+            };
+            boot_stats.push(stat);
+        }
+        boot_stats.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let lower_idx = (b as f64 * 0.025).floor() as usize;
+        let upper_idx = ((b as f64 * 0.975).ceil() as usize).min(b - 1);
+        let lower = boot_stats[lower_idx].min(point_estimate);
+        let upper = boot_stats[upper_idx].max(point_estimate);
+
+        let ci = ConfidenceInterval::new(lower, upper, 0.95)?;
+        Ok(Self {
+            point_estimate,
+            ci: Some(ci),
+            std_dev: Some(std_dev),
+            unit: unit_str,
+        })
+    }
 }
 
 /// Exact deterministic integer metric (e.g. Callgrind instruction count `Ir`, fuel, or allocations).
@@ -394,5 +492,41 @@ mod tests {
         assert_eq!(est.cv().unwrap(), 0.15);
         assert!(!est.is_noisy(0.20));
         assert!(est.is_noisy(0.10));
+    }
+
+    #[test]
+    fn test_continuous_estimate_from_samples() {
+        let samples = [14.3895, 14.476, 14.5057, 14.5314, 14.5369, 14.538, 14.5991];
+        let est = ContinuousEstimate::from_samples(&samples, Some(14.5314), "ms").unwrap();
+        assert_eq!(est.point_estimate, 14.5314);
+        assert_eq!(est.unit, "ms");
+        let ci = est.ci.expect("CI must be computed from sample runs");
+        assert!(ci.lower <= est.point_estimate);
+        assert!(ci.upper >= est.point_estimate);
+        assert!(ci.lower >= 14.38);
+        assert!(ci.upper <= 14.60);
+        assert!(est.std_dev.unwrap() > 0.0);
+
+        // Identical samples produce exact CI [val, val] and zero std dev
+        let uniform = [5.0, 5.0, 5.0];
+        let est_uni = ContinuousEstimate::from_samples(&uniform, None, "ns").unwrap();
+        assert_eq!(est_uni.point_estimate, 5.0);
+        assert_eq!(est_uni.std_dev.unwrap(), 0.0);
+        assert_eq!(est_uni.ci.unwrap().lower, 5.0);
+        assert_eq!(est_uni.ci.unwrap().upper, 5.0);
+
+        // Single sample degrades to point-only
+        let single = [42.0];
+        let est_single = ContinuousEstimate::from_samples(&single, None, "ns").unwrap();
+        assert_eq!(est_single.point_estimate, 42.0);
+        assert!(est_single.ci.is_none());
+
+        // Empty sample fails
+        assert!(ContinuousEstimate::from_samples(&[], None, "ns").is_err());
+
+        // Deterministic bootstrap yields identical intervals across runs
+        let est2 = ContinuousEstimate::from_samples(&samples, Some(14.5314), "ms").unwrap();
+        assert_eq!(est.ci.unwrap().lower, est2.ci.unwrap().lower);
+        assert_eq!(est.ci.unwrap().upper, est2.ci.unwrap().upper);
     }
 }

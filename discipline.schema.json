@@ -1,5 +1,37 @@
 {
   "$defs": {
+    "ArchiveContentsGate": {
+      "additionalProperties": false,
+      "properties": {
+        "archive_path": {
+          "description": "Glob pattern matching the built archive file",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "forbidden_patterns": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Regex patterns forbidden inside the archive"
+        },
+        "required_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Files required to exist inside the archive"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "strip_components": {
+          "description": "Leading directory components to strip from archive paths",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "AssertionGate": {
       "additionalProperties": false,
       "properties": {
@@ -414,6 +446,53 @@
       },
       "type": "object"
     },
+    "ManifestSyncGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "rules": {
+          "description": "Rules reconciling packaging manifests against git-tracked files",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "exclude_paths": {
+                "$ref": "#/$defs/StringListOrReset",
+                "description": "Globs excluded from manifest registration requirement"
+              },
+              "extract_regex": {
+                "description": "Regex to extract relative file paths from manifest",
+                "type": "string"
+              },
+              "manifest": {
+                "description": "Path to packaging manifest (e.g. package.xml)",
+                "type": "string"
+              },
+              "watched_paths": {
+                "$ref": "#/$defs/StringListOrReset",
+                "description": "Git file globs that must be registered in the manifest"
+              }
+            },
+            "required": [
+              "manifest",
+              "extract_regex",
+              "watched_paths"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "PiiGate": {
       "additionalProperties": false,
       "properties": {
@@ -707,6 +786,61 @@
         }
       },
       "type": "object"
+    },
+    "VersionLockstepGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "groups": {
+          "description": "Groups of sources that must declare identical version strings",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Name of the version lockstep group",
+                "type": "string"
+              },
+              "sources": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "description": "Source file path",
+                      "type": "string"
+                    },
+                    "regex": {
+                      "description": "Regex pattern capturing the version string in group 1",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "regex"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "sources"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -751,6 +885,14 @@
             }
           ],
           "description": "AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it"
+        },
+        "archive-contents": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ArchiveContentsGate"
+            }
+          ],
+          "description": "distribution archive must contain required paths and zero forbidden developer artifacts"
         },
         "assertion-reduction": {
           "allOf": [
@@ -832,6 +974,14 @@
           ],
           "description": "PR title or description links a tracking issue (#123, Fixes #123)"
         },
+        "manifest-sync": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ManifestSyncGate"
+            }
+          ],
+          "description": "reconcile git-tracked files against packaging manifest declarations"
+        },
         "pii": {
           "allOf": [
             {
@@ -895,6 +1045,14 @@
             }
           ],
           "description": "new tests must carry a non-tautological assertion"
+        },
+        "version-lockstep": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/VersionLockstepGate"
+            }
+          ],
+          "description": "version declarations across headers, manifests, and files must remain in lockstep"
         }
       },
       "type": "object"

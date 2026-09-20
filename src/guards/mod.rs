@@ -1,16 +1,19 @@
 pub mod agent_diff;
+pub mod archive_contents;
 pub mod ci_integrity;
 pub mod command;
 pub mod dependency;
 pub mod hygiene;
 pub mod integrity;
 pub mod issue_link;
+pub mod manifest_sync;
 pub mod perf;
 pub mod presets;
 pub mod provenance_tags;
 pub mod shell_secrets;
 pub mod test_budget;
 pub mod test_floor;
+pub mod version_lockstep;
 
 use crate::cli::SuiteChoice;
 use crate::config::{gate_info, DisciplineConfig, GateSettings, Severity, Suite, GATES};
@@ -264,6 +267,9 @@ pub fn run_checks(
             "test-floor" => test_floor::evaluate_test_floor(ctx),
             "ci-integrity" => ci_integrity::evaluate_ci_integrity(ctx),
             "provenance-tags" => provenance_tags::evaluate_provenance_tags(ctx),
+            "archive-contents" => archive_contents::evaluate_archive_contents(ctx),
+            "manifest-sync" => manifest_sync::evaluate_manifest_sync(ctx),
+            "version-lockstep" => version_lockstep::evaluate_version_lockstep(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -311,6 +317,12 @@ pub fn run_checks(
             || note.contains("allow-ci-change")
         {
             "ci-integrity"
+        } else if note.contains("allow-archive-leak") {
+            "archive-contents"
+        } else if note.contains("allow-manifest-drift") {
+            "manifest-sync"
+        } else if note.contains("allow-version-mismatch") {
+            "version-lockstep"
         } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
             "assertion-reduction"
         } else {
@@ -331,6 +343,9 @@ pub fn run_checks(
                         | "test-budget"
                         | "test-floor"
                         | "ci-integrity"
+                        | "archive-contents"
+                        | "manifest-sync"
+                        | "version-lockstep"
                 ) {
                     o.notes.push(note.clone());
                 }

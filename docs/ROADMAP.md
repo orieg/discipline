@@ -55,6 +55,9 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 | `test-budget` | integrity | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
 | `command` | verification | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
+| `archive-contents` | integrity | any | distribution archive must contain required paths and zero forbidden developer artifacts |
+| `manifest-sync` | integrity | any | reconcile git-tracked files against packaging manifest declarations |
+| `version-lockstep` | integrity | any | version declarations across headers, manifests, and files must remain in lockstep |
 <!-- /generated -->
 
 ---

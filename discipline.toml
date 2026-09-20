@@ -28,5 +28,6 @@ enabled = true
 exempt_paths = ["tests/fixtures/**"]
 
 [gates.dependency-delta]
-allow_dependencies = ["serde_yaml"]
+allow_dependencies = ["serde_yaml", "tar", "flate2", "zip", "bzip2-rs"]
+
 

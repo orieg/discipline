@@ -1696,7 +1696,7 @@ fn override_record_audit_trail_and_step_outputs() {
         .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
     assert!(run
         .stdout
-        .contains("gates:  17 passed, 0 failed, 3 disabled (19 items examined)"));
+        .contains("gates:  17 passed, 0 failed, 6 disabled (19 items examined)"));
     assert!(run.stdout.contains("overrides: 1"));
 
     // Check GITHUB_OUTPUT contents
@@ -1713,7 +1713,7 @@ fn override_record_audit_trail_and_step_outputs() {
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
-        step_summary.contains("**Summary:** 17 passed, 0 failed, 3 disabled (19 items examined)"),
+        step_summary.contains("**Summary:** 17 passed, 0 failed, 6 disabled (19 items examined)"),
         "{step_summary}"
     );
     assert!(
@@ -5662,6 +5662,379 @@ preset = "cargo-public-api"
     assert_eq!(run_override.code, 0);
     assert_eq!(
         run_override.outcome("command")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+// ---- archive-contents ------------------------------------------------------
+
+fn create_test_archive_tgz(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::fs::File;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let f = File::create(path).unwrap();
+    let enc = GzEncoder::new(f, Compression::default());
+    let mut tar = tar::Builder::new(enc);
+
+    for (name, data) in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, *name, *data).unwrap();
+    }
+    let enc = tar.into_inner().unwrap();
+    enc.finish().unwrap();
+}
+
+#[test]
+fn archive_contents_tracks_required_paths_and_forbidden_leaks_and_accepts_override() {
+    let repo = Repo::new();
+    let config = r#"
+[meta]
+version = 1
+name = "test-repo"
+
+[gates.archive-contents]
+enabled = true
+archive_path = "dist/*.tar.gz"
+required_paths = ["config.m4", "LICENSE"]
+forbidden_patterns = ["^tools/"]
+strip_components = 1
+"#;
+    repo.commit_base(
+        "discipline.toml",
+        config,
+        "base: configure archive-contents",
+    );
+
+    let dist_archive = repo.path().join("dist/php-judy-2.6.0.tar.gz");
+
+    // Positive control: valid archive with required paths and no leaks
+    create_test_archive_tgz(
+        &dist_archive,
+        &[
+            ("Judy-2.6.0/config.m4", b"PHP_ARG_ENABLE(judy, ...)"),
+            ("Judy-2.6.0/LICENSE", b"PHP License"),
+        ],
+    );
+    let run_pass = repo.check(&[]);
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    let outcome_pass = run_pass.outcome("archive-contents");
+    assert_eq!(outcome_pass["examined"].as_u64().unwrap(), 2);
+    assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
+
+    // Negative control 1: missing required path (LICENSE missing)
+    create_test_archive_tgz(
+        &dist_archive,
+        &[("Judy-2.6.0/config.m4", b"PHP_ARG_ENABLE(judy, ...)")],
+    );
+    let run_missing = repo.check(&[]);
+    assert_eq!(run_missing.code, 1);
+    let titles = run_missing.titles("archive-contents");
+    assert!(titles.contains(&"Missing Required Archive Path".to_string()));
+
+    // Negative control 2: forbidden entry leak
+    create_test_archive_tgz(
+        &dist_archive,
+        &[
+            ("Judy-2.6.0/config.m4", b"PHP_ARG_ENABLE(judy, ...)"),
+            ("Judy-2.6.0/LICENSE", b"PHP License"),
+            ("Judy-2.6.0/tools/leak.sh", b"#!/bin/bash\nrm -rf /"),
+        ],
+    );
+    let run_leak = repo.check(&[]);
+    assert_eq!(run_leak.code, 1);
+    let titles_leak = run_leak.titles("archive-contents");
+    assert!(titles_leak.contains(&"Forbidden Entry Found in Archive".to_string()));
+
+    // Override control: allow-archive-leak lifts the forbidden entry violation
+    let run_override = repo.check_with_pr(
+        &[],
+        "allow-archive-leak: ^tools/ temporary debug script retained for triage",
+    );
+    assert_eq!(
+        run_override.code, 0,
+        "{}{}",
+        run_override.stdout, run_override.stderr
+    );
+    assert_eq!(
+        run_override.outcome("archive-contents")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Negative control 3: missing archive path (fails closed with exit 2)
+    std::fs::remove_file(&dist_archive).unwrap();
+    let run_no_archive = repo.check(&[]);
+    assert_eq!(run_no_archive.code, 2);
+}
+
+// ---- manifest-sync ---------------------------------------------------------
+
+#[test]
+fn manifest_sync_reconciles_tracked_files_and_manifest_and_accepts_override() {
+    let repo = Repo::new();
+    let config = r#"
+[meta]
+version = 1
+name = "test-repo"
+
+[gates.manifest-sync]
+enabled = true
+
+[[gates.manifest-sync.rules]]
+manifest = "package.xml"
+extract_regex = '<file[^>]*name="([^"]+)"'
+watched_paths = ["src/**", "config.m4"]
+exclude_paths = ["src/generated/**"]
+"#;
+    let manifest_ok = r#"<?xml version="1.0"?>
+<package>
+  <contents>
+    <dir name="/">
+      <file name="config.m4" role="src" />
+      <file name="src/judy.c" role="src" />
+      <file name="src/lib.rs" role="src" />
+    </dir>
+  </contents>
+</package>
+"#;
+
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("package.xml", manifest_ok),
+            ("config.m4", "PHP_ARG_ENABLE(judy)"),
+            ("src/judy.c", "/* judy */"),
+        ],
+        "base: configure manifest-sync with matching files",
+    );
+
+    // Positive control: perfectly in sync
+    let run_clean = repo.check(&[]);
+    assert_eq!(
+        run_clean.code, 0,
+        "{}{}",
+        run_clean.stdout, run_clean.stderr
+    );
+    assert!(
+        run_clean.outcome("manifest-sync")["examined"]
+            .as_u64()
+            .unwrap()
+            >= 2
+    );
+
+    // Negative control 1: unmanifested tracked file (+)
+    repo.write("src/untracked_in_manifest.c", "/* unmanifested */");
+    repo.commit("feat: add source file without manifest update");
+    let run_unmanifested = repo.check(&[]);
+    assert_eq!(run_unmanifested.code, 1);
+    let titles_unmanifested = run_unmanifested.titles("manifest-sync");
+    assert!(titles_unmanifested.contains(&"Manifest Synchronization Drift".to_string()));
+    let msg_unmanifested = run_unmanifested.outcome("manifest-sync")["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(msg_unmanifested.contains("+ src/untracked_in_manifest.c"));
+
+    // Negative control 2: ghost manifest entry (-)
+    let manifest_with_ghost = r#"<?xml version="1.0"?>
+<package>
+  <contents>
+    <dir name="/">
+      <file name="config.m4" role="src" />
+      <file name="src/judy.c" role="src" />
+      <file name="src/untracked_in_manifest.c" role="src" />
+      <file name="src/ghost_file.c" role="src" />
+    </dir>
+  </contents>
+</package>
+"#;
+    repo.write("package.xml", manifest_with_ghost);
+    repo.commit("fix: add manifest entry including ghost file");
+    let run_ghost = repo.check(&[]);
+    assert_eq!(run_ghost.code, 1);
+    let titles_ghost = run_ghost.titles("manifest-sync");
+    assert!(titles_ghost.contains(&"Manifest Synchronization Drift".to_string()));
+    let msg_ghost = run_ghost.outcome("manifest-sync")["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(msg_ghost.contains("- src/ghost_file.c"));
+
+    // Override control: allow-manifest-drift lifts the violations
+    let run_override = repo.check_with_pr(
+        &[],
+        "allow-manifest-drift: package.xml intentionally deferred manifest sync during refactor",
+    );
+    assert_eq!(
+        run_override.code, 0,
+        "{}{}",
+        run_override.stdout, run_override.stderr
+    );
+    assert_eq!(
+        run_override.outcome("manifest-sync")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // Negative control 3: missing manifest file (fails closed with exit 2)
+    repo.git(&["rm", "-q", "package.xml"]);
+    repo.commit("chore: remove manifest");
+    let run_no_manifest = repo.check(&[]);
+    assert_eq!(run_no_manifest.code, 2);
+}
+
+// ---- version-lockstep ------------------------------------------------------
+
+#[test]
+fn version_lockstep_verifies_multi_source_equality_and_accepts_override() {
+    let repo = Repo::new();
+    let config = r#"
+[meta]
+version = 1
+name = "test-repo"
+
+[gates.version-lockstep]
+enabled = true
+
+[[gates.version-lockstep.groups]]
+name = "judy-release"
+sources = [
+  { path = "php_judy.h", regex = '#define\s+PHP_JUDY_VERSION\s+"([^"]+)"' },
+  { path = "package.xml", regex = '<release>\s*<version>\s*<release>([^<]+)</release>' },
+]
+"#;
+    let header_v1 = "#define PHP_JUDY_VERSION \"2.6.0\"\n";
+    let manifest_v1 = "<release><version><release>2.6.0</release></version></release>\n";
+
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("php_judy.h", header_v1),
+            ("package.xml", manifest_v1),
+        ],
+        "base: configure version-lockstep in sync",
+    );
+
+    // Positive control: matching versions
+    let run_ok = repo.check(&[]);
+    assert_eq!(run_ok.code, 0, "{}{}", run_ok.stdout, run_ok.stderr);
+    assert_eq!(
+        run_ok.outcome("version-lockstep")["examined"]
+            .as_u64()
+            .unwrap(),
+        2
+    );
+
+    // Negative control 1: version mismatch
+    let manifest_v2 = "<release><version><release>2.6.1</release></version></release>\n";
+    repo.write("package.xml", manifest_v2);
+    repo.commit("chore: bump manifest version without updating header");
+    let run_mismatch = repo.check(&[]);
+    assert_eq!(run_mismatch.code, 1);
+    let titles_mismatch = run_mismatch.titles("version-lockstep");
+    assert!(titles_mismatch.contains(&"Version Declaration Lockstep Mismatch".to_string()));
+
+    // Override control: allow-version-mismatch lifts the mismatch
+    let run_override = repo.check_with_pr(
+        &[],
+        "allow-version-mismatch: judy-release staged release bump across branches",
+    );
+    assert_eq!(
+        run_override.code, 0,
+        "{}{}",
+        run_override.stdout, run_override.stderr
+    );
+    assert_eq!(
+        run_override.outcome("version-lockstep")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Negative control 2: missing source file (fails closed with exit 2)
+    repo.git(&["rm", "-q", "php_judy.h"]);
+    repo.commit("chore: delete header");
+    let run_missing = repo.check(&[]);
+    assert_eq!(run_missing.code, 2);
+}
+
+// ---- bench-regression (sample array adapter) -------------------------------
+
+#[test]
+fn bench_regression_handles_generic_json_sample_array_and_accepts_override() {
+    let repo = Repo::new();
+    let config = r#"
+[meta]
+version = 1
+name = "test-repo"
+
+[gates.bench-regression]
+enabled = true
+tolerance_pct = 5.0
+paths = ["benchmarks/results.json"]
+"#;
+    let base_json = r#"{
+  "benchmarks": {
+    "judy_insert": {
+      "runs_ms": [10.0, 10.1, 9.9, 10.0, 10.1],
+      "median_ms": 10.0
+    }
+  }
+}
+"#;
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("benchmarks/results.json", base_json),
+        ],
+        "base: configure bench-regression with sample array baseline",
+    );
+
+    // Regressed head benchmark: 10ms -> 20ms (+100% regression)
+    let head_json = r#"{
+  "benchmarks": {
+    "judy_insert": {
+      "runs_ms": [20.0, 20.1, 19.9, 20.0, 20.1],
+      "median_ms": 20.0
+    }
+  }
+}
+"#;
+    repo.write("benchmarks/results.json", head_json);
+    repo.commit("perf: altered algorithm with severe regression");
+
+    let run_fail = repo.check(&["--suite", "bench"]);
+    assert_eq!(run_fail.code, 1);
+    let titles_fail = run_fail.titles("bench-regression");
+    assert!(titles_fail.iter().any(|t| t.contains("Regressed")));
+
+    // Override with allow-regression
+    let run_override = repo.check_with_pr(
+        &["--suite", "bench"],
+        "allow-regression: judy_insert trade runtime speed for memory density",
+    );
+    assert_eq!(
+        run_override.code, 0,
+        "{}{}",
+        run_override.stdout, run_override.stderr
+    );
+    assert_eq!(
+        run_override.outcome("bench-regression")["overrides"]
             .as_array()
             .unwrap()
             .len(),

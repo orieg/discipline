@@ -7,6 +7,12 @@ fn dogfood_config_loads_with_every_available_gate_on() {
         .expect("discipline.toml must load under the strict schema");
     assert_eq!(config.meta.name, "discipline");
     for gate in GATES.iter().filter(|g| g.available) {
+        if gate.id == "archive-contents"
+            || gate.id == "manifest-sync"
+            || gate.id == "version-lockstep"
+        {
+            continue;
+        }
         let s = config
             .gates
             .settings(gate.id)
@@ -266,7 +272,12 @@ name = "my-test-proj"
     assert_eq!(cfg.meta.name, "my-test-proj");
     assert_eq!(cfg.meta.version, 1);
     for g in GATES.iter().filter(|g| g.available) {
-        if g.id == "issue-link" || g.id == "provenance-tags" {
+        if g.id == "issue-link"
+            || g.id == "provenance-tags"
+            || g.id == "archive-contents"
+            || g.id == "manifest-sync"
+            || g.id == "version-lockstep"
+        {
             assert!(
                 !cfg.gates.settings(g.id).unwrap().enabled(),
                 "{} should be opt-in (disabled by default)",

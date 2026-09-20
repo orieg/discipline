@@ -1641,6 +1641,128 @@ smoke_cost::set_contains
             Ok(api_ok && miri_ok && san_ok)
         },
     ),
+    (
+        "archive-contents: detects missing required paths and forbidden entry leaks",
+        || {
+            use crate::guards::archive_contents::read_archive_entries;
+            use flate2::write::GzEncoder;
+            use flate2::Compression;
+            use std::fs::File;
+
+            let temp_path = std::env::temp_dir().join(format!("discipline_selftest_{}.tgz", std::process::id()));
+            let f = File::create(&temp_path)?;
+            let enc = GzEncoder::new(f, Compression::default());
+            let mut tar = tar::Builder::new(enc);
+
+            let data = b"content";
+            let mut h1 = tar::Header::new_gnu();
+            h1.set_size(data.len() as u64);
+            h1.set_mode(0o644);
+            h1.set_cksum();
+            tar.append_data(&mut h1, "Judy-2.6.0/config.m4", &data[..])?;
+
+            let mut h2 = tar::Header::new_gnu();
+            h2.set_size(data.len() as u64);
+            h2.set_mode(0o644);
+            h2.set_cksum();
+            tar.append_data(&mut h2, "Judy-2.6.0/tools/check.sh", &data[..])?;
+            let enc = tar.into_inner()?;
+            enc.finish()?;
+
+            let entries = read_archive_entries(&temp_path, 1);
+            let _ = std::fs::remove_file(&temp_path);
+            let entries = entries?;
+            let has_required = entries.contains(&"config.m4".to_string());
+            let missing_required = !entries.contains(&"php_judy.h".to_string());
+
+            let forbidden_re = Regex::new(r"^tools/")?;
+            let has_forbidden = entries.iter().any(|e| forbidden_re.is_match(e));
+            let clean_entry_safe = !forbidden_re.is_match("config.m4");
+
+            Ok(has_required && missing_required && has_forbidden && clean_entry_safe)
+        },
+    ),
+    (
+        "manifest-sync: extracts declared paths and reconciles bidirectional diffs",
+        || {
+            let manifest_xml = r#"
+            <package>
+                <contents>
+                    <file name="tests/001.phpt" role="test"/>
+                    <file name="tests/ghost.phpt" role="test"/>
+                </contents>
+            </package>"#;
+
+            let re = Regex::new(r#"<file\s+name="([^"]+)""#)?;
+            let manifest_files: std::collections::BTreeSet<String> = re
+                .captures_iter(manifest_xml)
+                .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+                .collect();
+
+            let git_files = ["tests/001.phpt".to_string(), "tests/unmanifested.phpt".to_string()];
+
+            let unmanifested: Vec<_> = git_files
+                .iter()
+                .filter(|f| !manifest_files.contains(*f))
+                .cloned()
+                .collect();
+            let ghost: Vec<_> = manifest_files
+                .iter()
+                .filter(|f| !git_files.contains(f))
+                .cloned()
+                .collect();
+
+            Ok(unmanifested == vec!["tests/unmanifested.phpt"] && ghost == vec!["tests/ghost.phpt"])
+        },
+    ),
+    (
+        "version-lockstep: verifies multi-source equality and detects mismatch",
+        || {
+            let header = "#define PHP_JUDY_VERSION \"2.6.0\"\n";
+            let manifest_match = "<release>2.6.0</release>";
+            let manifest_mismatch = "<release>2.5.0</release>";
+
+            let h_re = Regex::new(r#"#define\s+PHP_JUDY_VERSION\s+"([^"]+)""#)?;
+            let m_re = Regex::new(r#"<release>([^<]+)</release>"#)?;
+
+            let h_ver = h_re.captures(header).and_then(|c| c.get(1)).map(|m| m.as_str()).unwrap();
+            let m_ver_ok = m_re.captures(manifest_match).and_then(|c| c.get(1)).map(|m| m.as_str()).unwrap();
+            let m_ver_bad = m_re.captures(manifest_mismatch).and_then(|c| c.get(1)).map(|m| m.as_str()).unwrap();
+
+            Ok(h_ver == m_ver_ok && h_ver != m_ver_bad)
+        },
+    ),
+    (
+        "bench-regression: sample array adapter computes bootstrap confidence interval",
+        || {
+            use crate::guards::perf::{parse_metrics, MetricValue};
+
+            let json = r#"{
+                "benchmarks": {
+                    "core.bitset.write.judy": {
+                        "median_ms": 14.5314,
+                        "runs_ms": [14.3895, 14.476, 14.5057, 14.5314, 14.5369, 14.538, 14.5991]
+                    }
+                }
+            }"#;
+
+            let metrics = parse_metrics("baselines/latest.json", json)?;
+            if metrics.len() != 1 {
+                return Ok(false);
+            }
+
+            match &metrics[0].value {
+                MetricValue::Continuous(est) => {
+                    let has_ci = est.ci.is_some();
+                    let ci = est.ci.unwrap();
+                    let valid_bounds = ci.lower <= est.point_estimate && est.point_estimate <= ci.upper;
+                    let valid_unit = est.unit == "ms";
+                    Ok(has_ci && valid_bounds && valid_unit)
+                }
+                _ => Ok(false),
+            }
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

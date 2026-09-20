@@ -197,6 +197,24 @@ pub const ALLOW_PROVENANCE: &[&str] = &[
     "docs-lint:allow",
 ];
 
+pub const ALLOW_ARCHIVE_LEAK: &[&str] = &[
+    "allow-archive-leak",
+    "discipline:allow(archive-contents)",
+    "allow(archive-contents)",
+];
+
+pub const ALLOW_MANIFEST_DRIFT: &[&str] = &[
+    "allow-manifest-drift",
+    "discipline:allow(manifest-sync)",
+    "allow(manifest-sync)",
+];
+
+pub const ALLOW_VERSION_MISMATCH: &[&str] = &[
+    "allow-version-mismatch",
+    "discipline:allow(version-lockstep)",
+    "allow(version-lockstep)",
+];
+
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
     "deletes",
@@ -252,6 +270,15 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-unpaired-figures",
     "docs-lint: allow",
     "docs-lint:allow",
+    "allow-archive-leak",
+    "discipline:allow(archive-contents)",
+    "allow(archive-contents)",
+    "allow-manifest-drift",
+    "discipline:allow(manifest-sync)",
+    "allow(manifest-sync)",
+    "allow-version-mismatch",
+    "discipline:allow(version-lockstep)",
+    "allow(version-lockstep)",
 ];
 
 const PLACEHOLDERS: &[&str] = &[

@@ -244,6 +244,27 @@ pub const GATES: &[GateInfo] = &[
         languages: "Rust, Go, Python, C/C++",
         available: true,
     },
+    GateInfo {
+        id: "archive-contents",
+        suite: Suite::Integrity,
+        summary: "distribution archive must contain required paths and zero forbidden developer artifacts",
+        languages: "any",
+        available: true,
+    },
+    GateInfo {
+        id: "manifest-sync",
+        suite: Suite::Integrity,
+        summary: "reconcile git-tracked files against packaging manifest declarations",
+        languages: "any",
+        available: true,
+    },
+    GateInfo {
+        id: "version-lockstep",
+        suite: Suite::Integrity,
+        summary: "version declarations across headers, manifests, and files must remain in lockstep",
+        languages: "any",
+        available: true,
+    },
 ];
 
 pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
@@ -317,6 +338,9 @@ pub struct Gates {
     pub shell_secrets: ShellSecretsGate,
     pub issue_link: IssueLinkGate,
     pub provenance_tags: ProvenanceTagsGate,
+    pub archive_contents: ArchiveContentsGate,
+    pub manifest_sync: ManifestSyncGate,
+    pub version_lockstep: VersionLockstepGate,
 }
 
 /// Settings every gate shares.
@@ -353,7 +377,10 @@ impl_gate_settings!(
     CiIntegrityGate,
     ShellSecretsGate,
     IssueLinkGate,
-    ProvenanceTagsGate
+    ProvenanceTagsGate,
+    ArchiveContentsGate,
+    ManifestSyncGate,
+    VersionLockstepGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1001,6 +1028,96 @@ impl Default for CiIntegrityGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ArchiveContentsGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub archive_path: Option<String>,
+    pub required_paths: Vec<String>,
+    pub forbidden_patterns: Vec<String>,
+    pub strip_components: usize,
+}
+
+impl Default for ArchiveContentsGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            archive_path: None,
+            required_paths: Vec::new(),
+            forbidden_patterns: Vec::new(),
+            strip_components: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManifestSyncGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub rules: Vec<ManifestSyncRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManifestSyncRule {
+    pub manifest: String,
+    pub extract_regex: String,
+    pub watched_paths: Vec<String>,
+    #[serde(default)]
+    pub exclude_paths: Vec<String>,
+}
+
+impl Default for ManifestSyncGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            rules: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VersionLockstepGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub groups: Vec<VersionGroup>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VersionGroup {
+    pub name: String,
+    pub sources: Vec<VersionSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VersionSource {
+    pub path: String,
+    pub regex: String,
+}
+
+impl Default for VersionLockstepGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            groups: Vec::new(),
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -1024,6 +1141,9 @@ impl Gates {
             "test-floor" => &self.test_floor,
             "ci-integrity" => &self.ci_integrity,
             "provenance-tags" => &self.provenance_tags,
+            "archive-contents" => &self.archive_contents,
+            "manifest-sync" => &self.manifest_sync,
+            "version-lockstep" => &self.version_lockstep,
             _ => return None,
         })
     }
