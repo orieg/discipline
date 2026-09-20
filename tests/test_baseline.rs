@@ -45,7 +45,7 @@ fn test_baseline_write_and_grandfathering_passes() {
     assert!(notes.iter().any(|n| n
         .as_str()
         .unwrap()
-        .contains("1 baselined finding not blocking")));
+        .contains("1 finding grandfathered by baseline in this gate (not blocking)")));
 }
 
 #[test]
@@ -167,6 +167,25 @@ fn test_baseline_stale_entry_suppressed_when_gate_disabled() {
             .iter()
             .any(|n| n.as_str().unwrap().contains("stale baseline entry")),
         "stale baseline note must be suppressed for disabled gates, got: {notes:?}"
+    );
+}
+
+#[test]
+fn test_baseline_write_prints_directive_hint_for_config_integrity() {
+    let repo = Repo::new();
+    repo.write(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n",
+    );
+    repo.commit("feat: initial unsafe");
+
+    let run = repo.run(&["baseline", "--write"], &[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains("allow-gate-weakening: baseline initial grandfathered baseline"),
+        "expected directive hint in: {}",
+        run.stdout
     );
 }
 

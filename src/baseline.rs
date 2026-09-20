@@ -2,7 +2,7 @@
 //!
 //! Allows teams adopting discipline on mature repositories to grandfather pre-existing
 //! findings into `discipline-baseline.toml` using `discipline baseline --write`.
-//! Subsequent runs report baselined findings as non-blocking notes ("N baselined findings not blocking")
+//! Subsequent runs report baselined findings as non-blocking notes ("N findings grandfathered by baseline in this gate (not blocking)")
 //! and fail only on NEW violations.
 //!
 //! Fingerprints are stable and decoupled from line numbers:
@@ -183,7 +183,7 @@ where
         if gate_baselined > 0 {
             let suffix = if gate_baselined == 1 { "" } else { "s" };
             outcome.notes.push(format!(
-                "{gate_baselined} baselined finding{suffix} not blocking"
+                "{gate_baselined} finding{suffix} grandfathered by baseline in this gate (not blocking)"
             ));
         }
     }

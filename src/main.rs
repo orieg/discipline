@@ -18,7 +18,7 @@ fn main() -> ExitCode {
         Ok(c) => c,
         Err(e) => {
             let _ = e.print();
-            return ExitCode::from(2);
+            return ExitCode::from(e.exit_code() as u8);
         }
     };
     let cmd_name = cli.command.name();
@@ -716,6 +716,11 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             },
             args.baseline_file.display()
         );
+        if !baseline_obj.findings.is_empty() {
+            println!(
+                "\nTo commit this baseline under `config-integrity`, include this directive on its own line in the commit message or PR body:\n  allow-gate-weakening: baseline initial grandfathered baseline"
+            );
+        }
         Ok(true)
     } else {
         println!(

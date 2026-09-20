@@ -7034,3 +7034,31 @@ fn test_check_fatal_error_emits_configured_reports() {
     assert_eq!(report_json["errors"], 1);
     assert_eq!(report_json["outcomes"][0]["gate"], "engine");
 }
+
+#[test]
+fn test_version_and_help_exit_code_zero() {
+    let repo = Repo::new();
+    let run_version = repo.run(&["--version"], &[]);
+    assert_eq!(
+        run_version.code, 0,
+        "discipline --version must exit code 0, got {}",
+        run_version.code
+    );
+    assert!(
+        run_version.stdout.contains("discipline"),
+        "version output: {}",
+        run_version.stdout
+    );
+
+    let run_help = repo.run(&["--help"], &[]);
+    assert_eq!(
+        run_help.code, 0,
+        "discipline --help must exit code 0, got {}",
+        run_help.code
+    );
+    assert!(
+        run_help.stdout.contains("Usage:"),
+        "help output: {}",
+        run_help.stdout
+    );
+}
