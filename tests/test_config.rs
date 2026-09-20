@@ -10,6 +10,12 @@ fn dogfood_config_loads_with_every_available_gate_on() {
         if gate.id == "archive-contents"
             || gate.id == "manifest-sync"
             || gate.id == "version-lockstep"
+            || gate.id == "scope-confinement"
+            || gate.id == "pr-checklist"
+            || gate.id == "unsafe-budget"
+            || gate.id == "msrv"
+            || gate.id == "miri"
+            || gate.id == "sanitizers"
         {
             continue;
         }
@@ -49,9 +55,9 @@ fn schema_is_strict() {
     for bad in [
         "[gates.pii]\nlan_ipz = false\n",
         "[gates.no-such-gate]\nenabled = true\n",
-        "[gates.miri]\nenabled = true\n",
+        "[gates.fuzz-ratchet]\nenabled = true\n",
         "[gates.reproducible-builds]\nenabled = true\n",
-        "[gates.sanitizers]\nenabled = true\n",
+        "[gates.formal-verification]\nenabled = true\n",
         "[nonsense]\na = 1\n",
         "[gates.pii]\nseverity = \"fatal\"\n",
         "[directives]\nunknown_key = true\n",
@@ -277,6 +283,12 @@ name = "my-test-proj"
             || g.id == "archive-contents"
             || g.id == "manifest-sync"
             || g.id == "version-lockstep"
+            || g.id == "scope-confinement"
+            || g.id == "pr-checklist"
+            || g.id == "unsafe-budget"
+            || g.id == "msrv"
+            || g.id == "miri"
+            || g.id == "sanitizers"
         {
             assert!(
                 !cfg.gates.settings(g.id).unwrap().enabled(),

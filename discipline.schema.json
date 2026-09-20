@@ -493,6 +493,60 @@
       },
       "type": "object"
     },
+    "MiriGate": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Additional CLI arguments passed to cargo miri test"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "timeout_seconds": {
+          "description": "Maximum execution time in seconds before failing closed (default: 600)",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "MsrvGate": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "description": "Command to run to verify MSRV compatibility",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "pinned_version": {
+          "description": "Explicit MSRV version string (e.g. \"1.90.0\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "PiiGate": {
       "additionalProperties": false,
       "properties": {
@@ -545,6 +599,22 @@
       },
       "type": "object"
     },
+    "PrChecklistGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "ProvenanceTagsGate": {
       "additionalProperties": false,
       "properties": {
@@ -570,6 +640,58 @@
         },
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
+    "SanitizersGate": {
+      "additionalProperties": false,
+      "properties": {
+        "canary": {
+          "description": "Whether to verify a negative-control race canary before main tests",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "sanitizer": {
+          "description": "Sanitizer name to activate (e.g. \"address\", \"thread\")",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "timeout_seconds": {
+          "description": "Maximum execution time in seconds (default: 300)",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ScopeConfinementGate": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Glob patterns of paths agents are authorized to modify"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "forbidden_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Glob patterns of paths agents are strictly forbidden to touch"
         },
         "severity": {
           "$ref": "#/$defs/Severity"
@@ -661,6 +783,30 @@
           "type": "object"
         }
       ]
+    },
+    "SuppressionDeltaGate": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_suppressions": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Specific suppression patterns explicitly permitted by policy"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "max_increase": {
+          "description": "Maximum net increase in suppression annotations permitted (default: 0)",
+          "type": "integer"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
     },
     "TestBudgetGate": {
       "additionalProperties": false,
@@ -760,6 +906,33 @@
         "scan_pr_body": {
           "description": "Whether to scan PR description text",
           "type": "boolean"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
+    "UnsafeBudgetGate": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_increase": {
+          "description": "Whether total unsafe count may increase over base ref without override",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "max_unsafe": {
+          "description": "Maximum total number of unsafe sites allowed in head ref",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "severity": {
           "$ref": "#/$defs/Severity"
@@ -986,6 +1159,22 @@
           ],
           "description": "reconcile git-tracked files against packaging manifest declarations"
         },
+        "miri": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/MiriGate"
+            }
+          ],
+          "description": "Miri tiers with zero-tests guard"
+        },
+        "msrv": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/MsrvGate"
+            }
+          ],
+          "description": "cargo check under the pinned MSRV"
+        },
         "pii": {
           "allOf": [
             {
@@ -993,6 +1182,14 @@
             }
           ],
           "description": "no home paths, LAN IPs, or denylisted hostnames in tracked text"
+        },
+        "pr-checklist": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/PrChecklistGate"
+            }
+          ],
+          "description": "ticked PR checkboxes are reconciled against the diff"
         },
         "provenance-tags": {
           "allOf": [
@@ -1002,6 +1199,22 @@
           ],
           "description": "published numerics carry (measured|target|projected)"
         },
+        "sanitizers": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/SanitizersGate"
+            }
+          ],
+          "description": "ASan / TSan preset with audited suppressions and a race canary"
+        },
+        "scope-confinement": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ScopeConfinementGate"
+            }
+          ],
+          "description": "changes stay inside authorized paths"
+        },
         "shell-secrets": {
           "allOf": [
             {
@@ -1009,6 +1222,14 @@
             }
           ],
           "description": "no command-line secrets or unverified piped scripts in shell, docker, or CI"
+        },
+        "suppression-delta": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/SuppressionDeltaGate"
+            }
+          ],
+          "description": "new #[allow], commented-out tests, cfg-gated tests"
         },
         "test-budget": {
           "allOf": [
@@ -1033,6 +1254,14 @@
             }
           ],
           "description": "no calendar / duration estimates in markdown or the PR body"
+        },
+        "unsafe-budget": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/UnsafeBudgetGate"
+            }
+          ],
+          "description": "unsafe count ratchet"
         },
         "unsafe-safety-comment": {
           "allOf": [

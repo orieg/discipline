@@ -116,16 +116,16 @@ const CASES: &[Case] = &[
             && !line_allows("x discipline:allow(pii)", "time-estimates"))
     }),
     (
-        "config: unknown keys and planned gates are rejected",
+        "config: unknown keys and unknown gates are rejected",
         || {
             let head = "[meta]\nversion = 1\nname = \"t\"\n";
             let typo =
                 DisciplineConfig::from_toml_str(&format!("{head}[gates.pii]\nlan_ipz = false\n"));
-            let planned =
-                DisciplineConfig::from_toml_str(&format!("{head}[gates.miri]\nenabled = true\n"));
+            let unknown =
+                DisciplineConfig::from_toml_str(&format!("{head}[gates.unknown-gate]\nenabled = true\n"));
             let fine =
                 DisciplineConfig::from_toml_str(&format!("{head}[gates.pii]\nlan_ips = false\n"));
-            Ok(typo.is_err() && planned.is_err() && fine.is_ok())
+            Ok(typo.is_err() && unknown.is_err() && fine.is_ok())
         },
     ),
     (
@@ -1760,6 +1760,103 @@ smoke_cost::set_contains
                     Ok(has_ci && valid_bounds && valid_unit)
                 }
                 _ => Ok(false),
+            }
+        },
+    ),
+    (
+        "scope-confinement: glob confinement discriminates authorized and forbidden changes",
+        || {
+            use globset::{Glob, GlobSetBuilder};
+            let mut allowed_b = GlobSetBuilder::new();
+            allowed_b.add(Glob::new("src/**")?);
+            let allowed = allowed_b.build()?;
+
+            let mut forbidden_b = GlobSetBuilder::new();
+            forbidden_b.add(Glob::new(".github/**")?);
+            let forbidden = forbidden_b.build()?;
+
+            let ok_file = "src/lib.rs";
+            let bad_file = ".github/workflows/ci.yml";
+            let outside_file = "docs/guide.md";
+
+            Ok(allowed.is_match(ok_file)
+                && !forbidden.is_match(ok_file)
+                && forbidden.is_match(bad_file)
+                && !allowed.is_match(outside_file))
+        },
+    ),
+    (
+        "suppression-delta: annotations across languages are detected",
+        || {
+            let rust_suppr = "#[allow(unused_variables)]";
+            let py_suppr = "x = 1  # noqa";
+            let ts_suppr = "// @ts-ignore";
+            let clean = "let x = 1;";
+
+            let has_suppr = |s: &str| {
+                s.contains("#[allow(")
+                    || s.contains("# noqa")
+                    || s.contains("// @ts-ignore")
+            };
+
+            Ok(has_suppr(rust_suppr)
+                && has_suppr(py_suppr)
+                && has_suppr(ts_suppr)
+                && !has_suppr(clean))
+        },
+    ),
+    (
+        "pr-checklist: regex detects checked and unchecked items",
+        || {
+            let re = Regex::new(r"(?i)^[ \t]*-[ \t]*\[[xX]\][ \t]*(.*)$")?;
+            let checked = "- [x] Added unit tests";
+            let checked_upper = "- [X] Updated docs";
+            let unchecked = "- [ ] Benchmarks added";
+
+            Ok(re.is_match(checked)
+                && re.is_match(checked_upper)
+                && !re.is_match(unchecked))
+        },
+    ),
+    (
+        "unsafe-budget: counts unsafe blocks across AST facts",
+        || {
+            let v = AssertVocabulary::default();
+            let src = "fn safe() {}\nfn unsafe_fn() {\n    unsafe { let _ = 1; }\n    unsafe { let _ = 2; }\n}";
+            let facts = analyze(src, &v)?;
+            Ok(facts.unsafe_sites.len() == 2)
+        },
+    ),
+    (
+        "msrv: parse_rust_version extracts valid MSRV string",
+        || {
+            let cargo_toml = "[package]\nname = \"foo\"\nversion = \"0.1.0\"\nrust-version = \"1.90\"\n";
+            let no_msrv = "[package]\nname = \"foo\"\nversion = \"0.1.0\"\n";
+            let parsed_ok = crate::guards::msrv::parse_rust_version(cargo_toml);
+            let parsed_none = crate::guards::msrv::parse_rust_version(no_msrv);
+
+            Ok(parsed_ok == Some("1.90".to_string()) && parsed_none.is_none())
+        },
+    ),
+    (
+        "miri: resolves static preset with zero-tests pattern",
+        || {
+            let preset = crate::guards::presets::resolve_preset("miri");
+            match preset {
+                Some(p) => Ok(p.default_command.contains("cargo miri test")
+                    && p.zero_items_pattern == Some("running 0 tests")),
+                None => Ok(false),
+            }
+        },
+    ),
+    (
+        "sanitizers: resolves static preset with race canary diagnostic",
+        || {
+            let preset = crate::guards::presets::resolve_preset("sanitizers");
+            match preset {
+                Some(p) => Ok(p.canary_command.is_some()
+                    && p.canary_expected_diagnostic == Some("ThreadSanitizer: data race")),
+                None => Ok(false),
             }
         },
     ),

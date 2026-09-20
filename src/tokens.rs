@@ -84,7 +84,7 @@ pub fn find_gate_or_subject_override(
 ) -> Option<OverrideRecord> {
     for d in directives {
         if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive))
-            && (subject.is_empty() || d.covers(subject) || d.covers(gate))
+            && (subject.is_empty() || subject == gate || d.covers(subject) || d.covers(gate))
         {
             return Some(OverrideRecord {
                 gate: gate.to_string(),
@@ -215,6 +215,44 @@ pub const ALLOW_VERSION_MISMATCH: &[&str] = &[
     "allow(version-lockstep)",
 ];
 
+pub const ALLOW_SCOPE: &[&str] = &[
+    "allow-scope",
+    "allow-scope-confinement",
+    "discipline:allow(scope-confinement)",
+    "allow(scope-confinement)",
+];
+
+pub const ALLOW_SUPPRESSION: &[&str] = &[
+    "allow-suppression",
+    "allow-suppression-delta",
+    "discipline:allow(suppression-delta)",
+    "allow(suppression-delta)",
+];
+
+pub const ALLOW_PR_CHECKLIST: &[&str] = &[
+    "allow-checklist",
+    "allow-pr-checklist",
+    "discipline:allow(pr-checklist)",
+    "allow(pr-checklist)",
+];
+
+pub const ALLOW_UNSAFE: &[&str] = &[
+    "allow-unsafe",
+    "allow-unsafe-budget",
+    "discipline:allow(unsafe-budget)",
+    "allow(unsafe-budget)",
+];
+
+pub const ALLOW_MSRV: &[&str] = &["allow-msrv", "discipline:allow(msrv)", "allow(msrv)"];
+
+pub const ALLOW_MIRI: &[&str] = &["allow-miri", "discipline:allow(miri)", "allow(miri)"];
+
+pub const ALLOW_SANITIZERS: &[&str] = &[
+    "allow-sanitizers",
+    "discipline:allow(sanitizers)",
+    "allow(sanitizers)",
+];
+
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "removes",
     "deletes",
@@ -279,6 +317,31 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-version-mismatch",
     "discipline:allow(version-lockstep)",
     "allow(version-lockstep)",
+    "allow-scope",
+    "allow-scope-confinement",
+    "discipline:allow(scope-confinement)",
+    "allow(scope-confinement)",
+    "allow-suppression",
+    "allow-suppression-delta",
+    "discipline:allow(suppression-delta)",
+    "allow(suppression-delta)",
+    "allow-checklist",
+    "allow-pr-checklist",
+    "discipline:allow(pr-checklist)",
+    "allow(pr-checklist)",
+    "allow-unsafe",
+    "allow-unsafe-budget",
+    "discipline:allow(unsafe-budget)",
+    "allow(unsafe-budget)",
+    "allow-msrv",
+    "discipline:allow(msrv)",
+    "allow(msrv)",
+    "allow-miri",
+    "discipline:allow(miri)",
+    "allow(miri)",
+    "allow-sanitizers",
+    "discipline:allow(sanitizers)",
+    "allow(sanitizers)",
 ];
 
 const PLACEHOLDERS: &[&str] = &[

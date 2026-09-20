@@ -7,12 +7,19 @@ pub mod hygiene;
 pub mod integrity;
 pub mod issue_link;
 pub mod manifest_sync;
+pub mod miri;
+pub mod msrv;
 pub mod perf;
+pub mod pr_checklist;
 pub mod presets;
 pub mod provenance_tags;
+pub mod sanitizers;
+pub mod scope_confinement;
 pub mod shell_secrets;
+pub mod suppression_delta;
 pub mod test_budget;
 pub mod test_floor;
+pub mod unsafe_budget;
 pub mod version_lockstep;
 
 use crate::cli::SuiteChoice;
@@ -81,6 +88,26 @@ impl GateOutcome {
             line,
             message,
             remediation: Some(remediation.to_string()),
+        });
+    }
+
+    pub fn add_violation(
+        &mut self,
+        severity: Severity,
+        file: impl AsRef<str>,
+        line: usize,
+        message: impl Into<String>,
+        remediation: impl Into<String>,
+    ) {
+        let msg = message.into();
+        self.violations.push(Violation {
+            gate: self.gate,
+            severity,
+            title: msg.clone(),
+            file: Some(file.as_ref().to_string()),
+            line: Some(line),
+            message: msg,
+            remediation: Some(remediation.into()),
         });
     }
 }
@@ -270,6 +297,13 @@ pub fn run_checks(
             "archive-contents" => archive_contents::evaluate_archive_contents(ctx),
             "manifest-sync" => manifest_sync::evaluate_manifest_sync(ctx),
             "version-lockstep" => version_lockstep::evaluate_version_lockstep(ctx),
+            "scope-confinement" => scope_confinement::evaluate_scope_confinement(ctx),
+            "suppression-delta" => suppression_delta::evaluate_suppression_delta(ctx),
+            "pr-checklist" => pr_checklist::evaluate_pr_checklist(ctx),
+            "unsafe-budget" => unsafe_budget::evaluate_unsafe_budget(ctx),
+            "msrv" => msrv::evaluate_msrv(ctx),
+            "miri" => miri::evaluate_miri(ctx),
+            "sanitizers" => sanitizers::evaluate_sanitizers(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -323,6 +357,20 @@ pub fn run_checks(
             "manifest-sync"
         } else if note.contains("allow-version-mismatch") {
             "version-lockstep"
+        } else if note.contains("allow-scope") {
+            "scope-confinement"
+        } else if note.contains("allow-suppression") {
+            "suppression-delta"
+        } else if note.contains("allow-checklist") {
+            "pr-checklist"
+        } else if note.contains("allow-unsafe") {
+            "unsafe-budget"
+        } else if note.contains("allow-msrv") {
+            "msrv"
+        } else if note.contains("allow-miri") {
+            "miri"
+        } else if note.contains("allow-sanitizers") {
+            "sanitizers"
         } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
             "assertion-reduction"
         } else {
@@ -346,6 +394,13 @@ pub fn run_checks(
                         | "archive-contents"
                         | "manifest-sync"
                         | "version-lockstep"
+                        | "scope-confinement"
+                        | "suppression-delta"
+                        | "pr-checklist"
+                        | "unsafe-budget"
+                        | "msrv"
+                        | "miri"
+                        | "sanitizers"
                 ) {
                     o.notes.push(note.clone());
                 }

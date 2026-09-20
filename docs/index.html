@@ -1200,6 +1200,20 @@ discipline self-test</div>
             <td>a change cannot weaken its own discipline.toml without a token</td>
           </tr>
           <tr>
+            <td class="gate-id">scope-confinement</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>changes stay inside authorized paths</td>
+          </tr>
+          <tr>
+            <td class="gate-id">suppression-delta</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">per pack</span></td>
+            <td>new #[allow], commented-out tests, cfg-gated tests</td>
+          </tr>
+          <tr>
             <td class="gate-id">provenance-tags</td>
             <td>Hygiene</td>
             <td><span class="gate-badge badge-error">Error</span></td>
@@ -1242,11 +1256,46 @@ discipline self-test</div>
             <td>property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)</td>
           </tr>
           <tr>
+            <td class="gate-id">pr-checklist</td>
+            <td>Hygiene</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>ticked PR checkboxes are reconciled against the diff</td>
+          </tr>
+          <tr>
             <td class="gate-id">command</td>
             <td>Verification</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet</td>
+          </tr>
+          <tr>
+            <td class="gate-id">sanitizers</td>
+            <td>Verification</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust, C/C++</span></td>
+            <td>ASan / TSan preset with audited suppressions and a race canary</td>
+          </tr>
+          <tr>
+            <td class="gate-id">msrv</td>
+            <td>Quality</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust</span></td>
+            <td>cargo check under the pinned MSRV</td>
+          </tr>
+          <tr>
+            <td class="gate-id">miri</td>
+            <td>Verification</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust</span></td>
+            <td>Miri tiers with zero-tests guard</td>
+          </tr>
+          <tr>
+            <td class="gate-id">unsafe-budget</td>
+            <td>Verification</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Rust</span></td>
+            <td>unsafe count ratchet</td>
           </tr>
           <tr>
             <td class="gate-id">bench-regression</td>

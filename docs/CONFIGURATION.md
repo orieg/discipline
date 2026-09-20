@@ -379,7 +379,7 @@ Use [`templates/argo-workflow-template.yaml`](https://github.com/orieg/disciplin
 ```yaml
 repos:
   - repo: https://github.com/orieg/discipline
-    rev: v0.3.0
+    rev: v0.4.0
     hooks:
       - id: discipline          # compiles via cargo
       # Or: - id: discipline-system # uses pre-installed binary on PATH
@@ -437,6 +437,7 @@ Discipline is available as a standalone static binary across Linux and macOS.
 
 - **Debian / Ubuntu (APT)**:
   ```bash
+  sudo apt update && sudo apt install -y ca-certificates
   echo "deb [trusted=yes] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
   sudo apt update && sudo apt install -y discipline
   ```

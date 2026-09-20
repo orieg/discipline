@@ -18,11 +18,7 @@ fn clean_change_passes_and_reports_what_it_examined() {
     let json = run.json();
     assert_eq!(json["errors"], 0);
     assert!(run.outcome("pii")["examined"].as_u64().unwrap() >= 4);
-    assert!(json["planned_gates"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|g| g == "miri"));
+    assert!(json["planned_gates"].as_array().unwrap().is_empty());
 }
 
 // ---- assertion-reduction ---------------------------------------------------
@@ -1308,17 +1304,17 @@ fn could_not_check_is_exit_2_never_a_pass() {
     assert_eq!(repo.check(&[]).code, 2, "typo'd key");
     repo.write(
         "discipline.toml",
-        &format!("{CONFIG_HEAD}[gates.miri]\nenabled = true\n"),
+        &format!("{CONFIG_HEAD}[gates.no-such-gate]\nenabled = true\n"),
     );
-    let planned = repo.check(&[]);
-    assert_eq!(planned.code, 2);
-    assert!(planned.stderr.contains("planned"));
+    let unknown = repo.check(&[]);
+    assert_eq!(unknown.code, 2, "unknown gate in config must fail closed");
+    assert!(unknown.stderr.contains("unknown gate `no-such-gate`"));
     std::fs::remove_file(repo.file("discipline.toml")).unwrap();
 
     assert_eq!(
-        repo.check(&["--suite", "quality"]).code,
+        repo.check(&["--suite", "no-such-suite"]).code,
         2,
-        "empty suite must not pass"
+        "invalid suite must not pass"
     );
     assert_eq!(repo.check(&["--enable", "no-such-gate"]).code, 2);
     assert_eq!(repo.check(&["--enable", "pii", "--disable", "pii"]).code, 2);
@@ -1385,7 +1381,7 @@ fn self_test_passes_and_gates_lists_effective_state() {
     assert!(gates
         .stdout
         .lines()
-        .any(|l| l.starts_with("miri ") && l.contains("planned")));
+        .any(|l| l.starts_with("miri ") && l.contains("off")));
 }
 
 #[test]
@@ -1696,7 +1692,7 @@ fn override_record_audit_trail_and_step_outputs() {
         .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
     assert!(run
         .stdout
-        .contains("gates:  17 passed, 0 failed, 6 disabled (19 items examined)"));
+        .contains("gates:  18 passed, 0 failed, 12 disabled (19 items examined)"));
     assert!(run.stdout.contains("overrides: 1"));
 
     // Check GITHUB_OUTPUT contents
@@ -1707,13 +1703,13 @@ fn override_record_audit_trail_and_step_outputs() {
         "{step_output}"
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
-    assert!(step_output.contains("passed_gates=17"), "{step_output}");
+    assert!(step_output.contains("passed_gates=18"), "{step_output}");
     assert!(step_output.contains("examined_items=19"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
-        step_summary.contains("**Summary:** 17 passed, 0 failed, 6 disabled (19 items examined)"),
+        step_summary.contains("**Summary:** 18 passed, 0 failed, 12 disabled (19 items examined)"),
         "{step_summary}"
     );
     assert!(
@@ -6217,4 +6213,260 @@ fn commit_and_commit_range_cli_flags() {
         "run_range failed: {}{}",
         run_range.stdout, run_range.stderr
     );
+}
+
+// ---- scope-confinement -----------------------------------------------------
+
+#[test]
+fn scope_confinement_rejects_unauthorized_and_forbidden_paths() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.scope-confinement]
+enabled = true
+allowed_paths = ["src/**", "discipline.toml"]
+forbidden_paths = [".github/**"]
+"#,
+    );
+    repo.commit("chore: configure scope confinement");
+
+    // 1. Modifying allowed path passes
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn added() {{}}\n"));
+    repo.commit("feat: add within allowed path");
+    let run_ok = repo.check(&[]);
+    assert_eq!(run_ok.code, 0, "{}{}", run_ok.stdout, run_ok.stderr);
+
+    // 2. Modifying forbidden path fails
+    repo.write(".github/workflows/test.yml", "name: test\n");
+    repo.commit("ci: touch forbidden path");
+    let run_bad = repo.check(&[]);
+    assert_eq!(run_bad.code, 1);
+    assert!(!run_bad.titles("scope-confinement").is_empty());
+
+    // 3. Override waives violation
+    repo.commit("ci: touch forbidden with waiver\n\ndiscipline:allow(scope-confinement): .github/workflows/test.yml authorized");
+    let run_ov = repo.check(&[]);
+    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+}
+
+// ---- suppression-delta -----------------------------------------------------
+
+#[test]
+fn suppression_delta_detects_new_suppression_and_accepts_waiver() {
+    let repo = Repo::new();
+    // 1. Adding suppression fails
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\n#[allow(dead_code)]\nfn unused() {{}}\n"),
+    );
+    repo.commit("refactor: add lint suppression");
+    let run_bad = repo.check(&[]);
+    assert_eq!(run_bad.code, 1);
+    assert!(!run_bad.titles("suppression-delta").is_empty());
+
+    // 2. Waiver via directive passes
+    repo.commit("refactor: add lint suppression with waiver\n\ndiscipline:allow(suppression-delta): dead_code retained during refactor");
+    let run_ov = repo.check(&[]);
+    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+
+    // 3. Clean code without suppression passes
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn clean() {{}}\n"));
+    repo.commit("feat: clean function");
+    let run_ok = repo.check(&[]);
+    assert_eq!(run_ok.code, 0, "{}{}", run_ok.stdout, run_ok.stderr);
+}
+
+// ---- pr-checklist ----------------------------------------------------------
+
+#[test]
+fn pr_checklist_reconciles_ticked_items_against_diff() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.pr-checklist]
+enabled = true
+"#,
+    );
+    repo.commit("chore: enable pr checklist");
+
+    // 1. Checkbox claims tests modified, but diff touches only a doc file -> fails
+    repo.write("docs/readme.txt", "doc update\n");
+    repo.commit("docs: update");
+    repo.write("body.md", "- [x] Added tests\n- [x] Documentation\n");
+    let run_bad = repo.check(&["--pr-body-file", "body.md"]);
+    assert_eq!(run_bad.code, 1, "{}{}", run_bad.stdout, run_bad.stderr);
+    assert!(!run_bad.titles("pr-checklist").is_empty());
+
+    // 2. Diff actually touches a test file -> passes
+    repo.write(
+        "tests/new_test.rs",
+        "#[test] fn t() { let x = 1; assert_eq!(x, 1); }\n",
+    );
+    repo.commit("test: add new test");
+    repo.write("body.md", "- [x] Added tests\n- [x] Documentation\n");
+    let run_ok = repo.check(&["--pr-body-file", "body.md"]);
+    assert_eq!(run_ok.code, 0, "{}{}", run_ok.stdout, run_ok.stderr);
+
+    // 3. Waiver via directive waives checklist mismatch
+    repo.write("docs/readme.txt", "more doc\n");
+    repo.commit("docs: update without tests\n\ndiscipline:allow(pr-checklist): verified manually in staging");
+    repo.write("body.md", "- [x] Added tests\n");
+    let run_ov = repo.check(&["--pr-body-file", "body.md"]);
+    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+}
+
+// ---- unsafe-budget ---------------------------------------------------------
+
+#[test]
+fn unsafe_budget_ratchet_detects_unsafe_increases() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.unsafe-budget]
+enabled = true
+allow_increase = false
+"#,
+    );
+    repo.commit("chore: enable unsafe budget");
+
+    // 1. Introducing new unsafe block increases count -> fails
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\npub fn added_unsafe(p: *const u8) -> u8 {{\n    // SAFETY: caller asserts validity\n    unsafe {{ *p }}\n}}\n"),
+    );
+    repo.commit("feat: introduce new unsafe block");
+    let run_bad = repo.check(&[]);
+    assert_eq!(run_bad.code, 1);
+    assert!(!run_bad.titles("unsafe-budget").is_empty());
+
+    // 2. Waiver directive allows increase
+    repo.commit("feat: introduce new unsafe block with waiver\n\ndiscipline:allow(unsafe-budget): FFI performance critical path");
+    let run_ov = repo.check(&[]);
+    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+
+    // 3. Pure safe code changes do not increase budget -> passes
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\npub fn safe_fn() -> u32 {{ 42 }}\n"),
+    );
+    repo.commit("feat: safe function");
+    let run_ok = repo.check(&[]);
+    assert_eq!(run_ok.code, 0, "{}{}", run_ok.stdout, run_ok.stderr);
+}
+
+// ---- msrv ------------------------------------------------------------------
+
+#[test]
+fn msrv_gate_validates_rust_version_and_accepts_waiver() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.msrv]
+enabled = true
+"#,
+    );
+    // Write Cargo.toml without rust-version
+    repo.write(
+        "Cargo.toml",
+        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    repo.commit("chore: enable msrv gate without rust-version");
+
+    // 1. Missing rust-version fails
+    let run_bad = repo.check(&[]);
+    assert_eq!(run_bad.code, 1);
+    assert!(!run_bad.titles("msrv").is_empty());
+
+    // 2. Declaring rust-version passes
+    repo.write("Cargo.toml", "[package]\nname = \"t\"\nversion = \"0.1.0\"\nedition = \"2021\"\nrust-version = \"1.90\"\n");
+    repo.commit("chore: declare rust-version");
+    let run_ok = repo.check(&[]);
+    assert_eq!(run_ok.code, 0, "{}{}", run_ok.stdout, run_ok.stderr);
+
+    // 3. Waiver directive waives missing MSRV
+    repo.write(
+        "Cargo.toml",
+        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    repo.commit(
+        "chore: remove msrv with waiver\n\ndiscipline:allow(msrv): transitional crate unpinned",
+    );
+    let run_ov = repo.check(&[]);
+    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+}
+
+// ---- miri ------------------------------------------------------------------
+
+#[test]
+fn miri_gate_handles_execution_and_override() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.miri]
+enabled = true
+"#,
+    );
+    repo.commit("chore: enable miri gate");
+
+    // With waiver directive, execution or missing cargo-miri is waived
+    repo.commit(
+        "chore: run miri with waiver\n\ndiscipline:allow(miri): host lacks cargo-miri toolchain",
+    );
+    let run_ov = repo.check(&[]);
+    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+    assert!(run_ov.outcome("miri")["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n.as_str().unwrap().contains("override applied")));
+}
+
+// ---- sanitizers ------------------------------------------------------------
+
+#[test]
+fn sanitizers_gate_handles_execution_and_override() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.sanitizers]
+enabled = true
+sanitizer = "address"
+canary = false
+"#,
+    );
+    repo.commit("chore: enable sanitizers gate");
+
+    // With waiver directive, execution on non-nightly host is waived
+    repo.commit("chore: run sanitizers with waiver\n\ndiscipline:allow(sanitizers): nightly toolchain unavailable");
+    let run_ov = repo.check(&[]);
+    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+    assert!(run_ov.outcome("sanitizers")["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n.as_str().unwrap().contains("override applied")));
 }

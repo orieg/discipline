@@ -143,14 +143,14 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::AgentGuard,
         summary: "changes stay inside authorized paths",
         languages: "any",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "suppression-delta",
         suite: Suite::AgentGuard,
         summary: "new #[allow], commented-out tests, cfg-gated tests",
         languages: "per pack",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "provenance-tags",
@@ -200,7 +200,7 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Hygiene,
         summary: "ticked PR checkboxes are reconciled against the diff",
         languages: "any",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "command",
@@ -214,28 +214,28 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Verification,
         summary: "ASan / TSan preset with audited suppressions and a race canary",
         languages: "Rust, C/C++",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "msrv",
         suite: Suite::Quality,
         summary: "cargo check under the pinned MSRV",
         languages: "Rust",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "miri",
         suite: Suite::Verification,
         summary: "Miri tiers with zero-tests guard",
         languages: "Rust",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "unsafe-budget",
         suite: Suite::Verification,
         summary: "unsafe count ratchet",
         languages: "Rust",
-        available: false,
+        available: true,
     },
     GateInfo {
         id: "bench-regression",
@@ -343,6 +343,13 @@ pub struct Gates {
     pub archive_contents: ArchiveContentsGate,
     pub manifest_sync: ManifestSyncGate,
     pub version_lockstep: VersionLockstepGate,
+    pub scope_confinement: ScopeConfinementGate,
+    pub suppression_delta: SuppressionDeltaGate,
+    pub pr_checklist: PrChecklistGate,
+    pub unsafe_budget: UnsafeBudgetGate,
+    pub msrv: MsrvGate,
+    pub miri: MiriGate,
+    pub sanitizers: SanitizersGate,
 }
 
 /// Settings every gate shares.
@@ -382,7 +389,14 @@ impl_gate_settings!(
     ProvenanceTagsGate,
     ArchiveContentsGate,
     ManifestSyncGate,
-    VersionLockstepGate
+    VersionLockstepGate,
+    ScopeConfinementGate,
+    SuppressionDeltaGate,
+    PrChecklistGate,
+    UnsafeBudgetGate,
+    MsrvGate,
+    MiriGate,
+    SanitizersGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1120,6 +1134,158 @@ impl Default for VersionLockstepGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScopeConfinementGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub allowed_paths: Vec<String>,
+    pub forbidden_paths: Vec<String>,
+}
+
+impl Default for ScopeConfinementGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            allowed_paths: Vec::new(),
+            forbidden_paths: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SuppressionDeltaGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub max_increase: usize,
+    pub allowed_suppressions: Vec<String>,
+}
+
+impl Default for SuppressionDeltaGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            max_increase: 0,
+            allowed_suppressions: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrChecklistGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+}
+
+impl Default for PrChecklistGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UnsafeBudgetGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub max_unsafe: Option<usize>,
+    pub allow_increase: bool,
+}
+
+impl Default for UnsafeBudgetGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            max_unsafe: None,
+            allow_increase: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MsrvGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub pinned_version: Option<String>,
+    pub command: Option<String>,
+}
+
+impl Default for MsrvGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            pinned_version: None,
+            command: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MiriGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub args: Vec<String>,
+    pub timeout_seconds: u64,
+}
+
+impl Default for MiriGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            args: Vec::new(),
+            timeout_seconds: 600,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SanitizersGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub sanitizer: String,
+    pub canary: bool,
+    pub timeout_seconds: u64,
+}
+
+impl Default for SanitizersGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            sanitizer: "address".to_string(),
+            canary: false,
+            timeout_seconds: 300,
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -1146,6 +1312,13 @@ impl Gates {
             "archive-contents" => &self.archive_contents,
             "manifest-sync" => &self.manifest_sync,
             "version-lockstep" => &self.version_lockstep,
+            "scope-confinement" => &self.scope_confinement,
+            "suppression-delta" => &self.suppression_delta,
+            "pr-checklist" => &self.pr_checklist,
+            "unsafe-budget" => &self.unsafe_budget,
+            "msrv" => &self.msrv,
+            "miri" => &self.miri,
+            "sanitizers" => &self.sanitizers,
             _ => return None,
         })
     }

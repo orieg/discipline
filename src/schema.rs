@@ -33,6 +33,13 @@ pub fn generate_schema() -> Value {
             "archive-contents" => "#/$defs/ArchiveContentsGate",
             "manifest-sync" => "#/$defs/ManifestSyncGate",
             "version-lockstep" => "#/$defs/VersionLockstepGate",
+            "scope-confinement" => "#/$defs/ScopeConfinementGate",
+            "suppression-delta" => "#/$defs/SuppressionDeltaGate",
+            "pr-checklist" => "#/$defs/PrChecklistGate",
+            "unsafe-budget" => "#/$defs/UnsafeBudgetGate",
+            "msrv" => "#/$defs/MsrvGate",
+            "miri" => "#/$defs/MiriGate",
+            "sanitizers" => "#/$defs/SanitizersGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -467,6 +474,82 @@ pub fn generate_schema() -> Value {
                             }
                         }
                     }
+                }
+            },
+            "ScopeConfinementGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "allowed_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of paths agents are authorized to modify" },
+                    "forbidden_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of paths agents are strictly forbidden to touch" }
+                }
+            },
+            "SuppressionDeltaGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "max_increase": { "type": "integer", "description": "Maximum net increase in suppression annotations permitted (default: 0)" },
+                    "allowed_suppressions": { "$ref": "#/$defs/StringListOrReset", "description": "Specific suppression patterns explicitly permitted by policy" }
+                }
+            },
+            "PrChecklistGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" }
+                }
+            },
+            "UnsafeBudgetGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "max_unsafe": { "type": ["integer", "null"], "description": "Maximum total number of unsafe sites allowed in head ref" },
+                    "allow_increase": { "type": "boolean", "description": "Whether total unsafe count may increase over base ref without override" }
+                }
+            },
+            "MsrvGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "pinned_version": { "type": ["string", "null"], "description": "Explicit MSRV version string (e.g. \"1.90.0\")" },
+                    "command": { "type": ["string", "null"], "description": "Command to run to verify MSRV compatibility" }
+                }
+            },
+            "MiriGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "args": { "$ref": "#/$defs/StringListOrReset", "description": "Additional CLI arguments passed to cargo miri test" },
+                    "timeout_seconds": { "type": "integer", "description": "Maximum execution time in seconds before failing closed (default: 600)" }
+                }
+            },
+            "SanitizersGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "sanitizer": { "type": "string", "description": "Sanitizer name to activate (e.g. \"address\", \"thread\")" },
+                    "canary": { "type": "boolean", "description": "Whether to verify a negative-control race canary before main tests" },
+                    "timeout_seconds": { "type": "integer", "description": "Maximum execution time in seconds (default: 300)" }
                 }
             }
         }

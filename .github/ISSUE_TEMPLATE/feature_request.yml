@@ -1,0 +1,57 @@
+name: Feature request
+description: Propose a new gate, verification preset, language pack, or CLI enhancement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposals should align with Discipline's core mission: universal fail-closed verification, prevention of test erosion, and sentinel protection against AI agent drift. Please consult `AGENTS.md` and `docs/ARCHITECTURE.md` before proposing changes.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Proposal Category
+      options:
+        - New Verification Gate
+        - New Language Pack (Tree-Sitter AST Fact Extractor)
+        - Tool Preset (Turnkey wrapper for `command` gate)
+        - Action & CI Integration
+        - Output Format / Reporting (SARIF, JUnit, Code Quality)
+        - Documentation & Packaging
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What challenge or verification gap does this address? Describe the failure mode or drift scenario.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Detailed description of the proposed feature, configuration schema, and expected gate outcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Adherence to Fail-Closed Invariants
+      description: |
+        Describe how the proposal adheres to the 12 Fail-Closed Invariants (F1–F12 in `docs/ARCHITECTURE.md` §3):
+        - F1 (Three exit states: 0, 1, 2)
+        - F4 (No vacuous pass, exact examined count)
+        - F8 (Not satisfied by prose about the gate)
+        - F10 (Secrets & PII not echoed)
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative approaches or workarounds considered.

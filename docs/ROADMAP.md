@@ -47,13 +47,20 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 | `shell-secrets` | hygiene | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | `issue-link` | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | `config-integrity` | integrity | any | a change cannot weaken its own discipline.toml without a token |
+| `scope-confinement` | agent-guard | any | changes stay inside authorized paths |
+| `suppression-delta` | agent-guard | per pack | new #[allow], commented-out tests, cfg-gated tests |
 | `provenance-tags` | hygiene | any | published numerics carry (measured|target|projected) |
 | `ci-integrity` | integrity | any | workflow weakening: continue-on-error, || true, unpinned actions |
 | `test-floor` | integrity | any | test-count ratchet read from the base ref |
 | `golden-output` | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
 | `dependency-delta` | integrity | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
 | `test-budget` | integrity | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
+| `pr-checklist` | hygiene | any | ticked PR checkboxes are reconciled against the diff |
 | `command` | verification | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
+| `sanitizers` | verification | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
+| `msrv` | quality | Rust | cargo check under the pinned MSRV |
+| `miri` | verification | Rust | Miri tiers with zero-tests guard |
+| `unsafe-budget` | verification | Rust | unsafe count ratchet |
 | `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
 | `archive-contents` | integrity | any | distribution archive must contain required paths and zero forbidden developer artifacts |
 | `manifest-sync` | integrity | any | reconcile git-tracked files against packaging manifest declarations |
@@ -91,7 +98,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
   - `suppression-delta`: Catching net increases in compiler/linter suppression annotations (`#[allow]`, `@ts-ignore`, `# type: ignore`, `// NOLINT`).
   - `scope-confinement`: Restricting agent file modifications strictly within authorized directory boundaries.
 - **Go / no-go gate:** Incident replays of historical workflow weakening and all-skipped test rollups are rejected with exit `1`.
-- **Status:** **Completed & Verified** (`ci-integrity` and `test-floor` shipped; remaining gates planned).
+- **Status:** **Completed & Verified** (`ci-integrity`, `test-floor`, `suppression-delta`, and `scope-confinement` shipped).
 
 ### Phase 5: Verification Presets & Benchmark Adapters
 - **Deliverables:**

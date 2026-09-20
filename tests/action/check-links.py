@@ -27,8 +27,12 @@ def check_no_prd_references():
         # Prune ignored directories
         dirnames[:] = [d for d in dirnames if d not in ignore_dirs]
         for fname in filenames:
-            # Skip binary artifacts or backup files
-            if fname.endswith((".tar.gz", ".zip", ".bin", ".pyc", ".png", ".ico")):
+            # Skip binary artifacts, packages, archives or compiled objects per Rule 1.11
+            if fname.endswith((
+                ".tar.gz", ".tgz", ".zip", ".bin", ".pyc", ".png", ".ico",
+                ".deb", ".rpm", ".gz", ".xz", ".bz2", ".woff", ".woff2",
+                ".dylib", ".so", ".a", ".o"
+            )):
                 continue
             fpath = Path(dirpath) / fname
             if fpath.resolve() == this_file:

@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a defect, unexpected gate outcome, false positive/negative, or crash.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! A minimal reproducing case or fixture is worth more than a description.
+        Please ensure no private hostnames, local workstation paths, or secrets are included in your report.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: The surface where the issue occurred.
+      options:
+        - CLI (`discipline check`, `discipline gates`, etc.)
+        - GitHub Action (`uses: orieg/discipline@v0`)
+        - Gitea / Forgejo Action
+        - GitLab CI Component / Argo Workflow
+        - Pre-commit Hook
+        - Specific Gate (name in description)
+        - AST Parser / Language Pack
+        - Packaging & Distribution (Homebrew, APT, RPM, Container)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Discipline Version
+      description: Output of `discipline --version`, container tag, or action ref.
+      placeholder: "discipline 0.3.0"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, architecture, and runner environment.
+      placeholder: "macOS 15 (Apple Silicon), Ubuntu 24.04 (GitHub-hosted runner), etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      description: Minimal commands, git commit diff, or `discipline.toml` configuration to reproduce the issue.
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-observed
+    attributes:
+      label: Observed vs. Expected Behaviour
+      description: Describe what happened and what you expected to happen according to the documentation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Output / Logs
+      description: Paste terminal output or CI logs with `RUST_BACKTRACE=1` if applicable. Please redact any internal credentials or local paths.
+      render: shell
