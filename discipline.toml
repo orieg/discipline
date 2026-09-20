@@ -17,3 +17,16 @@ exempt_paths = ["tests/fixtures/**"]
 
 [gates.ignored-tests]
 exempt_paths = ["tests/fixtures/**"]
+
+[gates.issue-link]
+enabled = true
+
+[gates.provenance-tags]
+enabled = true
+
+[gates.pii]
+exempt_paths = ["tests/fixtures/**"]
+
+[gates.dependency-delta]
+allow_dependencies = ["serde_yaml"]
+

@@ -718,7 +718,7 @@ pub struct ProvenanceTagsGate {
 impl Default for ProvenanceTagsGate {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
             check_tables: true,
@@ -920,7 +920,7 @@ pub struct IssueLinkGate {
 impl Default for IssueLinkGate {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
             pattern: None,
@@ -936,6 +936,8 @@ pub struct TestFloorGate {
     pub severity: Severity,
     pub exempt_paths: Vec<String>,
     pub min_tests: Option<usize>,
+    /// Allowed test count decrease below floor or base before violation (default: 0).
+    pub tolerance: usize,
     pub constant_file: Option<String>,
     pub constant_name: Option<String>,
     pub required_suites: Vec<String>,
@@ -949,6 +951,7 @@ impl Default for TestFloorGate {
             severity: Severity::Error,
             exempt_paths: Vec::new(),
             min_tests: None,
+            tolerance: 0,
             constant_file: None,
             constant_name: None,
             required_suites: Vec::new(),

@@ -647,6 +647,10 @@
         "test_command": {
           "description": "Custom command to list or count tests",
           "type": "string"
+        },
+        "tolerance": {
+          "description": "Allowed test count decrease below floor or base before violation (default: 0)",
+          "type": "integer"
         }
       },
       "type": "object"

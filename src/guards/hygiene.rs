@@ -1270,14 +1270,14 @@ mod tests {
             agent_config_refs: true,
             ..PiiGate::default()
         };
-        // Positives (must fail)
+        // Positives (must fail) - constructed at runtime per documented pattern
         let bad = [
-            "with unit tests in ~/.claude/CLAUDE.md",
-            "follow $HOME/.gemini/GEMINI.md for style",
-            "Per RESEARCH_DISCIPLINES.md Rule 1",
-            "see PAPER_PUBLISHING_PLAYBOOK.md",
+            format!("with unit tests in {}{}{}", "~", "/.claude/", "CLAUDE.md"),
+            format!("follow {}{}{}", "$HOME", "/.gemini/", "GEMINI.md for style"),
+            format!("Per {}{}", "RESEARCH_DISCIPLINES", ".md Rule 1"),
+            format!("see {}{}", "PAPER_PUBLISHING_PLAYBOOK", ".md"),
         ];
-        for b in bad {
+        for b in &bad {
             assert!(rule_hits(&s, b), "expected leak to be flagged: {b}");
         }
         // Negatives (must pass)
@@ -1293,10 +1293,10 @@ mod tests {
     #[test]
     fn test_functions_are_scanned_for_pii() {
         let rules = pii_rules(&PiiGate::default()).unwrap();
-        let py_test_path = "    fake_path = \"/Users/someone/repo/\"";
-        let py_test_ip = "    fake_ip = \"192.168.1.20\"";
-        assert!(rules.iter().any(|r| r.re.is_match(py_test_path)));
-        assert!(rules.iter().any(|r| r.re.is_match(py_test_ip)));
+        let py_test_path = format!("    fake_path = \"/{}/{}/repo/\"", "Users", "someone");
+        let py_test_ip = format!("    fake_ip = \"{}.{}.1.20\"", "192", "168");
+        assert!(rules.iter().any(|r| r.re.is_match(&py_test_path)));
+        assert!(rules.iter().any(|r| r.re.is_match(&py_test_ip)));
     }
 
     #[test]

@@ -4,7 +4,9 @@
 //! read as "no changes, PASS".
 
 use anyhow::{anyhow, bail, Context, Result};
-use git2::{Delta, DiffFindOptions, DiffOptions, Oid, Repository, Tree};
+use git2::{
+    Delta, DiffFindOptions, DiffOptions, Oid, Repository, Tree, TreeWalkMode, TreeWalkResult,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,6 +348,29 @@ impl GitCtx {
             }
             out.push(path);
         }
+        Ok(out)
+    }
+
+    /// Tracked regular files in the base ref tree. Symlinks are skipped.
+    pub fn base_tracked_files(&self) -> Result<Vec<String>> {
+        const MODE_SYMLINK: i32 = 0o120000;
+        const MODE_GITLINK: i32 = 0o160000;
+        let Some(tree) = self.base_tree()? else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        tree.walk(TreeWalkMode::PreOrder, |root, entry| {
+            if entry.kind() == Some(git2::ObjectType::Blob) {
+                let mode = entry.filemode();
+                if mode != MODE_SYMLINK && mode != MODE_GITLINK {
+                    if let Ok(name) = entry.name() {
+                        let path = format!("{}{}", root, name).replace('\\', "/");
+                        out.push(path);
+                    }
+                }
+            }
+            TreeWalkResult::Ok
+        })?;
         Ok(out)
     }
 

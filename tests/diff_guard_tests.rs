@@ -477,7 +477,7 @@ fn cli_forgejo_actions_auto_detection() {
     let event_file = repo.file("forgejo_event.json");
     std::fs::write(
         &event_file,
-        r#"{"pull_request": {"title": "chore: remove tests/a.rs (#101)", "body": "removes: tests/a.rs superseded by updated test harness\n"}}"#,
+        r#"{"pull_request": {"title": "chore: remove tests/a.rs (#101)", "body": "removes: tests/a.rs superseded by updated test harness\nallow-test-shrink: tests/a.rs superseded by updated test harness\n"}}"#,
     )
     .unwrap();
 
@@ -513,7 +513,7 @@ fn cli_gitea_actions_auto_detection() {
     let event_file = repo.file("gitea_event.json");
     std::fs::write(
         &event_file,
-        r#"{"pull_request": {"title": "chore: remove tests/a.rs (#102)", "body": "removes: tests/a.rs Gitea event justification\n"}}"#,
+        r#"{"pull_request": {"title": "chore: remove tests/a.rs (#102)", "body": "removes: tests/a.rs Gitea event justification\nallow-test-shrink: tests/a.rs Gitea event justification\n"}}"#,
     )
     .unwrap();
 

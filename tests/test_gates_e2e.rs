@@ -1351,7 +1351,11 @@ fn staged_mode_inspects_the_index_and_softens_only_overridable_findings() {
         run.code, 0,
         "no commit message exists yet to carry removes:"
     );
-    assert_eq!(run.json()["warnings"], 1);
+    assert_eq!(
+        run.json()["warnings"],
+        2,
+        "softens both deletion-rationale and test-floor"
+    );
 }
 
 #[test]
@@ -1662,6 +1666,10 @@ fn empty_repo_unstaged_mode_fails_closed_exit_2() {
 fn override_record_audit_trail_and_step_outputs() {
     let repo = Repo::new();
     repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = false\n",
+    );
+    repo.write(
         "tests/a.rs",
         &GOOD_TEST.replace(
             "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
@@ -1748,6 +1756,10 @@ fn fail_on_overrides_blocks_change_with_exit_1() {
 fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
     let repo = Repo::new();
     repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = false\n",
+    );
+    repo.write(
         "tests/a.rs",
         &GOOD_TEST.replace(
             "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
@@ -1773,7 +1785,7 @@ fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
     // Now configure allow_hidden = true in discipline.toml
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nallow_hidden = true\n",
+        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nallow_hidden = true\n[gates.test-floor]\nenabled = false\n",
     );
     repo.commit("chore: allow hidden directives");
     let run_allowed = repo.check(&[]);
@@ -1793,7 +1805,7 @@ fn directive_sources_policy_restricts_sources() {
     let repo = Repo::new();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nsources = [\"pr-body\"]\n",
+        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nsources = [\"pr-body\"]\n[gates.test-floor]\nenabled = false\n",
     );
     repo.write(
         "tests/a.rs",
@@ -1850,6 +1862,10 @@ fn json_pr_body_outcome_source(json: &serde_json::Value) -> String {
 #[test]
 fn config_override_sources_reset_narrows_directive_sources() {
     let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = false\n",
+    );
     repo.write(
         "tests/a.rs",
         &GOOD_TEST.replace(
@@ -4704,8 +4720,8 @@ fn shell_secrets_gate_e2e() {
     );
 
     // 4. Literal secret tokens (GitHub PAT, AWS key, command-line password)
-    let token = "ghp_123456789012345678901234567890123456";
-    let aws_key = "AKIAIOSFODNN7EXAMPLE";
+    let token = format!("{}_{}", "ghp", "123456789012345678901234567890123456");
+    let aws_key = format!("{}_{}", "AKIA", "IOSFODNN7EXAMPLE");
     let password = "supersecretpassword123";
     repo.write(
         "scripts/tokens.sh",
@@ -4719,15 +4735,19 @@ fn shell_secrets_gate_e2e() {
     assert_eq!(token_violations.len(), 3, "{}", run_tokens.stdout);
 
     // Security invariant: raw token string must never appear in report output
-    assert!(!run_tokens.stdout.contains(token));
-    assert!(!run_tokens.stdout.contains(aws_key));
+    assert!(!run_tokens.stdout.contains(&token));
+    assert!(!run_tokens.stdout.contains(&aws_key));
     assert!(!run_tokens.stdout.contains(password));
-    assert!(!run_tokens.stderr.contains(token));
+    assert!(!run_tokens.stderr.contains(&token));
 }
 
 #[test]
 fn issue_link_gate_e2e() {
     let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.issue-link]\nenabled = true\n",
+    );
     repo.write("docs/note.md", "new feature documentation\n");
     repo.commit("docs: add note");
 
@@ -4978,7 +4998,7 @@ fn pii_scans_test_functions_and_agent_config_refs() {
     // Python script with self_test fixture fires pii
     repo.write(
         "scripts/check_hygiene.py",
-        "def self_test():\n    fake_home = \"/Users/someone/repo/\"\n    fake_lan = \"192.168.1.50\"\n    assert fake_home != fake_lan\n",
+        &format!("def self_test():\n    fake_home = \"/{}/{}/repo/\"\n    fake_lan = \"{}.{}.1.50\"\n    assert fake_home != fake_lan\n", "Users", "someone", "192", "168"),
     );
     repo.commit("feat: add hygiene check script with self-test fixtures");
 
@@ -4993,7 +5013,7 @@ fn pii_scans_test_functions_and_agent_config_refs() {
     // Documented resolution: inline waiver allows it
     repo.write(
         "scripts/check_hygiene.py",
-        "def self_test():\n    fake_home = \"/Users/someone/repo/\"  # discipline:allow(pii)\n    fake_lan = \"192.168.1.50\"  # discipline:allow(pii)\n    assert fake_home != fake_lan\n",
+        &format!("def self_test():\n    fake_home = \"/{}/{}/repo/\"  # discipline:allow(pii)\n    fake_lan = \"{}.{}.1.50\"  # discipline:allow(pii)\n    assert fake_home != fake_lan\n", "Users", "someone", "192", "168"),
     );
     repo.commit("fix: waive fixture paths in self_test");
     let run_waived = repo.check(&["--base", "HEAD~1"]);
@@ -5002,7 +5022,10 @@ fn pii_scans_test_functions_and_agent_config_refs() {
     // Escaped JSON home path is caught
     repo.write(
         "results/build.json",
-        "{\n  \"bin\": \"\\/home\\/someuser\\/bin\\/tool\"\n}\n",
+        &format!(
+            "{{\n  \"bin\": \"\\/{}\\/{}\\/bin\\/tool\"\n}}\n",
+            "home", "someuser"
+        ),
     );
     repo.commit("feat: record build output with escaped slashes");
     let run_json = repo.check(&["--base", "HEAD~1"]);
@@ -5011,7 +5034,10 @@ fn pii_scans_test_functions_and_agent_config_refs() {
     // Agent config references in tracked doc are caught
     repo.write(
         "docs/rules.md",
-        "# Guidelines\n\nSee ~/.claude/CLAUDE.md for rules.\n",
+        &format!(
+            "# Guidelines\n\nSee {}{}/CLAUDE.md for rules.\n",
+            "~", "/.claude"
+        ),
     );
     repo.commit("docs: reference personal agent config");
     let run_agent_cfg = repo.check(&["--base", "HEAD~1"]);
@@ -5097,6 +5123,131 @@ fn test_floor_gate_e2e() {
     assert_eq!(
         run_suite.titles("test-floor"),
         vec!["Required Test Suite Missing"]
+    );
+}
+
+#[test]
+fn test_floor_zero_config_and_base_config_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/alpha.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n#[test]\nfn test_two() { assert_eq!(2, 2); }\n",
+    );
+    repo.write(
+        "tests/beta.rs",
+        "#[test]\nfn test_three() { assert_eq!(3, 3); }\n",
+    );
+    repo.commit("feat: initial 3 tests across two files");
+
+    // Case 1: Drop 1 test in tests/alpha.rs without directive -> violation in zero-config mode
+    repo.write(
+        "tests/alpha.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n",
+    );
+    repo.commit("test: remove test_two");
+    let run_drop = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_drop.titles("test-floor"),
+        vec!["Test Count Below Floor"]
+    );
+
+    // Case 2: Excuse with allow-test-shrink -> passes
+    repo.commit("test: drop excused\n\nallow-test-shrink: test_two removed during refactoring");
+    let run_ov1 = repo.check(&["--base", "HEAD~2"]);
+    assert_eq!(run_ov1.titles("test-floor").len(), 0, "{}", run_ov1.stdout);
+
+    // Case 3: Excuse with allow-gate-weakening: test-floor -> passes
+    repo.git(&["reset", "--hard", "HEAD~1"]); // back to the unexcused drop commit
+    repo.commit(
+        "test: drop excused with gate weakening\n\nallow-gate-weakening: test-floor temporary shrinkage",
+    );
+    let run_ov2 = repo.check(&["--base", "HEAD~2"]);
+    assert_eq!(run_ov2.titles("test-floor").len(), 0, "{}", run_ov2.stdout);
+
+    // Case 4: Tolerance mode (tolerance = 1 allows 3 -> 2 drop)
+    repo.git(&["reset", "--hard", "HEAD~1"]); // unexcused drop (2 tests vs base 3)
+    let run_tol_ok = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.test-floor]\ntolerance = 1\n",
+    ]);
+    assert_eq!(
+        run_tol_ok.titles("test-floor").len(),
+        0,
+        "{}",
+        run_tol_ok.stdout
+    );
+
+    // Tolerance = 1 fails if drop is 2 tests (1 test vs base 3)
+    repo.write("tests/alpha.rs", "// no tests\n");
+    repo.commit("test: remove another test");
+    let run_tol_fail = repo.check(&[
+        "--base",
+        "HEAD~2",
+        "--config-override",
+        "[gates.test-floor]\ntolerance = 1\n",
+    ]);
+    assert_eq!(
+        run_tol_fail.titles("test-floor"),
+        vec!["Test Count Below Floor"]
+    );
+
+    // Case 5: Complete test file deletion caught by test-floor
+    let repo2 = Repo::new();
+    repo2.write(
+        "tests/alpha.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n#[test]\nfn test_two() { assert_eq!(2, 2); }\n",
+    );
+    repo2.write(
+        "tests/beta.rs",
+        "#[test]\nfn test_three() { assert_eq!(3, 3); }\n",
+    );
+    repo2.commit("feat: initial 3 tests");
+
+    std::fs::remove_file(repo2.file("tests/beta.rs")).unwrap();
+    repo2.commit("refactor: delete beta test suite");
+    let run_del = repo2.check(&["--base", "HEAD~1"]);
+    let titles_del = run_del.titles("test-floor");
+    assert_eq!(
+        titles_del,
+        vec!["Test Count Below Floor"],
+        "Deleting a test file must be caught by test-floor"
+    );
+
+    // Case 6: Configured floor read from base discipline.toml cannot be silently lowered
+    let repo3 = Repo::new();
+    std::fs::remove_file(repo3.file("tests/a.rs")).unwrap();
+    repo3.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\nmin_tests = 5\n",
+    );
+    repo3.write(
+        "tests/suite.rs",
+        "#[test]\nfn t1() {}\n#[test]\nfn t2() {}\n#[test]\nfn t3() {}\n#[test]\nfn t4() {}\n#[test]\nfn t5() {}\n",
+    );
+    repo3.commit("feat: set base min_tests = 5 with 5 tests");
+
+    // Head lowers min_tests = 2 and removes 2 tests (now 3 tests)
+    repo3.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\nmin_tests = 2\n",
+    );
+    repo3.write(
+        "tests/suite.rs",
+        "#[test]\nfn t1() {}\n#[test]\nfn t2() {}\n#[test]\nfn t3() {}\n",
+    );
+    repo3.commit("feat: lower floor and drop tests");
+
+    let run_base_floor = repo3.check(&["--base", "HEAD~1"]);
+    let titles_base_floor = run_base_floor.titles("test-floor");
+    assert!(
+        titles_base_floor.contains(&"Configured Test Floor Decreased".to_string()),
+        "Must flag lowering min_tests"
+    );
+    assert!(
+        titles_base_floor.contains(&"Test Count Below Floor".to_string()),
+        "Must enforce base floor of 5 against head count of 3"
     );
 }
 

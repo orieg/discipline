@@ -344,6 +344,8 @@ When a change touches source files in a language without an active pack, each AS
 
 #### `issue-link`
 - **Rule:** Every pull request title or description must reference a tracking issue (`#123`, `Fixes #123`, `Closes #123`), or carry an explicit `no-issue:` rationale.
+- **Default:** `enabled = false` (opt-in).
+- **False-Positive Rationale:** Field measurements on `orieg/expanse` and public open-source repositories demonstrate that `issue-link` produces disproportionate friction on routine maintenance PRs — documentation improvements, small chore PRs, dependency updates, and internal refactors — where formal tracking issues are neither required nor created. Repositories requiring tracking issues on all PRs can opt in via `[gates.issue-link] enabled = true`.
 - **Languages:** Any.
 - **What it catches:**
   - PRs with no referenced issue in the PR title or PR description.
@@ -353,6 +355,8 @@ When a change touches source files in a language without an active pack, each AS
 
 #### `provenance-tags`
 - **Rule:** Published numeric claims, tables, mechanism assertions, wall-clock intervals, and paired comparisons in markdown files and PR bodies must carry truthful provenance tags, hardware counter evidence, confidence intervals, or explicit hypothesis/differentiation qualifiers.
+- **Default:** `enabled = false` (opt-in).
+- **False-Positive Rationale:** Field measurements on `orieg/expanse` and public open-source repositories indicate that `provenance-tags` produces excessive noise on tabular benchmark comparisons, descriptive configuration tables, and architectural diagrams that are illustrative or descriptive rather than novel-claim-bearing. Repositories publishing empirical research benchmarks and requiring strict provenance tagging can opt in via `[gates.provenance-tags] enabled = true`.
 - **Languages:** Markdown (`*.md`) and PR description.
 - **What it catches:**
   - Markdown tables containing unit-bearing numbers (`ns`, `µs`, `ms`, `ops/s`, `Mops/s`, `B/key`, etc.) without a provenance tag (`(measured: host, commit)`, `(target)`, or `(projected)`).
@@ -488,23 +492,30 @@ When a change touches source files in a language without an active pack, each AS
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `workflows`, `rollup_job`, `excluded_jobs`, `pin_actions`, `forbid_continue_on_error`, `forbid_or_true`, `diff_only`, `documented_job_count_path`, `documented_job_count_pattern`.
 
 #### `test-floor`
-- **Rule:** Universal test count ratchet and floor sentinel. Reads test count floor constants from the base ref, enforces configured test count minimums, and ensures required test suite files exist.
-- **Languages:** Any supported language pack or external test listing command.
+- **Rule:** Universal test count ratchet and floor sentinel. Operates in zero-config mode by default to prevent any drop in workspace AST test count across all supported languages relative to the base ref (with configurable `tolerance = 0`). When explicit floors are configured, reads test count floor constants and `min_tests` from the base ref (preventing PRs from silently lowering their own floor), enforces configured test count minimums, and ensures required test suite files exist. Complete test file deletions are detected and blocked.
+- **Languages:** Any supported language pack (Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby) or external test listing command.
 - **What it catches:**
+  - Workspace test count dropping below merge base ref count in zero-config mode (with `tolerance = 0` default).
   - Workspace test count dropping below configured `min_tests` or base floor constant.
+  - Complete deletion of test files causing total test count reduction.
   - Lowering of floor constant value in `constant_file` below merge base ref.
-  - Lowering of `min_tests` in `discipline.toml` below merge base ref.
+  - Lowering or removal of `min_tests` in `discipline.toml` below merge base ref.
   - Missing `required_suites` files.
   - Missing floor constant file on base ref (fails closed).
 - **Passing commit / PR description (accepted):**
   ```text
   allow-test-shrink: TEST_FLOOR test suite pruned for modularization
   ```
+  or
+  ```text
+  allow-gate-weakening: test-floor test suite restructured for modularization
+  ```
 - **What it does NOT catch:**
   - Test count increases (ratchet permits additions).
-  - Reductions excused with scoped `allow-test-shrink: <subject> <reason>`.
-- **Lifting directive:** `allow-test-shrink: <subject> <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `min_tests`, `constant_file`, `constant_name`, `required_suites`, `test_command`.
+  - Reductions within configured `tolerance`.
+  - Reductions excused with `allow-test-shrink: <reason>` or `allow-gate-weakening: test-floor <reason>`.
+- **Lifting directive:** `allow-test-shrink: <reason>` or `allow-gate-weakening: test-floor <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `min_tests`, `tolerance`, `constant_file`, `constant_name`, `required_suites`, `test_command`.
 
 ---
 

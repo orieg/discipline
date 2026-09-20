@@ -25,6 +25,16 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
 
     let filter = exempt_filter(settings)?;
 
+    // Read base discipline.toml to get base configuration
+    let base_cfg = ctx
+        .git
+        .base_content(ctx.config_path)
+        .ok()
+        .flatten()
+        .and_then(|s| crate::config::DisciplineConfig::from_toml_str(&s).ok());
+    let base_min_tests = base_cfg.as_ref().and_then(|c| c.gates.test_floor.min_tests);
+    let head_min_tests = settings.min_tests;
+
     // 1. Resolve base floor constant from constant_file if configured.
     let mut base_floor_const: Option<usize> = None;
     if let (Some(const_file), Some(const_name)) = (&settings.constant_file, &settings.constant_name)
@@ -157,44 +167,31 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     }
 
     // 3. Check min_tests comparison against base discipline.toml.
-    if let Some(head_min) = settings.min_tests {
-        if let Ok(Some(base_cfg_str)) = ctx.git.base_content(ctx.config_path) {
-            if let Ok(base_cfg) = crate::config::DisciplineConfig::from_toml_str(&base_cfg_str) {
-                if let Some(base_min) = base_cfg.gates.test_floor.min_tests {
-                    if head_min < base_min {
-                        if let Some(ov) = ctx
-                            .find_gate_or_subject_override(
-                                GATE,
-                                tokens::ALLOW_TEST_SHRINK,
-                                "min_tests",
-                            )
-                            .or_else(|| {
-                                ctx.find_gate_or_subject_override(
-                                    GATE,
-                                    tokens::ALLOW_TEST_SHRINK,
-                                    "test-floor",
-                                )
-                            })
-                        {
-                            out.overrides.push(ov);
-                        } else {
-                            out.violations.push(Violation {
-                                gate: GATE,
-                                severity: ctx.overridable(settings.severity),
-                                title: "Configured Test Floor Decreased".to_string(),
-                                file: Some(ctx.config_path.to_string()),
-                                line: None,
-                                message: format!(
-                                    "Test count floor (min_tests = {head_min}) was lowered below base ref ({base_min})."
-                                ),
-                                remediation: Some(
-                                    "Restore min_tests or provide an allow-test-shrink: <reason> directive in the PR description."
-                                        .to_string(),
-                                ),
-                            });
-                        }
-                    }
-                }
+    if let Some(base_min) = base_min_tests {
+        let lowered = match head_min_tests {
+            Some(h) => h < base_min,
+            None => true,
+        };
+        if lowered {
+            if let Some(ov) = find_test_floor_override(ctx) {
+                out.overrides.push(ov);
+            } else {
+                let msg = match head_min_tests {
+                    Some(h) => format!("Test count floor (min_tests = {h}) was lowered below base ref ({base_min})."),
+                    None => format!("Test count floor (min_tests = {base_min}) was removed from discipline.toml."),
+                };
+                out.violations.push(Violation {
+                    gate: GATE,
+                    severity: ctx.overridable(settings.severity),
+                    title: "Configured Test Floor Decreased".to_string(),
+                    file: Some(ctx.config_path.to_string()),
+                    line: None,
+                    message: msg,
+                    remediation: Some(
+                        "Restore min_tests or provide an allow-test-shrink: <reason> directive in the PR description."
+                            .to_string(),
+                    ),
+                });
             }
         }
     }
@@ -240,16 +237,12 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     out.examined = measured_count;
 
     // 6. Determine effective floor and compare.
-    let effective_floor = settings.min_tests.or(base_floor_const);
+    // Base ref discipline.toml takes precedence over HEAD discipline.toml to prevent self-lowering.
+    let explicit_floor = base_min_tests.or(head_min_tests).or(base_floor_const);
 
-    if let Some(floor) = effective_floor {
-        if measured_count < floor {
-            if let Some(ov) = ctx
-                .find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, "test-floor")
-                .or_else(|| {
-                    ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, "tests")
-                })
-            {
+    if let Some(floor) = explicit_floor {
+        if measured_count + settings.tolerance < floor {
+            if let Some(ov) = find_test_floor_override(ctx) {
                 out.overrides.push(ov);
             } else {
                 out.violations.push(Violation {
@@ -269,12 +262,62 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             }
         }
     } else {
-        out.notes.push(
-            "no test count floor configured and no base ref test count available".to_string(),
-        );
+        // Zero-config ratchet: compare head AST test count against base ref AST test count.
+        let base_count = count_base_workspace_ast_tests(ctx, &filter)?;
+        if base_count > 0 && measured_count + settings.tolerance < base_count {
+            if let Some(ov) = find_test_floor_override(ctx) {
+                out.overrides.push(ov);
+            } else {
+                out.violations.push(Violation {
+                    gate: GATE,
+                    severity: ctx.overridable(settings.severity),
+                    title: "Test Count Below Floor".to_string(),
+                    file: None,
+                    line: None,
+                    message: format!(
+                        "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
+                        settings.tolerance
+                    ),
+                    remediation: Some(
+                        "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
+                            .to_string(),
+                    ),
+                });
+            }
+        } else if base_count == 0 {
+            out.notes.push(
+                "no test count floor configured and zero base ref tests detected".to_string(),
+            );
+        }
     }
 
     Ok(out)
+}
+
+fn find_test_floor_override(ctx: &Context) -> Option<crate::tokens::OverrideRecord> {
+    ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, "test-floor")
+        .or_else(|| ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, "tests"))
+        .or_else(|| ctx.find_gate_or_subject_override(GATE, tokens::ALLOW_TEST_SHRINK, "min_tests"))
+        .or_else(|| {
+            for d in &ctx.directives {
+                if d.directive.eq_ignore_ascii_case("allow-test-shrink")
+                    || d.directive.eq_ignore_ascii_case("allow-floor-drop")
+                    || d.directive
+                        .eq_ignore_ascii_case("discipline:allow(test-floor)")
+                    || d.directive.eq_ignore_ascii_case("allow(test-floor)")
+                {
+                    return Some(crate::tokens::OverrideRecord {
+                        gate: GATE.to_string(),
+                        subject: "test-floor".to_string(),
+                        directive: d.directive.clone(),
+                        reason: d.reason.clone(),
+                        source: d.source.clone(),
+                        hidden: d.hidden,
+                    });
+                }
+            }
+            None
+        })
 }
 
 /// Counts test functions across all supported language packs in tracked repository files.
@@ -308,7 +351,7 @@ pub fn count_base_workspace_ast_tests(
     ctx: &Context,
     filter: &crate::guards::PathFilter,
 ) -> Result<usize> {
-    let files = ctx.git.tracked_files()?;
+    let files = ctx.git.base_tracked_files()?;
     let registry = crate::ast::default_registry();
     let v = crate::ast::AssertVocabulary::default();
     let mut total = 0;

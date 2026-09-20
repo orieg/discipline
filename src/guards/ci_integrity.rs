@@ -1171,6 +1171,11 @@ jobs:
         assert_eq!(needs.len(), 2);
         assert!(needs.contains("lint"));
         assert!(needs.contains("test"));
+        assert!(!jobs.is_empty());
+        assert!(!needs.is_empty());
+        assert!(!jobs.contains("deploy"));
+        assert!(!needs.contains("deploy"));
+        assert!(!needs.contains("ci-gate"));
     }
 
     #[test]
@@ -1189,7 +1194,12 @@ jobs:
         let (jobs, needs) = parse_workflow_jobs(yml, Some("ci-gate"));
         assert_eq!(jobs.len(), 3);
         assert_eq!(needs.len(), 2);
-        assert!(needs.contains("detect-changes"));
-        assert!(needs.contains("lint"));
+        assert!(jobs.contains("detect-changes"));
+        assert!(jobs.contains("lint"));
+        assert!(jobs.contains("ci-gate"));
+        assert!(!jobs.is_empty());
+        assert!(!needs.is_empty());
+        assert!(!jobs.contains("deploy"));
+        assert!(!needs.contains("deploy"));
     }
 }

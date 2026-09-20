@@ -266,7 +266,19 @@ name = "my-test-proj"
     assert_eq!(cfg.meta.name, "my-test-proj");
     assert_eq!(cfg.meta.version, 1);
     for g in GATES.iter().filter(|g| g.available) {
-        assert!(cfg.gates.settings(g.id).unwrap().enabled());
+        if g.id == "issue-link" || g.id == "provenance-tags" {
+            assert!(
+                !cfg.gates.settings(g.id).unwrap().enabled(),
+                "{} should be opt-in (disabled by default)",
+                g.id
+            );
+        } else {
+            assert!(
+                cfg.gates.settings(g.id).unwrap().enabled(),
+                "{} should be enabled by default",
+                g.id
+            );
+        }
     }
 }
 

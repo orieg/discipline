@@ -157,6 +157,7 @@ pub const ALLOW_DEPENDENCY: &[&str] = &[
 ];
 
 pub const ALLOW_TEST_SHRINK: &[&str] = &[
+    "allow-gate-weakening",
     "allow-test-shrink",
     "allow-test-budget",
     "allow-floor-drop",

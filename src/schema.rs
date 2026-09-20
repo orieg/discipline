@@ -366,6 +366,7 @@ pub fn generate_schema() -> Value {
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "min_tests": { "type": "integer", "description": "Minimum required workspace test count" },
+                    "tolerance": { "type": "integer", "description": "Allowed test count decrease below floor or base before violation (default: 0)" },
                     "constant_file": { "type": "string", "description": "File containing a floor constant" },
                     "constant_name": { "type": "string", "description": "Name of the floor constant in constant_file" },
                     "required_suites": { "$ref": "#/$defs/StringListOrReset", "description": "Required test suite files that must exist" },
