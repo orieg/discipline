@@ -160,9 +160,22 @@ fn render_terminal_to_writer<W: Write>(
     }
 
     let total_ov = summary.total_overrides();
+    let (passed, failed, disabled, examined) =
+        summary.gate_counts(fail_on_warnings, fail_on_overrides);
+    let disabled_suffix = if disabled > 0 {
+        format!(", {disabled} disabled")
+    } else {
+        String::new()
+    };
+    let items_label = if examined == 1 { "item" } else { "items" };
     writeln!(
         w,
-        "\nerrors: {}  warnings: {}  overrides: {}",
+        "\ngates:  {} passed, {} failed{} ({} {} examined)",
+        passed, failed, disabled_suffix, examined, items_label
+    )?;
+    writeln!(
+        w,
+        "errors: {}  warnings: {}  overrides: {}",
         summary.errors, summary.warnings, total_ov
     )?;
     if fail_on_overrides && total_ov > 0 {
@@ -228,6 +241,22 @@ fn render_step_summary(
         "### Discipline gate: FAILED"
     };
     writeln!(file, "{heading}\n\nBase: `{}`\n", summary.base)?;
+
+    let (passed, failed, disabled, examined) =
+        summary.gate_counts(fail_on_warnings, fail_on_overrides);
+    let disabled_suffix = if disabled > 0 {
+        format!(", {disabled} disabled")
+    } else {
+        String::new()
+    };
+    let items_label = if examined == 1 { "item" } else { "items" };
+    let total_ov = summary.total_overrides();
+    writeln!(
+        file,
+        "**Summary:** {} passed, {} failed{} ({} {} examined) · {} errors · {} warnings · {} overrides\n",
+        passed, failed, disabled_suffix, examined, items_label, summary.errors, summary.warnings, total_ov
+    )?;
+
     writeln!(
         file,
         "| Gate | State | Examined | Violations |\n|---|---|---:|---:|"
@@ -321,12 +350,16 @@ fn render_step_outputs(
     fired.dedup();
     let mut overridden: Vec<&str> = summary.overrides().map(|o| o.gate.as_str()).collect();
     overridden.dedup();
+    let (passed, _failed, _disabled, examined) =
+        summary.gate_counts(fail_on_warnings, fail_on_overrides);
     writeln!(file, "errors={}", summary.errors)?;
     writeln!(file, "warnings={}", summary.warnings)?;
     writeln!(file, "overrides={}", summary.total_overrides())?;
     writeln!(file, "status={status}")?;
     writeln!(file, "failed_gates={}", fired.join(","))?;
     writeln!(file, "overridden_gates={}", overridden.join(","))?;
+    writeln!(file, "passed_gates={passed}")?;
+    writeln!(file, "examined_items={examined}")?;
     Ok(())
 }
 
@@ -336,7 +369,11 @@ pub fn format_agent_prompt(summary: &CheckSummary) -> String {
     let violations: Vec<&Violation> = summary.violations().collect();
 
     if violations.is_empty() {
-        return "No discipline violations found.\n".to_string();
+        let (passed, _, _, examined) = summary.gate_counts(false, false);
+        let items_label = if examined == 1 { "item" } else { "items" };
+        return format!(
+            "No discipline violations found ({passed} gates passed, {examined} {items_label} examined).\n"
+        );
     }
 
     let mut out = String::new();
@@ -570,5 +607,95 @@ mod tests {
                 "agent-prompt leaked forbidden directive token: '{token}'\nFull prompt:\n{prompt}"
             );
         }
+    }
+
+    #[test]
+    fn test_render_terminal_affirmative_summary() {
+        let mut o1 = GateOutcome::new("agents-md");
+        o1.examined = 1;
+
+        let mut o2 = GateOutcome::new("pii");
+        o2.examined = 42;
+
+        let mut o3 = GateOutcome::new("shell-secrets");
+        o3.enabled = false;
+
+        let summary = CheckSummary {
+            base: "main".to_string(),
+            errors: 0,
+            warnings: 0,
+            overrides: 0,
+            outcomes: vec![o1, o2, o3],
+            planned_gates: vec![],
+        };
+
+        let mut buf = Vec::new();
+        render_terminal_to_writer(&mut buf, &summary, false, false).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+
+        assert!(
+            out.contains("gates:  2 passed, 0 failed, 1 disabled (43 items examined)"),
+            "unexpected gates summary in: {out}"
+        );
+        assert!(out.contains("errors: 0  warnings: 0  overrides: 0"));
+        assert!(out.contains("Status: PASS"));
+    }
+
+    #[test]
+    fn test_render_terminal_affirmative_summary_singular_and_failed() {
+        let mut o1 = GateOutcome::new("agents-md");
+        o1.examined = 1;
+        o1.violations.push(Violation {
+            gate: "agents-md",
+            severity: Severity::Error,
+            title: "Agents MD Missing".into(),
+            file: Some("AGENTS.md".into()),
+            line: None,
+            message: "Missing AGENTS.md".into(),
+            remediation: None,
+        });
+
+        let summary = CheckSummary {
+            base: "main".to_string(),
+            errors: 1,
+            warnings: 0,
+            overrides: 0,
+            outcomes: vec![o1],
+            planned_gates: vec![],
+        };
+
+        let mut buf = Vec::new();
+        render_terminal_to_writer(&mut buf, &summary, false, false).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+
+        assert!(
+            out.contains("gates:  0 passed, 1 failed (1 item examined)"),
+            "unexpected gates summary in: {out}"
+        );
+        assert!(out.contains("errors: 1  warnings: 0  overrides: 0"));
+        assert!(out.contains("Status: FAILED"));
+    }
+
+    #[test]
+    fn test_agent_prompt_format_clean_summary() {
+        let mut o1 = GateOutcome::new("agents-md");
+        o1.examined = 1;
+        let mut o2 = GateOutcome::new("pii");
+        o2.examined = 50;
+
+        let summary = CheckSummary {
+            base: "main".to_string(),
+            errors: 0,
+            warnings: 0,
+            overrides: 0,
+            outcomes: vec![o1, o2],
+            planned_gates: vec![],
+        };
+
+        let prompt = format_agent_prompt(&summary);
+        assert_eq!(
+            prompt,
+            "No discipline violations found (2 gates passed, 51 items examined).\n"
+        );
     }
 }

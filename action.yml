@@ -93,6 +93,12 @@ outputs:
   overridden_gates:
     description: 'Comma separated ids of the gates that had an override applied'
     value: ${{ steps.run.outputs.overridden_gates }}
+  passed_gates:
+    description: 'Number of passing gates'
+    value: ${{ steps.run.outputs.passed_gates }}
+  examined_items:
+    description: 'Total number of items examined across all enabled gates'
+    value: ${{ steps.run.outputs.examined_items }}
   report:
     description: 'Path of the JSON report'
     value: ${{ steps.run.outputs.report }}

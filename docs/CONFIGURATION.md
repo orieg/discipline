@@ -138,6 +138,8 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `failed_gates` | Comma separated ids of the gates that reported a violation |
 | `overrides` | Number of applied override directives |
 | `overridden_gates` | Comma separated ids of the gates that had an override applied |
+| `passed_gates` | Number of passing gates |
+| `examined_items` | Total number of items examined across all enabled gates |
 | `report` | Path of the JSON report |
 | `install_error` | Why installing the binary failed (empty on success) |
 <!-- /generated -->

@@ -112,6 +112,39 @@ impl CheckSummary {
     pub fn total_overrides(&self) -> usize {
         self.outcomes.iter().map(|o| o.overrides.len()).sum()
     }
+
+    /// Returns affirmative gate counts and examination tallies:
+    /// `(passed_gates, failed_gates, disabled_gates, total_examined)`
+    pub fn gate_counts(
+        &self,
+        fail_on_warnings: bool,
+        fail_on_overrides: bool,
+    ) -> (usize, usize, usize, usize) {
+        let mut passed = 0;
+        let mut failed = 0;
+        let mut disabled = 0;
+        let mut examined = 0;
+
+        for o in &self.outcomes {
+            if !o.enabled {
+                disabled += 1;
+            } else {
+                examined += o.examined;
+                let has_failure = o.violations.iter().any(|v| match v.severity {
+                    Severity::Error => true,
+                    Severity::Warning => fail_on_warnings,
+                }) || (fail_on_overrides && !o.overrides.is_empty());
+
+                if has_failure {
+                    failed += 1;
+                } else {
+                    passed += 1;
+                }
+            }
+        }
+
+        (passed, failed, disabled, examined)
+    }
 }
 
 /// Everything a gate needs.
