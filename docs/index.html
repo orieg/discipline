@@ -942,7 +942,7 @@
         </p>
         <div class="code-block"><span class="code-comment"># .gitlab-ci.yml using the Discipline CI/CD Component</span>
 <span class="code-keyword">include:</span>
-  - <span class="code-prop">component:</span> $CI_SERVER_FQDN/orieg/discipline/discipline@v0.3.0
+  - <span class="code-prop">component:</span> $CI_SERVER_FQDN/orieg/discipline/discipline@v0.4.1
     <span class="code-prop">inputs:</span>
       <span class="code-prop">stage:</span> test
       <span class="code-prop">allow_failure:</span> false
@@ -1069,7 +1069,7 @@ docker run --rm \
         <div class="code-block"><span class="code-comment"># .pre-commit-config.yaml</span>
 <span class="code-prop">repos:</span>
   - <span class="code-prop">repo:</span> https://github.com/orieg/discipline
-    <span class="code-prop">rev:</span> v0.3.0
+    <span class="code-prop">rev:</span> v0.4.1
     <span class="code-prop">hooks:</span>
       - <span class="code-prop">id:</span> discipline         <span class="code-comment"># Compiles via cargo</span>
       <span class="code-comment"># - id: discipline-system   # Or uses binary on PATH</span></div>
@@ -1624,8 +1624,8 @@ discipline self-test</div>
     <div class="install-grid">
       <div class="install-card">
         <h4>Quick Install (Linux & macOS)</h4>
-        <div class="install-snippet">curl -fsSL https://orieg.github.io/discipline/install.sh | bash</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Automated OS/arch detection with cryptographic SHA-256 verification.</p>
+        <div class="install-snippet">curl -fsSL -o install.sh https://orieg.github.io/discipline/install.sh && bash install.sh</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Recommended download-verify-run workflow. Or via one-liner: <code>curl -fsSL https://orieg.github.io/discipline/install.sh | bash</code></p>
       </div>
       <div class="install-card">
         <h4>Debian / Ubuntu (APT)</h4>
@@ -1669,7 +1669,7 @@ discipline self-test</div>
       </div>
       <div class="install-card">
         <h4>GitLab CI/CD Component</h4>
-        <div class="install-snippet">component: $CI_SERVER_FQDN/orieg/discipline@v0.3.0</div>
+        <div class="install-snippet">component: $CI_SERVER_FQDN/orieg/discipline@v0.4.1</div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">GitLab 16.0+ CI/CD Catalog Component.</p>
       </div>
       <div class="install-card">

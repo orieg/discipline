@@ -195,14 +195,59 @@ where
     "origin/main".to_string()
 }
 
+/// Discovers a git repository starting from the given path.
+///
+/// If `DISCIPLINE_TRUST_WORKSPACE` is set to `"1"` or `"true"`, libgit2's owner validation
+/// is disabled to support containerized CI environments (such as Docker, Gitea, Forgejo, or
+/// Kubernetes) where mounted workspaces are owned by a different UID than the container's
+/// unprivileged user (UID 10001).
+///
+/// If discovery fails due to libgit2 owner validation (`code=Owner (-36)`), a clear,
+/// actionable diagnostic is returned naming the exact remediations instead of a generic
+/// "not inside a git repository".
+pub fn discover_repository(path: impl AsRef<std::path::Path>) -> Result<Repository> {
+    let trust_workspace = std::env::var("DISCIPLINE_TRUST_WORKSPACE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if trust_workspace {
+        // SAFETY: Disabling owner validation in libgit2 is safe during single-threaded
+        // repository discovery and allows volume-mounted repositories across differing
+        // UIDs in containerized CI environments (such as Docker, Gitea, Forgejo, or Kubernetes)
+        // when explicitly opted-in via DISCIPLINE_TRUST_WORKSPACE.
+        unsafe {
+            let _ = git2::opts::set_verify_owner_validation(false);
+        }
+    }
+
+    match Repository::discover(path.as_ref()) {
+        Ok(repo) => Ok(repo),
+        Err(err) => {
+            let is_owner_error = err.code() == git2::ErrorCode::Owner
+                || err.raw_code() == -36
+                || err.message().contains("not owned by current user");
+            if is_owner_error {
+                bail!(
+                    "repository path '{}' is not owned by current user (libgit2 owner validation rejected access; code=Owner (-36)).\n\
+                    To resolve this:\n\
+                      1. In containerized environments, pass `-e DISCIPLINE_TRUST_WORKSPACE=1` (or configure `ENV DISCIPLINE_TRUST_WORKSPACE=1`).\n\
+                      2. Or run the container matching the host UID/GID: `--user \"$(id -u):$(id -g)\"`.\n\
+                      3. Or add the directory to git's safe directory: `git config --global --add safe.directory '{}'`.",
+                    path.as_ref().display(),
+                    path.as_ref().display()
+                );
+            }
+            Err(err).context("not inside a git repository: discipline measures a change, so it needs git history")
+        }
+    }
+}
+
 impl GitCtx {
     /// `staged = true` inspects the index against `HEAD` (pre-commit hook).
     /// Otherwise the working tree is measured against the merge base of
     /// `base_ref` and `HEAD`.
     pub fn open(base_ref: &str, staged: bool) -> Result<Self> {
-        let repo = Repository::discover(".").context(
-            "not inside a git repository: discipline measures a change, so it needs git history",
-        )?;
+        let repo = discover_repository(".")?;
         if repo.is_bare() {
             bail!("bare repositories are not supported");
         }
@@ -276,6 +321,10 @@ impl GitCtx {
 
     pub fn base_label(&self) -> &str {
         &self.base_label
+    }
+
+    pub fn has_base(&self) -> bool {
+        self.base.is_some()
     }
 
     pub fn root(&self) -> &std::path::Path {
@@ -408,6 +457,15 @@ impl GitCtx {
                 .ok_or_else(|| anyhow!("repository has no working tree"))?;
             let full_path = root.join(rel_path);
             if !full_path.exists() {
+                return Ok(None);
+            }
+            if let Ok(canon) = full_path.canonicalize() {
+                let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+                if !canon.starts_with(&root_canon) {
+                    // Path escapes repository root (symlink traversal)
+                    return Ok(None);
+                }
+            } else {
                 return Ok(None);
             }
             Ok(Some(
@@ -547,39 +605,74 @@ impl GitCtx {
     }
 }
 
+fn is_ci_environment() -> bool {
+    std::env::var("CI").is_ok()
+        || std::env::var("GITHUB_ACTIONS").is_ok()
+        || std::env::var("GITLAB_CI").is_ok()
+        || std::env::var("GITEA_ACTIONS").is_ok()
+        || std::env::var("FORGEJO_ACTIONS").is_ok()
+}
+
 fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) {
+    if !is_ci_environment() {
+        // Do not make unsolicited network requests in local developer environments
+        return;
+    }
+
     let root = match repo.workdir() {
         Some(r) => r,
         None => return,
     };
-    let is_shallow = root.join(".git/shallow").exists();
+    // repo.path() resolves the real gitdir even in worktrees where .git is a gitdir reference file
+    let is_shallow = repo.path().join("shallow").exists();
+
+    let run_fetch = |args: &[&str]| {
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+        let _ = std::process::Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .and_then(|mut child| {
+                let start = Instant::now();
+                let timeout = Duration::from_secs(30);
+                loop {
+                    match child.try_wait()? {
+                        Some(status) => return Ok(status),
+                        None => {
+                            if start.elapsed() >= timeout {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                }
+                child.wait()
+            });
+    };
 
     // 1. If base ref is a commit SHA (>=7 hex characters), attempt targeted fetch
     let is_sha = base_ref.len() >= 7 && base_ref.chars().all(|c| c.is_ascii_hexdigit());
     if is_sha {
-        let _ = std::process::Command::new("git")
-            .current_dir(root)
-            .args(["fetch", "--no-tags", "--depth=100", "origin", base_ref])
-            .output();
+        run_fetch(&["fetch", "--no-tags", "--depth=100", "origin", base_ref]);
     }
 
     // 2. Try candidate branch names if they don't contain revision selectors (~, ^)
     for cand in candidates {
         let ref_name = cand.strip_prefix("origin/").unwrap_or(cand);
         if !is_sha && !ref_name.contains('~') && !ref_name.contains('^') {
-            let _ = std::process::Command::new("git")
-                .current_dir(root)
-                .args(["fetch", "--no-tags", "--depth=100", "origin", ref_name])
-                .output();
+            run_fetch(&["fetch", "--no-tags", "--depth=100", "origin", ref_name]);
         }
     }
 
     // 3. If repository is shallow, attempt unshallowing
     if is_shallow {
-        let _ = std::process::Command::new("git")
-            .current_dir(root)
-            .args(["fetch", "--no-tags", "--unshallow", "origin"])
-            .output();
+        run_fetch(&["fetch", "--no-tags", "--unshallow", "origin"]);
     }
 }
 

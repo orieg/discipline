@@ -71,13 +71,21 @@ Discipline is distributed as a standalone static binary, native operating system
 Install the latest pre-compiled static binary verified with cryptographic SHA-256 checksums:
 
 ```bash
+# Recommended (download, inspect, and run):
+curl -fsSL -o install.sh https://orieg.github.io/discipline/install.sh
+bash install.sh
+```
+
+Alternatively, install via one-liner (the installer script internally enforces SHA-256 checksum verification):
+
+```bash
 curl -fsSL https://orieg.github.io/discipline/install.sh | bash
 ```
 
 Custom destination directory or pinned release tag:
 
 ```bash
-curl -fsSL https://orieg.github.io/discipline/install.sh | bash -s -- --to ~/.local/bin --version v0.4.0
+bash install.sh --to ~/.local/bin --version v0.4.1
 ```
 
 ### Debian / Ubuntu (APT)
@@ -167,7 +175,7 @@ jobs:
           fail_on_warnings: true
 ```
 
-The floating `@v0` ref automatically tracks the latest `v0.x.y` release while pinning against breaking changes. Use `@v0.4.0` if you require immutable release tag pinning.
+The floating `@v0` ref automatically tracks the latest `v0.x.y` release while pinning against breaking changes. Use `@v0.4.1` if you require immutable release tag pinning.
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding a `removes:` directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
 

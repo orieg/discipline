@@ -42,6 +42,7 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
         Ok(r) => r,
         Err(e) => {
             if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MIRI, GATE) {
+                out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (miri execution error allowed) ({})",
                     ov.directive, ov.reason, ov.source
@@ -66,6 +67,7 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     if let Some(zero_pat) = preset.zero_items_pattern {
         if stdout.contains(zero_pat) || stderr.contains(zero_pat) {
             if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MIRI, GATE) {
+                out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (miri 0 tests allowed) ({})",
                     ov.directive, ov.reason, ov.source
@@ -85,6 +87,7 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
 
     if !res.status.success() {
         if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MIRI, GATE) {
+            out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` (miri failure allowed) ({})",
                 ov.directive, ov.reason, ov.source
@@ -105,6 +108,23 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     }
 
     Ok(out)
+}
+
+pub fn evaluate_miri_output(
+    status_success: bool,
+    stdout: &str,
+    stderr: &str,
+    zero_pat: Option<&str>,
+) -> Option<&'static str> {
+    if let Some(zero_pat) = zero_pat {
+        if stdout.contains(zero_pat) || stderr.contains(zero_pat) {
+            return Some("zero-tests");
+        }
+    }
+    if !status_success {
+        return Some("failure");
+    }
+    None
 }
 
 #[cfg(test)]

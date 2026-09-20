@@ -125,6 +125,10 @@ pub struct CheckArgs {
     #[arg(long, env = "DISCIPLINE_DIRECTIVE_SOURCES", value_delimiter = ',')]
     pub directive_sources: Vec<String>,
 
+    /// Suppress output on success (only print output when violations are found)
+    #[arg(short, long)]
+    pub quiet: bool,
+
     /// Output format
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Terminal)]
     pub format: OutputFormat,

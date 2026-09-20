@@ -194,12 +194,30 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 
 | Directive | Lifts | Subject |
 |---|---|---|
-| `removes:` / `deletes:` | `deletion-rationale` | File path, directory prefix, or test function name (or unscoped with `require_scope = false`) |
-| `allow-assertion-drop:` | `assertion-reduction` | Test function name, file path, or directory prefix |
-| `allow-ignore:` | `ignored-tests` | Test function name |
-| `allow-gate-weakening:` | `config-integrity` | Gate id |
-| `allow-golden-update:` | `golden-output` | Snapshot/fixture file path or directory prefix |
-| `allow-regression:` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
+| `removes:` / `deletes:` / `remove:` / `delete:` / `discipline:allow(deletion-rationale)` / `allow(deletion-rationale)` | `deletion-rationale` | File path, directory prefix, or test function name (or unscoped with `require_scope = false`) |
+| `allow-assertion-drop:` / `discipline:allow(assertion-reduction)` / `allow(assertion-reduction)` | `assertion-reduction` | Test function name, file path, or directory prefix |
+| `allow-ignore:` / `discipline:allow(ignored-tests)` / `allow(ignored-tests)` | `ignored-tests` | Test function name |
+| `allow-gate-weakening:` / `discipline:allow(config-integrity)` / `allow(config-integrity)` | `config-integrity` | Gate id |
+| `allow-golden-update:` / `discipline:allow(golden-output)` / `allow(golden-output)` | `golden-output` | Snapshot/fixture file path or directory prefix |
+| `allow-regression:` / `discipline:allow(bench-regression)` / `allow(bench-regression)` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
+| `allow-command:` / `discipline:allow(command)` / `allow(command)` | `command` | Subcommand or command line invocation, plus non-empty rationale |
+| `allow-dependency:` / `discipline:allow(dependency-delta)` / `allow(dependency-delta)` | `dependency-delta` | Dependency package name or manifest path |
+| `allow-test-shrink:` / `allow-test-budget:` / `allow-floor-drop:` / `discipline:allow(test-budget)` / `allow(test-budget)` / `discipline:allow(test-floor)` / `allow(test-floor)` | `test-budget`, `test-floor` | Test count delta, budget parameter, or suite name |
+| `allow-ci-weakening:` / `allow-unpinned-action:` / `allow-ci-change:` / `discipline:allow(ci-integrity)` / `allow(ci-integrity)` | `ci-integrity` | Workflow path, job id, or security check rationale |
+| `allow-nul:` / `allow-nul-byte:` / `allow-corrupt:` | `assertion-reduction`, `vacuous-tests` | Corrupt or NUL-byte fixture file path |
+| `secrets-argv-ok:` / `discipline:allow(shell-secrets)` / `allow(shell-secrets)` | `shell-secrets` | Shell script path or CLI command line |
+| `no-issue:` / `discipline:allow(issue-link)` / `allow(issue-link)` | `issue-link` | PR or commit justification for omitted tracking issue |
+| `allow-provenance:` / `allow-unpaired-figures:` / `docs-lint: allow` / `docs-lint:allow` / `discipline:allow(provenance-tags)` / `allow(provenance-tags)` | `provenance-tags` | Unmeasured figure, claim, or doc file path |
+| `allow-archive-leak:` / `discipline:allow(archive-contents)` / `allow(archive-contents)` | `archive-contents` | Archive file path or leaked entry name |
+| `allow-manifest-drift:` / `discipline:allow(manifest-sync)` / `allow(manifest-sync)` | `manifest-sync` | Manifest path or package field name |
+| `allow-version-mismatch:` / `discipline:allow(version-lockstep)` / `allow(version-lockstep)` | `version-lockstep` | Mismatched crate name or manifest path |
+| `allow-scope:` / `allow-scope-confinement:` / `discipline:allow(scope-confinement)` / `allow(scope-confinement)` | `scope-confinement` | Out-of-scope file path or module prefix |
+| `allow-suppression:` / `allow-suppression-delta:` / `discipline:allow(suppression-delta)` / `allow(suppression-delta)` | `suppression-delta` | Specific suppression rule (`dead_code`, `noqa`, `type: ignore`) and/or file path |
+| `allow-checklist:` / `allow-pr-checklist:` / `discipline:allow(pr-checklist)` / `allow(pr-checklist)` | `pr-checklist` | PR checklist item text or section |
+| `allow-unsafe:` / `allow-unsafe-budget:` / `discipline:allow(unsafe-budget)` / `allow(unsafe-budget)` | `unsafe-budget` | Rust file path, function name, or module |
+| `allow-msrv:` / `discipline:allow(msrv)` / `allow(msrv)` | `msrv` | Crate name or MSRV error diagnostic |
+| `allow-miri:` / `discipline:allow(miri)` / `allow(miri)` | `miri` | Test name or unsupported Miri operation |
+| `allow-sanitizers:` / `discipline:allow(sanitizers)` / `allow(sanitizers)` | `sanitizers` | Test or binary name with memory check rationale |
 
 ### Inline Line Exemptions
 
@@ -379,7 +397,7 @@ Use [`templates/argo-workflow-template.yaml`](https://github.com/orieg/disciplin
 ```yaml
 repos:
   - repo: https://github.com/orieg/discipline
-    rev: v0.4.0
+    rev: v0.4.1
     hooks:
       - id: discipline          # compiles via cargo
       # Or: - id: discipline-system # uses pre-installed binary on PATH
@@ -394,25 +412,48 @@ discipline check --staged
 
 Official multi-arch (`linux/amd64`, `linux/arm64`) minimal OCI container images are published to GitHub Container Registry:
 - `ghcr.io/orieg/discipline:latest`
-- `ghcr.io/orieg/discipline:v0.3`
+- `ghcr.io/orieg/discipline:v0`
+- `ghcr.io/orieg/discipline:v0.4.1`
 
-Images are built on Alpine Linux with the statically linked musl `discipline` binary and `git` on `PATH`, requiring no Node.js runtime or external package managers.
+Images are built on Alpine Linux with the statically linked musl `discipline` binary and `git` on `PATH`.
+
+#### Non-Root Execution & Workspace Ownership
+The container runs under an unprivileged user (`USER 10001:10001`) to comply with strict container security policies (such as CIS Docker Benchmark and Kubernetes restricted PodSecurityStandards).
+
+Because volume mounts may be owned by a different host UID or by root, the container declares `ENV DISCIPLINE_TRUST_WORKSPACE=1` by default. This instructs libgit2 to disable repository owner validation (avoiding `code=Owner (-36)`). If executing outside the official image or overriding environment variables, you can either:
+1. Pass `-e DISCIPLINE_TRUST_WORKSPACE=1`.
+2. Or pass `--user "$(id -u):$(id -g)"` to match the workspace owner.
 
 Run directly against any repository mounted to `/workspace`:
 ```bash
 docker run --rm -v "$PWD":/workspace ghcr.io/orieg/discipline:latest check --base origin/main
 ```
 
-Use in container-native CI environments (such as Forgejo, Gitea Actions with `act_runner`, or GitLab CI):
+#### Container Caveats: Missing Node.js Runtime in Container Jobs
+The minimal container image contains only the static binary and git; it does **not** include a Node.js runtime.
 
-```yaml
-# Forgejo / Gitea Actions
-jobs:
-  discipline:
-    runs-on: docker://ghcr.io/orieg/discipline:latest
-    steps:
-      - run: discipline check --base main
-```
+In GitHub Actions, Gitea Actions (`act_runner`), and Forgejo Actions, `actions/checkout` requires Node.js. As a result, `actions/checkout` cannot run inside a job container using `runs-on: docker://ghcr.io/orieg/discipline:latest`.
+
+**Recommended CI Integration:**
+- Use the composite action on a standard VM or host runner:
+  ```yaml
+  jobs:
+    discipline:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - uses: orieg/discipline@v0
+  ```
+- If running in a container-only runner environment, check out using `git clone`:
+  ```yaml
+  jobs:
+    discipline:
+      runs-on: docker://ghcr.io/orieg/discipline:latest
+      steps:
+        - run: |
+            git clone --depth 50 "${REPO_URL}" .
+            discipline check --base main
+  ```
 
 ```yaml
 # GitLab CI (.gitlab-ci.yml)
@@ -420,6 +461,8 @@ discipline:
   image:
     name: ghcr.io/orieg/discipline:latest
     entrypoint: [""]
+  variables:
+    DISCIPLINE_TRUST_WORKSPACE: "1"
   script:
     - discipline check --base origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-main}
 ```

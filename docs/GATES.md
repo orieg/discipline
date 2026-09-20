@@ -342,6 +342,10 @@ When a change touches source files in a language without an active pack, each AS
   - `ARGV-INLINE`: Expanding secret variables inside inline script strings `sh -c "... $SECRET ..."`.
   - `INJECT-XARGS`: Metacharacter command injection via `xargs -I {} sh -c '... {} ...'`.
   - `INJECT-PIPE`: Piping remote network downloads directly into shell interpreters `curl ... | bash`.
+- **Installer & `INJECT-PIPE` Rationale:**
+  - `INJECT-PIPE` flags piping remote network streams directly into shell interpreters (`curl ... | sh` / `curl ... | bash`) because uninspected piped execution is vulnerable to network truncation, connection drops leading to partial execution, and unverified execution.
+  - Checksum-verifying installers that inspect payloads internally: when an installer script internally fetches release assets, verifies their cryptographic SHA-256 checksum against `SHA256SUMS`, and only unpacks or executes upon hash verification, the downloaded binary payload is verified.
+  - However, download-verify-run (`curl -fsSL -o install.sh ... && bash install.sh`) remains the primary recommended pattern so operators can inspect the script before execution and avoid partial execution on interrupted connections.
 - **Lifting directive:** `secrets-argv-ok: <file-or-line> <reason>` in PR body or commit, or inline `discipline:allow(shell-secrets)`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_secret_patterns`, `allow_patterns`, `diff_only`.
 

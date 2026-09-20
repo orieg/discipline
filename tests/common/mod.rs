@@ -54,6 +54,11 @@ impl Run {
             .collect()
     }
 
+    /// Violations a gate reported as JSON Values.
+    pub fn violations(&self, gate: &str) -> Vec<Value> {
+        self.outcome(gate)["violations"].as_array().unwrap().clone()
+    }
+
     pub fn outcome(&self, gate: &str) -> Value {
         self.json()["outcomes"]
             .as_array()

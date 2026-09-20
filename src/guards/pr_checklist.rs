@@ -39,90 +39,106 @@ pub fn evaluate_pr_checklist(ctx: &Context) -> Result<GateOutcome> {
         .any(|p| p.contains("bench") || p.starts_with("benches/"));
 
     let box_re = Regex::new(r"(?i)^[ \t]*-[ \t]*\[[xX]\][ \t]*(.*)$").expect("static regex");
+    let checked_count = pr_body.lines().filter(|l| box_re.is_match(l)).count();
+    out.examined = checked_count;
 
-    let mut checked_count = 0;
-    for (idx, line) in pr_body.lines().enumerate() {
-        if let Some(caps) = box_re.captures(line) {
-            checked_count += 1;
-            let item_text = caps.get(1).map_or("", |m| m.as_str()).trim();
-            let lower = item_text.to_ascii_lowercase();
-
-            // Test claim verification
-            if (lower.contains("test") || lower.contains("tests"))
-                && !lower.contains("no test")
-                && !lower.contains("n/a")
-                && !has_tests
-            {
-                if let Some(ov) =
-                    ctx.find_gate_or_subject_override(GATE, ALLOW_PR_CHECKLIST, "test")
-                {
-                    out.notes.push(format!(
-                        "override applied: `{}: {}` for test checklist claim ({})",
-                        ov.directive, ov.reason, ov.source
-                    ));
-                } else {
-                    out.add_violation(
-                        ctx.overridable(settings.severity),
-                        "PR body",
-                        idx + 1,
-                        "PR checklist claims tests added or extended, but diff contains zero test files",
-                        format!("checked item: `{}`; use `discipline:allow(pr-checklist): <reason>` to waive", item_text),
-                    );
+    let claims = find_unsupported_claims(pr_body, has_tests, has_docs, has_benches);
+    for claim in claims {
+        if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_PR_CHECKLIST, claim.subject)
+        {
+            out.overrides.push(ov.clone());
+            out.notes.push(format!(
+                "override applied: `{}: {}` for {} checklist claim ({})",
+                ov.directive, ov.reason, claim.subject, ov.source
+            ));
+        } else {
+            let desc = match claim.subject {
+                "test" => {
+                    "PR checklist claims tests added or extended, but diff contains zero test files"
                 }
-            }
-
-            // Docs claim verification
-            if (lower.contains("doc") || lower.contains("docs") || lower.contains("documentation"))
-                && !lower.contains("no doc")
-                && !lower.contains("n/a")
-                && !has_docs
-            {
-                if let Some(ov) =
-                    ctx.find_gate_or_subject_override(GATE, ALLOW_PR_CHECKLIST, "docs")
-                {
-                    out.notes.push(format!(
-                        "override applied: `{}: {}` for docs checklist claim ({})",
-                        ov.directive, ov.reason, ov.source
-                    ));
-                } else {
-                    out.add_violation(
-                        ctx.overridable(settings.severity),
-                        "PR body",
-                        idx + 1,
-                        "PR checklist claims documentation updated, but diff contains zero documentation files",
-                        format!("checked item: `{}`; use `discipline:allow(pr-checklist): <reason>` to waive", item_text),
-                    );
+                "docs" => {
+                    "PR checklist claims documentation updated, but diff contains zero documentation files"
                 }
-            }
-
-            // Benchmark claim verification
-            if (lower.contains("bench") || lower.contains("benchmark"))
-                && !lower.contains("no bench")
-                && !lower.contains("n/a")
-                && !has_benches
-            {
-                if let Some(ov) =
-                    ctx.find_gate_or_subject_override(GATE, ALLOW_PR_CHECKLIST, "bench")
-                {
-                    out.notes.push(format!(
-                        "override applied: `{}: {}` for benchmark checklist claim ({})",
-                        ov.directive, ov.reason, ov.source
-                    ));
-                } else {
-                    out.add_violation(
-                        ctx.overridable(settings.severity),
-                        "PR body",
-                        idx + 1,
-                        "PR checklist claims benchmarks updated, but diff contains zero benchmark files",
-                        format!("checked item: `{}`; use `discipline:allow(pr-checklist): <reason>` to waive", item_text),
-                    );
+                "bench" => {
+                    "PR checklist claims benchmarks updated, but diff contains zero benchmark files"
                 }
-            }
+                _ => "PR checklist claims unsupported change",
+            };
+            out.add_violation(
+                ctx.overridable(settings.severity),
+                "PR body",
+                claim.line,
+                desc,
+                format!(
+                    "checked item: `{}`; use `discipline:allow(pr-checklist): <reason>` to waive",
+                    claim.item_text
+                ),
+            );
         }
     }
 
     out.examined = checked_count;
     Ok(out)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChecklistClaim {
+    pub line: usize,
+    pub subject: &'static str,
+    pub item_text: String,
+}
+
+pub fn find_unsupported_claims(
+    pr_body: &str,
+    has_tests: bool,
+    has_docs: bool,
+    has_benches: bool,
+) -> Vec<ChecklistClaim> {
+    let box_re = Regex::new(r"(?i)^[ \t]*-[ \t]*\[[xX]\][ \t]*(.*)$").expect("static regex");
+    let mut claims = Vec::new();
+    for (idx, line) in pr_body.lines().enumerate() {
+        if let Some(caps) = box_re.captures(line) {
+            let item_text = caps.get(1).map_or("", |m| m.as_str()).trim();
+            let lower = item_text.to_ascii_lowercase();
+
+            if (lower.contains("test") || lower.contains("tests"))
+                && !lower.contains("no test")
+                && !lower.contains("n/a")
+                && !has_tests
+            {
+                claims.push(ChecklistClaim {
+                    line: idx + 1,
+                    subject: "test",
+                    item_text: item_text.to_string(),
+                });
+            }
+
+            if (lower.contains("doc") || lower.contains("docs") || lower.contains("documentation"))
+                && !lower.contains("no doc")
+                && !lower.contains("n/a")
+                && !has_docs
+            {
+                claims.push(ChecklistClaim {
+                    line: idx + 1,
+                    subject: "docs",
+                    item_text: item_text.to_string(),
+                });
+            }
+
+            if (lower.contains("bench") || lower.contains("benchmark"))
+                && !lower.contains("no bench")
+                && !lower.contains("n/a")
+                && !has_benches
+            {
+                claims.push(ChecklistClaim {
+                    line: idx + 1,
+                    subject: "bench",
+                    item_text: item_text.to_string(),
+                });
+            }
+        }
+    }
+    claims
 }
 
 #[cfg(test)]

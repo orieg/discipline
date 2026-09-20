@@ -146,7 +146,7 @@ runs:
           esac
 
           version="${INPUT_VERSION}"
-          if [ -z "${version}" ] && [[ "${ACTION_REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+          if [ -z "${version}" ] && [[ "${ACTION_REF}" =~ ^v[0-9]+(\.[0-9]+)* ]]; then
             version="${ACTION_REF}"
           fi
           if [ -n "${version}" ]; then
@@ -196,13 +196,14 @@ runs:
       env:
         INPUT_BASE_REF: ${{ inputs.base_ref }}
         PR_BASE_REF: ${{ github.base_ref }}
+        MERGE_GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
         PUSH_BEFORE: ${{ github.event.before }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         FORGEJO_BASE_REF: ${{ env.FORGEJO_BASE_REF }}
         GITEA_BASE_REF: ${{ env.GITEA_BASE_REF }}
       run: |
         set -euo pipefail
-        base="${INPUT_BASE_REF:-${PR_BASE_REF:-${FORGEJO_BASE_REF:-${GITEA_BASE_REF}}}}"
+        base="${INPUT_BASE_REF:-${PR_BASE_REF:-${MERGE_GROUP_BASE_REF:-${FORGEJO_BASE_REF:-${GITEA_BASE_REF}}}}}"
         if [ -z "${base}" ] && [ -n "${PUSH_BEFORE}" ] && ! [[ "${PUSH_BEFORE}" =~ ^0+$ ]]; then
           base="${PUSH_BEFORE}"
         fi

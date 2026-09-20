@@ -19,7 +19,7 @@ use crate::tokens;
 use anyhow::{Context as _, Result};
 use globset::GlobSetBuilder;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 pub const GATE: &str = "ci-integrity";
@@ -129,13 +129,17 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         // 1. Rollup job checks
         let (jobs, rollup_needs) =
             parse_workflow_jobs(&head_content, settings.rollup_job.as_deref());
-        if let Some(ref rollup) = settings.rollup_job {
-            if jobs.contains(rollup) {
-                // Check if rollup dropped any dependencies compared to base
-                if let Some(ref base_src) = base_content {
-                    let (_, base_needs) = parse_workflow_jobs(base_src, Some(rollup));
+        let head_all_needs = parse_all_job_needs(&head_content);
+        if let Some(ref base_src) = base_content {
+            let base_all_needs = parse_all_job_needs(base_src);
+            for (job_name, base_needs) in &base_all_needs {
+                let is_gate_or_rollup = settings.rollup_job.as_deref() == Some(job_name.as_str())
+                    || job_name.contains("gate")
+                    || job_name.contains("rollup");
+                if is_gate_or_rollup && jobs.contains(job_name) {
+                    let head_needs = head_all_needs.get(job_name).cloned().unwrap_or_default();
                     let dropped_needs: Vec<String> =
-                        base_needs.difference(&rollup_needs).cloned().collect();
+                        base_needs.difference(&head_needs).cloned().collect();
                     for dropped in dropped_needs {
                         if jobs.contains(&dropped) {
                             record_or_excuse(
@@ -145,15 +149,19 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 settings.severity,
                                 "Rollup Job Dropped Dependency",
                                 Some(path.clone()),
-                                find_line_number(&head_content, rollup),
-                                format!("Rollup job '{rollup}' dropped dependency on '{dropped}' present in base."),
-                                format!("Restore '{dropped}' to '{rollup}' needs, or excuse with allow-gate-weakening: ci-integrity <reason>."),
+                                find_line_number(&head_content, job_name),
+                                format!("Rollup job '{job_name}' dropped dependency on '{dropped}' present in base."),
+                                format!("Restore '{dropped}' to '{job_name}' needs, or excuse with allow-gate-weakening: ci-integrity <reason>."),
                                 &dropped,
                             );
                         }
                     }
                 }
+            }
+        }
 
+        if let Some(ref rollup) = settings.rollup_job {
+            if jobs.contains(rollup) {
                 let expected: HashSet<String> = jobs
                     .iter()
                     .filter(|j| *j != rollup && !settings.excluded_jobs.contains(j))
@@ -1003,12 +1011,18 @@ fn workflow_permission_level(val: &serde_yaml::Value) -> u8 {
             }
         }
         if let Some(map) = perm.as_mapping() {
+            if map.is_empty() {
+                return 0;
+            }
             let has_write = map.values().any(|v| v.as_str() == Some("write"));
             if has_write {
                 return 2;
             }
             return 1;
         }
+    } else {
+        // Omitting permissions defaults to permissive / repository-default (which includes write access)
+        return 2;
     }
     0
 }
@@ -1110,6 +1124,33 @@ fn record_or_excuse(
         let rem_str = remediation.into();
         out.push(severity, title, file.as_deref(), line, message, &rem_str);
     }
+}
+
+/// Parses all job IDs and their needed job IDs from GitHub Actions workflow YAML.
+pub fn parse_all_job_needs(content: &str) -> HashMap<String, HashSet<String>> {
+    let mut map = HashMap::new();
+    if let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(content) {
+        if let Some(jobs_map) = val.get("jobs").and_then(|j| j.as_mapping()) {
+            for (k, v) in jobs_map {
+                if let Some(job_name) = k.as_str() {
+                    let mut needs = HashSet::new();
+                    if let Some(needs_val) = v.get("needs") {
+                        if let Some(seq) = needs_val.as_sequence() {
+                            for item in seq {
+                                if let Some(s) = item.as_str() {
+                                    needs.insert(s.to_string());
+                                }
+                            }
+                        } else if let Some(s) = needs_val.as_str() {
+                            needs.insert(s.to_string());
+                        }
+                    }
+                    map.insert(job_name.to_string(), needs);
+                }
+            }
+        }
+    }
+    map
 }
 
 /// Parses job IDs and the rollup job's needed job IDs from GitHub Actions workflow YAML.

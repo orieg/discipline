@@ -422,7 +422,7 @@ pub fn repair_action_for_violation(v: &Violation) -> String {
         "forbidden-words" => {
             "Remove the forbidden term and replace it with precise architectural or technical layer terminology (e.g. engine, runtime, AST parser, memory hierarchy).".to_string()
         }
-        "host-leaks" => {
+        "pii" | "host-leaks" => {
             "Remove local absolute paths, usernames, LAN IPs, or private hostnames from the file.".to_string()
         }
         "command" => {
@@ -437,7 +437,7 @@ pub fn repair_action_for_violation(v: &Violation) -> String {
         "bench-regression" => {
             "Optimize the code to eliminate the performance or cycle count regression.".to_string()
         }
-        "golden-tests" => {
+        "golden-output" | "golden-tests" => {
             "Restore or regenerate the golden test output to match expected behavior.".to_string()
         }
         "nul-bytes" => {

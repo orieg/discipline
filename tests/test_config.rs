@@ -376,3 +376,16 @@ fn schema_json_file_in_sync_with_code() {
         "discipline.schema.json is out of sync with Rust Serde models; run `cargo run -- docs --write` to update"
     );
 }
+
+#[test]
+fn test_all_directives_documented_in_configuration_md() {
+    let doc =
+        std::fs::read_to_string("docs/CONFIGURATION.md").expect("docs/CONFIGURATION.md must exist");
+    for directive in discipline::tokens::ALL_DIRECTIVE_NAMES {
+        assert!(
+            doc.contains(directive),
+            "Directive '{}' known to src/tokens.rs is missing from docs/CONFIGURATION.md",
+            directive
+        );
+    }
+}

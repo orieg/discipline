@@ -40,6 +40,7 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
             let expected = preset.canary_expected_diagnostic.unwrap_or("Sanitizer");
             if !combined.contains(expected) {
                 if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_SANITIZERS, GATE) {
+                    out.overrides.push(ov.clone());
                     out.notes.push(format!(
                         "override applied: `{}: {}` (canary diagnostic mismatch allowed) ({})",
                         ov.directive, ov.reason, ov.source
@@ -70,6 +71,7 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
         Ok(r) => r,
         Err(e) => {
             if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_SANITIZERS, GATE) {
+                out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (sanitizer execution error allowed) ({})",
                     ov.directive, ov.reason, ov.source
@@ -89,6 +91,7 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
 
     if !res.status.success() {
         if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_SANITIZERS, GATE) {
+            out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` (sanitizer failure allowed) ({})",
                 ov.directive, ov.reason, ov.source
@@ -118,6 +121,10 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
     }
 
     Ok(out)
+}
+
+pub fn evaluate_canary_diagnostic(output: &str, expected: &str) -> bool {
+    output.contains(expected)
 }
 
 #[cfg(test)]

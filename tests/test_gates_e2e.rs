@@ -6428,7 +6428,12 @@ enabled = true
     );
     repo.commit("chore: enable miri gate");
 
-    // With waiver directive, execution or missing cargo-miri is waived
+    // 1. Negative control: execution without waiver fails (exit 1)
+    let run_bad = repo.check(&[]);
+    assert_eq!(run_bad.code, 1);
+    assert!(!run_bad.titles("miri").is_empty());
+
+    // 2. With waiver directive, execution or missing cargo-miri is waived
     repo.commit(
         "chore: run miri with waiver\n\ndiscipline:allow(miri): host lacks cargo-miri toolchain",
     );
@@ -6460,7 +6465,12 @@ canary = false
     );
     repo.commit("chore: enable sanitizers gate");
 
-    // With waiver directive, execution on non-nightly host is waived
+    // 1. Negative control: execution without waiver fails (exit 1)
+    let run_bad = repo.check(&[]);
+    assert_eq!(run_bad.code, 1);
+    assert!(!run_bad.titles("sanitizers").is_empty());
+
+    // 2. With waiver directive, execution on non-nightly host is waived
     repo.commit("chore: run sanitizers with waiver\n\ndiscipline:allow(sanitizers): nightly toolchain unavailable");
     let run_ov = repo.check(&[]);
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
@@ -6469,4 +6479,353 @@ canary = false
         .unwrap()
         .iter()
         .any(|n| n.as_str().unwrap().contains("override applied")));
+}
+
+// ---- Q1: suppression-delta scoped override ---------------------------------
+
+#[test]
+fn test_suppression_delta_scoped_override_q1() {
+    let repo = Repo::new();
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\n#[allow(dead_code)]\nfn unused() {{}}\n"),
+    );
+    repo.write("test.py", "import os  # noqa\nx = 1  # type: ignore\n");
+
+    // 1. Commit with unrelated reason -> all 3 findings fire, exit code 1
+    repo.commit("refactor: add suppressions\n\nallow-suppression: totally unrelated words here");
+    let run1 = repo.check(&[]);
+    assert_eq!(run1.code, 1);
+    let v1 = run1.violations("suppression-delta");
+    assert_eq!(
+        v1.len(),
+        3,
+        "expected 3 violations with unrelated reason: {:#?}",
+        v1
+    );
+
+    // 2. Amend commit naming only dead_code -> 2 findings remain (noqa, type: ignore), exit code 1
+    repo.git(&[
+        "commit",
+        "-q",
+        "--amend",
+        "-m",
+        "refactor: add suppressions\n\nallow-suppression: dead_code legacy cleanup",
+    ]);
+    let run2 = repo.check(&[]);
+    assert_eq!(run2.code, 1);
+    let v2 = run2.violations("suppression-delta");
+    assert_eq!(v2.len(), 2, "expected 2 remaining violations: {:#?}", v2);
+    assert!(!v2
+        .iter()
+        .any(|v| v["message"].as_str().unwrap().contains("dead_code")));
+    assert!(v2
+        .iter()
+        .any(|v| v["message"].as_str().unwrap().contains("noqa")));
+    assert!(v2
+        .iter()
+        .any(|v| v["message"].as_str().unwrap().contains("type: ignore")));
+
+    // 3. Amend commit naming all three -> 0 findings remain, exit code 0
+    repo.git(&["commit", "-q", "--amend", "-m", "refactor: add suppressions\n\nallow-suppression: dead_code noqa type: ignore legacy cleanup"]);
+    let run3 = repo.check(&[]);
+    assert_eq!(run3.code, 0, "{}{}", run3.stdout, run3.stderr);
+    assert_eq!(run3.violations("suppression-delta").len(), 0);
+
+    // 4. Amend commit scoping by file path -> waives only src/lib.rs findings, test.py still fires
+    repo.git(&[
+        "commit",
+        "-q",
+        "--amend",
+        "-m",
+        "refactor: add suppressions\n\nallow-suppression: src/lib.rs legacy cleanup",
+    ]);
+    let run4 = repo.check(&[]);
+    assert_eq!(run4.code, 1);
+    let v4 = run4.violations("suppression-delta");
+    assert_eq!(v4.len(), 2, "expected 2 violations for test.py: {:#?}", v4);
+    assert!(!v4
+        .iter()
+        .any(|v| v["file"].as_str().unwrap() == "src/lib.rs"));
+    assert!(v4.iter().all(|v| v["file"].as_str().unwrap() == "test.py"));
+}
+
+// ---- Q2: overrides counter matches audit notes and trips fail-on-overrides --
+
+#[test]
+fn test_overrides_counter_matches_audit_notes_q2() {
+    let repo = Repo::new();
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\n#[allow(dead_code)]\nfn unused() {{}}\n"),
+    );
+    repo.commit("refactor: add suppression with scoped waiver\n\nallow-suppression: dead_code intentional legacy code");
+
+    // Check without --fail-on-overrides
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let json = run.json();
+    let overrides_count = json["overrides"].as_u64().unwrap();
+    assert!(overrides_count > 0, "summary.overrides should be > 0");
+
+    let gate_ov = &run.outcome("suppression-delta")["overrides"];
+    assert!(
+        !gate_ov.as_array().unwrap().is_empty(),
+        "suppression-delta should record override"
+    );
+
+    // Check with --fail-on-overrides -> must exit 1 because an override was applied!
+    let run_fail = repo.check(&["--fail-on-overrides"]);
+    assert_eq!(
+        run_fail.code, 1,
+        "fail-on-overrides must exit 1 when override is applied"
+    );
+}
+
+// ---- Q3: CI integrity dropped rollup dependency and omitted permissions ----
+
+#[test]
+fn test_ci_integrity_dropped_rollup_dependency_and_omitted_permissions_q3() {
+    let repo = Repo::new();
+    let base_wf = r#"name: CI
+permissions: read-all
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-latest
+  ci-gate:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+"#;
+    repo.write(".github/workflows/ci.yml", base_wf);
+    repo.commit("ci: healthy base workflow");
+
+    // Case A: Dropped rollup dependency: ci-gate drops `test` from needs: [lint, test]
+    let dropped_dep_wf = r#"name: CI
+permissions: read-all
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-latest
+  ci-gate:
+    needs: [lint]
+    runs-on: ubuntu-latest
+"#;
+    repo.write(".github/workflows/ci.yml", dropped_dep_wf);
+    repo.commit("ci: drop test dependency from rollup");
+    let run_dropped = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_dropped.code, 1);
+    let titles_dropped = run_dropped.titles("ci-integrity");
+    assert!(
+        titles_dropped.contains(&"Rollup Job Dropped Dependency".to_string()),
+        "expected 'Rollup Job Dropped Dependency', got: {:?}",
+        titles_dropped
+    );
+
+    // Case B: Permissions widened: base has `permissions: read-all`, head omits permissions entirely
+    let omitted_perm_wf = r#"name: CI
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-latest
+  ci-gate:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+"#;
+    repo.write(".github/workflows/ci.yml", omitted_perm_wf);
+    repo.commit("ci: omit permissions entirely");
+    let run_perm = repo.check(&["--base", "HEAD~2"]);
+    assert_eq!(run_perm.code, 1);
+    let titles_perm = run_perm.titles("ci-integrity");
+    assert!(
+        titles_perm.contains(&"Workflow Permissions Widened".to_string()),
+        "expected 'Workflow Permissions Widened' when permissions omitted, got: {:?}",
+        titles_perm
+    );
+}
+
+// ---- Q4: duplicate findings deduplicated ------------------------------------
+
+#[test]
+fn test_duplicate_findings_deduplicated_q4() {
+    let repo = Repo::new();
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\n#[allow(dead_code)]\nfn unused() {{}}\n"),
+    );
+    repo.commit("refactor: add suppression");
+    let run = repo.check(&[]);
+    let violations = run.violations("suppression-delta");
+    // Verify no duplicates: every (file, line, title, message) is unique
+    let mut seen = std::collections::HashSet::new();
+    for v in &violations {
+        let key = (
+            v["file"].as_str().unwrap_or(""),
+            v["line"].as_u64().unwrap_or(0),
+            v["title"].as_str().unwrap_or(""),
+            v["message"].as_str().unwrap_or(""),
+        );
+        assert!(seen.insert(key), "duplicate violation found: {:?}", v);
+    }
+}
+
+// ---- Q6: directive in subject line rejected --------------------------------
+
+#[test]
+fn test_directive_in_subject_line_rejected_q6() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.issue-link]
+enabled = true
+"#,
+    );
+    repo.commit("chore: enable issue-link");
+
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\n#[allow(dead_code)]\nfn unused() {{}}\n"),
+    );
+    // 1. Commit subject has directive: allow-suppression: dead_code
+    repo.commit("allow-suppression: dead_code");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+
+    // issue-link emits "Directive in Subject Line"
+    let issue_titles = run.titles("issue-link");
+    assert!(
+        issue_titles.contains(&"Directive in Subject Line".to_string()),
+        "expected 'Directive in Subject Line' from issue-link, got: {:?}",
+        issue_titles
+    );
+
+    // Directive in subject (line 0) was NOT parsed as an armed override, so suppression-delta still fires
+    let supp_titles = run.titles("suppression-delta");
+    assert!(
+        !supp_titles.is_empty(),
+        "suppression-delta must still fire because subject directive is ignored"
+    );
+
+    // 2. PR title containing directive also triggers "Directive in Subject Line"
+    let run_pr = repo.check_with_pr_metadata(
+        &[],
+        Some("allow-gate-weakening: ci-integrity bypass (#101)"),
+        Some("Valid PR body with no directives"),
+    );
+    assert_eq!(run_pr.code, 1);
+    let pr_issue_titles = run_pr.titles("issue-link");
+    assert!(
+        pr_issue_titles.contains(&"Directive in Subject Line".to_string()),
+        "expected 'Directive in Subject Line' for PR title directive, got: {:?}",
+        pr_issue_titles
+    );
+}
+
+// ---- Unsafe budget: max_unsafe cap -----------------------------------------
+
+#[test]
+fn test_unsafe_budget_max_unsafe_cap() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.unsafe-budget]
+enabled = true
+max_unsafe = 0
+"#,
+        "chore: set max_unsafe = 0",
+    );
+
+    // 1. Touching src/lib.rs (which has 1 unsafe block) exceeds max_unsafe = 0 -> fails
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}\n// touch\n"));
+    repo.commit("feat: touch lib");
+    let run_bad = repo.check(&[]);
+    assert_eq!(run_bad.code, 1);
+    let titles = run_bad.titles("unsafe-budget");
+    assert!(
+        titles.iter().any(|t| t.contains("exceeds maximum budget")),
+        "expected unsafe budget violation, got: {:?}",
+        titles
+    );
+
+    // 2. With waiver directive -> passes and records override
+    repo.git(&["commit", "-q", "--amend", "-m", "feat: touch lib with waiver\n\ndiscipline:allow(unsafe-budget): legacy C FFI pointer dereference"]);
+    let run_ov = repo.check(&[]);
+    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+    let ovs = run_ov.outcome("unsafe-budget")["overrides"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!ovs.is_empty(), "unsafe-budget must record override");
+    assert!(run_ov.json()["overrides"].as_u64().unwrap() > 0);
+}
+
+// ---- Container Ownership & Discovery (R1) -----------------------------------
+
+#[test]
+fn test_discover_repository_trust_workspace_r1() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}\n// touch\n"));
+    repo.commit("feat: touch lib");
+
+    // 1. With DISCIPLINE_TRUST_WORKSPACE=1, check succeeds
+    let run_trusted = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("DISCIPLINE_TRUST_WORKSPACE", "1")],
+    );
+    assert_eq!(
+        run_trusted.code, 0,
+        "{}{}",
+        run_trusted.stdout, run_trusted.stderr
+    );
+
+    // 2. Also with DISCIPLINE_TRUST_WORKSPACE=true
+    let run_trusted_bool = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("DISCIPLINE_TRUST_WORKSPACE", "true")],
+    );
+    assert_eq!(
+        run_trusted_bool.code, 0,
+        "{}{}",
+        run_trusted_bool.stdout, run_trusted_bool.stderr
+    );
+}
+
+#[test]
+fn test_owner_validation_actionable_error_diagnostic_r1() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    let res = discipline::gitctx::discover_repository(path);
+    assert!(res.is_err());
+    let err = match res {
+        Err(e) => e,
+        Ok(_) => unreachable!(),
+    };
+    let err_msg = format!("{err:#}");
+    assert!(err_msg.contains("discipline measures a change"));
+
+    // Verify actionable remediation strings
+    let owner_remediation = format!(
+        "repository path '{}' is not owned by current user (libgit2 owner validation rejected access; code=Owner (-36)).\n\
+        To resolve this:\n\
+          1. In containerized environments, pass `-e DISCIPLINE_TRUST_WORKSPACE=1` (or configure `ENV DISCIPLINE_TRUST_WORKSPACE=1`).\n\
+          2. Or run the container matching the host UID/GID: `--user \"$(id -u):$(id -g)\"`.\n\
+          3. Or add the directory to git's safe directory: `git config --global --add safe.directory '{}'`.",
+        path.display(),
+        path.display()
+    );
+    assert!(owner_remediation.contains("code=Owner (-36)"));
+    assert!(owner_remediation.contains("DISCIPLINE_TRUST_WORKSPACE=1"));
+    assert!(owner_remediation.contains("--user"));
+    assert!(owner_remediation.contains("safe.directory"));
 }

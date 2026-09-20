@@ -278,6 +278,15 @@ pub enum Severity {
     Warning,
 }
 
+impl std::fmt::Display for Severity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Severity::Error => write!(f, "error"),
+            Severity::Warning => write!(f, "warning"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DirectivesConfig {
@@ -301,6 +310,7 @@ impl Default for DirectivesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisciplineConfig {
+    #[serde(default)]
     pub meta: MetaConfig,
     #[serde(default)]
     pub directives: DirectivesConfig,
@@ -309,12 +319,22 @@ pub struct DisciplineConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct MetaConfig {
     pub version: u32,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+impl Default for MetaConfig {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            name: "discipline-project".to_string(),
+            description: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -201,30 +201,172 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
 
     out.examined = total_added_lines;
 
-    if detected_suppressions.len() > settings.max_increase {
-        let net = detected_suppressions.len();
-        if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_SUPPRESSION, GATE) {
+    let mut unwaived = Vec::new();
+    for (path, lno, lang, pat, snippet) in &detected_suppressions {
+        let mut candidate_subjects = extract_suppression_rules(snippet, pat);
+        candidate_subjects.push(path.clone());
+        if let Some(file_name) = path.rsplit('/').next() {
+            if file_name != path {
+                candidate_subjects.push(file_name.to_string());
+            }
+        }
+
+        let mut applied: Option<(crate::tokens::OverrideRecord, String)> = None;
+        for subj in &candidate_subjects {
+            if let Some(ov) = ctx.find_override(GATE, ALLOW_SUPPRESSION, subj) {
+                applied = Some((ov, subj.clone()));
+                break;
+            }
+        }
+
+        if let Some((ov, matched_subj)) = applied {
+            out.overrides.push(ov.clone());
             out.notes.push(format!(
-                "override applied: `{}: {}` (net increase of {} suppressions permitted) ({})",
-                ov.directive, ov.reason, net, ov.source
+                "override applied: `{}: {}` for suppression `{}` in `{}:{}` ({})",
+                ov.directive, ov.reason, matched_subj, path, lno, ov.source
             ));
         } else {
-            for (path, lno, lang, pat, snippet) in &detected_suppressions {
-                out.add_violation(
-                    ctx.overridable(settings.severity),
-                    path,
-                    *lno,
-                    format!("new {lang} suppression `{pat}` introduced without override"),
-                    format!(
-                        "line contains suppression annotation `{}`: `{}`; use `discipline:allow(suppression-delta): <reason>` to waive",
-                        pat, snippet
-                    ),
-                );
-            }
+            unwaived.push((path, lno, lang, pat, snippet));
+        }
+    }
+
+    if unwaived.len() > settings.max_increase {
+        for (path, lno, lang, pat, snippet) in &unwaived {
+            out.add_violation(
+                ctx.overridable(settings.severity),
+                path,
+                **lno,
+                format!("new {lang} suppression `{pat}` introduced without override"),
+                format!(
+                    "line contains suppression annotation `{}`: `{}`; use `discipline:allow(suppression-delta): <rule-or-path> <reason>` to waive",
+                    pat, snippet
+                ),
+            );
         }
     }
 
     Ok(out)
+}
+
+pub fn extract_suppression_rules(snippet: &str, pat: &str) -> Vec<String> {
+    let mut rules = Vec::new();
+    let trimmed = snippet.trim();
+
+    if pat.contains("allow(") || pat.contains("expect(") {
+        if let Some(start) = trimmed.find('(') {
+            if let Some(end) = trimmed[start + 1..].find(')') {
+                let inner = &trimmed[start + 1..start + 1 + end];
+                for part in inner.split(',') {
+                    let r = part.trim().trim_matches(['"', '\'']);
+                    if !r.is_empty() {
+                        rules.push(r.to_string());
+                        if let Some(leaf) = r.rsplit("::").next() {
+                            if leaf != r && !leaf.is_empty() {
+                                rules.push(leaf.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if pat == "# noqa" {
+        rules.push("noqa".to_string());
+        if let Some(pos) = trimmed.find("# noqa:") {
+            let after = &trimmed[pos + 8..];
+            for part in after.split(|c: char| c == ',' || c.is_whitespace()) {
+                let r = part.trim();
+                if !r.is_empty() {
+                    rules.push(r.to_string());
+                }
+            }
+        }
+    } else if pat == "# type: ignore" {
+        rules.push("type: ignore".to_string());
+        rules.push("type-ignore".to_string());
+        rules.push("type_ignore".to_string());
+        rules.push("ignore".to_string());
+        if let Some(pos) = trimmed.find("# type: ignore[") {
+            if let Some(end) = trimmed[pos + 15..].find(']') {
+                let inner = &trimmed[pos + 15..pos + 15 + end];
+                for part in inner.split(',') {
+                    let r = part.trim();
+                    if !r.is_empty() {
+                        rules.push(r.to_string());
+                    }
+                }
+            }
+        }
+    } else if pat == "# pylint: disable" {
+        rules.push("pylint".to_string());
+        if let Some(pos) = trimmed.find("disable=") {
+            let after = &trimmed[pos + 8..];
+            for part in after.split(',') {
+                let r = part.trim();
+                if !r.is_empty() {
+                    rules.push(r.to_string());
+                }
+            }
+        }
+    } else if pat.starts_with("// @ts-") || pat.starts_with("@ts-") {
+        let tag = pat.trim_start_matches("//").trim().trim_start_matches('@');
+        rules.push(format!("@{tag}"));
+        rules.push(tag.to_string());
+        rules.push(tag.replace('-', "_"));
+    } else if pat.contains("eslint-disable") {
+        rules.push("eslint-disable".to_string());
+        rules.push("eslint".to_string());
+        let after = if let Some(p) = trimmed.find("eslint-disable-next-line") {
+            &trimmed[p + 24..]
+        } else if let Some(p) = trimmed.find("eslint-disable") {
+            &trimmed[p + 14..]
+        } else {
+            ""
+        };
+        let cleaned = after.trim_end_matches("*/").trim();
+        for part in cleaned.split(|c: char| c == ',' || c.is_whitespace()) {
+            let r = part.trim();
+            if !r.is_empty() {
+                rules.push(r.to_string());
+            }
+        }
+    } else if pat.to_ascii_uppercase().contains("NOLINT") {
+        rules.push("NOLINT".to_string());
+        rules.push("nolint".to_string());
+        if let Some(start) = trimmed.find('(') {
+            if let Some(end) = trimmed[start + 1..].find(')') {
+                let inner = trimmed[start + 1..start + 1 + end].trim();
+                if !inner.is_empty() {
+                    rules.push(inner.to_string());
+                }
+            }
+        }
+    } else if pat.contains("nolint") || pat.contains("lint:ignore") {
+        rules.push("nolint".to_string());
+        rules.push("lint:ignore".to_string());
+        rules.push("ignore".to_string());
+        if let Some(pos) = trimmed.find("//nolint:") {
+            let after = &trimmed[pos + 9..];
+            for part in after.split(',') {
+                let r = part.trim();
+                if !r.is_empty() {
+                    rules.push(r.to_string());
+                }
+            }
+        }
+    } else if pat.contains("pragma warning disable") {
+        rules.push("pragma".to_string());
+        if let Some(pos) = trimmed.find("disable") {
+            let after = &trimmed[pos + 7..];
+            for part in after.split_whitespace() {
+                let r = part.trim_end_matches(';').trim();
+                if !r.is_empty() {
+                    rules.push(r.to_string());
+                }
+            }
+        }
+    }
+
+    rules
 }
 
 #[cfg(test)]
@@ -237,5 +379,32 @@ mod tests {
         assert!(gate.enabled);
         assert_eq!(gate.severity, Severity::Error);
         assert_eq!(gate.max_increase, 0);
+    }
+
+    #[test]
+    fn test_extract_suppression_rules() {
+        use super::extract_suppression_rules;
+
+        let rust_rules = extract_suppression_rules("#[allow(dead_code, clippy::all)]", "#[allow(");
+        assert!(rust_rules.contains(&"dead_code".to_string()));
+        assert!(rust_rules.contains(&"clippy::all".to_string()));
+        assert!(rust_rules.contains(&"all".to_string()));
+
+        let py_noqa = extract_suppression_rules("x = 1 # noqa: E501", "# noqa");
+        assert!(py_noqa.contains(&"noqa".to_string()));
+        assert!(py_noqa.contains(&"E501".to_string()));
+
+        let py_type =
+            extract_suppression_rules("y = 2 # type: ignore[attr-defined]", "# type: ignore");
+        assert!(py_type.contains(&"type: ignore".to_string()));
+        assert!(py_type.contains(&"attr-defined".to_string()));
+
+        let ts_rules = extract_suppression_rules("// @ts-ignore", "// @ts-ignore");
+        assert!(ts_rules.contains(&"ts-ignore".to_string()));
+        assert!(ts_rules.contains(&"@ts-ignore".to_string()));
+
+        let cpp_rules = extract_suppression_rules("// NOLINT(readability-something)", "// NOLINT");
+        assert!(cpp_rules.contains(&"NOLINT".to_string()));
+        assert!(cpp_rules.contains(&"readability-something".to_string()));
     }
 }

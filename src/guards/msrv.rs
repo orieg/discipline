@@ -52,6 +52,7 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
             return Ok(out);
         }
         if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MSRV, GATE) {
+            out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` (missing MSRV declaration allowed) ({})",
                 ov.directive, ov.reason, ov.source
@@ -75,6 +76,7 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
         let (status, stdout, stderr) = run_msrv_command(cmd, root)?;
         if !status {
             if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_MSRV, GATE) {
+                out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (MSRV command failure allowed) ({})",
                     ov.directive, ov.reason, ov.source
@@ -96,6 +98,22 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
 }
 
 pub fn parse_rust_version(toml_str: &str) -> Option<String> {
+    if let Ok(val) = toml_str.parse::<toml::Value>() {
+        if let Some(pkg) = val.get("package") {
+            if let Some(rv) = pkg.get("rust-version") {
+                if let Some(s) = rv.as_str() {
+                    return Some(s.to_string());
+                }
+            }
+        }
+        if let Some(ws) = val.get("workspace").and_then(|w| w.get("package")) {
+            if let Some(rv) = ws.get("rust-version") {
+                if let Some(s) = rv.as_str() {
+                    return Some(s.to_string());
+                }
+            }
+        }
+    }
     for line in toml_str.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("rust-version") {
@@ -111,24 +129,8 @@ pub fn parse_rust_version(toml_str: &str) -> Option<String> {
 }
 
 fn run_msrv_command(cmd: &str, dir: &std::path::Path) -> Result<(bool, String, String)> {
-    let mut parts = cmd.split_whitespace();
-    let program = match parts.next() {
-        Some(p) => p,
-        None => return Ok((true, String::new(), String::new())),
-    };
-    let args: Vec<&str> = parts.collect();
-
-    let output = std::process::Command::new(program)
-        .args(&args)
-        .current_dir(dir)
-        .output();
-
-    match output {
-        Ok(out) => Ok((
-            out.status.success(),
-            String::from_utf8_lossy(&out.stdout).to_string(),
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        )),
+    match crate::guards::command::run_command_bounded("msrv", cmd, 120, dir) {
+        Ok(res) => Ok((res.status.success(), res.stdout, res.stderr)),
         Err(e) => Ok((
             false,
             String::new(),

@@ -103,13 +103,19 @@ pub fn run_command_bounded(
     let program = &tokens[0];
     let args = &tokens[1..];
 
-    let mut child = match Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .current_dir(repo_root)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+
+    #[cfg(unix)]
     {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             bail!("tool `{program}` not found in PATH for command `{name}`");
@@ -119,19 +125,38 @@ pub fn run_command_bounded(
         }
     };
 
-    let mut stdout_pipe = child.stdout.take().expect("piped stdout");
-    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let stdout_pipe = child.stdout.take().expect("piped stdout");
+    let stderr_pipe = child.stderr.take().expect("piped stderr");
+
+    const MAX_CAPTURE_BYTES: u64 = 25 * 1024 * 1024; // 25 MiB cap per stream
 
     let stdout_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf);
+        let mut reader = std::io::Read::take(stdout_pipe, MAX_CAPTURE_BYTES);
+        let _ = reader.read_to_end(&mut buf);
         buf
     });
     let stderr_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buf);
+        let mut reader = std::io::Read::take(stderr_pipe, MAX_CAPTURE_BYTES);
+        let _ = reader.read_to_end(&mut buf);
         buf
     });
+
+    let kill_child_group = |child: &mut std::process::Child| {
+        #[cfg(unix)]
+        {
+            let pid = child.id() as i32;
+            // SAFETY: -pid sends SIGKILL to the process group created by process_group(0).
+            // This terminates all grandchildren/descendant processes that might hold inherited
+            // stdout/stderr file descriptors open, preventing pipe read deadlocks.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    };
 
     let timeout = Duration::from_secs(timeout_secs);
     let start = Instant::now();
@@ -141,8 +166,7 @@ pub fn run_command_bounded(
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_child_group(&mut child);
                     let _ = stdout_handle.join();
                     let _ = stderr_handle.join();
                     bail!("command `{name}` timed out after {timeout_secs}s");
@@ -150,8 +174,7 @@ pub fn run_command_bounded(
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_child_group(&mut child);
                 let _ = stdout_handle.join();
                 let _ = stderr_handle.join();
                 bail!("failed waiting for child `{program}` for command `{name}`: {e}");
@@ -176,35 +199,43 @@ fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
         None if ctx.config_path != "discipline.toml" => ctx.git.base_content("discipline.toml")?,
         other => other,
     };
-    let Some(base_src) = base_src else {
-        return Ok(None);
-    };
-    let base_cfg = match DisciplineConfig::from_toml_str(&base_src) {
-        Ok(c) => c,
-        Err(_) => return Ok(None),
-    };
 
     let head_cmd = &ctx.config.gates.command;
-    let base_cmd = &base_cfg.gates.command;
+    let head_has_commands =
+        head_cmd.command.is_some() || head_cmd.preset.is_some() || !head_cmd.commands.is_empty();
 
-    let mut modified = false;
-    if head_cmd.command != base_cmd.command || head_cmd.preset != base_cmd.preset {
-        modified = true;
-    }
-    if head_cmd.commands.len() != base_cmd.commands.len() {
-        modified = true;
-    } else {
-        for (h, b) in head_cmd.commands.iter().zip(base_cmd.commands.iter()) {
-            if h.name != b.name
-                || h.command != b.command
-                || h.preset != b.preset
-                || h.canary_command != b.canary_command
-            {
-                modified = true;
-                break;
-            }
+    let modified = if ctx.git.has_base() {
+        match base_src {
+            Some(src) => match DisciplineConfig::from_toml_str(&src) {
+                Ok(base_cfg) => {
+                    let base_cmd = &base_cfg.gates.command;
+                    let mut modded = false;
+                    if head_cmd.command != base_cmd.command || head_cmd.preset != base_cmd.preset {
+                        modded = true;
+                    }
+                    if head_cmd.commands.len() != base_cmd.commands.len() {
+                        modded = true;
+                    } else {
+                        for (h, b) in head_cmd.commands.iter().zip(base_cmd.commands.iter()) {
+                            if h.name != b.name
+                                || h.command != b.command
+                                || h.preset != b.preset
+                                || h.canary_command != b.canary_command
+                            {
+                                modded = true;
+                                break;
+                            }
+                        }
+                    }
+                    modded
+                }
+                Err(_) => head_has_commands,
+            },
+            None => head_has_commands,
         }
-    }
+    } else {
+        false
+    };
 
     if modified {
         let env_authorized = std::env::var("DISCIPLINE_COMMAND").is_ok()

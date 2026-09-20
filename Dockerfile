@@ -41,5 +41,8 @@ USER 10001:10001
 WORKDIR /workspace
 VOLUME ["/workspace"]
 
+# Trust mounted workspace directory to avoid libgit2 repository ownership errors (CVE-2022-24765)
+ENV DISCIPLINE_TRUST_WORKSPACE=1
+
 ENTRYPOINT ["discipline"]
 CMD ["check"]

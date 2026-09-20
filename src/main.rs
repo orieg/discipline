@@ -40,6 +40,7 @@ fn run() -> Result<bool> {
             fail_on_overrides: false,
             actor: None,
             directive_sources: Vec::new(),
+            quiet: false,
             format: args.format,
             json_out: args.json_out,
             output_file: args.output_file,
@@ -61,7 +62,7 @@ fn run() -> Result<bool> {
 }
 
 fn docs(args: DocsArgs) -> Result<bool> {
-    let repo = git2::Repository::discover(".").ok();
+    let repo = discipline::gitctx::discover_repository(".").ok();
     let root = repo
         .as_ref()
         .and_then(|r| r.workdir())
@@ -297,7 +298,59 @@ fn check(args: CheckArgs) -> Result<bool> {
         bench_base_file: args.bench_base_file.clone(),
         bench_head_file: args.bench_head_file.clone(),
     };
-    let summary = run_checks(&config, args.suite, &ctx)?;
+    let summary = match run_checks(&config, args.suite, &ctx) {
+        Ok(s) => s,
+        Err(err) => {
+            let mut fatal_outcome = discipline::guards::GateOutcome {
+                gate: "engine",
+                suite: "engine",
+                enabled: true,
+                examined: 0,
+                inline_exemptions: 0,
+                notes: Vec::new(),
+                violations: Vec::new(),
+                overrides: Vec::new(),
+            };
+            fatal_outcome.add_violation(
+                discipline::guards::Severity::Error,
+                "engine",
+                1,
+                format!("fatal error during check execution: {err}"),
+                "inspect error details and ensure environment/git state is valid",
+            );
+            let err_summary = discipline::guards::CheckSummary {
+                base: git.base_label().to_string(),
+                errors: 1,
+                warnings: 0,
+                overrides: 0,
+                planned_gates: discipline::config::GATES
+                    .iter()
+                    .filter(|g| !g.available)
+                    .map(|g| g.id)
+                    .collect(),
+                outcomes: vec![fatal_outcome],
+            };
+            if let Some(path) = &args.json_out {
+                let _ = std::fs::write(
+                    path,
+                    serde_json::to_string_pretty(&err_summary).unwrap_or_default(),
+                );
+            }
+            if let Some(path) = &args.output_file {
+                let _ = std::fs::write(
+                    path,
+                    discipline::report::format_report_content(
+                        &err_summary,
+                        args.format,
+                        args.fail_on_warnings,
+                        false,
+                    )
+                    .unwrap_or_default(),
+                );
+            }
+            return Err(err);
+        }
+    };
 
     let raw_fail_on_overrides = config.directives.fail_on_overrides;
     let actor = args
@@ -308,13 +361,6 @@ fn check(args: CheckArgs) -> Result<bool> {
         .or_else(|| std::env::var("GITEA_ACTOR").ok())
         .or_else(|| std::env::var("FORGEJO_ACTOR").ok())
         .or_else(|| std::env::var("GITLAB_USER_LOGIN").ok())
-        .or_else(|| {
-            if is_push_or_commit {
-                git.head_commit_author().ok()
-            } else {
-                None
-            }
-        })
         .filter(|s| !s.trim().is_empty());
 
     let actor_authorized = match &actor {
@@ -332,12 +378,15 @@ fn check(args: CheckArgs) -> Result<bool> {
         raw_fail_on_overrides
     };
 
-    render_report(
-        &summary,
-        args.format,
-        args.fail_on_warnings,
-        fail_on_overrides,
-    )?;
+    let success = summary.is_success(args.fail_on_warnings, fail_on_overrides);
+    if !(args.quiet && success) {
+        render_report(
+            &summary,
+            args.format,
+            args.fail_on_warnings,
+            fail_on_overrides,
+        )?;
+    }
     if let Some(path) = &args.output_file {
         let content = discipline::report::format_report_content(
             &summary,
@@ -395,7 +444,7 @@ fn check(args: CheckArgs) -> Result<bool> {
 }
 
 fn init(name: Option<String>) -> Result<bool> {
-    let repo = git2::Repository::discover(".").ok();
+    let repo = discipline::gitctx::discover_repository(".").ok();
     let repo_root = repo.as_ref().and_then(|r| r.workdir());
     let config_path = repo_root
         .map(|r| r.join("discipline.toml"))
@@ -454,22 +503,44 @@ fn schema() -> Result<bool> {
 }
 
 fn gates(args: &ConfigArgs) -> Result<bool> {
-    let repo = git2::Repository::discover(".").ok();
+    let repo = discipline::gitctx::discover_repository(".").ok();
     let repo_root = repo.as_ref().and_then(|r| r.workdir());
     let (config, _) = load_config(args, repo_root, None, None)?;
-    println!("{:<24} {:<13} {:<9} SUMMARY", "GATE", "SUITE", "STATE");
+    println!(
+        "{:<24} {:<13} {:<9} {:<10} SUMMARY",
+        "GATE", "SUITE", "STATE", "SEVERITY"
+    );
     for g in GATES {
-        let state = match config.gates.settings(g.id) {
-            // Pad before styling: escape codes would count toward the width.
-            _ if !g.available => style::dim(&format!("{:<9}", "planned")),
-            Some(s) if s.enabled() => style::green(&format!("{:<9}", "on")),
-            _ => style::yellow(&format!("{:<9}", "off")),
+        let (state, severity) = match config.gates.settings(g.id) {
+            _ if !g.available => (
+                style::dim(&format!("{:<9}", "planned")),
+                format!("{:<10}", "-"),
+            ),
+            Some(s) if s.enabled() => {
+                let sev = s.severity().to_string();
+                (
+                    style::green(&format!("{:<9}", "on")),
+                    format!("{:<10}", sev),
+                )
+            }
+            Some(s) => {
+                let sev = s.severity().to_string();
+                (
+                    style::yellow(&format!("{:<9}", "off")),
+                    format!("{:<10}", sev),
+                )
+            }
+            _ => (
+                style::yellow(&format!("{:<9}", "off")),
+                format!("{:<10}", "-"),
+            ),
         };
         println!(
-            "{:<24} {:<13} {} {}",
+            "{:<24} {:<13} {} {} {}",
             g.id,
             g.suite.label(),
             state,
+            severity,
             g.summary
         );
     }
@@ -477,7 +548,7 @@ fn gates(args: &ConfigArgs) -> Result<bool> {
 }
 
 fn install_hooks(args: InstallHooksArgs) -> Result<bool> {
-    let repo = git2::Repository::discover(".").context(
+    let repo = discipline::gitctx::discover_repository(".").context(
         "cannot install hooks: current directory is not a git repository (no .git directory found)",
     )?;
     let git_dir = repo.path();
@@ -518,6 +589,18 @@ fn install_hooks(args: InstallHooksArgs) -> Result<bool> {
                 pre_commit_path.display()
             );
         } else {
+            let first_line = existing.lines().next().unwrap_or("");
+            if first_line.starts_with("#!")
+                && !first_line.contains("sh")
+                && !first_line.contains("bash")
+                && !first_line.contains("zsh")
+            {
+                bail!(
+                    "existing hook at {} uses a non-shell interpreter ('{}'). Cannot safely append shell commands. Integrate 'discipline check --staged' manually or use --force to overwrite.",
+                    pre_commit_path.display(),
+                    first_line.trim()
+                );
+            }
             let mut updated = existing;
             if !updated.ends_with('\n') {
                 updated.push('\n');

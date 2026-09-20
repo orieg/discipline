@@ -43,6 +43,7 @@ discipline:
   variables:
     GIT_STRATEGY: clone
     GIT_DEPTH: 0
+    DISCIPLINE_TRUST_WORKSPACE: "1"
   allow_failure: $[[ inputs.allow_failure ]]
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"

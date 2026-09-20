@@ -1,6 +1,6 @@
 [package]
 name = "discipline"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 rust-version = "1.90"
 authors = ["Nicolas Brousse <nicolas@brousse.info>"]
@@ -69,6 +69,9 @@ lang-ruby = ["dep:tree-sitter-ruby"]
 
 [dev-dependencies]
 tempfile = "3.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [profile.release]
 lto = "thin"

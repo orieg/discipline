@@ -461,9 +461,37 @@ jobs:
           path: ${{ steps.discipline.outputs.report }}
           if-no-files-found: ignore
 
+  # Smoke test the built container image with non-root USER 10001 against a root-owned checkout (reproducing R1).
+  docker-smoke:
+    needs: build-static
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: discipline-x86_64-unknown-linux-musl
+          path: bin-amd64
+      - run: chmod +x bin-amd64/discipline
+      - name: Build local container image
+        run: |
+          docker build -f Dockerfile.release --build-arg TARGETARCH=amd64 -t discipline:test .
+      - name: Create root-owned fixture repo (reproducing container UID mismatch)
+        run: |
+          tests/action/make-fixture.sh "${RUNNER_TEMP}/fx-root" clean
+          sudo chown -R 0:0 "${RUNNER_TEMP}/fx-root"
+      - name: Smoke test container against root-owned workspace (positive control)
+        run: |
+          docker run --rm -v "${RUNNER_TEMP}/fx-root":/workspace discipline:test check --base main
+      - name: Negative control: bad fixture is detected and rejected
+        run: |
+          tests/action/make-fixture.sh "${RUNNER_TEMP}/fx-root-bad" bad
+          sudo chown -R 0:0 "${RUNNER_TEMP}/fx-root-bad"
+          ! docker run --rm -v "${RUNNER_TEMP}/fx-root-bad":/workspace discipline:test check --base main
+
   ci-gate:
     if: always()
-    needs: [lint, test, msrv, supply-chain, build-static, action-github, action-gitea, pre-commit, dogfood]
+    needs: [lint, test, msrv, supply-chain, build-static, action-github, action-gitea, pre-commit, dogfood, docker-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -478,5 +506,5 @@ jobs:
           # `skipped`, `cancelled`, or a result string added later — fails.
           bad="$(echo "${NEEDS}" | jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(", ")')"
           count="$(echo "${NEEDS}" | jq 'length')"
-          [ "${count}" -eq 9 ] || { echo "::error::expected 9 needed jobs, saw ${count}"; exit 1; }
+          [ "${count}" -eq 10 ] || { echo "::error::expected 10 needed jobs, saw ${count}"; exit 1; }
           [ -z "${bad}" ] || { echo "::error::not successful: ${bad}"; exit 1; }

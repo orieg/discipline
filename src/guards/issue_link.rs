@@ -39,9 +39,66 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
+    // Check for directive leakage into commit subjects on the branch (Q6).
+    // Directives belong in the commit body, never in the subject line.
+    let branch_commits = ctx.git.commits().unwrap_or_default();
+    let mut directive_in_subject_found = false;
+    for (sha, msg) in &branch_commits {
+        let subject = msg.lines().next().unwrap_or("").trim();
+        if let Some(dir) = tokens::find_directive_in_subject(subject) {
+            directive_in_subject_found = true;
+            out.push(
+                settings.severity(),
+                "Directive in Subject Line",
+                None,
+                None,
+                format!(
+                    "Commit {sha} subject '{subject}' contains directive '{dir}'. Directives belong in the commit body, never in the subject line."
+                ),
+                "Move the directive into the commit body.",
+            );
+        }
+    }
+
+    if let Some(pr_title) = ctx.pr_title.as_deref() {
+        let title = pr_title.trim();
+        if !title.is_empty() {
+            if let Some(dir) = tokens::find_directive_in_subject(title) {
+                directive_in_subject_found = true;
+                out.push(
+                    settings.severity(),
+                    "Directive in Subject Line",
+                    None,
+                    None,
+                    format!(
+                        "PR title '{title}' contains directive '{dir}'. Directives belong in the PR body or commit body, never in the subject line."
+                    ),
+                    "Move the directive into the PR body.",
+                );
+            }
+        }
+    }
+
     if ctx.staged {
+        let msg = ctx.pr_body.as_deref().unwrap_or("").trim();
+        let subject = msg.lines().next().unwrap_or("").trim();
+        if !subject.is_empty() {
+            if let Some(dir) = tokens::find_directive_in_subject(subject) {
+                out.push(
+                    settings.severity(),
+                    "Directive in Subject Line",
+                    None,
+                    None,
+                    format!(
+                        "Staged commit subject '{subject}' contains directive '{dir}'. Directives belong in the commit body, never in the subject line."
+                    ),
+                    "Move the directive into the commit body.",
+                );
+                out.examined = 1;
+                return Ok(out);
+            }
+        }
         if settings.require_in_commit_if_no_pr {
-            let msg = ctx.pr_body.as_deref().unwrap_or("").trim();
             if msg.is_empty() {
                 out.examined = 0;
                 out.notes.push(
@@ -86,15 +143,14 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
 
     if !has_pr_context {
         if settings.require_in_commit_if_no_pr {
-            let commits = ctx.git.commits()?;
-            if commits.is_empty() {
+            if branch_commits.is_empty() {
                 out.examined = 0;
                 out.notes.push("no commits examined on branch".to_string());
                 return Ok(out);
             }
-            out.examined = commits.len();
+            out.examined = branch_commits.len();
             let mut found = false;
-            for (_sha, msg) in &commits {
+            for (_sha, msg) in &branch_commits {
                 if has_issue_reference(msg, &re_issue) {
                     found = true;
                     break;
@@ -118,6 +174,10 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             }
             return Ok(out);
         } else {
+            if directive_in_subject_found {
+                out.examined = branch_commits.len();
+                return Ok(out);
+            }
             out.examined = 0;
             out.notes
                 .push("no PR title or body supplied; issue-link check skipped".to_string());

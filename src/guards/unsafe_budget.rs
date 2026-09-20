@@ -102,6 +102,7 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
     if let Some(max) = settings.max_unsafe {
         if head_unsafe_count > max {
             if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_UNSAFE, GATE) {
+                out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` (unsafe count {} exceeds cap of {}) ({})",
                     ov.directive, ov.reason, head_unsafe_count, max, ov.source
@@ -124,6 +125,7 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
     if !settings.allow_increase && head_unsafe_count > base_unsafe_count {
         let delta = head_unsafe_count - base_unsafe_count;
         if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_UNSAFE, GATE) {
+            out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` (+{} unsafe sites admitted) ({})",
                 ov.directive, ov.reason, delta, ov.source

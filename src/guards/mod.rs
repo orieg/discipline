@@ -23,7 +23,8 @@ pub mod unsafe_budget;
 pub mod version_lockstep;
 
 use crate::cli::SuiteChoice;
-use crate::config::{gate_info, DisciplineConfig, GateSettings, Severity, Suite, GATES};
+pub use crate::config::Severity;
+use crate::config::{gate_info, DisciplineConfig, GateSettings, Suite, GATES};
 use crate::gitctx::GitCtx;
 use anyhow::{anyhow, bail, Context as _, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -410,6 +411,15 @@ pub fn run_checks(
         }
     }
 
+    // Deduplicate violations per gate by (file, line, title, message) preserving discovery order
+    for o in &mut outcomes {
+        let mut seen = std::collections::HashSet::new();
+        o.violations.retain(|v| {
+            let key = (v.file.clone(), v.line, v.title.clone(), v.message.clone());
+            seen.insert(key)
+        });
+    }
+
     let count = |s: Severity| {
         outcomes
             .iter()
@@ -453,9 +463,12 @@ pub fn exempt_filter(settings: &dyn GateSettings) -> Result<PathFilter> {
     PathFilter::new(settings.exempt_paths())
 }
 
-/// `discipline:allow(gate-a, gate-b)` or `docs-lint: allow` anywhere on a line exempts that line.
+/// `discipline:allow(gate-a, gate-b)` anywhere on a line exempts that line.
+/// For backwards compatibility with documentation lints, `docs-lint: allow` exempts `time-estimates` and `pii` only.
 pub fn line_allows(line: &str, gate: &str) -> bool {
-    if line.contains("docs-lint: allow") {
+    if (gate == "time-estimates" || gate == "pii")
+        && (line.contains("docs-lint: allow") || line.contains("docs-lint:allow"))
+    {
         return true;
     }
     const MARKER: &str = "discipline:allow(";
@@ -487,6 +500,10 @@ mod tests {
         assert!(line_allows(
             "connect to 192.168.1.20 # docs-lint: allow",
             "pii"
+        ));
+        assert!(!line_allows(
+            "#[allow(dead_code)] // docs-lint: allow",
+            "suppression-delta"
         ));
         assert!(!line_allows(
             "x <!-- discipline:allow(time-estimates) -->",

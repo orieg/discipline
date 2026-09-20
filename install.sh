@@ -3,7 +3,10 @@
 # Downloads pre-built release binary, verifies SHA256 checksum, and installs it.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/orieg/discipline/main/install.sh | bash
+#   # Recommended: download, inspect, and run
+#   curl -fsSL -o install.sh https://orieg.github.io/discipline/install.sh && bash install.sh
+#   # Or via one-liner:
+#   curl -fsSL https://orieg.github.io/discipline/install.sh | bash
 #   ./install.sh [--to <dir>] [--version <version>] [--download-url <url>]
 #
 set -euo pipefail

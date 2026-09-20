@@ -101,6 +101,8 @@ spec:
         env:
           - name: PR_BODY
             value: "{{inputs.parameters.pr-body}}"
+          - name: DISCIPLINE_TRUST_WORKSPACE
+            value: "1"
         command: ["/bin/sh", "-c"]
         args:
           - |

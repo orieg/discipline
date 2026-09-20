@@ -1764,9 +1764,13 @@ smoke_cost::set_contains
         },
     ),
     (
-        "scope-confinement: glob confinement discriminates authorized and forbidden changes",
+        "scope-confinement: check_path_confinement discriminates authorized, forbidden, and exempt files",
         || {
             use globset::{Glob, GlobSetBuilder};
+            let mut exempt_b = GlobSetBuilder::new();
+            exempt_b.add(Glob::new("tests/fixtures/**")?);
+            let exempt = exempt_b.build()?;
+
             let mut allowed_b = GlobSetBuilder::new();
             allowed_b.add(Glob::new("src/**")?);
             let allowed = allowed_b.build()?;
@@ -1775,47 +1779,55 @@ smoke_cost::set_contains
             forbidden_b.add(Glob::new(".github/**")?);
             let forbidden = forbidden_b.build()?;
 
-            let ok_file = "src/lib.rs";
-            let bad_file = ".github/workflows/ci.yml";
-            let outside_file = "docs/guide.md";
+            let ok = crate::guards::scope_confinement::check_path_confinement(
+                "src/lib.rs", &exempt, &allowed, true, &forbidden,
+            );
+            let forbidden_res = crate::guards::scope_confinement::check_path_confinement(
+                ".github/workflows/ci.yml", &exempt, &allowed, true, &forbidden,
+            );
+            let outside_res = crate::guards::scope_confinement::check_path_confinement(
+                "docs/guide.md", &exempt, &allowed, true, &forbidden,
+            );
+            let exempt_res = crate::guards::scope_confinement::check_path_confinement(
+                "tests/fixtures/data.bin", &exempt, &allowed, true, &forbidden,
+            );
 
-            Ok(allowed.is_match(ok_file)
-                && !forbidden.is_match(ok_file)
-                && forbidden.is_match(bad_file)
-                && !allowed.is_match(outside_file))
+            Ok(ok.is_none()
+                && forbidden_res == Some("forbidden")
+                && outside_res == Some("outside-allowed")
+                && exempt_res.is_none())
         },
     ),
     (
-        "suppression-delta: annotations across languages are detected",
+        "suppression-delta: extract_suppression_rules extracts exact rules across language packs",
         || {
-            let rust_suppr = "#[allow(unused_variables)]";
-            let py_suppr = "x = 1  # noqa";
-            let ts_suppr = "// @ts-ignore";
-            let clean = "let x = 1;";
+            use crate::guards::suppression_delta::extract_suppression_rules;
+            let rs_rules = extract_suppression_rules("#[allow(dead_code)]\nfn foo() {}", "#[allow(");
+            let py_rules = extract_suppression_rules("x = 1  # noqa\ny = 2  # type: ignore", "# noqa");
+            let py_ignore = extract_suppression_rules("y = 2  # type: ignore", "# type: ignore");
+            let ts_rules = extract_suppression_rules("// @ts-ignore\nconst x = 1;", "@ts-ignore");
+            let clean = extract_suppression_rules("pub fn ok() {}", "#[allow(");
 
-            let has_suppr = |s: &str| {
-                s.contains("#[allow(")
-                    || s.contains("# noqa")
-                    || s.contains("// @ts-ignore")
-            };
-
-            Ok(has_suppr(rust_suppr)
-                && has_suppr(py_suppr)
-                && has_suppr(ts_suppr)
-                && !has_suppr(clean))
+            Ok(rs_rules.contains(&"dead_code".to_string())
+                && py_rules.contains(&"noqa".to_string())
+                && py_ignore.contains(&"type: ignore".to_string())
+                && ts_rules.contains(&"ts-ignore".to_string())
+                && clean.is_empty())
         },
     ),
     (
-        "pr-checklist: regex detects checked and unchecked items",
+        "pr-checklist: find_unsupported_claims identifies vacuous test/doc/bench claims",
         || {
-            let re = Regex::new(r"(?i)^[ \t]*-[ \t]*\[[xX]\][ \t]*(.*)$")?;
-            let checked = "- [x] Added unit tests";
-            let checked_upper = "- [X] Updated docs";
-            let unchecked = "- [ ] Benchmarks added";
+            use crate::guards::pr_checklist::find_unsupported_claims;
+            let pr_body = "- [x] Added unit tests\n- [X] Updated documentation\n- [x] Added benchmarks\n- [ ] Unchecked item";
+            let unbacked = find_unsupported_claims(pr_body, false, false, false);
+            let backed = find_unsupported_claims(pr_body, true, true, true);
 
-            Ok(re.is_match(checked)
-                && re.is_match(checked_upper)
-                && !re.is_match(unchecked))
+            Ok(unbacked.len() == 3
+                && unbacked.iter().any(|c| c.subject == "test")
+                && unbacked.iter().any(|c| c.subject == "docs")
+                && unbacked.iter().any(|c| c.subject == "bench")
+                && backed.is_empty())
         },
     ),
     (
@@ -1839,25 +1851,30 @@ smoke_cost::set_contains
         },
     ),
     (
-        "miri: resolves static preset with zero-tests pattern",
+        "miri: evaluate_miri_output distinguishes clean runs, zero-tests, and failures",
         || {
-            let preset = crate::guards::presets::resolve_preset("miri");
-            match preset {
-                Some(p) => Ok(p.default_command.contains("cargo miri test")
-                    && p.zero_items_pattern == Some("running 0 tests")),
-                None => Ok(false),
-            }
+            use crate::guards::miri::evaluate_miri_output;
+            let clean = evaluate_miri_output(true, "test result: ok. 5 passed", "", Some("running 0 tests"));
+            let zero = evaluate_miri_output(true, "running 0 tests", "", Some("running 0 tests"));
+            let fail = evaluate_miri_output(false, "", "Undefined Behavior: pointer arithmetic out of bounds", Some("running 0 tests"));
+
+            Ok(clean.is_none() && zero == Some("zero-tests") && fail == Some("failure"))
         },
     ),
     (
-        "sanitizers: resolves static preset with race canary diagnostic",
+        "sanitizers: evaluate_canary_diagnostic verifies canary diagnostic discrimination",
         || {
-            let preset = crate::guards::presets::resolve_preset("sanitizers");
-            match preset {
-                Some(p) => Ok(p.canary_command.is_some()
-                    && p.canary_expected_diagnostic == Some("ThreadSanitizer: data race")),
-                None => Ok(false),
-            }
+            use crate::guards::sanitizers::evaluate_canary_diagnostic;
+            let matched = evaluate_canary_diagnostic(
+                "fatal error: ThreadSanitizer: data race on vptr",
+                "ThreadSanitizer: data race",
+            );
+            let unmatched = evaluate_canary_diagnostic(
+                "test passed cleanly without race",
+                "ThreadSanitizer: data race",
+            );
+
+            Ok(matched && !unmatched)
         },
     ),
 ];

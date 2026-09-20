@@ -67,7 +67,8 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
 
         // 1. Check forbidden paths first
         if forbidden_set.is_match(&file.path) {
-            if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_SCOPE, &file.path) {
+            if let Some(ov) = ctx.find_override(GATE, ALLOW_SCOPE, &file.path) {
+                out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` for forbidden file `{}` ({})",
                     ov.directive, ov.reason, file.path, ov.source
@@ -86,7 +87,8 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
 
         // 2. Check allowed paths if configured
         if has_allowed && !allowed_set.is_match(&file.path) {
-            if let Some(ov) = ctx.find_gate_or_subject_override(GATE, ALLOW_SCOPE, &file.path) {
+            if let Some(ov) = ctx.find_override(GATE, ALLOW_SCOPE, &file.path) {
+                out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` for out-of-scope file `{}` ({})",
                     ov.directive, ov.reason, file.path, ov.source
@@ -104,6 +106,25 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
     }
 
     Ok(out)
+}
+
+pub fn check_path_confinement(
+    path: &str,
+    exempt_set: &globset::GlobSet,
+    allowed_set: &globset::GlobSet,
+    has_allowed: bool,
+    forbidden_set: &globset::GlobSet,
+) -> Option<&'static str> {
+    if exempt_set.is_match(path) {
+        return None;
+    }
+    if forbidden_set.is_match(path) {
+        return Some("forbidden");
+    }
+    if has_allowed && !allowed_set.is_match(path) {
+        return Some("outside-allowed");
+    }
+    None
 }
 
 #[cfg(test)]

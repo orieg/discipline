@@ -84,7 +84,10 @@ pub fn find_gate_or_subject_override(
 ) -> Option<OverrideRecord> {
     for d in directives {
         if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive))
-            && (subject.is_empty() || subject == gate || d.covers(subject) || d.covers(gate))
+            && (d.covers(subject)
+                || (!gate.is_empty() && d.covers(gate))
+                || (subject.is_empty() && gate != "suppression-delta")
+                || (subject == gate && gate != "suppression-delta"))
         {
             return Some(OverrideRecord {
                 gate: gate.to_string(),
@@ -373,7 +376,12 @@ pub fn parse_directives_with_names(
 
     let mut directives = Vec::new();
     let mut fence: Option<&str> = None;
-    for line in text.lines() {
+    let is_commit = matches!(source, OverrideSource::Commit(_));
+    for (line_idx, line) in text.lines().enumerate() {
+        if line_idx == 0 && is_commit {
+            // Directives belong in the commit body, never in the subject line (Q6).
+            continue;
+        }
         let trimmed = line.trim_start();
         let marker = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m));
         match (fence, marker) {
@@ -402,6 +410,41 @@ pub fn parse_directives_with_names(
         }
     }
     directives
+}
+
+/// Returns the first directive name found in `text` (e.g. commit subject line or PR title), if any.
+/// Directives belong in the body, never in the subject line (Q6).
+pub fn find_directive_in_subject(text: &str) -> Option<String> {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        let patterns = ALL_DIRECTIVE_NAMES
+            .iter()
+            .map(|n| {
+                let esc = regex::escape(n);
+                if n.ends_with(')') {
+                    format!("{esc}(?::|[ \\t])")
+                } else {
+                    format!("{esc}:")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        Regex::new(&format!(r"(?i)(?:discipline:[ \t]+)?({patterns})"))
+            .expect("directive subject regex is static")
+    });
+
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(caps) = re.captures(trimmed) {
+        let dir = caps
+            .get(1)
+            .map(|m| m.as_str().trim_end_matches(':').trim().to_string())
+            .unwrap_or_else(|| caps[0].to_string());
+        return Some(dir);
+    }
+    None
 }
 
 /// Parses all directives in `text` against all known directive names.
@@ -557,7 +600,29 @@ fn reason_names(reason: &str, subject: &str) -> bool {
             }
         }
 
-        // 2. Multi-word subject at the beginning of the reason (e.g. `allow-ignore: my test name <reason>`).
+        // 2. Multi-word subject containing ':' (e.g. `type: ignore`) anywhere in the reason, bounded by non-token boundary.
+        if trimmed_subject.contains(':') {
+            for (idx, _) in reason.match_indices(trimmed_subject) {
+                let prev_ok = if idx == 0 {
+                    true
+                } else {
+                    let prev_char = reason[..idx].chars().next_back().unwrap();
+                    !is_token_char(prev_char) && prev_char != ':'
+                };
+                let end_idx = idx + trimmed_subject.len();
+                let next_ok = if end_idx == reason.len() {
+                    true
+                } else {
+                    let next_char = reason[end_idx..].chars().next().unwrap();
+                    !is_token_char(next_char) && next_char != ':'
+                };
+                if prev_ok && next_ok {
+                    return true;
+                }
+            }
+        }
+
+        // 3. Multi-word subject at the beginning of the reason (e.g. `allow-ignore: my test name <reason>`).
         if trimmed_subject.contains(' ') {
             let unquoted_reason = reason.trim_start_matches(['"', '\'', '`']);
             if let Some(rest) = unquoted_reason.strip_prefix(trimmed_subject) {
@@ -840,6 +905,36 @@ removes: tests/old.rs inside a fence
         );
         assert_eq!(r3, vec!["bench_run #822 verified"]);
         assert!(covers(&r3, "bench_run"));
+    }
+
+    #[test]
+    fn test_scoped_reason_names_multi_item_and_gate_scoping() {
+        let multi = "dead_code noqa type: ignore legacy";
+        assert!(reason_names(multi, "dead_code"));
+        assert!(reason_names(multi, "noqa"));
+        assert!(reason_names(multi, "type: ignore"));
+        assert!(!reason_names(multi, "unrelated"));
+
+        let unrelated = "totally unrelated words here";
+        assert!(!reason_names(unrelated, "dead_code"));
+        assert!(!reason_names(unrelated, "noqa"));
+        assert!(!reason_names(unrelated, "type: ignore"));
+
+        let dirs = vec![ParsedDirective {
+            directive: "allow-suppression".to_string(),
+            reason: unrelated.to_string(),
+            source: OverrideSource::Commit("abc".to_string()),
+            hidden: false,
+        }];
+        // Before the fix, passing subject == gate bypassed checking the reason.
+        // With the fix, an unrelated reason returns None.
+        assert!(find_gate_or_subject_override(
+            &dirs,
+            "suppression-delta",
+            ALLOW_SUPPRESSION,
+            "suppression-delta"
+        )
+        .is_none());
     }
 
     #[test]

@@ -184,13 +184,69 @@ def check_markdown_links():
     return True
 
 
+def check_container_tags():
+    """Verify that all ghcr.io/orieg/discipline container tags referenced in docs are valid."""
+    print("Checking container image tags in documentation...")
+    cargo_path = ROOT / "Cargo.toml"
+    current_version = None
+    with open(cargo_path, "r", encoding="utf-8") as f:
+        for line in f:
+            m = re.match(r'^version\s*=\s*"([^"]+)"', line.strip())
+            if m:
+                current_version = m.group(1)
+                break
+
+    if not current_version:
+        print("FAILED: Could not determine current version from Cargo.toml", file=sys.stderr)
+        return False
+
+    major = current_version.split(".")[0]
+    allowed_tags = {"latest", f"v{major}", f"v{current_version}", "test"}
+
+    check_files = [ROOT / "README.md", ROOT / "AGENTS.md"]
+    docs_dir = ROOT / "docs"
+    if docs_dir.exists():
+        check_files.extend(docs_dir.glob("*.md"))
+        check_files.extend(docs_dir.glob("*.html"))
+    templates_dir = ROOT / "templates"
+    if templates_dir.exists():
+        check_files.extend(templates_dir.glob("*"))
+
+    tag_pattern = re.compile(r'ghcr\.io/orieg/discipline:([a-zA-Z0-9_\.-]+)')
+    violations = []
+
+    for fpath in check_files:
+        if not fpath.is_file():
+            continue
+        rel_path = fpath.relative_to(ROOT)
+        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+            for lno, line in enumerate(f, 1):
+                for match in tag_pattern.finditer(line):
+                    tag = match.group(1).rstrip('`"\'.,;:)<>')
+                    tag = re.sub(r'[<>/].*$', '', tag)
+                    if tag not in allowed_tags and not tag.startswith("${{"):
+                        violations.append(
+                            f"{rel_path}:{lno}: invalid or obsolete container tag '{tag}' (allowed: {sorted(allowed_tags)})"
+                        )
+
+    if violations:
+        print(f"FAILED: Found {len(violations)} invalid container tag(s):", file=sys.stderr)
+        for v in violations:
+            print(f"  {v}", file=sys.stderr)
+        return False
+
+    print(f"OK: All container image tags valid across documentation (allowed: {sorted(allowed_tags)}).")
+    return True
+
+
 def main():
     prd_ok = check_no_prd_references()
     links_ok = check_markdown_links()
+    tags_ok = check_container_tags()
 
-    if not (prd_ok and links_ok):
+    if not (prd_ok and links_ok and tags_ok):
         sys.exit(1)
-    print("All link and reference checks passed successfully.")
+    print("All link, reference, and tag checks passed successfully.")
     sys.exit(0)
 
 

@@ -109,3 +109,4 @@ A gate is not done until all of these hold (full contract: `docs/ARCHITECTURE.md
 - Never commit agent scratch state (`.claude/`, `.gemini/`, `.antigravity/`, `scratch/`, `*.session.*`).
 - Never leak local paths (`/Users/...`, `/home/...`) or LAN IPs in committed files or PR bodies.
 - Never name private repositories, internal hostnames, or unreleased projects in committed files.
+- Directives belong in the commit BODY. Never place directives in the commit subject line or PR title.
