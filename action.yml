@@ -254,7 +254,7 @@ runs:
         DISCIPLINE_ACTOR: ${{ inputs.actor || github.actor }}
         DISCIPLINE_DIRECTIVE_SOURCES: ${{ inputs.directive_sources }}
         DISCIPLINE_BASELINE: ${{ inputs.baseline_file }}
-        DISCIPLINE_NO_BASELINE: ${{ inputs.no_baseline == 'true' && 'true' || '' }}
+        DISCIPLINE_NO_BASELINE: ${{ inputs.no_baseline == 'true' && 'true' || 'false' }}
         INPUT_SUITE: ${{ inputs.suite }}
         PR_BODY: ${{ inputs.pr_body }}
         PR_TITLE: ${{ inputs.pr_title }}

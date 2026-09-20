@@ -49,6 +49,14 @@ cat > docs/plan.md <<'MD'
 
 Phase 1, then Phase 2 once the parser tests pass.
 MD
+cat > discipline.toml <<'TOML'
+[meta]
+version = 1
+name = "fixture"
+
+[gates.time-estimates]
+severity = "error"
+TOML
 git add -A
 git commit -q -m "chore: base"
 git checkout -q -b work

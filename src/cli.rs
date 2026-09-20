@@ -179,11 +179,11 @@ pub struct CheckArgs {
     pub bench_head_file: Option<PathBuf>,
 
     /// Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)
-    #[arg(long, env = "DISCIPLINE_BASELINE")]
+    #[arg(long)]
     pub baseline_file: Option<PathBuf>,
 
     /// Ignore grandfathering baseline even if present
-    #[arg(long, env = "DISCIPLINE_NO_BASELINE")]
+    #[arg(long)]
     pub no_baseline: bool,
 }
 
@@ -221,11 +221,11 @@ pub struct DiffArgs {
     pub report_sarif: Option<PathBuf>,
 
     /// Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)
-    #[arg(long, env = "DISCIPLINE_BASELINE")]
+    #[arg(long)]
     pub baseline_file: Option<PathBuf>,
 
     /// Ignore grandfathering baseline even if present
-    #[arg(long, env = "DISCIPLINE_NO_BASELINE")]
+    #[arg(long)]
     pub no_baseline: bool,
 
     /// Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)
@@ -243,11 +243,7 @@ pub struct BaselineArgs {
     pub write: bool,
 
     /// Path to grandfathering baseline file (defaults to discipline-baseline.toml)
-    #[arg(
-        long,
-        default_value = "discipline-baseline.toml",
-        env = "DISCIPLINE_BASELINE"
-    )]
+    #[arg(long, default_value = "discipline-baseline.toml")]
     pub baseline_file: PathBuf,
 
     /// Base branch or commit ref to compare against

@@ -16,12 +16,12 @@ use discipline::guards::{CheckSummary, GateOutcome};
 use discipline::report::format_report_content;
 
 const SENTINEL_AWS_KEY: &str = "AKIAIOSFODNN7EXAMPLE_SECRET_SENTINEL";
-const SENTINEL_GHP_TOKEN: &str = "ghp_0123456789abcdef0123456789abcdef_SENTINEL";
+const SENTINEL_GHP_TOKEN: &str = "ghp_0123456789abcdef0123456789abcdef_SENTINEL"; // discipline:allow(pii)
 const SENTINEL_PASSWORD: &str = "super_secret_password_sentinel_xyz123";
 const SENTINEL_HOSTNAME: &str = "internal-production-vault.corp.sentinel";
-const SENTINEL_HOMEPATH: &str = "/Users/secretdeveloperuser_sentinel/projects";
+const SENTINEL_HOMEPATH: &str = "/Users/secretdeveloperuser_sentinel/projects"; // discipline:allow(pii)
 const SENTINEL_SLACK_TOKEN: &str = "xoxb-012345678901-0123456789012-SENTINEL_TOKEN_SECRET";
-const SENTINEL_LAN_IP: &str = "192.168.1.99";
+const SENTINEL_LAN_IP: &str = "192.168.1.99"; // discipline:allow(pii)
 
 /// Compile-time check ensuring every variant of `OutputFormat` is handled.
 /// Adding an 8th format will cause this function to fail to compile.

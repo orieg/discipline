@@ -209,3 +209,65 @@ fn test_baseline_config_integrity_ratchet() {
         1
     );
 }
+
+#[test]
+fn test_empty_baseline_env_vars_do_not_crash() {
+    let repo = Repo::new();
+    let run = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("DISCIPLINE_BASELINE", ""), ("DISCIPLINE_NO_BASELINE", "")],
+    );
+    // Should execute cleanly (exit 0 on clean repo) and never exit with clap code 2
+    assert_ne!(run.code, 2, "stderr: {}", run.stderr);
+    assert_eq!(
+        run.code, 0,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+}
+
+#[test]
+fn test_env_baseline_and_no_baseline_respected() {
+    let repo = Repo::new();
+    repo.write(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n",
+    );
+    repo.commit("feat: initial unsafe");
+
+    // Write to a custom baseline path
+    let baseline_run = repo.run(
+        &[
+            "baseline",
+            "--write",
+            "--baseline-file",
+            "custom-baseline.toml",
+        ],
+        &[],
+    );
+    assert_eq!(baseline_run.code, 0);
+    assert!(repo.file("custom-baseline.toml").exists());
+
+    // Check with DISCIPLINE_BASELINE pointing to custom file
+    let run_custom = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[
+            ("DISCIPLINE_BASELINE", "custom-baseline.toml"),
+            ("PR_BODY", WEAKENING_PR),
+        ],
+    );
+    assert_eq!(run_custom.code, 0, "{}", run_custom.stdout);
+    assert_eq!(run_custom.json()["baselined"], 1);
+
+    // Check with DISCIPLINE_NO_BASELINE=true ignores the custom baseline
+    let run_ignored = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[
+            ("DISCIPLINE_BASELINE", "custom-baseline.toml"),
+            ("DISCIPLINE_NO_BASELINE", "true"),
+            ("PR_BODY", WEAKENING_PR),
+        ],
+    );
+    assert_eq!(run_ignored.code, 1);
+    assert_eq!(run_ignored.json()["baselined"], 0);
+}

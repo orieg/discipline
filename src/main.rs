@@ -8,7 +8,7 @@ use discipline::gitctx::GitCtx;
 use discipline::guards::{run_checks, Context};
 use discipline::report::render_report;
 use discipline::style;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// 0 = pass, 1 = violations, 2 = the check itself could not run. Keeping the
@@ -291,18 +291,29 @@ fn check(args: CheckArgs) -> Result<bool> {
         None
     };
 
-    let baseline_filename = args
-        .baseline_file
+    let explicit_baseline = args.baseline_file.or_else(|| {
+        std::env::var("DISCIPLINE_BASELINE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+    });
+    let no_baseline = args.no_baseline
+        || std::env::var("DISCIPLINE_NO_BASELINE")
+            .ok()
+            .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+    let baseline_filename = explicit_baseline
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| discipline::baseline::DEFAULT_BASELINE_FILE.to_string());
 
-    let (baseline_path_ref, loaded_baseline) = if !args.no_baseline {
+    let (baseline_path_ref, loaded_baseline) = if !no_baseline {
         let baseline_path = git.root().join(&baseline_filename);
         if baseline_path.exists() {
             let b = discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path)?;
             (Some(baseline_filename), Some(b))
-        } else if args.baseline_file.is_some() {
+        } else if explicit_baseline.is_some() {
             bail!("baseline file `{}` does not exist", baseline_path.display());
         } else {
             (None, None)
@@ -534,7 +545,16 @@ fn schema() -> Result<bool> {
     Ok(true)
 }
 
-fn baseline(args: BaselineArgs) -> Result<bool> {
+fn baseline(mut args: BaselineArgs) -> Result<bool> {
+    if args.baseline_file == std::path::Path::new(discipline::baseline::DEFAULT_BASELINE_FILE) {
+        if let Some(p) = std::env::var("DISCIPLINE_BASELINE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+        {
+            args.baseline_file = p;
+        }
+    }
     if args.trust_workspace {
         std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
     }
