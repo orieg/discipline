@@ -31,11 +31,14 @@ fn run() -> Result<bool> {
             config: args.config,
             suite: SuiteChoice::AgentGuard,
             base: args.base.or_else(|| Some("HEAD~1".to_string())),
+            commit: None,
+            commit_range: None,
             staged: false,
             pr_body_file: None,
             pr_title: None,
             fail_on_warnings: false,
             fail_on_overrides: false,
+            actor: None,
             directive_sources: Vec::new(),
             format: args.format,
             json_out: args.json_out,
@@ -197,7 +200,11 @@ fn detect_pr_title_from_ci() -> Option<String> {
 
 fn check(args: CheckArgs) -> Result<bool> {
     let is_gitlab = is_gitlab_ci();
-    let base_ref = discipline::gitctx::detect_base_ref(args.base.as_deref());
+    let base_ref = discipline::gitctx::detect_base_ref(
+        args.base.as_deref(),
+        args.commit.as_deref(),
+        args.commit_range.as_deref(),
+    );
     let git = GitCtx::open(&base_ref, args.staged)?;
     let extra_fail = if args.fail_on_overrides {
         Some(true)
@@ -217,16 +224,30 @@ fn check(args: CheckArgs) -> Result<bool> {
     let (config, config_path) =
         load_config(&args.config, Some(git.root()), extra_fail, extra_sources)?;
 
+    let is_push_or_commit = discipline::gitctx::is_push_event_environment()
+        || args.commit.is_some()
+        || args.commit_range.is_some();
+
     let pr_title = if args.staged {
         args.pr_title
     } else {
-        args.pr_title
+        let explicit = args
+            .pr_title
             .or_else(|| std::env::var("PR_TITLE").ok())
             .filter(|t| !t.trim().is_empty())
-            .or_else(detect_pr_title_from_ci)
+            .or_else(detect_pr_title_from_ci);
+        if explicit.is_some() {
+            explicit
+        } else if is_push_or_commit {
+            git.head_commit_subject()
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        } else {
+            None
+        }
     };
 
-    let pr_body = if args.staged {
+    let raw_pr_body = if args.staged {
         match &args.pr_body_file {
             Some(p) => Some(
                 std::fs::read_to_string(p)
@@ -246,9 +267,21 @@ fn check(args: CheckArgs) -> Result<bool> {
                 .or_else(detect_pr_body_from_ci),
         }
     };
+
     let commits = git.commits()?;
-    let (directives, directive_notes) =
-        discipline::tokens::extract_directives_for_config(pr_body.as_deref(), &commits, &config);
+    let (directives, directive_notes) = discipline::tokens::extract_directives_for_config(
+        raw_pr_body.as_deref(),
+        &commits,
+        &config,
+    );
+
+    let pr_body = if raw_pr_body.is_some() {
+        raw_pr_body
+    } else if is_push_or_commit {
+        git.head_commit_body().ok().filter(|b| !b.trim().is_empty())
+    } else {
+        None
+    };
 
     let ctx = Context {
         config: &config,
@@ -265,7 +298,40 @@ fn check(args: CheckArgs) -> Result<bool> {
         bench_head_file: args.bench_head_file.clone(),
     };
     let summary = run_checks(&config, args.suite, &ctx)?;
-    let fail_on_overrides = config.directives.fail_on_overrides;
+
+    let raw_fail_on_overrides = config.directives.fail_on_overrides;
+    let actor = args
+        .actor
+        .clone()
+        .or_else(|| std::env::var("DISCIPLINE_ACTOR").ok())
+        .or_else(|| std::env::var("GITHUB_ACTOR").ok())
+        .or_else(|| std::env::var("GITEA_ACTOR").ok())
+        .or_else(|| std::env::var("FORGEJO_ACTOR").ok())
+        .or_else(|| std::env::var("GITLAB_USER_LOGIN").ok())
+        .or_else(|| {
+            if is_push_or_commit {
+                git.head_commit_author().ok()
+            } else {
+                None
+            }
+        })
+        .filter(|s| !s.trim().is_empty());
+
+    let actor_authorized = match &actor {
+        Some(act) => config
+            .directives
+            .allowed_override_actors
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(act)),
+        None => false,
+    };
+
+    let fail_on_overrides = if raw_fail_on_overrides && actor_authorized {
+        false
+    } else {
+        raw_fail_on_overrides
+    };
+
     render_report(
         &summary,
         args.format,

@@ -10,6 +10,7 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     /// Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check
     Check(CheckArgs),
@@ -85,6 +86,14 @@ pub struct CheckArgs {
     #[arg(short, long, env = "DISCIPLINE_BASE_REF")]
     pub base: Option<String>,
 
+    /// Specific commit to inspect (compares against parent commit <sha>~1)
+    #[arg(long, conflicts_with = "commit_range")]
+    pub commit: Option<String>,
+
+    /// Commit range to inspect (<before>..<after> or <before>...<after>)
+    #[arg(long, conflicts_with = "commit")]
+    pub commit_range: Option<String>,
+
     /// Inspect the index against HEAD instead (pre-commit hook mode)
     #[arg(long)]
     pub staged: bool,
@@ -106,6 +115,11 @@ pub struct CheckArgs {
     /// Treat applied overrides as failures (requires human sign-off)
     #[arg(long, env = "DISCIPLINE_FAIL_ON_OVERRIDES")]
     pub fail_on_overrides: bool,
+
+    /// Actor executing the check (for actor-aware override authorization).
+    /// Falls back to DISCIPLINE_ACTOR, GITHUB_ACTOR, GITEA_ACTOR, FORGEJO_ACTOR, GITLAB_USER_LOGIN
+    #[arg(long, env = "DISCIPLINE_ACTOR")]
+    pub actor: Option<String>,
 
     /// Comma-separated list of allowed directive sources (pr-body, commits)
     #[arg(long, env = "DISCIPLINE_DIRECTIVE_SOURCES", value_delimiter = ',')]

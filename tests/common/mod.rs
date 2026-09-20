@@ -92,6 +92,16 @@ const ISOLATED_ENV_VARS: &[&str] = &[
     "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
     "CI_MERGE_REQUEST_DIFF_BASE_SHA",
     "CI_DEFAULT_BRANCH",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_EVENT_BEFORE",
+    "GITEA_EVENT_BEFORE",
+    "FORGEJO_EVENT_BEFORE",
+    "CI_COMMIT_BEFORE_SHA",
+    "DISCIPLINE_ACTOR",
+    "GITHUB_ACTOR",
+    "GITEA_ACTOR",
+    "FORGEJO_ACTOR",
+    "GITLAB_USER_LOGIN",
 ];
 
 impl Repo {
@@ -142,6 +152,27 @@ impl Repo {
             "git {args:?} failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    pub fn git_output(&self, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(["-c", "user.email=t@example.invalid", "-c", "user.name=t"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .current_dir(self.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
     pub fn commit(&self, message: &str) {

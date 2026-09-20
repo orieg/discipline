@@ -45,30 +45,116 @@ pub struct GitCtx {
 ///
 /// Precedence:
 /// 1. Explicit CLI argument (`--base <ref>`)
-/// 2. `DISCIPLINE_BASE_REF` environment variable
-/// 3. GitLab Merge Request Target Branch: `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` (`origin/<branch>`)
-/// 4. GitLab Merge Request Diff Base SHA: `CI_MERGE_REQUEST_DIFF_BASE_SHA`
-/// 5. Forgejo Pull Request Base Branch: `FORGEJO_BASE_REF` (`origin/<branch>`)
-/// 6. Gitea Pull Request Base Branch: `GITEA_BASE_REF` (`origin/<branch>`)
-/// 7. GitHub Pull Request Base Branch: `GITHUB_BASE_REF` (`origin/<branch>`)
-/// 8. GitLab Default Branch: `CI_DEFAULT_BRANCH` (`origin/<branch>`)
-/// 9. Default fallback: `"origin/main"`
-pub fn detect_base_ref(explicit_base: Option<&str>) -> String {
-    detect_base_ref_with_env(explicit_base, |k| std::env::var(k).ok())
+/// 2. Explicit CLI argument (`--commit <sha>` -> `<sha>~1`)
+/// 3. Explicit CLI argument (`--commit-range <before>..<after>` -> `<before>`)
+/// 4. `DISCIPLINE_BASE_REF` environment variable
+/// 5. Push event before SHA: `GITHUB_EVENT_BEFORE`, `FORGEJO_EVENT_BEFORE`, `GITEA_EVENT_BEFORE`, `CI_COMMIT_BEFORE_SHA`
+/// 6. GitLab Merge Request Target Branch: `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` (`origin/<branch>`)
+/// 7. GitLab Merge Request Diff Base SHA: `CI_MERGE_REQUEST_DIFF_BASE_SHA`
+/// 8. Forgejo Pull Request Base Branch: `FORGEJO_BASE_REF` (`origin/<branch>`)
+/// 9. Gitea Pull Request Base Branch: `GITEA_BASE_REF` (`origin/<branch>`)
+/// 10. GitHub Pull Request Base Branch: `GITHUB_BASE_REF` (`origin/<branch>`)
+/// 11. GitLab Default Branch: `CI_DEFAULT_BRANCH` (`origin/<branch>`)
+/// 12. Default fallback: `"origin/main"`
+pub fn detect_base_ref(
+    explicit_base: Option<&str>,
+    commit: Option<&str>,
+    commit_range: Option<&str>,
+) -> String {
+    detect_base_ref_with_env(explicit_base, commit, commit_range, |k| {
+        std::env::var(k).ok()
+    })
 }
 
-pub fn detect_base_ref_with_env<F>(explicit_base: Option<&str>, get_env: F) -> String
+pub fn is_push_event_environment() -> bool {
+    is_push_event_environment_with_env(|k| std::env::var(k).ok())
+}
+
+pub fn is_push_event_environment_with_env<F>(get_env: F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if get_env("GITHUB_EVENT_NAME").as_deref() == Some("push")
+        || get_env("CI_PIPELINE_SOURCE").as_deref() == Some("push")
+        || get_env("FORGEJO_EVENT_NAME").as_deref() == Some("push")
+        || get_env("GITEA_EVENT_NAME").as_deref() == Some("push")
+    {
+        return true;
+    }
+    for var in &[
+        "GITHUB_EVENT_BEFORE",
+        "FORGEJO_EVENT_BEFORE",
+        "GITEA_EVENT_BEFORE",
+        "CI_COMMIT_BEFORE_SHA",
+    ] {
+        if let Some(before) = get_env(var) {
+            let trimmed = before.trim();
+            if !trimmed.is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn detect_base_ref_with_env<F>(
+    explicit_base: Option<&str>,
+    commit: Option<&str>,
+    commit_range: Option<&str>,
+    get_env: F,
+) -> String
 where
     F: Fn(&str) -> Option<String>,
 {
     if let Some(b) = explicit_base.filter(|s| !s.trim().is_empty()) {
         return b.to_string();
     }
+    if let Some(c) = commit.filter(|s| !s.trim().is_empty()) {
+        let trimmed = c.trim();
+        return format!("{trimmed}~1");
+    }
+    if let Some(r) = commit_range.filter(|s| !s.trim().is_empty()) {
+        let trimmed = r.trim();
+        if let Some((before, _)) = trimmed.split_once("...") {
+            if !before.is_empty() {
+                return before.to_string();
+            }
+        } else if let Some((before, _)) = trimmed.split_once("..") {
+            if !before.is_empty() {
+                return before.to_string();
+            }
+        } else {
+            return trimmed.to_string();
+        }
+    }
     if let Some(b) = get_env("DISCIPLINE_BASE_REF") {
         if !b.trim().is_empty() {
             return b.trim().to_string();
         }
     }
+
+    // Push event detection (GitHub Actions, Forgejo, Gitea, GitLab CI)
+    if is_push_event_environment_with_env(&get_env) {
+        for var in &[
+            "GITHUB_EVENT_BEFORE",
+            "FORGEJO_EVENT_BEFORE",
+            "GITEA_EVENT_BEFORE",
+            "CI_COMMIT_BEFORE_SHA",
+        ] {
+            if let Some(before) = get_env(var) {
+                let trimmed = before.trim();
+                if !trimmed.is_empty() {
+                    if trimmed.chars().all(|c| c == '0') {
+                        return "HEAD~1".to_string();
+                    } else if trimmed.len() >= 7 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+                        return trimmed.to_string();
+                    }
+                }
+            }
+        }
+        return "HEAD~1".to_string();
+    }
+
     if let Some(target_branch) = get_env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME") {
         if !target_branch.trim().is_empty() {
             let trimmed = target_branch.trim();
@@ -141,22 +227,39 @@ impl GitCtx {
             } else {
                 candidates.push(format!("origin/{base_ref}"));
             }
-            let base_commit = candidates
-                .iter()
-                .find_map(|name| Some(repo.revparse_single(name).ok()?.peel_to_commit().ok()?.id()))
-                .ok_or_else(|| {
-                    anyhow!(
-                        "base ref `{base_ref}` does not resolve. In CI, check out with \
-                         `fetch-depth: 0` or fetch the base branch first. Refusing to \
-                         treat an unknown base as an empty diff."
-                    )
+            let resolve_base = |candidates: &[String]| -> Option<(Oid, Oid)> {
+                let base_commit = candidates.iter().find_map(|name| {
+                    Some(repo.revparse_single(name).ok()?.peel_to_commit().ok()?.id())
                 })?;
-            let merge_base = repo.merge_base(base_commit, head).map_err(|e| {
-                anyhow!(
-                    "no merge base between `{base_ref}` and HEAD ({e}); the clone is \
-                     probably shallow — fetch full history"
-                )
-            })?;
+                let merge_base = repo.merge_base(base_commit, head).ok()?;
+                Some((base_commit, merge_base))
+            };
+
+            let (_base_commit, merge_base) = match resolve_base(&candidates) {
+                Some(pair) => pair,
+                None => {
+                    deepen_git_history(&candidates, base_ref, &repo);
+                    let base_commit = candidates
+                        .iter()
+                        .find_map(|name| {
+                            Some(repo.revparse_single(name).ok()?.peel_to_commit().ok()?.id())
+                        })
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "base ref `{base_ref}` does not resolve. In CI, check out with \
+                                 `fetch-depth: 0` or fetch the base branch first. Refusing to \
+                                 treat an unknown base as an empty diff."
+                            )
+                        })?;
+                    let merge_base = repo.merge_base(base_commit, head).map_err(|e| {
+                        anyhow!(
+                            "no merge base between `{base_ref}` and HEAD ({e}); the clone is \
+                             probably shallow — fetch full history"
+                        )
+                    })?;
+                    (base_commit, merge_base)
+                }
+            };
             (
                 Some(merge_base),
                 format!("{base_ref} (merge base {:.10})", merge_base.to_string()),
@@ -416,6 +519,68 @@ impl GitCtx {
     pub fn commit_messages(&self) -> Result<Vec<String>> {
         Ok(self.commits()?.into_iter().map(|(_, m)| m).collect())
     }
+
+    /// Returns the HEAD commit subject (`%s`), if available.
+    pub fn head_commit_subject(&self) -> Result<String> {
+        let head = self.repo.head()?.peel_to_commit()?;
+        let msg = String::from_utf8_lossy(head.message_bytes());
+        let subject = msg.lines().next().unwrap_or("").trim().to_string();
+        Ok(subject)
+    }
+
+    /// Returns the HEAD commit body (`%b`), if available.
+    pub fn head_commit_body(&self) -> Result<String> {
+        let head = self.repo.head()?.peel_to_commit()?;
+        let msg = String::from_utf8_lossy(head.message_bytes());
+        let mut lines = msg.lines();
+        lines.next(); // Skip subject line
+        let body: String = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+        Ok(body)
+    }
+
+    /// Returns the HEAD commit author name (`%an`), if available.
+    pub fn head_commit_author(&self) -> Result<String> {
+        let head = self.repo.head()?.peel_to_commit()?;
+        let author = head.author();
+        let name = author.name().unwrap_or("").to_string();
+        Ok(name)
+    }
+}
+
+fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) {
+    let root = match repo.workdir() {
+        Some(r) => r,
+        None => return,
+    };
+    let is_shallow = root.join(".git/shallow").exists();
+
+    // 1. If base ref is a commit SHA (>=7 hex characters), attempt targeted fetch
+    let is_sha = base_ref.len() >= 7 && base_ref.chars().all(|c| c.is_ascii_hexdigit());
+    if is_sha {
+        let _ = std::process::Command::new("git")
+            .current_dir(root)
+            .args(["fetch", "--no-tags", "--depth=100", "origin", base_ref])
+            .output();
+    }
+
+    // 2. Try candidate branch names if they don't contain revision selectors (~, ^)
+    for cand in candidates {
+        let ref_name = cand.strip_prefix("origin/").unwrap_or(cand);
+        if !is_sha && !ref_name.contains('~') && !ref_name.contains('^') {
+            let _ = std::process::Command::new("git")
+                .current_dir(root)
+                .args(["fetch", "--no-tags", "--depth=100", "origin", ref_name])
+                .output();
+        }
+    }
+
+    // 3. If repository is shallow, attempt unshallowing
+    if is_shallow {
+        let _ = std::process::Command::new("git")
+            .current_dir(root)
+            .args(["fetch", "--no-tags", "--unshallow", "origin"])
+            .output();
+    }
 }
 
 pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
@@ -549,8 +714,56 @@ mod tests {
     #[test]
     fn test_detect_base_ref_explicit() {
         assert_eq!(
-            detect_base_ref_with_env(Some("my-branch"), |_| None),
+            detect_base_ref_with_env(Some("my-branch"), None, None, |_| None),
             "my-branch"
+        );
+    }
+
+    #[test]
+    fn test_detect_base_ref_commit_and_range() {
+        assert_eq!(
+            detect_base_ref_with_env(None, Some("1a2b3c4d5e"), None, |_| None),
+            "1a2b3c4d5e~1"
+        );
+        assert_eq!(
+            detect_base_ref_with_env(None, None, Some("v0.1.0..v0.2.0"), |_| None),
+            "v0.1.0"
+        );
+        assert_eq!(
+            detect_base_ref_with_env(None, None, Some("origin/main...feature"), |_| None),
+            "origin/main"
+        );
+    }
+
+    #[test]
+    fn test_detect_base_ref_push_event() {
+        let lookup = |k: &str| {
+            if k == "GITHUB_EVENT_NAME" {
+                Some("push".to_string())
+            } else if k == "GITHUB_EVENT_BEFORE" {
+                Some("abcdef1234567890abcdef1234567890abcdef12".to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            detect_base_ref_with_env(None, None, None, lookup),
+            "abcdef1234567890abcdef1234567890abcdef12"
+        );
+
+        // Zero SHA on branch creation falls back to HEAD~1
+        let lookup_zero = |k: &str| {
+            if k == "GITHUB_EVENT_NAME" {
+                Some("push".to_string())
+            } else if k == "GITHUB_EVENT_BEFORE" {
+                Some("0000000000000000000000000000000000000000".to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            detect_base_ref_with_env(None, None, None, lookup_zero),
+            "HEAD~1"
         );
     }
 
@@ -563,7 +776,10 @@ mod tests {
                 None
             }
         };
-        assert_eq!(detect_base_ref_with_env(None, lookup), "upstream/dev");
+        assert_eq!(
+            detect_base_ref_with_env(None, None, None, lookup),
+            "upstream/dev"
+        );
     }
 
     #[test]
@@ -576,7 +792,7 @@ mod tests {
             }
         };
         assert_eq!(
-            detect_base_ref_with_env(None, lookup),
+            detect_base_ref_with_env(None, None, None, lookup),
             "origin/feature/pr-123"
         );
     }
@@ -591,7 +807,7 @@ mod tests {
             }
         };
         assert_eq!(
-            detect_base_ref_with_env(None, lookup),
+            detect_base_ref_with_env(None, None, None, lookup),
             "1234567890abcdef1234567890abcdef12345678"
         );
     }
@@ -605,7 +821,10 @@ mod tests {
                 None
             }
         };
-        assert_eq!(detect_base_ref_with_env(None, lookup), "origin/master");
+        assert_eq!(
+            detect_base_ref_with_env(None, None, None, lookup),
+            "origin/master"
+        );
     }
 
     #[test]
@@ -617,7 +836,10 @@ mod tests {
                 None
             }
         };
-        assert_eq!(detect_base_ref_with_env(None, lookup), "origin/main");
+        assert_eq!(
+            detect_base_ref_with_env(None, None, None, lookup),
+            "origin/main"
+        );
     }
 
     #[test]
@@ -629,7 +851,10 @@ mod tests {
                 None
             }
         };
-        assert_eq!(detect_base_ref_with_env(None, lookup), "origin/develop");
+        assert_eq!(
+            detect_base_ref_with_env(None, None, None, lookup),
+            "origin/develop"
+        );
     }
 
     #[test]
@@ -642,13 +867,16 @@ mod tests {
             }
         };
         assert_eq!(
-            detect_base_ref_with_env(None, lookup),
+            detect_base_ref_with_env(None, None, None, lookup),
             "origin/release/v1.0"
         );
     }
 
     #[test]
     fn test_detect_base_ref_fallback() {
-        assert_eq!(detect_base_ref_with_env(None, |_| None), "origin/main");
+        assert_eq!(
+            detect_base_ref_with_env(None, None, None, |_| None),
+            "origin/main"
+        );
     }
 }
