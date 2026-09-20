@@ -1,0 +1,26 @@
+name: Tag Drift Guard
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: tag-guard
+  cancel-in-progress: true
+
+permissions: read-all
+
+jobs:
+  check-major-tag-drift:
+    name: Check Major Tag Drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Fetch all tags from origin
+        run: git fetch origin --tags --force
+      - name: Verify major tags dereference to newest non-prerelease tag
+        run: tests/action/check-major-tag.sh

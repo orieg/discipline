@@ -44,6 +44,8 @@ jobs:
         run: python3 tests/action/check_ecosystem_theme.py --local-only
       - name: Test release notes sanitiser
         run: python3 tests/action/sanitize-release-notes.py --test
+      - name: Test major tag drift detector
+        run: tests/action/test-check-major-tag.sh
       - name: Lint PR title for unquoted mentions
         if: github.event_name == 'pull_request'
         shell: bash

@@ -297,7 +297,7 @@ Third-party GitHub Actions are pinned by full commit SHA. Tooling binaries (`act
 
 | Job | Verification Scope |
 |---|---|
-| `lint` | `cargo fmt --check`, `cargo clippy -- -D warnings`, `actionlint` on workflows, `shellcheck`, `lint-action.py` (F11), `docs --check` (G7), and link integrity validator. |
+| `lint` | `cargo fmt --check`, `cargo clippy -- -D warnings`, `actionlint` on workflows, `shellcheck`, `lint-action.py` (F11), `docs --check` (G7), link integrity validator, and `test-check-major-tag.sh`. |
 | `test` (Linux & macOS) | Full test suite execution asserting at least 65 test cases ran, followed by embedded `self-test`. |
 | `msrv` | `cargo check` under the pinned Minimum Supported Rust Version (`1.90`). |
 | `supply-chain` | `cargo-deny` validation of advisories, bans, license allow-list, and sources. |
@@ -315,15 +315,32 @@ Releases are triggered exclusively by pushing a `vX.Y.Z` tag:
 3. **Publish:** Generates `SHA256SUMS`, attaches build-provenance attestations, creates GitHub release.
 4. **Smoke test:** Action downloads published release assets on Linux and macOS, validates checksums, tests clean and negative fixtures, and verifies GitHub attestations.
 5. **Move major tag:** Advances floating major version tag (`v0`) only after all smoke tests succeed.
+6. **Post-release guard:** Verifies via `tests/action/check-major-tag.sh` that the major tag dereferences to the release commit.
+
+#### Major Tag Floating Pointer Invariant
+Major tags (`v0`, `v1`) provide consumer convenience for action workflows (`uses: orieg/discipline@v0`). The release workflow contract mandates that **major tags are moved exclusively by the release pipeline (`release.yml`) after all smoke tests pass against published release assets**. Moving floating major tags manually or out-of-band bypasses compilation, static linkage verification, attestation generation, and smoke tests, which defeats the security guarantees of the sentinel. To prevent silent tag drift, two automated sentinels enforce this invariant:
+- **Post-release assertion:** In `release.yml`, immediately after pushing the updated major tag, `tests/action/check-major-tag.sh` verifies that the tag dereferences to the release commit.
+- **Scheduled tag drift guard (`tag-guard.yml`):** Runs on schedule to verify that every major tag dereferences to the newest non-prerelease semver tag's commit in that major series, failing immediately if drift is detected.
 
 ### 8.3 CodeQL Security Pipeline (`.github/workflows/codeql.yml`)
 
-Static security analysis runs on pull requests, pushes to `main`, and on a weekly Monday schedule (`cron: '30 6 * * 1'`) using GitHub CodeQL Advanced setup (`github/codeql-action` pinned by SHA):
+Static security analysis runs on pull requests, pushes to `main`, and on a scheduled run (`cron: '30 6 * * 1'`) using GitHub CodeQL Advanced setup (`github/codeql-action` pinned by SHA):
 - **Matrix analysis:** Analyzes `rust`, `actions`, and `python`.
-- **Rust build-mode: none:** Rust analysis uses `build-mode: none`, powered solely by `rust-analyzer` extraction without driving `cargo build`.
-- **Advisory status:** CodeQL scanning is an advisory security sentinel; it operates independently of the blocking `ci-gate` rollup in `ci.yml`. Findings are reviewed weekly and addressed via hardening PRs or documented dismissals with positive and negative regression controls.
 - **Query suite:** Configured with `queries: security-extended` for deep vulnerability scanning.
 - **Toolchain:** Pins `dtolnay/rust-toolchain` stable for Rust AST and macro expansion.
+
+#### CodeQL Rust Build Mode Evaluation (`none` vs Built)
+- **Supported Modes:** GitHub CodeQL for Rust officially supports two build modes: `none` and `autobuild`. The `manual` build mode is explicitly unsupported for Rust and produces an engine error.
+- **Mechanism:** In `build-mode: none`, CodeQL does not invoke `cargo build` or a C compiler. Instead, it runs `rust-analyzer` to parse source syntax, resolve types, and expand macros into CodeQL AST representations.
+- **Analysis & False-Positive Delta:** In `build-mode: none`, CodeQL applies generalized taint-tracking and heuristic patterns. For example, Alert #1 (CWE-312: Cleartext Logging of Sensitive Information) was flagged on variable names matching `secret` in report generation code (`markdown`, `terminal`, `gitlab`), despite the fact that the engine explicitly redacts secrets before reporting. Under `autobuild` (which runs `cargo build`), the underlying AST and variable bindings analyzed by CodeQL are identical, producing the exact same naming-heuristic alert while adding compilation overhead and runner dependencies.
+- **Decision:** Discipline retains `build-mode: none` for Rust analysis, backed by a pinned stable Rust toolchain so `rust-analyzer` has access to standard library symbols. This provides fast, deterministic AST analysis without pulling build dependencies into the security analysis runner.
+
+#### Advisory Security Sentinel Contract & Triage Procedures
+- **Advisory Status:** CodeQL operates as an **advisory security sentinel**, intentionally independent of the blocking `ci-gate` rollup in `ci.yml`. This design prevents false-positive security heuristics or uncalibrated upstream rules from blocking development or emergency PR merges.
+- **Scheduled Triage Procedures:** Maintainers audit newly surfaced alerts following each scheduled run:
+  1. **Triage:** Review all open alerts in GitHub Advanced Security across `rust`, `actions`, and `python`.
+  2. **True Positives:** Classified as blocking security defects. Remediated immediately via prioritized patches with dedicated unit and end-to-end regression tests.
+  3. **False Positives / Heuristic Flags:** Must be audited against engine behavior. An alert may only be dismissed if accompanied by a documented justification and pinned by executable regression tests (e.g., `tests/test_report_redaction.rs` verifying cross-format secret redaction across all 7 supported report formats).
 
 ---
 

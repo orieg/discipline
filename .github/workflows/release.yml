@@ -361,3 +361,10 @@ jobs:
           git tag --force "${major}" "${GITHUB_SHA}"
           git push --force origin "refs/tags/${major}"
           echo "moved ${major} to ${GITHUB_SHA}"
+      - name: Verify major tag dereferences to release commit
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          tests/action/check-major-tag.sh "${VERSION}" "${GITHUB_SHA}"
