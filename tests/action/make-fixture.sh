@@ -94,6 +94,21 @@ RS
     ;;
   deletion)
     git rm -q tests/legacy/old.rs
+    cat > tests/arith.rs <<'RS'
+#[test]
+fn adds() {
+    let x = 1;
+    assert_eq!(x + 1, 2);
+    assert_eq!(x + 3, 4);
+}
+
+#[test]
+fn replaces() {
+    let x = 1;
+    assert_eq!(x + 2, 3);
+}
+RS
+    git add tests/arith.rs
     git commit -q -m "chore: drop legacy test"
     ;;
   *)
