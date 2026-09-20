@@ -120,6 +120,13 @@ impl MarkdownTableTracker {
         if !self.in_table || self.exempt_cols.is_empty() {
             return false;
         }
+        if !line.is_char_boundary(hit_start)
+            || !line.is_char_boundary(hit_end)
+            || hit_start > hit_end
+            || hit_end > line.len()
+        {
+            return false;
+        }
         let pipe_count = line[..hit_start].chars().filter(|&c| c == '|').count();
         let col_idx = pipe_count.saturating_sub(1);
         if !self.exempt_cols.get(col_idx).copied().unwrap_or(false) {
@@ -161,23 +168,26 @@ pub(crate) fn split_into_clauses(line: &str) -> Vec<(usize, &str)> {
     while i < len {
         let (byte_idx, ch) = chars[i];
         let mut is_delim = false;
-        let mut delim_len = ch.len_utf8();
+        let mut delim_bytes = ch.len_utf8();
+        let mut delim_chars = 1;
 
         if ch == ';' || ch == '—' {
             is_delim = true;
         } else if ch == '-' && i + 1 < len && chars[i + 1].1 == '-' {
             is_delim = true;
-            delim_len = 2;
+            delim_bytes = 2;
+            delim_chars = 2;
         } else if ch == '.' || ch == '!' || ch == '?' {
             if i + 1 == len {
                 is_delim = true;
             } else {
                 let next_ch = chars[i + 1].1;
-                if next_ch.is_whitespace()
+                if (next_ch.is_whitespace()
                     || next_ch == '"'
                     || next_ch == '\''
                     || next_ch == ')'
-                    || next_ch == ']'
+                    || next_ch == ']')
+                    && start <= byte_idx
                 {
                     let before = &line[start..byte_idx];
                     let is_num = before.chars().last().is_some_and(|c| c.is_ascii_digit());
@@ -187,7 +197,7 @@ pub(crate) fn split_into_clauses(line: &str) -> Vec<(usize, &str)> {
                     }
                 }
             }
-        } else if ch == ',' {
+        } else if ch == ',' && start <= byte_idx {
             let before = &line[start..byte_idx];
             let is_num = before.chars().last().is_some_and(|c| c.is_ascii_digit());
             let next_is_num = chars.get(i + 1).is_some_and(|(_, c)| c.is_ascii_digit());
@@ -197,27 +207,36 @@ pub(crate) fn split_into_clauses(line: &str) -> Vec<(usize, &str)> {
         }
 
         if is_delim {
-            let slice = line[start..byte_idx].trim();
-            if !slice.is_empty() {
-                clauses.push((start, slice));
+            if start <= byte_idx {
+                let raw_slice = &line[start..byte_idx];
+                let trimmed = raw_slice.trim();
+                if !trimmed.is_empty() {
+                    let offset = trimmed.as_ptr() as usize - line.as_ptr() as usize;
+                    clauses.push((offset, trimmed));
+                }
             }
-            start = byte_idx + delim_len;
-            if delim_len > 1 {
-                i += delim_len - 1;
+            start = byte_idx + delim_bytes;
+            if delim_chars > 1 {
+                i += delim_chars - 1;
             }
         }
         i += 1;
     }
 
-    let tail = line[start..].trim();
-    if !tail.is_empty() {
-        clauses.push((start, tail));
+    if start < line.len() {
+        let raw_tail = &line[start..];
+        let trimmed = raw_tail.trim();
+        if !trimmed.is_empty() {
+            let offset = trimmed.as_ptr() as usize - line.as_ptr() as usize;
+            clauses.push((offset, trimmed));
+        }
     }
 
     if clauses.is_empty() {
         let trimmed = line.trim();
         if !trimmed.is_empty() {
-            clauses.push((0, trimmed));
+            let offset = trimmed.as_ptr() as usize - line.as_ptr() as usize;
+            clauses.push((offset, trimmed));
         }
     }
 
@@ -1027,6 +1046,38 @@ mod tests {
         ] {
             assert!(!any_match(&banned, good), "false positive: {good}");
         }
+    }
+
+    #[test]
+    fn split_into_clauses_preserves_exact_byte_offsets_with_unicode() {
+        let line = "  | latency | Phase 2 (≤ 2 weeks) |";
+        let clauses = split_into_clauses(line);
+        for (start, clause) in clauses {
+            assert_eq!(
+                &line[start..start + clause.len()],
+                clause,
+                "clause at {start} does not match slice"
+            );
+        }
+
+        let emdash_line = "Step 1 — Phase 2 (≤ 2 weeks); note";
+        let clauses = split_into_clauses(emdash_line);
+        for (start, clause) in clauses {
+            assert_eq!(
+                &emdash_line[start..start + clause.len()],
+                clause,
+                "clause at {start} does not match slice in emdash line"
+            );
+        }
+    }
+
+    #[test]
+    fn time_estimates_table_cell_with_unicode_does_not_panic() {
+        let banned = compile(time_estimate_patterns(), "t").unwrap();
+        let allowed = Vec::new();
+        let text = "| Latency | Status |\n|---|---|\n  | 50ms | Phase 2 (≤ 2 weeks) |\n";
+        let violations = scan_text_for_time_estimates(text, &banned, &allowed);
+        assert!(!violations.is_empty());
     }
 
     #[test]
