@@ -26,6 +26,24 @@ CODE_SPAN_RE = re.compile(r'(`[^`]*`)')
 # GitHub mention pattern: @name outside word characters or backticks
 MENTION_RE = re.compile(r'(?<![\w`])@([a-zA-Z0-9_-]+)')
 
+# PII patterns: home directory paths, agent config paths, private LAN IPs
+PII_PATTERNS = [
+    (re.compile(r'(?:/Users/|/home/)[a-zA-Z0-9_.-]+'), "home directory path leak"),
+    (re.compile(r'(?:~/|\$HOME/)\.(?:claude|gemini|antigravity)\b'), "personal agent config path"),
+    (re.compile(r'\b(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b'), "private LAN IP leak"),
+]
+
+# Time estimate patterns: clock/calendar durations and sprint projections
+TIME_ESTIMATE_PATTERNS = [
+    (re.compile(r'\b\d+(?:-\d+)?\s*(?:days?|weeks?|months?|sprints?|engineer-days?)\b', re.IGNORECASE), "time estimate duration"),
+    (re.compile(r'\bnext sprint\b', re.IGNORECASE), "sprint projection"),
+    (re.compile(r'\bPhase\s+\d+\s*\([^)]*(?:day|week|month)[^)]*\)', re.IGNORECASE), "phase duration estimate"),
+]
+
+# Metric claim pattern: e.g. "3x faster", "40% speedup" requiring (measured: ...), (target), or (projected)
+METRIC_CLAIM_RE = re.compile(r'\b\d+(?:\.\d+)?\s*(?:x|%)\s*(?:faster|speedup|regression|improvement)\b', re.IGNORECASE)
+PROVENANCE_TAG_RE = re.compile(r'\((?:measured:[^)]+|target|projected)\)', re.IGNORECASE)
+
 
 def sanitize_line(line: str) -> str:
     """Neutralise every @name in line that is NOT in the trailing attribution."""
@@ -56,14 +74,22 @@ def sanitize_notes(text: str) -> str:
 
 
 def verify_release_notes(text: str) -> list[str]:
-    """Return all lines where an '@' remains outside an attribution or code span."""
+    """Return all lines where policy is violated (unverified @, PII, time estimates, unprovenanced metrics)."""
     violations: list[str] = []
     for idx, line in enumerate(text.splitlines(), start=1):
         attr_match = ATTR_RE.search(line)
         prefix = line[: attr_match.start()] if attr_match else line
         without_code = CODE_SPAN_RE.sub("", prefix)
         if "@" in without_code:
-            violations.append(f"line {idx}: {line.strip()}")
+            violations.append(f"line {idx}: unverified '@' mention: {line.strip()}")
+        for pat, desc in PII_PATTERNS:
+            if pat.search(without_code):
+                violations.append(f"line {idx}: PII leak ({desc}): {line.strip()}")
+        for pat, desc in TIME_ESTIMATE_PATTERNS:
+            if pat.search(without_code):
+                violations.append(f"line {idx}: time estimate ({desc}): {line.strip()}")
+        if METRIC_CLAIM_RE.search(without_code) and not PROVENANCE_TAG_RE.search(line):
+            violations.append(f"line {idx}: unprovenanced metric claim without provenance tag: {line.strip()}")
     return violations
 
 
@@ -113,6 +139,38 @@ def run_tests() -> None:
     assert bad_mentions == ["v0"], f"Expected ['v0'], got {bad_mentions}"
     multi_mentions = check_pr_title("feat: update @foo and @bar")
     assert multi_mentions == ["foo", "bar"], f"Expected ['foo', 'bar'], got {multi_mentions}"
+
+    # PII rejection tests
+    home_leak = f"* feat: fix tool at {'/'}{'Users'}{'/'}{'alice'}{'/'}{'repo'} by @orieg in https://github.com/orieg/discipline/pull/50"
+    v_home = verify_release_notes(sanitize_notes(home_leak))
+    assert any("PII leak" in v for v in v_home), f"Expected PII leak violation, got: {v_home}"
+
+    ip_leak = f"* fix: connect to {'192'}.{'168'}.1.25 by @orieg in https://github.com/orieg/discipline/pull/51"
+    v_ip = verify_release_notes(sanitize_notes(ip_leak))
+    assert any("PII leak" in v for v in v_ip), f"Expected LAN IP violation, got: {v_ip}"
+
+    agent_cfg_leak = f"* docs: see {'~'}{'/.claude'}/CLAUDE.md by @orieg in https://github.com/orieg/discipline/pull/52"
+    v_agent = verify_release_notes(sanitize_notes(agent_cfg_leak))
+    assert any("PII leak" in v for v in v_agent), f"Expected agent config violation, got: {v_agent}"
+
+    # Time estimates rejection tests
+    time_leak = f"* feat: completed Phase 1 in {1}-{2} {'days'} by @orieg in https://github.com/orieg/discipline/pull/53"
+    v_time = verify_release_notes(sanitize_notes(time_leak))
+    assert any("time estimate" in v for v in v_time), f"Expected time estimate violation, got: {v_time}"
+
+    sprint_leak = f"* feat: shipping {'next'} {'sprint'} by @orieg in https://github.com/orieg/discipline/pull/54"
+    v_sprint = verify_release_notes(sanitize_notes(sprint_leak))
+    assert any("time estimate" in v for v in v_sprint), f"Expected sprint projection violation, got: {v_sprint}"
+
+    # Unprovenanced numbers rejection tests
+    unprov_claim = f"* perf: achieve {3}x {'faster'} AST parsing by @orieg in https://github.com/orieg/discipline/pull/55"
+    v_unprov = verify_release_notes(sanitize_notes(unprov_claim))
+    assert any("unprovenanced metric" in v for v in v_unprov), f"Expected unprovenanced metric violation, got: {v_unprov}"
+
+    # Provenanced numbers pass (positive control)
+    prov_claim = f"* perf: achieve {3}x {'faster'} AST parsing (measured: linux-x86_64, abc1234) by @orieg in https://github.com/orieg/discipline/pull/55"
+    v_prov = verify_release_notes(sanitize_notes(prov_claim))
+    assert not v_prov, f"Expected provenanced claim to pass, got: {v_prov}"
 
     print("OK: All sanitiser and PR title tests passed.")
 
