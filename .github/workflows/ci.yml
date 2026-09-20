@@ -480,10 +480,10 @@ jobs:
         run: |
           tests/action/make-fixture.sh "${RUNNER_TEMP}/fx-root" clean
           sudo chown -R 0:0 "${RUNNER_TEMP}/fx-root"
-      - name: Smoke test container against root-owned workspace (positive control)
+      - name: "Smoke test container against root-owned workspace (positive control)"
         run: |
           docker run --rm -v "${RUNNER_TEMP}/fx-root":/workspace discipline:test check --base main
-      - name: Negative control: bad fixture is detected and rejected
+      - name: "Negative control: bad fixture is detected and rejected"
         run: |
           tests/action/make-fixture.sh "${RUNNER_TEMP}/fx-root-bad" bad
           sudo chown -R 0:0 "${RUNNER_TEMP}/fx-root-bad"
