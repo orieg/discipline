@@ -325,3 +325,63 @@ fn test_env_baseline_and_no_baseline_respected() {
     assert_eq!(run_ignored.code, 1);
     assert_eq!(run_ignored.json()["baselined"], 0);
 }
+
+#[test]
+fn test_baseline_malformed_toml_fails_closed_exit_2() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline-baseline.toml",
+        "version = 1\n[[findings\nmalformed toml content\n",
+    );
+    repo.commit("chore: commit broken baseline");
+
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 2,
+        "malformed baseline TOML must fail closed with exit code 2\nstderr:\n{}",
+        run.stderr
+    );
+    assert!(run.stderr.contains("failed to parse baseline file"));
+}
+
+#[test]
+fn test_baseline_explicit_missing_file_fails_closed_exit_2() {
+    let repo = Repo::new();
+    let run = repo.check(&["--baseline-file", "non-existent-baseline.toml"]);
+    assert_eq!(
+        run.code, 2,
+        "explicit non-existent baseline file must fail closed with exit code 2\nstderr:\n{}",
+        run.stderr
+    );
+    assert!(run.stderr.contains("does not exist"));
+}
+
+#[test]
+fn test_baseline_duplicate_fingerprint_count_decrementing() {
+    let repo = Repo::new();
+    let two_unsafes = "pub fn f1(p: *const u8) -> u8 {\n    unsafe { *p }\n}\npub fn f2(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n";
+    repo.commit_base("src/lib.rs", two_unsafes, "chore: base two unsafes");
+    repo.run(&["baseline", "--write", "--base", "HEAD~1"], &[]);
+    repo.commit_base(
+        "discipline-baseline.toml",
+        &std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap(),
+        "chore: commit baseline with 2 grandfathered entries",
+    );
+
+    // On work branch, add a third identical unsafe function f3
+    let three_unsafes = "pub fn f1(p: *const u8) -> u8 {\n    unsafe { *p }\n}\npub fn f2(p: *const u8) -> u8 {\n    unsafe { *p }\n}\npub fn f3(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n";
+    repo.write("src/lib.rs", three_unsafes);
+    repo.commit("feat: add third unsafe");
+
+    let run = repo.check_with_pr(&[], WEAKENING_PR);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let json = run.json();
+    assert_eq!(
+        json["errors"], 1,
+        "exactly 1 non-grandfathered error should remain"
+    );
+    assert_eq!(
+        json["baselined"], 2,
+        "exactly 2 grandfathered findings should be baselined"
+    );
+}

@@ -6909,3 +6909,53 @@ fn test_owner_validation_actionable_error_diagnostic_r1() {
     assert!(owner_remediation.contains("--user"));
     assert!(owner_remediation.contains("safe.directory"));
 }
+
+#[test]
+fn test_conflicting_cli_options_fail_closed_exit_2() {
+    let repo = Repo::new();
+
+    // 1. --commit vs --commit-range
+    let run1 = repo.run(
+        &[
+            "check",
+            "--commit",
+            "abcdef1",
+            "--commit-range",
+            "HEAD~1..HEAD",
+        ],
+        &[],
+    );
+    assert_eq!(
+        run1.code, 2,
+        "conflicting commit options must exit with code 2"
+    );
+    assert!(
+        run1.stderr.contains("cannot be used with") || run1.stderr.contains("conflict"),
+        "stderr: {}",
+        run1.stderr
+    );
+
+    // 2. --staged vs --commit
+    let run2 = repo.run(&["check", "--staged", "--commit", "abcdef1"], &[]);
+    assert_eq!(run2.code, 2, "--staged and --commit must exit with code 2");
+    assert!(
+        run2.stderr.contains("cannot be used with") || run2.stderr.contains("conflict"),
+        "stderr: {}",
+        run2.stderr
+    );
+
+    // 3. --staged vs --commit-range
+    let run3 = repo.run(
+        &["check", "--staged", "--commit-range", "HEAD~1..HEAD"],
+        &[],
+    );
+    assert_eq!(
+        run3.code, 2,
+        "--staged and --commit-range must exit with code 2"
+    );
+    assert!(
+        run3.stderr.contains("cannot be used with") || run3.stderr.contains("conflict"),
+        "stderr: {}",
+        run3.stderr
+    );
+}

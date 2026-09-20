@@ -1879,14 +1879,175 @@ smoke_cost::set_contains
             Ok(matched && !unmatched)
         },
     ),
+    (
+        "baseline: fingerprinting and apply_baseline match grandfathered violations and detect stale entries",
+        || {
+            use crate::baseline::{
+                apply_baseline, compute_violation_fingerprint, BaselineEntry, DisciplineBaseline,
+            };
+            use crate::config::Severity;
+            use crate::guards::{GateOutcome, Violation};
+            use std::path::Path;
+
+            let dummy_root = Path::new(".");
+            let v1 = Violation {
+                gate: "unsafe-safety-comment",
+                severity: Severity::Error,
+                title: "Unsafe Without SAFETY Comment".to_string(),
+                file: Some("src/lib.rs".to_string()),
+                line: None,
+                message: "Unsafe block without comment".to_string(),
+                remediation: Some("Add comment".to_string()),
+            };
+            let fp1 = compute_violation_fingerprint(dummy_root, &v1);
+            anyhow::ensure!(
+                fp1.len() == 64,
+                "expected 64-char sha256 fingerprint, got {}",
+                fp1.len()
+            );
+
+            let v2 = Violation {
+                gate: "unsafe-safety-comment",
+                severity: Severity::Error,
+                title: "Unsafe Without SAFETY Comment".to_string(),
+                file: Some("src/extra.rs".to_string()),
+                line: None,
+                message: "Different unsafe block".to_string(),
+                remediation: Some("Add comment".to_string()),
+            };
+            let fp2 = compute_violation_fingerprint(dummy_root, &v2);
+            anyhow::ensure!(
+                fp1 != fp2,
+                "distinct violations must have distinct fingerprints"
+            );
+
+            let baseline = DisciplineBaseline {
+                version: 1,
+                findings: vec![
+                    BaselineEntry {
+                        gate: "unsafe-safety-comment".to_string(),
+                        rule: "Unsafe Without SAFETY Comment".to_string(),
+                        path: "src/lib.rs".to_string(),
+                        fingerprint: fp1.clone(),
+                    },
+                    BaselineEntry {
+                        gate: "unsafe-safety-comment".to_string(),
+                        rule: "Unsafe Without SAFETY Comment".to_string(),
+                        path: "src/old.rs".to_string(),
+                        fingerprint:
+                            "0000000000000000000000000000000000000000000000000000000000000000"
+                                .to_string(),
+                    },
+                ],
+            };
+
+            let mut outcome = GateOutcome::new("unsafe-safety-comment");
+            outcome.violations = vec![v1, v2];
+
+            let mut outcomes = vec![outcome];
+            let res = apply_baseline(dummy_root, &baseline, &mut outcomes);
+
+            anyhow::ensure!(
+                res.baselined_count == 1,
+                "expected 1 baselined finding, got {}",
+                res.baselined_count
+            );
+            anyhow::ensure!(
+                res.stale_count == 1,
+                "expected 1 stale finding, got {}",
+                res.stale_count
+            );
+            anyhow::ensure!(
+                outcomes[0].violations.len() == 1,
+                "expected 1 remaining violation, got {}",
+                outcomes[0].violations.len()
+            );
+            anyhow::ensure!(
+                outcomes[0].violations[0].file.as_deref() == Some("src/extra.rs"),
+                "remaining violation must be extra.rs"
+            );
+            anyhow::ensure!(
+                outcomes[0].baselined == 1,
+                "outcome baselined count must be 1"
+            );
+
+            Ok(true)
+        },
+    ),
+    (
+        "agents-md: evaluate_agents_guide catches missing AGENTS.md and forked aliases",
+        || {
+            use crate::config::AgentsMdGate;
+            use crate::guards::hygiene::evaluate_agents_guide;
+
+            let settings = AgentsMdGate::default();
+
+            // Negative control: missing AGENTS.md
+            let missing = evaluate_agents_guide(false, None, &[], &settings)?;
+            anyhow::ensure!(
+                missing.violations.len() == 1
+                    && missing.violations[0].title == "Missing AGENTS.md",
+                "missing AGENTS.md must produce Missing AGENTS.md violation"
+            );
+
+            // Positive control: AGENTS.md exists, CLAUDE.md is symlink
+            let symlinked = evaluate_agents_guide(
+                true,
+                Some("# Canonical Guide"),
+                &[("CLAUDE.md", true, true, None)],
+                &settings,
+            )?;
+            anyhow::ensure!(
+                symlinked.violations.is_empty(),
+                "symlinked alias must not produce violation"
+            );
+
+            // Positive control: AGENTS.md exists, CLAUDE.md is regular file with identical content
+            let identical = evaluate_agents_guide(
+                true,
+                Some("# Canonical Guide"),
+                &[("CLAUDE.md", true, false, Some("# Canonical Guide"))],
+                &settings,
+            )?;
+            anyhow::ensure!(
+                identical.violations.is_empty(),
+                "regular file with identical content must not produce violation"
+            );
+
+            // Negative control: AGENTS.md exists, GEMINI.md is regular file with divergent content
+            let divergent = evaluate_agents_guide(
+                true,
+                Some("# Canonical Guide"),
+                &[("GEMINI.md", true, false, Some("# Forked Guide"))],
+                &settings,
+            )?;
+            anyhow::ensure!(
+                divergent.violations.len() == 1
+                    && divergent.violations[0].title == "Forked Agent Guide",
+                "divergent regular file must produce Forked Agent Guide violation"
+            );
+
+            Ok(true)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {
     let mut failed = 0;
     for (name, case) in CASES {
-        let ok = matches!(case(), Ok(true));
-        println!("{} {name}", if ok { "ok  " } else { "FAIL" });
-        failed += usize::from(!ok);
+        match case() {
+            Ok(true) => println!("ok   {name}"),
+            Ok(false) => {
+                println!("FAIL {name}");
+                eprintln!("  clause evaluated to false");
+                failed += 1;
+            }
+            Err(e) => {
+                println!("FAIL {name}");
+                eprintln!("  case error: {e:#}");
+                failed += 1;
+            }
+        }
     }
     if CASES.is_empty() {
         bail!("self-test has no cases");

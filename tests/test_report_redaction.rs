@@ -7,7 +7,9 @@
 //! Table-driven over `OutputFormat::value_variants()` with compile-time exhaustive match
 //! to ensure any newly added format fails until explicitly covered.
 
+mod common;
 use clap::ValueEnum;
+use common::Repo;
 use discipline::cli::OutputFormat;
 use discipline::config::{PiiGate, Severity, ShellSecretsGate};
 use discipline::guards::hygiene::pii_rules;
@@ -145,6 +147,81 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
                 "SECURITY VIOLATION: sentinel `{sentinel}` was leaked in output format `{:?}`!\nRendered output:\n{}",
                 format,
                 rendered
+            );
+        }
+    }
+}
+
+#[test]
+fn test_live_repository_cross_format_redaction_pins_sentinel_exclusion() {
+    let repo = Repo::new();
+
+    // 0. Enable full LAN IP redaction in config
+    repo.write("discipline.toml", "[gates.pii]\nredact_lan_ips = true\n");
+
+    // 1. Introduce shell secrets in a shell script
+    repo.write(
+        "scripts/deploy.sh",
+        &format!(
+            "#!/usr/bin/env bash\nexport AWS_ACCESS_KEY_ID={SENTINEL_AWS_KEY}\nexport GITHUB_TOKEN={SENTINEL_GHP_TOKEN}\nSLACK_API_TOKEN={SENTINEL_SLACK_TOKEN}\nmysql -u root -p{SENTINEL_PASSWORD} -h localhost\n"
+        ),
+    );
+
+    // 2. Introduce PII in a config file
+    repo.write(
+        "config/settings.json",
+        &format!(
+            "{{\n  \"home\": \"{SENTINEL_HOMEPATH}/data.bin\",\n  \"vault\": \"https://{SENTINEL_HOSTNAME}/api\",\n  \"lan\": \"{SENTINEL_LAN_IP}\"\n}}\n"
+        ),
+    );
+
+    repo.commit("feat: add service configs");
+
+    let all_sentinels = [
+        SENTINEL_AWS_KEY,
+        SENTINEL_GHP_TOKEN,
+        SENTINEL_PASSWORD,
+        SENTINEL_HOSTNAME,
+        SENTINEL_HOMEPATH,
+        SENTINEL_SLACK_TOKEN,
+        SENTINEL_LAN_IP,
+    ];
+
+    let formats = [
+        ("terminal", OutputFormat::Terminal),
+        ("github-summary", OutputFormat::GithubSummary),
+        ("json", OutputFormat::Json),
+        ("junit", OutputFormat::Junit),
+        ("sarif", OutputFormat::Sarif),
+        ("gitlab", OutputFormat::Gitlab),
+        ("agent-prompt", OutputFormat::AgentPrompt),
+    ];
+
+    for (fmt_str, fmt_variant) in formats {
+        assert_format_exhaustiveness(fmt_variant);
+
+        let run = repo.run(
+            &["check", "--format", fmt_str, "--base", "main"],
+            &[("DISCIPLINE_HOSTNAME_DENYLIST", SENTINEL_HOSTNAME)],
+        );
+
+        // Violations must cause non-zero exit (errors present)
+        assert_eq!(
+            run.code, 1,
+            "format `{fmt_str}` must fail due to secrets/pii violations\nstdout:\n{}\nstderr:\n{}",
+            run.stdout, run.stderr
+        );
+
+        for sentinel in all_sentinels {
+            assert!(
+                !run.stdout.contains(sentinel),
+                "SECURITY VIOLATION: sentinel `{sentinel}` was leaked in stdout for format `{fmt_str}`!\nStdout:\n{}",
+                run.stdout
+            );
+            assert!(
+                !run.stderr.contains(sentinel),
+                "SECURITY VIOLATION: sentinel `{sentinel}` was leaked in stderr for format `{fmt_str}`!\nStderr:\n{}",
+                run.stderr
             );
         }
     }

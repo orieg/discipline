@@ -89,15 +89,15 @@ pub struct CheckArgs {
     pub base: Option<String>,
 
     /// Specific commit to inspect (compares against parent commit <sha>~1)
-    #[arg(long, conflicts_with = "commit_range")]
+    #[arg(long, conflicts_with = "commit_range", conflicts_with = "staged")]
     pub commit: Option<String>,
 
     /// Commit range to inspect (<before>..<after> or <before>...<after>)
-    #[arg(long, conflicts_with = "commit")]
+    #[arg(long, conflicts_with = "commit", conflicts_with = "staged")]
     pub commit_range: Option<String>,
 
     /// Inspect the index against HEAD instead (pre-commit hook mode)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "commit", conflicts_with = "commit_range")]
     pub staged: bool,
 
     /// File holding the PR body or commit message (override directives, hygiene scanning).
