@@ -40,4 +40,29 @@ if python3 "${repo_root}/scripts/update_homebrew_formula.py" \
   exit 1
 fi
 
-echo "update_homebrew_formula: both controls behaved"
+echo "== positive control: push-to-tap clones, commits, and pushes formula"
+tap_bare="${scratch}/bare-tap.git"
+git init --bare "${tap_bare}"
+init_clone="${scratch}/init-clone"
+git clone "${tap_bare}" "${init_clone}"
+mkdir -p "${init_clone}/Formula"
+echo "# placeholder" > "${init_clone}/Formula/discipline.rb"
+git -C "${init_clone}" config user.name "tester"
+git -C "${init_clone}" config user.email "test@example.com"
+git -C "${init_clone}" add Formula/discipline.rb
+git -C "${init_clone}" commit -m "init tap"
+git -C "${init_clone}" push origin HEAD
+
+python3 "${repo_root}/scripts/update_homebrew_formula.py" \
+  --version 1.2.3 \
+  --checksums "${scratch}/SHA256SUMS" \
+  --push-to-tap "${tap_bare}" \
+  --tap-token "mock-token" \
+  --output "${scratch}/test-discipline.rb"
+
+verify_clone="${scratch}/verify-clone"
+git clone "${tap_bare}" "${verify_clone}"
+grep -q '1111111111111111111111111111111111111111111111111111111111111111' "${verify_clone}/Formula/discipline.rb"
+grep -q 'v1.2.3' "${verify_clone}/Formula/discipline.rb"
+
+echo "update_homebrew_formula: all controls behaved"

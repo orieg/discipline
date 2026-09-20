@@ -120,6 +120,7 @@ def push_to_tap_repo(
 ) -> None:
     """Clone or push formula to the specified Homebrew tap repository via SSH deploy key or HTTPS token."""
     with tempfile.TemporaryDirectory() as tmpdir:
+        repo_dir = Path(tmpdir) / "repo"
         git_env = os.environ.copy()
         if deploy_key:
             key_file = Path(tmpdir) / "id_deploy"
@@ -128,27 +129,38 @@ def push_to_tap_repo(
             git_env["GIT_SSH_COMMAND"] = (
                 f"ssh -i {key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
             )
-            clone_url = f"git@github.com:{tap_repo}.git"
+            if tap_repo.startswith("/") or tap_repo.startswith("file://"):
+                clone_url = tap_repo
+            else:
+                clone_url = f"git@github.com:{tap_repo}.git"
         elif token:
-            clone_url = f"https://x-access-token:{token}@github.com/{tap_repo}.git"
+            if tap_repo.startswith("/") or tap_repo.startswith("file://"):
+                clone_url = tap_repo
+            else:
+                clone_url = f"https://x-access-token:{token}@github.com/{tap_repo}.git"
         else:
             raise ValueError("Either deploy_key or token must be provided to push to tap repository")
 
         print(f"Cloning tap repository {tap_repo}...")
-        subprocess.run(
-            ["git", "clone", "--depth", "1", clone_url, tmpdir],
-            check=True,
-            capture_output=True,
-            env=git_env,
-        )
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", clone_url, str(repo_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=git_env,
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"git clone failed:\nstdout: {e.stdout}\nstderr: {e.stderr}", file=sys.stderr)
+            raise
 
-        formula_dir = Path(tmpdir) / "Formula"
+        formula_dir = repo_dir / "Formula"
         formula_dir.mkdir(parents=True, exist_ok=True)
         formula_file = formula_dir / "discipline.rb"
         formula_file.write_text(formula_content, encoding="utf-8")
 
         subprocess.run(
-            ["git", "-C", tmpdir, "config", "user.name", "github-actions[bot]"],
+            ["git", "-C", str(repo_dir), "config", "user.name", "github-actions[bot]"],
             check=True,
             env=git_env,
         )
@@ -156,7 +168,7 @@ def push_to_tap_repo(
             [
                 "git",
                 "-C",
-                tmpdir,
+                str(repo_dir),
                 "config",
                 "user.email",
                 "41898282+github-actions[bot]@users.noreply.github.com",
@@ -165,13 +177,13 @@ def push_to_tap_repo(
             env=git_env,
         )
         subprocess.run(
-            ["git", "-C", tmpdir, "add", "Formula/discipline.rb"],
+            ["git", "-C", str(repo_dir), "add", "Formula/discipline.rb"],
             check=True,
             env=git_env,
         )
 
         diff = subprocess.run(
-            ["git", "-C", tmpdir, "diff", "--staged", "--quiet"],
+            ["git", "-C", str(repo_dir), "diff", "--staged", "--quiet"],
             check=False,
             env=git_env,
         )
@@ -183,7 +195,7 @@ def push_to_tap_repo(
             [
                 "git",
                 "-C",
-                tmpdir,
+                str(repo_dir),
                 "commit",
                 "-m",
                 f"chore(discipline): bump formula to v{version}",
@@ -191,11 +203,18 @@ def push_to_tap_repo(
             check=True,
             env=git_env,
         )
-        subprocess.run(
-            ["git", "-C", tmpdir, "push", "origin", "HEAD"],
-            check=True,
-            env=git_env,
-        )
+        print(f"Pushing updated formula to {tap_repo}...")
+        try:
+            subprocess.run(
+                ["git", "-C", str(repo_dir), "push", "origin", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=git_env,
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"git push failed:\nstdout: {e.stdout}\nstderr: {e.stderr}", file=sys.stderr)
+            raise
         print(f"Successfully pushed updated formula to {tap_repo} for v{version}!")
 
 
