@@ -240,7 +240,23 @@ fn render_step_summary(
         .append(true)
         .open(&path)
         .with_context(|| format!("failed to open job summary {path}"))?;
-    let cell = |s: &str| s.replace('|', "\\|").replace('\n', " ");
+    render_step_summary_to_writer(&mut file, summary, fail_on_warnings, fail_on_overrides)
+}
+
+pub fn render_step_summary_to_writer(
+    mut file: impl std::io::Write,
+    summary: &CheckSummary,
+    fail_on_warnings: bool,
+    fail_on_overrides: bool,
+) -> Result<()> {
+    let cell_code = |s: &str| s.replace('|', "\\|").replace('\n', " ");
+    let cell = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('|', "\\|")
+            .replace('\n', " ")
+    };
 
     let heading = if summary.is_success(fail_on_warnings, fail_on_overrides) {
         "### Discipline gate: passed"
@@ -308,8 +324,8 @@ fn render_step_summary(
                 file,
                 "| `{}` | `{}` | `{}` | {} | {} |",
                 ov.gate,
-                cell(&ov.directive),
-                cell(&ov.subject),
+                cell_code(&ov.directive),
+                cell_code(&ov.subject),
                 cell(&ov.reason),
                 src
             )?;
@@ -328,7 +344,7 @@ fn render_step_summary(
                 v.gate,
                 cell(&v.title),
                 location(v)
-                    .map(|l| format!("`{}`", cell(&l)))
+                    .map(|l| format!("`{}`", cell_code(&l)))
                     .unwrap_or_else(|| "—".into()),
                 cell(&v.message),
                 cell(v.remediation.as_deref().unwrap_or("—"))
@@ -711,6 +727,51 @@ mod tests {
         assert_eq!(
             prompt,
             "No discipline violations found (2 gates passed, 51 items examined).\n"
+        );
+    }
+
+    #[test]
+    fn test_render_step_summary_escapes_html_in_table_cells() {
+        let mut o1 = GateOutcome::new("shell-secrets");
+        o1.examined = 1;
+        o1.violations.push(Violation {
+            gate: "shell-secrets",
+            severity: Severity::Error,
+            title: "Secret <Key> Detected".into(),
+            file: Some("<pr-body>".into()),
+            line: Some(42),
+            message: "Contains <token> & raw `value`".into(),
+            remediation: Some("Replace <token> with env var".into()),
+        });
+
+        let summary = CheckSummary {
+            base: "main".to_string(),
+            errors: 1,
+            warnings: 0,
+            notes: 0,
+            overrides: 0,
+            baselined: 0,
+            outcomes: vec![o1],
+            planned_gates: vec![],
+        };
+
+        let mut buf = Vec::new();
+        render_step_summary_to_writer(&mut buf, &summary, false, false).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+
+        assert!(
+            out.contains("**Secret &lt;Key&gt; Detected**"),
+            "expected escaped title in: {out}"
+        );
+        assert!(
+            out.contains(
+                "Contains &lt;token&gt; &amp; raw `value`<br>_Replace &lt;token&gt; with env var_"
+            ),
+            "expected escaped message and remediation in: {out}"
+        );
+        assert!(
+            out.contains("`<pr-body>:42`"),
+            "expected code span for location to retain raw backtick content in: {out}"
         );
     }
 }

@@ -189,7 +189,7 @@ where
     }
 
     let mut stale_count = 0;
-    let mut stale_by_gate: BTreeMap<String, usize> = BTreeMap::new();
+    let mut stale_entries_by_gate: BTreeMap<String, Vec<&BaselineEntry>> = BTreeMap::new();
 
     let mut consumed_fps = matched_by_entry;
     for entry in &baseline.findings {
@@ -200,17 +200,43 @@ where
             }
         }
         stale_count += 1;
-        *stale_by_gate.entry(entry.gate.clone()).or_insert(0) += 1;
+        stale_entries_by_gate
+            .entry(entry.gate.clone())
+            .or_default()
+            .push(entry);
     }
 
-    if stale_count > 0 {
-        for (gate, count) in &stale_by_gate {
-            if let Some(outcome) = outcomes.iter_mut().find(|o| o.gate == gate) {
-                let suffix = if *count == 1 { "y" } else { "ies" };
-                outcome.notes.push(format!(
-                    "{count} stale baseline entr{suffix} (resolved findings): run `discipline baseline --write` to ratchet down"
-                ));
+    let mut stale_by_gate: BTreeMap<String, usize> = BTreeMap::new();
+    for (gate, entries) in &stale_entries_by_gate {
+        stale_by_gate.insert(gate.clone(), entries.len());
+        if let Some(outcome) = outcomes.iter_mut().find(|o| o.gate == *gate) {
+            if !outcome.enabled {
+                continue;
             }
+            let count = entries.len();
+            let suffix = if count == 1 { "y" } else { "ies" };
+            let sample = entries
+                .iter()
+                .take(2)
+                .map(|e| {
+                    if e.path.is_empty() {
+                        format!("`{}`", e.rule)
+                    } else {
+                        format!("`{}` in `{}`", e.rule, e.path)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sample_str = if sample.is_empty() {
+                String::new()
+            } else if count > 2 {
+                format!(" (e.g. {sample}, ...)")
+            } else {
+                format!(" ({sample})")
+            };
+            outcome.notes.push(format!(
+                "{count} stale baseline entr{suffix} (resolved findings){sample_str}: run `discipline baseline --write` to ratchet down"
+            ));
         }
     }
 

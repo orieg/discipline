@@ -122,12 +122,51 @@ fn test_baseline_stale_entry_reported_as_note() {
 
     let outcome = run.outcome("unsafe-safety-comment");
     let notes = outcome["notes"].as_array().unwrap();
+    let note = notes
+        .iter()
+        .find(|n| {
+            n.as_str()
+                .unwrap()
+                .contains("stale baseline entry (resolved findings)")
+        })
+        .expect("expected stale baseline note in outcome notes")
+        .as_str()
+        .unwrap();
     assert!(
-        notes.iter().any(|n| n
-            .as_str()
-            .unwrap()
-            .contains("stale baseline entry (resolved findings)")),
-        "expected stale baseline note in {notes:?}"
+        note.contains("`Unsafe Without SAFETY Comment` in `src/lib.rs`"),
+        "expected sample rule and path in stale baseline note: {note}"
+    );
+}
+
+#[test]
+fn test_baseline_stale_entry_suppressed_when_gate_disabled() {
+    let repo = Repo::new();
+    repo.write(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n",
+    );
+    repo.commit("feat: initial unsafe");
+
+    repo.run(&["baseline", "--write"], &[]);
+
+    // Now resolve the finding by adding the required SAFETY comment
+    repo.write(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    // SAFETY: caller guarantees valid pointer\n    unsafe { *p }\n}\n",
+    );
+    repo.commit("fix: add safety comment");
+
+    // Check with the gate explicitly disabled
+    let run = repo.check_with_pr(&["--disable", "unsafe-safety-comment"], WEAKENING_PR);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    let outcome = run.outcome("unsafe-safety-comment");
+    assert!(!outcome["enabled"].as_bool().unwrap());
+    let notes = outcome["notes"].as_array().unwrap();
+    assert!(
+        !notes
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("stale baseline entry")),
+        "stale baseline note must be suppressed for disabled gates, got: {notes:?}"
     );
 }
 

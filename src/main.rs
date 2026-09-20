@@ -214,6 +214,111 @@ fn detect_pr_title_from_ci() -> Option<String> {
     None
 }
 
+fn write_structured_reports(
+    summary: &discipline::guards::CheckSummary,
+    report_gitlab: Option<&Path>,
+    report_junit: Option<&Path>,
+    report_sarif: Option<&Path>,
+    fail_on_warnings: bool,
+) -> Result<()> {
+    if let Some(path) = report_gitlab {
+        let content = discipline::report::gitlab::format_gitlab(summary);
+        std::fs::write(path, content).with_context(|| {
+            format!(
+                "failed to write GitLab Code Quality report {}",
+                path.display()
+            )
+        })?;
+    }
+    if let Some(path) = report_junit {
+        let content = discipline::report::junit::format_junit(summary, fail_on_warnings);
+        std::fs::write(path, content)
+            .with_context(|| format!("failed to write JUnit report {}", path.display()))?;
+    }
+    if let Some(path) = report_sarif {
+        let sarif_val = discipline::report::sarif::format_sarif(summary);
+        let content = serde_json::to_string_pretty(&sarif_val)?;
+        std::fs::write(path, content)
+            .with_context(|| format!("failed to write SARIF report {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyhow::Error) {
+    let mut fatal_outcome = discipline::guards::GateOutcome {
+        gate: "engine",
+        suite: "engine",
+        enabled: true,
+        examined: 0,
+        inline_exemptions: 0,
+        baselined: 0,
+        notes: Vec::new(),
+        violations: Vec::new(),
+        overrides: Vec::new(),
+    };
+    fatal_outcome.add_violation(
+        discipline::guards::Severity::Error,
+        "engine",
+        1,
+        format!("fatal error during check execution: {err}"),
+        "inspect error details and ensure environment/git state is valid",
+    );
+    let err_summary = discipline::guards::CheckSummary {
+        base: base.to_string(),
+        errors: 1,
+        warnings: 0,
+        notes: 0,
+        overrides: 0,
+        baselined: 0,
+        planned_gates: discipline::config::GATES
+            .iter()
+            .filter(|g| !g.available)
+            .map(|g| g.id)
+            .collect(),
+        outcomes: vec![fatal_outcome],
+    };
+    if let Some(path) = &args.json_out {
+        let _ = std::fs::write(
+            path,
+            serde_json::to_string_pretty(&err_summary).unwrap_or_default(),
+        );
+    }
+    if let Some(path) = &args.output_file {
+        let _ = std::fs::write(
+            path,
+            discipline::report::format_report_content(
+                &err_summary,
+                args.format,
+                args.fail_on_warnings,
+                false,
+            )
+            .unwrap_or_default(),
+        );
+    }
+    let report_gitlab = args.report_gitlab.as_deref().or_else(|| {
+        if is_gitlab {
+            Some(Path::new("gl-codequality.json"))
+        } else {
+            None
+        }
+    });
+    let report_junit = args.report_junit.as_deref().or_else(|| {
+        if is_gitlab {
+            Some(Path::new("junit.xml"))
+        } else {
+            None
+        }
+    });
+    let report_sarif = args.report_sarif.as_deref();
+    let _ = write_structured_reports(
+        &err_summary,
+        report_gitlab,
+        report_junit,
+        report_sarif,
+        args.fail_on_warnings,
+    );
+}
+
 fn check(args: CheckArgs) -> Result<bool> {
     if args.trust_workspace {
         std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
@@ -224,7 +329,13 @@ fn check(args: CheckArgs) -> Result<bool> {
         args.commit.as_deref(),
         args.commit_range.as_deref(),
     );
-    let git = GitCtx::open(&base_ref, args.staged)?;
+    let git = match GitCtx::open(&base_ref, args.staged) {
+        Ok(g) => g,
+        Err(err) => {
+            emit_fatal_reports(&args, is_gitlab, &base_ref, &err);
+            return Err(err);
+        }
+    };
     let extra_fail = if args.fail_on_overrides {
         Some(true)
     } else {
@@ -241,17 +352,24 @@ fn check(args: CheckArgs) -> Result<bool> {
         Some(non_empty_sources)
     };
     let (config, config_path) =
-        load_config(&args.config, Some(git.root()), extra_fail, extra_sources)?;
+        match load_config(&args.config, Some(git.root()), extra_fail, extra_sources) {
+            Ok(c) => c,
+            Err(err) => {
+                emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
+                return Err(err);
+            }
+        };
 
     let is_push_or_commit = discipline::gitctx::is_push_event_environment()
         || args.commit.is_some()
         || args.commit_range.is_some();
 
     let pr_title = if args.staged {
-        args.pr_title
+        args.pr_title.clone()
     } else {
         let explicit = args
             .pr_title
+            .clone()
             .or_else(|| std::env::var("PR_TITLE").ok())
             .filter(|t| !t.trim().is_empty())
             .or_else(detect_pr_title_from_ci);
@@ -302,7 +420,7 @@ fn check(args: CheckArgs) -> Result<bool> {
         None
     };
 
-    let explicit_baseline = args.baseline_file.or_else(|| {
+    let explicit_baseline = args.baseline_file.clone().or_else(|| {
         std::env::var("DISCIPLINE_BASELINE")
             .ok()
             .filter(|s| !s.trim().is_empty())
@@ -322,10 +440,18 @@ fn check(args: CheckArgs) -> Result<bool> {
     let (baseline_path_ref, loaded_baseline) = if !no_baseline {
         let baseline_path = git.root().join(&baseline_filename);
         if baseline_path.exists() {
-            let b = discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path)?;
+            let b = match discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path) {
+                Ok(b) => b,
+                Err(err) => {
+                    emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
+                    return Err(err);
+                }
+            };
             (Some(baseline_filename), Some(b))
         } else if explicit_baseline.is_some() {
-            bail!("baseline file `{}` does not exist", baseline_path.display());
+            let err = anyhow::anyhow!("baseline file `{}` does not exist", baseline_path.display());
+            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
+            return Err(err);
         } else {
             (None, None)
         }
@@ -352,56 +478,7 @@ fn check(args: CheckArgs) -> Result<bool> {
     let summary = match run_checks(&config, args.suite, &ctx) {
         Ok(s) => s,
         Err(err) => {
-            let mut fatal_outcome = discipline::guards::GateOutcome {
-                gate: "engine",
-                suite: "engine",
-                enabled: true,
-                examined: 0,
-                inline_exemptions: 0,
-                baselined: 0,
-                notes: Vec::new(),
-                violations: Vec::new(),
-                overrides: Vec::new(),
-            };
-            fatal_outcome.add_violation(
-                discipline::guards::Severity::Error,
-                "engine",
-                1,
-                format!("fatal error during check execution: {err}"),
-                "inspect error details and ensure environment/git state is valid",
-            );
-            let err_summary = discipline::guards::CheckSummary {
-                base: git.base_label().to_string(),
-                errors: 1,
-                warnings: 0,
-                notes: 0,
-                overrides: 0,
-                baselined: 0,
-                planned_gates: discipline::config::GATES
-                    .iter()
-                    .filter(|g| !g.available)
-                    .map(|g| g.id)
-                    .collect(),
-                outcomes: vec![fatal_outcome],
-            };
-            if let Some(path) = &args.json_out {
-                let _ = std::fs::write(
-                    path,
-                    serde_json::to_string_pretty(&err_summary).unwrap_or_default(),
-                );
-            }
-            if let Some(path) = &args.output_file {
-                let _ = std::fs::write(
-                    path,
-                    discipline::report::format_report_content(
-                        &err_summary,
-                        args.format,
-                        args.fail_on_warnings,
-                        false,
-                    )
-                    .unwrap_or_default(),
-                );
-            }
+            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
             return Err(err);
         }
     };
@@ -457,42 +534,29 @@ fn check(args: CheckArgs) -> Result<bool> {
     }
 
     // Auto-bundle or explicit report outputs for GitLab CI / multi-CI
-    let report_gitlab = args.report_gitlab.or_else(|| {
+    let report_gitlab = args.report_gitlab.as_deref().or_else(|| {
         if is_gitlab {
-            Some(std::path::PathBuf::from("gl-codequality.json"))
+            Some(Path::new("gl-codequality.json"))
         } else {
             None
         }
     });
-    let report_junit = args.report_junit.or_else(|| {
+    let report_junit = args.report_junit.as_deref().or_else(|| {
         if is_gitlab {
-            Some(std::path::PathBuf::from("junit.xml"))
+            Some(Path::new("junit.xml"))
         } else {
             None
         }
     });
-    let report_sarif = args.report_sarif;
+    let report_sarif = args.report_sarif.as_deref();
 
-    if let Some(path) = &report_gitlab {
-        let content = discipline::report::gitlab::format_gitlab(&summary);
-        std::fs::write(path, content).with_context(|| {
-            format!(
-                "failed to write GitLab Code Quality report {}",
-                path.display()
-            )
-        })?;
-    }
-    if let Some(path) = &report_junit {
-        let content = discipline::report::junit::format_junit(&summary, args.fail_on_warnings);
-        std::fs::write(path, content)
-            .with_context(|| format!("failed to write JUnit report {}", path.display()))?;
-    }
-    if let Some(path) = &report_sarif {
-        let sarif_val = discipline::report::sarif::format_sarif(&summary);
-        let content = serde_json::to_string_pretty(&sarif_val)?;
-        std::fs::write(path, content)
-            .with_context(|| format!("failed to write SARIF report {}", path.display()))?;
-    }
+    write_structured_reports(
+        &summary,
+        report_gitlab,
+        report_junit,
+        report_sarif,
+        args.fail_on_warnings,
+    )?;
 
     Ok(summary.is_success(args.fail_on_warnings, fail_on_overrides))
 }
