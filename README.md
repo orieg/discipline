@@ -85,7 +85,7 @@ curl -fsSL https://orieg.github.io/discipline/install.sh | bash
 Custom destination directory or pinned release tag:
 
 ```bash
-bash install.sh --to ~/.local/bin --version v0.4.1
+bash install.sh --to ~/.local/bin --version v0.4.2
 ```
 
 ### Debian / Ubuntu (APT)
@@ -175,7 +175,7 @@ jobs:
           fail_on_warnings: true
 ```
 
-The floating `@v0` ref automatically tracks the latest `v0.x.y` release while pinning against breaking changes. Use `@v0.4.1` if you require immutable release tag pinning.
+The floating `@v0` ref automatically tracks the latest `v0.x.y` release while pinning against breaking changes. Use `@v0.4.2` if you require immutable release tag pinning.
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding a `removes:` directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
 

@@ -397,7 +397,7 @@ Use [`templates/argo-workflow-template.yaml`](https://github.com/orieg/disciplin
 ```yaml
 repos:
   - repo: https://github.com/orieg/discipline
-    rev: v0.4.1
+    rev: v0.4.2
     hooks:
       - id: discipline          # compiles via cargo
       # Or: - id: discipline-system # uses pre-installed binary on PATH
@@ -413,7 +413,7 @@ discipline check --staged
 Official multi-arch (`linux/amd64`, `linux/arm64`) minimal OCI container images are published to GitHub Container Registry:
 - `ghcr.io/orieg/discipline:latest`
 - `ghcr.io/orieg/discipline:v0`
-- `ghcr.io/orieg/discipline:v0.4.1`
+- `ghcr.io/orieg/discipline:v0.4.2`
 
 Images are built on Alpine Linux with the statically linked musl `discipline` binary and `git` on `PATH`.
 
