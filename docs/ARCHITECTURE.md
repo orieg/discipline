@@ -307,6 +307,13 @@ Releases are triggered exclusively by pushing a `vX.Y.Z` tag:
 4. **Smoke test:** Action downloads published release assets on Linux and macOS, validates checksums, tests clean and negative fixtures, and verifies GitHub attestations.
 5. **Move major tag:** Advances floating major version tag (`v0`) only after all smoke tests succeed.
 
+### 8.3 CodeQL Security Pipeline (`.github/workflows/codeql.yml`)
+
+Static security analysis runs on pull requests, pushes to `main`, and on a weekly schedule using GitHub CodeQL Advanced setup (`github/codeql-action` pinned by SHA):
+- **Matrix analysis:** Analyzes `rust`, `actions`, and `python` with `build-mode: none`.
+- **Query suite:** Configured with `queries: security-extended` for deep vulnerability scanning.
+- **Toolchain:** Pins `dtolnay/rust-toolchain` stable for Rust AST and macro expansion.
+
 ---
 
 ## 9. Test Discipline for Gates
