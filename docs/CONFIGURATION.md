@@ -147,6 +147,7 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `examined_items` | Total number of items examined across all enabled gates |
 | `report` | Path of the JSON report |
 | `install_error` | Why installing the binary failed (empty on success) |
+| `bin` | Path to the installed discipline executable |
 <!-- /generated -->
 
 ---
