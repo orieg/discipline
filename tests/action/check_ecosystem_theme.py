@@ -222,6 +222,22 @@ def check_local_discipline(repo_root: str) -> List[str]:
     else:
         errors.append("docs/_layouts/default.html not found")
 
+    # 4. Check docs/apt/index.html if present
+    apt_path = os.path.join(repo_root, "docs", "apt", "index.html")
+    if os.path.isfile(apt_path):
+        with open(apt_path, "r", encoding="utf-8") as f:
+            apt_content = f.read()
+        errs = validate_contract_script(apt_content, legacy_key="discipline-theme", strict_v1=True)
+        errors.extend([f"docs/apt/index.html: {e}" for e in errs])
+
+    # 5. Check docs/rpm/index.html if present
+    rpm_path = os.path.join(repo_root, "docs", "rpm", "index.html")
+    if os.path.isfile(rpm_path):
+        with open(rpm_path, "r", encoding="utf-8") as f:
+            rpm_content = f.read()
+        errs = validate_contract_script(rpm_content, legacy_key="discipline-theme", strict_v1=True)
+        errors.extend([f"docs/rpm/index.html: {e}" for e in errs])
+
     return errors
 
 

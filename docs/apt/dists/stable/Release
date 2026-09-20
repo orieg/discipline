@@ -1,0 +1,13 @@
+Origin: Discipline
+Label: Discipline
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: main
+Description: Official Discipline APT Repository
+Date: Sun, 20 Sep 2026 06:50:04 UTC
+SHA256:
+ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 main/binary-amd64/Packages
+ 36e84c7d9db1d2db0cd19ec08e02918ebf80963c66a5c7a4c8b823b19c5513f4 29 main/binary-amd64/Packages.gz
+ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 main/binary-arm64/Packages
+ 36e84c7d9db1d2db0cd19ec08e02918ebf80963c66a5c7a4c8b823b19c5513f4 29 main/binary-arm64/Packages.gz

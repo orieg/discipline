@@ -126,6 +126,24 @@ jobs:
           path: discipline-${{ matrix.target }}.tar.gz
           if-no-files-found: error
           retention-days: 3
+      - name: Package Linux OS packages (deb & rpm)
+        if: matrix.static
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y rpm
+          scripts/package_deb.sh "${VERSION}" "${TARGET%%-*}" "target/${TARGET}/release/discipline" packages
+          scripts/package_rpm.sh "${VERSION}" "${TARGET%%-*}" "target/${TARGET}/release/discipline" packages
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: matrix.static
+        with:
+          name: discipline-packages-${{ matrix.target }}
+          path: packages/*
+          if-no-files-found: error
+          retention-days: 3
 
   publish:
     needs: [verify, build]
@@ -151,11 +169,14 @@ jobs:
           # A build leg that silently produced nothing must not yield a release
           # that is missing a platform.
           [ "${count}" -eq 4 ] || { echo "::error::expected 4 archives, found ${count}"; exit 1; }
-          sha256sum discipline-*.tar.gz > SHA256SUMS
+          sha256sum discipline-*.tar.gz discipline_*.deb discipline-*.rpm > SHA256SUMS
           cat SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/discipline-*.tar.gz
+          subject-path: |
+            dist/discipline-*.tar.gz
+            dist/discipline_*.deb
+            dist/discipline-*.rpm
       - name: Create the GitHub release
         shell: bash
         env:
@@ -184,7 +205,7 @@ jobs:
           else
             gh release create "${TAG}" --draft "${flags[@]}"
           fi
-          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/SHA256SUMS --clobber
+          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/discipline_*.deb dist/discipline-*.rpm dist/SHA256SUMS --clobber
           gh release edit "${TAG}" --draft=false
 
   # Consume the release exactly as a user does: download, verify the checksum,

@@ -396,6 +396,45 @@ docker run --rm -v "$PWD":/workspace ghcr.io/orieg/discipline:latest check --bas
 
 ### Standalone CLI
 
+Discipline is available as a standalone static binary across Linux and macOS.
+
+#### Installation Methods
+
+- **Quick Install (curl | bash)**:
+  ```bash
+  curl -fsSL https://orieg.github.io/discipline/install.sh | bash
+  ```
+
+- **Debian / Ubuntu (APT)**:
+  ```bash
+  echo "deb [trusted=yes] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
+  sudo apt update && sudo apt install -y discipline
+  ```
+
+- **Enterprise Linux / Fedora (RPM)**:
+  ```bash
+  sudo dnf config-manager --add-repo https://orieg.github.io/discipline/rpm/discipline.repo
+  sudo dnf install -y discipline
+  ```
+
+- **macOS (Homebrew & MacPorts)**:
+  ```bash
+  # Homebrew
+  brew tap orieg/tap && brew install discipline
+
+  # MacPorts
+  sudo port install discipline
+  ```
+
+- **Cargo**:
+  ```bash
+  cargo binstall discipline
+  # or from source:
+  cargo install --git https://github.com/orieg/discipline
+  ```
+
+#### CLI Execution
+
 ```bash
 discipline check --base origin/main   # compare working tree against merge base
 discipline check --staged             # check staged index against HEAD

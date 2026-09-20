@@ -763,6 +763,8 @@
     <li><a href="#gates">Gate Reference</a></li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#install">Install</a></li>
+    <li><a href="apt/">APT</a></li>
+    <li><a href="rpm/">RPM</a></li>
   </ul>
 
   <div class="nav-actions">
@@ -1253,6 +1255,27 @@ discipline self-test</div>
             <td><span class="gate-badge badge-lang">Rust, Go, Python, C/C++</span></td>
             <td>benchmark drift via harness adapters (deterministic counts or BCa intervals)</td>
           </tr>
+          <tr>
+            <td class="gate-id">archive-contents</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>distribution archive must contain required paths and zero forbidden developer artifacts</td>
+          </tr>
+          <tr>
+            <td class="gate-id">manifest-sync</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>reconcile git-tracked files against packaging manifest declarations</td>
+          </tr>
+          <tr>
+            <td class="gate-id">version-lockstep</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>version declarations across headers, manifests, and files must remain in lockstep</td>
+          </tr>
 <!-- /generated -->
         </tbody>
       </table>
@@ -1541,10 +1564,40 @@ discipline self-test</div>
   <section class="section-block" id="install">
     <div class="section-head">
       <div class="section-title">Installation & Distribution</div>
-      <p class="section-desc">Available as a pre-compiled static binary, container image, or from source via Cargo.</p>
+      <p class="section-desc">Available as a one-line installer, native APT/RPM packages, Homebrew formula, pre-compiled static binary, container image, or from source via Cargo.</p>
     </div>
 
     <div class="install-grid">
+      <div class="install-card">
+        <h4>Quick Install (Linux & macOS)</h4>
+        <div class="install-snippet">curl -fsSL https://orieg.github.io/discipline/install.sh | bash</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Automated OS/arch detection with cryptographic SHA-256 verification.</p>
+      </div>
+      <div class="install-card">
+        <h4>Debian / Ubuntu (APT)</h4>
+        <div class="install-snippet">echo "deb [trusted=yes] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list && sudo apt update && sudo apt install -y discipline</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Official APT repo for Debian 11+ and Ubuntu 20.04+. <a href="apt/" style="color: var(--accent);">Browse repo &rarr;</a></p>
+      </div>
+      <div class="install-card">
+        <h4>Enterprise Linux / Fedora (RPM)</h4>
+        <div class="install-snippet">sudo dnf config-manager --add-repo https://orieg.github.io/discipline/rpm/discipline.repo && sudo dnf install -y discipline</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Official RPM repo for RHEL 8/9/10, Fedora, CentOS, Rocky, Alma. <a href="rpm/" style="color: var(--accent);">Browse repo &rarr;</a></p>
+      </div>
+      <div class="install-card">
+        <h4>Homebrew (macOS & Linux)</h4>
+        <div class="install-snippet">brew tap orieg/tap && brew install discipline</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Native formula for Apple Silicon, Intel macOS, and Linux.</p>
+      </div>
+      <div class="install-card">
+        <h4>MacPorts (macOS)</h4>
+        <div class="install-snippet">sudo port install discipline</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">MacPorts Portfile for macOS Darwin systems.</p>
+      </div>
+      <div class="install-card">
+        <h4>Cargo Binstall (Pre-built)</h4>
+        <div class="install-snippet">cargo binstall discipline</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Fast binary fetch directly from verified GitHub release assets.</p>
+      </div>
       <div class="install-card">
         <h4>Cargo (From Source)</h4>
         <div class="install-snippet">cargo install --git https://github.com/orieg/discipline</div>
@@ -1556,14 +1609,14 @@ discipline self-test</div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Non-root Alpine container with static binary.</p>
       </div>
       <div class="install-card">
-        <h4>GitLab CI/CD Component</h4>
-        <div class="install-snippet">component: $CI_SERVER_FQDN/orieg/discipline@v0.2.0</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">GitLab 16.0+ CI/CD Catalog Component.</p>
-      </div>
-      <div class="install-card">
         <h4>GitHub Action</h4>
         <div class="install-snippet">uses: orieg/discipline@v0</div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Composite action with automatic binary bootstrap.</p>
+      </div>
+      <div class="install-card">
+        <h4>GitLab CI/CD Component</h4>
+        <div class="install-snippet">component: $CI_SERVER_FQDN/orieg/discipline@v0.2.0</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">GitLab 16.0+ CI/CD Catalog Component.</p>
       </div>
       <div class="install-card">
         <h4>Forgejo Action</h4>
@@ -1598,7 +1651,9 @@ discipline self-test</div>
       <strong>Discipline</strong> is open source software released under dual MIT / Apache-2.0 licenses.<br>
       Maintained by <a href="https://nicolas.brousse.info/">Nicolas Brousse</a> &bull;
       <a href="https://github.com/orieg/discipline">GitHub</a> &bull;
-      <a href="./">Docs</a>
+      <a href="./">Docs</a> &bull;
+      <a href="apt/">APT Repo</a> &bull;
+      <a href="rpm/">RPM Repo</a>
     </p>
   </div>
 </footer>

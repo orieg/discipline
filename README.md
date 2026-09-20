@@ -50,9 +50,92 @@ Discipline inspects the **diff** against the merge base using `tree-sitter` AST 
 | `test-budget` | integrity | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
 | `command` | verification | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | `bench-regression` | bench | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
+| `archive-contents` | integrity | any | distribution archive must contain required paths and zero forbidden developer artifacts |
+| `manifest-sync` | integrity | any | reconcile git-tracked files against packaging manifest declarations |
+| `version-lockstep` | integrity | any | version declarations across headers, manifests, and files must remain in lockstep |
 <!-- /generated -->
 
-Seven gates inspect text, diffs, or repository metadata across any language. The four AST gates use per-language packs (Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C/C++, C#, Ruby) with Kotlin planned. `bench-regression` tracks micro-benchmarks with statistical variance bounds and interval degradation when sampling distributions lack confidence bounds.
+## Installation
+
+Discipline is distributed as a standalone static binary, native operating system packages (APT, RPM, Homebrew, MacPorts), cargo toolchain binary, or container image:
+
+### Quick Install (Linux & macOS)
+
+Install the latest pre-compiled static binary verified with cryptographic SHA-256 checksums:
+
+```bash
+curl -fsSL https://orieg.github.io/discipline/install.sh | bash
+```
+
+Custom destination directory or pinned release tag:
+
+```bash
+curl -fsSL https://orieg.github.io/discipline/install.sh | bash -s -- --to ~/.local/bin --version v0.2.2
+```
+
+### Debian / Ubuntu (APT)
+
+Add the official APT repository and install via `apt`:
+
+```bash
+# 1. Add repository source
+echo "deb [trusted=yes] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
+
+# 2. Update package cache and install
+sudo apt update
+sudo apt install -y discipline
+```
+
+Direct `.deb` package downloads and repository metadata: [Discipline APT Repository](https://orieg.github.io/discipline/apt/).
+
+### Enterprise Linux / Fedora (RPM)
+
+Add the official RPM repository and install via `dnf` or `yum`:
+
+```bash
+# 1. Add repository configuration
+sudo dnf config-manager --add-repo https://orieg.github.io/discipline/rpm/discipline.repo
+
+# 2. Install discipline binary
+sudo dnf install -y discipline
+```
+
+Direct `.rpm` package downloads and repodata manifests: [Discipline RPM Repository](https://orieg.github.io/discipline/rpm/).
+
+### macOS (Homebrew & MacPorts)
+
+- **Homebrew**:
+  ```bash
+  brew tap orieg/tap
+  brew install discipline
+  ```
+  Or direct formula install:
+  ```bash
+  brew install https://raw.githubusercontent.com/orieg/discipline/main/packaging/homebrew/discipline.rb
+  ```
+- **MacPorts**:
+  ```bash
+  sudo port install discipline
+  ```
+
+### Rust Toolchain
+
+- **`cargo-binstall`** (pre-compiled binary fetch):
+  ```bash
+  cargo binstall discipline
+  ```
+- **`cargo install`** (from source via git, requires `rustc` 1.80+):
+  ```bash
+  cargo install --git https://github.com/orieg/discipline
+  ```
+
+### Binary Verification & Provenance
+
+Each release publishes pre-compiled binaries with SHA-256 checksums and SLSA Build Level 2 attestations:
+
+```bash
+gh attestation verify discipline-x86_64-unknown-linux-musl.tar.gz --repo orieg/discipline
+```
 
 ## Quickstart
 

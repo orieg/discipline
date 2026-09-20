@@ -1,0 +1,30 @@
+# -*- coding: utf-8; mode: tcl; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- vim:fenc=utf-8:ft=tcl:et:sw=4:ts=4:sts=4
+
+PortSystem          1.0
+PortGroup           cargo 1.0
+
+name                discipline
+version             0.2.2
+categories          devel
+platforms           darwin linux
+license             {MIT Apache-2.0}
+maintainers         openmaintainer
+
+description         Universal CI/CD gatekeeper and AI coding agent diff sentinel
+long_description    Discipline transforms the verification rigors from high-assurance algorithm \
+                    repositories into a single, declarative static binary wrapped in a composite \
+                    GitHub, Gitea, and Forgejo Action. It traverses AST diffs via tree-sitter \
+                    to reject assertion weakening, vacuous tests, and test erosion.
+
+homepage            https://orieg.github.io/discipline/
+master_sites        https://github.com/orieg/discipline/archive/refs/tags/v${version}.tar.gz?dummy=
+distname            discipline-${version}
+
+checksums           rmd160  0000000000000000000000000000000000000000 \
+                    sha256  0000000000000000000000000000000000000000000000000000000000000000
+
+installs_libs       no
+
+destroot {
+    xinstall -m 0755 ${worksrcpath}/target/release/discipline ${destroot}${prefix}/bin/
+}

@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discipline — Official RPM Repository</title>
+  <meta name="description" content="Official RPM repository for Discipline — universal CI/CD diff sentinel and AI coding agent gatekeeper.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1f6e1;&#xfe0f;</text></svg>">
+<script>
+    (function() {
+      'use strict';
+      if (window.__disciplineApplyTheme) { return; }
+      var KEY = 'orieg-theme';
+      var LEGACY_KEY = 'discipline-theme';
+      var LABELS = {
+        system: 'Color theme: system (click to switch to light)',
+        light: 'Color theme: light (click to switch to dark)',
+        dark: 'Color theme: dark (click to switch to system)'
+      };
+      function stored() {
+        try {
+          var v = localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY);
+          return (v === 'light' || v === 'dark') ? v : null;
+        } catch (e) { return null; }
+      }
+      function systemTheme() {
+        return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      }
+      function apply() {
+        var override = stored();
+        var theme = override || systemTheme();
+        var mode = override || 'system';
+        var root = document.documentElement;
+        root.setAttribute('data-theme', theme);
+        root.setAttribute('data-theme-mode', mode);
+        var buttons = document.querySelectorAll('.theme-toggle');
+        for (var i = 0; i < buttons.length; i++) {
+          buttons[i].setAttribute('aria-label', LABELS[mode]);
+          buttons[i].setAttribute('title', LABELS[mode]);
+        }
+        if (window.__disciplineThemeChanged) { window.__disciplineThemeChanged(theme); }
+      }
+      window.__disciplineApplyTheme = apply;
+      apply();
+      if (window.matchMedia) {
+        var mq = window.matchMedia('(prefers-color-scheme: dark)');
+        if (mq.addEventListener) { mq.addEventListener('change', apply); }
+        else if (mq.addListener) { mq.addListener(apply); }
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', apply);
+      }
+    })();
+  </script>
+  <style>
+
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-inner: #0b1120;
+      --card-hover: #1e293b;
+      --border: #1f293d;
+      --border-accent: rgba(56, 189, 248, 0.4);
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --heading: #f8fafc;
+      --accent: #38bdf8;
+      --accent-hover: #7dd3fc;
+      --accent-green: #10b981;
+      --code-bg: #030712;
+      --navbar-bg: rgba(9, 13, 22, 0.85);
+      --nav-pill-bg: rgba(56, 189, 248, 0.1);
+      --nav-pill-border: rgba(56, 189, 248, 0.25);
+      --badge-bg: #111827;
+      --badge-border: #1f293d;
+      --badge-text: #38bdf8;
+      --badge-near: #facc15;
+      --badge-gap: #f87171;
+      --table-header-color: #f8fafc;
+      --table-row-border: #1f293d;
+      color-scheme: dark;
+    }
+
+    [data-theme="light"] {
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --card-inner: #f1f5f9;
+      --card-hover: #f8fafc;
+      --border: #e2e8f0;
+      --border-accent: rgba(2, 132, 199, 0.4);
+      --text: #334155;
+      --text-muted: #64748b;
+      --heading: #0f172a;
+      --accent: #0284c7;
+      --accent-hover: #0369a1;
+      --accent-green: #059669;
+      --code-bg: #0f172a;
+      --navbar-bg: rgba(248, 250, 252, 0.88);
+      --nav-pill-bg: rgba(2, 132, 199, 0.08);
+      --nav-pill-border: rgba(2, 132, 199, 0.25);
+      --badge-bg: #ffffff;
+      --badge-border: #e2e8f0;
+      --badge-text: #0284c7;
+      --badge-near: #b45309;
+      --badge-gap: #be123c;
+      --table-header-color: #0f172a;
+      --table-row-border: #e2e8f0;
+      color-scheme: light;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .navbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--navbar-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .nav-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-weight: 700;
+      font-size: 1.2rem;
+      color: var(--heading);
+      text-decoration: none;
+      flex-shrink: 0;
+    }
+    .nav-logo {
+      font-size: 1.4rem;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .nav-scroll {
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+    }
+    .nav-links {
+      display: flex;
+      gap: 1.25rem;
+      align-items: center;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: color 0.15s ease;
+      white-space: nowrap;
+    }
+    .nav-links a:hover, .nav-links a.active { color: var(--accent); }
+    .nav-pill {
+      padding: 0.35rem 0.75rem;
+      background: var(--nav-pill-bg);
+      border: 1px solid var(--nav-pill-border);
+      border-radius: 6px;
+      color: var(--accent) !important;
+      font-weight: 600 !important;
+    }
+    @media (max-width: 768px) {
+      .navbar {
+        padding: 0.6rem 1rem;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.5rem;
+      }
+      .nav-top { width: 100%; }
+      .nav-scroll {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 0.2rem;
+        justify-content: flex-start;
+        scrollbar-width: none;
+        -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 28px), transparent 100%);
+        mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 28px), transparent 100%);
+      }
+      .nav-scroll::-webkit-scrollbar { display: none; }
+      .nav-scroll.at-end {
+        -webkit-mask-image: none;
+        mask-image: none;
+      }
+      .nav-links { gap: 0.85rem; }
+    }
+
+    .theme-toggle {
+      background: var(--card-inner);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--heading);
+      font-size: 16px;
+      flex-shrink: 0;
+      transition: all 0.15s ease;
+    }
+    .theme-toggle:hover { border-color: var(--accent); }
+    .theme-icon-system, .theme-icon-sun, .theme-icon-moon { display: none; }
+    [data-theme-mode="system"] .theme-icon-system { display: inline; }
+    [data-theme-mode="light"] .theme-icon-sun { display: inline; }
+    [data-theme-mode="dark"] .theme-icon-moon { display: inline; }
+    :root:not([data-theme-mode]) .theme-icon-system { display: inline; }
+
+    .theme-toggle-mobile { display: flex; }
+    .theme-toggle-desktop { display: none; }
+
+    @media (min-width: 769px) {
+      .theme-toggle-mobile { display: none !important; }
+      .theme-toggle-desktop { display: flex !important; }
+    }
+    @media (max-width: 768px) {
+      .theme-toggle-mobile { display: flex !important; }
+      .theme-toggle-desktop { display: none !important; }
+    }
+
+    .code-copy-wrap { position: relative; }
+    .code-copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      padding: 0.3rem 0.6rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-family: inherit;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card-bg);
+      color: var(--text-muted);
+      cursor: pointer;
+      opacity: 0.75;
+      transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+    .code-copy-btn:hover, .code-copy-btn:focus-visible {
+      opacity: 1;
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    .code-copy-btn.copied {
+      opacity: 1;
+      color: var(--accent-green);
+      border-color: var(--accent-green);
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+    }
+    h1 {
+      font-size: clamp(1.6rem, 4vw, 2.2rem);
+      font-weight: 800;
+      color: var(--heading);
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    h2 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--heading);
+      margin-bottom: 0.75rem;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin-top: 1.5rem;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1.25rem;
+      overflow-x: auto;
+      color: #7dd3fc;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.88rem;
+      line-height: 1.6;
+      margin-top: 0.75rem;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.88em;
+      color: var(--accent);
+    }
+    .table-responsive {
+      overflow-x: auto;
+      width: 100%;
+      -webkit-overflow-scrolling: touch;
+      margin-top: 0.75rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+      min-width: 480px;
+    }
+    th, td {
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--table-row-border);
+    }
+    th {
+      font-weight: 600;
+      color: var(--table-header-color);
+      background: var(--card-inner);
+    }
+    td { color: var(--text); }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 12px;
+      background: var(--badge-bg);
+      border: 1px solid var(--badge-border);
+      color: var(--badge-text);
+      vertical-align: middle;
+      margin-left: 0.5rem;
+    }
+    footer {
+      border-top: 1px solid var(--border);
+      margin-top: 3rem;
+      padding: 2rem 0;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    @media (max-width: 768px) {
+      .container { padding: 0 1rem; margin: 1.5rem auto; }
+      .card { padding: 1.15rem; }
+      pre { padding: 0.9rem; font-size: 0.82rem; }
+    }
+  </style>
+</head>
+<body>
+  <header class="navbar">
+    <div class="nav-top">
+      <a href="../" class="nav-brand">
+        <div class="nav-logo">&#x1f6e1;&#xfe0f;</div>
+        <span>Discipline</span>
+      </a>
+      <button class="theme-toggle theme-toggle-mobile" type="button" onclick="toggleTheme()" aria-label="Toggle color theme" title="Toggle color theme">
+        <span class="theme-icon-system" aria-hidden="true">&#9681;</span>
+        <span class="theme-icon-sun" aria-hidden="true">&#9728;</span>
+        <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
+      </button>
+    </div>
+    <nav class="nav-scroll" aria-label="Site">
+      <ul class="nav-links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../#gates">Gates</a></li>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#install">Install</a></li>
+        <li><a href="../apt/">APT</a></li>
+        <li><a href="../rpm/" class="active">RPM</a></li>
+        <li><a href="https://github.com/orieg/discipline/blob/main/docs/ARCHITECTURE.md">Docs</a></li>
+        <li><a href="https://github.com/orieg/discipline" class="nav-pill">GitHub &bull; v0.2.2</a></li>
+      </ul>
+      <button class="theme-toggle theme-toggle-desktop" type="button" onclick="toggleTheme()" aria-label="Toggle color theme" title="Toggle color theme">
+        <span class="theme-icon-system" aria-hidden="true">&#9681;</span>
+        <span class="theme-icon-sun" aria-hidden="true">&#9728;</span>
+        <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
+      </button>
+    </nav>
+  </header>
+
+  <main>
+  <div class="container">
+    <h1>Discipline RPM Repository <span class="badge">v0.2.2</span></h1>
+    <p style="color: var(--text-muted);">Official YUM / DNF repository for <strong><a href="https://github.com/orieg/discipline">Discipline</a></strong> across Enterprise Linux: RHEL 8/9/10, CentOS Stream, Fedora, Rocky Linux, AlmaLinux, and Amazon Linux 2023.</p>
+
+    <div class="card">
+      <h2>Quick Setup</h2>
+      <p style="color: var(--text-muted); margin-top: 0.5rem;">Configure the official repository using DNF / YUM:</p>
+      <pre><code># 1. Add repository configuration
+sudo dnf config-manager --add-repo https://orieg.github.io/discipline/rpm/discipline.repo
+
+# Or manually download repo file for older YUM / Amazon Linux:
+# sudo curl -sS -o /etc/yum.repos.d/discipline.repo https://orieg.github.io/discipline/rpm/discipline.repo
+
+# 2. Install discipline binary
+sudo dnf install -y discipline</code></pre>
+    </div>
+
+    <div class="card">
+      <h2>Packages in this Repository</h2>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Package</th>
+              <th>Architecture</th>
+              <th>Direct Download</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>discipline</strong></td>
+              <td><code>x86_64</code></td>
+              <td><a href="Packages/x86_64/discipline-0.2.2-1.x86_64.rpm">discipline-0.2.2-1.x86_64.rpm</a></td>
+            </tr>
+            <tr>
+              <td><strong>discipline</strong></td>
+              <td><code>aarch64</code></td>
+              <td><a href="Packages/aarch64/discipline-0.2.2-1.aarch64.rpm">discipline-0.2.2-1.aarch64.rpm</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Supported Platforms &amp; Architectures</h2>
+      <ul style="margin-left: 1.5rem; margin-top: 0.5rem; line-height: 1.8;">
+        <li><strong>x86_64</strong>: Enterprise Linux 8/9/10, Fedora, CentOS Stream, Rocky Linux, AlmaLinux.</li>
+        <li><strong>aarch64 (ARM64)</strong>: AWS Graviton, Ampere Altra, ARM64 servers and containers.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Repository Metadata Files</h2>
+      <p style="color: var(--text-muted); margin-top: 0.5rem;">Direct links to repository configuration and repomd metadata:</p>
+      <ul style="margin-left: 1.5rem; margin-top: 0.5rem; line-height: 1.8;">
+        <li><a href="discipline.repo"><code>discipline.repo</code></a> &mdash; YUM/DNF repository configuration</li>
+        <li><a href="repodata/repomd.xml"><code>repodata/repomd.xml</code></a> &mdash; Repository index metadata</li>
+      </ul>
+    </div>
+
+    <footer>
+      <p style="margin-bottom: 0.75rem; color: var(--text-muted); font-size: 0.85rem;">
+        Judy &amp; Systems Ecosystem:
+        <a href="https://orieg.github.io/judy-cache/">Judy Cache PSR-16</a> &bull;
+        <a href="https://orieg.github.io/php-judy/">PHP Judy</a> &bull;
+        <a href="https://orieg.github.io/judy-polyfill/">Judy Polyfill</a> &bull;
+        <a href="https://orieg.github.io/expanse/">Expanse Engine</a> &bull;
+        <a href="https://orieg.github.io/">Nicolas Brousse (Hub)</a>
+      </p>
+      <p>Maintained by <a href="https://nicolas.brousse.info/">Nicolas Brousse</a> &bull; <a href="https://github.com/orieg/discipline">GitHub</a> &bull; <a href="https://crates.io/crates/discipline">Crates.io</a> &bull; <a href="../apt/">APT Repo</a></p>
+    </footer>
+  </div>
+  </main>
+
+  <script>
+    function toggleTheme() {
+      var KEY = 'orieg-theme';
+      var LEGACY_KEY = 'discipline-theme';
+      var v = null;
+      try { v = localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY); } catch (e) {}
+      var mode = (v === 'light' || v === 'dark') ? v : 'system';
+      var next = mode === 'system' ? 'light' : (mode === 'light' ? 'dark' : 'system');
+      try {
+        if (next === 'system') {
+          localStorage.removeItem(KEY);
+          localStorage.removeItem(LEGACY_KEY);
+        } else {
+          localStorage.setItem(KEY, next);
+          localStorage.removeItem(LEGACY_KEY);
+        }
+      } catch (e) {}
+      if (window.__disciplineApplyTheme) { window.__disciplineApplyTheme(); }
+    }
+  </script>
+  <script>
+    (function() {
+      'use strict';
+      document.querySelectorAll('.nav-scroll, .install-nav').forEach(function(el) {
+        function update() {
+          el.classList.toggle('at-end', el.scrollLeft + el.clientWidth >= el.scrollWidth - 4);
+        }
+        el.addEventListener('scroll', update, { passive: true });
+        window.addEventListener('resize', update);
+        update();
+      });
+
+      if (!navigator.clipboard) { return; }
+      document.querySelectorAll('pre').forEach(function(pre) {
+        var wrap = document.createElement('div');
+        wrap.className = 'code-copy-wrap';
+        pre.parentNode.insertBefore(wrap, pre);
+        wrap.appendChild(pre);
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'code-copy-btn';
+        btn.textContent = 'Copy';
+        btn.setAttribute('aria-label', 'Copy code to clipboard');
+        btn.setAttribute('aria-live', 'polite');
+        btn.addEventListener('click', function() {
+          navigator.clipboard.writeText(pre.innerText.replace(/\n$/, '')).then(function() {
+            btn.textContent = 'Copied \u2713';
+            btn.classList.add('copied');
+            setTimeout(function() {
+              btn.textContent = 'Copy';
+              btn.classList.remove('copied');
+            }, 2000);
+          });
+        });
+        wrap.appendChild(btn);
+      });
+    })();
+  </script>
+</body>
+</html>

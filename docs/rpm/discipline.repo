@@ -1,0 +1,6 @@
+[discipline]
+name=Discipline Enterprise Linux Repository
+baseurl=https://orieg.github.io/discipline/rpm/
+enabled=1
+gpgcheck=0
+repo_gpgcheck=0
