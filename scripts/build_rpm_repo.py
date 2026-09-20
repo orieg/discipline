@@ -29,7 +29,7 @@ def get_default_version() -> str:
             for line in f:
                 if line.startswith("version ="):
                     return line.split("=")[1].strip().strip('"')
-    return "0.2.2"
+    return "0.3.0"
 
 
 def sha256_file(filepath: str) -> str:
@@ -44,7 +44,7 @@ def build_rpm_repo(
     input_dir: str,
     output_dir: str,
     allow_empty: bool = False,
-    version: str = "0.2.2",
+    version: str = "0.3.0",
 ):
     rpm_files = []
     if os.path.isdir(input_dir):

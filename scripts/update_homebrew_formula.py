@@ -16,7 +16,7 @@ def get_default_version() -> str:
         for line in cargo_toml.read_text(encoding="utf-8").splitlines():
             if line.startswith("version = "):
                 return line.split('"')[1]
-    return "0.2.2"
+    return "0.3.0"
 
 
 def parse_checksums(checksums_path: Path) -> dict[str, str]:
