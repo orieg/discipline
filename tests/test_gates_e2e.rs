@@ -1762,6 +1762,75 @@ fn fail_on_overrides_blocks_change_with_exit_1() {
 }
 
 #[test]
+fn allowed_override_actors_permits_authorized_actor_and_blocks_unauthorized() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+[directives]
+fail_on_overrides = true
+allowed_override_actors = ["maintainer-handle", "owner-handle"]
+[gates.test-floor]
+enabled = false
+"#,
+    );
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
+    );
+    repo.commit("test: remove orders\n\nremoves: tests/a.rs orders moved to proptest");
+
+    // 1. Unauthorized actor (e.g. agent or random user) -> exit 1
+    let run_unauthorized = repo.check(&["--actor", "unauthorized-agent"]);
+    assert_eq!(
+        run_unauthorized.code, 1,
+        "should fail when actor is not in allowed_override_actors"
+    );
+
+    // 2. Unspecified actor -> exit 1
+    let run_no_actor = repo.check(&[]);
+    assert_eq!(
+        run_no_actor.code, 1,
+        "should fail when actor is unspecified"
+    );
+
+    // 3. Authorized actor (case-insensitive) -> exit 0
+    let run_authorized = repo.check(&["--actor", "Maintainer-Handle"]);
+    assert_eq!(
+        run_authorized.code, 0,
+        "should pass when actor is authorized: {}",
+        run_authorized.stderr
+    );
+    let outcome = run_authorized.outcome("deletion-rationale");
+    assert_eq!(outcome["overrides"].as_array().unwrap().len(), 1);
+
+    // 4. Authorized via DISCIPLINE_ACTOR environment variable -> exit 0
+    let run_env_actor = repo.run(
+        &["check", "--base", "main"],
+        &[("DISCIPLINE_ACTOR", "owner-handle")],
+    );
+    assert_eq!(
+        run_env_actor.code, 0,
+        "should pass when actor is authorized via env"
+    );
+
+    // 5. Authorized via GITHUB_ACTOR environment variable -> exit 0
+    let run_gh_actor = repo.run(
+        &["check", "--base", "main"],
+        &[("GITHUB_ACTOR", "maintainer-handle")],
+    );
+    assert_eq!(
+        run_gh_actor.code, 0,
+        "should pass when actor is authorized via GITHUB_ACTOR"
+    );
+}
+
+#[test]
 fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
     let repo = Repo::new();
     repo.write(
@@ -4748,6 +4817,40 @@ fn shell_secrets_gate_e2e() {
     assert!(!run_tokens.stdout.contains(&aws_key));
     assert!(!run_tokens.stdout.contains(password));
     assert!(!run_tokens.stderr.contains(&token));
+
+    // 5. Multi-line continuation: docker run with -e on subsequent line (Issue #66)
+    repo.remove("scripts/tokens.sh");
+    repo.write(
+        "scripts/multiline.sh",
+        "#!/usr/bin/env bash\ndocker run \\\n  -e AWS_SECRET_ACCESS_KEY=\"$AWS_SECRET_ACCESS_KEY\" \\\n  amazon/aws-cli:latest\n",
+    );
+    repo.commit("feat: add multiline docker invocation");
+    let run_multiline = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_multiline.code, 1);
+    let outcome_multiline = run_multiline.outcome("shell-secrets");
+    let multiline_violations = outcome_multiline["violations"].as_array().unwrap();
+    assert_eq!(multiline_violations.len(), 1, "{}", run_multiline.stdout);
+    assert_eq!(
+        multiline_violations[0]["title"].as_str().unwrap(),
+        "Unsafe Shell Pattern: ARGV-DOCKER"
+    );
+
+    // 6. Secrets passed as positional arguments to inline interpreter script (Issue #66)
+    repo.remove("scripts/multiline.sh");
+    repo.write(
+        "scripts/inline_args.sh",
+        "#!/usr/bin/env bash\ncalc_hmac=$(python3 -c 'import hmac,sys; print(sys.argv[1])' \"$SECRETS_PASSPHRASE\" \"$enc\")\n",
+    );
+    repo.commit("feat: add inline interpreter positional secret");
+    let run_inline_args = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_inline_args.code, 1);
+    let outcome_inline_args = run_inline_args.outcome("shell-secrets");
+    let inline_violations = outcome_inline_args["violations"].as_array().unwrap();
+    assert_eq!(inline_violations.len(), 1, "{}", run_inline_args.stdout);
+    assert_eq!(
+        inline_violations[0]["title"].as_str().unwrap(),
+        "Unsafe Shell Pattern: ARGV-INLINE"
+    );
 }
 
 #[test]
@@ -6039,5 +6142,79 @@ paths = ["benchmarks/results.json"]
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[test]
+fn push_event_commit_range_and_commit_body_metadata_fallback() {
+    let repo = Repo::new();
+    let base_sha = repo.git_output(&["rev-parse", "HEAD"]);
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
+    );
+    repo.commit("test: remove orders test\n\nremoves: tests/a.rs orders moved to proptest\nallow-test-shrink: orders moved to proptest");
+
+    // In a push event, GITHUB_EVENT_NAME=push and GITHUB_EVENT_BEFORE=base_sha.
+    // Discipline auto-detects base_sha as the diff base, and falls back to git HEAD commit
+    // subject/body for PR metadata (meaning PR_BODY falls back to the commit body).
+    let run = repo.run(
+        &["check", "--format", "json"],
+        &[
+            ("GITHUB_EVENT_NAME", "push"),
+            ("GITHUB_EVENT_BEFORE", &base_sha),
+        ],
+    );
+    assert_eq!(
+        run.code, 0,
+        "Push check failed: {}{}",
+        run.stdout, run.stderr
+    );
+    let outcome = run.outcome("deletion-rationale");
+    let overrides = outcome["overrides"].as_array().unwrap();
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(overrides[0]["directive"], "removes");
+}
+
+#[test]
+fn commit_and_commit_range_cli_flags() {
+    let repo = Repo::new();
+    let base_sha = repo.git_output(&["rev-parse", "HEAD"]);
+
+    repo.write(
+        "tests/b.rs",
+        "#[test]\nfn b1() { let x = 1; assert_eq!(x, 1); }\n",
+    );
+    repo.commit("test: commit 1");
+    let _commit1_sha = repo.git_output(&["rev-parse", "HEAD"]);
+
+    repo.write("tests/b.rs", "#[test]\nfn b1() { let x = 1; assert_eq!(x, 1); }\n#[test]\nfn b2() { let y = 2; assert_eq!(y, 2); }\n");
+    repo.commit("test: commit 2");
+    let commit2_sha = repo.git_output(&["rev-parse", "HEAD"]);
+
+    // Test --commit <sha>
+    let run_commit = repo.run(
+        &["check", "--format", "json", "--commit", &commit2_sha],
+        &[],
+    );
+    assert_eq!(
+        run_commit.code, 0,
+        "run_commit failed: {}{}",
+        run_commit.stdout, run_commit.stderr
+    );
+
+    // Test --commit-range <base>..<head>
+    let range = format!("{}..{}", base_sha, commit2_sha);
+    let run_range = repo.run(
+        &["check", "--format", "json", "--commit-range", &range],
+        &[],
+    );
+    assert_eq!(
+        run_range.code, 0,
+        "run_range failed: {}{}",
+        run_range.stdout, run_range.stderr
     );
 }
