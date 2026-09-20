@@ -241,7 +241,7 @@ impl ShellSecretScanner {
         ))?;
 
         let re_inline = Regex::new(&format!(
-            r#"(?i)\b(?:python[0-9.]*|bash|sh|zsh|node|ruby|perl)\s+(?:-[A-Za-z0-9_-]*c|-c|-e)\s+(?:"[^"]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?|'[^']*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?)"#
+            r#"(?i)\b(?:python[0-9.]*|bash|sh|zsh|node|ruby|perl)\b(?:\s+-[A-Za-z0-9_-]+)*\s+(?:-[A-Za-z0-9_-]*c|-c|-e)\s+(?:(?:"[^"]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?|'[^']*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?)|(?:'[^']*'|"[^"]*"|[^\s]+)\s+[^;\n\r|&]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union}))"#
         ))?;
 
         let re_xargs = Regex::new(
@@ -492,6 +492,142 @@ fn line_has_secrets_argv_ok(line: &str) -> bool {
     false
 }
 
+#[derive(Debug, Clone)]
+pub struct LogicalLine {
+    pub content: String,
+    pub physical_lines: Vec<usize>,
+    pub primary_line: usize,
+    pub has_inline_allow: bool,
+}
+
+pub fn parse_logical_lines(content: &str) -> Vec<LogicalLine> {
+    let mut logical_lines = Vec::new();
+    let mut current_parts: Vec<(usize, String)> = Vec::new();
+    let raw_lines: Vec<&str> = content.lines().collect();
+
+    for (idx, line) in raw_lines.iter().enumerate() {
+        let physical_line = idx + 1;
+        let mut trimmed_end = line.trim_end();
+
+        // Support comments following a continuation backslash (e.g. `cmd \ # comment`)
+        if let Some(hash_pos) = trimmed_end.find('#') {
+            let before_hash = trimmed_end[..hash_pos].trim_end();
+            if before_hash.ends_with('\\') && !before_hash.ends_with(r"\\") {
+                trimmed_end = before_hash;
+            }
+        }
+
+        let trailing_backslashes = trimmed_end.chars().rev().take_while(|&c| c == '\\').count();
+
+        let is_continuation = trailing_backslashes % 2 == 1;
+
+        if is_continuation {
+            let without_slash = &trimmed_end[..trimmed_end.len() - 1];
+            current_parts.push((physical_line, without_slash.to_string()));
+        } else {
+            current_parts.push((physical_line, line.to_string()));
+
+            let mut combined = String::new();
+            let mut phys = Vec::with_capacity(current_parts.len());
+            let mut has_inline_allow = false;
+
+            for (p_line, part) in &current_parts {
+                phys.push(*p_line);
+                let orig_line = raw_lines.get(p_line - 1).copied().unwrap_or("");
+                if line_has_secrets_argv_ok(orig_line) {
+                    has_inline_allow = true;
+                }
+                if !combined.is_empty() {
+                    combined.push(' ');
+                }
+                combined.push_str(part);
+            }
+
+            if line_has_secrets_argv_ok(&combined) {
+                has_inline_allow = true;
+            }
+
+            let primary_line = phys
+                .iter()
+                .copied()
+                .find(|&p| {
+                    let orig = raw_lines.get(p - 1).copied().unwrap_or("");
+                    let lower = orig.to_ascii_lowercase();
+                    lower.contains("secret")
+                        || lower.contains("token")
+                        || lower.contains("password")
+                        || lower.contains("passwd")
+                        || lower.contains("passphrase")
+                        || lower.contains("key")
+                        || lower.contains("-e")
+                        || lower.contains("--env")
+                        || lower.contains("bearer")
+                        || lower.contains("sk-")
+                })
+                .unwrap_or(phys[0]);
+
+            logical_lines.push(LogicalLine {
+                content: combined,
+                physical_lines: phys,
+                primary_line,
+                has_inline_allow,
+            });
+
+            current_parts.clear();
+        }
+    }
+
+    if !current_parts.is_empty() {
+        let mut combined = String::new();
+        let mut phys = Vec::with_capacity(current_parts.len());
+        let mut has_inline_allow = false;
+
+        for (p_line, part) in &current_parts {
+            phys.push(*p_line);
+            let orig_line = raw_lines.get(p_line - 1).copied().unwrap_or("");
+            if line_has_secrets_argv_ok(orig_line) {
+                has_inline_allow = true;
+            }
+            if !combined.is_empty() {
+                combined.push(' ');
+            }
+            combined.push_str(part);
+        }
+
+        if line_has_secrets_argv_ok(&combined) {
+            has_inline_allow = true;
+        }
+
+        let primary_line = phys
+            .iter()
+            .copied()
+            .find(|&p| {
+                let orig = raw_lines.get(p - 1).copied().unwrap_or("");
+                let lower = orig.to_ascii_lowercase();
+                lower.contains("secret")
+                    || lower.contains("token")
+                    || lower.contains("password")
+                    || lower.contains("passwd")
+                    || lower.contains("passphrase")
+                    || lower.contains("key")
+                    || lower.contains("-e")
+                    || lower.contains("--env")
+                    || lower.contains("bearer")
+                    || lower.contains("sk-")
+            })
+            .unwrap_or(phys[0]);
+
+        logical_lines.push(LogicalLine {
+            content: combined,
+            physical_lines: phys,
+            primary_line,
+            has_inline_allow,
+        });
+    }
+
+    logical_lines
+}
+
 pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.shell_secrets;
     let exempt = exempt_filter(settings)?;
@@ -546,34 +682,42 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
             }
         };
 
-        for (idx, line) in content.lines().enumerate() {
-            let line_num = idx + 1;
+        let logical_lines = parse_logical_lines(&content);
+
+        for log_line in logical_lines {
             if let Some(lines) = added_lines {
-                if !lines.contains(&line_num) {
+                if !log_line.physical_lines.iter().any(|p| lines.contains(p)) {
                     continue;
                 }
             }
 
-            if let Some(rule) = scanner.check_line(line) {
-                // Line-level PR body override or inline exemption
-                let line_subject = format!("{file}:{line_num}");
-                if let Some(record) =
-                    ctx.find_override(GATE, tokens::SECRETS_ARGV_OK, &line_subject)
-                {
-                    out.overrides.push(record);
+            if let Some(rule) = scanner.check_line(&log_line.content) {
+                // Check PR body overrides across all physical lines in this logical line
+                let mut overridden = false;
+                for &p_line in &log_line.physical_lines {
+                    let line_subject = format!("{file}:{p_line}");
+                    if let Some(record) =
+                        ctx.find_override(GATE, tokens::SECRETS_ARGV_OK, &line_subject)
+                    {
+                        out.overrides.push(record);
+                        overridden = true;
+                        break;
+                    }
+                }
+                if overridden {
                     continue;
                 }
 
-                if line_has_secrets_argv_ok(line) {
+                if log_line.has_inline_allow {
                     out.inline_exemptions += 1;
                     out.overrides.push(OverrideRecord {
                         gate: GATE.to_string(),
-                        subject: line_subject,
+                        subject: format!("{file}:{}", log_line.primary_line),
                         directive: "secrets-argv-ok".to_string(),
                         reason: "inline exemption marker".to_string(),
                         source: OverrideSource::Inline {
                             file: file.clone(),
-                            line: line_num,
+                            line: log_line.primary_line,
                         },
                         hidden: true,
                     });
@@ -585,7 +729,7 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
                     settings.severity(),
                     rule.title(),
                     Some(file),
-                    Some(line_num),
+                    Some(log_line.primary_line),
                     rule.message().to_string(),
                     rule.remediation(),
                 );
@@ -700,6 +844,28 @@ mod tests {
             Some(ShellRuleId::ArgvInline)
         );
 
+        // Positional argument positive controls (Issue #66)
+        assert_eq!(
+            scanner.check_line("calc_hmac=$(python3 -c 'import hmac,sys; print(sys.argv[1])' \"$SECRETS_PASSPHRASE\" \"$enc\")"),
+            Some(ShellRuleId::ArgvInline)
+        );
+        assert_eq!(
+            scanner.check_line("python3 -c 'import sys; print(sys.argv[1])' \"$SECRET\""),
+            Some(ShellRuleId::ArgvInline)
+        );
+        assert_eq!(
+            scanner.check_line("ruby -e 'puts ARGV[0]' \"$API_KEY\""),
+            Some(ShellRuleId::ArgvInline)
+        );
+        assert_eq!(
+            scanner.check_line("node -e 'console.log(process.argv[1])' \"$TOKEN\""),
+            Some(ShellRuleId::ArgvInline)
+        );
+        assert_eq!(
+            scanner.check_line("sh -c 'echo \"$1\"' _ \"$MY_SECRET\""),
+            Some(ShellRuleId::ArgvInline)
+        );
+
         // Negative controls
         assert_eq!(
             scanner.check_line("python3 -c \"import sys; print(sys.version)\""),
@@ -707,6 +873,57 @@ mod tests {
         );
         assert_eq!(scanner.check_line("sh -c \"echo hello\""), None);
         assert_eq!(scanner.check_line("sh -c \"echo $USER\""), None);
+        assert_eq!(
+            scanner
+                .check_line("SECRET=\"$s\" python3 -c 'import os; print(os.environ[\"SECRET\"])'"),
+            None
+        );
+        assert_eq!(
+            scanner.check_line("python3 -c 'import sys; print(sys.argv[1])' \"$input_file\""),
+            None
+        );
+        assert_eq!(
+            scanner.check_line("python3 -c 'print(\"done\")' ; echo \"$SECRET\""),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_logical_lines_and_multiline_continuation_discriminates() {
+        let scanner = ShellSecretScanner::new(&ShellSecretsGate::default()).unwrap();
+
+        let multiline_docker = r#"docker run \
+  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  amazon/aws-cli:latest"#;
+
+        let logical = parse_logical_lines(multiline_docker);
+        assert_eq!(logical.len(), 1);
+        assert_eq!(logical[0].physical_lines, vec![1, 2, 3]);
+        assert_eq!(logical[0].primary_line, 2);
+        assert_eq!(
+            scanner.check_line(&logical[0].content),
+            Some(ShellRuleId::ArgvDocker)
+        );
+
+        let split_env_docker = r#"docker run \
+  -e \
+  AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  amazon/aws-cli:latest"#;
+
+        let logical_split = parse_logical_lines(split_env_docker);
+        assert_eq!(logical_split.len(), 1);
+        assert_eq!(
+            scanner.check_line(&logical_split[0].content),
+            Some(ShellRuleId::ArgvDocker)
+        );
+
+        let allowed_multiline = r#"docker run \
+  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \ # secrets-argv-ok: test fixture
+  amazon/aws-cli:latest"#;
+
+        let logical_allowed = parse_logical_lines(allowed_multiline);
+        assert_eq!(logical_allowed.len(), 1);
+        assert!(logical_allowed[0].has_inline_allow);
     }
 
     #[test]
