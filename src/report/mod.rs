@@ -483,32 +483,19 @@ pub fn repair_action_for_violation(v: &Violation) -> String {
 
 /// Strictly scrubs any override directive syntax, ensuring AI coding agents cannot learn bypass tokens.
 pub fn scrub_override_directives(input: &str) -> String {
-    let directive_patterns = [
-        "allow-assertion-drop",
-        "allow-command",
-        "allow-dependency",
-        "allow-test-shrink",
-        "allow-test-budget",
-        "allow-gate-weakening",
-        "allow-golden-update",
-        "allow-nul-byte",
-        "allow-nul",
-        "allow-corrupt",
-        "allow-regression",
-        "allow-bench-regression",
-        "allow-ignored-test",
-        "allow-ignore",
-        "allow-vacuous-test",
-        "allow-unsafe",
+    let mut result = input.to_string();
+    for pat in crate::tokens::ALL_DIRECTIVE_NAMES {
+        result = result.replace(pat, "[redacted-directive]");
+    }
+    for extra in &[
         "discipline:allow",
         "allow(",
+        "docs-lint: allow",
+        "docs-lint:allow",
         "removes:",
         "deletes:",
-    ];
-
-    let mut result = input.to_string();
-    for pat in &directive_patterns {
-        result = result.replace(pat, "[redacted-directive]");
+    ] {
+        result = result.replace(extra, "[redacted-directive]");
     }
     result
 }

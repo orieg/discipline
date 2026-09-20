@@ -211,6 +211,60 @@ fn test_baseline_config_integrity_ratchet() {
 }
 
 #[test]
+fn test_baseline_one_for_one_swap_without_growth_fails_integrity() {
+    let repo = Repo::new();
+
+    // Baseline with finding A on main (measured against HEAD~1)
+    repo.commit_base(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n",
+        "chore: base unsafe A",
+    );
+    repo.run(&["baseline", "--write", "--base", "HEAD~1"], &[]);
+    repo.commit_base(
+        "discipline-baseline.toml",
+        &std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap(),
+        "chore: commit initial baseline A",
+    );
+
+    // On work branch, fix finding A (add safety comment) and introduce finding B in src/extra.rs
+    repo.write(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    // SAFETY: valid pointer\n    unsafe { *p }\n}\n",
+    );
+    repo.write(
+        "src/extra.rs",
+        "pub fn write(p: *mut u8, v: u8) {\n    unsafe { *p = v; }\n}\n",
+    );
+    repo.commit("feat: resolve A and add B");
+    // Re-write baseline against main: count is still 1, but finding B replaces finding A
+    repo.run(&["baseline", "--write", "--base", "main"], &[]);
+    repo.commit("chore: update baseline with finding B");
+
+    // Check MUST fail integrity because head baseline contains a new fingerprint not in base baseline
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert!(run
+        .titles("config-integrity")
+        .iter()
+        .any(|t| t.contains("Baseline Contains New Findings Without Directive")));
+
+    // With allow-gate-weakening: baseline directive, it passes
+    let run_overridden = repo.check_with_pr(
+        &[],
+        "allow-gate-weakening: baseline swapping grandfathered finding",
+    );
+    assert_eq!(run_overridden.code, 0, "{}", run_overridden.stdout);
+    assert_eq!(
+        run_overridden.outcome("config-integrity")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn test_empty_baseline_env_vars_do_not_crash() {
     let repo = Repo::new();
     let run = repo.run(

@@ -626,6 +626,7 @@ pub fn parse_directives_with_names(
 
     let mut directives = Vec::new();
     let mut fence: Option<&str> = None;
+    let mut in_html_comment = false;
     let is_commit = matches!(source, OverrideSource::Commit(_));
     for (line_idx, line) in text.lines().enumerate() {
         if line_idx == 0 && is_commit {
@@ -646,6 +647,11 @@ pub fn parse_directives_with_names(
             (Some(_), _) => continue,
             (None, None) => {}
         }
+
+        let line_has_open_comment =
+            !in_html_comment && line.contains("<!--") && !line.contains("-->");
+        let line_closes_comment = in_html_comment && line.contains("-->");
+
         if let Some(caps) = re.captures(line) {
             let reason = clean_reason(&caps[3]);
             if !is_placeholder(&reason) {
@@ -654,9 +660,15 @@ pub fn parse_directives_with_names(
                     directive: directive_str,
                     reason,
                     source: source.clone(),
-                    hidden: caps.get(1).is_some(),
+                    hidden: in_html_comment || caps.get(1).is_some() || line_has_open_comment,
                 });
             }
+        }
+
+        if line_has_open_comment {
+            in_html_comment = true;
+        } else if line_closes_comment {
+            in_html_comment = false;
         }
     }
     directives
@@ -1242,6 +1254,23 @@ removes: tests/old.rs inside a fence
                 &regressed
             ),
             vec!["instructions::cost::sync_set_insert/random"]
+        );
+    }
+
+    #[test]
+    fn test_multiline_html_comment_directives_marked_hidden() {
+        let text = "<!--\nallow-assertion-drop: tests/auth.rs\n-->\nallow-ignore: tests/slow.rs\n";
+        let parsed = parse_directives(text, OverrideSource::PrBody);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].directive, "allow-assertion-drop");
+        assert!(
+            parsed[0].hidden,
+            "directive inside multiline HTML comment must be hidden"
+        );
+        assert_eq!(parsed[1].directive, "allow-ignore");
+        assert!(
+            !parsed[1].hidden,
+            "directive outside HTML comment must not be hidden"
         );
     }
 }

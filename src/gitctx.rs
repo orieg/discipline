@@ -663,14 +663,32 @@ fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) 
     // 1. If base ref is a commit SHA (>=7 hex characters), attempt targeted fetch
     let is_sha = base_ref.len() >= 7 && base_ref.chars().all(|c| c.is_ascii_hexdigit());
     if is_sha {
-        run_fetch(&["fetch", "--no-tags", "--depth=100", "origin", base_ref]);
+        run_fetch(&[
+            "fetch",
+            "--no-tags",
+            "--depth=100",
+            "origin",
+            "--",
+            base_ref,
+        ]);
     }
 
-    // 2. Try candidate branch names if they don't contain revision selectors (~, ^)
+    // 2. Try candidate branch names if they don't contain revision selectors (~, ^) or start with a dash
     for cand in candidates {
         let ref_name = cand.strip_prefix("origin/").unwrap_or(cand);
-        if !is_sha && !ref_name.contains('~') && !ref_name.contains('^') {
-            run_fetch(&["fetch", "--no-tags", "--depth=100", "origin", ref_name]);
+        if !is_sha
+            && !ref_name.contains('~')
+            && !ref_name.contains('^')
+            && !ref_name.starts_with('-')
+        {
+            run_fetch(&[
+                "fetch",
+                "--no-tags",
+                "--depth=100",
+                "origin",
+                "--",
+                ref_name,
+            ]);
         }
     }
 

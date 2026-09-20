@@ -165,6 +165,9 @@ fn escape_xml(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
+            c if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' => {
+                // Strip non-printable ASCII control characters forbidden in XML 1.0
+            }
             _ => out.push(c),
         }
     }
@@ -257,5 +260,12 @@ mod tests {
         assert!(xml.contains("failures=\"1\""));
         assert!(xml.contains("&lt; Expected &amp; &quot;Dangerous&quot;"));
         assert!(xml.contains("[tests/a.rs:10]"));
+    }
+
+    #[test]
+    fn test_escape_xml_strips_forbidden_control_characters() {
+        let input = "clean\ttext\nwith\rvalid and \x00null \x07bell \x1Bescape";
+        let escaped = escape_xml(input);
+        assert_eq!(escaped, "clean\ttext\nwith\rvalid and null bell escape");
     }
 }

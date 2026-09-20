@@ -19,6 +19,11 @@ const LOOSER_WHEN_GROWN: &[&str] = &[
     "allowed_users",
     "extra_assert_macros",
     "assert_helper_fns",
+    "allowed_unpinned_actions",
+    "allowed_hosts",
+    "allow_dependencies",
+    "approved_predicates",
+    "allowed_rules",
 ];
 /// List options where a *shorter* list is looser.
 const LOOSER_WHEN_SHRUNK: &[&str] = &["paths", "include", "extra_patterns", "hostname_denylist"];
@@ -88,35 +93,46 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
         ));
     }
 
-    // Baseline file integrity: growing grandfathered baseline is a weakening
+    // Baseline file integrity: growing grandfathered baseline or adding new ungrandfathered fingerprints is a weakening
     let baseline_filename = ctx
         .baseline_path
         .unwrap_or(crate::baseline::DEFAULT_BASELINE_FILE);
-    let base_baseline_count = match ctx.git.base_content(baseline_filename)? {
-        Some(s) => match toml::from_str::<crate::baseline::DisciplineBaseline>(&s) {
-            Ok(b) => Some(b.findings.len()),
-            Err(_) => None,
-        },
-        None => None,
-    };
+    let base_baseline: Option<crate::baseline::DisciplineBaseline> =
+        match ctx.git.base_content(baseline_filename)? {
+            Some(s) => toml::from_str(&s).ok(),
+            None => None,
+        };
 
     let head_baseline_path = ctx.git.root().join(baseline_filename);
-    let head_baseline_count = if head_baseline_path.exists() {
-        match std::fs::read_to_string(&head_baseline_path) {
-            Ok(s) => match toml::from_str::<crate::baseline::DisciplineBaseline>(&s) {
-                Ok(b) => Some(b.findings.len()),
-                Err(_) => None,
-            },
-            Err(_) => None,
-        }
+    let head_baseline: Option<crate::baseline::DisciplineBaseline> = if head_baseline_path.exists()
+    {
+        std::fs::read_to_string(&head_baseline_path)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
     } else {
         None
     };
 
-    if let Some(h_count) = head_baseline_count {
-        let b_count = base_baseline_count.unwrap_or(0);
-        if h_count > b_count {
-            let diff = h_count - b_count;
+    if let Some(ref h_base) = head_baseline {
+        let b_count = base_baseline
+            .as_ref()
+            .map(|b| b.findings.len())
+            .unwrap_or(0);
+        let h_count = h_base.findings.len();
+
+        let base_fps: std::collections::HashSet<&str> = base_baseline
+            .as_ref()
+            .map(|b| b.findings.iter().map(|f| f.fingerprint.as_str()).collect())
+            .unwrap_or_default();
+
+        let new_fps: Vec<&str> = h_base
+            .findings
+            .iter()
+            .map(|f| f.fingerprint.as_str())
+            .filter(|fp| !base_fps.contains(fp))
+            .collect();
+
+        if h_count > b_count || !new_fps.is_empty() {
             if let Some(record) = ctx
                 .find_override(GATE, tokens::ALLOW_GATE_WEAKENING, "baseline")
                 .or_else(|| {
@@ -124,7 +140,19 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 })
             {
                 out.overrides.push(record);
+            } else if !new_fps.is_empty() && h_count <= b_count {
+                let count = new_fps.len();
+                let sample = new_fps.first().unwrap_or(&"");
+                out.push(
+                    ctx.overridable(settings.severity()),
+                    "Baseline Contains New Findings Without Directive",
+                    Some(baseline_filename),
+                    None,
+                    format!("[baseline] Grandfathered baseline contains {count} new fingerprint(s) not present on base (e.g. `{sample}`). A 1-for-1 replacement of grandfathered findings with new ones is forbidden."),
+                    "Revert the baseline modification, or justify it on its own line in the PR body or a commit message: `allow-gate-weakening: baseline <reason>`.",
+                );
             } else {
+                let diff = h_count.saturating_sub(b_count);
                 out.push(
                     ctx.overridable(settings.severity()),
                     "Baseline Grew Without Directive",
@@ -252,8 +280,29 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                 (Value::Boolean(true), Value::Boolean(false)) => {
                     note(format!("`{key}` changed from true to false"))
                 }
-                (Value::Boolean(false), Value::Boolean(true)) if key == "allow_hidden" => {
-                    note("`allow_hidden` changed from false to true".to_string())
+                (Value::Boolean(false), Value::Boolean(true))
+                    if key == "allow_hidden"
+                        || key == "allow_zero"
+                        || key == "diff_only"
+                        || key == "allow_stale"
+                        || key == "allow_missing_base" =>
+                {
+                    note(format!("`{key}` changed from false to true"))
+                }
+                (Value::Integer(bi), Value::Integer(hi)) => {
+                    // Floors: lowering is a weakening
+                    if (key == "min_count" || key == "floor" || key == "test_floor") && hi < bi {
+                        note(format!("`{key}` decreased from {bi} to {hi}"));
+                    }
+                    // Budgets: increasing is a weakening
+                    if (key == "max_unsafe"
+                        || key == "max_suppressions"
+                        || key == "max_count"
+                        || key == "budget")
+                        && hi > bi
+                    {
+                        note(format!("`{key}` increased from {bi} to {hi}"));
+                    }
                 }
                 (Value::String(bs), Value::String(hs))
                     if key == "severity"
@@ -316,5 +365,20 @@ mod tests {
         assert!(has("vacuous-tests", "`enabled` changed from true to false"));
         assert!(has("agent-scratch", "`severity` lowered"));
         assert_eq!(found.len(), 5, "{found:?}");
+    }
+
+    #[test]
+    fn integer_and_security_boolean_loosening_detected() {
+        let base = cfg("[gates.command]\nmin_count = 10\n[gates.unsafe-budget]\nmax_unsafe = 5\n[gates.pii]\ndiff_only = false\n");
+        let head = cfg("[gates.command]\nmin_count = 5\n[gates.unsafe-budget]\nmax_unsafe = 10\n[gates.pii]\ndiff_only = true\n");
+        let found = diff_configs(&base, &head).unwrap();
+        let has = |gate: &str, needle: &str| {
+            found
+                .iter()
+                .any(|w| w.gate == gate && w.what.contains(needle))
+        };
+        assert!(has("command", "`min_count` decreased from 10 to 5"));
+        assert!(has("unsafe-budget", "`max_unsafe` increased from 5 to 10"));
+        assert!(has("pii", "`diff_only` changed from false to true"));
     }
 }
