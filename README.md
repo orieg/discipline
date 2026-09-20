@@ -106,12 +106,12 @@ Direct `.rpm` package downloads and repodata manifests: [Discipline RPM Reposito
 
 - **Homebrew**:
   ```bash
+  # Single-command install:
+  brew install orieg/tap/discipline
+
+  # Or tap first:
   brew tap orieg/tap
   brew install discipline
-  ```
-  Or direct formula install:
-  ```bash
-  brew install https://raw.githubusercontent.com/orieg/discipline/main/packaging/homebrew/discipline.rb
   ```
 - **MacPorts**:
   ```bash
