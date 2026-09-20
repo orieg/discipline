@@ -284,6 +284,7 @@ pub struct DirectivesConfig {
     pub sources: Vec<String>,
     pub allow_hidden: bool,
     pub fail_on_overrides: bool,
+    pub allowed_override_actors: Vec<String>,
 }
 
 impl Default for DirectivesConfig {
@@ -292,6 +293,7 @@ impl Default for DirectivesConfig {
             sources: vec!["pr-body".to_string(), "commits".to_string()],
             allow_hidden: false,
             fail_on_overrides: false,
+            allowed_override_actors: Vec::new(),
         }
     }
 }

@@ -90,6 +90,10 @@ pub fn generate_schema() -> Value {
                     "fail_on_overrides": {
                         "type": "boolean",
                         "description": "Treat applied overrides as failures requiring human sign-off (default: false)"
+                    },
+                    "allowed_override_actors": {
+                        "$ref": "#/$defs/StringListOrReset",
+                        "description": "Actors authorized to apply overrides even when fail_on_overrides is true (default: [])"
                     }
                 }
             },

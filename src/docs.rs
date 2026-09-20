@@ -273,6 +273,7 @@ pub fn render_config_schema_markdown() -> String {
 | `directives.sources` | list | `[\"pr-body\", \"commits\"]` | Allowed directive source channels |\n\
 | `directives.allow_hidden` | boolean | `false` | Allow directives inside HTML comments `<!-- -->` |\n\
 | `directives.fail_on_overrides` | boolean | `false` | Treat applied overrides as failures requiring human sign-off |\n\
+| `directives.allowed_override_actors` | list | `[]` | Actors authorized to apply overrides even when fail_on_overrides is true |\n\
 | `gates.<id>.enabled` | boolean | `true` | Whether this gate is active |\n\
 | `gates.<id>.severity` | string | `\"error\"` | Violation severity: `\"error\"` (blocking) or `\"warning\"` (non-blocking) |\n\
 | `gates.<id>.exempt_paths` | list | `[]` | File path globs exempted from gate evaluation |\n\

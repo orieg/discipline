@@ -45,6 +45,10 @@ inputs:
     description: 'Treat applied overrides as failures (requires human sign-off).'
     required: false
     default: 'false'
+  actor:
+    description: 'Actor executing the check (defaults to github.actor or forge equivalent; used for allowed_override_actors).'
+    required: false
+    default: ${{ github.actor }}
   directive_sources:
     description: 'Comma-separated list of allowed directive sources (pr-body, commits).'
     required: false
@@ -235,6 +239,7 @@ runs:
         DISCIPLINE_HOSTNAME_DENYLIST: ${{ inputs.hostname_denylist }}
         DISCIPLINE_FAIL_ON_WARNINGS: ${{ inputs.fail_on_warnings == 'true' && 'true' || 'false' }}
         DISCIPLINE_FAIL_ON_OVERRIDES: ${{ inputs.fail_on_overrides == 'true' && 'true' || 'false' }}
+        DISCIPLINE_ACTOR: ${{ inputs.actor || github.actor }}
         DISCIPLINE_DIRECTIVE_SOURCES: ${{ inputs.directive_sources }}
         INPUT_SUITE: ${{ inputs.suite }}
         PR_BODY: ${{ inputs.pr_body }}
