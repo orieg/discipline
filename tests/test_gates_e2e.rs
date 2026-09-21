@@ -5158,10 +5158,10 @@ fn time_estimates_terms_of_art_and_docs_lint_allow() {
 #[test]
 fn pii_scans_test_functions_and_agent_config_refs() {
     let repo = Repo::new();
-    // Python script with self_test fixture fires pii
+    // A collected Python test function (`test_*`) fires pii: tests are not exempt
     repo.write(
         "scripts/check_hygiene.py",
-        &format!("def self_test():\n    fake_home = \"/{}/{}/repo/\"\n    fake_lan = \"{}.{}.1.50\"\n    assert fake_home != fake_lan\n", "Users", "someone", "192", "168"),
+        &format!("def test_hygiene():\n    fake_home = \"/{}/{}/repo/\"\n    fake_lan = \"{}.{}.1.50\"\n    assert fake_home != fake_lan\n", "Users", "someone", "192", "168"),
     );
     repo.commit("feat: add hygiene check script with self-test fixtures");
 
@@ -5176,9 +5176,9 @@ fn pii_scans_test_functions_and_agent_config_refs() {
     // Documented resolution: inline waiver allows it
     repo.write(
         "scripts/check_hygiene.py",
-        &format!("def self_test():\n    fake_home = \"/{}/{}/repo/\"  # discipline:allow(pii)\n    fake_lan = \"{}.{}.1.50\"  # discipline:allow(pii)\n    assert fake_home != fake_lan\n", "Users", "someone", "192", "168"),
+        &format!("def test_hygiene():\n    fake_home = \"/{}/{}/repo/\"  # discipline:allow(pii)\n    fake_lan = \"{}.{}.1.50\"  # discipline:allow(pii)\n    assert fake_home != fake_lan\n", "Users", "someone", "192", "168"),
     );
-    repo.commit("fix: waive fixture paths in self_test");
+    repo.commit("fix: waive fixture paths in test_hygiene");
     let run_waived = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(run_waived.titles("pii").len(), 0, "{}", run_waived.stdout);
 
