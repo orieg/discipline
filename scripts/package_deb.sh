@@ -40,6 +40,16 @@ fi
 if [ -f "README.md" ]; then
   cp README.md "${STAGE}/usr/share/doc/discipline/README.md"
 fi
+if [ -f "man/man1/discipline.1" ]; then
+  mkdir -p "${STAGE}/usr/share/man/man1"
+  gzip -9cn "man/man1/discipline.1" > "${STAGE}/usr/share/man/man1/discipline.1.gz"
+  chmod 644 "${STAGE}/usr/share/man/man1/discipline.1.gz"
+fi
+if [ -f "man/man5/discipline.toml.5" ]; then
+  mkdir -p "${STAGE}/usr/share/man/man5"
+  gzip -9cn "man/man5/discipline.toml.5" > "${STAGE}/usr/share/man/man5/discipline.toml.5.gz"
+  chmod 644 "${STAGE}/usr/share/man/man5/discipline.toml.5.gz"
+fi
 
 cat <<EOF > "${STAGE}/DEBIAN/control"
 Package: discipline

@@ -4,7 +4,7 @@
 # needs to state what differs. In dogfood, we configure time-estimates,
 # bench-regression, and agents-md to severity "error" for maximum verification rigor.
 # `discipline gates` prints the effective state; the annotated reference lives in
-# README.md ("Configuration").
+# docs/CONFIGURATION.md.
 
 [meta]
 version = 1
@@ -39,6 +39,6 @@ enabled = true
 exempt_paths = ["tests/fixtures/**"]
 
 [gates.dependency-delta]
-allow_dependencies = ["serde_yaml", "tar", "flate2", "zip", "bzip2-rs", "libc"]
+allow_dependencies = ["serde_yaml", "tar", "flate2", "zip", "bzip2-rs", "libc", "clap_mangen", "clap_complete"]
 
 

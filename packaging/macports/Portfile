@@ -4,7 +4,7 @@ PortSystem          1.0
 PortGroup           cargo 1.0
 
 name                discipline
-version             0.4.0
+version             0.5.1
 categories          devel
 platforms           darwin linux
 license             {MIT Apache-2.0}
@@ -20,11 +20,16 @@ homepage            https://orieg.github.io/discipline/
 master_sites        https://github.com/orieg/discipline/archive/refs/tags/v${version}.tar.gz?dummy=
 distname            discipline-${version}
 
-checksums           rmd160  1bbedab9c5d16cb6d2ebb452bf03c9efd87b2ccf \
-                    sha256  475333a22f241d1fc1e2ef8856dd117575128e6e8dfdc3fb977c2283123df4d6
-
 installs_libs       no
 
 destroot {
     xinstall -m 0755 ${worksrcpath}/target/release/discipline ${destroot}${prefix}/bin/
+    if {[file exists ${worksrcpath}/man/man1/discipline.1]} {
+        xinstall -d ${destroot}${prefix}/share/man/man1
+        xinstall -m 0644 ${worksrcpath}/man/man1/discipline.1 ${destroot}${prefix}/share/man/man1/
+    }
+    if {[file exists ${worksrcpath}/man/man5/discipline.toml.5]} {
+        xinstall -d ${destroot}${prefix}/share/man/man5
+        xinstall -m 0644 ${worksrcpath}/man/man5/discipline.toml.5 ${destroot}${prefix}/share/man/man5/
+    }
 }

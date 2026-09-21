@@ -316,16 +316,35 @@ impl GitCtx {
             } else {
                 candidates.push(format!("origin/{base_ref}"));
             }
-            let resolve_base = |candidates: &[String]| -> Option<(Oid, Oid)> {
-                let base_commit = candidates.iter().find_map(|name| {
-                    Some(repo.revparse_single(name).ok()?.peel_to_commit().ok()?.id())
-                })?;
-                let merge_base = repo.merge_base(base_commit, head).ok()?;
-                Some((base_commit, merge_base))
+            if base_ref == "origin/main" || base_ref == "main" {
+                for fallback in &[
+                    "refs/remotes/origin/HEAD",
+                    "origin/master",
+                    "master",
+                    "origin/trunk",
+                    "trunk",
+                ] {
+                    if !candidates.contains(&fallback.to_string()) {
+                        candidates.push(fallback.to_string());
+                    }
+                }
+            }
+            let resolve_base = |candidates: &[String]| -> Option<(String, Oid, Oid)> {
+                for name in candidates {
+                    if let Ok(obj) = repo.revparse_single(name) {
+                        if let Ok(commit) = obj.peel_to_commit() {
+                            let base_commit = commit.id();
+                            if let Ok(merge_base) = repo.merge_base(base_commit, head) {
+                                return Some((name.clone(), base_commit, merge_base));
+                            }
+                        }
+                    }
+                }
+                None
             };
 
-            let (_base_commit, merge_base) = match resolve_base(&candidates) {
-                Some(pair) => pair,
+            let (resolved_name, _base_commit, merge_base) = match resolve_base(&candidates) {
+                Some(triple) => triple,
                 None => {
                     let fetch_errors = deepen_git_history(&candidates, base_ref, &repo);
                     let fetch_detail = if fetch_errors.is_empty() {
@@ -333,14 +352,15 @@ impl GitCtx {
                     } else {
                         format!("\ngit fetch diagnostics:\n  {}", fetch_errors.join("\n  "))
                     };
-                    let base_commit = candidates
+                    let (found_name, base_commit) = candidates
                         .iter()
                         .find_map(|name| {
-                            Some(repo.revparse_single(name).ok()?.peel_to_commit().ok()?.id())
+                            let c = repo.revparse_single(name).ok()?.peel_to_commit().ok()?.id();
+                            Some((name.clone(), c))
                         })
                         .ok_or_else(|| {
                             anyhow!(
-                                "base ref `{base_ref}` does not resolve. In CI, check out with \
+                                "base ref `{base_ref}` does not resolve. If working locally on a non-main branch, pass `--base <branch>` (e.g. `--base master` or `--base HEAD~1`). In CI, check out with \
                                  `fetch-depth: 0` or fetch the base branch first. Refusing to \
                                  treat an unknown base as an empty diff.{fetch_detail}"
                             )
@@ -351,12 +371,17 @@ impl GitCtx {
                              probably shallow — fetch full history.{fetch_detail}"
                         )
                     })?;
-                    (base_commit, merge_base)
+                    (found_name, base_commit, merge_base)
                 }
+            };
+            let label_prefix = if resolved_name == base_ref {
+                base_ref.to_string()
+            } else {
+                format!("{base_ref} ({resolved_name})")
             };
             (
                 Some(merge_base),
-                format!("{base_ref} (merge base {:.10})", merge_base.to_string()),
+                format!("{label_prefix} (merge base {:.10})", merge_base.to_string()),
             )
         };
 

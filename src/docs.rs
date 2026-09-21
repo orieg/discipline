@@ -193,13 +193,14 @@ pub fn render_action_outputs_html(spec: &ActionSpec) -> String {
     out
 }
 
-/// Render gates Markdown table for README.md.
-pub fn render_gates_markdown(gates: &[GateInfo]) -> String {
+/// Render gates Markdown table for README.md or ROADMAP.md.
+pub fn render_gates_markdown(gates: &[GateInfo], target_prefix: &str) -> String {
     let mut out =
         String::from("| Gate | Suite | Languages | Rule Description |\n|---|---|---|---|\n");
     for g in gates.iter().filter(|g| g.available) {
         out.push_str(&format!(
-            "| `{}` | {} | {} | {} |\n",
+            "| [`{}`]({target_prefix}{}) | {} | {} | {} |\n",
+            g.id,
             g.id,
             g.suite.label(),
             g.languages,
@@ -210,7 +211,11 @@ pub fn render_gates_markdown(gates: &[GateInfo]) -> String {
 }
 
 /// Render gates catalog Markdown table for GATES.md / ROADMAP.md.
-pub fn render_gates_catalog_markdown(gates: &[GateInfo], suite_filter: Option<Suite>) -> String {
+pub fn render_gates_catalog_markdown(
+    gates: &[GateInfo],
+    suite_filter: Option<Suite>,
+    in_gates_md: bool,
+) -> String {
     let mut out = String::from(
         "| Gate id | Suite | Status | Languages | Rule Description |\n|---|---|---|---|---|\n",
     );
@@ -224,9 +229,18 @@ pub fn render_gates_catalog_markdown(gates: &[GateInfo], suite_filter: Option<Su
         } else {
             "planned"
         };
+        let gate_link = if g.available {
+            if in_gates_md {
+                format!("[`{}`](#{})", g.id, g.id)
+            } else {
+                format!("[`{}`](GATES.md#{})", g.id, g.id)
+            }
+        } else {
+            format!("`{}`", g.id)
+        };
         out.push_str(&format!(
-            "| `{}` | {} | {} | {} | {} |\n",
-            g.id,
+            "| {} | {} | {} | {} | {} |\n",
+            gate_link,
             g.suite.label(),
             status,
             g.languages,
@@ -376,27 +390,46 @@ pub fn update_generated_regions(
             // Write opening marker
             out.push(line.to_string());
 
+            let is_gates_md = path.file_name().and_then(|f| f.to_str()) == Some("GATES.md");
+            let in_docs = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|f| f.to_str())
+                == Some("docs");
+            let target_prefix = if in_docs {
+                "GATES.md#"
+            } else {
+                "docs/GATES.md#"
+            };
             // Generate content
             let generated_text = match marker_name {
                 "gates" => {
                     if is_html {
                         render_gates_html(gates)
-                    } else if path.file_name().and_then(|f| f.to_str()) == Some("GATES.md") {
-                        render_gates_catalog_markdown(gates, None)
+                    } else if is_gates_md {
+                        render_gates_catalog_markdown(gates, None, true)
                     } else {
-                        render_gates_markdown(gates)
+                        render_gates_markdown(gates, target_prefix)
                     }
                 }
                 "gates:agent-guard" => {
-                    render_gates_catalog_markdown(gates, Some(Suite::AgentGuard))
+                    render_gates_catalog_markdown(gates, Some(Suite::AgentGuard), is_gates_md)
                 }
-                "gates:hygiene" => render_gates_catalog_markdown(gates, Some(Suite::Hygiene)),
-                "gates:integrity" => render_gates_catalog_markdown(gates, Some(Suite::Integrity)),
-                "gates:quality" => render_gates_catalog_markdown(gates, Some(Suite::Quality)),
+                "gates:hygiene" => {
+                    render_gates_catalog_markdown(gates, Some(Suite::Hygiene), is_gates_md)
+                }
+                "gates:integrity" => {
+                    render_gates_catalog_markdown(gates, Some(Suite::Integrity), is_gates_md)
+                }
+                "gates:quality" => {
+                    render_gates_catalog_markdown(gates, Some(Suite::Quality), is_gates_md)
+                }
                 "gates:verification" => {
-                    render_gates_catalog_markdown(gates, Some(Suite::Verification))
+                    render_gates_catalog_markdown(gates, Some(Suite::Verification), is_gates_md)
                 }
-                "gates:bench" => render_gates_catalog_markdown(gates, Some(Suite::Bench)),
+                "gates:bench" => {
+                    render_gates_catalog_markdown(gates, Some(Suite::Bench), is_gates_md)
+                }
                 "action-inputs" => {
                     if is_html {
                         render_action_inputs_html(spec)
@@ -572,12 +605,38 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         }
     }
 
+    // 3. Process man/man1/discipline.1
+    let man1_dir = root.join("man/man1");
+    let man1_path = man1_dir.join("discipline.1");
+    let generated_man1_str = generate_man1()?;
+
+    let existing_man1_str = if man1_path.exists() {
+        std::fs::read_to_string(&man1_path)?
+    } else {
+        String::new()
+    };
+
+    if existing_man1_str != generated_man1_str {
+        has_diffs = true;
+        let diff = unified_diff(&man1_path, &existing_man1_str, &generated_man1_str);
+        eprintln!("{diff}");
+
+        if write {
+            if !man1_dir.exists() {
+                std::fs::create_dir_all(&man1_dir)?;
+            }
+            std::fs::write(&man1_path, &generated_man1_str)
+                .with_context(|| format!("failed to write {}", man1_path.display()))?;
+            println!("Updated {}", man1_path.display());
+        }
+    }
+
     if has_diffs {
         if write {
-            println!("Reference docs and schemas written successfully.");
+            println!("Reference docs, schemas, and man pages written successfully.");
             Ok(true)
         } else {
-            eprintln!("Error: reference documentation is out of date.");
+            eprintln!("Error: reference documentation, schemas, or man pages are out of date.");
             eprintln!("Run 'cargo run -- docs --write' to update generated reference docs.");
             Ok(false)
         }
@@ -585,4 +644,11 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         println!("All reference documentation and schemas are up to date.");
         Ok(true)
     }
+}
+
+/// Generate man1 page for discipline CLI.
+pub fn generate_man1() -> Result<String> {
+    let mut buf = Vec::new();
+    clap_mangen::Man::new(<crate::cli::Cli as clap::CommandFactory>::command()).render(&mut buf)?;
+    Ok(String::from_utf8(buf)?)
 }

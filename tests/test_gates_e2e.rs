@@ -2002,9 +2002,9 @@ fn diff_command_accepts_config_and_json_out() {
     let repo = Repo::new();
     repo.write(
         "tests/a.rs",
-        "#[test]\nfn adds() {\n    assert!(1 + 1 == 2);\n}\n",
+        "#[test]\nfn adds() {\n    assert!(1 + 1 == 2);\n}\n\n#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
     );
-    repo.commit("test: drop assertion\n\nremoves: orders removed");
+    repo.commit("test: drop assertion");
     let json_file = repo.file("report.json");
     let json_path = json_file.to_string_lossy().to_string();
 
@@ -4416,7 +4416,8 @@ fn install_hooks_creates_executable_pre_commit_hook() {
     assert!(hook_path.exists());
 
     let content = std::fs::read_to_string(&hook_path).unwrap();
-    assert!(content.contains("exec discipline check --staged"));
+    assert!(content.contains("discipline check --staged"));
+    assert!(!content.contains("exec discipline check --staged"));
 
     #[cfg(unix)]
     {
@@ -7061,4 +7062,77 @@ fn test_version_and_help_exit_code_zero() {
         "help output: {}",
         run_help.stdout
     );
+}
+
+#[test]
+fn advisory_mode_flag_and_config_exit_zero_on_violations() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    assert!(1 + 1 == 2);\n}\n",
+    );
+    repo.commit("test: weaken assertion");
+
+    // 1. In default enforcing mode, check must exit code 1
+    let run_enforcing = repo.check(&[]);
+    assert_eq!(run_enforcing.code, 1);
+    let json_enforcing = run_enforcing.json();
+    assert!(json_enforcing["errors"].as_u64().unwrap() > 0);
+
+    // 2. With --advisory CLI flag, check must exit code 0 while still reporting errors
+    let run_advisory_flag = repo.check(&["--advisory"]);
+    assert_eq!(
+        run_advisory_flag.code, 0,
+        "stdout: {}\nstderr: {}",
+        run_advisory_flag.stdout, run_advisory_flag.stderr
+    );
+    let json_advisory = run_advisory_flag.json();
+    assert!(json_advisory["errors"].as_u64().unwrap() > 0);
+
+    // 3. With mode = "advisory" in discipline.toml, check must exit code 0
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\nmode = \"advisory\"\n",
+    );
+    repo.commit("chore: set advisory mode in config");
+    let run_config_advisory = repo.check(&[]);
+    assert_eq!(
+        run_config_advisory.code, 0,
+        "stdout: {}\nstderr: {}",
+        run_config_advisory.stdout, run_config_advisory.stderr
+    );
+    let json_cfg_advisory = run_config_advisory.json();
+    assert!(json_cfg_advisory["errors"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn discipline_diff_inspects_unstaged_working_tree_against_head() {
+    let repo = Repo::new();
+    // Repo starts clean at commit "chore: base".
+    // Modify a test file in the working tree without staging or committing.
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    assert!(1 + 1 == 2);\n}\n",
+    );
+
+    // Running `discipline diff` should inspect working tree vs HEAD across the full suite
+    let run_diff = repo.run(&["diff", "--format", "json"], &[]);
+    assert_eq!(run_diff.code, 1);
+    let json = run_diff.json();
+    assert!(json["errors"].as_u64().unwrap() > 0);
+    assert_eq!(run_diff.titles("assertion-reduction").len(), 1);
+
+    // Running `discipline diff --advisory` should exit 0
+    let run_diff_advisory = repo.run(&["diff", "--format", "json", "--advisory"], &[]);
+    assert_eq!(run_diff_advisory.code, 0);
+}
+
+#[test]
+fn completions_subcommand_outputs_valid_shell_script() {
+    let repo = Repo::new();
+    for shell in ["bash", "zsh", "fish"] {
+        let run = repo.run(&["completions", shell], &[]);
+        assert_eq!(run.code, 0);
+        assert!(!run.stdout.is_empty(), "completions for {shell} was empty");
+    }
 }

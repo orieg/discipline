@@ -14,11 +14,11 @@ This document provides the complete specification of `discipline`'s configuratio
 
 ## Configuration Layers & Precedence
 
-Discipline employs a 5-layer configuration hierarchy. With zero configuration, every available gate executes at severity `error`. Every layer merges deterministically; nothing turns off silently.
+Discipline employs a 5-layer configuration hierarchy. With zero configuration, every available gate executes at its built-in default severity: correctness and integrity gates default to `error`, while heuristic and brownfield-sensitive gates (`time-estimates`, `bench-regression`, and `agents-md`) default to `warning` by design. Every layer merges deterministically; nothing turns off silently.
 
 | Layer | Source | Precedence | Description |
 |---|---|---|---|
-| **1. Built-in defaults** | Compiled binary | Lowest | Every available gate enabled at severity `"error"`. |
+| **1. Built-in defaults** | Compiled binary | Lowest | Every available gate enabled (correctness/integrity: `"error"`, heuristic/bench: `"warning"`). |
 | **2. Repository configuration** | `discipline.toml` | ↑ | Durable, peer-reviewed repository policy. |
 | **3. Inline TOML override** | `--config-override`, `DISCIPLINE_CONFIG_OVERRIDE`, action input `config_override` | ↑ | Per-workflow tuning without modifying files. |
 | **4. Gate switches** | `--enable` / `--disable`, `DISCIPLINE_ENABLE` / `DISCIPLINE_DISABLE`, action inputs `enable` / `disable` | ↑ | Command-line switches (comma- or newline-separated). |
@@ -119,6 +119,7 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `hostname_denylist` | *(none)* | Hostnames the pii gate must reject (comma or newline separated). Pass a secret; matches are never echoed. |
 | `fail_on_warnings` | `false` | Treat warnings as failures. |
 | `fail_on_overrides` | `false` | Treat applied overrides as failures (requires human sign-off). |
+| `advisory` | `false` | Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur. |
 | `actor` | `${{ github.actor }}` | Actor executing the check (defaults to github.actor or forge equivalent; used for allowed_override_actors). |
 | `directive_sources` | *(none)* | Comma-separated list of allowed directive sources (pr-body, commits). |
 | `pr_body` | `${{ github.event.pull_request.body }}` | PR description: carries override directives and is itself scanned by hygiene gates. |
@@ -160,12 +161,13 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | Subcommand | Description |
 |---|---|
 | `check` | Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check |
-| `diff` | Shorthand for `check --suite agent-guard` against `HEAD~1` |
+| `diff` | Shorthand for checking uncommitted or working tree changes against HEAD |
 | `baseline` | Record or manage grandfathered finding baselines |
 | `init` | Write a discipline.toml with every available gate at its default |
 | `gates` | List every gate: id, suite, availability, and effective state |
 | `schema` | Print the JSON Schema for discipline.toml |
 | `self-test` | Run the embedded negative / positive controls against this binary |
+| `completions` | Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish) |
 | `install-hooks` | Install pre-commit hook in the local git repository |
 <!-- /generated -->
 
@@ -298,7 +300,7 @@ exempt_paths = [
 
 ## Platform Quickstarts
 
-Discipline delivers a single static binary and a composite shell action that runs identically across modern CI/CD engines.
+Discipline delivers a single static binary and a composite shell action that runs identically across modern CI/CD engines. For in-depth tutorials, multi-architecture container setups, and runner permissions, see the [CI/CD Platform Integration Guide](guides/ci-platforms.md). Quick-reference snippets for each platform follow:
 
 ### GitHub Actions
 

@@ -320,6 +320,14 @@ pub struct DisciplineConfig {
     pub gates: Gates,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunMode {
+    #[default]
+    Enforcing,
+    Advisory,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MetaConfig {
@@ -327,6 +335,8 @@ pub struct MetaConfig {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default)]
+    pub mode: RunMode,
 }
 
 impl Default for MetaConfig {
@@ -335,6 +345,7 @@ impl Default for MetaConfig {
             version: 1,
             name: "discipline-project".to_string(),
             description: None,
+            mode: RunMode::Enforcing,
         }
     }
 }
@@ -1397,6 +1408,7 @@ impl DisciplineConfig {
                 version: SCHEMA_VERSION,
                 name: name.to_string(),
                 description: None,
+                mode: RunMode::Enforcing,
             },
             directives: DirectivesConfig::default(),
             gates: Gates::default(),

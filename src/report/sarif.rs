@@ -18,7 +18,7 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
             "shortDescription": {
                 "text": desc
             },
-            "helpUri": "https://github.com/orieg/discipline",
+            "helpUri": format!("https://orieg.github.io/discipline/gates/#{}", o.gate),
             "properties": {
                 "examined": o.examined
             }

@@ -1,7 +1,7 @@
 use anyhow::{bail, Context as _, Result};
 use clap::Parser;
 use discipline::cli::{
-    BaselineArgs, CheckArgs, Cli, Commands, ConfigArgs, DocsArgs, InstallHooksArgs, SuiteChoice,
+    BaselineArgs, CheckArgs, Cli, Commands, ConfigArgs, DocsArgs, InstallHooksArgs,
 };
 use discipline::config::{split_list, DisciplineConfig, Overrides, GATES, HOSTNAME_DENYLIST_ENV};
 use discipline::gitctx::GitCtx;
@@ -40,8 +40,8 @@ fn run_command(command: Commands) -> Result<bool> {
         Commands::Check(args) => check(args),
         Commands::Diff(args) => check(CheckArgs {
             config: args.config,
-            suite: SuiteChoice::AgentGuard,
-            base: args.base.or_else(|| Some("HEAD~1".to_string())),
+            suite: args.suite,
+            base: args.base.or_else(|| Some("HEAD".to_string())),
             commit: None,
             commit_range: None,
             staged: false,
@@ -65,12 +65,22 @@ fn run_command(command: Commands) -> Result<bool> {
             baseline_file: args.baseline_file,
             no_baseline: args.no_baseline,
             trust_workspace: args.trust_workspace,
+            advisory: args.advisory,
         }),
         Commands::Baseline(args) => baseline(args),
         Commands::Init(args) => init(args.name),
         Commands::Gates(args) => gates(&args.config),
         Commands::Schema => schema(),
         Commands::SelfTest => discipline::selftest::run(),
+        Commands::Completions(args) => {
+            clap_complete::generate(
+                args.shell,
+                &mut <discipline::cli::Cli as clap::CommandFactory>::command(),
+                "discipline",
+                &mut std::io::stdout(),
+            );
+            Ok(true)
+        }
         Commands::Docs(args) => docs(args),
         Commands::InstallHooks(args) => install_hooks(args),
     }
@@ -558,7 +568,16 @@ fn check(args: CheckArgs) -> Result<bool> {
         args.fail_on_warnings,
     )?;
 
-    Ok(summary.is_success(args.fail_on_warnings, fail_on_overrides))
+    let is_advisory = args.advisory || config.meta.mode == discipline::config::RunMode::Advisory;
+    if is_advisory && !success {
+        eprintln!(
+            "{}",
+            discipline::style::yellow("advisory: violations detected, but exiting 0 due to advisory mode (--advisory / mode = \"advisory\")")
+        );
+        Ok(true)
+    } else {
+        Ok(success)
+    }
 }
 
 fn init(name: Option<String>) -> Result<bool> {
@@ -805,8 +824,7 @@ fn install_hooks(args: InstallHooksArgs) -> Result<bool> {
     }
 
     let pre_commit_path = hooks_dir.join("pre-commit");
-    let hook_content =
-        "#!/bin/sh\n# Discipline pre-commit sentinel\nexec discipline check --staged\n";
+    let hook_content = "#!/bin/sh\n# Discipline pre-commit sentinel\ndiscipline check --staged\n";
 
     if pre_commit_path.exists() {
         let existing = std::fs::read_to_string(&pre_commit_path).with_context(|| {
@@ -850,8 +868,7 @@ fn install_hooks(args: InstallHooksArgs) -> Result<bool> {
             if !updated.ends_with('\n') {
                 updated.push('\n');
             }
-            updated
-                .push_str("\n# Discipline pre-commit sentinel\nexec discipline check --staged\n");
+            updated.push_str("\n# Discipline pre-commit sentinel\ndiscipline check --staged\n");
             std::fs::write(&pre_commit_path, updated)
                 .with_context(|| format!("failed to update hook: {}", pre_commit_path.display()))?;
             println!(

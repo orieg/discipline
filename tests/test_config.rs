@@ -438,3 +438,25 @@ fn test_all_directives_documented_in_configuration_md() {
         "Mismatch between documented directive table and src/tokens.rs::ALL_DIRECTIVE_NAMES"
     );
 }
+
+#[test]
+fn config_meta_mode_round_trips_and_defaults_to_enforcing() {
+    let default_cfg = DisciplineConfig::default_for_repo("test-repo");
+    assert_eq!(
+        default_cfg.meta.mode,
+        discipline::config::RunMode::Enforcing
+    );
+
+    let toml_advisory = r#"
+[meta]
+version = 1
+name = "test-repo"
+mode = "advisory"
+"#;
+    let cfg = DisciplineConfig::from_toml_str(toml_advisory).expect("advisory mode must parse");
+    assert_eq!(cfg.meta.mode, discipline::config::RunMode::Advisory);
+
+    let serialized = toml::to_string_pretty(&cfg).unwrap();
+    let back = DisciplineConfig::from_toml_str(&serialized).unwrap();
+    assert_eq!(back.meta.mode, discipline::config::RunMode::Advisory);
+}

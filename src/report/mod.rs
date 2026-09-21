@@ -158,6 +158,12 @@ fn render_terminal_to_writer<W: Write>(
         if let Some(rem) = &v.remediation {
             writeln!(w, "   {} {rem}", style::bold("Remediation:"))?;
         }
+        writeln!(
+            w,
+            "   {} https://orieg.github.io/discipline/gates/#{}",
+            style::bold("Doc:"),
+            v.gate
+        )?;
     }
 
     let total_ov = summary.total_overrides();
@@ -195,6 +201,13 @@ fn render_terminal_to_writer<W: Write>(
         writeln!(w, "{}", style::green("Status: PASS"))?;
     } else {
         writeln!(w, "{}", style::red("Status: FAILED"))?;
+        if summary.baselined == 0 && summary.errors > 0 {
+            writeln!(
+                w,
+                "\n{}",
+                style::cyan("Tip: Adopting Discipline on an existing repository? Run 'discipline baseline --write' to grandfather existing debt into discipline-baseline.toml.")
+            )?;
+        }
     }
     Ok(())
 }
@@ -339,8 +352,9 @@ pub fn render_step_summary_to_writer(
         for v in summary.violations() {
             writeln!(
                 file,
-                "| {:?} | `{}` | **{}** | {} | {}<br>_{}_ |",
+                "| {:?} | [`{}`](https://orieg.github.io/discipline/gates/#{}) | **{}** | {} | {}<br>_{}_ |",
                 v.severity,
+                v.gate,
                 v.gate,
                 cell(&v.title),
                 location(v)

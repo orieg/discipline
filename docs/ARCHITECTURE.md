@@ -40,7 +40,7 @@ Discipline's operational rigors were developed to defend high-assurance reposito
 ```mermaid
 flowchart TD
     subgraph CFG_LAYER["Layered Configuration & Directives"]
-        D["1. Built-in Defaults<br/>(All available gates ON, severity: error)"]
+        D["1. Built-in Defaults<br/>(All gates ON; correctness/integrity: error, heuristic/bench: warning)"]
         F["2. discipline.toml<br/>(Repository configuration)"]
         O["3. Inline Overrides / Directives<br/>(--config-override, PR body)"]
         CLI["4. CLI Flags & Environment<br/>(--enable, --disable, denylist)"]
@@ -85,7 +85,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    D["1. Built-in Defaults<br/>(All available gates ON, severity error)"] --> M1["Merge Layer 1"]
+    D["1. Built-in Defaults<br/>(All gates ON; correctness: error, heuristic/bench: warning)"] --> M1["Merge Layer 1"]
     F["2. discipline.toml<br/>(Repository configuration)"] --> M1
     M1 --> M2["Merge Layer 2"]
     O["3. Inline Override<br/>(--config-override / action input)"] --> M2

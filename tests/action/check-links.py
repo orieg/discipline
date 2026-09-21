@@ -120,7 +120,7 @@ def check_markdown_links():
     md_files = [ROOT / "README.md", ROOT / "AGENTS.md"]
     docs_dir = ROOT / "docs"
     if docs_dir.exists():
-        md_files.extend(docs_dir.glob("*.md"))
+        md_files.extend(docs_dir.rglob("*.md"))
 
     link_pattern = re.compile(r'(?<!\!)\[([^\]]+)\]\(([^)]+)\)')
 

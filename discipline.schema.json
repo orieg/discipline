@@ -1298,6 +1298,15 @@
           "description": "Optional short description of the project",
           "type": "string"
         },
+        "mode": {
+          "default": "enforcing",
+          "description": "Operating mode: 'enforcing' exits non-zero on violations; 'advisory' runs all checks and emits reports but exits 0.",
+          "enum": [
+            "enforcing",
+            "advisory"
+          ],
+          "type": "string"
+        },
         "name": {
           "description": "Repository or project name",
           "type": "string"

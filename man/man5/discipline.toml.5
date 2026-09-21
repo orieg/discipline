@@ -1,0 +1,167 @@
+.TH DISCIPLINE.TOML 5 "September 2026" "Discipline v0.5.1" "File Formats Manual"
+.SH NAME
+discipline.toml \- configuration file for the Discipline CI gatekeeper and diff sentinel
+.SH SYNOPSIS
+.B discipline.toml
+.SH DESCRIPTION
+.B discipline.toml
+is a TOML-formatted configuration file that defines repository policy for
+.BR discipline (1).
+It controls which static analysis and diff-inspection gates are enabled, their
+enforcement severity, file path exemptions, override directive policies, and
+benchmark performance regression thresholds.
+
+Discipline uses a strict five-layer configuration hierarchy where every layer
+merges deterministically and unknown fields are rejected (fail-closed):
+.IP 1. 4
+.B Built-in defaults:
+Every available gate is enabled. Correctness and integrity gates default to
+.BR error ;
+heuristic and brownfield-sensitive gates
+.RI ( time-estimates ,
+.IR bench-regression ,
+and
+.IR agents-md )
+default to
+.BR warning .
+.IP 2. 4
+.B Repository configuration:
+The checked-in
+.B discipline.toml
+file.
+.IP 3. 4
+.B Inline TOML overrides:
+Supplied via
+.B \-\-config\-override
+or
+.BR DISCIPLINE_CONFIG_OVERRIDE .
+Tables merge, lists append, and scalar values replace.
+.IP 4. 4
+.B Gate switches:
+Supplied via
+.B \-\-enable
+and
+.BR \-\-disable .
+.IP 5. 4
+.B Secret denylists:
+Supplied via
+.B DISCIPLINE_HOSTNAME_DENYLIST
+(appended to the
+.B pii
+gate; never echoed in reports).
+
+.SH FILE FORMAT
+The file consists of TOML tables:
+.TP
+.B [meta]
+Top-level metadata and configuration schema version.
+.RS
+.TP
+.BI version " = 1"
+Required integer. Must match the schema version (currently 1).
+.TP
+.BI name " = \"project-name\""
+Required string. Name of the project or repository.
+.TP
+.BI description " = \"...\""
+Optional string. High-level description of the repository.
+.TP
+.BI mode " = \"enforcing\" | \"advisory\""
+Optional string. Default is \fB"enforcing"\fR. When set to \fB"advisory"\fR,
+all gates run and generate reports (terminal, SARIF, GitLab Code Quality, JUnit),
+but the process exits with code 0 even if violations occur.
+.RE
+
+.TP
+.B [directives]
+Policy for developer override directives (e.g. \fBallow-time-estimates:\fR).
+.RS
+.TP
+.BI sources " = [\"pr-body\", \"commits\"]"
+Allowed sources for directives. Valid values: \fB"pr-body"\fR, \fB"commits"\fR.
+.TP
+.BI allow_hidden " = false"
+Whether directives placed inside HTML comments (\fB<!-- -->\fR) are honored.
+Default is \fBfalse\fR to prevent stealth overrides.
+.TP
+.BI fail_on_overrides " = false"
+When \fBtrue\fR, any applied directive is treated as a build failure unless
+the executing actor is authorized.
+.TP
+.BI allowed_override_actors " = [\"username\"]"
+List of repository actors (GitHub/GitLab logins) authorized to supply overrides
+when \fBfail_on_overrides\fR is enabled.
+.RE
+
+.TP
+.B [gates.<gate-id>]
+Individual gate configuration. Every gate accepts these common fields:
+.RS
+.TP
+.BI enabled " = true | false"
+Enable or disable the gate.
+.TP
+.BI severity " = \"error\" | \"warning\" | \"note\""
+Severity of violations reported by this gate.
+.TP
+.BI exempt_paths " = [\"glob\", ...]"
+Glob patterns of files exempt from this gate.
+.RE
+
+.SH COMMON GATES
+.TP
+.B [gates.assertion-reduction]
+Prevents weakening or deleting assertions in test files.
+.TP
+.B [gates.vacuous-tests]
+Ensures newly added tests contain meaningful, non-tautological assertions.
+.TP
+.B [gates.unsafe-safety-comment]
+Enforces that every \fBunsafe\fR block or implementation carries an explicit \fB// SAFETY:\fR rationale comment.
+.TP
+.B [gates.time-estimates]
+Rejects calendar and duration projections ("2 days", "next sprint") in documentation.
+.TP
+.B [gates.pii]
+Prevents accidental commits of local home directories, private LAN IPs, and secret hostnames.
+.TP
+.B [gates.dependency-delta]
+Validates additions to package manifests against license allowlists and prevents wildcard dependencies.
+.TP
+.B [gates.config-integrity]
+Ensures a commit cannot weaken \fBdiscipline.toml\fR without a cryptographic token or directive.
+
+.SH OVERRIDE DIRECTIVES
+When an invariant must be legitimately relaxed, developers can declare an
+override directive in an authorized source (such as the PR description):
+.PP
+.RS
+.B allow-<gate-id>: <rationale>
+.RE
+.PP
+Example:
+.RS
+.B allow-time-estimates: quoting historical deadline from vendor contract RFC 1234
+.RE
+.PP
+Removing a test or deleting a file requires:
+.RS
+.B removes: path/to/file.rs <rationale>
+.RE
+
+.SH EXIT STATUS
+.TP
+.B 0
+All gates passed, or violations occurred while in advisory mode.
+.TP
+.B 1
+One or more gates reported blocking violations.
+.TP
+.B 2
+Fatal engine error, invalid configuration, or unresolvable git base ref.
+
+.SH SEE ALSO
+.BR discipline (1),
+.BR git (1)
+.PP
+Documentation and guides: https://orieg.github.io/discipline/

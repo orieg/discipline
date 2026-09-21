@@ -14,7 +14,7 @@ pub struct Cli {
 pub enum Commands {
     /// Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check
     Check(CheckArgs),
-    /// Shorthand for `check --suite agent-guard` against `HEAD~1`
+    /// Shorthand for checking uncommitted or working tree changes against HEAD
     Diff(DiffArgs),
     /// Record or manage grandfathered finding baselines
     Baseline(BaselineArgs),
@@ -26,6 +26,8 @@ pub enum Commands {
     Schema,
     /// Run the embedded negative / positive controls against this binary
     SelfTest,
+    /// Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish)
+    Completions(CompletionsArgs),
     /// Generate or check reference docs and schemas against sources of truth
     #[command(hide = true)]
     Docs(DocsArgs),
@@ -43,10 +45,18 @@ impl Commands {
             Commands::Gates(_) => "gates",
             Commands::Schema => "schema",
             Commands::SelfTest => "self-test",
+            Commands::Completions(_) => "completions",
             Commands::Docs(_) => "docs",
             Commands::InstallHooks(_) => "install-hooks",
         }
     }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CompletionsArgs {
+    /// Target shell for completion script
+    #[arg(value_enum)]
+    pub shell: clap_complete::Shell,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -134,6 +144,10 @@ pub struct CheckArgs {
     #[arg(long, env = "DISCIPLINE_FAIL_ON_OVERRIDES")]
     pub fail_on_overrides: bool,
 
+    /// Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur
+    #[arg(long, env = "DISCIPLINE_ADVISORY")]
+    pub advisory: bool,
+
     /// Actor executing the check (for actor-aware override authorization).
     /// Falls back to DISCIPLINE_ACTOR, GITHUB_ACTOR, GITEA_ACTOR, FORGEJO_ACTOR, GITLAB_USER_LOGIN
     #[arg(long, env = "DISCIPLINE_ACTOR")]
@@ -208,7 +222,11 @@ pub struct DiffArgs {
     #[command(flatten)]
     pub config: ConfigArgs,
 
-    /// Base branch or commit ref to compare against
+    /// Which check suite to run
+    #[arg(short, long, value_enum, default_value_t = SuiteChoice::All)]
+    pub suite: SuiteChoice,
+
+    /// Base branch or commit ref to compare against (defaults to HEAD for uncommitted changes)
     #[arg(short, long)]
     pub base: Option<String>,
 
@@ -247,6 +265,10 @@ pub struct DiffArgs {
     /// Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)
     #[arg(long)]
     pub trust_workspace: bool,
+
+    /// Advisory mode: run checks and emit reports, but exit 0 even if violations are found
+    #[arg(long, env = "DISCIPLINE_ADVISORY")]
+    pub advisory: bool,
 }
 
 #[derive(Args, Debug, Clone)]

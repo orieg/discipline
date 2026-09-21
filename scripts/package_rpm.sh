@@ -30,6 +30,12 @@ trap 'rm -rf "${TOPDIR}"' EXIT
 mkdir -p "${TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
 
 cp "${BIN_PATH}" "${TOPDIR}/SOURCES/discipline"
+if [ -f "man/man1/discipline.1" ]; then
+  cp "man/man1/discipline.1" "${TOPDIR}/SOURCES/discipline.1"
+fi
+if [ -f "man/man5/discipline.toml.5" ]; then
+  cp "man/man5/discipline.toml.5" "${TOPDIR}/SOURCES/discipline.toml.5"
+fi
 
 SPEC_FILE="${TOPDIR}/SPECS/discipline.spec"
 cat <<EOF > "${SPEC_FILE}"
@@ -52,9 +58,19 @@ action and standalone CLI.
 %install
 mkdir -p %{buildroot}/usr/bin
 install -m 755 %{_sourcedir}/discipline %{buildroot}/usr/bin/discipline
+if [ -f %{_sourcedir}/discipline.1 ]; then
+    mkdir -p %{buildroot}%{_mandir}/man1
+    install -m 644 %{_sourcedir}/discipline.1 %{buildroot}%{_mandir}/man1/discipline.1
+fi
+if [ -f %{_sourcedir}/discipline.toml.5 ]; then
+    mkdir -p %{buildroot}%{_mandir}/man5
+    install -m 644 %{_sourcedir}/discipline.toml.5 %{buildroot}%{_mandir}/man5/discipline.toml.5
+fi
 
 %files
 /usr/bin/discipline
+%{_mandir}/man1/discipline.1*
+%{_mandir}/man5/discipline.toml.5*
 
 %changelog
 EOF

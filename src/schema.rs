@@ -78,6 +78,12 @@ pub fn generate_schema() -> Value {
                     "description": {
                         "type": "string",
                         "description": "Optional short description of the project"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["enforcing", "advisory"],
+                        "default": "enforcing",
+                        "description": "Operating mode: 'enforcing' exits non-zero on violations; 'advisory' runs all checks and emits reports but exits 0."
                     }
                 }
             },

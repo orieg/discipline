@@ -567,6 +567,37 @@
     .badge-warn { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
     .badge-lang { background: var(--card-inner); color: var(--text-muted); border: 1px solid var(--border); }
 
+    /* Gate Search Bar */
+    .gate-search-wrapper {
+      margin-bottom: 1.25rem;
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .gate-search-input {
+      flex: 1;
+      min-width: 240px;
+      max-width: 480px;
+      padding: 0.65rem 1rem;
+      font-size: 0.92rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--card-inner);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .gate-search-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+    }
+    .gate-count {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
     /* Override box */
     .directive-card {
       background: var(--card-inner);
@@ -805,12 +836,12 @@
     <!-- Stat Bar -->
     <div class="stat-bar">
       <div class="stat-item">
-        <h3>12</h3>
+        <h3>30</h3>
         <p>Active Fail-Closed Gates</p>
       </div>
       <div class="stat-item">
-        <h3>4</h3>
-        <p>AST Language Packs (RS, PY, TS, PHPT)</p>
+        <h3>10</h3>
+        <p>AST Language Packs</p>
       </div>
       <div class="stat-item">
         <h3>7</h3>
@@ -1100,6 +1131,11 @@ discipline self-test</div>
     <div class="section-head">
       <div class="section-title">Active Gate Reference</div>
       <p class="section-desc">Every gate operates with fail-closed semantics, truthful examination counts, and explicit remediation instructions.</p>
+    </div>
+
+    <div class="gate-search-wrapper">
+      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 30 gates by id, category, language, or rule..." aria-label="Search active gates">
+      <span id="gate-count" class="gate-count">Showing 30 of 30 gates</span>
     </div>
 
     <div class="gate-table-wrapper">
@@ -1405,6 +1441,11 @@ discipline self-test</div>
       <td class="gate-id">fail_on_overrides</td>
       <td><code>false</code></td>
       <td>Treat applied overrides as failures (requires human sign-off).</td>
+    </tr>
+    <tr>
+      <td class="gate-id">advisory</td>
+      <td><code>false</code></td>
+      <td>Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur.</td>
     </tr>
     <tr>
       <td class="gate-id">actor</td>
@@ -1762,6 +1803,30 @@ discipline self-test</div>
       document.getElementById(targetId).classList.add('active');
     });
   });
+
+  // Real-time client-side gate search/filter
+  const gateSearch = document.getElementById('gate-search');
+  const gateCount = document.getElementById('gate-count');
+  if (gateSearch) {
+    const gateRows = document.querySelectorAll('#gates .gate-table tbody tr');
+    const totalGates = gateRows.length;
+    gateSearch.addEventListener('input', function() {
+      const query = this.value.trim().toLowerCase();
+      let matchCount = 0;
+      gateRows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        if (!query || text.includes(query)) {
+          row.style.display = '';
+          matchCount++;
+        } else {
+          row.style.display = 'none';
+        }
+      });
+      if (gateCount) {
+        gateCount.textContent = `Showing ${matchCount} of ${totalGates} gates`;
+      }
+    });
+  }
 </script>
 
 </body>

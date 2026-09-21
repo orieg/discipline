@@ -17,36 +17,36 @@ This document establishes the normative enforcement rules, detection capabilitie
 <!-- generated:gates -->
 | Gate id | Suite | Status | Languages | Rule Description |
 |---|---|---|---|---|
-| `agents-md` | agent-guard | **shipped** | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
-| `assertion-reduction` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | assertion count / strength must not drop in an existing test |
-| `vacuous-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | new tests must carry a non-tautological assertion |
-| `ignored-tests` | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | tests must not be newly #[ignore]d or skipped without directive |
-| `unsafe-safety-comment` | agent-guard | **shipped** | Rust | unsafe blocks / impls carry a // SAFETY: comment |
-| `deletion-rationale` | agent-guard | **shipped** | any | deleted files and removed tests need a scoped removes: rationale |
-| `time-estimates` | hygiene | **shipped** | any | no calendar / duration estimates in markdown or the PR body |
-| `pii` | hygiene | **shipped** | any | no home paths, LAN IPs, or denylisted hostnames in tracked text |
-| `agent-scratch` | hygiene | **shipped** | any | agent scratch state is never tracked |
-| `shell-secrets` | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
-| `issue-link` | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
-| `config-integrity` | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
-| `scope-confinement` | agent-guard | **shipped** | any | changes stay inside authorized paths |
-| `suppression-delta` | agent-guard | **shipped** | per pack | new #[allow], commented-out tests, cfg-gated tests |
-| `provenance-tags` | hygiene | **shipped** | any | published numerics carry (measured|target|projected) |
-| `ci-integrity` | integrity | **shipped** | any | workflow weakening: continue-on-error, || true, unpinned actions |
-| `test-floor` | integrity | **shipped** | any | test-count ratchet read from the base ref |
-| `golden-output` | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override |
-| `dependency-delta` | integrity | **shipped** | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
-| `test-budget` | integrity | **shipped** | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
-| `pr-checklist` | hygiene | **shipped** | any | ticked PR checkboxes are reconciled against the diff |
-| `command` | verification | **shipped** | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
-| `sanitizers` | verification | **shipped** | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
-| `msrv` | quality | **shipped** | Rust | cargo check under the pinned MSRV |
-| `miri` | verification | **shipped** | Rust | Miri tiers with zero-tests guard |
-| `unsafe-budget` | verification | **shipped** | Rust | unsafe count ratchet |
-| `bench-regression` | bench | **shipped** | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
-| `archive-contents` | integrity | **shipped** | any | distribution archive must contain required paths and zero forbidden developer artifacts |
-| `manifest-sync` | integrity | **shipped** | any | reconcile git-tracked files against packaging manifest declarations |
-| `version-lockstep` | integrity | **shipped** | any | version declarations across headers, manifests, and files must remain in lockstep |
+| [`agents-md`](#agents-md) | agent-guard | **shipped** | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
+| [`assertion-reduction`](#assertion-reduction) | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | assertion count / strength must not drop in an existing test |
+| [`vacuous-tests`](#vacuous-tests) | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | new tests must carry a non-tautological assertion |
+| [`ignored-tests`](#ignored-tests) | agent-guard | **shipped** | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | tests must not be newly #[ignore]d or skipped without directive |
+| [`unsafe-safety-comment`](#unsafe-safety-comment) | agent-guard | **shipped** | Rust | unsafe blocks / impls carry a // SAFETY: comment |
+| [`deletion-rationale`](#deletion-rationale) | agent-guard | **shipped** | any | deleted files and removed tests need a scoped removes: rationale |
+| [`time-estimates`](#time-estimates) | hygiene | **shipped** | any | no calendar / duration estimates in markdown or the PR body |
+| [`pii`](#pii) | hygiene | **shipped** | any | no home paths, LAN IPs, or denylisted hostnames in tracked text |
+| [`agent-scratch`](#agent-scratch) | hygiene | **shipped** | any | agent scratch state is never tracked |
+| [`shell-secrets`](#shell-secrets) | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
+| [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
+| [`config-integrity`](#config-integrity) | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
+| [`scope-confinement`](#scope-confinement) | agent-guard | **shipped** | any | changes stay inside authorized paths |
+| [`suppression-delta`](#suppression-delta) | agent-guard | **shipped** | per pack | new #[allow], commented-out tests, cfg-gated tests |
+| [`provenance-tags`](#provenance-tags) | hygiene | **shipped** | any | published numerics carry (measured|target|projected) |
+| [`ci-integrity`](#ci-integrity) | integrity | **shipped** | any | workflow weakening: continue-on-error, || true, unpinned actions |
+| [`test-floor`](#test-floor) | integrity | **shipped** | any | test-count ratchet read from the base ref |
+| [`golden-output`](#golden-output) | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override |
+| [`dependency-delta`](#dependency-delta) | integrity | **shipped** | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
+| [`test-budget`](#test-budget) | integrity | **shipped** | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
+| [`pr-checklist`](#pr-checklist) | hygiene | **shipped** | any | ticked PR checkboxes are reconciled against the diff |
+| [`command`](#command) | verification | **shipped** | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
+| [`sanitizers`](#sanitizers) | verification | **shipped** | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
+| [`msrv`](#msrv) | quality | **shipped** | Rust | cargo check under the pinned MSRV |
+| [`miri`](#miri) | verification | **shipped** | Rust | Miri tiers with zero-tests guard |
+| [`unsafe-budget`](#unsafe-budget) | verification | **shipped** | Rust | unsafe count ratchet |
+| [`bench-regression`](#bench-regression) | bench | **shipped** | Rust, Go, Python, C/C++ | benchmark drift via harness adapters (deterministic counts or BCa intervals) |
+| [`archive-contents`](#archive-contents) | integrity | **shipped** | any | distribution archive must contain required paths and zero forbidden developer artifacts |
+| [`manifest-sync`](#manifest-sync) | integrity | **shipped** | any | reconcile git-tracked files against packaging manifest declarations |
+| [`version-lockstep`](#version-lockstep) | integrity | **shipped** | any | version declarations across headers, manifests, and files must remain in lockstep |
 <!-- /generated -->
 
 ### Directive Policy
@@ -293,6 +293,43 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Lifting directive:** Ensure `CLAUDE.md` and `GEMINI.md` are symlinks: `ln -sf AGENTS.md CLAUDE.md`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
+#### `scope-confinement`
+- **Rule:** Agent modifications must remain strictly within configured authorized directory and file paths (`allowed_paths`) and never touch restricted paths (`forbidden_paths`).
+- **Languages:** Any.
+- **What it catches:**
+  - Modifications touching paths outside `allowed_paths`.
+  - Modifications touching paths matching `forbidden_paths` (e.g. security credentials, CI workflow definitions, release scripts).
+- **Passing commit / PR body (accepted):**
+  ```text
+  allow-scope: authorized infra migration across deploy scripts
+  ```
+- **What it does NOT catch:**
+  - Files exempted via `exempt_paths`.
+  - Modifications when `allowed_paths` is empty and no `forbidden_paths` are matched.
+- **Lifting directive:** `allow-scope: <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `allowed_paths`, `forbidden_paths`.
+
+#### `suppression-delta`
+- **Rule:** Rejects net increases in compiler, linter, or type checker suppression annotations (`#[allow]`, `#[expect]`, `@ts-ignore`, `@ts-expect-error`, `/* eslint-disable */`, `# noqa`, `// nolint`, `#pragma warning disable`) across tracked source files unless explicitly authorized.
+- **Languages:** Rust, Python, TypeScript, JavaScript, Go, C/C++, C#.
+- **What it catches:**
+  - Newly added suppression annotations that silence linter or compiler warnings.
+  - Commented-out test functions and unverified `#[cfg]` gates.
+- **Failing diff (rejected):**
+  ```rust
+  + #[allow(dead_code, clippy::all)]
+    fn internal_helper() { ... }
+  ```
+- **Passing commit / PR body (accepted):**
+  ```text
+  allow-suppression: unavoidable legacy FFI bindings in wrapper module
+  ```
+- **What it does NOT catch:**
+  - Pre-existing suppression annotations present on the base ref.
+  - Suppressions inside explicitly exempted file paths.
+- **Lifting directive:** `allow-suppression: <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `patterns`.
+
 ---
 
 ### Pillar 2: Hygiene (`hygiene`)
@@ -418,6 +455,18 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Paired comparison citing `(workload: uniform-random)`.
 - **Lifting directive:** `allow-provenance: <file-or-path> <reason>` in PR body or commit, or inline `<!-- discipline:allow(provenance-tags) -->`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `include`, `check_tables`, `check_mechanisms`, `check_intervals`, `check_paired_figures`, `scan_pr_body`.
+
+#### `pr-checklist`
+- **Rule:** Reconciles ticked checklist items in PR descriptions (`- [x] Tests added/updated`, `- [x] Documentation updated`, `- [x] Benchmarks added`) against actual modified files in the pull request diff to prevent vacuous checkoffs.
+- **Languages:** Any.
+- **What it catches:**
+  - Ticked test checkboxes when zero test files were modified.
+  - Ticked documentation checkboxes when zero docs or markdown files were modified.
+  - Ticked benchmark checkboxes when zero benchmark files were modified.
+- **Passing PR body (accepted):**
+  Checklists accurately reflect modified files, or unticked items remain `- [ ]`.
+- **Lifting directive:** `allow-pr-checklist: <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `require_tests`, `require_docs`, `require_benches`.
 
 ---
 
@@ -657,9 +706,49 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Lifting directive:** `allow-command: <command-or-preset-name> <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `preset`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `commands`.
 
+#### `sanitizers`
+- **Rule:** Executes runtime sanitizers (AddressSanitizer `ASan` or ThreadSanitizer `TSan`) with negative-control race canaries and audited suppression list verification.
+- **Languages:** Rust, C/C++.
+- **What it catches:**
+  - Memory errors (out-of-bounds access, use-after-free) or data races detected by LLVM sanitizers.
+  - Failure of negative-control canaries to trigger expected sanitizer diagnostics.
+  - Unaudited sanitizer suppression entries.
+- **Lifting directive:** `allow-sanitizers: <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `sanitizer`, `timeout_seconds`, `canary`.
+
+#### `miri`
+- **Rule:** Executes Miri (`cargo miri test`) with a zero-tests guard to detect undefined behavior (UB), invalid memory operations, and memory leaks.
+- **Languages:** Rust.
+- **What it catches:**
+  - Undefined behavior flagged during Miri execution.
+  - Zero tests executing under Miri when test filters match zero cases (prevents vacuous passes).
+- **Lifting directive:** `allow-miri: <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `args`, `timeout_seconds`, `allow_zero`.
+
+#### `unsafe-budget`
+- **Rule:** Enforces an `unsafe` block count ratchet: the total number of `unsafe` blocks and functions cannot increase without an explicit justification directive.
+- **Languages:** Rust.
+- **What it catches:**
+  - Net additions of `unsafe` blocks or `unsafe fn` declarations across tracked source files.
+- **Lifting directive:** `allow-unsafe: <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`.
+
 ---
 
-### Pillar 5: Benchmark Drift (`bench`)
+### Pillar 5: Quality & Compiler Toolchain (`quality`)
+
+#### `msrv`
+- **Rule:** Validates that the repository declares a Minimum Supported Rust Version (`rust-version` in `Cargo.toml` or `pinned_version`) and compiles cleanly under that toolchain.
+- **Languages:** Rust.
+- **What it catches:**
+  - Missing `rust-version` declaration in `Cargo.toml`.
+  - Compilation or syntax errors when building under the declared or pinned MSRV toolchain.
+- **Lifting directive:** `allow-msrv: <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `pinned_version`.
+
+---
+
+### Pillar 6: Benchmark Drift (`bench`)
 
 #### `bench-regression`
 - **Rule:** Benchmark output files are tracked across revisions. Comparisons against merge-base baselines enforce formal mathematical confidence intervals and exact deterministic instruction counts.
@@ -935,14 +1024,7 @@ The official container image (`ghcr.io/orieg/discipline`) intentionally relaxes 
 
 ---
 
-## Planned Gates
+## Roadmap & Future Gates
 
-The following gates are registered with `available: false` in the gate registry. Attempting to enable or configure them exits non-zero (F5). Full roadmaps, dependencies, and go/no-go gates are documented in [ROADMAP.md](ROADMAP.md).
+All 30 foundational gates across the six suites are fully implemented and shipped in Discipline v0.5.1+. Future candidate research gates under evaluation (including paired within-run ratio benchmarking, mutation score floor, and fuzz corpus drift) are documented in [ROADMAP.md](ROADMAP.md).
 
-- `scope-confinement` (Suite: Agent Guard) — Changes stay inside authorized directory paths.
-- `suppression-delta` (Suite: Agent Guard) — Tracks net increases in compiler/linter suppression attributes (`#[allow]`, `@ts-ignore`, `# noqa`).
-- `pr-checklist` (Suite: Hygiene) — Reconciles ticked PR checkboxes against actual diffs.
-- `sanitizers` (Suite: Verification) — Memory and thread sanitizer presets with race canaries.
-- `msrv` (Suite: Quality) — Verifies build against minimum supported Rust version.
-- `miri` (Suite: Verification) — Undefined behavior verification under Miri with zero-test guards.
-- `unsafe-budget` (Suite: Verification) — Ratchet limiting the total number of `unsafe` blocks.

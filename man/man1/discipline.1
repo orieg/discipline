@@ -1,0 +1,49 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH discipline 1  "discipline 0.5.1" 
+.SH NAME
+discipline \- Universal CI/CD gatekeeper and AI coding agent diff sentinel
+.SH SYNOPSIS
+\fBdiscipline\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Universal CI/CD gatekeeper and AI coding agent diff sentinel
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+discipline\-check(1)
+Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check
+.TP
+discipline\-diff(1)
+Shorthand for checking uncommitted or working tree changes against HEAD
+.TP
+discipline\-baseline(1)
+Record or manage grandfathered finding baselines
+.TP
+discipline\-init(1)
+Write a discipline.toml with every available gate at its default
+.TP
+discipline\-gates(1)
+List every gate: id, suite, availability, and effective state
+.TP
+discipline\-schema(1)
+Print the JSON Schema for discipline.toml
+.TP
+discipline\-self\-test(1)
+Run the embedded negative / positive controls against this binary
+.TP
+discipline\-completions(1)
+Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish)
+.TP
+discipline\-install\-hooks(1)
+Install pre\-commit hook in the local git repository
+.TP
+discipline\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH VERSION
+v0.5.1
