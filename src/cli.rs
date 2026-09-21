@@ -362,7 +362,7 @@ pub struct DoctorArgs {
     /// Branch whose protection is checked (default: the repository's default branch)
     #[arg(long)]
     pub branch: Option<String>,
-    /// Repository as OWNER/NAME (default: GITHUB_REPOSITORY, else the `origin` remote)
+    /// Repository path on the forge, e.g. OWNER/NAME (default: from the CI environment or the `origin` remote; set DISCIPLINE_FORGE for a self-hosted forge)
     #[arg(long)]
     pub repo: Option<String>,
     /// Check only local files; skip the platform API

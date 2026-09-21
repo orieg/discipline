@@ -476,8 +476,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Wall-clock ratios (`2.9x faster`, `3.1x speedup`) without confidence intervals (`[lo, hi]`, `BCa`, `CI`) or provisional markers.
   - Paired comparison figures (`11.9 ns vs 108.9 ns`, cross-metric comparisons) without shared workload tags (`(workload: id)`) or documented differentiation markers.
   - **Superseded figures** (with `superseded_registry`): a figure the repository has withdrawn, republished without a retraction marker (`retracted`, `superseded`, `corrected`, `previously`, ...) within three lines. The registry is a JSON file at `HEAD`: `{"figures": [{"id", "patterns", "context", "array_sequence", "replacement"}]}`; unknown fields are ignored. Patterns are case-insensitive and may use look-around. A pattern counts only when at least two of the figure's `context` words (one, if it lists one) appear in the same sentence or table cell or in the surrounding lines. Tracked JSON datasets matched by `superseded_json_paths` are swept value by value (string values by pattern, arrays by `array_sequence`; `provenance`, `retraction*`, `meta`, `description` and `_comment` keys are skipped). Changed files are swept; when the registry itself changes, every tracked markdown file and matching dataset is swept, so withdrawing a figure finds where it is already published.
-  - **Pending measurements** (with `check_pending_citations`): a statement that a measurement is pending (`pending re-run`, `pending re-measurement`, `pending a quiet-host run`, ...) with no issue cited (`#123`, `issues/123`, or a GitHub issue URL) within the next 150 characters. With `require_open_pending_issues`, at least one cited issue must be open, checked with `gh api` (`DISCIPLINE_GH`, repository from `GITHUB_REPOSITORY` or a GitHub `origin`): text still saying "pending" after its issue closed is stale. Agent guides (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) are not read for this check.
-- **Could not check (exit 2):** a configured registry missing at `HEAD`, not JSON, or holding a pattern that does not compile; a swept dataset that is not JSON; with `require_open_pending_issues`, an issue whose state `gh` cannot report (not installed, unauthenticated, rate limited, no repository to resolve `#123` in). Each is named in the error.
+  - **Pending measurements** (with `check_pending_citations`): a statement that a measurement is pending (`pending re-run`, `pending re-measurement`, `pending a quiet-host run`, ...) with no issue cited (`#123`, `issues/123`, or an issue URL) within the next 150 characters. With `require_open_pending_issues`, at least one cited issue must be open, read from the repository's forge: GitHub through `gh api`, GitLab, Gitea and Forgejo through `curl` (see [Forge access](#forge-access)). A bare `#123` resolves in the repository under review; an issue URL on the same host resolves in the repository it names (a GitLab `/-/merge_requests/123` link is read as a merge request, open while `opened`). Text still saying "pending" after its issue closed is stale. Agent guides (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) are not read for this check.
+- **Could not check (exit 2):** a configured registry missing at `HEAD`, not JSON, or holding a pattern that does not compile; a swept dataset that is not JSON; with `require_open_pending_issues`, an issue whose state the forge cannot report (tool missing, no access, rate limited, an issue on another host, a forge that cannot be identified). Each is named in the error.
 - **Passing examples (accepted):**
   - Table caption carrying `*(measured: host, commit)*` or `*(target)*`.
   - Mechanism claim citing `perf stat` counters or labeled as `(hypothesis — unmeasured pending PMU counters)`.
@@ -1160,6 +1160,23 @@ ratchet = true
 ```
 
 ---
+
+## Forge Access
+
+`require_open_pending_issues` and `discipline doctor` read from the forge that hosts the repository. The binary has no network stack; requests go through external tools on the same bounded runner the `command` gate uses.
+
+| Forge | Tool | Token (optional for public repositories) |
+|---|---|---|
+| GitHub | `gh api` (`DISCIPLINE_GH`, default `gh`) | whatever `gh` is authenticated with (`GH_TOKEN`) |
+| GitLab | `curl` (`DISCIPLINE_CURL`, default `curl`), `<url>/api/v4` | `DISCIPLINE_FORGE_TOKEN`, else `GITLAB_TOKEN` (sent as `PRIVATE-TOKEN`) |
+| Gitea | `curl`, `<url>/api/v1` | `DISCIPLINE_FORGE_TOKEN`, else `GITEA_TOKEN` |
+| Forgejo | `curl`, `<url>/api/v1` | `DISCIPLINE_FORGE_TOKEN`, else `FORGEJO_TOKEN`, else `GITEA_TOKEN` |
+
+A token is written to a mode-0600 curl config file that is removed after the request; it never appears in process arguments.
+
+The forge is identified in this order: `DISCIPLINE_FORGE` (`github`, `gitlab`, `gitea`, `forgejo`, with `DISCIPLINE_FORGE_URL` and `DISCIPLINE_FORGE_REPO` when the `origin` remote does not give them); the CI runner (`GITLAB_CI` with `CI_SERVER_URL` and `CI_PROJECT_PATH`; `FORGEJO_ACTIONS` or `GITEA_ACTIONS` with `GITHUB_SERVER_URL` and `GITHUB_REPOSITORY`; `GITHUB_ACTIONS`); then the `origin` host (`github.com`, `gitlab.com` or a host containing `gitlab`, `codeberg.org` or a host containing `forgejo`, a host containing `gitea`); with no remote, `GITHUB_REPOSITORY` alone means GitHub. A self-hosted forge under another name needs `DISCIPLINE_FORGE`; without it, a check that needs the forge exits 2.
+
+Verified against Gitea 1.24.7 and Forgejo 12.0.4 instances and against gitlab.com's public API: issue state, repository default branch, branch protection with and without an admin token.
 
 ## Legacy Script Parity & Replacement Reference
 

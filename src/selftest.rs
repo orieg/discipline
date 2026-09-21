@@ -1754,7 +1754,6 @@ smoke_cost::set_contains
             use crate::guards::claim_registry::{
                 load_registry, scan_pending, scan_superseded, IssueStates, PendingProblem,
             };
-            use crate::guards::perf::citation::{CannedInstruments, Unavailable};
             let lines = |t: &str| -> Vec<(usize, String)> {
                 t.lines().enumerate().map(|(i, l)| (i + 1, l.to_string())).collect()
             };
@@ -1768,13 +1767,19 @@ smoke_cost::set_contains
             let broken_registry = load_registry(r#"{"figures": [{"id": "a", "patterns": ["("]}]}"#, "r").is_err();
 
             let (uncited, _) = scan_pending(&lines("B is pending re-run."), None);
-            let mut canned = CannedInstruments::default();
+            // Gitea's issue vocabulary, as recorded from a live instance.
+            let forge = crate::forge::Forge {
+                kind: crate::forge::ForgeKind::Gitea,
+                url: "https://git.example.com".into(),
+                repo: "o/r".into(),
+            };
+            let mut canned = crate::forge::CannedApi::default();
             canned
                 .responses
-                .insert("repos/o/r/issues/1".into(), serde_json::json!({"state": "closed"}));
-            let mut states = IssueStates::new(&canned, Some("o/r".into()));
+                .insert("gitea:repos/o/r/issues/1".into(), serde_json::json!({"state": "closed"}));
+            let mut states = IssueStates::new(&canned, Ok(forge.clone()));
             let (closed, _) = scan_pending(&lines("B is pending re-run (#1)."), Some(&mut states));
-            let mut blind = IssueStates::new(&Unavailable, Some("o/r".into()));
+            let mut blind = IssueStates::new(&crate::forge::NoApi, Ok(forge));
             let (_, undecided) = scan_pending(&lines("B is pending re-run (#1)."), Some(&mut blind));
 
             Ok(bare.len() == 1
@@ -1801,9 +1806,9 @@ smoke_cost::set_contains
                 ..Protection::default()
             };
             p.required_contexts.insert("ci-gate".to_string());
-            let good = protection_findings(&p, &jobs);
+            let good = protection_findings(crate::forge::ForgeKind::GitHub, &p, &jobs);
             p.required_contexts = ["lint".to_string()].into_iter().collect();
-            let wrong = protection_findings(&p, &jobs);
+            let wrong = protection_findings(crate::forge::ForgeKind::GitHub, &p, &jobs);
             let required = |f: &[crate::doctor::Finding]| {
                 f.iter().find(|x| x.id == "required-check").map(|x| x.status)
             };

@@ -814,26 +814,36 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
 }
 
 fn doctor(args: discipline::cli::DoctorArgs) -> Result<bool> {
-    use discipline::doctor::{detect_platform, run, DoctorInput};
+    use discipline::doctor::{run, DoctorInput};
     let git = GitCtx::open_whole_tree()?;
-    let remote = git.remote_url("origin");
-    let repository = args
-        .repo
-        .clone()
-        .or_else(|| discipline::guards::claim_registry::repository_slug(&git));
-    let platform = if args.repo.is_some() || std::env::var("GITHUB_REPOSITORY").is_ok() {
-        discipline::doctor::Platform::GitHub
-    } else {
-        detect_platform(remote.as_deref())
-    };
+    let env = |k: &str| std::env::var(k).ok();
+    let mut forge = discipline::forge::detect(&env, git.remote_url("origin").as_deref());
+    if let Some(repo) = &args.repo {
+        forge = match forge {
+            Ok(mut f) => {
+                f.repo = repo.clone();
+                Ok(f)
+            }
+            // An explicit repository without a detectable forge is taken to be GitHub.
+            Err(_) => Ok(discipline::forge::Forge {
+                kind: discipline::forge::ForgeKind::GitHub,
+                url: "https://github.com".into(),
+                repo: repo.clone(),
+            }),
+        };
+    }
     let gh = discipline::guards::perf::citation::LiveInstruments::new(&git);
+    let api = discipline::forge::LiveApi {
+        gh: &gh,
+        root: git.root(),
+        env: &env,
+    };
     let report = run(&DoctorInput {
         root: git.root(),
-        repository,
+        forge,
         branch: args.branch.clone(),
-        platform,
         local_only: args.local_only,
-        gh: &gh,
+        api: &api,
     });
     match args.format {
         discipline::cli::DoctorFormat::Text => print!("{}", report.render_text()),

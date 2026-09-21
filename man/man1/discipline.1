@@ -636,7 +636,7 @@ Check that the repository and its platform enforce discipline: workflows, CODEOW
 Branch whose protection is checked (default: the repository\*(Aqs default branch)
 .TP
 \fB\-\-repo\fR \fI<REPO>\fR
-Repository as OWNER/NAME (default: GITHUB_REPOSITORY, else the `origin` remote)
+Repository path on the forge, e.g. OWNER/NAME (default: from the CI environment or the `origin` remote; set DISCIPLINE_FORGE for a self\-hosted forge)
 .TP
 \fB\-\-local\-only\fR
 Check only local files; skip the platform API

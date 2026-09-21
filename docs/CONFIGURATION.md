@@ -211,7 +211,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.provenance-tags.check_tables` | boolean | `true` | Check markdown tables for unit-bearing numbers without table or caption provenance tags |
 | `gates.provenance-tags.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.provenance-tags.exempt_paths` | list | `[]` | File path globs exempted from this gate |
-| `gates.provenance-tags.require_open_pending_issues` | boolean | `false` | A pending-measurement statement must cite at least one open issue, checked with gh; implies check_pending_citations |
+| `gates.provenance-tags.require_open_pending_issues` | boolean | `false` | A pending-measurement statement must cite at least one open issue, read from the forge (gh on GitHub, curl on GitLab, Gitea and Forgejo); implies check_pending_citations |
 | `gates.provenance-tags.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.provenance-tags.superseded_json_paths` | list | `[]` | Globs of tracked JSON datasets swept for registered figures |
 | `gates.provenance-tags.superseded_registry` | string | *(unset)* | Path (read at HEAD) of a JSON registry of withdrawn figures; a registered figure may be republished only next to a retraction marker |

@@ -29,7 +29,6 @@
 //! freshness; the binary has no network stack (AGENTS.md §3.3). An issue whose state the
 //! instruments cannot decide is reported by name as could-not-check.
 
-use crate::guards::perf::citation::CitationInstruments;
 use anyhow::{bail, Context as _, Result};
 use regex::Regex;
 use std::collections::BTreeMap;
@@ -67,7 +66,7 @@ static PENDING: LazyLock<Regex> = LazyLock::new(|| {
 
 static ISSUE_REF: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(?:issues|pull)/(\d+)|(?:#|issues/)(\d+)",
+        r"(?i)https?://([A-Za-z0-9.:-]+)/([A-Za-z0-9_./-]+?)/(?:-/)?(issues|pull|pulls|merge_requests|work_items)/(\d+)|(?:#|issues/)(\d+)",
     )
     .unwrap()
 });
@@ -335,47 +334,102 @@ pub struct PendingUndecidable {
     pub reasons: Vec<String>,
 }
 
-/// Issue state lookups, cached per `owner/repo#n` across one evaluation.
+/// A cited issue: an explicit `host`/`repo` from a URL, or a bare `#n` in this repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueRef {
+    pub host: Option<String>,
+    pub repo: Option<String>,
+    pub number: String,
+    /// A GitLab merge request (`/-/merge_requests/n`) rather than an issue.
+    pub merge_request: bool,
+}
+
+fn issue_refs(text: &str) -> Vec<IssueRef> {
+    ISSUE_REF
+        .captures_iter(text)
+        .map(|c| match (c.get(1), c.get(2), c.get(4)) {
+            (Some(host), Some(repo), Some(n)) => IssueRef {
+                host: Some(host.as_str().to_ascii_lowercase()),
+                repo: Some(repo.as_str().to_string()),
+                number: n.as_str().to_string(),
+                merge_request: c.get(3).is_some_and(|k| k.as_str() == "merge_requests"),
+            },
+            _ => IssueRef {
+                host: None,
+                repo: None,
+                number: c.get(5).map(|n| n.as_str()).unwrap_or_default().to_string(),
+                merge_request: false,
+            },
+        })
+        .collect()
+}
+
+/// Issue state lookups against the repository's forge, cached per reference.
 pub struct IssueStates<'a> {
-    instruments: &'a dyn CitationInstruments,
-    repo: Option<String>,
+    api: &'a dyn crate::forge::ForgeApi,
+    forge: std::result::Result<crate::forge::Forge, String>,
     cache: BTreeMap<String, std::result::Result<bool, String>>,
 }
 
 impl<'a> IssueStates<'a> {
-    /// `repo` is `owner/name`, used for bare `#123` references.
-    pub fn new(instruments: &'a dyn CitationInstruments, repo: Option<String>) -> Self {
+    /// `forge` is where bare `#123` references resolve; `Err` says why it is unknown.
+    pub fn new(
+        api: &'a dyn crate::forge::ForgeApi,
+        forge: std::result::Result<crate::forge::Forge, String>,
+    ) -> Self {
         Self {
-            instruments,
-            repo,
+            api,
+            forge,
             cache: BTreeMap::new(),
         }
     }
 
     /// `Ok(true)` when open, `Ok(false)` when closed, `Err` when undecidable.
-    fn is_open(
-        &mut self,
-        owner_repo: Option<&str>,
-        number: &str,
-    ) -> std::result::Result<bool, String> {
-        let Some(slug) = owner_repo.map(str::to_string).or_else(|| self.repo.clone()) else {
-            return Err(format!(
-                "#{number}: no repository to resolve it in (GITHUB_REPOSITORY is unset and `origin` is not a GitHub remote)"
-            ));
+    fn is_open(&mut self, r: &IssueRef) -> std::result::Result<bool, String> {
+        let forge = match &self.forge {
+            Ok(f) => f.clone(),
+            Err(e) => return Err(format!("#{}: {e}", r.number)),
         };
-        let key = format!("{slug}#{number}");
+        if let Some(host) = &r.host {
+            if *host != forge.host() {
+                return Err(format!(
+                    "#{} is on {host}, not on this repository's forge ({})",
+                    r.number,
+                    forge.host()
+                ));
+            }
+        }
+        let repo = r.repo.clone().unwrap_or_else(|| forge.repo.clone());
+        let key = format!(
+            "{}/{repo}#{}{}",
+            forge.host(),
+            r.number,
+            if r.merge_request { "!" } else { "" }
+        );
         if let Some(hit) = self.cache.get(&key) {
             return hit.clone();
         }
-        let answer = self
-            .instruments
-            .gh_api(&format!("repos/{slug}/issues/{number}"))
-            .and_then(|v| match v.get("state").and_then(|s| s.as_str()) {
-                Some(s) if s.eq_ignore_ascii_case("open") => Ok(true),
-                Some(s) if s.eq_ignore_ascii_case("closed") => Ok(false),
-                _ => Err("response carries no `state`".to_string()),
+        let answer = if r.merge_request {
+            let path = format!(
+                "projects/{}/merge_requests/{}",
+                crate::forge::gitlab_project_id(&repo),
+                r.number
+            );
+            self.api.get(&forge, &path).and_then(|v| {
+                match v
+                    .as_ref()
+                    .and_then(|v| v.get("state"))
+                    .and_then(|s| s.as_str())
+                {
+                    Some("opened") => Ok(true),
+                    Some(_) => Ok(false),
+                    None => Err("merge request has no readable state".to_string()),
+                }
             })
-            .map_err(|e| format!("{key}: {e}"));
+        } else {
+            crate::forge::issue_is_open(self.api, &forge, &repo, &r.number)
+        }
+        .map_err(|e| format!("{key}: {e}"));
         self.cache.insert(key, answer.clone());
         answer
     }
@@ -395,19 +449,7 @@ pub fn scan_pending(
                 .chars()
                 .take(PENDING_CITATION_SPAN)
                 .collect();
-            let refs: Vec<(Option<String>, String)> = ISSUE_REF
-                .captures_iter(&after)
-                .map(|c| match (c.get(1), c.get(2), c.get(3)) {
-                    (Some(o), Some(r), Some(n)) => (
-                        Some(format!("{}/{}", o.as_str(), r.as_str())),
-                        n.as_str().to_string(),
-                    ),
-                    _ => (
-                        None,
-                        c.get(4).map(|n| n.as_str()).unwrap_or_default().to_string(),
-                    ),
-                })
-                .collect();
+            let refs = issue_refs(&after);
             if refs.is_empty() {
                 problems.push((*line, PendingProblem::NoCitation));
                 break;
@@ -418,13 +460,13 @@ pub fn scan_pending(
             let mut closed = Vec::new();
             let mut unknown = Vec::new();
             let mut open = false;
-            for (slug, n) in &refs {
-                match states.is_open(slug.as_deref(), n) {
+            for r in &refs {
+                match states.is_open(r) {
                     Ok(true) => {
                         open = true;
                         break;
                     }
-                    Ok(false) => closed.push(format!("#{n}")),
+                    Ok(false) => closed.push(format!("#{}", r.number)),
                     Err(e) => unknown.push(e),
                 }
             }
@@ -445,32 +487,9 @@ pub fn scan_pending(
     (problems, undecidable)
 }
 
-/// `owner/name` of the repository under review: `GITHUB_REPOSITORY`, else a GitHub
-/// `origin` remote.
-pub fn repository_slug(git: &crate::gitctx::GitCtx) -> Option<String> {
-    if let Some(s) = std::env::var("GITHUB_REPOSITORY")
-        .ok()
-        .filter(|s| s.contains('/') && !s.trim().is_empty())
-    {
-        return Some(s.trim().to_string());
-    }
-    let url = git.remote_url("origin")?;
-    parse_github_remote(&url)
-}
-
-/// `owner/name` from a GitHub remote URL (https or ssh form).
-pub fn parse_github_remote(url: &str) -> Option<String> {
-    static REMOTE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$").unwrap()
-    });
-    let c = REMOTE.captures(url.trim())?;
-    Some(format!("{}/{}", &c[1], &c[2]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::guards::perf::citation::{CannedInstruments, Unavailable};
 
     const REGISTRY: &str = r#"{
       "_comment": ["notes are ignored"],
@@ -592,23 +611,31 @@ mod tests {
         assert!(p.is_empty());
     }
 
+    fn github_forge() -> crate::forge::Forge {
+        crate::forge::Forge {
+            kind: crate::forge::ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        }
+    }
+
     #[test]
     fn pending_citation_must_include_an_open_issue_when_state_is_required() {
-        let mut canned = CannedInstruments::default();
-        canned.responses.insert(
-            "repos/o/r/issues/1".into(),
+        let mut api = crate::forge::CannedApi::default();
+        api.responses.insert(
+            "github:repos/o/r/issues/1".into(),
             serde_json::json!({"state": "closed"}),
         );
-        canned.responses.insert(
-            "repos/o/r/issues/2".into(),
+        api.responses.insert(
+            "github:repos/o/r/issues/2".into(),
             serde_json::json!({"state": "open"}),
         );
-        canned.responses.insert(
-            "repos/x/y/issues/9".into(),
+        api.responses.insert(
+            "github:repos/x/y/issues/9".into(),
             serde_json::json!({"state": "OPEN"}),
         );
 
-        let mut states = IssueStates::new(&canned, Some("o/r".into()));
+        let mut states = IssueStates::new(&api, Ok(github_forge()));
         let (p, u) = scan_pending(&lines("B is pending re-run (#1)."), Some(&mut states));
         assert_eq!(p, vec![(1, PendingProblem::Closed(vec!["#1".into()]))]);
         assert!(u.is_empty());
@@ -624,32 +651,87 @@ mod tests {
     }
 
     #[test]
+    fn pending_issues_resolve_on_gitea_forgejo_and_gitlab() {
+        use crate::forge::{CannedApi, Forge, ForgeKind};
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "gitea:repos/o/r/issues/4".into(),
+            serde_json::json!({"state": "open"}),
+        );
+        api.responses.insert(
+            "forgejo:repos/o/r/issues/5".into(),
+            serde_json::json!({"state": "closed"}),
+        );
+        api.responses.insert(
+            "gitlab:projects/g%2Fs%2Fp/issues/6".into(),
+            serde_json::json!({"state": "opened"}),
+        );
+        api.responses.insert(
+            "gitlab:projects/g%2Fs%2Fp/merge_requests/7".into(),
+            serde_json::json!({"state": "merged"}),
+        );
+        let on = |kind, url: &str, repo: &str| Forge {
+            kind,
+            url: url.into(),
+            repo: repo.into(),
+        };
+
+        let mut gitea = IssueStates::new(
+            &api,
+            Ok(on(ForgeKind::Gitea, "https://git.example.com", "o/r")),
+        );
+        let (p, u) = scan_pending(&lines("pending re-run (#4)."), Some(&mut gitea));
+        assert!(p.is_empty() && u.is_empty(), "{p:?} {u:?}");
+        let (p, _) = scan_pending(
+            &lines("pending re-run (https://git.example.com/o/r/issues/4)."),
+            Some(&mut gitea),
+        );
+        assert!(p.is_empty());
+
+        let mut forgejo = IssueStates::new(
+            &api,
+            Ok(on(ForgeKind::Forgejo, "https://codeberg.org", "o/r")),
+        );
+        let (p, _) = scan_pending(&lines("pending re-run (#5)."), Some(&mut forgejo));
+        assert_eq!(p, vec![(1, PendingProblem::Closed(vec!["#5".into()]))]);
+
+        let mut gitlab = IssueStates::new(
+            &api,
+            Ok(on(ForgeKind::GitLab, "https://gitlab.com", "g/s/p")),
+        );
+        let (p, u) = scan_pending(
+            &lines("pending re-run (https://gitlab.com/g/s/p/-/issues/6)."),
+            Some(&mut gitlab),
+        );
+        assert!(p.is_empty() && u.is_empty(), "{p:?} {u:?}");
+        let (p, _) = scan_pending(
+            &lines("pending re-run (https://gitlab.com/g/s/p/-/merge_requests/7)."),
+            Some(&mut gitlab),
+        );
+        assert_eq!(p, vec![(1, PendingProblem::Closed(vec!["#7".into()]))]);
+
+        // An issue on another host cannot be checked against this forge.
+        let (_, u) = scan_pending(
+            &lines("pending re-run (https://github.com/o/r/issues/4)."),
+            Some(&mut gitea),
+        );
+        assert!(
+            u[0].reasons[0].contains("not on this repository's forge"),
+            "{u:?}"
+        );
+    }
+
+    #[test]
     fn undecidable_issue_state_is_reported_not_passed() {
-        let mut states = IssueStates::new(&Unavailable, Some("o/r".into()));
+        let mut states = IssueStates::new(&crate::forge::NoApi, Ok(github_forge()));
         let (p, u) = scan_pending(&lines("B is pending re-run (#5)."), Some(&mut states));
         assert!(p.is_empty());
         assert_eq!(u.len(), 1);
         assert!(u[0].reasons[0].contains("o/r#5"), "{u:?}");
 
-        let mut no_repo = IssueStates::new(&Unavailable, None);
-        let (_, u) = scan_pending(&lines("B is pending re-run (#5)."), Some(&mut no_repo));
-        assert!(u[0].reasons[0].contains("no repository"), "{u:?}");
-    }
-
-    #[test]
-    fn github_remote_forms_parse() {
-        assert_eq!(
-            parse_github_remote("https://github.com/o/r.git").as_deref(),
-            Some("o/r")
-        );
-        assert_eq!(
-            parse_github_remote("git@github.com:o/r.git").as_deref(),
-            Some("o/r")
-        );
-        assert_eq!(
-            parse_github_remote("https://github.com/o/r").as_deref(),
-            Some("o/r")
-        );
-        assert_eq!(parse_github_remote("https://gitlab.com/o/r.git"), None);
+        let mut no_forge =
+            IssueStates::new(&crate::forge::NoApi, Err("set DISCIPLINE_FORGE".into()));
+        let (_, u) = scan_pending(&lines("B is pending re-run (#5)."), Some(&mut no_forge));
+        assert!(u[0].reasons[0].contains("DISCIPLINE_FORGE"), "{u:?}");
     }
 }

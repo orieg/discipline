@@ -295,7 +295,7 @@ pub fn generate_schema() -> Value {
                     "superseded_registry": { "type": "string", "description": "Path (read at HEAD) of a JSON registry of withdrawn figures; a registered figure may be republished only next to a retraction marker" },
                     "superseded_json_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs of tracked JSON datasets swept for registered figures" },
                     "check_pending_citations": { "type": "boolean", "description": "A pending-measurement statement must cite a tracking issue" },
-                    "require_open_pending_issues": { "type": "boolean", "description": "A pending-measurement statement must cite at least one open issue, checked with gh; implies check_pending_citations" }
+                    "require_open_pending_issues": { "type": "boolean", "description": "A pending-measurement statement must cite at least one open issue, read from the forge (gh on GitHub, curl on GitLab, Gitea and Forgejo); implies check_pending_citations" }
                 }
             },
             "UnsafeSafetyCommentGate": {

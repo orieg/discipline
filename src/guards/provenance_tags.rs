@@ -421,9 +421,15 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
     };
     let check_pending = settings.check_pending_citations || settings.require_open_pending_issues;
     let instruments = crate::guards::perf::citation::LiveInstruments::new(ctx.git);
-    let mut issue_states = settings.require_open_pending_issues.then(|| {
-        claim_registry::IssueStates::new(&instruments, claim_registry::repository_slug(ctx.git))
-    });
+    let env = |k: &str| std::env::var(k).ok();
+    let forge_api = crate::forge::LiveApi {
+        gh: &instruments,
+        root: ctx.git.root(),
+        env: &env,
+    };
+    let mut issue_states = settings
+        .require_open_pending_issues
+        .then(|| claim_registry::IssueStates::new(&forge_api, crate::forge::detect_for(ctx.git)));
     let mut undecidable: Vec<String> = Vec::new();
 
     let mut scanned_count = 0;
@@ -521,7 +527,8 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
     if !undecidable.is_empty() {
         anyhow::bail!(
             "provenance-tags: could not decide the state of issues cited by pending statements \
-             (require_open_pending_issues needs `gh` with read access; set DISCIPLINE_GH / GH_TOKEN): {}",
+             (require_open_pending_issues reads the forge: `gh` on GitHub, `curl` on GitLab, Gitea and Forgejo, \
+             with a token for private repositories; see docs/GATES.md#provenance-tags): {}",
             undecidable.join(" | ")
         );
     }

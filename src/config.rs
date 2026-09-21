@@ -881,7 +881,7 @@ pub struct ProvenanceTagsGate {
     pub superseded_json_paths: Vec<String>,
     /// A pending-measurement statement must cite a tracking issue.
     pub check_pending_citations: bool,
-    /// A pending-measurement statement must cite at least one open issue (checked with `gh`).
+    /// A pending-measurement statement must cite at least one open issue, read from the forge.
     /// Implies `check_pending_citations`.
     pub require_open_pending_issues: bool,
 }
