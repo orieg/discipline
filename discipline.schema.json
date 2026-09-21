@@ -727,6 +727,10 @@
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"
         },
+        "pending_issue_repos": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Other repositories (owner/name) whose issues a pending statement may cite; by default only this repository's issues count"
+        },
         "require_open_pending_issues": {
           "description": "A pending-measurement statement must cite at least one open issue, read from the forge (gh on GitHub, curl on GitLab, Gitea and Forgejo); implies check_pending_citations",
           "type": "boolean"

@@ -110,7 +110,14 @@ const ISOLATED_ENV_VARS: &[&str] = &[
     "GITEA_TOKEN",
     "FORGEJO_TOKEN",
     "GITLAB_TOKEN",
-    "DISCIPLINE_CURL",
+    "DISCIPLINE_FORGE_API_URL",
+    "DISCIPLINE_FORGE_ALLOW_HTTP",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
     "GITLAB_CI",
     "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
     "CI_MERGE_REQUEST_DIFF_BASE_SHA",
@@ -277,8 +284,8 @@ impl Repo {
         for var in ISOLATED_ENV_VARS {
             cmd.env_remove(var);
         }
-        // Citation freshness shells out to `gh`; no test reaches the network by default.
-        cmd.env("DISCIPLINE_GH", "/nonexistent/discipline-test-gh");
+        // No test reaches a real forge: only a loopback FakeForge is allowed.
+        cmd.env("DISCIPLINE_NO_NETWORK", "1");
         let has_pr_body = env.iter().any(|(k, _)| *k == "PR_BODY");
         let has_pr_title = env.iter().any(|(k, _)| *k == "PR_TITLE");
         if has_pr_body && !has_pr_title {
@@ -306,5 +313,103 @@ impl Repo {
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         }
+    }
+}
+
+/// Canned responses by API path: status, extra headers, body.
+type Routes = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<String, (u16, Vec<(String, String)>, String)>>,
+>;
+/// Recorded requests: path and lower-cased headers.
+type Requests = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<(String, String)>)>>>;
+
+/// A forge REST API on a loopback port: canned responses by path, every request recorded.
+/// Unknown paths answer 403 with a rate-limit message, like an exhausted anonymous quota.
+pub struct FakeForge {
+    addr: std::net::SocketAddr,
+    routes: Routes,
+    requests: Requests,
+}
+
+impl FakeForge {
+    pub fn start() -> Self {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let routes: Routes = Default::default();
+        let requests: Requests = Default::default();
+        let (r, q) = (routes.clone(), requests.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() {
+                    continue;
+                }
+                let target = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let mut headers = Vec::new();
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((k, v)) = h.trim_end().split_once(':') {
+                        headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+                    }
+                }
+                let path = target.trim_start_matches('/').to_string();
+                q.lock().unwrap().push((path.clone(), headers));
+                let (status, extra, body) = r.lock().unwrap().get(&path).cloned().unwrap_or((
+                    403,
+                    Vec::new(),
+                    r#"{"message":"API rate limit exceeded"}"#.to_string(),
+                ));
+                let mut resp = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    body.len()
+                );
+                for (k, v) in extra {
+                    resp.push_str(&format!("{k}: {v}\r\n"));
+                }
+                resp.push_str("\r\n");
+                resp.push_str(&body);
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        Self {
+            addr,
+            routes,
+            requests,
+        }
+    }
+
+    /// Base URL for `DISCIPLINE_FORGE_API_URL`.
+    pub fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    /// Answer `path` (relative to the API base, with any query) with 200 and `body`.
+    pub fn serve(&self, path: &str, body: Value) {
+        self.serve_raw(path, 200, &[], &body.to_string());
+    }
+
+    pub fn serve_raw(&self, path: &str, status: u16, headers: &[(&str, &str)], body: &str) {
+        self.routes.lock().unwrap().insert(
+            path.trim_start_matches('/').to_string(),
+            (
+                status,
+                headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                body.to_string(),
+            ),
+        );
+    }
+
+    /// Requests received so far: path and lower-cased headers.
+    pub fn requests(&self) -> Vec<(String, Vec<(String, String)>)> {
+        self.requests.lock().unwrap().clone()
     }
 }

@@ -415,21 +415,23 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                     "provenance-tags: superseded_registry `{path}` is not present at HEAD"
                 );
             };
-            Some((path.clone(), claim_registry::load_registry(&text, path)?))
+            let head = claim_registry::load_registry(&text, path)?;
+            // The base registry still binds this change (a PR cannot delete the entry for
+            // the figure it republishes). A malformed base is ignored: the change may fix it.
+            let base = match ctx.git.base_content(path)? {
+                Some(b) => claim_registry::load_registry(&b, path).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            Some((path.clone(), claim_registry::merge_registries(base, head)))
         }
         None => None,
     };
     let check_pending = settings.check_pending_citations || settings.require_open_pending_issues;
-    let instruments = crate::guards::perf::citation::LiveInstruments::new(ctx.git);
-    let env = |k: &str| std::env::var(k).ok();
-    let forge_api = crate::forge::LiveApi {
-        gh: &instruments,
-        root: ctx.git.root(),
-        env: &env,
-    };
-    let mut issue_states = settings
-        .require_open_pending_issues
-        .then(|| claim_registry::IssueStates::new(&forge_api, crate::forge::detect_for(ctx.git)));
+    let forge_api = crate::forge::HttpApi::from_env();
+    let mut issue_states = settings.require_open_pending_issues.then(|| {
+        claim_registry::IssueStates::new(&forge_api, crate::forge::detect_for(ctx.git))
+            .allow_repositories(&settings.pending_issue_repos)
+    });
     let mut undecidable: Vec<String> = Vec::new();
 
     let mut scanned_count = 0;
@@ -527,8 +529,8 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
     if !undecidable.is_empty() {
         anyhow::bail!(
             "provenance-tags: could not decide the state of issues cited by pending statements \
-             (require_open_pending_issues reads the forge: `gh` on GitHub, `curl` on GitLab, Gitea and Forgejo, \
-             with a token for private repositories; see docs/GATES.md#provenance-tags): {}",
+             (require_open_pending_issues reads the forge's API over HTTPS, with a token for private \
+             repositories; see docs/GATES.md#forge-access): {}",
             undecidable.join(" | ")
         );
     }
@@ -642,6 +644,11 @@ fn pending_finding((line, problem): (usize, claim_registry::PendingProblem)) -> 
         }
         claim_registry::PendingProblem::Closed(issues) => format!(
             "pending measurement statement cites only closed issue(s): {}",
+            issues.join(", ")
+        ),
+        claim_registry::PendingProblem::OutsideRepository(issues) => format!(
+            "pending measurement statement cites only issues of other repositories ({}); \
+             list them in `pending_issue_repos` if they track this measurement",
             issues.join(", ")
         ),
     };

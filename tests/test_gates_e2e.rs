@@ -3,7 +3,7 @@
 //! the released interface: the binary, a real git repository, JSON output.
 
 mod common;
-use common::{Repo, GOOD_LIB, GOOD_TEST};
+use common::{FakeForge, Repo, GOOD_LIB, GOOD_TEST};
 
 #[test]
 fn clean_change_passes_and_reports_what_it_examined() {
@@ -7993,21 +7993,16 @@ fn provenance_tags_pending_statement_must_cite_an_open_issue() {
         .titles("provenance-tags")
         .contains(&"Pending Measurement Without Open Issue".to_string()));
 
-    // Issue state: #1 closed, #2 open, answered by a stand-in for `gh`.
-    let gh = repo.file("fake-gh.sh");
-    std::fs::write(
-        &gh,
-        "#!/bin/sh\ncase \"$2\" in\n  */issues/1) echo '{\"state\":\"closed\"}' ;;\n  */issues/2) echo '{\"state\":\"open\"}' ;;\n  *) echo 'not found' >&2; exit 1 ;;\nesac\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let gh = gh.to_str().unwrap().to_string();
-    let open_cfg = "[gates.provenance-tags]\nenabled = true\nrequire_open_pending_issues = true\nexempt_paths = [\"fake-gh.sh\"]\n";
-    let env = [("DISCIPLINE_GH", gh.as_str()), ("GITHUB_REPOSITORY", "o/r")];
+    // Issue state: #1 closed, #2 open, answered by a loopback GitHub API.
+    let api = FakeForge::start();
+    api.serve("repos/o/r/issues/1", serde_json::json!({"state": "closed"}));
+    api.serve("repos/o/r/issues/2", serde_json::json!({"state": "open"}));
+    let url = api.url();
+    let open_cfg = "[gates.provenance-tags]\nenabled = true\nrequire_open_pending_issues = true\n";
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("GITHUB_REPOSITORY", "o/r"),
+    ];
     let args = [
         "check",
         "--format",
@@ -8036,12 +8031,39 @@ fn provenance_tags_pending_statement_must_cite_an_open_issue() {
     let open = repo.run(&args, &env);
     assert_eq!(open.code, 0, "{}", open.stdout);
 
-    // Without a usable `gh` the state is undecidable: could-not-check, not a pass.
+    // Without network access the state is undecidable: could-not-check, not a pass.
     let blind = repo.run(&args, &[("GITHUB_REPOSITORY", "o/r")]);
     assert_eq!(blind.code, 2, "{}", blind.stderr);
     assert!(
         blind.stderr.contains("o/r#1") || blind.stderr.contains("o/r#2"),
         "{}",
         blind.stderr
+    );
+}
+
+#[test]
+fn provenance_tags_a_change_cannot_delete_the_entry_for_a_figure_it_republishes() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("figures.json", SUPERSEDED_REGISTRY),
+            ("docs/perf.md", "# Perf\n"),
+        ],
+        "base: registry",
+    );
+    // The change republishes the figure and empties the registry in the same commit.
+    repo.write("figures.json", r#"{"figures": []}"#);
+    repo.write(
+        "docs/perf.md",
+        "# Perf\n\nRandom lookup is 1.11x slower than stock.\n",
+    );
+    repo.commit("docs: republish and withdraw the retraction");
+    let run = repo.check(&["--config-override", REGISTRY_CONFIG]);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    let v = run.violations("provenance-tags");
+    assert!(
+        v.iter()
+            .any(|x| x["title"].as_str() == Some("Superseded Figure Republished")),
+        "{v:?}"
     );
 }

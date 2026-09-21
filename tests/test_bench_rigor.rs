@@ -11,47 +11,9 @@ use std::process::Command;
 
 // ---- helpers --------------------------------------------------------------------------
 
-/// A stand-in `gh` that answers `gh api <path>` from `<dir>/<path with / ? & = . -> _>.json`
-/// and fails like an unauthenticated or rate-limited `gh` for anything else.
-#[cfg(unix)]
-struct FakeGh {
-    dir: tempfile::TempDir,
-}
+/// The GitHub API the citation checks read: a loopback forge with canned responses.
+type FakeGh = FakeForge;
 
-#[cfg(unix)]
-impl FakeGh {
-    fn new() -> Self {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let script = format!(
-            "#!/bin/sh\n[ \"$1\" = api ] || exit 2\nf=\"{}/$(printf '%s' \"$2\" | tr '/?&=.' '_____').json\"\n[ -f \"$f\" ] || {{ echo 'HTTP 403: API rate limit exceeded' >&2; exit 1; }}\ncat \"$f\"\n",
-            dir.path().display()
-        );
-        let bin = dir.path().join("gh");
-        std::fs::write(&bin, script).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Self { dir }
-    }
-
-    fn serve(&self, api_path: &str, body: Value) {
-        let name: String = api_path
-            .chars()
-            .map(|c| if "/?&=.".contains(c) { '_' } else { c })
-            .collect();
-        std::fs::write(
-            self.dir.path().join(format!("{name}.json")),
-            body.to_string(),
-        )
-        .unwrap();
-    }
-
-    fn bin(&self) -> String {
-        self.dir.path().join("gh").display().to_string()
-    }
-}
-
-/// Commits with a fixed committer time, so freshness ordering does not depend on how
-/// fast the test runs.
 fn commit_at(repo: &Repo, message: &str, epoch: i64) {
     repo.git(&["add", "-A"]);
     let date = format!("{epoch} +0000");
@@ -129,7 +91,7 @@ fn sourced_override_citing_a_fresh_run_is_admitted() {
     let repo = Repo::new();
     repo.commit("init");
     let head_sha = repo.git_output(&["rev-parse", "HEAD"]);
-    let gh = FakeGh::new();
+    let gh = FakeGh::start();
     gh.serve(
         RUN_API,
         json!({"conclusion": "success", "head_sha": head_sha}),
@@ -146,7 +108,7 @@ fn sourced_override_citing_a_fresh_run_is_admitted() {
         &args,
         &[
             ("PR_BODY", body.as_str()),
-            ("DISCIPLINE_GH", gh.bin().as_str()),
+            ("DISCIPLINE_FORGE_API_URL", gh.url().as_str()),
         ],
     );
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
@@ -164,7 +126,7 @@ fn sourced_override_citing_a_fresh_run_is_admitted() {
 fn sourced_override_citing_a_cancelled_run_leaves_the_gate_armed() {
     let repo = Repo::new();
     repo.commit("init");
-    let gh = FakeGh::new();
+    let gh = FakeGh::start();
     gh.serve(
         RUN_API,
         json!({"conclusion": "cancelled", "head_sha": "dfc5f456"}),
@@ -177,7 +139,7 @@ fn sourced_override_citing_a_cancelled_run_leaves_the_gate_armed() {
         &args,
         &[
             ("PR_BODY", body.as_str()),
-            ("DISCIPLINE_GH", gh.bin().as_str()),
+            ("DISCIPLINE_FORGE_API_URL", gh.url().as_str()),
         ],
     );
     assert_eq!(run.code, 1, "{}", run.stdout);
@@ -202,7 +164,7 @@ fn failure_run_is_admitted_only_when_its_measurement_job_reached_the_guard() {
     let repo = Repo::new();
     repo.commit("init");
     let head_sha = repo.git_output(&["rev-parse", "HEAD"]);
-    let gh = FakeGh::new();
+    let gh = FakeGh::start();
     gh.serve(
         RUN_API,
         json!({"conclusion": "failure", "head_sha": head_sha}),
@@ -228,8 +190,11 @@ fn failure_run_is_admitted_only_when_its_measurement_job_reached_the_guard() {
     let config = "citation_measurement_jobs = [{ job = \"Perf / Counts\", guard = \"Enforce Regression Guard\" }]\n";
     let args = sourced_args(base.to_str().unwrap(), head.to_str().unwrap(), config);
     let body = format!("allow-regression: sync_map_insert +6% counts in {RUN_URL}");
-    let bin = gh.bin();
-    let env_ok = [("PR_BODY", body.as_str()), ("DISCIPLINE_GH", bin.as_str())];
+    let bin = gh.url();
+    let env_ok = [
+        ("PR_BODY", body.as_str()),
+        ("DISCIPLINE_FORGE_API_URL", bin.as_str()),
+    ];
 
     // The guard tripped on numbers the job measured: the run holds the report.
     gh.serve(&jobs_api, jobs("success"));
@@ -250,20 +215,13 @@ fn failure_run_is_admitted_only_when_its_measurement_job_reached_the_guard() {
 }
 
 #[test]
-fn sourced_override_is_undecidable_without_gh_and_stays_armed() {
+fn sourced_override_is_undecidable_without_network_and_stays_armed() {
     let repo = Repo::new();
     repo.commit("init");
     let (base, head) = bench_files(repo.path());
     let args = sourced_args(base.to_str().unwrap(), head.to_str().unwrap(), "");
     let body = format!("allow-regression: sync_map_insert trade measured in {RUN_URL}");
-    let run = run_with(
-        &repo,
-        &args,
-        &[
-            ("PR_BODY", body.as_str()),
-            ("DISCIPLINE_GH", "/nonexistent/discipline-test-gh"),
-        ],
-    );
+    let run = run_with(&repo, &args, &[("PR_BODY", body.as_str())]);
     assert_eq!(run.code, 1, "{}", run.stdout);
     assert!(run
         .titles("bench-regression")

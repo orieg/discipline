@@ -79,7 +79,7 @@ Every contribution must satisfy:
 `orieg/discipline` is a high-assurance tool. Unsafe code is strictly forbidden in core logic unless fundamentally required for low-level FFI bindings (e.g. `libgit2` or C tree-sitter grammars). When required, every `unsafe` block MUST be preceded by a detailed `// SAFETY:` invariant comment.
 
 ### 3.3 Static Binary Parity
-All CI builds target `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` for container execution, and native macOS targets for local developer workflows. The binary has no network features; do not add a dependency that pulls in openssl or a TLS stack.
+All CI builds target `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` for container execution, and native macOS targets for local developer workflows. No gate needs the network. Three opt-in features read a forge's REST API (open-issue state, bench citation freshness, `discipline doctor` platform checks); they use the in-process HTTPS client in `src/forge.rs` (rustls, no OpenSSL), never an external tool, and fail closed (exit 2) when the forge cannot be reached. Do not add another network path, a dependency that pulls in OpenSSL, or a runtime dependency on an external binary. `DISCIPLINE_NO_NETWORK=1` must keep every request off the network.
 
 ### 3.4 Adding or Changing a Gate
 A gate is not done until all of these hold (full contract: `docs/ARCHITECTURE.md` §3 and §9):

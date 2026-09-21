@@ -7,14 +7,14 @@
 //! - **Local files** (platform-neutral for Actions-style workflows): which workflow jobs
 //!   run discipline, which jobs roll them up, the triggers and token permissions of those
 //!   workflows, and whether `CODEOWNERS` covers the gate configuration.
-//! - **Platform settings** (GitHub, through `gh api`; the binary has no network stack,
+//! - **Platform settings** (GitHub, GitLab, Gitea, Forgejo, over HTTPS through `crate::forge`;
 //!   AGENTS.md §3.3): the effective branch rules and classic protection of the default
 //!   branch — a required check that runs discipline, the up-to-date policy, force-push
 //!   and deletion blocking, pull-request requirement and bypass.
 //!
 //! Exit status follows the gate contract: `0` nothing failed, `1` at least one finding
 //! failed (with `--strict`, a warning also fails), `2` a check could not be decided
-//! (`gh` missing or unauthenticated, an unsupported platform). "Could not check" is never
+//! (no network, no access, a forge that cannot be identified). "Could not check" is never
 //! reported as healthy.
 
 use crate::forge::{gitlab_project_id, Forge, ForgeApi, ForgeKind};
@@ -1435,10 +1435,10 @@ pub fn run(input: &DoctorInput) -> Report {
 
 fn access_hint(kind: ForgeKind) -> &'static str {
     match kind {
-        ForgeKind::GitHub => "Install and authenticate `gh` (or set DISCIPLINE_GH), or use --local-only.",
-        ForgeKind::GitLab => "Set GITLAB_TOKEN (or DISCIPLINE_FORGE_TOKEN) and make sure `curl` is installed, or use --local-only.",
-        ForgeKind::Gitea => "Set GITEA_TOKEN (or DISCIPLINE_FORGE_TOKEN) and make sure `curl` is installed, or use --local-only.",
-        ForgeKind::Forgejo => "Set FORGEJO_TOKEN (or DISCIPLINE_FORGE_TOKEN) and make sure `curl` is installed, or use --local-only.",
+        ForgeKind::GitHub => "Set GH_TOKEN or GITHUB_TOKEN (or DISCIPLINE_FORGE_TOKEN) with read access, or use --local-only.",
+        ForgeKind::GitLab => "Set GITLAB_TOKEN (or DISCIPLINE_FORGE_TOKEN), or use --local-only.",
+        ForgeKind::Gitea => "Set GITEA_TOKEN (or DISCIPLINE_FORGE_TOKEN), or use --local-only.",
+        ForgeKind::Forgejo => "Set FORGEJO_TOKEN (or DISCIPLINE_FORGE_TOKEN), or use --local-only.",
     }
 }
 

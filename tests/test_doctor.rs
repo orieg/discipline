@@ -1,7 +1,7 @@
 //! End-to-end tests for `discipline doctor`, driving the real binary.
 
 mod common;
-use common::Repo;
+use common::{FakeForge, Repo};
 
 const WORKFLOW: &str = "name: CI
 on:
@@ -24,19 +24,20 @@ jobs:
 
 const CODEOWNERS: &str = "/discipline.toml @o\n/.github/workflows/ @o\n";
 
-/// A stand-in `gh` answering the rules, ruleset, branch and repository endpoints.
-fn fake_gh(repo: &Repo, rules: &str) -> String {
-    let path = repo.file("fake-gh.sh");
-    let script = format!(
-        "#!/bin/sh\ncase \"$2\" in\n  repos/o/r/rules/branches/main) echo '{rules}' ;;\n  repos/o/r/rulesets/1) echo '{{\"bypass_actors\": []}}' ;;\n  repos/o/r/branches/main) echo '{{\"protected\": true, \"protection\": {{\"enabled\": false}}}}' ;;\n  repos/o/r) echo '{{\"default_branch\": \"main\"}}' ;;\n  *) echo \"unexpected $2\" >&2; exit 1 ;;\nesac\n"
+/// A loopback GitHub API answering the rules, ruleset, branch and repository endpoints.
+fn github_api(rules: &str) -> FakeForge {
+    let api = FakeForge::start();
+    api.serve_raw("repos/o/r/rules/branches/main", 200, &[], rules);
+    api.serve(
+        "repos/o/r/rulesets/1",
+        serde_json::json!({"bypass_actors": []}),
     );
-    std::fs::write(&path, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    path.to_str().unwrap().to_string()
+    api.serve(
+        "repos/o/r/branches/main",
+        serde_json::json!({"protected": true, "protection": {"enabled": false}}),
+    );
+    api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));
+    api
 }
 
 const GOOD_RULES: &str = r#"[{"type":"required_status_checks","ruleset_id":1,"parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"ci-gate"}]}},{"type":"non_fast_forward","ruleset_id":1},{"type":"deletion","ruleset_id":1},{"type":"pull_request","ruleset_id":1,"parameters":{}}]"#;
@@ -72,10 +73,14 @@ fn statuses(stdout: &str) -> Vec<(String, String)> {
 #[test]
 fn doctor_healthy_repository_passes() {
     let repo = protected_repo();
-    let gh = fake_gh(&repo, GOOD_RULES);
+    let api = github_api(GOOD_RULES);
+    let url = api.url();
     let run = repo.run(
         &["doctor", "--repo", "o/r", "--format", "json"],
-        &[("DISCIPLINE_GH", gh.as_str())],
+        &[
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ("GH_TOKEN", "gh-tok-1"),
+        ],
     );
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     let st = statuses(&run.stdout);
@@ -84,16 +89,29 @@ fn doctor_healthy_repository_passes() {
         "{st:?}"
     );
     assert!(st.iter().all(|(_, s)| s == "pass" || s == "info"), "{st:?}");
+    // The token is sent as a bearer credential, with GitHub's API headers.
+    let reqs = api.requests();
+    assert!(!reqs.is_empty());
+    for (_, headers) in &reqs {
+        assert!(
+            headers.contains(&("authorization".into(), "Bearer gh-tok-1".into())),
+            "{headers:?}"
+        );
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "user-agent" && v.starts_with("discipline/")));
+    }
 }
 
 #[test]
 fn doctor_required_check_without_discipline_fails() {
     let repo = protected_repo();
     let rules = GOOD_RULES.replace("\"ci-gate\"", "\"lint\"");
-    let gh = fake_gh(&repo, &rules);
+    let api = github_api(&rules);
+    let url = api.url();
     let run = repo.run(
         &["doctor", "--repo", "o/r", "--format", "json"],
-        &[("DISCIPLINE_GH", gh.as_str())],
+        &[("DISCIPLINE_FORGE_API_URL", url.as_str())],
     );
     assert_eq!(run.code, 1, "{}", run.stdout);
     assert!(statuses(&run.stdout).contains(&("required-check".into(), "fail".into())));
@@ -102,7 +120,7 @@ fn doctor_required_check_without_discipline_fails() {
 #[test]
 fn doctor_without_platform_access_is_could_not_check() {
     let repo = protected_repo();
-    // The test harness points DISCIPLINE_GH at a path that does not exist.
+    // The harness sets DISCIPLINE_NO_NETWORK=1 and no API URL: github.com is unreachable.
     let run = repo.run(&["doctor", "--repo", "o/r"], &[]);
     assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
     assert!(run.stdout.contains("unknown"), "{}", run.stdout);
@@ -137,30 +155,8 @@ fn doctor_local_findings_warn_and_strict_fails_on_them() {
     assert!(none.stdout.contains("no workflow job runs discipline"));
 }
 
-/// A stand-in `curl` playing a Gitea server: answers by URL path, records its arguments
-/// and the config file it was given, and appends the HTTP status as `--write-out` would.
-fn fake_curl(repo: &Repo, routes: &[(&str, &str)]) -> String {
-    let log = repo.file("curl.log");
-    let mut cases = String::new();
-    for (path, body) in routes {
-        cases.push_str(&format!("  *{path}) printf '%s\\n200' '{body}' ;;\n"));
-    }
-    let script = format!(
-        "#!/bin/sh\necho \"ARGS $*\" >> '{log}'\nprev=''\nfor a in \"$@\"; do\n  if [ \"$prev\" = --config ]; then echo \"CONFIG $(cat \"$a\")\" >> '{log}'; fi\n  prev=\"$a\"; url=\"$a\"\ndone\ncase \"$url\" in\n{cases}  *) printf 'not found\\n404' ;;\nesac\n",
-        log = log.display()
-    );
-    let path = repo.file("fake-curl.sh");
-    std::fs::write(&path, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    path.to_str().unwrap().to_string()
-}
-
 #[test]
-fn doctor_reads_gitea_protection_with_a_token_kept_off_the_command_line() {
+fn doctor_reads_gitea_protection_with_the_gitea_token_header() {
     let repo = Repo::new();
     repo.commit_base_files(
         &[
@@ -175,15 +171,12 @@ fn doctor_reads_gitea_protection_with_a_token_kept_off_the_command_line() {
     );
     // Field names as a Gitea 1.24 instance returns them.
     let rule = r#"[{"rule_name":"main","enable_push":false,"enable_force_push":false,"enable_status_check":true,"status_check_contexts":["CI / ci-gate (pull_request)"],"block_on_outdated_branch":true,"block_admin_merge_override":true,"enable_merge_whitelist":false,"require_signed_commits":false}]"#;
-    let curl = fake_curl(
-        &repo,
-        &[
-            ("/api/v1/repos/o/r/branch_protections", rule),
-            ("/api/v1/repos/o/r", r#"{"default_branch":"main"}"#),
-        ],
-    );
+    let api = FakeForge::start();
+    api.serve_raw("repos/o/r/branch_protections", 200, &[], rule);
+    api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));
+    let url = api.url();
     let env = [
-        ("DISCIPLINE_CURL", curl.as_str()),
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
         ("DISCIPLINE_FORGE", "gitea"),
         ("DISCIPLINE_FORGE_URL", "https://git.example.com"),
         ("DISCIPLINE_FORGE_REPO", "o/r"),
@@ -197,18 +190,70 @@ fn doctor_reads_gitea_protection_with_a_token_kept_off_the_command_line() {
         "{st:?}"
     );
     assert!(st.contains(&("codeowners".into(), "pass".into())), "{st:?}");
+    let reqs = api.requests();
+    assert!(
+        reqs.iter()
+            .all(|(_, h)| h.contains(&("authorization".into(), "token tok-secret-123".into()))),
+        "{reqs:?}"
+    );
+    assert!(!run.stdout.contains("tok-secret-123") && !run.stderr.contains("tok-secret-123"));
+}
 
-    let log = std::fs::read_to_string(repo.file("curl.log")).unwrap();
-    let args: Vec<&str> = log.lines().filter(|l| l.starts_with("ARGS")).collect();
-    assert!(!args.is_empty(), "{log}");
-    assert!(
-        args.iter().all(|l| !l.contains("tok-secret-123")),
-        "token on argv: {log}"
+#[test]
+fn redirects_to_another_host_are_not_followed_with_the_token() {
+    let repo = protected_repo();
+    let api = FakeForge::start();
+    api.serve_raw(
+        "repos/o/r",
+        302,
+        &[("Location", "http://127.0.0.2:9/steal")],
+        "",
+    );
+    let url = api.url();
+    let run = repo.run(
+        &["doctor", "--repo", "o/r"],
+        &[
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ("GH_TOKEN", "t0k"),
+        ],
+    );
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("another host"), "{}", run.stdout);
+
+    // Same host: followed.
+    api.serve_raw("repos/o/r", 301, &[("Location", "/repos/o/renamed")], "");
+    api.serve(
+        "repos/o/renamed",
+        serde_json::json!({"default_branch": "main"}),
+    );
+    let run = repo.run(
+        &["doctor", "--repo", "o/r", "--format", "json"],
+        &[("DISCIPLINE_FORGE_API_URL", url.as_str())],
     );
     assert!(
-        log.contains("CONFIG header = \"Authorization: token tok-secret-123\""),
-        "{log}"
+        run.stdout.contains("\"branch\": \"main\""),
+        "{}",
+        run.stdout
     );
+}
+
+#[test]
+fn plain_http_forge_and_url_credentials_are_refused_or_stripped() {
+    let repo = protected_repo();
+    let run = repo.run(
+        &["doctor"],
+        &[
+            ("DISCIPLINE_FORGE", "gitea"),
+            (
+                "DISCIPLINE_FORGE_URL",
+                "http://oauth2:hunter2@git.example.com",
+            ),
+            ("DISCIPLINE_FORGE_REPO", "o/r"),
+        ],
+    );
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("plain HTTP"), "{}", run.stdout);
+    assert!(!run.stdout.contains("hunter2") && !run.stderr.contains("hunter2"));
 }
 
 #[test]
@@ -217,7 +262,7 @@ fn pending_issue_state_is_read_from_gitea() {
     repo.commit_base("docs/perf.md", "# Perf\n", "base");
     repo.write("docs/perf.md", "# Perf\n\nArm B is pending re-run (#7).\n");
     repo.commit("docs: pending");
-    let cfg = "[gates.provenance-tags]\nenabled = true\nrequire_open_pending_issues = true\nexempt_paths = [\"fake-curl.sh\", \"curl.log\"]\n";
+    let cfg = "[gates.provenance-tags]\nenabled = true\nrequire_open_pending_issues = true\n";
     let args = [
         "check",
         "--format",
@@ -227,38 +272,30 @@ fn pending_issue_state_is_read_from_gitea() {
         "--config-override",
         cfg,
     ];
-    let forge_env = |curl: &str| {
-        vec![
-            ("DISCIPLINE_CURL", curl.to_string()),
-            ("DISCIPLINE_FORGE", "gitea".to_string()),
-            (
-                "DISCIPLINE_FORGE_URL",
-                "https://git.example.com".to_string(),
-            ),
-            ("DISCIPLINE_FORGE_REPO", "o/r".to_string()),
-        ]
-    };
+    let api = FakeForge::start();
+    let url = api.url();
+    let env = vec![
+        ("DISCIPLINE_FORGE_API_URL", url.clone()),
+        ("DISCIPLINE_FORGE", "gitea".to_string()),
+        (
+            "DISCIPLINE_FORGE_URL",
+            "https://git.example.com".to_string(),
+        ),
+        ("DISCIPLINE_FORGE_REPO", "o/r".to_string()),
+    ];
 
-    let closed = fake_curl(
-        &repo,
-        &[(
-            "/api/v1/repos/o/r/issues/7",
-            r#"{"number":7,"state":"closed"}"#,
-        )],
+    api.serve(
+        "repos/o/r/issues/7",
+        serde_json::json!({"number": 7, "state": "closed"}),
     );
-    let env = forge_env(&closed);
     let run = repo.run(&args, &as_refs(&env));
     assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
     assert!(run.stdout.contains("closed issue(s): #7"), "{}", run.stdout);
 
-    let open = fake_curl(
-        &repo,
-        &[(
-            "/api/v1/repos/o/r/issues/7",
-            r#"{"number":7,"state":"open"}"#,
-        )],
+    api.serve(
+        "repos/o/r/issues/7",
+        serde_json::json!({"number": 7, "state": "open"}),
     );
-    let env = forge_env(&open);
     let run = repo.run(&args, &as_refs(&env));
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
 

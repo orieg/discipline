@@ -25,8 +25,8 @@
 //! missing at `HEAD`, is not JSON, or holds a pattern that does not compile is a
 //! could-not-check (exit 2), never an empty registry.
 //!
-//! Issue state comes from `gh api` through the same instruments as bench citation
-//! freshness; the binary has no network stack (AGENTS.md §3.3). An issue whose state the
+//! Issue state comes from the forge's REST API over HTTPS (`crate::forge`, AGENTS.md
+//! §3.3). An issue whose state the
 //! instruments cannot decide is reported by name as could-not-check.
 
 use anyhow::{bail, Context as _, Result};
@@ -36,6 +36,10 @@ use std::sync::LazyLock;
 
 /// Lines on each side of a registered figure searched for a retraction marker.
 pub const RETRACTION_WINDOW: usize = 3;
+
+/// Backtracking steps one registry pattern may take on one sentence before the search is
+/// abandoned as could-not-check. Registry patterns are repository data, so they are bounded.
+pub const BACKTRACK_LIMIT: usize = 100_000;
 
 /// Characters after a pending statement searched for its issue citation.
 pub const PENDING_CITATION_SPAN: usize = 150;
@@ -127,9 +131,12 @@ pub fn load_registry(json: &str, path: &str) -> Result<Vec<SupersededFigure>> {
         };
         let mut patterns = Vec::new();
         for (j, p) in strings("patterns")?.iter().enumerate() {
-            let re = fancy_regex::Regex::new(&format!("(?i){p}")).with_context(|| {
-                format!("superseded registry `{path}`: `{id}.patterns[{j}]` does not compile")
-            })?;
+            let re = fancy_regex::RegexBuilder::new(&format!("(?i){p}"))
+                .backtrack_limit(BACKTRACK_LIMIT)
+                .build()
+                .with_context(|| {
+                    format!("superseded registry `{path}`: `{id}.patterns[{j}]` does not compile")
+                })?;
             patterns.push(re);
         }
         let array_sequence = fig
@@ -158,6 +165,34 @@ pub fn load_registry(json: &str, path: &str) -> Result<Vec<SupersededFigure>> {
         });
     }
     Ok(out)
+}
+
+/// The registry a change is checked against: every figure of the base registry plus every
+/// figure of the head registry. A change cannot withdraw the entry for a figure it
+/// republishes; an entry removed on purpose stops applying once the change is merged.
+pub fn merge_registries(
+    base: Vec<SupersededFigure>,
+    head: Vec<SupersededFigure>,
+) -> Vec<SupersededFigure> {
+    let key = |f: &SupersededFigure| {
+        (
+            f.id.clone(),
+            f.patterns
+                .iter()
+                .map(|p| p.as_str().to_string())
+                .collect::<Vec<_>>(),
+            f.context.clone(),
+            f.array_sequence.clone(),
+        )
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for f in head.into_iter().chain(base) {
+        if seen.insert(key(&f)) {
+            out.push(f);
+        }
+    }
+    out
 }
 
 /// A registered figure published without a retraction marker.
@@ -227,7 +262,10 @@ pub fn scan_superseded(
                     else {
                         continue;
                     };
-                    if !retracted {
+                    let dup = hits
+                        .iter()
+                        .any(|h: &SupersededHit| h.line == *line && h.figure_id == fig.id);
+                    if !retracted && !dup {
                         hits.push(SupersededHit {
                             line: *line,
                             figure_id: fig.id.clone(),
@@ -325,6 +363,8 @@ pub enum PendingProblem {
     NoCitation,
     /// Every cited issue is closed.
     Closed(Vec<String>),
+    /// The only citations name another repository not in `pending_issue_repos`.
+    OutsideRepository(Vec<String>),
 }
 
 /// A pending statement whose cited issues' state could not be decided.
@@ -368,6 +408,8 @@ fn issue_refs(text: &str) -> Vec<IssueRef> {
 pub struct IssueStates<'a> {
     api: &'a dyn crate::forge::ForgeApi,
     forge: std::result::Result<crate::forge::Forge, String>,
+    /// Other repositories (`owner/name`) whose issues may be cited.
+    allowed: Vec<String>,
     cache: BTreeMap<String, std::result::Result<bool, String>>,
 }
 
@@ -380,7 +422,29 @@ impl<'a> IssueStates<'a> {
         Self {
             api,
             forge,
+            allowed: Vec::new(),
             cache: BTreeMap::new(),
+        }
+    }
+
+    /// Also accept issues of these repositories (`owner/name`). Anything else is refused:
+    /// an open issue anywhere on the host must not satisfy a claim about this one.
+    pub fn allow_repositories(mut self, repos: &[String]) -> Self {
+        self.allowed = repos
+            .iter()
+            .map(|r| r.trim_matches('/').to_string())
+            .collect();
+        self
+    }
+
+    /// Whether `r` names a repository other than this one that is not allowed.
+    fn outside(&self, r: &IssueRef) -> bool {
+        match (&self.forge, &r.repo) {
+            (Ok(f), Some(repo)) => {
+                !repo.eq_ignore_ascii_case(&f.repo)
+                    && !self.allowed.iter().any(|a| a.eq_ignore_ascii_case(repo))
+            }
+            _ => false,
         }
     }
 
@@ -459,8 +523,17 @@ pub fn scan_pending(
             };
             let mut closed = Vec::new();
             let mut unknown = Vec::new();
+            let mut outside = Vec::new();
             let mut open = false;
             for r in &refs {
+                if states.outside(r) {
+                    outside.push(format!(
+                        "{}#{}",
+                        r.repo.as_deref().unwrap_or_default(),
+                        r.number
+                    ));
+                    continue;
+                }
                 match states.is_open(r) {
                     Ok(true) => {
                         open = true;
@@ -478,6 +551,8 @@ pub fn scan_pending(
                     line: *line,
                     reasons: unknown,
                 });
+            } else if closed.is_empty() {
+                problems.push((*line, PendingProblem::OutsideRepository(outside)));
             } else {
                 problems.push((*line, PendingProblem::Closed(closed)));
             }
@@ -643,11 +718,68 @@ mod tests {
         let (p, u) = scan_pending(&lines("B is pending re-run (#1, #2)."), Some(&mut states));
         assert!(p.is_empty() && u.is_empty());
 
-        let (p, u) = scan_pending(
-            &lines("B is pending re-run, see https://github.com/x/y/issues/9."),
-            Some(&mut states),
+        // Another repository's open issue does not satisfy a claim about this one...
+        let other = lines("B is pending re-run, see https://github.com/x/y/issues/9.");
+        let (p, u) = scan_pending(&other, Some(&mut states));
+        assert_eq!(
+            p,
+            vec![(1, PendingProblem::OutsideRepository(vec!["x/y#9".into()]))]
         );
-        assert!(p.is_empty() && u.is_empty());
+        assert!(u.is_empty());
+        // ...unless that repository is listed.
+        let mut allowed =
+            IssueStates::new(&api, Ok(github_forge())).allow_repositories(&["x/y".to_string()]);
+        let (p, u) = scan_pending(&other, Some(&mut allowed));
+        assert!(p.is_empty() && u.is_empty(), "{p:?} {u:?}");
+    }
+
+    #[test]
+    fn base_registry_entries_still_bind_a_change_that_removes_them() {
+        let base = load_registry(REGISTRY, "r").unwrap();
+        let head = load_registry(
+            r#"{"figures": [{"id": "old_curve", "array_sequence": [1.0, 1.9, 12.0]}]}"#,
+            "r",
+        )
+        .unwrap();
+        let merged = merge_registries(base, head);
+        assert_eq!(
+            merged.len(),
+            2,
+            "head's copy of old_curve and base's old_deficit"
+        );
+        let hits =
+            scan_superseded(&lines("Random lookup is 1.11x slower than stock."), &merged).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].figure_id, "old_deficit");
+        // A loosened pattern in head does not replace base's: both apply, one hit per line.
+        let loosened = load_registry(
+            r#"{"figures": [{"id": "old_deficit", "patterns": ["9\\.99x"], "context": ["lookup"]}]}"#,
+            "r",
+        )
+        .unwrap();
+        let merged = merge_registries(load_registry(REGISTRY, "r").unwrap(), loosened);
+        let hits =
+            scan_superseded(&lines("Random lookup is 1.11x slower than stock."), &merged).unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn a_pattern_past_the_backtrack_limit_is_an_error_not_a_pass() {
+        let reg = load_registry(
+            r#"{"figures": [{"id": "slow", "patterns": ["(a*)*\\1b"], "context": []}]}"#,
+            "r",
+        )
+        .unwrap();
+        // Between our limit and fancy-regex's default (1,000,000): the default finishes
+        // the search, ours stops it. The input length is calibrated for that window.
+        let n = (10..=24)
+            .find(|&n| {
+                let input = format!("{}c", "a".repeat(n));
+                let default = fancy_regex::Regex::new(r"(?i)(a*)*\1b").unwrap();
+                default.find(&input).is_ok() && scan_superseded(&lines(&input), &reg).is_err()
+            })
+            .expect("an input whose search needs more than BACKTRACK_LIMIT steps");
+        assert!(n > 10, "the limit must not trip on trivial input");
     }
 
     #[test]

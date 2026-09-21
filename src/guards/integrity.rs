@@ -24,6 +24,7 @@ const LOOSER_WHEN_GROWN: &[&str] = &[
     "allow_dependencies",
     "approved_predicates",
     "allowed_rules",
+    "pending_issue_repos",
 ];
 /// List options where a *shorter* list is looser.
 const LOOSER_WHEN_SHRUNK: &[&str] = &[

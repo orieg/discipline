@@ -541,7 +541,7 @@ fn report_unfresh_override(
                 directive.reason,
                 report.undecidable.join("; ")
             ),
-            "make `gh` available and authenticated to the job (or configure `citation_measurement_jobs` / `citation_source_paths`), or cite a committed artifact",
+            "give the job network access and a GitHub token (`GH_TOKEN` or `GITHUB_TOKEN`) (or configure `citation_measurement_jobs` / `citation_source_paths`), or cite a committed artifact",
         );
     }
     for (arm, delta, base_c, head_c, unit) in regressions {

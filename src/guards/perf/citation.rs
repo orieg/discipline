@@ -23,13 +23,13 @@
 //!   `citation_source_paths`. Prose and figures (`.md`, `.svg`) are cited as rules and
 //!   context, not as the source of a number, and are not dated.
 //!
-//! A citation the available instruments cannot decide (no `gh`, unauthenticated, rate
+//! A citation the available instruments cannot decide (no network, unauthenticated, rate
 //! limited, a non-GitHub run URL, no base ref) is reported by name and leaves the gate
 //! ARMED: "could not check" is never "checked and clean".
 //!
-//! Run, job and commit data come from `gh api`, invoked as an external tool through the
-//! same bounded runner the `command` gate uses; the binary itself has no network stack
-//! (AGENTS.md §3.3). The instruments are a trait so every case is testable offline.
+//! Run, job and commit data come from the GitHub REST API over HTTPS (`crate::forge`,
+//! token from `DISCIPLINE_FORGE_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`). The instruments are a
+//! trait so every case is testable offline.
 
 use crate::config::MeasurementJob;
 use crate::tokens;
@@ -62,9 +62,6 @@ const REACHABLE_STATUSES: &[&str] = &["ahead", "identical"];
 /// Pages of the jobs API read before giving up (100 jobs per page).
 const MAX_JOB_PAGES: usize = 10;
 
-/// Seconds a single `gh api` call may take.
-pub const GH_TIMEOUT_SECS: u64 = 30;
-
 static GITHUB_RUN_URL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/actions/runs/(\d+)$")
         .unwrap()
@@ -75,7 +72,7 @@ static DATA_ARTIFACT: LazyLock<Regex> =
 
 /// The external instruments freshness is decided with.
 pub trait CitationInstruments {
-    /// `gh api <path>` parsed as JSON; `Err` with a reason when unavailable.
+    /// A GitHub API GET of `path`, parsed as JSON; `Err` with a reason when unavailable.
     fn gh_api(&self, path: &str) -> std::result::Result<serde_json::Value, String>;
     /// Whether `path` is tracked at head; `None` when git cannot answer.
     fn is_tracked(&self, path: &str) -> Option<bool>;
@@ -109,11 +106,11 @@ impl CitationInstruments for Unavailable {
     }
 }
 
-/// Instruments that answer from canned data: `gh api` responses keyed by API path, and
+/// Instruments that answer from canned data: GitHub API responses keyed by API path, and
 /// git answers. Used by the self-test and to replay recorded API responses offline.
 #[derive(Debug, Clone, Default)]
 pub struct CannedInstruments {
-    /// `gh api` path (e.g. `repos/o/r/actions/runs/1`) to the JSON it returns.
+    /// API path (e.g. `repos/o/r/actions/runs/1`) to the JSON it returns.
     pub responses: std::collections::BTreeMap<String, serde_json::Value>,
     pub tracked: std::collections::BTreeSet<String>,
     pub last_change: std::collections::BTreeMap<String, i64>,
@@ -142,50 +139,28 @@ impl CitationInstruments for CannedInstruments {
     }
 }
 
-/// Live instruments: `gh api` through the bounded command runner, and the repository.
+/// Live instruments: the GitHub API over HTTPS (see [`crate::forge`]), and the repository.
 pub struct LiveInstruments<'a> {
     pub git: &'a crate::gitctx::GitCtx,
-    /// The `gh` executable (`DISCIPLINE_GH`, default `gh`).
-    pub gh: String,
 }
 
 impl<'a> LiveInstruments<'a> {
     pub fn new(git: &'a crate::gitctx::GitCtx) -> Self {
-        let gh = std::env::var("DISCIPLINE_GH")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| "gh".to_string());
-        Self { git, gh }
+        Self { git }
     }
 }
 
 impl CitationInstruments for LiveInstruments<'_> {
     fn gh_api(&self, path: &str) -> std::result::Result<serde_json::Value, String> {
-        if self.gh.contains('\'') || path.contains('\'') {
-            return Err("refusing a quoted `gh` path or API path".to_string());
-        }
-        let cmd = format!("'{}' api '{}'", self.gh, path);
-        let run = crate::guards::command::run_command_bounded(
-            "gh api",
-            &cmd,
-            GH_TIMEOUT_SECS,
-            self.git.root(),
-        )
-        .map_err(|e| format!("`gh` could not run: {e:#}"))?;
-        if !run.status.success() {
-            let why = run
-                .stderr
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("no diagnostic")
-                .trim()
-                .to_string();
-            return Err(format!(
-                "`gh api` exited {}: {why}",
-                run.status.code().unwrap_or(-1)
-            ));
-        }
-        serde_json::from_str(&run.stdout).map_err(|e| format!("`gh api` returned non-JSON: {e}"))
+        use crate::forge::ForgeApi;
+        let github = crate::forge::Forge {
+            kind: crate::forge::ForgeKind::GitHub,
+            url: "https://github.com".to_string(),
+            repo: String::new(),
+        };
+        crate::forge::HttpApi::from_env()
+            .get(&github, path)?
+            .ok_or_else(|| format!("GitHub API `{path}`: not found (HTTP 404)"))
     }
 
     fn is_tracked(&self, path: &str) -> Option<bool> {
@@ -575,7 +550,7 @@ mod tests {
         vec!["crates".to_string(), "include".to_string()]
     }
 
-    /// Serves `gh api` responses and git answers from fixtures.
+    /// Serves GitHub API responses and git answers from fixtures.
     #[derive(Default)]
     struct Fixture {
         runs: BTreeMap<String, serde_json::Value>,

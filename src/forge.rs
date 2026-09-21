@@ -1,25 +1,31 @@
 //! Which forge hosts the repository, and a read-only way to ask it questions.
 //!
-//! Two features need platform data that is not in the repository: the open-issue check of
-//! `provenance-tags` (`require_open_pending_issues`) and the branch-protection checks of
-//! `discipline doctor`. Both go through this module.
+//! Three opt-in features need platform data that is not in the repository: the open-issue
+//! check of `provenance-tags` (`require_open_pending_issues`), bench-regression citation
+//! freshness, and the branch-protection checks of `discipline doctor`. They go through
+//! this module. No gate needs the network otherwise.
 //!
-//! The binary has no network stack (AGENTS.md §3.3). Requests run through external tools
-//! on the bounded command runner: `gh api` for GitHub (`DISCIPLINE_GH`, default `gh`), and
-//! `curl` for GitLab, Gitea and Forgejo (`DISCIPLINE_CURL`, default `curl`). A token, when
-//! one is set, is handed to `curl` in a mode-0600 config file so it never appears in the
-//! process arguments.
+//! Requests are made in-process over HTTPS (rustls, no OpenSSL), so the static binary and
+//! the container need no external tool. The client:
 //!
-//! | Forge   | API base            | Token environment                                   |
-//! |---------|---------------------|-----------------------------------------------------|
-//! | GitHub  | `gh api`            | whatever `gh` is authenticated with (`GH_TOKEN`)    |
-//! | GitLab  | `<url>/api/v4`      | `DISCIPLINE_FORGE_TOKEN`, else `GITLAB_TOKEN`       |
-//! | Gitea   | `<url>/api/v1`      | `DISCIPLINE_FORGE_TOKEN`, else `GITEA_TOKEN`        |
-//! | Forgejo | `<url>/api/v1`      | `DISCIPLINE_FORGE_TOKEN`, else `FORGEJO_TOKEN`, else `GITEA_TOKEN` |
+//! - speaks HTTPS only; plain HTTP is accepted for a loopback address, or for any host with
+//!   `DISCIPLINE_FORGE_ALLOW_HTTP=1` (the token then travels in clear);
+//! - follows a redirect only to the same scheme and host, so a token never leaves it;
+//! - refuses API paths with empty or dot segments;
+//! - verifies certificates with the platform's trust store (system CA bundle, macOS
+//!   keychain), and honours `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`;
+//! - does nothing when `DISCIPLINE_NO_NETWORK=1`, except against a loopback address.
 //!
-//! Without a token, requests are anonymous: enough for issue state on public repositories.
+//! | Forge   | API base                         | Token environment                                   |
+//! |---------|----------------------------------|-----------------------------------------------------|
+//! | GitHub  | `https://api.github.com`, GHES `<url>/api/v3`, GHE.com `https://api.<host>` | `DISCIPLINE_FORGE_TOKEN`, else `GH_TOKEN`, else `GITHUB_TOKEN` |
+//! | GitLab  | `<url>/api/v4`                   | `DISCIPLINE_FORGE_TOKEN`, else `GITLAB_TOKEN`       |
+//! | Gitea   | `<url>/api/v1`                   | `DISCIPLINE_FORGE_TOKEN`, else `GITEA_TOKEN`        |
+//! | Forgejo | `<url>/api/v1`                   | `DISCIPLINE_FORGE_TOKEN`, else `FORGEJO_TOKEN`, else `GITEA_TOKEN` |
+//!
+//! `DISCIPLINE_FORGE_API_URL` replaces the computed API base (a proxy, or a local mock in
+//! tests). Without a token, requests are anonymous: enough for public repositories.
 
-use crate::guards::perf::citation::CitationInstruments;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -160,11 +166,16 @@ pub fn detect(env: &dyn Fn(&str) -> Option<String>, origin: Option<&str>) -> Res
             .or(repo)
             .or_else(|| remote.as_ref().map(|r| r.repo.clone()))
             .ok_or_else(|| format!("no {} repository: set DISCIPLINE_FORGE_REPO", kind.label()))?;
-        Ok(Forge {
-            kind,
-            url: url.trim_end_matches('/').to_string(),
-            repo: repo.trim_matches('/').to_string(),
-        })
+        // A URL variable may carry `user:token@`; keep the host, never the credential.
+        let url = clean_url(&url).map_err(|e| format!("{} URL: {e}", kind.label()))?;
+        let repo = repo.trim_matches('/').to_string();
+        if check_api_path(&repo).is_err() {
+            return Err(format!(
+                "{} repository path is not a plain path",
+                kind.label()
+            ));
+        }
+        Ok(Forge { kind, url, repo })
     };
 
     if let Some(k) = var("DISCIPLINE_FORGE") {
@@ -256,131 +267,232 @@ impl ForgeApi for NoApi {
     }
 }
 
-/// Live requests: `gh api` for GitHub, `curl` for the others.
-pub struct LiveApi<'a> {
-    pub gh: &'a dyn CitationInstruments,
-    pub root: &'a std::path::Path,
+/// Maximum response body read from a forge.
+pub const MAX_BODY_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Redirects followed within the same host.
+const MAX_REDIRECTS: usize = 3;
+
+/// Live requests over HTTPS.
+pub struct HttpApi<'a> {
     pub env: &'a dyn Fn(&str) -> Option<String>,
 }
 
-impl LiveApi<'_> {
-    fn token(&self, kind: ForgeKind) -> Option<(String, String)> {
-        let var = |k: &str| (self.env)(k).filter(|v| !v.trim().is_empty());
+impl HttpApi<'_> {
+    /// An API over the process environment.
+    pub fn from_env() -> HttpApi<'static> {
+        HttpApi {
+            env: &|k: &str| std::env::var(k).ok(),
+        }
+    }
+
+    fn var(&self, k: &str) -> Option<String> {
+        (self.env)(k).filter(|v| !v.trim().is_empty())
+    }
+
+    fn flag(&self, k: &str) -> bool {
+        self.var(k)
+            .is_some_and(|v| v.trim() != "0" && !v.eq_ignore_ascii_case("false"))
+    }
+
+    fn token(&self, kind: ForgeKind) -> Option<String> {
         let names: &[&str] = match kind {
-            ForgeKind::GitHub => return None,
+            ForgeKind::GitHub => &["DISCIPLINE_FORGE_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
             ForgeKind::GitLab => &["DISCIPLINE_FORGE_TOKEN", "GITLAB_TOKEN"],
             ForgeKind::Gitea => &["DISCIPLINE_FORGE_TOKEN", "GITEA_TOKEN"],
             ForgeKind::Forgejo => &["DISCIPLINE_FORGE_TOKEN", "FORGEJO_TOKEN", "GITEA_TOKEN"],
         };
-        let token = names.iter().find_map(|n| var(n))?;
-        let header = match kind {
-            ForgeKind::GitLab => format!("PRIVATE-TOKEN: {}", token.trim()),
-            _ => format!("Authorization: token {}", token.trim()),
-        };
-        Some((header, token))
+        names
+            .iter()
+            .find_map(|n| self.var(n))
+            .map(|t| t.trim().to_string())
+    }
+
+    /// The API base URL for `forge`, without a trailing slash.
+    pub fn api_base(&self, forge: &Forge) -> Result<String, String> {
+        if let Some(u) = self.var("DISCIPLINE_FORGE_API_URL") {
+            return clean_url(&u).map_err(|e| format!("DISCIPLINE_FORGE_API_URL: {e}"));
+        }
+        let host = forge.host();
+        Ok(match forge.kind {
+            ForgeKind::GitHub if host == "github.com" => "https://api.github.com".to_string(),
+            ForgeKind::GitHub if host.ends_with(".ghe.com") => format!("https://api.{host}"),
+            ForgeKind::GitHub => format!("{}/api/v3", forge.url),
+            ForgeKind::GitLab => format!("{}/api/v4", forge.url),
+            ForgeKind::Gitea | ForgeKind::Forgejo => format!("{}/api/v1", forge.url),
+        })
+    }
+
+    fn headers(&self, kind: ForgeKind) -> Vec<(&'static str, String)> {
+        let mut h = vec![("Accept", "application/json".to_string())];
+        if kind == ForgeKind::GitHub {
+            h[0].1 = "application/vnd.github+json".to_string();
+            h.push(("X-GitHub-Api-Version", "2022-11-28".to_string()));
+        }
+        if let Some(t) = self.token(kind) {
+            h.push((
+                "Authorization",
+                match kind {
+                    ForgeKind::Gitea | ForgeKind::Forgejo => format!("token {t}"),
+                    _ => format!("Bearer {t}"),
+                },
+            ));
+        }
+        h
     }
 }
 
-fn api_base(forge: &Forge) -> String {
-    match forge.kind {
-        ForgeKind::GitLab => format!("{}/api/v4", forge.url),
-        _ => format!("{}/api/v1", forge.url),
+/// Validate a base URL: http(s) scheme, credentials removed, no trailing slash.
+pub fn clean_url(url: &str) -> Result<String, String> {
+    let url = url.trim().trim_end_matches('/');
+    let (scheme, rest) = match url.split_once("://") {
+        Some((s, r)) => (s.to_ascii_lowercase(), r),
+        None => ("https".to_string(), url),
+    };
+    if scheme != "https" && scheme != "http" {
+        return Err(format!("unsupported scheme `{scheme}`"));
     }
+    // Drop `user:secret@`: credentials belong in a token variable, not a URL.
+    let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if authority.is_empty() {
+        return Err("no host".to_string());
+    }
+    Ok(if path.is_empty() {
+        format!("{scheme}://{authority}")
+    } else {
+        format!("{scheme}://{authority}/{path}")
+    })
 }
 
-impl ForgeApi for LiveApi<'_> {
+/// `host[:port]` of a URL, lower-cased, without credentials.
+fn authority_of(url: &str) -> String {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = rest.split('/').next().unwrap_or_default();
+    authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, h)| h)
+        .to_ascii_lowercase()
+}
+
+fn is_loopback(host: &str) -> bool {
+    let h = host.trim_start_matches('[').trim_end_matches(']');
+    h == "localhost" || h == "::1" || h.starts_with("127.")
+}
+
+/// An API path must be plain segments: no empty, `.` or `..` segment, no query tricks.
+pub fn check_api_path(path: &str) -> Result<(), String> {
+    let (p, query) = path.split_once('?').map_or((path, ""), |(p, q)| (p, q));
+    let ok_char = |c: char| c.is_ascii_alphanumeric() || "-_.~%".contains(c);
+    for seg in p.split('/') {
+        if seg.is_empty() || seg.starts_with('.') || !seg.chars().all(ok_char) {
+            return Err(format!("refusing API path `{path}`"));
+        }
+    }
+    if !query.chars().all(|c| ok_char(c) || "=&,".contains(c)) {
+        return Err(format!("refusing API query in `{path}`"));
+    }
+    Ok(())
+}
+
+impl ForgeApi for HttpApi<'_> {
     fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String> {
-        if forge.kind == ForgeKind::GitHub {
-            return match self.gh.gh_api(path) {
-                Ok(v) => Ok(Some(v)),
-                Err(e) if e.contains("404") || e.contains("Not Found") => Ok(None),
-                Err(e) => Err(e),
-            };
+        check_api_path(path)?;
+        let base = self.api_base(forge)?;
+        let base_host = host_of(&base);
+        let insecure_ok = is_loopback(&base_host) || self.flag("DISCIPLINE_FORGE_ALLOW_HTTP");
+        if !base.starts_with("https://") && !insecure_ok {
+            return Err(format!(
+                "refusing plain HTTP to {base_host}: use https, or set DISCIPLINE_FORGE_ALLOW_HTTP=1"
+            ));
         }
-        let url = format!("{}/{}", api_base(forge), path.trim_start_matches('/'));
-        if url.contains(['\'', '"', ' ', '\n']) {
-            return Err(format!("refusing an API URL with quotes or spaces: {url}"));
+        if self.flag("DISCIPLINE_NO_NETWORK") && !is_loopback(&base_host) {
+            return Err(format!(
+                "network access is disabled (DISCIPLINE_NO_NETWORK); cannot reach {base_host}"
+            ));
         }
-        let curl = (self.env)("DISCIPLINE_CURL")
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| "curl".to_string());
-        // A token goes into a private config file, never onto the command line.
-        let config = match self.token(forge.kind) {
-            Some((header, _)) => Some(private_curl_config(&header)?),
-            None => None,
-        };
-        let mut cmd = format!(
-            "'{curl}' --silent --show-error --location --max-time {API_TIMEOUT_SECS} --header 'Accept: application/json' --write-out '\\n%{{http_code}}'"
-        );
-        if let Some(cfg) = &config {
-            cmd.push_str(&format!(" --config '{}'", cfg.path.display()));
-        }
-        cmd.push_str(&format!(" '{url}'"));
-        let run = crate::guards::command::run_command_bounded(
-            "forge api",
-            &cmd,
-            API_TIMEOUT_SECS + 5,
-            self.root,
-        )
-        .map_err(|e| format!("`curl` could not run: {e:#}"));
-        drop(config);
-        let run = run?;
-        if !run.status.success() {
-            let why = run
-                .stderr
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("no diagnostic");
-            return Err(format!("`curl` failed for {url}: {}", why.trim()));
-        }
-        let (body, code) = run
-            .stdout
-            .rsplit_once('\n')
-            .ok_or_else(|| format!("`curl` returned no status for {url}"))?;
-        match code.trim() {
-            "404" => Ok(None),
-            c if c.starts_with('2') => serde_json::from_str(body)
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(API_TIMEOUT_SECS)))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .https_only(!insecure_ok)
+            .proxy(ureq::Proxy::try_from_env())
+            .user_agent(concat!("discipline/", env!("CARGO_PKG_VERSION")))
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .build(),
+            )
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+        let headers = self.headers(forge.kind);
+
+        let mut url = format!("{base}/{path}");
+        for _ in 0..=MAX_REDIRECTS {
+            let mut req = agent.get(&url);
+            for (k, v) in &headers {
+                req = req.header(*k, v);
+            }
+            let mut resp = req
+                .call()
+                .map_err(|e| format!("request to {base_host} failed: {e}"))?;
+            let status = resp.status().as_u16();
+            if matches!(status, 301 | 302 | 303 | 307 | 308) {
+                let location = resp
+                    .headers()
+                    .get("location")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| format!("{base_host} redirected without a location"))?;
+                let next = if location.starts_with('/') {
+                    let origin_end = url.find("://").map(|i| i + 3).unwrap_or(0);
+                    let origin_end = url[origin_end..]
+                        .find('/')
+                        .map(|i| i + origin_end)
+                        .unwrap_or(url.len());
+                    format!("{}{location}", &url[..origin_end])
+                } else {
+                    location.to_string()
+                };
+                let same_scheme = next.split("://").next() == url.split("://").next();
+                if authority_of(&next) != authority_of(&url) || !same_scheme {
+                    return Err(format!(
+                        "{base_host} redirected to another host or scheme; not following with credentials"
+                    ));
+                }
+                url = next;
+                continue;
+            }
+            if status == 404 {
+                return Ok(None);
+            }
+            let body = resp
+                .body_mut()
+                .with_config()
+                .limit(MAX_BODY_BYTES)
+                .read_to_string()
+                .map_err(|e| format!("reading the response from {base_host} failed: {e}"))?;
+            if !(200..300).contains(&status) {
+                let message = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("message")
+                            .and_then(|m| m.as_str())
+                            .map(str::to_string)
+                    })
+                    .map(|m| m.chars().take(200).collect::<String>())
+                    .unwrap_or_default();
+                return Err(format!("{base_host} answered HTTP {status} {message}")
+                    .trim_end()
+                    .to_string());
+            }
+            return serde_json::from_str(&body)
                 .map(Some)
-                .map_err(|e| format!("{url} returned non-JSON: {e}")),
-            c => Err(format!("{url} answered HTTP {c}")),
+                .map_err(|e| format!("{base_host} returned non-JSON: {e}"));
         }
+        Err(format!(
+            "{base_host} redirected more than {MAX_REDIRECTS} times"
+        ))
     }
-}
-
-/// A curl config file readable only by this user, removed on drop.
-struct PrivateFile {
-    path: std::path::PathBuf,
-}
-
-impl Drop for PrivateFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-fn private_curl_config(header: &str) -> Result<PrivateFile, String> {
-    use std::io::Write;
-    let path = std::env::temp_dir().join(format!(
-        "discipline-forge-{}-{}.curlrc",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default()
-    ));
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts
-        .open(&path)
-        .map_err(|e| format!("cannot create a private curl config: {e}"))?;
-    let escaped = header.replace('\\', "\\\\").replace('"', "\\\"");
-    writeln!(f, "header = \"{escaped}\"").map_err(|e| format!("cannot write curl config: {e}"))?;
-    Ok(PrivateFile { path })
 }
 
 /// Percent-encode a GitLab project path for `projects/:id`.
@@ -515,6 +627,24 @@ mod tests {
             (ForgeKind::Forgejo, "https://git.example.com")
         );
         assert!(d(&[("DISCIPLINE_FORGE", "svn")], None).is_err());
+        // Credentials in a URL variable are dropped.
+        let cred = d(
+            &[
+                ("DISCIPLINE_FORGE", "gitlab"),
+                ("DISCIPLINE_FORGE_URL", "https://oauth2:tok@gl.example.com/"),
+            ],
+            Some("https://gl.example.com/g/p"),
+        )
+        .unwrap();
+        assert_eq!(cred.url, "https://gl.example.com");
+        assert!(d(
+            &[
+                ("DISCIPLINE_FORGE", "gitea"),
+                ("DISCIPLINE_FORGE_REPO", "o/../x")
+            ],
+            Some("https://g.example/o/r")
+        )
+        .is_err());
         // Without a remote, GITHUB_REPOSITORY alone still names a GitHub repository.
         let bare = d(&[("GITHUB_REPOSITORY", "o/r")], None).unwrap();
         assert_eq!((bare.kind, bare.repo.as_str()), (ForgeKind::GitHub, "o/r"));
@@ -574,40 +704,107 @@ mod tests {
     }
 
     #[test]
-    fn tokens_are_chosen_per_forge_and_kept_off_the_command_line() {
+    fn tokens_and_api_bases_are_chosen_per_forge() {
         let e = env(&[
             ("GITEA_TOKEN", "gt"),
             ("FORGEJO_TOKEN", "ft"),
             ("GITLAB_TOKEN", "lt"),
+            ("GH_TOKEN", "ht"),
         ]);
-        let gh = crate::guards::perf::citation::Unavailable;
-        let api = LiveApi {
-            gh: &gh,
-            root: std::path::Path::new("."),
-            env: &e,
+        let api = HttpApi { env: &e };
+        let auth = |k| {
+            api.headers(k)
+                .into_iter()
+                .find(|(h, _)| *h == "Authorization")
+                .map(|(_, v)| v)
         };
-        assert_eq!(
-            api.token(ForgeKind::Gitea).unwrap().0,
-            "Authorization: token gt"
-        );
-        assert_eq!(
-            api.token(ForgeKind::Forgejo).unwrap().0,
-            "Authorization: token ft"
-        );
-        assert_eq!(api.token(ForgeKind::GitLab).unwrap().0, "PRIVATE-TOKEN: lt");
-        assert!(api.token(ForgeKind::GitHub).is_none());
+        assert_eq!(auth(ForgeKind::Gitea).as_deref(), Some("token gt"));
+        assert_eq!(auth(ForgeKind::Forgejo).as_deref(), Some("token ft"));
+        assert_eq!(auth(ForgeKind::GitLab).as_deref(), Some("Bearer lt"));
+        assert_eq!(auth(ForgeKind::GitHub).as_deref(), Some("Bearer ht"));
+        let none = env(&[]);
+        assert!(HttpApi { env: &none }
+            .headers(ForgeKind::Gitea)
+            .iter()
+            .all(|(h, _)| *h != "Authorization"));
 
-        let cfg = private_curl_config("Authorization: token s\"ecret").unwrap();
-        let text = std::fs::read_to_string(&cfg.path).unwrap();
-        assert_eq!(text, "header = \"Authorization: token s\\\"ecret\"\n");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&cfg.path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600);
+        let on = |kind, url: &str| Forge {
+            kind,
+            url: url.into(),
+            repo: "o/r".into(),
+        };
+        let base = |f: &Forge| api.api_base(f).unwrap();
+        assert_eq!(
+            base(&on(ForgeKind::GitHub, "https://github.com")),
+            "https://api.github.com"
+        );
+        assert_eq!(
+            base(&on(ForgeKind::GitHub, "https://acme.ghe.com")),
+            "https://api.acme.ghe.com"
+        );
+        assert_eq!(
+            base(&on(ForgeKind::GitHub, "https://git.acme.io")),
+            "https://git.acme.io/api/v3"
+        );
+        assert_eq!(
+            base(&on(ForgeKind::GitLab, "https://gitlab.com")),
+            "https://gitlab.com/api/v4"
+        );
+        assert_eq!(
+            base(&on(ForgeKind::Forgejo, "https://codeberg.org")),
+            "https://codeberg.org/api/v1"
+        );
+    }
+
+    #[test]
+    fn urls_lose_credentials_and_paths_cannot_walk() {
+        assert_eq!(
+            clean_url("https://oauth2:secret@gitlab.example.com/").unwrap(),
+            "https://gitlab.example.com"
+        );
+        assert_eq!(
+            clean_url("git.example.com").unwrap(),
+            "https://git.example.com"
+        );
+        assert!(clean_url("ftp://x").is_err());
+        assert_eq!(
+            authority_of("https://u:p@Git.Example.com:8443/a"),
+            "git.example.com:8443"
+        );
+        assert_ne!(
+            authority_of("http://127.0.0.1:1/a"),
+            authority_of("http://127.0.0.1:2/a")
+        );
+        assert!(check_api_path("repos/o/r/issues/1").is_ok());
+        assert!(check_api_path("projects/g%2Fp/issues/1").is_ok());
+        assert!(check_api_path("repos/o/r/actions/runs/1/jobs?per_page=100&page=2").is_ok());
+        for bad in [
+            "repos/o/../x/issues/1",
+            "repos//o",
+            "repos/o/.git",
+            "repos/o/r issues",
+            "repos/o/{a,b}",
+        ] {
+            assert!(check_api_path(bad).is_err(), "{bad}");
         }
-        let path = cfg.path.clone();
-        drop(cfg);
-        assert!(!path.exists(), "config must be removed");
+    }
+
+    #[test]
+    fn plain_http_and_disabled_network_are_refused_before_any_request() {
+        let forge = Forge {
+            kind: ForgeKind::Gitea,
+            url: "http://git.example.com".into(),
+            repo: "o/r".into(),
+        };
+        let e = env(&[]);
+        let err = HttpApi { env: &e }.get(&forge, "repos/o/r").unwrap_err();
+        assert!(err.contains("plain HTTP"), "{err}");
+        let https = Forge {
+            url: "https://git.example.com".into(),
+            ..forge
+        };
+        let off = env(&[("DISCIPLINE_NO_NETWORK", "1")]);
+        let err = HttpApi { env: &off }.get(&https, "repos/o/r").unwrap_err();
+        assert!(err.contains("DISCIPLINE_NO_NETWORK"), "{err}");
     }
 }

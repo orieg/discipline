@@ -884,6 +884,9 @@ pub struct ProvenanceTagsGate {
     /// A pending-measurement statement must cite at least one open issue, read from the forge.
     /// Implies `check_pending_citations`.
     pub require_open_pending_issues: bool,
+    /// Other repositories (`owner/name`) whose issues a pending statement may cite. By
+    /// default only this repository's issues count.
+    pub pending_issue_repos: Vec<String>,
 }
 
 impl Default for ProvenanceTagsGate {
@@ -900,6 +903,7 @@ impl Default for ProvenanceTagsGate {
             superseded_json_paths: Vec::new(),
             check_pending_citations: false,
             require_open_pending_issues: false,
+            pending_issue_repos: Vec::new(),
         }
     }
 }

@@ -832,12 +832,7 @@ fn doctor(args: discipline::cli::DoctorArgs) -> Result<bool> {
             }),
         };
     }
-    let gh = discipline::guards::perf::citation::LiveInstruments::new(&git);
-    let api = discipline::forge::LiveApi {
-        gh: &gh,
-        root: git.root(),
-        env: &env,
-    };
+    let api = discipline::forge::HttpApi { env: &env };
     let report = run(&DoctorInput {
         root: git.root(),
         forge,
