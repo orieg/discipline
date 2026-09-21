@@ -122,6 +122,7 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
         baselined: 0,
         outcomes: vec![shell_outcome, pii_outcome],
         planned_gates: Vec::new(),
+        policy_failures: Vec::new(),
     };
 
     let all_sentinels = [

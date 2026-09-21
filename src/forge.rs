@@ -669,9 +669,100 @@ pub fn issue_is_open(
     }
 }
 
+/// The most reviews one request returns; a full page means there may be more.
+const REVIEWS_PAGE: usize = 100;
+
+/// Logins whose **latest** review of pull request `number` approves `head_sha`.
+///
+/// An approval of an earlier commit does not count: the head it approved is not the head
+/// being checked. A later review by the same login (changes requested, dismissed)
+/// withdraws an earlier approval.
+pub fn pull_approvers(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    number: u64,
+    head_sha: &str,
+) -> Result<Vec<String>, String> {
+    if forge.kind == ForgeKind::GitLab {
+        return Err("review approval lookup is not implemented for GitLab".to_string());
+    }
+    let path = format!(
+        "repos/{}/pulls/{number}/reviews?per_page={REVIEWS_PAGE}",
+        forge.repo
+    );
+    let reviews = api
+        .get(forge, &path)?
+        .ok_or_else(|| format!("pull request #{number} does not exist or is not visible"))?;
+    let reviews = reviews
+        .as_array()
+        .ok_or_else(|| format!("reviews of pull request #{number} are not a list"))?;
+    if reviews.len() >= REVIEWS_PAGE {
+        return Err(format!(
+            "pull request #{number} has {REVIEWS_PAGE} or more reviews; refusing to judge a partial list"
+        ));
+    }
+    // The list is chronological; the last entry per login is that login's standing.
+    let mut latest: std::collections::BTreeMap<String, (String, String)> = Default::default();
+    for r in reviews {
+        let field = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or_default();
+        let login = r
+            .get("user")
+            .and_then(|u| u.get("login"))
+            .and_then(|l| l.as_str())
+            .unwrap_or_default();
+        let state = field("state").to_ascii_uppercase();
+        // A plain comment does not change a reviewer's standing.
+        if login.is_empty() || state == "COMMENTED" || state == "COMMENT" || state == "PENDING" {
+            continue;
+        }
+        latest.insert(
+            login.to_ascii_lowercase(),
+            (state, field("commit_id").to_string()),
+        );
+    }
+    Ok(latest
+        .into_iter()
+        .filter(|(_, (state, sha))| state == "APPROVED" && sha.eq_ignore_ascii_case(head_sha))
+        .map(|(login, _)| login)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approvers_are_latest_reviews_of_the_checked_head_only() {
+        let forge = Forge {
+            kind: ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        };
+        let review = |login: &str, state: &str, sha: &str| serde_json::json!({"user": {"login": login}, "state": state, "commit_id": sha});
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "github:repos/o/r/pulls/7/reviews?per_page=100".into(),
+            serde_json::json!([
+                review("Lead", "APPROVED", "head"),
+                review("stale", "APPROVED", "older"),
+                review("flipped", "APPROVED", "head"),
+                review("flipped", "CHANGES_REQUESTED", "head"),
+                review("chatty", "APPROVED", "head"),
+                review("chatty", "COMMENTED", "head"),
+            ]),
+        );
+        assert_eq!(
+            pull_approvers(&api, &forge, 7, "head").unwrap(),
+            vec!["chatty".to_string(), "lead".to_string()]
+        );
+        // Missing pull request, and a forge without the lookup, are errors, not "nobody".
+        assert!(pull_approvers(&api, &forge, 8, "head").is_err());
+        let gitlab = Forge {
+            kind: ForgeKind::GitLab,
+            ..forge.clone()
+        };
+        assert!(pull_approvers(&api, &gitlab, 7, "head").is_err());
+    }
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         let map: std::collections::BTreeMap<String, String> = pairs

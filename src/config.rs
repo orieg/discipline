@@ -148,7 +148,7 @@ pub const GATES: &[GateInfo] = &[
     GateInfo {
         id: "suppression-delta",
         suite: Suite::AgentGuard,
-        summary: "new #[allow], commented-out tests, cfg-gated tests",
+        summary: "newly added linter / compiler suppression annotations",
         languages: "per pack",
         available: true,
     },
@@ -303,6 +303,13 @@ pub struct DirectivesConfig {
     pub allow_hidden: bool,
     pub fail_on_overrides: bool,
     pub allowed_override_actors: Vec<String>,
+    /// Most directive overrides (PR body and commit bodies; inline markers are not
+    /// counted) one change may apply. Unset = no cap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_overrides: Option<usize>,
+    /// Directive overrides fail the run until the forge shows an approving review of the
+    /// head commit by an `allowed_override_actors` member who is not the author.
+    pub require_approval: bool,
 }
 
 impl Default for DirectivesConfig {
@@ -312,6 +319,8 @@ impl Default for DirectivesConfig {
             allow_hidden: false,
             fail_on_overrides: false,
             allowed_override_actors: Vec::new(),
+            max_overrides: None,
+            require_approval: false,
         }
     }
 }
@@ -728,7 +737,11 @@ impl Default for GoldenGate {
             paths: [
                 "**/golden/**",
                 "**/snapshots/**",
+                "**/__snapshots__/**",
                 "**/*.snap",
+                "**/*.ambr",
+                "**/*.golden",
+                "**/*.approved.*",
                 "tests/fixtures/**/output*",
             ]
             .iter()
@@ -1163,10 +1176,16 @@ impl Default for CiIntegrityGate {
             enabled: true,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
-            workflows: vec![
-                ".github/workflows/*.yml".to_string(),
-                ".github/workflows/*.yaml".to_string(),
-            ],
+            // Every Actions-shaped workflow directory `doctor::WORKFLOW_DIRS` knows.
+            workflows: crate::doctor::WORKFLOW_DIRS
+                .iter()
+                .flat_map(|dir| [format!("{dir}/*.yml"), format!("{dir}/*.yaml")])
+                .chain(
+                    [".gitlab-ci.yml", ".gitlab/ci/*.yml", ".gitlab/ci/*.yaml"]
+                        .iter()
+                        .map(|s| s.to_string()),
+                )
+                .collect(),
             rollup_job: Some("ci-gate".to_string()),
             excluded_jobs: vec!["detect-changes".to_string()],
             pin_actions: true,
@@ -1565,12 +1584,24 @@ impl DisciplineConfig {
 
     /// Resolve the effective configuration. `path = None` starts from defaults.
     pub fn resolve(path: Option<&Path>, overrides: &Overrides) -> Result<Self> {
-        let mut source_info: Option<(std::path::PathBuf, String)> = None;
-        let mut value = match path {
-            Some(p) => {
-                let content = std::fs::read_to_string(p).with_context(|| {
+        let source = match path {
+            Some(p) => Some((
+                p,
+                std::fs::read_to_string(p).with_context(|| {
                     format!("failed to read configuration file {}", p.display())
-                })?;
+                })?,
+            )),
+            None => None,
+        };
+        Self::resolve_source(source, overrides)
+    }
+
+    /// [`Self::resolve`] over content already in hand (a blob read from the base ref).
+    /// The path only labels diagnostics.
+    pub fn resolve_source(source: Option<(&Path, String)>, overrides: &Overrides) -> Result<Self> {
+        let mut source_info: Option<(std::path::PathBuf, String)> = None;
+        let mut value = match source {
+            Some((p, content)) => {
                 let val = match toml::from_str::<Value>(&content) {
                     Ok(v) => v,
                     Err(e) => {

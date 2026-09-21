@@ -201,6 +201,9 @@ fn render_terminal_to_writer<W: Write>(
             style::red("failure: applied overrides require human sign-off (directives.fail_on_overrides / --fail-on-overrides)")
         )?;
     }
+    for failure in &summary.policy_failures {
+        writeln!(w, "{}", style::red(&format!("failure: {failure}")))?;
+    }
     if summary.is_success(fail_on_warnings, fail_on_overrides) {
         writeln!(w, "{}", style::green("Status: PASS"))?;
     } else {
@@ -281,6 +284,9 @@ pub fn render_step_summary_to_writer(
         "### Discipline gate: FAILED"
     };
     writeln!(file, "{heading}\n\nBase: `{}`\n", summary.base)?;
+    for failure in &summary.policy_failures {
+        writeln!(file, "**Refused:** {failure}\n")?;
+    }
 
     let (passed, failed, disabled, examined) =
         summary.gate_counts(fail_on_warnings, fail_on_overrides);
@@ -616,6 +622,7 @@ mod tests {
             baselined: 0,
             outcomes: vec![o1, o2, o3, o4, o5],
             planned_gates: vec![],
+            policy_failures: Vec::new(),
         };
 
         let prompt = format_agent_prompt(&summary);
@@ -676,6 +683,7 @@ mod tests {
             baselined: 0,
             outcomes: vec![o1, o2, o3],
             planned_gates: vec![],
+            policy_failures: Vec::new(),
         };
 
         let mut buf = Vec::new();
@@ -713,6 +721,7 @@ mod tests {
             baselined: 0,
             outcomes: vec![o1],
             planned_gates: vec![],
+            policy_failures: Vec::new(),
         };
 
         let mut buf = Vec::new();
@@ -743,6 +752,7 @@ mod tests {
             baselined: 0,
             outcomes: vec![o1, o2],
             planned_gates: vec![],
+            policy_failures: Vec::new(),
         };
 
         let prompt = format_agent_prompt(&summary);
@@ -775,6 +785,7 @@ mod tests {
             baselined: 0,
             outcomes: vec![o1],
             planned_gates: vec![],
+            policy_failures: Vec::new(),
         };
 
         let mut buf = Vec::new();

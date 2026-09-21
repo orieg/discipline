@@ -82,6 +82,7 @@ fn run_command(command: Commands) -> Result<bool> {
             no_baseline: args.no_baseline,
             trust_workspace: args.trust_workspace,
             advisory: args.advisory,
+            policy_from: discipline::cli::PolicyFrom::Head,
         }),
         Commands::Baseline(args) => baseline(args),
         Commands::Init(args) => init(args.name),
@@ -113,13 +114,12 @@ fn docs(args: DocsArgs) -> Result<bool> {
     discipline::docs::run_docs_check_or_write(root, args.write)
 }
 
-fn load_config(
+fn build_overrides(
     args: &ConfigArgs,
-    repo_root: Option<&Path>,
     extra_fail_on_overrides: Option<bool>,
     extra_directive_sources: Option<Vec<String>>,
-) -> Result<(DisciplineConfig, String)> {
-    let overrides = Overrides {
+) -> Overrides {
+    Overrides {
         config_override: args
             .config_override
             .clone()
@@ -132,7 +132,43 @@ fn load_config(
             .unwrap_or_default(),
         directive_sources: extra_directive_sources,
         fail_on_overrides: extra_fail_on_overrides,
+    }
+}
+
+/// The base ref's configuration with this run's command-line layers applied. A base
+/// without the file is judged by the built-in defaults, never by the change's own copy.
+fn load_base_policy(
+    git: &GitCtx,
+    config_path: &str,
+    overrides: &Overrides,
+) -> Result<DisciplineConfig> {
+    let base_src = match git.base_content(config_path)? {
+        Some(s) => Some(s),
+        None if config_path != "discipline.toml" => git.base_content("discipline.toml")?,
+        None => None,
     };
+    match base_src {
+        Some(content) => {
+            let label = PathBuf::from(format!("{config_path} (base ref)"));
+            DisciplineConfig::resolve_source(Some((&label, content)), overrides)
+        }
+        None => {
+            eprintln!(
+                "{} --policy-from base: the base ref has no discipline.toml; judging by built-in defaults.",
+                style::yellow("note:")
+            );
+            DisciplineConfig::resolve(None, overrides)
+        }
+    }
+}
+
+fn load_config(
+    args: &ConfigArgs,
+    repo_root: Option<&Path>,
+    extra_fail_on_overrides: Option<bool>,
+    extra_directive_sources: Option<Vec<String>>,
+) -> Result<(DisciplineConfig, String)> {
+    let overrides = build_overrides(args, extra_fail_on_overrides, extra_directive_sources);
     let explicit = args.config != Path::new("discipline.toml");
     let resolved_path = match repo_root {
         Some(root) if !args.config.is_absolute() => root.join(&args.config),
@@ -215,6 +251,19 @@ fn detect_pr_body_from_ci() -> Option<String> {
         }
     }
     None
+}
+
+fn detect_pull_context_from_ci() -> Option<discipline::override_policy::PullContext> {
+    [
+        "FORGEJO_EVENT_PATH",
+        "GITEA_EVENT_PATH",
+        "GITHUB_EVENT_PATH",
+    ]
+    .iter()
+    .filter_map(|var| std::env::var(var).ok())
+    .filter_map(|path| std::fs::read_to_string(path).ok())
+    .filter_map(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+    .find_map(|json| discipline::override_policy::pull_context(&json))
 }
 
 fn detect_pr_title_from_ci() -> Option<String> {
@@ -304,6 +353,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
             .map(|g| g.id)
             .collect(),
         outcomes: vec![fatal_outcome],
+        policy_failures: Vec::new(),
     };
     if let Some(path) = &args.json_out {
         let _ = std::fs::write(
@@ -379,14 +429,32 @@ fn check(args: CheckArgs) -> Result<bool> {
     } else {
         Some(non_empty_sources)
     };
-    let (config, config_path) =
-        match load_config(&args.config, Some(git.root()), extra_fail, extra_sources) {
-            Ok(c) => c,
+    let (config, config_path) = match load_config(
+        &args.config,
+        Some(git.root()),
+        extra_fail,
+        extra_sources.clone(),
+    ) {
+        Ok(c) => c,
+        Err(err) => {
+            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
+            return Err(err);
+        }
+    };
+    // `--policy-from base`: the change is judged by the base ref's configuration. Its own
+    // copy is still loaded (it must parse) and kept for `config-integrity` to diff.
+    let (config, head_config) = if args.policy_from == discipline::cli::PolicyFrom::Base {
+        let overrides = build_overrides(&args.config, extra_fail, extra_sources);
+        match load_base_policy(&git, &config_path, &overrides) {
+            Ok(base) => (base, Some(config)),
             Err(err) => {
                 emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
                 return Err(err);
             }
-        };
+        }
+    } else {
+        (config, None)
+    };
 
     let is_push_or_commit = discipline::gitctx::is_push_event_environment()
         || args.commit.is_some()
@@ -489,6 +557,7 @@ fn check(args: CheckArgs) -> Result<bool> {
 
     let ctx = Context {
         config: &config,
+        head_config: head_config.as_ref(),
         git: &git,
         config_path: &config_path,
         baseline_path: baseline_path_ref.as_deref(),
@@ -503,13 +572,29 @@ fn check(args: CheckArgs) -> Result<bool> {
         bench_base_file: args.bench_base_file.clone(),
         bench_head_file: args.bench_head_file.clone(),
     };
-    let summary = match run_checks(&config, args.suite, &ctx) {
+    let mut summary = match run_checks(&config, args.suite, &ctx) {
         Ok(s) => s,
         Err(err) => {
             emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
             return Err(err);
         }
     };
+
+    // Run-level override limits: a budget, and an approval read from the forge.
+    let pull = detect_pull_context_from_ci();
+    match discipline::override_policy::judge(
+        &config.directives,
+        summary.directive_overrides(),
+        pull.as_ref(),
+        &|| discipline::forge::detect_for(&git),
+        &discipline::forge::HttpApi::from_env(),
+    ) {
+        Ok(failures) => summary.policy_failures = failures,
+        Err(err) => {
+            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
+            return Err(err);
+        }
+    }
 
     let raw_fail_on_overrides = config.directives.fail_on_overrides;
     let actor = args
@@ -586,7 +671,17 @@ fn check(args: CheckArgs) -> Result<bool> {
         args.fail_on_warnings,
     )?;
 
-    let is_advisory = args.advisory || config.meta.mode == discipline::config::RunMode::Advisory;
+    // A change that switches its own run to advisory does not get the exit 0 it asked for.
+    let config_advisory = config.meta.mode == discipline::config::RunMode::Advisory;
+    let advisory_refused =
+        config_advisory && discipline::guards::integrity::advisory_mode_unapproved(&ctx)?;
+    if advisory_refused {
+        eprintln!(
+            "{}",
+            discipline::style::yellow("advisory: `mode = \"advisory\"` is introduced by this change and is not honoured until it merges (or `allow-gate-weakening: meta <reason>` lifts it)")
+        );
+    }
+    let is_advisory = args.advisory || (config_advisory && !advisory_refused);
     if is_advisory && !success {
         eprintln!(
             "{}",
@@ -684,6 +779,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
 
     let ctx = Context {
         config: &config,
+        head_config: None,
         git: &git,
         config_path: &config_path,
         baseline_path: None,

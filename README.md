@@ -114,7 +114,7 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 | [`issue-link`](docs/GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`config-integrity`](docs/GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
 | [`scope-confinement`](docs/GATES.md#scope-confinement) | agent-guard | any | changes stay inside authorized paths |
-| [`suppression-delta`](docs/GATES.md#suppression-delta) | agent-guard | per pack | new #[allow], commented-out tests, cfg-gated tests |
+| [`suppression-delta`](docs/GATES.md#suppression-delta) | agent-guard | per pack | newly added linter / compiler suppression annotations |
 | [`provenance-tags`](docs/GATES.md#provenance-tags) | hygiene | any | published numerics carry (measured|target|projected) |
 | [`ci-integrity`](docs/GATES.md#ci-integrity) | integrity | any | workflow weakening: continue-on-error, || true, unpinned actions |
 | [`ci-skip-set`](docs/GATES.md#ci-skip-set) | integrity | any | rollup skip set matches each job's `if:` under the observed filter outputs |

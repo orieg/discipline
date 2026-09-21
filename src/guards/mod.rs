@@ -1,5 +1,6 @@
 pub mod agent_diff;
 pub mod archive_contents;
+pub mod ci_gitlab;
 pub mod ci_integrity;
 pub mod ci_skip_set;
 pub mod claim_registry;
@@ -8,6 +9,7 @@ pub mod dependency;
 pub mod hygiene;
 pub mod integrity;
 pub mod issue_link;
+pub mod lockfile;
 pub mod manifest_sync;
 pub mod miri;
 pub mod msrv;
@@ -138,13 +140,26 @@ pub struct CheckSummary {
     /// Gates the roadmap plans but this binary does not ship. Listed in every
     /// report so their absence is never mistaken for coverage.
     pub planned_gates: Vec<&'static str>,
+    /// Run-level refusals that no single gate owns (an exhausted override budget,
+    /// overrides awaiting approval). Any entry fails the run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub policy_failures: Vec<String>,
 }
 
 impl CheckSummary {
     pub fn is_success(&self, fail_on_warnings: bool, fail_on_overrides: bool) -> bool {
         self.errors == 0
+            && self.policy_failures.is_empty()
             && (!fail_on_warnings || self.warnings == 0)
             && (!fail_on_overrides || self.total_overrides() == 0)
+    }
+
+    /// Overrides granted by a directive in the PR body or a commit body. Inline markers
+    /// are reviewed as part of the tree and are not counted.
+    pub fn directive_overrides(&self) -> usize {
+        self.overrides()
+            .filter(|o| !matches!(o.source, crate::tokens::OverrideSource::Inline { .. }))
+            .count()
     }
 
     pub fn violations(&self) -> impl Iterator<Item = &Violation> {
@@ -206,6 +221,9 @@ impl CheckSummary {
 /// Everything a gate needs.
 pub struct Context<'a> {
     pub config: &'a DisciplineConfig,
+    /// The change's own configuration when the run is judged by the base ref's
+    /// (`--policy-from base`); `None` when `config` already is the change's own.
+    pub head_config: Option<&'a DisciplineConfig>,
     pub git: &'a GitCtx,
     /// Repo-relative path of the configuration file (for config-integrity).
     pub config_path: &'a str,
@@ -293,7 +311,11 @@ pub fn run_checks(
             .gates
             .settings(gate.id)
             .ok_or_else(|| anyhow!("gate `{}` has no settings entry", gate.id))?;
-        if !settings.enabled() {
+        // The gate that guards the configuration is switched by the base side (F9).
+        let held_on = gate.id == "config-integrity"
+            && !settings.enabled()
+            && integrity::enabled_on_base(ctx)?;
+        if !settings.enabled() && !held_on {
             let mut o = GateOutcome::new(gate.id);
             o.enabled = false;
             outcomes.push(o);
@@ -484,6 +506,7 @@ pub fn run_checks(
             .map(|g| g.id)
             .collect(),
         outcomes,
+        policy_failures: Vec::new(),
     })
 }
 

@@ -237,6 +237,7 @@ mod tests {
             baselined: 0,
             planned_gates: Vec::new(),
             outcomes: Vec::new(),
+            policy_failures: Vec::new(),
         };
         let json = format_gitlab(&summary);
         assert_eq!(json.trim(), "[]");
@@ -264,6 +265,7 @@ mod tests {
             baselined: 0,
             planned_gates: Vec::new(),
             outcomes: vec![outcome],
+            policy_failures: Vec::new(),
         };
 
         let json = format_gitlab(&summary);

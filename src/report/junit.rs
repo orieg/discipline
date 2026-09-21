@@ -225,6 +225,7 @@ mod tests {
                 },
             ],
             planned_gates: Vec::new(),
+            policy_failures: Vec::new(),
         };
 
         let xml = format_junit(&summary, false);
@@ -266,6 +267,7 @@ mod tests {
                 overrides: Vec::new(),
             }],
             planned_gates: Vec::new(),
+            policy_failures: Vec::new(),
         };
 
         let xml = format_junit(&summary, false);
@@ -310,6 +312,7 @@ mod tests {
                 overrides: Vec::new(),
             }],
             planned_gates: Vec::new(),
+            policy_failures: Vec::new(),
         };
 
         // Without fail_on_warnings, failures="0" and no <failure> tag emitted

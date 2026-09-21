@@ -71,6 +71,11 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
     };
 
     for path in &workflow_files {
+        // GitLab pipelines are a different document shape; they have their own diff.
+        if super::ci_gitlab::is_gitlab_ci_path(path) {
+            evaluate_gitlab_file(ctx, path, &mut out)?;
+            continue;
+        }
         let head_content = match ctx.git.head_content(path)? {
             Some(c) => c,
             None => {
@@ -603,6 +608,31 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                     || uses.contains("discipline")
                                     || uses == "./action.yml"
                                 {
+                                    // policy_from moved off `base` (or the whole `with:` block dropped): the change
+                                    // is judged by its own configuration again
+                                    let policy_from = |w: Option<&serde_yaml::Value>| {
+                                        w.and_then(|w| w.get("policy_from"))
+                                            .and_then(|p| p.as_str())
+                                            .map(|p| p.trim().to_ascii_lowercase())
+                                    };
+                                    if policy_from(base_step.and_then(|b| b.get("with"))).as_deref()
+                                        == Some("base")
+                                        && policy_from(step.get("with")).as_deref() != Some("base")
+                                    {
+                                        record_or_excuse(
+                                            ctx,
+                                            Some(&head_content),
+                                            &mut out,
+                                            settings.severity,
+                                            "Discipline Action Weakened (policy_from)",
+                                            Some(path.clone()),
+                                            approx_line,
+                                            "The discipline step no longer sets 'policy_from: base'; the change would be judged by its own discipline.toml.".to_string(),
+                                            "Restore 'policy_from: base' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                                            "policy_from",
+                                        );
+                                    }
+
                                     if let Some(with_val) = step.get("with") {
                                         let base_with_val = base_step.and_then(|b| b.get("with"));
 
@@ -629,6 +659,24 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                                     "disable",
                                                 );
                                             }
+                                        }
+
+                                        // advisory switched on: the step reports and exits 0
+                                        if advisory_input_on(Some(with_val))
+                                            && !advisory_input_on(base_with_val)
+                                        {
+                                            record_or_excuse(
+                                                ctx,
+                                                Some(&head_content),
+                                                &mut out,
+                                                settings.severity,
+                                                "Discipline Action Weakened (advisory: true)",
+                                                Some(path.clone()),
+                                                approx_line,
+                                                "The 'advisory' input on the discipline step was switched on; the step exits 0 whatever the gates report.".to_string(),
+                                                "Remove 'advisory' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                                                "advisory",
+                                            );
                                         }
 
                                         // fail_on_warnings set to false
@@ -725,6 +773,28 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            // 5b'. `discipline check --advisory` in a run command
+                            if let Some(head_run) = run_str {
+                                let base_run = base_step
+                                    .and_then(|b| b.get("run"))
+                                    .and_then(|r| r.as_str())
+                                    .unwrap_or("");
+                                if run_is_advisory(head_run) && !run_is_advisory(base_run) {
+                                    record_or_excuse(
+                                        ctx,
+                                        Some(&head_content),
+                                        &mut out,
+                                        settings.severity,
+                                        "Discipline Run Weakened (--advisory)",
+                                        Some(path.clone()),
+                                        approx_line,
+                                        "A discipline command gained '--advisory'; it exits 0 whatever the gates report.".to_string(),
+                                        "Remove '--advisory' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                                        "--advisory",
+                                    );
                                 }
                             }
 
@@ -1173,6 +1243,94 @@ fn markers_in(step: &serde_yaml::Value, run: Option<String>) -> HashSet<&'static
     found
 }
 
+/// Diff one GitLab pipeline file against its base side. A side that does not parse is a
+/// finding: an unreadable pipeline cannot be shown to be unweakened.
+fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Result<()> {
+    use super::ci_gitlab::{diff_gitlab_ci, verification_jobs};
+    let settings = &ctx.config.gates.ci_integrity;
+    let base = ctx.git.base_content(path)?;
+    let Some(head) = ctx.git.head_content(path)? else {
+        if let Some(jobs) = base.as_deref().and_then(|b| verification_jobs(b).ok()) {
+            if !jobs.is_empty() {
+                record_or_excuse(
+                    ctx,
+                    None,
+                    out,
+                    settings.severity,
+                    "Deletion of Verification Workflow",
+                    Some(path.to_string()),
+                    None,
+                    format!(
+                        "Pipeline '{path}' defining verification job(s) {} was deleted.",
+                        jobs.join(", ")
+                    ),
+                    "Restore the pipeline or provide an allow-gate-weakening: ci-integrity <reason> directive.",
+                    path,
+                );
+            }
+        }
+        return Ok(());
+    };
+    out.examined += 1;
+    out.notes.push(format!(
+        "`{path}`: pipelines pulled in through `include:` and changes to `rules:` are not read"
+    ));
+    // A new pipeline file has nothing to be weakened against.
+    let Some(base) = base else {
+        return Ok(());
+    };
+    match diff_gitlab_ci(&base, &head) {
+        Ok(found) => {
+            for w in found {
+                let line = find_line_number(&head, &format!("{}:", w.job));
+                record_or_excuse(
+                    ctx,
+                    Some(&head),
+                    out,
+                    settings.severity,
+                    w.title,
+                    Some(path.to_string()),
+                    line,
+                    w.message,
+                    format!(
+                        "Revert it, or excuse with allow-gate-weakening: ci-integrity <reason> naming `{}`.",
+                        w.subject
+                    ),
+                    &w.subject,
+                );
+            }
+        }
+        Err(e) => out.push(
+            settings.severity,
+            "Pipeline File Unreadable",
+            Some(path),
+            None,
+            format!("`{path}` could not be compared with its base side ({e})."),
+            "Fix the YAML so the pipeline can be checked.",
+        ),
+    }
+    Ok(())
+}
+
+/// Whether a discipline step's `with:` block switches advisory mode on. YAML `true` and
+/// the string "true" both reach the action as the same input.
+fn advisory_input_on(with: Option<&serde_yaml::Value>) -> bool {
+    match with.and_then(|w| w.get("advisory")) {
+        Some(serde_yaml::Value::Bool(b)) => *b,
+        Some(serde_yaml::Value::String(s)) => s.trim().eq_ignore_ascii_case("true"),
+        _ => false,
+    }
+}
+
+/// Whether a run script invokes discipline with `--advisory`. Comment lines do not count.
+pub fn run_is_advisory(run: &str) -> bool {
+    run.lines().map(str::trim).any(|l| {
+        !l.starts_with('#')
+            && (l.contains("discipline check") || l.contains("discipline diff"))
+            && l.split_whitespace().any(|w| w == "--advisory")
+    })
+}
+
 fn is_verification_step(step: &serde_yaml::Value) -> bool {
     let raw_run = step.get("run").and_then(|r| r.as_str()).map(str::to_string);
     if !markers_in(step, raw_run).is_empty() {
@@ -1415,6 +1573,27 @@ pub fn parse_workflow_jobs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advisory_is_read_from_the_input_and_the_flag_not_from_prose() {
+        let with = |y: &str| serde_yaml::from_str::<serde_yaml::Value>(y).unwrap();
+        assert!(advisory_input_on(Some(&with("advisory: true"))));
+        assert!(advisory_input_on(Some(&with("advisory: 'True'"))));
+        assert!(!advisory_input_on(Some(&with("advisory: false"))));
+        assert!(!advisory_input_on(Some(&with("suite: all"))));
+        assert!(!advisory_input_on(None));
+
+        assert!(run_is_advisory(
+            "set -e\ndiscipline check --advisory --suite all"
+        ));
+        assert!(run_is_advisory("discipline diff --advisory"));
+        assert!(!run_is_advisory("discipline check --suite all"));
+        assert!(!run_is_advisory(
+            "# discipline check --advisory is forbidden here\ndiscipline check"
+        ));
+        assert!(!run_is_advisory("echo --advisory"));
+        assert!(!run_is_advisory("discipline check --advisory-notes"));
+    }
 
     #[test]
     fn parses_workflow_jobs_and_inline_needs() {

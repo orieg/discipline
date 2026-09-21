@@ -24,9 +24,11 @@ flowchart TD
     P3 --> P7["Phase 7: Language packs II (Java/Kotlin, C/C++, Go)"]
     P4 --> P6["Phase 6: Production dogfooding & legacy script retirement"]
     P5 --> P6
+    P4 --> P8["Phase 8: Agent-evasion hardening"]
+    P7 --> P8
 ```
 
-Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
+Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 and Tier 1 depend only on Phase 4; Tier 2 adds facts to every language pack, so it follows Phase 7.
 
 ---
 
@@ -48,7 +50,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 | [`issue-link`](GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`config-integrity`](GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
 | [`scope-confinement`](GATES.md#scope-confinement) | agent-guard | any | changes stay inside authorized paths |
-| [`suppression-delta`](GATES.md#suppression-delta) | agent-guard | per pack | new #[allow], commented-out tests, cfg-gated tests |
+| [`suppression-delta`](GATES.md#suppression-delta) | agent-guard | per pack | newly added linter / compiler suppression annotations |
 | [`provenance-tags`](GATES.md#provenance-tags) | hygiene | any | published numerics carry (measured|target|projected) |
 | [`ci-integrity`](GATES.md#ci-integrity) | integrity | any | workflow weakening: continue-on-error, || true, unpinned actions |
 | [`ci-skip-set`](GATES.md#ci-skip-set) | integrity | any | rollup skip set matches each job's `if:` under the observed filter outputs |
@@ -119,6 +121,46 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 - **Go / no-go gate:** 100% discriminating test coverage per language pack.
 - **Status:** In progress (Java, Go, PHP, and C / C++ packs shipped; Kotlin planned).
 
+### Phase 8: Agent-Evasion Hardening
+Candidate work from a review of discipline as a safety net against autonomous coding agents. The review's central finding: the detectors are strong, and the trust boundary around them is the cheaper target. A change that can switch its own run to advisory, or grant itself every override, does not need to beat an AST gate. Tiers are ordered; within a tier, items are independent.
+
+**Tier 0: the gates' own trust boundary.** Blocks the value of every later tier.
+
+| Item | Gap | Status |
+|---|---|---|
+| Advisory self-switch | `mode = "advisory"` in the change's own `discipline.toml` made the run exit 0 | **Shipped**: reported by `config-integrity` under `[meta]`, and not honoured until it is on the base side or `allow-gate-weakening: meta` lifts it |
+| Guard self-disable | `[gates.config-integrity] enabled = false` (or `severity = "note"`) silenced the report of the change's own weakenings | **Shipped**: enablement is read from the base configuration; findings use the stricter of the base and head severity |
+| Unclassified options | Most gate options had no loosening direction, among them `min_tests`, `max_increase`, `workflows`, `forbidden_paths`, `deny_dependencies`, `allowed_override_actors`, and every `command` | **Shipped**: one direction table covers every option; a unit test fails on any option the table does not name |
+| Action `advisory` input | `advisory: true` on the action step, or `--advisory` on a `discipline check` run line, was invisible to `ci-integrity` | **Shipped** |
+| Other forges' workflows | `ci-integrity` read `.github/workflows/` only | **Shipped**: `.gitea/` and `.forgejo/` workflows share the Actions rules; GitLab pipelines have their own base-versus-head diff (`src/guards/ci_gitlab.rs`). Open: what a pipeline pulls in through `include:`, and narrowed `rules:` |
+| Self-granted overrides | The PR body and commit bodies are written by the change author, `fail_on_overrides` defaults to false, and nothing capped the count | **Shipped**, opt-in: `directives.max_overrides` is a per-change budget; `directives.require_approval` makes directive overrides fail until the forge shows an approving review of the head commit by an `allowed_override_actors` member who is not the author (read-only, through `src/forge.rs`; exit 2 when it cannot be read). GitLab approvals are open |
+| Policy from the base ref | The change is judged by its own `discipline.toml` | **Shipped**, opt-in: `--policy-from base` / action input `policy_from: base`; `ci-integrity` reports the input being moved off `base`. Chosen over signing the file: a verifying key kept in the repository is writable by the same change, and verification needs a cryptography dependency |
+| `doctor` enforcement | `discipline doctor` (required check, CODEOWNERS, non-blocking jobs) ran in no workflow here | **Shipped** for the local checks: the `dogfood` job runs `doctor --local-only --strict`, under which an uncovered CODEOWNERS target fails. The forge-side checks (required check, branch rules) need a token that can read branch protection and are open |
+
+**Tier 1: coverage from existing machinery** (base-versus-head structural diffs; no new AST facts).
+
+- **`toolchain-config` gate.** No gate reads `tsconfig.json`, `ruff.toml` / `[tool.ruff]`, `mypy.ini`, `.eslintrc*`, `clippy.toml`, `Cargo.toml [lints]`, `.cargo/config.toml` rustflags, `.golangci.yml` or `phpstan.neon`. Same direction-table design as `config-integrity`. Also owns coverage thresholds (`coverageThreshold`, `fail_under`, `codecov.yml`), retry settings (`--reruns`, nextest `retries`) and test-selection narrowing (`--ignore`, `testPathIgnorePatterns`). A configuration written as code (`eslint.config.js`) is reported as changed and not analysed, never passed silently.
+- **`golden-output` coupling.** **Shipped:** default globs cover `__snapshots__/`, `*.ambr`, `*.approved.*` and `*.golden`; a change that rewrites expectations while nothing producing output changed has its own title; the message states the lines rewritten. Open: added snapshot files are still skipped, because telling a snapshot for a new test from one added to an existing test needs the test-to-snapshot mapping of each framework.
+- **Lockfile integrity in `dependency-delta`.** **Shipped** for `Cargo.lock`, `package-lock.json` and `yarn.lock` v1 (`src/guards/lockfile.rs`): entry from a new source, dropped integrity hash, manifest changed without its lockfile, lockfile deleted. Open: the other lockfile formats (named as not analysed), and extending the `ci-integrity` `--locked` rule to `npm ci`, `--frozen-lockfile`, `--require-hashes` and `uv sync --locked`.
+- **`suppression-delta` on AST facts.** Every pack fills `ParsedFileFacts.escape_hatches` and no gate reads it; the gate matches substrings on added lines and never reads the base side. Move it to net base-versus-head counts from the packs.
+- **Existing-gate corrections.** **Shipped:** `test-floor` counts tests that run (unconditionally ignored tests are left out on both sides) and names files it could not read or that parse with errors. Open: `test-budget` extracts with line patterns (contrary to the AST-aware rule); an assertion under a constant-false branch, or after an unconditional `return`, counts in full.
+
+**Tier 2: new AST facts.** Packs are hand-written visitors, so each fact is written once per language. Prerequisite: a per-fact capability on `LanguagePack`, so a pack that does not supply a fact yields a named note; coverage notes are per language today.
+
+- **`stub-bodies`.** An added non-test function whose whole body is a stub marker (`todo!()`, `unimplemented!()`, `raise NotImplementedError`, a not-implemented `throw` or `panic`), and an existing body replaced by one, which no gate reports today. Excludes abstract methods, protocols, `.pyi`, overloads and interface declarations. Visibility is not read by any pack, so the first version does not depend on it. Order: Rust, Python, JS/TS, Go, Java/C#.
+- **Mock infiltration.** Callee names inside test bodies are already collected per pack and discarded. Surface them; treat a test whose only assertions are on the mock (`assert_called_with`, `toHaveBeenCalled`, `verify(`) as a vacuity class; for a paired test, report mocks rising while strong assertions do not. Ships as a warning with a configurable vocabulary.
+- **Error swallowing.** Net new empty `catch {}`, `except: pass`, discarded `Result` in non-test code.
+- **Retry annotations.** `jest.retryTimes`, `@pytest.mark.flaky`, `@RetryingTest`, CI retry wrappers; reported through `ignored-tests`.
+
+**Tier 3: governance.**
+
+- **`instruction-smuggling` gate.** Ordered by precision. (1) Bidirectional controls, zero-width characters and Unicode tag characters in added lines: deterministic, blocking. (2) Any change to an agent-instruction file (`AGENTS.md`, `.cursorrules`, `copilot-instructions.md`, skill files) needs a directive; no gate reads their content for instructions, and `provenance-tags` skips them. (3) Instruction phrases, role markers and long encoded blobs in comments, docstrings and hidden HTML comments: warning only, because a paraphrase defeats them. Findings carry the location and never the matched text, so the `agent-prompt` report cannot hand the injection to the next agent. Whether file names or override reasons can reach that format today is unaudited.
+- **`commit-provenance` gate.** Required commit trailers; an agent-identified commit needs a `Reviewed-by:` from someone other than its author. A trailer is self-asserted text, so this is hygiene. The signals a change cannot forge are forge review state and commit signatures, which `doctor` reads from branch protection; extend `doctor` to code-owner review and last-push approval. Verifying signatures in the binary is declined (cryptography dependency and a trusted keyring). Git notes are not fetched by CI checkouts.
+- **Registry verification of new dependencies: declined.** A lookup of package existence and first-publish date needs a network path beyond the forge API, which `AGENTS.md` §3.3 forbids, and it would send internal package names to public registries. Lockfile integrity (Tier 1) is the offline control; existence and advisory checks stay with the `command` presets. Reopen only with a design that keeps private names on the runner.
+
+- **Go / no-go gate:** each item meets the gate contract in `AGENTS.md` §3.4: positive and negative unit controls, an end-to-end case through the binary, a `self-test` case, and a named test that kills a mutated detector. A Tier 2 item additionally names every pack that does not supply its fact.
+- **Status:** Tier 0 shipped, with three named remainders (GitLab `include:` / `rules:` in `ci-integrity`, GitLab approvals in `require_approval`, forge-side `doctor` checks in CI); Tier 1 partly shipped (lockfile integrity, `golden-output`, `test-floor`; `toolchain-config` and AST-based `suppression-delta` are open); Tiers 2 and 3 are candidates.
+
 ---
 
 ## Default Changes (Compatibility Ledger)
@@ -139,10 +181,21 @@ From v0.7.0 a new gate that ships enabled is listed too, since for a consumer it
 
 ### Behaviour Changes
 
-A change to what a gate reports, an exit code, or an output, with an unchanged default. Newest first; each release's rows are copied into its release notes under "Upgrading" (`scripts/release_notes_upgrade.py`).
+A change to what a gate reports, an exit code, or an output, with an unchanged default. Newest first; a row marked `unreleased` takes its version when the release is cut; each release's rows are copied into its release notes under "Upgrading" (`scripts/release_notes_upgrade.py`).
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | `test-floor` | The static count is of tests that run: an unconditionally ignored / skipped test is no longer counted, on the base or the head side. Counts can drop. | stricter | Re-baseline `min_tests` / constant floors; the gate notes state how many tests were left out. |
+| unreleased | `dependency-delta` | Lockfiles are read, not only sized: an entry from a new source, a dropped integrity hash, a manifest changed without its tracked lockfile, and a deleted lockfile are violations. | stricter | `allow-dependency: <package-or-lockfile> <reason>`. |
+| unreleased | `golden-output` | Default `paths` add `**/__snapshots__/**`, `**/*.ambr`, `**/*.golden`, `**/*.approved.*`; a rewrite with no output-producing change is titled "Golden Output Regenerated Without Source Change". | stricter | Set `paths` to the previous four globs. |
+| unreleased | `ci-integrity` | GitLab pipelines (`.gitlab-ci.yml`, `.gitlab/ci/*.yml`) are in the default `workflows` and are diffed for `allow_failure`, `when: manual`, masked script lines, `--advisory`, deleted verification jobs. | stricter | Remove the GitLab globs from `workflows`. |
+| unreleased | directives | New options `directives.max_overrides` and `directives.require_approval`, and the `--policy-from` flag / `policy_from` action input. All default to the previous behaviour. Older binaries reject the two new keys. | stricter when set | Upgrade every binary that reads the file together. |
+| unreleased | report | The JSON report gains `policy_failures` when an override budget or approval refuses a run; a run can now exit 1 with `errors: 0`. | reclassified | Read `status` / the exit code, not `errors`. |
+| unreleased | `config-integrity` | `mode = "advisory"` introduced by the change under review is reported under `[meta]` and is not honoured: the run keeps its enforcing exit code until the setting is on the base side. | stricter | `allow-gate-weakening: meta <reason>`, or merge the mode change on its own. |
+| unreleased | `config-integrity` | The gate runs whenever the base configuration enables it, even if the head configuration or `--disable` turns it off, and reports at the stricter of the base and head severity. | stricter | `allow-gate-weakening: config-integrity <reason>`; the new setting applies from the next change. |
+| unreleased | `config-integrity` | Every gate option has a loosening direction. Newly reported: a lowered `min_tests` / `min_assertions_per_test`, a raised `max_increase` / `tolerance`, a removed floor or cap, shrunk `workflows`, `forbidden_paths`, `deny_dependencies`, `manifests`, `required_paths`, `forbidden_patterns`, `forbid_output`, `corpus_dirs`, `fuzz_targets`, `extra_secret_patterns`, `required_suites`, `placeholders`, `commands`, `rules`, `groups`; grown `allowed_suppressions`, `excluded_jobs`, `first_party_action_prefixes`, `allowed_override_actors`; an emptied `allow_dependencies` / `allowed_paths`; `allow_cross_host`, `allow_wildcards`, `allow_increase` switched on; a changed or removed `command`, `test_command`, `canary_command`, `preset`, `count_pattern`, `zero_items_pattern`, `pattern`, `deny_file`, `rollup_job`, `sanitizer`, `archive_path`, `constant_*`, `documented_job_count_*`. | stricter | `allow-gate-weakening: <gate> <reason>`. |
+| unreleased | `ci-integrity` | `advisory: true` added to the discipline action step, or `--advisory` added to a `discipline check` / `discipline diff` run line, is a violation. | stricter | `allow-gate-weakening: ci-integrity <reason>`. |
+| unreleased | `ci-integrity` | The default `workflows` globs also cover `.gitea/workflows/` and `.forgejo/workflows/`. | stricter | Set `workflows` to the previous two `.github/workflows/` globs. |
 | v0.7.2 | `doctor` | On Gitea, doctor reads the instance version; below 1.26 (which ignores a workflow's `permissions:`) the token finding is information, not a warning, and names the upgrade. | narrower | None. |
 | v0.7.1 | forge access | An SSH remote's host is resolved through `~/.ssh/config` (`Host` alias to `HostName`, with `Include`) before the forge's API address is built; `doctor` prints that address (`forge_url` in JSON) and points an unreachable host at `DISCIPLINE_FORGE_URL`. | reclassified | None; set `DISCIPLINE_FORGE_URL` if the API is served elsewhere than the SSH host. |
 | v0.7.0 | configuration | New keys (`superseded_registry`, `pending_issue_repos`, `mode`, `citation_*`, `[gates.ci-skip-set]`, ...) are rejected by older binaries, which refuse unknown keys. | stricter | Upgrade every binary that reads the file (pre-commit `rev:`, pinned images) together. |
@@ -176,3 +229,6 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
   - Argo Workflows: template linted; live Kubernetes cluster DAG execution is outstanding.
 - **Macro opacity:** Tests generated dynamically inside complex macro bodies (`proptest! { ... }`, `quickcheck! { ... }`) are invisible to tree-sitter AST fact extractors without compilation expansion. Use `extra_assert_macros` and `assert_helper_fns` to configure macro vocabulary.
 - **Grammar lag:** Source syntax newer than the bundled tree-sitter grammars is treated as a parse error, failing closed by design. Use `exempt_paths` until grammars are updated.
+- **Self-granted overrides:** A directive in the PR body or a commit body is written by the author of the change it excuses. `max_overrides`, `require_approval` and `--policy-from base` bound that, and all three are opt-in: a repository that sets none of them accepts every well-formed directive. Policy refusals appear in the terminal, step-summary and JSON reports; the JUnit, SARIF and GitLab reports carry gate findings only, so read the exit code.
+- **What no static gate closes:** An implementation that special-cases the inputs its tests use, or a wrong change accompanied by plausible tests, passes every diff-based gate. The mutation presets of the `command` gate are the control for that class.
+- **Option enumeration in `config-integrity`:** The test that requires every gate option to have a loosening direction enumerates options from the published schema and the serialized defaults. An `Option` field missing from the schema is the one shape it cannot see.

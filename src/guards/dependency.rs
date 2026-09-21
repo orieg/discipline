@@ -8,8 +8,8 @@
 //! - Configured `allow_dependencies` and `deny_dependencies`
 //! - Scoped `allow-dependency` escape hatches
 
-use crate::config::GateSettings;
-use crate::guards::{Context, GateOutcome};
+use crate::config::{GateSettings, Severity};
+use crate::guards::{lockfile, Context, GateOutcome};
 use crate::tokens;
 use anyhow::{Context as _, Result};
 use globset::{Glob, GlobSetBuilder};
@@ -703,6 +703,32 @@ pub fn parse_manifest(content: &str, path: &str) -> Vec<DependencyRecord> {
     }
 }
 
+/// Record a lockfile finding unless an `allow-dependency:` override names `subject`.
+fn lock_violation(
+    ctx: &Context,
+    outcome: &mut GateOutcome,
+    severity: Severity,
+    title: &str,
+    file: &str,
+    subject: &str,
+    message: String,
+) {
+    if let Some(rec) = ctx.find_override(GATE, tokens::ALLOW_DEPENDENCY, subject) {
+        outcome.overrides.push(rec);
+        return;
+    }
+    outcome.push(
+        ctx.overridable(severity),
+        title,
+        Some(file),
+        None,
+        message,
+        &format!(
+            "Regenerate the lockfile from the manifest, or justify it: `allow-dependency: {subject} <reason>`."
+        ),
+    );
+}
+
 fn count_lockfile_entries(content: &str, file_name: &str) -> usize {
     if file_name == "Cargo.lock" || file_name == "poetry.lock" {
         content
@@ -852,8 +878,25 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
-    // Track lockfile growth
+    // Lockfiles: growth is a note; a deleted lockfile, an entry from a new source, and a
+    // dropped integrity hash are findings (`lockfile.rs`).
     for (f, fname) in &lock_files {
+        outcome.examined += 1;
+        if f.kind == crate::gitctx::ChangeKind::Deleted {
+            lock_violation(
+                ctx,
+                &mut outcome,
+                gate.severity(),
+                "Lockfile Deleted",
+                &f.path,
+                &f.path,
+                format!(
+                    "Lockfile `{}` was deleted; dependency versions are no longer pinned.",
+                    f.path
+                ),
+            );
+            continue;
+        }
         let head_raw = ctx.git.head_content(&f.path)?;
         let base_raw = ctx.git.base_content(&f.old_path)?;
         let head_count = head_raw
@@ -869,6 +912,33 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             "lockfile `{}` package count: base {}, head {} ({:+})",
             f.path, base_count, head_count, diff
         ));
+
+        let Some(head_entries) = head_raw
+            .as_deref()
+            .and_then(|c| lockfile::parse_lock(fname, c))
+        else {
+            outcome.notes.push(format!(
+                "lockfile `{}`: entry sources and integrity hashes not analysed (format not read, or it does not parse)",
+                f.path
+            ));
+            continue;
+        };
+        // No base side (a new lockfile): every entry is judged against the default hosts.
+        let base_entries = base_raw
+            .as_deref()
+            .and_then(|c| lockfile::parse_lock(fname, c))
+            .unwrap_or_default();
+        for finding in lockfile::diff_lock(&base_entries, &head_entries) {
+            lock_violation(
+                ctx,
+                &mut outcome,
+                gate.severity(),
+                finding.title,
+                &f.path,
+                &finding.package,
+                format!("{} in `{}`.", finding.message, f.path),
+            );
+        }
     }
 
     if manifest_files.is_empty() && lock_files.is_empty() {
@@ -878,6 +948,8 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
         return Ok(outcome);
     }
 
+    let tracked: std::collections::BTreeSet<String> =
+        ctx.git.tracked_files()?.into_iter().collect();
     for f in manifest_files {
         let head_raw = ctx.git.head_content(&f.path)?;
         let Some(head_content) = head_raw else {
@@ -890,6 +962,37 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             Some(ref b) => parse_manifest(b, &f.old_path),
             None => Vec::new(),
         };
+
+        // A manifest whose dependency set changed while its tracked lockfile did not.
+        let dep_key = |d: &DependencyRecord| {
+            (
+                d.name.clone(),
+                d.version.clone(),
+                d.git_url.clone(),
+                d.git_pin.clone(),
+                d.is_path,
+            )
+        };
+        let base_set: std::collections::BTreeSet<_> = base_deps.iter().map(dep_key).collect();
+        let head_set: std::collections::BTreeSet<_> = head_deps.iter().map(dep_key).collect();
+        if base_raw.is_some() && base_set != head_set {
+            if let Some(lock) = lockfile::governing_lockfile(&f.path, &tracked) {
+                if !changed.iter().any(|c| c.path == lock) {
+                    lock_violation(
+                        ctx,
+                        &mut outcome,
+                        gate.severity(),
+                        "Manifest Changed Without Lockfile",
+                        &f.path,
+                        &lock,
+                        format!(
+                            "Dependencies in `{}` changed and the lockfile that pins them, `{lock}`, did not.",
+                            f.path
+                        ),
+                    );
+                }
+            }
+        }
 
         // Find deltas: new dependencies or modified existing dependencies
         for h in &head_deps {

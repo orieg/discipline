@@ -1249,7 +1249,7 @@ discipline self-test</div>
             <td>Agent Guard</td>
             <td><span class="gate-badge badge-warn">Warning</span></td>
             <td><span class="gate-badge badge-lang">per pack</span></td>
-            <td>new #[allow], commented-out tests, cfg-gated tests</td>
+            <td>newly added linter / compiler suppression annotations</td>
           </tr>
           <tr>
             <td class="gate-id">provenance-tags</td>
@@ -1455,6 +1455,11 @@ discipline self-test</div>
       <td class="gate-id">advisory</td>
       <td><code>false</code></td>
       <td>Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">policy_from</td>
+      <td><code>head</code></td>
+      <td>Which side's discipline.toml judges the change: 'head' (the change's own copy) or 'base' (the base ref's, so a policy edit takes effect once merged; config-integrity still reports it).</td>
     </tr>
     <tr>
       <td class="gate-id">actor</td>

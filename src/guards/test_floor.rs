@@ -216,7 +216,9 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     let measured_count = if let Some(cmd) = &settings.test_command {
         count_tests_via_command(cmd, Path::new(ctx.git.root()))?
     } else {
-        count_workspace_ast_tests(ctx, &filter)?
+        let head = count_workspace_ast_tests(ctx, &filter)?;
+        out.notes.extend(head.notes("head"));
+        head.running
     };
     out.examined = measured_count;
 
@@ -244,7 +246,9 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         }
     } else {
         // Zero-config ratchet: compare head AST test count against base ref AST test count.
-        let base_count = count_base_workspace_ast_tests(ctx, &filter)?;
+        let base = count_base_workspace_ast_tests(ctx, &filter)?;
+        out.notes.extend(base.notes("base"));
+        let base_count = base.running;
         if base_count > 0 && measured_count + settings.tolerance < base_count {
             if let Some(ov) = find_test_floor_override(ctx) {
                 out.overrides.push(ov);
@@ -336,55 +340,110 @@ fn find_test_floor_override(ctx: &Context) -> Option<crate::tokens::OverrideReco
     None
 }
 
-/// Counts test functions across all supported language packs in tracked repository files.
+/// A static test count over one side of the change.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AstTestCount {
+    /// Tests that run. An ignored or skipped test does not count toward a floor: it
+    /// verifies nothing until someone re-enables it.
+    pub running: usize,
+    pub ignored: usize,
+    /// Supported-language files that could not be read (contributed nothing) or that
+    /// parse with errors (tree-sitter recovers what it can; the count may be short).
+    pub unread: Vec<String>,
+}
+
+impl AstTestCount {
+    fn add(
+        &mut self,
+        path: &str,
+        content: Option<String>,
+        registry: &crate::ast::LanguageRegistry,
+    ) {
+        let v = crate::ast::AssertVocabulary::default();
+        let facts = content.and_then(|c| {
+            registry
+                .find_pack(path)
+                .and_then(|pack| pack.extract(path, &c, &v).ok())
+        });
+        match facts {
+            Some(facts) => {
+                if facts.has_parse_errors {
+                    self.unread.push(path.to_string());
+                }
+                // A conditional skip (`skipif`, `cfg_attr(..., ignore)`) still runs somewhere.
+                let ignored = facts
+                    .tests
+                    .iter()
+                    .filter(|t| t.ignored && t.conditional_ignore.is_none())
+                    .count();
+                self.ignored += ignored;
+                self.running += facts.tests.len() - ignored;
+            }
+            None => self.unread.push(path.to_string()),
+        }
+    }
+
+    /// Notes for the report: what was left out of the count, and why.
+    fn notes(&self, side: &str) -> Vec<String> {
+        let mut notes = Vec::new();
+        if self.ignored > 0 {
+            notes.push(format!(
+                "{side}: {} ignored / skipped test(s) are not counted toward the floor",
+                self.ignored
+            ));
+        }
+        if !self.unread.is_empty() {
+            let shown: Vec<&str> = self.unread.iter().take(5).map(String::as_str).collect();
+            notes.push(format!(
+                "{side}: {} file(s) could not be read, or parse with errors, so their tests may be uncounted: {}{}",
+                self.unread.len(),
+                shown.join(", "),
+                if self.unread.len() > shown.len() {
+                    ", ..."
+                } else {
+                    ""
+                }
+            ));
+        }
+        notes
+    }
+}
+
+/// Counts running test functions across all supported language packs in the workspace.
 pub fn count_workspace_ast_tests(
     ctx: &Context,
     filter: &crate::guards::PathFilter,
-) -> Result<usize> {
-    let files = ctx.git.tracked_files()?;
+) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
-    let v = crate::ast::AssertVocabulary::default();
-    let mut total = 0;
-
-    for path in files {
+    let mut count = AstTestCount::default();
+    for path in ctx.git.tracked_files()? {
         if filter.matches(&path) || !registry.is_supported(&path) {
             continue;
         }
         let full = Path::new(ctx.git.root()).join(&path);
-        if let Ok(content) = std::fs::read_to_string(&full) {
-            if let Some(pack) = registry.find_pack(&path) {
-                if let Ok(facts) = pack.extract(&path, &content, &v) {
-                    total += facts.tests.len();
-                }
-            }
+        // A tracked file deleted from the working tree is gone, not unreadable.
+        if !full.exists() {
+            continue;
         }
+        count.add(&path, std::fs::read_to_string(&full).ok(), &registry);
     }
-    Ok(total)
+    Ok(count)
 }
 
-/// Counts test functions across all supported language packs in base ref.
+/// Counts running test functions across all supported language packs in base ref.
 pub fn count_base_workspace_ast_tests(
     ctx: &Context,
     filter: &crate::guards::PathFilter,
-) -> Result<usize> {
-    let files = ctx.git.base_tracked_files()?;
+) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
-    let v = crate::ast::AssertVocabulary::default();
-    let mut total = 0;
-
-    for path in files {
+    let mut count = AstTestCount::default();
+    for path in ctx.git.base_tracked_files()? {
         if filter.matches(&path) || !registry.is_supported(&path) {
             continue;
         }
-        if let Ok(Some(content)) = ctx.git.base_content(&path) {
-            if let Some(pack) = registry.find_pack(&path) {
-                if let Ok(facts) = pack.extract(&path, &content, &v) {
-                    total += facts.tests.len();
-                }
-            }
-        }
+        count.add(&path, ctx.git.base_content(&path).ok().flatten(), &registry);
     }
-    Ok(total)
+    Ok(count)
 }
 
 /// Executes an external test listing command and counts tests from output lines.

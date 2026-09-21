@@ -181,6 +181,7 @@ mod tests {
                 overrides: Vec::new(),
             }],
             planned_gates: Vec::new(),
+            policy_failures: Vec::new(),
         };
 
         let val = format_sarif(&summary);
@@ -229,6 +230,7 @@ mod tests {
                 overrides: Vec::new(),
             }],
             planned_gates: Vec::new(),
+            policy_failures: Vec::new(),
         };
 
         let val = format_sarif(&summary);

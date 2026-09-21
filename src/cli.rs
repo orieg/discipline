@@ -185,6 +185,16 @@ pub struct CheckArgs {
     #[arg(long, env = "DISCIPLINE_ADVISORY")]
     pub advisory: bool,
 
+    /// Which side's discipline.toml judges the change. `base` reads it from the base ref,
+    /// so a policy edit takes effect once merged; `config-integrity` still reports it
+    #[arg(
+        long,
+        value_enum,
+        default_value = "head",
+        env = "DISCIPLINE_POLICY_FROM"
+    )]
+    pub policy_from: PolicyFrom,
+
     /// Actor executing the check (for actor-aware override authorization).
     /// Falls back to DISCIPLINE_ACTOR, GITHUB_ACTOR, GITEA_ACTOR, FORGEJO_ACTOR, GITLAB_USER_LOGIN
     #[arg(long, env = "DISCIPLINE_ACTOR")]
@@ -408,4 +418,13 @@ pub enum OutputFormat {
     Sarif,
     Gitlab,
     AgentPrompt,
+}
+
+/// Which side's configuration judges a change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PolicyFrom {
+    /// The configuration in the working tree (the change's own copy).
+    Head,
+    /// The configuration on the base ref.
+    Base,
 }

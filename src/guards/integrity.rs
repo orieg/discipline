@@ -6,57 +6,175 @@
 //! `allow-gate-weakening:` directive for every loosening.
 
 use super::{Context, GateOutcome, PathFilter};
-use crate::config::{DisciplineConfig, GateSettings, Severity};
+use crate::config::{DisciplineConfig, GateSettings, RunMode, Severity};
 use crate::gitctx::ChangeKind;
 use crate::tokens;
 use anyhow::Result;
 use toml::Value;
 
-/// List options where a *longer* list is looser.
-const LOOSER_WHEN_GROWN: &[&str] = &[
-    "exempt_paths",
-    "allow_patterns",
-    "allowed_users",
-    "extra_assert_macros",
-    "assert_helper_fns",
-    "allowed_unpinned_actions",
-    "allowed_hosts",
-    "allow_dependencies",
-    "approved_predicates",
-    "allowed_rules",
-    "pending_issue_repos",
-    "exempt_arms",
+/// How a change to one option moves the bar. Option names are judged the same way in
+/// every gate table, so a name must keep one meaning across gates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// List: a gained entry is looser.
+    Grown,
+    /// List: a lost entry is looser. An edited entry counts as lost.
+    Shrunk,
+    /// Allow-list: a gained entry is looser, and so is emptying it (an empty allow-list
+    /// switches the restriction off).
+    Allowlist,
+    /// Number: a larger value is looser.
+    Tolerance,
+    /// Number: a smaller value is looser, and so is removing it.
+    Floor,
+    /// Number: a larger value is looser, and so is removing it.
+    Cap,
+    /// Boolean: `true` is the looser value.
+    LooserWhenTrue,
+    /// Boolean: `false` is the looser value.
+    LooserWhenFalse,
+    /// Names what the gate checks against or runs: removing or repointing it replaces
+    /// the check.
+    Evidence,
+    /// Mode switch whose named value is the stricter check.
+    StrictMode(&'static str),
+    /// `error` > `warning` > `note`.
+    Severity,
+    /// Does not move the bar, or is judged as part of its enclosing list entry.
+    Neutral,
+}
+
+/// Every option accepted under `[gates.<id>]`, classified. An option missing from this
+/// table is a hole in the gate: `every_gate_option_is_classified` fails until it is added.
+pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
+    // Common to every gate.
+    ("enabled", Direction::LooserWhenFalse),
+    ("severity", Direction::Severity),
+    ("exempt_paths", Direction::Grown),
+    // Lists that widen what is tolerated.
+    ("allow_patterns", Direction::Grown),
+    ("allowed_users", Direction::Grown),
+    ("extra_assert_macros", Direction::Grown),
+    ("assert_helper_fns", Direction::Grown),
+    ("approved_predicates", Direction::Grown),
+    ("pending_issue_repos", Direction::Grown),
+    ("exempt_arms", Direction::Grown),
+    ("allowed_suppressions", Direction::Grown),
+    ("excluded_jobs", Direction::Grown),
+    ("first_party_action_prefixes", Direction::Grown),
+    // Allow-lists: growing or emptying both loosen.
+    ("allow_dependencies", Direction::Allowlist),
+    ("allowed_paths", Direction::Allowlist),
+    // Lists that define what is examined or rejected.
+    ("paths", Direction::Shrunk),
+    ("include", Direction::Shrunk),
+    ("extra_patterns", Direction::Shrunk),
+    ("hostname_denylist", Direction::Shrunk),
+    ("superseded_json_paths", Direction::Shrunk),
+    ("citation_source_paths", Direction::Shrunk),
+    ("citation_measurement_jobs", Direction::Shrunk),
+    ("unconditional_jobs", Direction::Shrunk),
+    ("placeholders", Direction::Shrunk),
+    ("workflows", Direction::Shrunk),
+    ("forbidden_paths", Direction::Shrunk),
+    ("deny_dependencies", Direction::Shrunk),
+    ("manifests", Direction::Shrunk),
+    ("required_paths", Direction::Shrunk),
+    ("forbidden_patterns", Direction::Shrunk),
+    ("forbid_output", Direction::Shrunk),
+    ("corpus_dirs", Direction::Shrunk),
+    ("fuzz_targets", Direction::Shrunk),
+    ("extra_secret_patterns", Direction::Shrunk),
+    ("required_suites", Direction::Shrunk),
+    ("commands", Direction::Shrunk),
+    ("rules", Direction::Shrunk),
+    ("groups", Direction::Shrunk),
+    // Numbers.
+    ("tolerance_pct", Direction::Tolerance),
+    ("ratio_tolerance_pct", Direction::Tolerance),
+    ("noise_floor_pct", Direction::Tolerance),
+    ("noise_margin_pct", Direction::Tolerance),
+    ("advisory_pct", Direction::Tolerance),
+    ("max_noise_cv", Direction::Tolerance),
+    ("tolerance", Direction::Tolerance),
+    ("min_count", Direction::Floor),
+    ("min_tests", Direction::Floor),
+    ("min_assertions_per_test", Direction::Floor),
+    ("max_unsafe", Direction::Cap),
+    ("max_increase", Direction::Cap),
+    // Booleans where `true` relaxes the gate.
+    ("allow_hidden", Direction::LooserWhenTrue),
+    ("allow_zero", Direction::LooserWhenTrue),
+    ("diff_only", Direction::LooserWhenTrue),
+    ("allow_cross_host", Direction::LooserWhenTrue),
+    ("allow_wildcards", Direction::LooserWhenTrue),
+    ("allow_increase", Direction::LooserWhenTrue),
+    ("allow_updates", Direction::LooserWhenTrue),
+    // Booleans where `false` switches a check off.
+    ("require_scope", Direction::LooserWhenFalse),
+    ("scan_pr_body", Direction::LooserWhenFalse),
+    ("home_paths", Direction::LooserWhenFalse),
+    ("lan_ips", Direction::LooserWhenFalse),
+    ("secrets", Direction::LooserWhenFalse),
+    ("agent_config_refs", Direction::LooserWhenFalse),
+    ("require_sourced_override", Direction::LooserWhenFalse),
+    ("check_tables", Direction::LooserWhenFalse),
+    ("check_mechanisms", Direction::LooserWhenFalse),
+    ("check_intervals", Direction::LooserWhenFalse),
+    ("check_paired_figures", Direction::LooserWhenFalse),
+    ("check_pending_citations", Direction::LooserWhenFalse),
+    ("require_open_pending_issues", Direction::LooserWhenFalse),
+    ("require_git_pins", Direction::LooserWhenFalse),
+    ("scan_workflows", Direction::LooserWhenFalse),
+    ("scan_scripts", Direction::LooserWhenFalse),
+    ("require_in_commit_if_no_pr", Direction::LooserWhenFalse),
+    ("pin_actions", Direction::LooserWhenFalse),
+    ("forbid_continue_on_error", Direction::LooserWhenFalse),
+    ("forbid_or_true", Direction::LooserWhenFalse),
+    ("canary", Direction::LooserWhenFalse),
+    // What the gate runs or checks against.
+    ("superseded_registry", Direction::Evidence),
+    ("ratio_baseline", Direction::Evidence),
+    ("workflow", Direction::Evidence),
+    ("change_job", Direction::Evidence),
+    ("command", Direction::Evidence),
+    ("test_command", Direction::Evidence),
+    ("canary_command", Direction::Evidence),
+    ("canary_expected_diagnostic", Direction::Evidence),
+    ("preset", Direction::Evidence),
+    ("count_pattern", Direction::Evidence),
+    ("zero_items_pattern", Direction::Evidence),
+    ("constant_file", Direction::Evidence),
+    ("constant_name", Direction::Evidence),
+    ("deny_file", Direction::Evidence),
+    ("pattern", Direction::Evidence),
+    ("rollup_job", Direction::Evidence),
+    ("documented_job_count_path", Direction::Evidence),
+    ("documented_job_count_pattern", Direction::Evidence),
+    ("sanitizer", Direction::Evidence),
+    ("archive_path", Direction::Evidence),
+    ("mode", Direction::StrictMode("paired-ratio")),
+    // Output shaping, run limits that can only fail a run sooner, and fields of list
+    // entries (an edited entry already counts as a lost one).
+    ("redact_lan_ips", Direction::Neutral),
+    ("timeout_seconds", Direction::Neutral),
+    ("strip_components", Direction::Neutral),
+    ("provenance", Direction::Neutral),
+    ("base_file", Direction::Neutral),
+    ("head_file", Direction::Neutral),
+    ("pinned_version", Direction::Neutral),
+    ("args", Direction::Neutral),
+    ("name", Direction::Neutral),
+    ("job", Direction::Neutral),
+    ("guard", Direction::Neutral),
 ];
-/// List options where a *shorter* list is looser.
-const LOOSER_WHEN_SHRUNK: &[&str] = &[
-    "paths",
-    "include",
-    "extra_patterns",
-    "hostname_denylist",
-    "superseded_json_paths",
-    "citation_source_paths",
-    "citation_measurement_jobs",
-    "unconditional_jobs",
-];
-/// Optional references to evidence files: removing one, or pointing it elsewhere, drops
-/// or replaces what the gate checks against.
-const EVIDENCE_REFERENCES: &[&str] = &[
-    "superseded_registry",
-    "ratio_baseline",
-    "workflow",
-    "change_job",
-];
-/// Numeric tolerances where a larger value is looser.
-const LOOSER_WHEN_INCREASED: &[&str] = &[
-    "tolerance_pct",
-    "ratio_tolerance_pct",
-    "noise_floor_pct",
-    "noise_margin_pct",
-    "advisory_pct",
-    "max_noise_cv",
-];
-/// Mode switches whose non-default value is the stricter check.
-const STRICTER_MODES: &[(&str, &str)] = &[("mode", "paired-ratio")];
+
+pub fn direction_of(key: &str) -> Option<Direction> {
+    KEY_DIRECTIONS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, d)| *d)
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Weakening {
@@ -64,20 +182,76 @@ pub struct Weakening {
     pub what: String,
 }
 
+/// The base-side configuration source. A `--config` pointing at a file the base does not
+/// have still compares against the base `discipline.toml`.
+fn base_config_source(ctx: &Context) -> Result<Option<String>> {
+    Ok(match ctx.git.base_content(ctx.config_path)? {
+        Some(s) => Some(s),
+        None if ctx.config_path != "discipline.toml" => ctx.git.base_content("discipline.toml")?,
+        None => None,
+    })
+}
+
+/// Whether the base side runs this gate. The change under review cannot switch off the
+/// gate that judges its configuration: `enabled = false` takes effect once it has merged.
+pub fn enabled_on_base(ctx: &Context) -> Result<bool> {
+    Ok(base_config_source(ctx)?
+        .and_then(|src| DisciplineConfig::from_toml_str(&src).ok())
+        .is_some_and(|base| base.gates.config_integrity.enabled()))
+}
+
+/// Whether this change is what switched the run to advisory mode, with no scoped override
+/// lifting it. Advisory mode exits 0 whatever the gates report, so honouring it here would
+/// let the change excuse itself. Adopting discipline in advisory mode (no base
+/// configuration) is unaffected.
+pub fn advisory_mode_unapproved(ctx: &Context) -> Result<bool> {
+    if ctx.config.meta.mode != RunMode::Advisory {
+        return Ok(false);
+    }
+    let base_enforcing = base_config_source(ctx)?
+        .and_then(|src| DisciplineConfig::from_toml_str(&src).ok())
+        .is_some_and(|base| base.meta.mode == RunMode::Enforcing);
+    Ok(base_enforcing
+        && ctx
+            .find_override("config-integrity", tokens::ALLOW_GATE_WEAKENING, "meta")
+            .is_none())
+}
+
+/// The stricter of two severities.
+fn stricter(a: Severity, b: Severity) -> Severity {
+    let rank = |s: Severity| match s {
+        Severity::Error => 2,
+        Severity::Warning => 1,
+        Severity::Note => 0,
+    };
+    if rank(a) >= rank(b) {
+        a
+    } else {
+        b
+    }
+}
+
 pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
     const GATE: &str = "config-integrity";
     let settings = &ctx.config.gates.config_integrity;
     let mut out = GateOutcome::new(GATE);
+    // Findings are reported at the stricter of the base and head severity, so a change
+    // cannot demote the report of its own weakenings.
+    let mut severity = settings.severity();
 
-    let base_src = match ctx.git.base_content(ctx.config_path)? {
-        Some(s) => Some(s),
-        None if ctx.config_path != "discipline.toml" => ctx.git.base_content("discipline.toml")?,
-        None => None,
-    };
+    let base_src = base_config_source(ctx)?;
     if let Some(base_src) = base_src {
         match DisciplineConfig::from_toml_str(&base_src) {
             Ok(base) => {
-                let head = ctx.config;
+                let head = ctx.head_config.unwrap_or(ctx.config);
+                severity = stricter(severity, base.gates.config_integrity.severity());
+                if !settings.enabled() {
+                    out.notes.push(
+                        "this change disables `config-integrity`; evaluated anyway because the \
+                         base configuration enables it"
+                            .to_string(),
+                    );
+                }
                 let weakenings = diff_configs(&base, head)?;
                 out.examined = Value::try_from(&base.gates)?
                     .as_table()
@@ -91,7 +265,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                         continue;
                     }
                     out.push(
-                        ctx.overridable(settings.severity()),
+                        ctx.overridable(severity),
                         "Gate Weakened By This Change",
                         Some(ctx.config_path),
                         None,
@@ -174,7 +348,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 let count = new_fps.len();
                 let sample = new_fps.first().unwrap_or(&"");
                 out.push(
-                    ctx.overridable(settings.severity()),
+                    ctx.overridable(severity),
                     "Baseline Contains New Findings Without Directive",
                     Some(baseline_filename),
                     None,
@@ -184,7 +358,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 let diff = h_count.saturating_sub(b_count);
                 out.push(
-                    ctx.overridable(settings.severity()),
+                    ctx.overridable(severity),
                     "Baseline Grew Without Directive",
                     Some(baseline_filename),
                     None,
@@ -207,6 +381,22 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
     let exempt_filter = PathFilter::new(&settings.exempt_paths)?;
 
     let changed = ctx.git.changed_files()?;
+    let is_golden = |f: &crate::gitctx::ChangedFile| {
+        path_filter.matches(&f.path) || (!f.old_path.is_empty() && path_filter.matches(&f.old_path))
+    };
+    // Expected output rewritten while nothing that produces it changed: the shape of a
+    // failing comparison "fixed" by regenerating the expectation. Prose and the gate's own
+    // configuration do not produce output.
+    let produces_output = |f: &crate::gitctx::ChangedFile| {
+        let p = f.path.to_ascii_lowercase();
+        !is_golden(f)
+            && !p.ends_with(".md")
+            && !p.ends_with(".markdown")
+            && !p.ends_with(".txt")
+            && !p.ends_with(".rst")
+            && p != "discipline.toml"
+    };
+    let snapshot_only = !changed.iter().any(produces_output);
     for file in &changed {
         if file.kind == ChangeKind::Added {
             continue;
@@ -242,14 +432,23 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
             _ => "modified",
         };
 
+        let (title, context) = if snapshot_only {
+            (
+                "Golden Output Regenerated Without Source Change",
+                " No file that produces output changed in this diff, so the expectation was rewritten to match existing behaviour.",
+            )
+        } else {
+            ("Golden Output Modified Without Directive", "")
+        };
         out.push(
             ctx.overridable(settings.severity()),
-            "Golden Output Modified Without Directive",
+            title,
             Some(&file.path),
             None,
             format!(
-                "Committed golden/snapshot file `{}` was {action} without an explicit override.",
-                file.path
+                "Committed golden/snapshot file `{}` was {action} ({} line(s) rewritten) without an explicit override.{context}",
+                file.path,
+                file.added_lines.len()
             ),
             "Provide a scoped override on its own line in the PR body or a commit message: \
              `allow-golden-update: <path-or-prefix> <reason>` (or `discipline:allow(golden-output): ...`).",
@@ -284,6 +483,37 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
     if base.directives.fail_on_overrides && !head.directives.fail_on_overrides {
         dir_note("`fail_on_overrides` changed from true to false".to_string());
     }
+    // A listed actor is exempt from `fail_on_overrides`.
+    let gained_actors = head
+        .directives
+        .allowed_override_actors
+        .iter()
+        .filter(|a| !base.directives.allowed_override_actors.contains(a))
+        .count();
+    if gained_actors > 0 {
+        dir_note(format!(
+            "`allowed_override_actors` gained {gained_actors} entr(y/ies)"
+        ));
+    }
+
+    match (base.directives.max_overrides, head.directives.max_overrides) {
+        (Some(b), None) => dir_note(format!("`max_overrides` removed (was {b})")),
+        (Some(b), Some(h)) if h > b => {
+            dir_note(format!("`max_overrides` increased from {b} to {h}"))
+        }
+        _ => {}
+    }
+    if base.directives.require_approval && !head.directives.require_approval {
+        dir_note("`require_approval` changed from true to false".to_string());
+    }
+
+    // [meta]: advisory mode exits 0 whatever the gates found.
+    if base.meta.mode == RunMode::Enforcing && head.meta.mode == RunMode::Advisory {
+        found.push(Weakening {
+            gate: "meta".to_string(),
+            what: "`mode` changed from enforcing to advisory".to_string(),
+        });
+    }
 
     let base_v = Value::try_from(&base.gates)?;
     let head_v = Value::try_from(&head.gates)?;
@@ -305,78 +535,83 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
             })
         };
         for (key, bv) in b {
+            // An option this binary does not know is judged as a plain switch, so a
+            // stale table degrades to the strict reading rather than to silence.
+            let dir = direction_of(key).unwrap_or(Direction::LooserWhenFalse);
             let Some(hv) = h.get(key) else {
-                if EVIDENCE_REFERENCES.contains(&key.as_str()) {
-                    note(format!("`{key}` removed (was {bv})"));
+                match dir {
+                    Direction::Evidence | Direction::Floor | Direction::Cap => {
+                        note(format!("`{key}` removed (was {bv})"))
+                    }
+                    _ => {}
                 }
                 continue;
             };
-            if EVIDENCE_REFERENCES.contains(&key.as_str()) && bv != hv {
-                note(format!("`{key}` changed from {bv} to {hv}"));
-                continue;
-            }
-            if let (Value::String(bs), Value::String(hs)) = (bv, hv) {
-                if STRICTER_MODES
-                    .iter()
-                    .any(|(k, strict)| k == key && bs == strict && hs != strict)
-                {
-                    note(format!("`{key}` changed from {bs} to {hs}"));
-                    continue;
+            let num = |v: &Value| match v {
+                Value::Integer(i) => Some(*i as f64),
+                Value::Float(f) => Some(*f),
+                _ => None,
+            };
+            match dir {
+                Direction::Evidence if bv != hv => {
+                    note(format!("`{key}` changed from {bv} to {hv}"))
                 }
-            }
-            match (bv, hv) {
-                (Value::Boolean(true), Value::Boolean(false)) => {
+                Direction::StrictMode(strict) => {
+                    if let (Value::String(bs), Value::String(hs)) = (bv, hv) {
+                        if bs == strict && hs != strict {
+                            note(format!("`{key}` changed from {bs} to {hs}"));
+                        }
+                    }
+                }
+                Direction::LooserWhenFalse
+                    if matches!((bv, hv), (Value::Boolean(true), Value::Boolean(false))) =>
+                {
                     note(format!("`{key}` changed from true to false"))
                 }
-                (Value::Boolean(false), Value::Boolean(true))
-                    if key == "allow_hidden"
-                        || key == "allow_zero"
-                        || key == "diff_only"
-                        || key == "allow_stale"
-                        || key == "allow_missing_base" =>
+                Direction::LooserWhenTrue
+                    if matches!((bv, hv), (Value::Boolean(false), Value::Boolean(true))) =>
                 {
                     note(format!("`{key}` changed from false to true"))
                 }
-                (Value::Integer(bi), Value::Integer(hi)) => {
-                    // Floors: lowering is a weakening
-                    if (key == "min_count" || key == "floor" || key == "test_floor") && hi < bi {
-                        note(format!("`{key}` decreased from {bi} to {hi}"));
-                    }
-                    // Budgets: increasing is a weakening
-                    if (key == "max_unsafe"
-                        || key == "max_suppressions"
-                        || key == "max_count"
-                        || key == "budget")
-                        && hi > bi
-                    {
-                        note(format!("`{key}` increased from {bi} to {hi}"));
+                Direction::Floor => {
+                    if let (Some(bn), Some(hn)) = (num(bv), num(hv)) {
+                        if hn < bn {
+                            note(format!("`{key}` decreased from {bv} to {hv}"));
+                        }
                     }
                 }
-                (Value::Float(bf), Value::Float(hf))
-                    if LOOSER_WHEN_INCREASED.contains(&key.as_str()) && hf > bf =>
-                {
-                    note(format!("`{key}` increased from {bf} to {hf}"))
-                }
-                (Value::Integer(bi), Value::Float(hf))
-                    if LOOSER_WHEN_INCREASED.contains(&key.as_str()) && *hf > *bi as f64 =>
-                {
-                    note(format!("`{key}` increased from {bi} to {hf}"))
-                }
-                (Value::String(bs), Value::String(hs))
-                    if key == "severity"
-                        && ((bs == "error" && (hs == "warning" || hs == "note"))
-                            || (bs == "warning" && hs == "note")) =>
-                {
-                    note(format!("`severity` lowered from {bs} to {hs}"))
-                }
-                (Value::Array(ba), Value::Array(ha)) => {
-                    let gained: Vec<_> = ha.iter().filter(|x| !ba.contains(x)).collect();
-                    let lost: Vec<_> = ba.iter().filter(|x| !ha.contains(x)).collect();
-                    if LOOSER_WHEN_GROWN.contains(&key.as_str()) && !gained.is_empty() {
-                        note(format!("`{key}` gained {} entr(y/ies)", gained.len()));
+                Direction::Cap | Direction::Tolerance => {
+                    if let (Some(bn), Some(hn)) = (num(bv), num(hv)) {
+                        if hn > bn {
+                            note(format!("`{key}` increased from {bv} to {hv}"));
+                        }
                     }
-                    if LOOSER_WHEN_SHRUNK.contains(&key.as_str()) && !lost.is_empty() {
-                        note(format!("`{key}` lost {} entr(y/ies)", lost.len()));
+                }
+                Direction::Severity => {
+                    if let (Value::String(bs), Value::String(hs)) = (bv, hv) {
+                        if (bs == "error" && (hs == "warning" || hs == "note"))
+                            || (bs == "warning" && hs == "note")
+                        {
+                            note(format!("`severity` lowered from {bs} to {hs}"));
+                        }
+                    }
+                }
+                Direction::Grown | Direction::Shrunk | Direction::Allowlist => {
+                    let (Value::Array(ba), Value::Array(ha)) = (bv, hv) else {
+                        continue;
+                    };
+                    let gained = ha.iter().filter(|x| !ba.contains(x)).count();
+                    let lost = ba.iter().filter(|x| !ha.contains(x)).count();
+                    if dir == Direction::Allowlist && !ba.is_empty() && ha.is_empty() {
+                        note(format!(
+                            "`{key}` emptied, which switches the allow-list off"
+                        ));
+                    } else if dir == Direction::Allowlist && ba.is_empty() {
+                        // No allow-list on base: adopting one is a tightening.
+                    } else if dir != Direction::Shrunk && gained > 0 {
+                        note(format!("`{key}` gained {gained} entr(y/ies)"));
+                    } else if dir == Direction::Shrunk && lost > 0 {
+                        note(format!("`{key}` lost {lost} entr(y/ies)"));
                     }
                 }
                 _ => {}
@@ -515,5 +750,212 @@ mod tests {
         // Adopting the registry or the stricter mode is not a weakening.
         let plain = cfg("");
         assert!(diff_configs(&plain, &base).unwrap().is_empty());
+    }
+
+    /// Every option name a gate table accepts, from the published schema and from the
+    /// serialized defaults (the schema has lagged the structs before; the union covers
+    /// both). An `Option` field absent from the schema is the one shape this cannot see.
+    fn all_gate_option_names() -> std::collections::BTreeSet<String> {
+        let mut names = std::collections::BTreeSet::new();
+        let schema = crate::schema::generate_schema();
+        for def in schema["$defs"].as_object().unwrap().values() {
+            if let Some(props) = def.get("properties").and_then(|p| p.as_object()) {
+                names.extend(props.keys().cloned());
+            }
+        }
+        fn walk(v: &Value, names: &mut std::collections::BTreeSet<String>) {
+            match v {
+                Value::Table(t) => {
+                    for (k, child) in t {
+                        names.insert(k.clone());
+                        walk(child, names);
+                    }
+                }
+                Value::Array(a) => a.iter().for_each(|x| walk(x, names)),
+                _ => {}
+            }
+        }
+        let gates = Value::try_from(DisciplineConfig::default_for_repo("t").gates).unwrap();
+        for table in gates.as_table().unwrap().values() {
+            walk(table, &mut names);
+        }
+        names
+    }
+
+    #[test]
+    fn every_gate_option_is_classified() {
+        let names = all_gate_option_names();
+        assert!(names.len() > 80, "option enumeration collapsed: {names:?}");
+        let unclassified: Vec<_> = names.iter().filter(|n| direction_of(n).is_none()).collect();
+        assert!(
+            unclassified.is_empty(),
+            "add these options to KEY_DIRECTIONS: {unclassified:?}"
+        );
+        let dead: Vec<_> = KEY_DIRECTIONS
+            .iter()
+            .map(|(k, _)| *k)
+            .filter(|k| !names.contains(*k))
+            .collect();
+        assert!(
+            dead.is_empty(),
+            "KEY_DIRECTIONS names no real option: {dead:?}"
+        );
+        let mut seen = std::collections::BTreeSet::new();
+        for (k, _) in KEY_DIRECTIONS {
+            assert!(seen.insert(*k), "`{k}` is classified twice");
+        }
+    }
+
+    #[test]
+    fn every_directives_option_is_judged() {
+        // `diff_configs` reads [directives] field by field; a new option must be added
+        // there and here.
+        const JUDGED: &[&str] = &[
+            "sources",
+            "allow_hidden",
+            "fail_on_overrides",
+            "allowed_override_actors",
+            "max_overrides",
+            "require_approval",
+        ];
+        let schema = crate::schema::generate_schema();
+        let props = schema["properties"]["directives"]["properties"]
+            .as_object()
+            .unwrap();
+        let unjudged: Vec<_> = props
+            .keys()
+            .filter(|k| !JUDGED.contains(&k.as_str()))
+            .collect();
+        assert!(
+            unjudged.is_empty(),
+            "judge these in diff_configs: {unjudged:?}"
+        );
+        assert_eq!(props.len(), JUDGED.len());
+    }
+
+    #[test]
+    fn a_raised_or_removed_override_budget_and_dropped_approval_are_weakenings() {
+        let cfg = |d: &str| {
+            DisciplineConfig::from_toml_str(&format!(
+                "[meta]\nversion = 1\nname = \"t\"\n[directives]\n{d}"
+            ))
+            .unwrap()
+        };
+        let base = cfg("max_overrides = 1\nrequire_approval = true\n");
+        let whats = |head: &DisciplineConfig| -> Vec<String> {
+            diff_configs(&base, head)
+                .unwrap()
+                .into_iter()
+                .map(|w| w.what)
+                .collect()
+        };
+        assert_eq!(
+            whats(&cfg("max_overrides = 4\n")),
+            vec![
+                "`max_overrides` increased from 1 to 4",
+                "`require_approval` changed from true to false"
+            ]
+        );
+        assert_eq!(
+            whats(&cfg("require_approval = true\n")),
+            vec!["`max_overrides` removed (was 1)"]
+        );
+        assert!(whats(&cfg("max_overrides = 0\nrequire_approval = true\n")).is_empty());
+        // Adopting either is a tightening.
+        assert!(diff_configs(&cfg(""), &base).unwrap().is_empty());
+    }
+
+    #[test]
+    fn advisory_mode_and_override_actors_are_weakenings() {
+        let base = DisciplineConfig::from_toml_str(
+            "[meta]\nversion = 1\nname = \"t\"\n[directives]\nallowed_override_actors = [\"lead\"]\n",
+        )
+        .unwrap();
+        let head = DisciplineConfig::from_toml_str(
+            "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n\
+             [directives]\nallowed_override_actors = [\"lead\", \"bot\"]\n",
+        )
+        .unwrap();
+        let found = diff_configs(&base, &head).unwrap();
+        assert_eq!(
+            found,
+            vec![
+                Weakening {
+                    gate: "directives".into(),
+                    what: "`allowed_override_actors` gained 1 entr(y/ies)".into()
+                },
+                Weakening {
+                    gate: "meta".into(),
+                    what: "`mode` changed from enforcing to advisory".into()
+                },
+            ]
+        );
+        // Leaving advisory mode, or dropping an actor, tightens.
+        assert!(diff_configs(&head, &base).unwrap().is_empty());
+    }
+
+    #[test]
+    fn floors_caps_allowlists_and_commands_are_directional() {
+        let base = cfg(
+            "[gates.test-floor]\nmin_tests = 40\ntolerance = 0\ntest_command = \"cargo test\"\n\
+             [gates.suppression-delta]\nmax_increase = 0\nallowed_suppressions = []\n\
+             [gates.dependency-delta]\nallow_dependencies = [\"serde\"]\ndeny_dependencies = [\"openssl\"]\n\
+             [gates.scope-confinement]\nforbidden_paths = [\"ci/**\"]\n\
+             [gates.ci-integrity]\nworkflows = [\".github/workflows/*.yml\"]\n",
+        );
+        let head = cfg(
+            "[gates.test-floor]\ntolerance = 5\ntest_command = \"true\"\n\
+             [gates.suppression-delta]\nmax_increase = 9\nallowed_suppressions = [\"noqa\"]\n\
+             [gates.dependency-delta]\nallow_dependencies = []\ndeny_dependencies = []\n\
+             [gates.scope-confinement]\nforbidden_paths = []\n\
+             [gates.ci-integrity]\nworkflows = []\n",
+        );
+        let found = diff_configs(&base, &head).unwrap();
+        let has = |gate: &str, needle: &str| {
+            found
+                .iter()
+                .any(|w| w.gate == gate && w.what.contains(needle))
+        };
+        assert!(has("test-floor", "`min_tests` removed"), "{found:?}");
+        assert!(
+            has("test-floor", "`tolerance` increased from 0 to 5"),
+            "{found:?}"
+        );
+        assert!(has("test-floor", "`test_command` changed"), "{found:?}");
+        assert!(
+            has("suppression-delta", "`max_increase` increased"),
+            "{found:?}"
+        );
+        assert!(
+            has("suppression-delta", "`allowed_suppressions` gained 1"),
+            "{found:?}"
+        );
+        assert!(
+            has("dependency-delta", "`allow_dependencies` emptied"),
+            "{found:?}"
+        );
+        assert!(
+            has("dependency-delta", "`deny_dependencies` lost 1"),
+            "{found:?}"
+        );
+        assert!(
+            has("scope-confinement", "`forbidden_paths` lost 1"),
+            "{found:?}"
+        );
+        assert!(has("ci-integrity", "`workflows` lost 1"), "{found:?}");
+        assert_eq!(found.len(), 9, "{found:?}");
+
+        // The reverse direction tightens everything except the repointed command: which
+        // command is the stronger check is not something a diff can decide.
+        let back = diff_configs(&head, &base).unwrap();
+        assert_eq!(back.len(), 1, "{back:?}");
+        assert!(back[0].what.contains("`test_command` changed"), "{back:?}");
+        // Adopting an allow-list where none existed is a tightening; growing one is not.
+        let none = cfg("");
+        let adopted = cfg("[gates.dependency-delta]\nallow_dependencies = [\"serde\"]\n");
+        let grown =
+            cfg("[gates.dependency-delta]\nallow_dependencies = [\"serde\", \"left-pad\"]\n");
+        assert!(diff_configs(&none, &adopted).unwrap().is_empty());
+        assert_eq!(diff_configs(&adopted, &grown).unwrap().len(), 1);
     }
 }

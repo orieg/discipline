@@ -30,7 +30,7 @@ Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline check\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-commit\fR] [\fB\-\-commit\-range\fR] [\fB\-\-staged\fR] [\fB\-\-pr\-body\-file\fR] [\fB\-\-pr\-title\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-fail\-on\-overrides\fR] [\fB\-\-advisory\fR] [\fB\-\-actor\fR] [\fB\-\-directive\-sources\fR] [\fB\-\-trust\-workspace\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-bench\-provenance\fR] [\fB\-\-allow\-cross\-host\-bench\fR] [\fB\-\-bench\-base\-file\fR] [\fB\-\-bench\-head\-file\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline check\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-commit\fR] [\fB\-\-commit\-range\fR] [\fB\-\-staged\fR] [\fB\-\-pr\-body\-file\fR] [\fB\-\-pr\-title\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-fail\-on\-overrides\fR] [\fB\-\-advisory\fR] [\fB\-\-policy\-from\fR] [\fB\-\-actor\fR] [\fB\-\-directive\-sources\fR] [\fB\-\-trust\-workspace\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-bench\-provenance\fR] [\fB\-\-allow\-cross\-host\-bench\fR] [\fB\-\-bench\-base\-file\fR] [\fB\-\-bench\-head\-file\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -123,6 +123,22 @@ May also be specified with the \fBDISCIPLINE_FAIL_ON_OVERRIDES\fR environment va
 Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur
 .RS
 May also be specified with the \fBDISCIPLINE_ADVISORY\fR environment variable. 
+.RE
+.TP
+\fB\-\-policy\-from\fR \fI<POLICY_FROM>\fR [default: head]
+Which side\*(Aqs discipline.toml judges the change. `base` reads it from the base ref, so a policy edit takes effect once merged; `config\-integrity` still reports it
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+head: The configuration in the working tree (the change\*(Aqs own copy)
+.IP \(bu 2
+base: The configuration on the base ref
+.RE
+.RS
+May also be specified with the \fBDISCIPLINE_POLICY_FROM\fR environment variable. 
 .RE
 .TP
 \fB\-\-actor\fR \fI<ACTOR>\fR
@@ -221,7 +237,7 @@ Path to grandfathering baseline file (defaults to discipline\-baseline.toml if p
 Ignore grandfathering baseline even if present
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS "discipline diff"
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '

@@ -30,7 +30,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`config-integrity`](#config-integrity) | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
 | [`scope-confinement`](#scope-confinement) | agent-guard | **shipped** | any | changes stay inside authorized paths |
-| [`suppression-delta`](#suppression-delta) | agent-guard | **shipped** | per pack | new #[allow], commented-out tests, cfg-gated tests |
+| [`suppression-delta`](#suppression-delta) | agent-guard | **shipped** | per pack | newly added linter / compiler suppression annotations |
 | [`provenance-tags`](#provenance-tags) | hygiene | **shipped** | any | published numerics carry (measured|target|projected) |
 | [`ci-integrity`](#ci-integrity) | integrity | **shipped** | any | workflow weakening: continue-on-error, || true, unpinned actions |
 | [`ci-skip-set`](#ci-skip-set) | integrity | **shipped** | any | rollup skip set matches each job's `if:` under the observed filter outputs |
@@ -58,7 +58,7 @@ Each gate gets exactly one canonical directive (with at most one documented depr
 
 ## Language Scope & Detection Boundaries
 
-Seven gates are language-independent and inspect text, git diffs, or repository metadata: `deletion-rationale` (file level), `agents-md`, `time-estimates`, `pii`, `agent-scratch`, `config-integrity`, and `golden-output`. The four AST gates (`assertion-reduction`, `vacuous-tests`, `ignored-tests`, `unsafe-safety-comment`) operate through tree-sitter AST extraction.
+Most gates are language-independent and inspect text, git diffs, configuration, workflows, or repository metadata; the *Languages* column of the catalog above is the authority for each. Four AST gates (`assertion-reduction`, `vacuous-tests`, `ignored-tests`, `unsafe-safety-comment`) operate through tree-sitter AST extraction.
 
 When a change touches source files in a language without an active pack, each AST gate **names the unanalysed files in its report notes** (F7) rather than rendering a silent zero.
 
@@ -338,7 +338,6 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Languages:** Rust, Python, TypeScript, JavaScript, Go, C/C++, C#.
 - **What it catches:**
   - Newly added suppression annotations that silence linter or compiler warnings.
-  - Commented-out test functions and unverified `#[cfg]` gates.
 - **Failing diff (rejected):**
   ```rust
   + #[allow(dead_code, clippy::all)]
@@ -350,6 +349,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```
 - **What it does NOT catch:**
   - Pre-existing suppression annotations present on the base ref.
+  - Commented-out or `#[cfg]`-gated tests. The Rust pack detects those and reports them through `ignored-tests`; no other pack does.
+  - A suppression moved or reworded on an existing line: the gate reads added lines, not a base-versus-head count.
   - Suppressions inside explicitly exempted file paths.
 - **Lifting directive:** `allow-suppression: <reason>`.
 - **Default:** on, severity `warning` (see [Default Severity by Gate](#default-severity-by-gate)).
@@ -508,9 +509,18 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - Disabling a gate (`enabled = false`).
   - Lowering severity (`severity = "error"` -> `severity = "warning"`).
-  - Growing loosening lists (`exempt_paths`, `allowed_users`, `allow_patterns`, `assert_helper_fns`).
-  - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`).
-  - Deleting `discipline.toml`.
+  - Growing loosening lists (`exempt_paths`, `allowed_users`, `allow_patterns`, `assert_helper_fns`, `allowed_suppressions`).
+  - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`, `workflows`, `forbidden_paths`, `deny_dependencies`), and emptying an allow-list (`allow_dependencies`, `allowed_paths`).
+  - Lowering or removing a floor (`min_tests`, `min_count`, `min_assertions_per_test`); raising or removing a cap (`max_unsafe`, `max_increase`); raising a tolerance.
+  - Changing or removing what a gate runs or checks against (`command`, `test_command`, `preset`, `count_pattern`, `ratio_baseline`, ...).
+  - `[meta] mode = "advisory"` introduced by the change. It is reported under the subject `meta` and **not honoured** for that run: the exit code stays enforcing until the setting is on the base side.
+  - `[directives]`: `allow_hidden` switched on, `sources` gaining `commits`, `fail_on_overrides` or `require_approval` switched off, `max_overrides` raised or removed, `allowed_override_actors` grown.
+  - Growth of the grandfathering baseline file.
+- **Self-protection:** the gate runs whenever the **base** configuration enables it, whatever the head configuration or `--disable` says, and reports at the stricter of the base and head severity. Every gate option has a declared loosening direction in `src/guards/integrity.rs::KEY_DIRECTIONS`; a unit test fails when an option is added without one.
+- **What it does NOT catch:**
+  - Deleting `discipline.toml`: the run falls back to built-in defaults, and only options the base file set stricter than those defaults are reported.
+  - A loosening expressed by editing an entry of `commands`, `rules` or `groups` in a way that keeps the entry count: it is reported as one lost entry, without naming the field.
+  - A repointed `command` is reported in both directions; the gate cannot tell which command is the stronger check.
 - **Failing diff example (rejected):**
   ```diff
   [gates.vacuous-tests]
@@ -532,7 +542,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Rule:** Committed test snapshots, golden outputs, and recorded fixtures cannot be modified or deleted without an explicit scoped rationale.
 - **Languages:** Any.
 - **What it catches:**
-  - Edits or deletions of files matching `paths` (`**/golden/**`, `**/snapshots/**`, `**/*.snap`, `tests/fixtures/**/output*`).
+  - Edits or deletions of files matching `paths` (`**/golden/**`, `**/snapshots/**`, `**/__snapshots__/**`, `**/*.snap`, `**/*.ambr`, `**/*.golden`, `**/*.approved.*`, `tests/fixtures/**/output*`). The message states how many lines were rewritten.
+  - `Golden Output Regenerated Without Source Change`: the same finding under its own title when nothing in the diff produces output (only golden files, prose, or `discipline.toml` changed). That is the shape of a failing comparison resolved by rewriting the expectation.
   - Stealth snapshot re-blessing to mask test regressions.
 - **Failing diff example (rejected):**
   ```diff
@@ -558,6 +569,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Newly introduced dependencies that violate repository `deny.toml` `[bans]` or `[sources]`.
   - Dependencies listed in configured `deny_dependencies`.
   - Newly added dependencies not present in configured `allow_dependencies` (when configured).
+  - **Lockfile integrity** (offline; `Cargo.lock`, `package-lock.json`, `yarn.lock` v1 are read entry by entry, base side against head side):
+    - `Lockfile Entry From New Source`: an entry fetched from git or a bare URL, or from a registry host that is neither a default registry nor a host the base lockfile already uses (a private registry present on the base side is known).
+    - `Lockfile Integrity Hash Dropped`: an entry (same name and version) that carried a checksum / `integrity` on the base side and no longer does.
+    - `Manifest Changed Without Lockfile`: the dependency set of a manifest changed while the tracked lockfile governing it (same directory, else the nearest ancestor's) did not. A project that tracks no lockfile is not asked for one; `go.mod` is exempt because requiring an already-indirect module leaves `go.sum` unchanged.
+    - `Lockfile Deleted`.
 - **Failing diff example (rejected):**
   ```diff
   // Cargo.toml
@@ -571,8 +587,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```
 - **What it does NOT catch:**
   - Unmodified pre-existing dependencies already present in the merge base ref.
+  - Whether a package exists, how old it is, or whether its name is a typosquat: that needs a registry lookup, which discipline does not make (`AGENTS.md` §3.3). Use an audit preset of the `command` gate.
+  - Entries of `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `go.sum`, `composer.lock`, `Gemfile.lock` and Yarn 2+ lockfiles: their size is noted, their sources and hashes are not read, and the notes say so.
+  - A lockfile entry whose version changed within the same source (a routine update).
   - Dependencies explicitly excused via scoped `allow-dependency: <name> <reason>`.
-- **Lifting directive:** `allow-dependency: <dependency-name> <reason>`.
+- **Lifting directive:** `allow-dependency: <dependency-name> <reason>`. A lockfile entry finding is lifted by naming the **package**; a stale or deleted lockfile by naming the **lockfile path**.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `manifests`, `allow_wildcards`, `require_git_pins`, `deny_file`, `allow_dependencies`, `deny_dependencies`.
 
 #### `test-budget`
@@ -601,12 +620,15 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Lifting directive:** `allow-test-shrink: <target-or-metric> <reason>`.
 #### `ci-integrity`
 - **Rule:** CI/CD workflow integrity and rollup sentinel. Enforces complete rollup jobs (`ci-gate` must `needs:` all verification jobs), pins third-party actions by 40-character commit SHA, bans masked failures (`continue-on-error: true`), and bans exit-code suppression (`|| true`, `set +e`).
-- **Languages:** CI workflow files (`.github/workflows/*.yml`, `.github/workflows/*.yaml`).
+- **Languages:** Actions workflow files (`*.yml` / `*.yaml` under `.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/`) and GitLab pipelines (`.gitlab-ci.yml`, `.gitlab/ci/*.yml`).
 - **What it catches:**
   - Rollup job missing a dependency on verification jobs defined in the workflow (`Incomplete Rollup Job Needs`).
   - Third-party GitHub actions unpinned or pinned to mutable tags/branches (`@v4`, `@main`) instead of 40-character commit SHA.
   - Steps carrying `continue-on-error: true`.
   - Commands masking exit codes (`|| true`, `set +e`).
+  - In a GitLab pipeline, against its base side: a deleted verification job, a job gaining `allow_failure` (boolean or `exit_codes` form), an existing verification job changed to `when: manual`, a script line gaining `|| true` / `|| :` / `set +e` (hidden `.template` jobs included, comment lines excluded), a `discipline check` line gaining `--advisory`, a pipeline file that no longer parses, and a deleted pipeline that defined verification jobs. Pipelines pulled in through `include:` and changes to `rules:` / `only:` / `except:` are **not** read; the gate says so in its notes.
+  - The discipline step moved off the base policy: `policy_from: base` changed, removed, or its whole `with:` block dropped.
+  - The discipline step made non-blocking: `advisory: true` added to the action's `with:`, or `--advisory` added to a `discipline check` / `discipline diff` run line (comment lines do not count).
   - Documented job count mismatches when `documented_job_count_path` is configured.
   - Deleted verification jobs and steps (`Deletion of Verification Step`). A base step is found in head by id, name, action, or first `run:` line; failing that, it is paired as a **rename** with an otherwise unmatched head step whose body (`run:` script without its full-line `#` comments, or action and `with:` inputs) has token Dice similarity of at least 0.60 (`STEP_RENAME_SIMILARITY`) and still carries every verification marker (`test`, `clippy`, `lint`, ...) the base body carried; ties go to the nearest position. A rename is reported in the gate notes, not as a violation, and the renamed step is still checked against its base form (dropped flags, `continue-on-error`). A step whose name and body both changed past the threshold, or whose body stopped verifying, is reported as deleted, with the closest candidate and its similarity in the message.
 - **Passing commit / PR description (accepted):**
@@ -647,7 +669,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Rule:** Universal test count ratchet and floor sentinel. Operates in zero-config mode by default to prevent any drop in workspace AST test count across all supported languages relative to the base ref (with configurable `tolerance = 0`). When explicit floors are configured, reads test count floor constants and `min_tests` from the base ref (preventing PRs from silently lowering their own floor), enforces configured test count minimums, and ensures required test suite files exist. Complete test file deletions are detected and blocked.
 - **Languages:** Any supported language pack (Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby) or external test listing command (see [Counting basis](#counting-basis-static-or-runtime)).
 - **What it catches:**
-  - Workspace test count dropping below merge base ref count in zero-config mode (with `tolerance = 0` default).
+  - Workspace test count dropping below merge base ref count in zero-config mode (with `tolerance = 0` default). The static count is of tests that **run**: an unconditionally ignored or skipped test is not counted on either side (a conditional skip still is), so replacing running tests with parked ones lowers the count. The notes state how many were left out, and name files that could not be read or that parse with errors.
   - Workspace test count dropping below configured `min_tests` or base floor constant.
   - Complete deletion of test files causing total test count reduction.
   - Lowering of floor constant value in `constant_file` below merge base ref.

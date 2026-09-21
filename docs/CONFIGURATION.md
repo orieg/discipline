@@ -49,8 +49,10 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | Section / Key | Type | Default | Description |
 |---|---|---|---|
 | `directives.allow_hidden` | boolean | `false` | Allow directives hidden inside HTML comments &lt;!-- --&gt; (default: false) |
-| `directives.allowed_override_actors` | list | `[]` | Actors authorized to apply overrides even when fail_on_overrides is true (default: []) |
+| `directives.allowed_override_actors` | list | `[]` | Actors authorized to apply overrides even when fail_on_overrides is true, and the reviewers whose approval require_approval accepts (default: []) |
 | `directives.fail_on_overrides` | boolean | `false` | Treat applied overrides as failures requiring human sign-off (default: false) |
+| `directives.max_overrides` | integer | *(per entry)* | Most PR-body / commit-body overrides one change may apply; inline markers are not counted (default: unset, no cap) |
+| `directives.require_approval` | boolean | `false` | PR-body / commit-body overrides fail the run until the forge shows an approving review of the head commit by an allowed_override_actors member other than the author (default: false) |
 | `directives.sources` | list | `["pr-body","commits"]` | Allowed directive sources: pr-body, commits (default: ["pr-body", "commits"]) |
 | `gates.agent-scratch.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.agent-scratch.exempt_paths` | list | `[]` | File path globs exempted from this gate |
@@ -106,7 +108,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.ci-integrity.pin_actions` | boolean | `true` | Ensure third-party GitHub actions are pinned by 40-character commit SHA |
 | `gates.ci-integrity.rollup_job` | string | `"ci-gate"` | Name of the rollup job that must depend on all jobs |
 | `gates.ci-integrity.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.ci-integrity.workflows` | list | *(2 entries)* | Workflow file patterns to inspect |
+| `gates.ci-integrity.workflows` | list | *(9 entries)* | Workflow file patterns to inspect |
 | `gates.ci-skip-set.change_job` | string | `"detect-changes"` | Change-detection job whose outputs gate the conditional jobs; it must have succeeded. Empty string = no such job |
 | `gates.ci-skip-set.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.ci-skip-set.exempt_paths` | list | `[]` | File path globs exempted from this gate |
@@ -159,7 +161,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.golden-output.allow_updates` | boolean | *(per entry)* | Permit snapshot updates without error |
 | `gates.golden-output.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.golden-output.exempt_paths` | list | `[]` | File path globs exempted from this gate |
-| `gates.golden-output.paths` | list | *(4 entries)* | Committed golden/snapshot globs whose edits require a directive |
+| `gates.golden-output.paths` | list | *(8 entries)* | Committed golden/snapshot globs whose edits require a directive |
 | `gates.golden-output.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ignored-tests.approved_predicates` | list | `[]` | Conditional ignore predicates (e.g. miri) approved by policy |
 | `gates.ignored-tests.enabled` | boolean | `true` | Whether this gate is active |
@@ -312,6 +314,7 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `fail_on_warnings` | `false` | Treat warnings as failures. |
 | `fail_on_overrides` | `false` | Treat applied overrides as failures (requires human sign-off). |
 | `advisory` | `false` | Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur. |
+| `policy_from` | `head` | Which side's discipline.toml judges the change: 'head' (the change's own copy) or 'base' (the base ref's, so a policy edit takes effect once merged; config-integrity still reports it). |
 | `actor` | `${{ github.actor }}` | Actor executing the check (defaults to github.actor or forge equivalent; used for allowed_override_actors). |
 | `directive_sources` | *(none)* | Comma-separated list of allowed directive sources (pr-body, commits). |
 | `pr_body` | `${{ github.event.pull_request.body }}` | PR description: carries override directives and is itself scanned by hygiene gates. |
@@ -444,11 +447,16 @@ Every report records the exact count of lines exempted by inline markers.
 ## Trust Model
 
 Discipline distinguishes between **configurable** and **bypassable**:
+0. **Who wrote the policy:** By default a change is judged by its own copy of `discipline.toml`. With `--policy-from base` (action input `policy_from: base`, env `DISCIPLINE_POLICY_FROM`) it is judged by the base ref's copy: a policy edit, looser or stricter, takes effect once merged, and `config-integrity` still reports the edit for review. A base ref without the file is judged by the built-in defaults, never by the change's copy. The change's own file must still parse (exit `2` otherwise).
 1. **Config integrity:** A pull request cannot weaken its own `discipline.toml` without triggering `config-integrity`. If an agent disables a gate or grows an exemption list, the PR is rejected unless an authorized `allow-gate-weakening:` directive is present.
 2. **Directive channel enforcement:** Directives are parsed exclusively from trusted channels specified in `directives.sources` (defaulting to `["pr-body", "commits"]`).
 3. **Hidden directive policy:** By default, HTML comment-wrapped directives in PR bodies are forbidden (`directives.allow_hidden = false`) to ensure reviewers see all requested waivers.
 4. **Machine gate for human sign-off:** When `directives.fail_on_overrides = true` (or `--fail-on-overrides`), any applied override causes Discipline to exit `1`, requiring an authorized human approver to bypass or merge.
-5. **Residual gap:** Workflow files (`.github/workflows/*.yml`) are evaluated by CI from the PR head commit; an agent could conceivably edit the workflow step to pass `disable: ...`. The `ci-integrity` gate catches the common forms of this in modified workflows: masked failures (`continue-on-error`, `|| true`, `set +e`), unpinned actions, deleted verification steps, and a rollup job whose `needs` no longer covers every verification job. Repositories should still protect workflow files and `discipline.toml` with `CODEOWNERS` and branch protection, because a workflow can be rewritten in ways no static check anticipates; see [Repository Protection](guides/ci-platforms.md#8-repository-protection).
+   A directive in the PR body or a commit body is written by the author of the change it excuses. Two options sit between accepting every such override and refusing them all; both count directive overrides only (inline `discipline:allow(...)` markers are part of the reviewed tree):
+   - `directives.max_overrides = N`: a change applying more than `N` fails, with the refusal listed under `policy_failures` in the JSON report.
+   - `directives.require_approval = true`: directive overrides fail the run until the forge shows an **approving review of the pull request's head commit** by a login in `allowed_override_actors` **other than the pull request's author**. An approval of an earlier commit does not count, and a later "changes requested" by the same reviewer withdraws it. The pull request is read from the Actions event payload and the reviews from the forge API (GitHub, Gitea, Forgejo; read-only token). No payload, an unreachable forge, `DISCIPLINE_NO_NETWORK=1`, GitLab, or an empty `allowed_override_actors` is exit `2`, never a pass. Re-run the check after the review (trigger the workflow on `pull_request_review`), since the first run precedes it.
+   Raising or removing `max_overrides`, switching `require_approval` off, and growing `allowed_override_actors` are themselves weakenings reported by `config-integrity`.
+5. **Residual gap:** Workflow files (`.github/workflows/*.yml`) are evaluated by CI from the PR head commit; an agent could conceivably edit the workflow step to pass `disable: ...` or `advisory: true`. The `ci-integrity` gate catches the common forms of this in modified workflows: those two inputs, masked failures (`continue-on-error`, `|| true`, `set +e`), unpinned actions, deleted verification steps, and a rollup job whose `needs` no longer covers every verification job. Repositories should still protect workflow files and `discipline.toml` with `CODEOWNERS` and branch protection, because a workflow can be rewritten in ways no static check anticipates; see [Repository Protection](guides/ci-platforms.md#8-repository-protection).
 
 ---
 

@@ -159,6 +159,115 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "integrity: switching to advisory mode is a weakening, leaving it is not",
+        || {
+            let enforcing = DisciplineConfig::default_for_repo("t");
+            let mut advisory = enforcing.clone();
+            advisory.meta.mode = crate::config::RunMode::Advisory;
+            let found = diff_configs(&enforcing, &advisory)?;
+            Ok(found.len() == 1
+                && found[0].gate == "meta"
+                && diff_configs(&advisory, &enforcing)?.is_empty())
+        },
+    ),
+    (
+        "integrity: a lowered floor or raised cap is a weakening, the reverse is not",
+        || {
+            let mut base = DisciplineConfig::default_for_repo("t");
+            base.gates.test_floor.min_tests = Some(40);
+            base.gates.suppression_delta.max_increase = 2;
+            let mut weaker = base.clone();
+            weaker.gates.test_floor.min_tests = Some(3);
+            weaker.gates.suppression_delta.max_increase = 9;
+            Ok(diff_configs(&base, &weaker)?.len() == 2
+                && diff_configs(&weaker, &base)?.is_empty())
+        },
+    ),
+    (
+        "overrides: a listed reviewer approves, the author and a stale approval do not",
+        || {
+            use crate::config::DirectivesConfig;
+            use crate::forge::{CannedApi, Forge, ForgeKind};
+            use crate::override_policy::{judge, PullContext};
+            let cfg = DirectivesConfig {
+                require_approval: true,
+                allowed_override_actors: vec!["lead".into(), "agent".into()],
+                ..Default::default()
+            };
+            let pull = PullContext {
+                number: 7,
+                author: "agent".into(),
+                head_sha: "abc123".into(),
+            };
+            let forge = || {
+                Ok(Forge {
+                    kind: ForgeKind::GitHub,
+                    url: "https://github.com".into(),
+                    repo: "o/r".into(),
+                })
+            };
+            let refused = |login: &str, sha: &str| -> Result<bool> {
+                let mut api = CannedApi::default();
+                api.responses.insert(
+                    "github:repos/o/r/pulls/7/reviews?per_page=100".into(),
+                    serde_json::json!([{"user": {"login": login}, "state": "APPROVED", "commit_id": sha}]),
+                );
+                Ok(!judge(&cfg, 1, Some(&pull), &forge, &api)?.is_empty())
+            };
+            Ok(!refused("lead", "abc123")?
+                && refused("agent", "abc123")?
+                && refused("lead", "0ld5ha")?)
+        },
+    ),
+    (
+        "overrides: the budget refuses the override past it, not the one at it",
+        || {
+            use crate::config::DirectivesConfig;
+            use crate::forge::NoApi;
+            use crate::override_policy::judge;
+            let cfg = DirectivesConfig {
+                max_overrides: Some(2),
+                ..Default::default()
+            };
+            let forge = || Err("unused".to_string());
+            Ok(judge(&cfg, 2, None, &forge, &NoApi)?.is_empty()
+                && judge(&cfg, 3, None, &forge, &NoApi)?.len() == 1)
+        },
+    ),
+    (
+        "ci-integrity: a GitLab job gaining allow_failure is a weakening, one that had it is not",
+        || {
+            use crate::guards::ci_gitlab::diff_gitlab_ci;
+            let strict = "unit-tests:\n  script:\n    - cargo test\n";
+            let lax = "unit-tests:\n  script:\n    - cargo test\n  allow_failure: true\n";
+            let found = |b: &str, h: &str| diff_gitlab_ci(b, h).map_err(anyhow::Error::msg);
+            Ok(found(strict, lax)?.len() == 1
+                && found(lax, lax)?.is_empty()
+                && found(lax, strict)?.is_empty())
+        },
+    ),
+    (
+        "dependency-delta: a lockfile entry moved to git is reported, a new registry entry is not",
+        || {
+            use crate::guards::lockfile::{diff_lock, parse_lock};
+            let reg = "source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"aa\"\n";
+            let pkg = |name: &str, src: &str| format!("[[package]]\nname = \"{name}\"\nversion = \"1.0.0\"\n{src}\n");
+            let parse = |c: &str| parse_lock("Cargo.lock", c).ok_or_else(|| anyhow::anyhow!("unparsed"));
+            let base = parse(&pkg("serde", reg))?;
+            let grown = parse(&format!("{}{}", pkg("serde", reg), pkg("anyhow", reg)))?;
+            let forked = parse(&pkg("serde", "source = \"git+https://github.com/someone/serde#def\"\n"))?;
+            Ok(diff_lock(&base, &grown).is_empty() && diff_lock(&base, &forked).len() == 2)
+        },
+    ),
+    (
+        "ci-integrity: advisory is read from the flag, not from a comment",
+        || {
+            use crate::guards::ci_integrity::run_is_advisory;
+            Ok(run_is_advisory("discipline check --advisory")
+                && !run_is_advisory("# never pass --advisory to discipline check\ndiscipline check"))
+        },
+    ),
+    (
         "tokens: bare directory word does not act as prefix, but explicit slash does",
         || {
             let bare = directive_reasons("removes: tests refactored", REMOVES);
@@ -1219,6 +1328,7 @@ command = "cargo test"
                 baselined: 0,
                 outcomes: vec![o],
                 planned_gates: vec![],
+                policy_failures: Vec::new(),
             };
 
             let prompt = format_agent_prompt(&summary);

@@ -1137,10 +1137,19 @@
         },
         "allowed_override_actors": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Actors authorized to apply overrides even when fail_on_overrides is true (default: [])"
+          "description": "Actors authorized to apply overrides even when fail_on_overrides is true, and the reviewers whose approval require_approval accepts (default: [])"
         },
         "fail_on_overrides": {
           "description": "Treat applied overrides as failures requiring human sign-off (default: false)",
+          "type": "boolean"
+        },
+        "max_overrides": {
+          "description": "Most PR-body / commit-body overrides one change may apply; inline markers are not counted (default: unset, no cap)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "require_approval": {
+          "description": "PR-body / commit-body overrides fail the run until the forge shows an approving review of the head commit by an allowed_override_actors member other than the author (default: false)",
           "type": "boolean"
         },
         "sources": {
@@ -1344,7 +1353,7 @@
               "$ref": "#/$defs/SuppressionDeltaGate"
             }
           ],
-          "description": "new #[allow], commented-out tests, cfg-gated tests"
+          "description": "newly added linter / compiler suppression annotations"
         },
         "test-budget": {
           "allOf": [

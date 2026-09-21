@@ -1291,6 +1291,826 @@ fn a_change_cannot_weaken_its_own_config_without_a_scoped_token() {
     repo.git(&["commit", "-q", "-am", "chore: tighten", "--amend"]);
 }
 
+/// A repository whose base branch carries `base_cfg`, checked out on `work`.
+fn repo_with_base_config(base_cfg: &str) -> Repo {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("discipline.toml", base_cfg);
+    repo.commit("chore: config");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo
+}
+
+#[test]
+fn a_change_cannot_switch_its_own_run_to_advisory() {
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n",
+    );
+    repo.commit("chore: tune");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 1,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+    assert!(run.stderr.contains("is not honoured until it merges"));
+
+    // Naming another subject does not lift it.
+    repo.commit("chore: explain\n\nallow-gate-weakening: pii rolling the gates out gradually");
+    assert_eq!(repo.check(&[]).code, 1);
+
+    // The scoped token lifts the finding and lets advisory mode apply.
+    repo.commit("chore: explain\n\nallow-gate-weakening: meta rolling the gates out gradually");
+    let lifted = repo.check(&[]);
+    assert!(lifted.titles("config-integrity").is_empty());
+    assert_eq!(lifted.code, 0);
+
+    // Once advisory is on the base side it is simply the repository's mode.
+    let settled = repo_with_base_config("[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n");
+    settled.write("tests/a.rs", "#[test]\nfn adds() {}\n");
+    settled.commit("test: add");
+    let run = settled.check(&[]);
+    assert!(run.json()["errors"].as_u64().unwrap() > 0);
+    assert_eq!(run.code, 0);
+}
+
+#[test]
+fn a_change_cannot_disable_or_demote_the_gate_that_judges_its_config() {
+    // Disabling config-integrity in the same change that weakens another gate.
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[gates.config-integrity]\nenabled = false\n\
+             [gates.vacuous-tests]\nenabled = false\n"
+        ),
+    );
+    repo.commit("chore: tune");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 1,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert_eq!(run.violations("config-integrity").len(), 2);
+    let notes = run.outcome("config-integrity")["notes"].to_string();
+    assert!(notes.contains("evaluated anyway"), "{notes}");
+
+    // `--disable` on the command line takes the same path.
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.vacuous-tests]\nenabled = false\n"),
+    );
+    repo.commit("chore: tune");
+    let run = repo.check(&["--disable", "config-integrity"]);
+    assert_eq!(run.code, 1);
+    assert_eq!(run.violations("config-integrity").len(), 2);
+
+    // Demoting the gate to `note` does not demote the report of that demotion.
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.config-integrity]\nseverity = \"note\"\n"),
+    );
+    repo.commit("chore: tune");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(run.violations("config-integrity")[0]["severity"], "error");
+
+    // A base that already disables the gate keeps it disabled.
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[gates.config-integrity]\nenabled = false\n"
+    ));
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[gates.config-integrity]\nenabled = false\n\
+             [gates.vacuous-tests]\nenabled = false\n"
+        ),
+    );
+    repo.commit("chore: tune");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 0,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert_eq!(run.outcome("config-integrity")["enabled"], false);
+}
+
+#[test]
+fn lowered_floors_and_repointed_commands_are_weakenings() {
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[gates.test-floor]\nenabled = false\nmin_tests = 40\n\
+         [gates.suppression-delta]\nmax_increase = 0\n"
+    ));
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[gates.test-floor]\nenabled = false\nmin_tests = 3\n\
+             [gates.suppression-delta]\nmax_increase = 50\n"
+        ),
+    );
+    repo.commit("chore: tune");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let messages: Vec<String> = run
+        .violations("config-integrity")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert!(messages
+        .iter()
+        .any(|m| m.contains("`min_tests` decreased from 40 to 3")));
+    assert!(messages
+        .iter()
+        .any(|m| m.contains("`max_increase` increased from 0 to 50")));
+
+    // Raising the floor and lowering the cap needs no token.
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[gates.test-floor]\nenabled = false\nmin_tests = 41\n\
+             [gates.suppression-delta]\nmax_increase = 0\n"
+        ),
+    );
+    repo.commit("chore: tighten");
+    assert!(repo.check(&[]).titles("config-integrity").is_empty());
+}
+
+#[test]
+fn ci_integrity_flags_advisory_on_the_discipline_step_in_every_actions_directory() {
+    const ENFORCING: &str = r#"name: CI
+permissions: read-all
+on: [pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Run discipline sentinel
+        uses: orieg/discipline@5ab92591605ad900000000000000000000000000
+        with:
+          suite: all
+      - name: Run discipline from source
+        run: |
+          # --advisory is what this step must never pass to discipline check
+          discipline check --suite all
+"#;
+    let advisory_input = ENFORCING.replace(
+        "          suite: all\n",
+        "          suite: all\n          advisory: true\n",
+    );
+    let advisory_flag = ENFORCING.replace(
+        "          discipline check --suite all\n",
+        "          discipline check --suite all --advisory\n",
+    );
+    assert_ne!(advisory_input, ENFORCING);
+    assert_ne!(advisory_flag, ENFORCING);
+
+    for dir in [
+        ".github/workflows",
+        ".gitea/workflows",
+        ".forgejo/workflows",
+    ] {
+        let wf = format!("{dir}/ci.yml");
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(&wf, ENFORCING);
+        repo.commit("ci: add workflow");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+
+        // Negative control: an unrelated edit to the same workflow stays silent.
+        repo.write(
+            &wf,
+            &ENFORCING.replace("timeout-minutes: 20", "timeout-minutes: 25"),
+        );
+        repo.commit("ci: more headroom");
+        let quiet = repo.check(&[]);
+        assert!(
+            quiet.titles("ci-integrity").is_empty(),
+            "{dir}: {:?}",
+            quiet.titles("ci-integrity")
+        );
+        assert_eq!(quiet.outcome("ci-integrity")["examined"], 1, "{dir}");
+
+        repo.write(&wf, &advisory_input);
+        repo.commit("ci: tune");
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 1, "{dir}");
+        assert_eq!(
+            run.titles("ci-integrity"),
+            vec!["Discipline Action Weakened (advisory: true)"],
+            "{dir}"
+        );
+
+        repo.write(&wf, &advisory_flag);
+        repo.commit("ci: tune again");
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 1, "{dir}");
+        assert_eq!(
+            run.titles("ci-integrity"),
+            vec!["Discipline Run Weakened (--advisory)"],
+            "{dir}"
+        );
+
+        repo.commit(
+            "ci: explain\n\nallow-gate-weakening: ci-integrity trial rollout on this forge",
+        );
+        let lifted = repo.check(&[]);
+        assert!(lifted.titles("ci-integrity").is_empty(), "{dir}");
+        assert_eq!(lifted.code, 0, "{dir}");
+    }
+}
+
+#[test]
+fn ci_integrity_flags_a_discipline_step_moved_off_the_base_policy() {
+    const PINNED: &str = r#"name: CI
+permissions: read-all
+on: [pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Run discipline sentinel
+        uses: orieg/discipline@5ab92591605ad900000000000000000000000000
+        with:
+          policy_from: base
+"#;
+    let to_head = PINNED.replace("policy_from: base", "policy_from: head");
+    let with_dropped = PINNED.replace("        with:\n          policy_from: base\n", "");
+    assert!(!with_dropped.contains("with:"));
+
+    for weakened in [to_head.as_str(), with_dropped.as_str()] {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(".github/workflows/ci.yml", PINNED);
+        repo.commit("ci: add workflow");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write(".github/workflows/ci.yml", weakened);
+        repo.commit("ci: tune");
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 1, "{weakened}");
+        assert_eq!(
+            run.titles("ci-integrity"),
+            vec!["Discipline Action Weakened (policy_from)"],
+            "{weakened}"
+        );
+    }
+
+    // Adopting the base policy, or never having had it, is not a weakening.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(".github/workflows/ci.yml", &to_head);
+    repo.commit("ci: add workflow");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(".github/workflows/ci.yml", PINNED);
+    repo.commit("ci: judge by the base policy");
+    assert!(repo.check(&[]).titles("ci-integrity").is_empty());
+}
+
+#[test]
+fn ci_integrity_reads_gitlab_pipelines() {
+    const PIPELINE: &str = "stages: [test]\n\
+        unit-tests:\n  stage: test\n  script:\n    - cargo test --locked\n\
+        discipline:\n  stage: test\n  script:\n    - discipline check --suite all\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(".gitlab-ci.yml", PIPELINE);
+    repo.commit("ci: add pipeline");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: a new stage and a new deploy job are not weakenings.
+    repo.write(
+        ".gitlab-ci.yml",
+        &format!("{PIPELINE}pages:\n  stage: test\n  script:\n    - echo publish\n"),
+    );
+    repo.commit("ci: publish pages");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("ci-integrity").is_empty(),
+        "{:?}",
+        quiet.titles("ci-integrity")
+    );
+    assert_eq!(quiet.outcome("ci-integrity")["examined"], 1);
+    assert!(quiet.outcome("ci-integrity")["notes"]
+        .to_string()
+        .contains("`include:`"));
+
+    repo.write(
+        ".gitlab-ci.yml",
+        &PIPELINE
+            .replace(
+                "    - cargo test --locked\n",
+                "    - cargo test --locked\n  allow_failure: true\n",
+            )
+            .replace("--suite all\n", "--suite all --advisory\n"),
+    );
+    repo.commit("ci: tune");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("ci-integrity"),
+        vec![
+            "Discipline Run Weakened (--advisory)",
+            "allow_failure Masks Failure"
+        ]
+    );
+
+    // An override naming one weakening lifts that one only.
+    repo.commit(
+        "ci: explain\n\nallow-ci-weakening: allow_failure flaky runner pool, tracked separately",
+    );
+    assert_eq!(
+        repo.check(&[]).titles("ci-integrity"),
+        vec!["Discipline Run Weakened (--advisory)"]
+    );
+
+    // Deleting the pipeline, or breaking its YAML, is not a pass.
+    repo.write(".gitlab-ci.yml", "unit-tests: [\n");
+    repo.commit("ci: break");
+    assert_eq!(
+        repo.check(&[]).titles("ci-integrity"),
+        vec!["Pipeline File Unreadable"]
+    );
+    repo.remove(".gitlab-ci.yml");
+    repo.commit("ci: drop pipeline");
+    assert_eq!(
+        repo.check(&[]).titles("ci-integrity"),
+        vec!["Deletion of Verification Workflow"]
+    );
+}
+
+// ---- dependency-delta: lockfile integrity -----------------------------------
+
+const LOCK_MANIFEST: &str =
+    "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0.0\"\n";
+const LOCK_BASE: &str = "version = 3\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\n\
+    [[package]]\nname = \"serde\"\nversion = \"1.0.0\"\n\
+    source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"aa\"\n";
+
+fn repo_with_lockfile() -> Repo {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("app/Cargo.toml", LOCK_MANIFEST);
+    repo.write("app/Cargo.lock", LOCK_BASE);
+    repo.commit("chore: app crate");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo
+}
+
+#[test]
+fn dependency_delta_reads_the_lockfile_not_only_its_size() {
+    // Negative control: a new registry package, manifest and lockfile together.
+    let repo = repo_with_lockfile();
+    repo.write(
+        "app/Cargo.toml",
+        &format!("{LOCK_MANIFEST}anyhow = \"1.0.0\"\n"),
+    );
+    repo.write(
+        "app/Cargo.lock",
+        &format!(
+            "{LOCK_BASE}\n[[package]]\nname = \"anyhow\"\nversion = \"1.0.0\"\n\
+             source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"bb\"\n"
+        ),
+    );
+    repo.commit("feat: add anyhow\n\nallow-dependency: anyhow error context for the CLI");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("dependency-delta").is_empty(),
+        "{:?}",
+        run.titles("dependency-delta")
+    );
+
+    // The lockfile alone repoints serde at a git fork and drops its checksum.
+    let repo = repo_with_lockfile();
+    repo.write(
+        "app/Cargo.lock",
+        &LOCK_BASE.replace(
+            "source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"aa\"\n",
+            "source = \"git+https://github.com/someone/serde#def\"\n",
+        ),
+    );
+    repo.commit("chore: refresh lockfile");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("dependency-delta"),
+        vec![
+            "Lockfile Entry From New Source",
+            "Lockfile Integrity Hash Dropped"
+        ]
+    );
+    // The override names the package, not the file.
+    repo.commit("chore: explain\n\nallow-dependency: Cargo.lock refreshed");
+    assert_eq!(repo.check(&[]).titles("dependency-delta").len(), 2);
+    repo.commit("chore: explain\n\nallow-dependency: serde fork carries the unreleased fix for the parser panic");
+    assert!(repo.check(&[]).titles("dependency-delta").is_empty());
+}
+
+#[test]
+fn dependency_delta_flags_a_stale_or_deleted_lockfile() {
+    // Manifest gains a dependency; the tracked lockfile is left alone.
+    let repo = repo_with_lockfile();
+    repo.write(
+        "app/Cargo.toml",
+        &format!("{LOCK_MANIFEST}anyhow = \"1.0.0\"\n"),
+    );
+    repo.commit("feat: add anyhow\n\nallow-dependency: anyhow error context for the CLI");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("dependency-delta"),
+        vec!["Manifest Changed Without Lockfile"]
+    );
+
+    // A manifest edit that leaves the dependency set alone needs no lockfile change.
+    let repo = repo_with_lockfile();
+    repo.write("app/Cargo.toml", &LOCK_MANIFEST.replace("0.1.0", "0.1.1"));
+    repo.commit("chore: bump version");
+    assert!(repo.check(&[]).titles("dependency-delta").is_empty());
+
+    // A crate that never tracked a lockfile is not asked for one.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("lib/Cargo.toml", LOCK_MANIFEST);
+    repo.commit("chore: lib crate");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "lib/Cargo.toml",
+        &format!("{LOCK_MANIFEST}anyhow = \"1.0.0\"\n"),
+    );
+    repo.commit("feat: add anyhow\n\nallow-dependency: anyhow error context for the CLI");
+    assert!(repo.check(&[]).titles("dependency-delta").is_empty());
+
+    // Deleting the lockfile.
+    let repo = repo_with_lockfile();
+    repo.remove("app/Cargo.lock");
+    repo.commit("chore: drop lockfile");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(run.titles("dependency-delta"), vec!["Lockfile Deleted"]);
+
+    // A format this gate does not read is named, not passed silently.
+    let repo = Repo::new();
+    repo.write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    repo.commit("chore: pnpm lockfile");
+    let notes = repo.check(&[]).outcome("dependency-delta")["notes"].to_string();
+    assert!(notes.contains("not analysed"), "{notes}");
+}
+
+#[test]
+fn golden_output_names_a_regeneration_with_no_source_change() {
+    let base = |repo: &Repo| {
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(
+            "src/render.rs",
+            "pub fn render() -> &'static str { \"v1\" }\n",
+        );
+        repo.write(
+            "tests/__snapshots__/render.test.js.snap",
+            "exports[`render 1`] = `v1`;\n",
+        );
+        repo.write("tests/cli.approved.txt", "v1\n");
+        repo.commit("test: snapshots");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+    };
+
+    // Snapshots rewritten, nothing that produces them touched.
+    let repo = Repo::new();
+    base(&repo);
+    repo.write(
+        "tests/__snapshots__/render.test.js.snap",
+        "exports[`render 1`] = `v2`;\n",
+    );
+    repo.write("tests/cli.approved.txt", "v2\n");
+    repo.write("CHANGELOG.md", "# Changes\n");
+    repo.commit("test: refresh snapshots");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("golden-output"),
+        vec![
+            "Golden Output Regenerated Without Source Change",
+            "Golden Output Regenerated Without Source Change"
+        ]
+    );
+    let msg = run.violations("golden-output")[0]["message"].to_string();
+    assert!(msg.contains("1 line(s) rewritten"), "{msg}");
+
+    // The same rewrite alongside the source change that explains it keeps the plain title.
+    let repo = Repo::new();
+    base(&repo);
+    repo.write(
+        "src/render.rs",
+        "pub fn render() -> &'static str { \"v2\" }\n",
+    );
+    repo.write(
+        "tests/__snapshots__/render.test.js.snap",
+        "exports[`render 1`] = `v2`;\n",
+    );
+    repo.commit("feat: render v2");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("golden-output"),
+        vec!["Golden Output Modified Without Directive"]
+    );
+
+    // Either form is lifted by the scoped directive.
+    repo.commit(
+        "test: explain\n\nallow-golden-update: tests/__snapshots__/ render output moved to v2",
+    );
+    assert!(repo.check(&[]).titles("golden-output").is_empty());
+}
+
+#[test]
+fn test_floor_counts_tests_that_run_not_tests_that_exist() {
+    const THREE: &str = "#[test]\nfn one() { assert_eq!(1, 1 + 0); }\n\
+        #[test]\nfn two() { assert_eq!(2, 1 + 1); }\n\
+        #[test]\nfn three() { assert_eq!(3, 1 + 2); }\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/floor.rs", THREE);
+    repo.commit("test: three");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Same number of test functions, two of them switched off. Every other gate is
+    // satisfied by directives the change wrote for itself.
+    repo.write(
+        "tests/floor.rs",
+        &THREE
+            .replace(
+                "#[test]\nfn two()",
+                "#[test]\n#[ignore = \"upstream bug 4411 breaks the fixture\"]\nfn two()",
+            )
+            .replace(
+                "#[test]\nfn three()",
+                "#[test]\n#[ignore = \"upstream bug 4411 breaks the fixture\"]\nfn three()",
+            ),
+    );
+    repo.commit(
+        "test: park two\n\nallow-ignore: two upstream bug 4411 breaks the fixture\n\
+         allow-ignore: three upstream bug 4411 breaks the fixture",
+    );
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("ignored-tests").is_empty(),
+        "{:?}",
+        run.titles("ignored-tests")
+    );
+    assert_eq!(run.titles("test-floor"), vec!["Test Count Below Floor"]);
+    let notes = run.outcome("test-floor")["notes"].to_string();
+    assert!(
+        notes.contains("head: 2 ignored / skipped test(s) are not counted"),
+        "{notes}"
+    );
+
+    // A conditional skip still runs somewhere and still counts.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/floor.rs", THREE);
+    repo.commit("test: three");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "tests/floor.rs",
+        &THREE.replace(
+            "#[test]\nfn two()",
+            "#[test]\n#[cfg_attr(windows, ignore)]\nfn two()",
+        ),
+    );
+    repo.commit("test: skip on windows\n\nallow-ignore: two path separators differ on windows");
+    assert!(repo.check(&[]).titles("test-floor").is_empty());
+
+    // A test file that no longer parses is named, not counted as zero in silence.
+    let repo = Repo::new();
+    repo.write("tests/broken.py", "def test_a(:\n    assert 1 == 1\n");
+    repo.commit("test: wip");
+    let notes = repo.check(&[]).outcome("test-floor")["notes"].to_string();
+    assert!(notes.contains("parse with errors"), "{notes}");
+    assert!(notes.contains("tests/broken.py"), "{notes}");
+}
+
+// ---- override policy -------------------------------------------------------
+
+/// A change that disables two gates and excuses both from its commit body.
+fn repo_with_two_self_granted_overrides(directives: &str) -> Repo {
+    let repo = repo_with_base_config(&format!("{CONFIG_HEAD}[directives]\n{directives}"));
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[directives]\n{directives}\
+             [gates.vacuous-tests]\nenabled = false\n[gates.pii]\nenabled = false\n"
+        ),
+    );
+    repo.commit(
+        "chore: tune\n\nallow-gate-weakening: vacuous-tests snapshot macros assert for us\n\
+         allow-gate-weakening: pii fixtures carry documentation addresses",
+    );
+    repo
+}
+
+#[test]
+fn override_budget_caps_what_one_change_may_excuse() {
+    let over = repo_with_two_self_granted_overrides("max_overrides = 1\n");
+    let run = over.check(&[]);
+    assert_eq!(
+        run.code, 1,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    let json = run.json();
+    assert_eq!(json["errors"], 0, "the gates themselves were satisfied");
+    let refusals = json["policy_failures"].as_array().unwrap();
+    assert_eq!(refusals.len(), 1);
+    assert!(refusals[0].as_str().unwrap().contains("allows 1"));
+
+    // Within budget, and with no budget, the same change passes.
+    assert_eq!(
+        repo_with_two_self_granted_overrides("max_overrides = 2\n")
+            .check(&[])
+            .code,
+        0
+    );
+    let unlimited = repo_with_two_self_granted_overrides("").check(&[]);
+    assert_eq!(unlimited.code, 0);
+    assert!(unlimited.json().get("policy_failures").is_none());
+
+    // Raising the budget in the change that needs it is itself a weakening.
+    let repo = repo_with_base_config(&format!("{CONFIG_HEAD}[directives]\nmax_overrides = 0\n"));
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[directives]\nmax_overrides = 5\n"),
+    );
+    repo.commit("chore: tune");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let v = run.violations("config-integrity");
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(v[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("`max_overrides` increased from 0 to 5"));
+}
+
+#[test]
+fn required_approval_is_read_from_the_forge_for_the_checked_head() {
+    // The author is a listed actor too: listing does not let anyone approve their own change.
+    let repo = repo_with_two_self_granted_overrides(
+        "require_approval = true\nallowed_override_actors = [\"lead\", \"agent\"]\n",
+    );
+    let event_dir = tempfile::tempdir().unwrap();
+    let event = event_dir.path().join("event.json");
+    std::fs::write(
+        &event,
+        r#"{"pull_request": {"number": 7, "user": {"login": "agent"}, "head": {"sha": "abc123"}}}"#,
+    )
+    .unwrap();
+    let event = event.to_str().unwrap().to_string();
+    let review = |login: &str, sha: &str| serde_json::json!([{"user": {"login": login}, "state": "APPROVED", "commit_id": sha}]);
+    let check = |reviews: Option<serde_json::Value>, with_event: bool| {
+        let api = FakeForge::start();
+        if let Some(r) = reviews {
+            api.serve("repos/o/r/pulls/7/reviews?per_page=100", r);
+        }
+        let url = api.url();
+        let mut env = vec![
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ("GITHUB_REPOSITORY", "o/r"),
+        ];
+        if with_event {
+            env.push(("GITHUB_EVENT_PATH", event.as_str()));
+        }
+        repo.run(&["check", "--format", "json", "--base", "main"], &env)
+    };
+
+    // Approved by the listed reviewer at this head: the overrides stand.
+    let ok = check(Some(review("lead", "abc123")), true);
+    assert_eq!(ok.code, 0, "stdout: {}\nstderr: {}", ok.stdout, ok.stderr);
+
+    // Nobody, the author, an unlisted reviewer, or an approval of an older head: refused.
+    for reviews in [
+        serde_json::json!([]),
+        review("agent", "abc123"),
+        review("stranger", "abc123"),
+        review("lead", "0ld5ha"),
+    ] {
+        let run = check(Some(reviews.clone()), true);
+        assert_eq!(run.code, 1, "{reviews}: {}", run.stderr);
+        let refusals = run.json()["policy_failures"].as_array().unwrap().clone();
+        assert_eq!(refusals.len(), 1, "{reviews}");
+        assert!(refusals[0]
+            .as_str()
+            .unwrap()
+            .contains("await an approving review"));
+    }
+
+    // Could not check is exit 2: no payload, or a forge that does not answer.
+    assert_eq!(check(Some(review("lead", "abc123")), false).code, 2);
+    assert_eq!(check(None, true).code, 2);
+
+    // A change without directive overrides needs no approval and no forge.
+    let plain = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[directives]\nrequire_approval = true\nallowed_override_actors = [\"lead\"]\n"
+    ));
+    plain.write("notes.txt", "hello\n");
+    plain.commit("docs: note");
+    assert_eq!(plain.check(&[]).code, 0);
+}
+
+#[test]
+fn policy_from_base_judges_a_change_by_the_configuration_it_did_not_write() {
+    // The change adds a vacuous test and switches off the gate that would report it,
+    // excusing the switch from its own commit body.
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write("tests/fresh.rs", "#[test]\nfn fresh() {}\n");
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.vacuous-tests]\nenabled = false\n"),
+    );
+    repo.commit("test: add\n\nallow-gate-weakening: vacuous-tests asserted elsewhere");
+
+    // Judged by its own configuration, the self-excused change passes.
+    let own = repo.check(&[]);
+    assert_eq!(
+        own.code, 0,
+        "stdout: {}\nstderr: {}",
+        own.stdout, own.stderr
+    );
+    assert_eq!(own.outcome("vacuous-tests")["enabled"], false);
+
+    // Judged by the base configuration, the gate it disabled still runs.
+    let base = repo.check(&["--policy-from", "base"]);
+    assert_eq!(
+        base.code, 1,
+        "stdout: {}\nstderr: {}",
+        base.stdout, base.stderr
+    );
+    assert_eq!(base.outcome("vacuous-tests")["enabled"], true);
+    assert_eq!(base.violations("vacuous-tests").len(), 1);
+    // The edit is still reported for review (here: lifted by its directive, and recorded).
+    assert_eq!(
+        base.outcome("config-integrity")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Without the directive the configuration edit is reported too.
+    let bare = repo_with_base_config(CONFIG_HEAD);
+    bare.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.vacuous-tests]\nenabled = false\n"),
+    );
+    bare.commit("chore: tune");
+    let run = bare.check(&["--policy-from", "base"]);
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+
+    // A tightening in the change does not apply to the change itself either.
+    let tight = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[gates.vacuous-tests]\nenabled = false\n"
+    ));
+    tight.write("tests/fresh.rs", "#[test]\nfn fresh() {}\n");
+    tight.write("discipline.toml", CONFIG_HEAD);
+    tight.commit("test: add");
+    assert_eq!(tight.check(&[]).code, 1);
+    assert_eq!(tight.check(&["--policy-from", "base"]).code, 0);
+
+    // A base without the file is judged by the defaults, not by the change's copy.
+    let adopt = Repo::new();
+    adopt.write("tests/fresh.rs", "#[test]\nfn fresh() {}\n");
+    adopt.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.vacuous-tests]\nenabled = false\n"),
+    );
+    adopt.commit("test: add");
+    assert_eq!(adopt.check(&[]).code, 0);
+    let run = adopt.check(&["--policy-from", "base"]);
+    assert_eq!(run.code, 1);
+    assert!(
+        run.stderr.contains("judging by built-in defaults"),
+        "{}",
+        run.stderr
+    );
+
+    // A change whose own configuration does not parse is still exit 2.
+    let broken = repo_with_base_config(CONFIG_HEAD);
+    broken.write("discipline.toml", "[meta\n");
+    broken.commit("chore: break");
+    assert_eq!(broken.check(&["--policy-from", "base"]).code, 2);
+}
+
 // ---- fail-closed behavior --------------------------------------------------
 
 #[test]
