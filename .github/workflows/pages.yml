@@ -15,8 +15,8 @@ on:
       - 'scripts/build_rpm_repo.py'
       - 'scripts/site_theme.py'
       - '.github/workflows/pages.yml'
-  release:
-    types: [published, released]
+  # Releases dispatch this workflow from release.yml `promote`: a release made
+  # with GITHUB_TOKEN does not trigger a `release` event here.
   workflow_dispatch:
 
 permissions: read-all

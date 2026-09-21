@@ -362,6 +362,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Mark the release latest
@@ -418,6 +419,14 @@ jobs:
             --checksums dist/SHA256SUMS \
             --push-to-tap orieg/homebrew-tap \
             --deploy-key "${HOMEBREW_TAP_DEPLOY_KEY}"
+      # A release made with GITHUB_TOKEN triggers no other workflow, so the
+      # `release` event never reaches pages.yml. workflow_dispatch is the
+      # exception: rebuild the signed APT/RPM repositories from this release.
+      - name: Rebuild the package repositories
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "${GITHUB_REPOSITORY}" --ref main
 
   # `uses: orieg/discipline@v0` follows this tag. It moves last, and only for
   # stable releases, so the floating tag never points at an unproven release.
