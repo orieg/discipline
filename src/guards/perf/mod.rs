@@ -21,6 +21,8 @@
 //!    conservative interval clearing derived from interval arithmetic; overlapping CIs do not fail.
 
 pub mod bounds;
+pub mod citation;
+pub mod paired_ratio;
 
 use self::bounds::{
     evaluate_continuous_regression, ConfidenceInterval, ContinuousEstimate, DiscreteMetric,
@@ -50,6 +52,9 @@ pub struct BenchmarkMetric {
 
 pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.bench_regression;
+    if settings.mode == crate::config::BenchMode::PairedRatio {
+        return paired_ratio::bench_paired_ratio(ctx);
+    }
 
     let env_head = std::env::var("DISCIPLINE_BENCH_HEAD_FILE")
         .ok()
@@ -459,18 +464,19 @@ pub fn evaluate_metrics_regression(
     head_path: &str,
     out: &mut GateOutcome,
 ) -> Result<()> {
-    evaluate_metrics_regression_with_directives(
+    evaluate_metrics_regression_with_instruments(
         &ctx.directives,
         settings,
-        base_metrics,
-        head_metrics,
-        base_path,
-        head_path,
+        (base_metrics, head_metrics),
+        (base_path, head_path),
         ctx.overridable(settings.severity),
+        &citation::LiveInstruments::new(ctx.git),
         out,
     )
 }
 
+/// `evaluate_metrics_regression_with_instruments` with no instruments: every citation an
+/// override rests on is undecidable, so a sourced override never admits a regression here.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_metrics_regression_with_directives(
     directives: &[crate::tokens::ParsedDirective],
@@ -482,6 +488,91 @@ pub fn evaluate_metrics_regression_with_directives(
     severity: crate::config::Severity,
     out: &mut GateOutcome,
 ) -> Result<()> {
+    evaluate_metrics_regression_with_instruments(
+        directives,
+        settings,
+        (base_metrics, head_metrics),
+        (base_path, head_path),
+        severity,
+        &citation::Unavailable,
+        out,
+    )
+}
+
+/// Reports an override whose citations are stale or undecidable, with every regression it
+/// would have approved. Returns true when the override must not be admitted.
+fn report_unfresh_override(
+    report: &citation::FreshnessReport,
+    directive: &crate::tokens::ParsedDirective,
+    regressions: &[(String, f64, u64, u64, String)],
+    head_path: &str,
+    severity: crate::config::Severity,
+    out: &mut GateOutcome,
+) -> bool {
+    if report.is_fresh() {
+        return false;
+    }
+    if !report.problems.is_empty() {
+        out.push(
+            severity,
+            "Regression Override Is Void — Citation Does Not Measure This Code",
+            Some(head_path),
+            None,
+            format!(
+                "regression override `{}` is void: its citation does not resolve to a measurement of the head being gated: {}",
+                directive.reason,
+                report.problems.join("; ")
+            ),
+            "cite a completed run at a commit reachable from this head, or regenerate the cited artifact after the change",
+        );
+    } else {
+        for item in &report.undecidable {
+            out.notes.push(format!(
+                "allow-regression citation not verified — {item}; the gate stays armed"
+            ));
+        }
+        out.push(
+            severity,
+            "Regression Override Not Verified — Citation Undecidable",
+            Some(head_path),
+            None,
+            format!(
+                "regression override `{}` is not admitted: its citations could not be checked for freshness: {}",
+                directive.reason,
+                report.undecidable.join("; ")
+            ),
+            "make `gh` available and authenticated to the job (or configure `citation_measurement_jobs` / `citation_source_paths`), or cite a committed artifact",
+        );
+    }
+    for (arm, delta, base_c, head_c, unit) in regressions {
+        out.push(
+            severity,
+            "Instruction Count Regressed",
+            Some(head_path),
+            None,
+            format!(
+                "deterministic counter `{arm}` in `{head_path}` regressed by +{delta:.2}% ({base_c} -> {head_c} {unit}), and the override for it rests on a citation that is not verified fresh"
+            ),
+            &format!("optimize `{arm}` or cite a fresh measurement"),
+        );
+    }
+    true
+}
+
+/// Evaluates base and head metrics; a sourced override is admitted only when every
+/// citation it rests on is verified fresh with `instruments`. `metrics` and `paths` are
+/// `(base, head)`.
+pub fn evaluate_metrics_regression_with_instruments(
+    directives: &[crate::tokens::ParsedDirective],
+    settings: &crate::config::BenchRegressionGate,
+    metrics: (&[BenchmarkMetric], &[BenchmarkMetric]),
+    paths: (&str, &str),
+    severity: crate::config::Severity,
+    instruments: &dyn citation::CitationInstruments,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let (base_metrics, head_metrics) = metrics;
+    let (base_path, head_path) = paths;
     // 1. Check for removed benchmarks within surviving artifact
     for b in base_metrics {
         if !head_metrics.iter().any(|h| h.name == b.name) {
@@ -718,6 +809,22 @@ pub fn evaluate_metrics_regression_with_directives(
                                         &format!("name `{}` in the override reason", arm),
                                     );
                                 }
+                            } else if report_unfresh_override(
+                                &citation::check_citation_freshness(
+                                    &d.reason,
+                                    &citation::FreshnessPolicy {
+                                        measurement_jobs: &settings.citation_measurement_jobs,
+                                        source_paths: &settings.citation_source_paths,
+                                    },
+                                    instruments,
+                                ),
+                                d,
+                                &discrete_regressions,
+                                head_path,
+                                severity,
+                                out,
+                            ) {
+                                // Stale or undecidable: the gate stays armed.
                             } else {
                                 for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
                                     if unapproved.contains(&arm.as_str()) {
@@ -2095,27 +2202,78 @@ smoke_cost::set_contains
         );
 
         // Case 6: Sourced override naming only subset of regressed arms -> named approved, unnamed fails
+        // (the cited run is verified fresh: completed at the head under review)
         let dir_subset = vec![ParsedDirective {
             directive: "allow-regression".to_string(),
-            reason: "sync_map_insert pays the bracket refs https://github.com/orieg/expanse/actions/runs/34490311084".to_string(),
+            reason: "sync_map_insert pays the bracket refs https://github.com/acme/widgets/actions/runs/4401".to_string(),
             source: OverrideSource::PrBody,
             hidden: false,
         }];
-        let mut out6 = GateOutcome::new(GATE);
-        evaluate_metrics_regression_with_directives(
-            &dir_subset,
-            &settings,
-            &base,
-            &head_two_2pct,
-            "base.txt",
-            "head.txt",
-            Severity::Error,
-            &mut out6,
-        )
-        .unwrap();
+        let canned = |conclusion: &str| citation::CannedInstruments {
+            responses: std::collections::BTreeMap::from([
+                (
+                    "repos/acme/widgets/actions/runs/4401".to_string(),
+                    serde_json::json!({"conclusion": conclusion, "head_sha": "abc123"}),
+                ),
+                (
+                    "repos/acme/widgets/compare/abc123...abc123".to_string(),
+                    serde_json::json!({"status": "identical"}),
+                ),
+            ]),
+            head: Some("abc123".to_string()),
+            ..Default::default()
+        };
+        let run6 = |instruments: &dyn citation::CitationInstruments| {
+            let mut out = GateOutcome::new(GATE);
+            evaluate_metrics_regression_with_instruments(
+                &dir_subset,
+                &settings,
+                (&base, &head_two_2pct),
+                ("base.txt", "head.txt"),
+                Severity::Error,
+                instruments,
+                &mut out,
+            )
+            .unwrap();
+            out
+        };
+        let out6 = run6(&canned("success"));
         assert_eq!(out6.overrides.len(), 1, "named arm must be approved");
         assert_eq!(out6.violations.len(), 1, "unnamed arm must fail");
         assert!(out6.violations[0].title.contains("Unapproved Arm"));
+
+        // Case 6b: the same override citing a cancelled run is void, and says which run.
+        let stale = run6(&canned("cancelled"));
+        assert!(
+            stale.overrides.is_empty(),
+            "a stale citation admits nothing"
+        );
+        assert!(stale
+            .violations
+            .iter()
+            .any(|v| v.title.contains("Citation Does Not Measure This Code")
+                && v.message.contains("run 4401 concluded `cancelled`")));
+        assert_eq!(
+            stale
+                .violations
+                .iter()
+                .filter(|v| v.title == "Instruction Count Regressed")
+                .count(),
+            2,
+            "every regression stays armed"
+        );
+
+        // Case 6c: no instruments -> undecidable -> named notice, gate stays armed.
+        let undecided = run6(&citation::Unavailable);
+        assert!(undecided.overrides.is_empty(), "undecidable admits nothing");
+        assert!(undecided
+            .violations
+            .iter()
+            .any(|v| v.title.contains("Citation Undecidable")));
+        assert!(undecided
+            .notes
+            .iter()
+            .any(|n| n.contains("citation not verified") && n.contains("run 4401")));
 
         // Case 7: Exempt arm
         let mut settings_exempt = settings.clone();

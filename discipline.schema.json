@@ -91,6 +91,17 @@
           "description": "In-job base benchmark result file path for dual-file regression checks",
           "type": "string"
         },
+        "citation_measurement_jobs": {
+          "description": "CI jobs that produce gated numbers, each with the step that gates them. A cited run that concluded `failure` is admitted only when every listed job it started reached its guard step with every earlier step green. Empty: a cited `failure` run cannot be told from a crashed benchmark and leaves the gate armed.",
+          "items": {
+            "$ref": "#/$defs/MeasurementJob"
+          },
+          "type": "array"
+        },
+        "citation_source_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Repo-relative files or directories whose changes can move a gated number. A cited data artifact last committed before the branch's newest change under these paths is stale. Empty: artifact citations cannot be dated and leave the gate armed."
+        },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"
@@ -110,6 +121,14 @@
           "description": "Maximum acceptable coefficient of variation (std_dev / mean)",
           "type": "number"
         },
+        "mode": {
+          "description": "Evaluation mode: `version-vs-version` compares base and head artifacts of the same arms (preferred when the old version can be built in the same run); `paired-ratio` compares a ratio of two arms measured in the same interleaved rounds against a committed ratio baseline (when building the old version is impractical). The two are not interchangeable.",
+          "enum": [
+            "version-vs-version",
+            "paired-ratio"
+          ],
+          "type": "string"
+        },
         "noise_floor_pct": {
           "description": "Noise floor percentage (default: 0.5%)",
           "type": "number"
@@ -126,8 +145,16 @@
           "description": "Expected host/runner provenance tag for benchmark artifacts",
           "type": "string"
         },
+        "ratio_baseline": {
+          "description": "Committed paired-ratio baseline (`discipline-bench-ratio-baseline/v1`), produced by `discipline bench derive`. Read from the base ref, never from head; loosening it needs a scoped `allow-regression: <path>` directive.",
+          "type": "string"
+        },
+        "ratio_tolerance_pct": {
+          "description": "Optional minimum paired-ratio threshold in percent. It only widens a derived floor; configured for an axis with no derived floor, it is a configuration error.",
+          "type": "number"
+        },
         "require_sourced_override": {
-          "description": "Require allow-regression reasons to cite a CI run URL or artifact path and name the arms",
+          "description": "Require allow-regression reasons to cite a CI run URL or artifact path and name the arms. Every citation is also checked for freshness: a cited run must have completed, reached its regression guard, and measured a commit reachable from the head; a cited data artifact must post-date the branch's newest change under `citation_source_paths`. A citation that cannot be checked (no `gh`, unauthenticated, rate limited) is reported by name and leaves the gate armed.",
           "type": "boolean"
         },
         "severity": {
@@ -524,6 +551,24 @@
           "$ref": "#/$defs/Severity"
         }
       },
+      "type": "object"
+    },
+    "MeasurementJob": {
+      "additionalProperties": false,
+      "properties": {
+        "guard": {
+          "description": "Name of the step in that job that reads the numbers and enforces the regression guard",
+          "type": "string"
+        },
+        "job": {
+          "description": "Job display name as the CI API lists it",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job",
+        "guard"
+      ],
       "type": "object"
     },
     "MiriGate": {

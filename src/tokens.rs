@@ -950,6 +950,17 @@ pub fn extract_citation(reason: &str) -> Option<String> {
     CITATION_RE.find(reason).map(|m| m.as_str().to_string())
 }
 
+/// Every citation (CI run URL or committed artifact path) in an override reason, in order.
+///
+/// A reason carrying two citations rests on both; checking only the first lets word order
+/// decide which source is examined.
+pub fn extract_citations(reason: &str) -> Vec<String> {
+    CITATION_RE
+        .find_iter(reason)
+        .map(|m| m.as_str().to_string())
+        .collect()
+}
+
 /// Checks whether an override reason explicitly names a benchmark arm (in full, tail, or stem).
 pub fn reason_cites_arm(reason: &str, arm: &str) -> bool {
     let haystack = reason.to_lowercase();
@@ -1198,6 +1209,20 @@ removes: tests/old.rs inside a fence
             "suppression-delta"
         )
         .is_none());
+    }
+
+    #[test]
+    fn extract_citations_returns_every_citation_in_order() {
+        let reason = "trade in results/fallback.json, measured in run https://github.com/acme/widgets/actions/runs/7 and docs/RULES.md";
+        assert_eq!(
+            extract_citations(reason),
+            vec![
+                "results/fallback.json".to_string(),
+                "https://github.com/acme/widgets/actions/runs/7".to_string(),
+                "docs/RULES.md".to_string(),
+            ]
+        );
+        assert!(extract_citations("no source at all").is_empty());
     }
 
     #[test]

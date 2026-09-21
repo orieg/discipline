@@ -767,7 +767,50 @@ pub struct BenchRegressionGate {
     /// silently stop covering something.
     pub exempt_arms: Vec<String>,
     /// Require allow-regression directive reasons to carry a verifiable citation and arm names.
+    /// Every citation the reason carries is also checked for freshness: a cited CI run must
+    /// have completed, reached its regression guard, and measured a commit reachable from the
+    /// head; a cited data artifact must post-date the branch's newest change under
+    /// `citation_source_paths`. A citation that cannot be decided leaves the gate armed.
     pub require_sourced_override: bool,
+    /// Paths (repo-relative files or directories) whose changes can move a gated number.
+    /// A cited data artifact last committed before the branch's newest change under these
+    /// paths describes the code the change replaced.
+    pub citation_source_paths: Vec<String>,
+    /// CI jobs that produce gated numbers, each with the one step that gates them. A cited run
+    /// that concluded `failure` is admitted only when every one of these jobs that started
+    /// reached its guard step with every earlier step green.
+    pub citation_measurement_jobs: Vec<MeasurementJob>,
+    /// Evaluation mode: `version-vs-version` (base and head artifacts, the default) or
+    /// `paired-ratio` (a ratio of two arms measured in the same interleaved rounds, compared
+    /// against a committed ratio baseline).
+    pub mode: BenchMode,
+    /// Committed paired-ratio baseline (the threshold file). Read from the base ref, never
+    /// from head.
+    pub ratio_baseline: Option<String>,
+    /// Optional minimum paired-ratio threshold in percent. It only ever widens a derived
+    /// floor; configured for an axis the baseline has no derived floor for, it is an error.
+    pub ratio_tolerance_pct: Option<f64>,
+}
+
+/// Evaluation mode of the `bench-regression` gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BenchMode {
+    /// Base and head benchmark artifacts of the same arms (the preferred model).
+    #[default]
+    VersionVsVersion,
+    /// A paired within-run ratio against a committed ratio baseline.
+    PairedRatio,
+}
+
+/// A CI job that produces gated numbers and the step in it that gates them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeasurementJob {
+    /// Job display name as the CI API lists it.
+    pub job: String,
+    /// Name of the step in that job that reads the numbers and enforces the guard.
+    pub guard: String,
 }
 
 impl Default for BenchRegressionGate {
@@ -808,6 +851,11 @@ impl Default for BenchRegressionGate {
             advisory_pct: Some(0.1),
             exempt_arms: Vec::new(),
             require_sourced_override: false,
+            citation_source_paths: Vec::new(),
+            citation_measurement_jobs: Vec::new(),
+            mode: BenchMode::VersionVsVersion,
+            ratio_baseline: None,
+            ratio_tolerance_pct: None,
         }
     }
 }
@@ -1698,6 +1746,7 @@ pub const SHORTER_IS_STRICTER: &[&str] = &[
 
 pub const LONGER_IS_STRICTER: &[&str] = &[
     "hostname_denylist",
+    "citation_source_paths",
     "extra_patterns",
     "paths",
     "include",

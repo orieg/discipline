@@ -263,6 +263,8 @@ impl Repo {
         for var in ISOLATED_ENV_VARS {
             cmd.env_remove(var);
         }
+        // Citation freshness shells out to `gh`; no test reaches the network by default.
+        cmd.env("DISCIPLINE_GH", "/nonexistent/discipline-test-gh");
         let has_pr_body = env.iter().any(|(k, _)| *k == "PR_BODY");
         let has_pr_title = env.iter().any(|(k, _)| *k == "PR_TITLE");
         if has_pr_body && !has_pr_title {

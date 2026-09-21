@@ -83,6 +83,7 @@ fn run_command(command: Commands) -> Result<bool> {
         }
         Commands::Docs(args) => docs(args),
         Commands::InstallHooks(args) => install_hooks(args),
+        Commands::Bench(args) => discipline::guards::perf::paired_ratio::cli_bench(args),
     }
 }
 

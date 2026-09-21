@@ -75,16 +75,23 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.bench-regression.advisory_pct` | number | `0.1` | Advisory review percentage (default: 0.1%) |
 | `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched host/runner provenance |
 | `gates.bench-regression.base_file` | string | *(unset)* | In-job base benchmark result file path for dual-file regression checks |
+| `gates.bench-regression.citation_measurement_jobs` | array of tables | `[]` | CI jobs that produce gated numbers, each with the step that gates them. A cited run that concluded `failure` is admitted only when every listed job it started reached its guard step with every earlier step green. Empty: a cited `failure` run cannot be told from a crashed benchmark and leaves the gate armed. |
+| `gates.bench-regression.citation_measurement_jobs[].guard` | string | *(required)* | Name of the step in that job that reads the numbers and enforces the regression guard |
+| `gates.bench-regression.citation_measurement_jobs[].job` | string | *(required)* | Job display name as the CI API lists it |
+| `gates.bench-regression.citation_source_paths` | list | `[]` | Repo-relative files or directories whose changes can move a gated number. A cited data artifact last committed before the branch's newest change under these paths is stale. Empty: artifact citations cannot be dated and leave the gate armed. |
 | `gates.bench-regression.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.bench-regression.exempt_arms` | list | `[]` | Benchmark arms exempted from regression checks: exact name, the name as the benchmark prints it (`map_get random` matches `map_get/random`), a glob (`*.heap.*`), a trailing-`*` prefix, or a `::`/`/` path suffix. An entry matching no arm in the run is an error. |
 | `gates.bench-regression.exempt_paths` | list | *(6 entries)* | File path globs exempted from this gate |
 | `gates.bench-regression.head_file` | string | *(unset)* | In-job head benchmark result file path for dual-file regression checks |
 | `gates.bench-regression.max_noise_cv` | number | *(unset)* | Maximum acceptable coefficient of variation (std_dev / mean) |
+| `gates.bench-regression.mode` | string | `"version-vs-version"` | Evaluation mode: `version-vs-version` compares base and head artifacts of the same arms (preferred when the old version can be built in the same run); `paired-ratio` compares a ratio of two arms measured in the same interleaved rounds against a committed ratio baseline (when building the old version is impractical). The two are not interchangeable. |
 | `gates.bench-regression.noise_floor_pct` | number | `0.5` | Noise floor percentage (default: 0.5%) |
 | `gates.bench-regression.noise_margin_pct` | number | *(unset)* | Configurable noise margin added to tolerance_pct |
 | `gates.bench-regression.paths` | list | *(6 entries)* | Benchmark artifact globs tracked across revisions |
 | `gates.bench-regression.provenance` | string | *(unset)* | Expected host/runner provenance tag for benchmark artifacts |
-| `gates.bench-regression.require_sourced_override` | boolean | `false` | Require allow-regression reasons to cite a CI run URL or artifact path and name the arms |
+| `gates.bench-regression.ratio_baseline` | string | *(unset)* | Committed paired-ratio baseline (`discipline-bench-ratio-baseline/v1`), produced by `discipline bench derive`. Read from the base ref, never from head; loosening it needs a scoped `allow-regression: &lt;path&gt;` directive. |
+| `gates.bench-regression.ratio_tolerance_pct` | number | *(unset)* | Optional minimum paired-ratio threshold in percent. It only widens a derived floor; configured for an axis with no derived floor, it is a configuration error. |
+| `gates.bench-regression.require_sourced_override` | boolean | `false` | Require allow-regression reasons to cite a CI run URL or artifact path and name the arms. Every citation is also checked for freshness: a cited run must have completed, reached its regression guard, and measured a commit reachable from the head; a cited data artifact must post-date the branch's newest change under `citation_source_paths`. A citation that cannot be checked (no `gh`, unauthenticated, rate limited) is reported by name and leaves the gate armed. |
 | `gates.bench-regression.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.bench-regression.tolerance_pct` | number | `0.5` | Maximum allowed regression percentage |
 | `gates.ci-integrity.diff_only` | boolean | `true` | When true, scans only modified workflow files rather than all workflows |
@@ -350,6 +357,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `self-test` | Run the embedded negative / positive controls against this binary |
 | `completions` | Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish) |
 | `install-hooks` | Install pre-commit hook in the local git repository |
+| `bench` | Benchmark tooling for the bench-regression gate |
 <!-- /generated -->
 
 ### Exit Codes

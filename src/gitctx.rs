@@ -668,6 +668,69 @@ impl GitCtx {
             .unwrap_or(false))
     }
 
+    /// Full hex id of the `HEAD` commit, if there is one.
+    pub fn head_oid(&self) -> Option<String> {
+        self.repo
+            .head()
+            .ok()
+            .and_then(|h| h.peel_to_commit().ok())
+            .map(|c| c.id().to_string())
+    }
+
+    /// Committer time (seconds since the epoch) of the newest commit that changed any of
+    /// `paths` (repo-relative files or directories).
+    ///
+    /// With `branch_only`, only commits between the base and `HEAD` are considered and
+    /// `Ok(None)` means the branch changes none of `paths`; otherwise the whole history
+    /// reachable from `HEAD` is walked and `Ok(None)` means no commit ever touched them.
+    /// A commit changes a path when the path's tree entry differs from every parent's
+    /// (a merge that takes one side unchanged does not count, as in `git log -- <path>`).
+    pub fn newest_commit_time_touching(
+        &self,
+        paths: &[String],
+        branch_only: bool,
+    ) -> Result<Option<i64>> {
+        if branch_only && (self.base.is_none() || self.staged) {
+            bail!("no base commit to bound the branch's changes");
+        }
+        let entry_id = |tree: &Tree<'_>, path: &str| -> Option<Oid> {
+            let trimmed = path.trim_matches('/');
+            tree.get_path(std::path::Path::new(trimmed))
+                .ok()
+                .map(|e| e.id())
+        };
+        let mut walk = self.repo.revwalk()?;
+        walk.set_sorting(git2::Sort::TIME)?;
+        walk.push_head()?;
+        if branch_only {
+            if let Some(base) = self.base {
+                walk.hide(base)?;
+            }
+        }
+        let mut newest: Option<i64> = None;
+        for oid in walk {
+            let commit = self.repo.find_commit(oid?)?;
+            let tree = commit.tree()?;
+            let parents: Vec<Tree<'_>> = commit
+                .parents()
+                .map(|p| p.tree())
+                .collect::<std::result::Result<_, _>>()?;
+            let touched = paths.iter().any(|path| {
+                let here = entry_id(&tree, path);
+                if parents.is_empty() {
+                    here.is_some()
+                } else {
+                    parents.iter().all(|pt| entry_id(pt, path) != here)
+                }
+            });
+            if touched {
+                let t = commit.committer().when().seconds();
+                newest = Some(newest.map_or(t, |n: i64| n.max(t)));
+            }
+        }
+        Ok(newest)
+    }
+
     /// Commits between the base and `HEAD` as `(short_oid, message)` (empty when staged).
     pub fn commits(&self) -> Result<Vec<(String, String)>> {
         let (Some(base), false) = (self.base, self.staged) else {

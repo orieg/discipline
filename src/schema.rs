@@ -260,7 +260,25 @@ pub fn generate_schema() -> Value {
                     "noise_floor_pct": { "type": "number", "description": "Noise floor percentage (default: 0.5%)" },
                     "advisory_pct": { "type": "number", "description": "Advisory review percentage (default: 0.1%)" },
                     "exempt_arms": { "$ref": "#/$defs/StringListOrReset", "description": "Benchmark arms exempted from regression checks: exact name, the name as the benchmark prints it (`map_get random` matches `map_get/random`), a glob (`*.heap.*`), a trailing-`*` prefix, or a `::`/`/` path suffix. An entry matching no arm in the run is an error." },
-                    "require_sourced_override": { "type": "boolean", "description": "Require allow-regression reasons to cite a CI run URL or artifact path and name the arms" }
+                    "require_sourced_override": { "type": "boolean", "description": "Require allow-regression reasons to cite a CI run URL or artifact path and name the arms. Every citation is also checked for freshness: a cited run must have completed, reached its regression guard, and measured a commit reachable from the head; a cited data artifact must post-date the branch's newest change under `citation_source_paths`. A citation that cannot be checked (no `gh`, unauthenticated, rate limited) is reported by name and leaves the gate armed." },
+                    "citation_source_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Repo-relative files or directories whose changes can move a gated number. A cited data artifact last committed before the branch's newest change under these paths is stale. Empty: artifact citations cannot be dated and leave the gate armed." },
+                    "citation_measurement_jobs": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/MeasurementJob" },
+                        "description": "CI jobs that produce gated numbers, each with the step that gates them. A cited run that concluded `failure` is admitted only when every listed job it started reached its guard step with every earlier step green. Empty: a cited `failure` run cannot be told from a crashed benchmark and leaves the gate armed."
+                    },
+                    "mode": { "type": "string", "enum": ["version-vs-version", "paired-ratio"], "description": "Evaluation mode: `version-vs-version` compares base and head artifacts of the same arms (preferred when the old version can be built in the same run); `paired-ratio` compares a ratio of two arms measured in the same interleaved rounds against a committed ratio baseline (when building the old version is impractical). The two are not interchangeable." },
+                    "ratio_baseline": { "type": "string", "description": "Committed paired-ratio baseline (`discipline-bench-ratio-baseline/v1`), produced by `discipline bench derive`. Read from the base ref, never from head; loosening it needs a scoped `allow-regression: <path>` directive." },
+                    "ratio_tolerance_pct": { "type": "number", "description": "Optional minimum paired-ratio threshold in percent. It only widens a derived floor; configured for an axis with no derived floor, it is a configuration error." }
+                }
+            },
+            "MeasurementJob": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["job", "guard"],
+                "properties": {
+                    "job": { "type": "string", "description": "Job display name as the CI API lists it" },
+                    "guard": { "type": "string", "description": "Name of the step in that job that reads the numbers and enforces the regression guard" }
                 }
             },
             "ProvenanceTagsGate": {

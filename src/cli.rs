@@ -33,6 +33,39 @@ pub enum Commands {
     Docs(DocsArgs),
     /// Install pre-commit hook in the local git repository
     InstallHooks(InstallHooksArgs),
+    /// Benchmark tooling for the bench-regression gate
+    Bench(BenchArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct BenchArgs {
+    #[command(subcommand)]
+    pub command: BenchCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BenchCommand {
+    /// Derive paired-ratio noise floors and baseline ratios from repeated same-commit runs
+    Derive(BenchDeriveArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct BenchDeriveArgs {
+    /// `discipline-bench-ratio/v1` run files of the same code (at least two)
+    #[arg(required = true, num_args = 2..)]
+    pub runs: Vec<PathBuf>,
+
+    /// Merge the derived platform entry into this ratio baseline file (created if absent)
+    #[arg(long)]
+    pub baseline: Option<PathBuf>,
+
+    /// Accept runs of different commits (recorded in the baseline); only when the differences cannot move a number
+    #[arg(long)]
+    pub allow_mixed_commits: bool,
+
+    /// Derived cell floors above this percentage are reported but not gated
+    #[arg(long, default_value_t = 50.0)]
+    pub ceiling_pct: f64,
 }
 
 impl Commands {
@@ -48,6 +81,7 @@ impl Commands {
             Commands::Completions(_) => "completions",
             Commands::Docs(_) => "docs",
             Commands::InstallHooks(_) => "install-hooks",
+            Commands::Bench(_) => "bench",
         }
     }
 }

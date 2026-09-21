@@ -1671,22 +1671,37 @@ smoke_cost::set_contains
             )?;
             let fail_ok = out2.violations.len() == 2;
 
-            // Sourced override naming map_get: approved for map_get, map_insert fails
+            // Sourced override naming map_get, citing a run verified fresh (completed at
+            // the head under review): approved for map_get, map_insert fails
             let dirs = vec![ParsedDirective {
                 directive: "allow-regression".to_string(),
-                reason: "map_get trade refs https://github.com/orieg/expanse/actions/runs/34490311084".to_string(),
+                reason: "map_get trade refs https://github.com/acme/widgets/actions/runs/4401"
+                    .to_string(),
                 source: OverrideSource::PrBody,
                 hidden: false,
             }];
+            let fresh = crate::guards::perf::citation::CannedInstruments {
+                responses: std::collections::BTreeMap::from([
+                    (
+                        "repos/acme/widgets/actions/runs/4401".to_string(),
+                        serde_json::json!({"conclusion": "success", "head_sha": "abc123"}),
+                    ),
+                    (
+                        "repos/acme/widgets/compare/abc123...abc123".to_string(),
+                        serde_json::json!({"status": "identical"}),
+                    ),
+                ]),
+                head: Some("abc123".to_string()),
+                ..Default::default()
+            };
             let mut out3 = GateOutcome::new("bench-regression");
-            evaluate_metrics_regression_with_directives(
+            crate::guards::perf::evaluate_metrics_regression_with_instruments(
                 &dirs,
                 &settings,
-                &base_metrics,
-                &head_fail,
-                "base.txt",
-                "head.txt",
+                (&base_metrics, &head_fail),
+                ("base.txt", "head.txt"),
                 Severity::Error,
+                &fresh,
                 &mut out3,
             )?;
             let override_subset_ok = out3.overrides.len() == 1 && out3.violations.len() == 1;
@@ -1936,6 +1951,126 @@ smoke_cost::set_contains
                 &[], &settings, &m, &grown, "b.json", "h.json", Severity::Error, &mut regressed,
             )?;
             Ok(memory_ok && zero_named && regressed.violations.len() == 1)
+        },
+    ),
+    (
+        "bench-regression: citation freshness voids stale runs and artifacts and keeps undecidable citations armed",
+        || {
+            use crate::config::MeasurementJob;
+            use crate::guards::perf::citation::{
+                check_citation_freshness, CannedInstruments, FreshnessPolicy, Unavailable,
+            };
+            let run = "https://github.com/acme/widgets/actions/runs/7";
+            let api = "repos/acme/widgets/actions/runs/7";
+            let jobs = vec![MeasurementJob {
+                job: "Perf / Counts".to_string(),
+                guard: "Guard".to_string(),
+            }];
+            let paths = vec!["src".to_string()];
+            let policy = FreshnessPolicy {
+                measurement_jobs: &jobs,
+                source_paths: &paths,
+            };
+            let canned = |conclusion: &str, status: &str| CannedInstruments {
+                responses: std::collections::BTreeMap::from([
+                    (
+                        api.to_string(),
+                        serde_json::json!({"conclusion": conclusion, "head_sha": "c1"}),
+                    ),
+                    (
+                        "repos/acme/widgets/compare/c1...h1".to_string(),
+                        serde_json::json!({"status": status}),
+                    ),
+                ]),
+                head: Some("h1".to_string()),
+                tracked: ["results/a.json".to_string()].into(),
+                last_change: [("results/a.json".to_string(), 100)].into(),
+                branch_change: Some(200),
+            };
+            let reason = format!("map_get trade in {run}");
+            let fresh = check_citation_freshness(&reason, &policy, &canned("success", "ahead"));
+            let cancelled =
+                check_citation_freshness(&reason, &policy, &canned("cancelled", "ahead"));
+            let rewritten =
+                check_citation_freshness(&reason, &policy, &canned("success", "diverged"));
+            // The artifact precedes the run URL and is stale; every citation is checked.
+            let both = format!("map_get trade in results/a.json, run {run}");
+            let stale_artifact =
+                check_citation_freshness(&both, &policy, &canned("success", "ahead"));
+            let undecidable = check_citation_freshness(&reason, &policy, &Unavailable);
+            Ok(fresh.is_fresh()
+                && cancelled.problems.len() == 1
+                && rewritten.problems.len() == 1
+                && stale_artifact.problems.len() == 1
+                && stale_artifact.problems[0].contains("results/a.json")
+                && undecidable.problems.is_empty()
+                && undecidable.undecidable.len() == 1
+                && !undecidable.is_fresh())
+        },
+    ),
+    (
+        "bench-regression: paired-ratio flags whole-interval regressions and refuses contaminated controls",
+        || {
+            use crate::config::Severity;
+            use crate::guards::perf::citation::{FreshnessPolicy, Unavailable};
+            use crate::guards::perf::paired_ratio::{evaluate_run, EvalOptions, RatioBaseline, RatioRun};
+            use crate::guards::GateOutcome;
+            let jitter = [-0.002, 0.001, 0.0, 0.002, -0.001, 0.001, 0.0, -0.002];
+            let run = |cell: f64, control: f64| -> anyhow::Result<RatioRun> {
+                let rounds: Vec<_> = jitter.iter().enumerate().map(|(i, j)| serde_json::json!({
+                    "subject": cell * (1.0 + j), "twin": 1.0,
+                    "order": if i % 2 == 0 { "subject-first" } else { "twin-first" }})).collect();
+                let ctl: Vec<_> = jitter.iter().enumerate().map(|(i, j)| serde_json::json!({
+                    "a": control * (1.0 + j), "b": 1.0,
+                    "order": if i % 2 == 0 { "a-first" } else { "b-first" }})).collect();
+                let v = serde_json::json!({
+                    "schema": "discipline-bench-ratio/v1",
+                    "provenance": {"platform": "p", "runner_class": "c", "commit": "x",
+                                   "twin": {"identity": "t", "version": "1"}},
+                    "axes": {"timing": {"adverse": "up",
+                        "cells": {"map_get": {"rounds": rounds}},
+                        "controls": {"ctl": {"rounds": ctl}}}}});
+                RatioRun::parse(&v.to_string(), "self-test")
+            };
+            let baseline = RatioBaseline::parse(&serde_json::json!({
+                "schema": "discipline-bench-ratio-baseline/v1",
+                "platforms": {"p": {"runner_class": "c", "twin": {"identity": "t", "version": "1"},
+                  "derived_from": {"runs": 4, "distinct_runners": 2, "commits": ["x"], "mixed_commits": false},
+                  "axes": {"timing": {"adverse": "up",
+                    "derived": {"axis_floor_pct": 5.0, "p95_drift_pct": 3.0, "pairwise_samples": 6,
+                      "quantile": 0.95, "axis_safety_factor": 1.25, "cell_safety_factor": 1.5,
+                      "per_cell_below_axis_allowed": false, "ceiling_pct": 50.0, "twin_axis_floor_pct": 10.0},
+                    "cells": {"map_get": {"ratio": 1.0, "floor_pct": 5.0, "worst_drift_pct": 3.0,
+                      "gateable": true, "twin_median": 1.0, "twin_floor_pct": 10.0}}}}}}
+            }).to_string(), "self-test")?;
+            let eval = |r: &RatioRun| -> anyhow::Result<GateOutcome> {
+                let mut out = GateOutcome::new("bench-regression");
+                let opts = EvalOptions {
+                    severity: Severity::Error,
+                    tolerance_pct: None,
+                    allow_cross_runner: false,
+                    require_sourced_override: false,
+                    directives: &[],
+                    policy: FreshnessPolicy { measurement_jobs: &[], source_paths: &[] },
+                    instruments: &Unavailable,
+                    location: "run.json",
+                };
+                evaluate_run(r, Some(&baseline), &opts, &mut out)?;
+                Ok(out)
+            };
+            let titles = |o: &GateOutcome| o.violations.iter().map(|v| v.title.clone()).collect::<Vec<_>>();
+            let clean = eval(&run(1.01, 1.0)?)?;
+            let regressed = eval(&run(1.20, 1.0)?)?;
+            let contaminated = eval(&run(1.60, 1.30)?)?;
+            let mut no_controls = run(1.0, 1.0)?;
+            if let Some(a) = no_controls.axes.get_mut("timing") {
+                a.controls.clear();
+            }
+            let refused = RatioRun::parse(&serde_json::to_string(&no_controls)?, "self-test").is_err();
+            Ok(clean.violations.is_empty()
+                && titles(&regressed) == ["Paired Ratio Regressed"]
+                && titles(&contaminated) == ["Paired Ratio Not Comparable"]
+                && refused)
         },
     ),
     (

@@ -5690,7 +5690,10 @@ fn bench_regression_dual_file_mode_and_missing_baseline() {
     let titles = run_fail.titles("bench-regression");
     assert!(titles.contains(&"Instruction Count Regressed".to_string()));
 
-    // Sourced override naming arm passes
+    // A sourced override naming the arm is admitted only once its citation is verified
+    // fresh; with no `gh` available the citation is undecidable and the gate stays armed
+    // (warning severity here, so the exit code is 0). The admitted path, with recorded
+    // API responses, is covered in tests/test_bench_rigor.rs.
     let run_pass = repo.check_with_pr(
         &[
             "--suite", "bench",
@@ -5698,7 +5701,7 @@ fn bench_regression_dual_file_mode_and_missing_baseline() {
             "--bench-head-file", head_file.to_str().unwrap(),
             "--config-override", "[gates.bench-regression]\ntolerance_pct = 5.0\nrequire_sourced_override = true\n",
         ],
-        "allow-regression: sync_map_insert trade refs https://github.com/orieg/expanse/actions/runs/34490311084",
+        "allow-regression: sync_map_insert trade refs https://github.com/acme/widgets/actions/runs/4401",
     );
     assert_eq!(run_pass.code, 0);
     assert_eq!(
@@ -5706,8 +5709,11 @@ fn bench_regression_dual_file_mode_and_missing_baseline() {
             .as_array()
             .unwrap()
             .len(),
-        1
+        0
     );
+    assert!(run_pass
+        .titles("bench-regression")
+        .contains(&"Regression Override Not Verified — Citation Undecidable".to_string()));
 
     // Missing baseline fails closed with NO BASELINE note
     let missing_base = repo.dir.path().join("nonexistent_base.json");
