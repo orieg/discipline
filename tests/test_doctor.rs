@@ -333,3 +333,47 @@ fn a_gate_without_its_input_is_reported_as_not_evaluated() {
     // ci-skip-set needs DISCIPLINE_CI_CONTEXT; without it the gate is neither passed nor failed.
     assert!(run.stdout.contains("1 not evaluated"), "{}", run.stdout);
 }
+
+#[test]
+fn an_ssh_host_alias_in_the_remote_resolves_to_its_hostname() {
+    // `git@forge:o/r.git` names a `Host forge` alias in ~/.ssh/config; the forge's
+    // API is at its HostName, not at `https://forge`.
+    let repo = protected_repo();
+    repo.git(&["remote", "add", "origin", "git@forge:o/r.git"]);
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".ssh")).unwrap();
+    std::fs::write(
+        home.path().join(".ssh/config"),
+        "Host forge\n    HostName gitea.example.com\n    Port 2222\n    User git\n",
+    )
+    .unwrap();
+    let api = FakeForge::start();
+    api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));
+    api.serve_raw("repos/o/r/branch_protections", 200, &[], "[]");
+    let url = api.url();
+    let home_str = home.path().to_str().unwrap();
+    let run = repo.run(
+        &["doctor", "--format", "json"],
+        &[
+            ("HOME", home_str),
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ],
+    );
+    let v: serde_json::Value = serde_json::from_str(&run.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}\n{}", run.stdout, run.stderr));
+    assert_eq!(v["platform"], "gitea", "{}", run.stdout);
+    assert_eq!(
+        v["forge_url"], "https://gitea.example.com",
+        "{}",
+        run.stdout
+    );
+    assert_eq!(v["repository"], "o/r");
+
+    // Without the alias the address is the bare alias, and the hint says so.
+    let run = repo.run(
+        &["doctor"],
+        &[("HOME", "/nonexistent-home"), ("DISCIPLINE_FORGE", "gitea")],
+    );
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.stdout.contains("(https://forge)"), "{}", run.stdout);
+}

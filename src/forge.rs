@@ -226,10 +226,154 @@ pub fn detect(env: &dyn Fn(&str) -> Option<String>, origin: Option<&str>) -> Res
 
 /// [`detect`] against the process environment and a repository's `origin`.
 pub fn detect_for(git: &crate::gitctx::GitCtx) -> Result<Forge, String> {
-    detect(
-        &|k| std::env::var(k).ok(),
-        git.remote_url("origin").as_deref(),
-    )
+    let origin = git
+        .remote_url("origin")
+        .map(|o| resolve_ssh_alias(&o, &|alias| ssh_hostname_from_home(alias)));
+    detect(&|k| std::env::var(k).ok(), origin.as_deref())
+}
+
+static SSH_REMOTE: LazyLock<Regex> = LazyLock::new(|| {
+    // `ssh://[user@]host[:port]/path` or scp-like `[user@]host:path` (not `scheme://`).
+    Regex::new(r"^(ssh://(?:[^@/]+@)?)([^/:]+)(.*)$|^((?:[^@/:]+@)?)([^/:]+)(:[^/].*)$").unwrap()
+});
+
+/// Rewrite the host of an SSH remote through `resolve` (an OpenSSH `Host` alias to its
+/// `HostName`). HTTP(S) remotes and hosts that resolve to nothing are returned unchanged.
+pub fn resolve_ssh_alias(remote: &str, resolve: &dyn Fn(&str) -> Option<String>) -> String {
+    let remote = remote.trim();
+    if remote.contains("://") && !remote.starts_with("ssh://") {
+        return remote.to_string();
+    }
+    let Some(c) = SSH_REMOTE.captures(remote) else {
+        return remote.to_string();
+    };
+    let (prefix, host, rest) = match (c.get(1), c.get(2), c.get(3)) {
+        (Some(p), Some(h), Some(r)) => (p.as_str(), h.as_str(), r.as_str()),
+        _ => (
+            c.get(4).map_or("", |m| m.as_str()),
+            c.get(5).map_or("", |m| m.as_str()),
+            c.get(6).map_or("", |m| m.as_str()),
+        ),
+    };
+    match resolve(host) {
+        Some(real) if !real.is_empty() && real != host => format!("{prefix}{real}{rest}"),
+        _ => remote.to_string(),
+    }
+}
+
+/// `HostName` for `alias` from `~/.ssh/config`.
+pub fn ssh_hostname_from_home(alias: &str) -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let dir = std::path::Path::new(&home).join(".ssh");
+    let text = read_ssh_config(&dir.join("config"), &dir, 0);
+    ssh_hostname(&text, alias)
+}
+
+/// A config file with its `Include` directives expanded in place (relative paths are
+/// under `~/.ssh`; `*` and `?` match file names), up to a fixed depth.
+fn read_ssh_config(path: &std::path::Path, ssh_dir: &std::path::Path, depth: usize) -> String {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    if depth > 4 {
+        return text;
+    }
+    let mut out = String::new();
+    for line in text.lines() {
+        let (key, args) = ssh_config_line(line);
+        if !key.eq_ignore_ascii_case("include") {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        for arg in args {
+            let expanded = if let Some(rest) = arg.strip_prefix("~/") {
+                ssh_dir.parent().map(|h| h.join(rest)).unwrap_or_default()
+            } else if std::path::Path::new(&arg).is_absolute() {
+                std::path::PathBuf::from(&arg)
+            } else {
+                ssh_dir.join(&arg)
+            };
+            let name = expanded
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned());
+            match (expanded.parent(), name) {
+                (Some(parent), Some(name)) if name.contains(['*', '?']) => {
+                    let Ok(glob) = globset::Glob::new(&name) else {
+                        continue;
+                    };
+                    let matcher = glob.compile_matcher();
+                    let mut files: Vec<_> = std::fs::read_dir(parent)
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| p.file_name().is_some_and(|n| matcher.is_match(n)))
+                        .collect();
+                    files.sort();
+                    for f in files {
+                        out.push_str(&read_ssh_config(&f, ssh_dir, depth + 1));
+                    }
+                }
+                _ => out.push_str(&read_ssh_config(&expanded, ssh_dir, depth + 1)),
+            }
+        }
+    }
+    out
+}
+
+/// Keyword and arguments of one OpenSSH config line (`Key value`, `Key=value`, quotes).
+fn ssh_config_line(line: &str) -> (String, Vec<String>) {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return (String::new(), Vec::new());
+    }
+    let (key, rest) = match line.find(|c: char| c.is_whitespace() || c == '=') {
+        Some(i) => (
+            &line[..i],
+            line[i..].trim_start_matches(|c: char| c.is_whitespace() || c == '='),
+        ),
+        None => (line, ""),
+    };
+    let args = rest
+        .split_whitespace()
+        .map(|a| a.trim_matches('"').to_string())
+        .collect();
+    (key.to_string(), args)
+}
+
+/// `HostName` for `alias` from OpenSSH client config text, as `ssh` resolves it: the
+/// first `HostName` in a section that applies wins (the lines before any `Host` apply to
+/// every host); `Host` patterns take `*`, `?` and `!` negation; `%h` is the alias.
+/// `Match` sections are not evaluated and never apply.
+pub fn ssh_hostname(config: &str, alias: &str) -> Option<String> {
+    let pattern_matches = |pat: &str| {
+        globset::Glob::new(pat)
+            .map(|g| g.compile_matcher().is_match(alias))
+            .unwrap_or(false)
+    };
+    let mut applies = true;
+    for line in config.lines() {
+        let (key, args) = ssh_config_line(line);
+        if key.eq_ignore_ascii_case("host") {
+            let negated = args
+                .iter()
+                .filter_map(|a| a.strip_prefix('!'))
+                .any(&pattern_matches);
+            applies = !negated
+                && args
+                    .iter()
+                    .filter(|a| !a.starts_with('!'))
+                    .any(|p| pattern_matches(p));
+        } else if key.eq_ignore_ascii_case("match") {
+            applies = false;
+        } else if applies && key.eq_ignore_ascii_case("hostname") {
+            if let Some(h) = args.first() {
+                return Some(h.replace("%h", alias).replace("%%", "%"));
+            }
+        }
+    }
+    None
 }
 
 /// Read-only access to a forge's REST API.
@@ -806,5 +950,93 @@ mod tests {
         let off = env(&[("DISCIPLINE_NO_NETWORK", "1")]);
         let err = HttpApi { env: &off }.get(&https, "repos/o/r").unwrap_err();
         assert!(err.contains("DISCIPLINE_NO_NETWORK"), "{err}");
+    }
+
+    #[test]
+    fn ssh_aliases_resolve_like_openssh() {
+        let cfg = "# global\nUser git\n\nHost gitea\n    HostName gitea.example.com\n    Port 2222\n\nHost *.corp !bastion.corp\n  HostName=%h.internal.example\n\nHost gitea\n  HostName shadowed.example\n\nMatch host other\n  HostName never.example\n";
+        assert_eq!(
+            ssh_hostname(cfg, "gitea").as_deref(),
+            Some("gitea.example.com")
+        );
+        assert_eq!(
+            ssh_hostname(cfg, "git.corp").as_deref(),
+            Some("git.corp.internal.example")
+        );
+        assert_eq!(ssh_hostname(cfg, "bastion.corp"), None, "negated pattern");
+        assert_eq!(
+            ssh_hostname(cfg, "other"),
+            None,
+            "Match sections are not evaluated"
+        );
+        assert_eq!(
+            ssh_hostname(
+                "HostName global.example\nHost x\n HostName x.example\n",
+                "x"
+            )
+            .as_deref(),
+            Some("global.example"),
+            "first value wins"
+        );
+
+        let resolve = |a: &str| ssh_hostname(cfg, a);
+        assert_eq!(
+            resolve_ssh_alias("git@gitea:o/r.git", &resolve),
+            "git@gitea.example.com:o/r.git"
+        );
+        assert_eq!(
+            resolve_ssh_alias("ssh://git@gitea:2222/o/r.git", &resolve),
+            "ssh://git@gitea.example.com:2222/o/r.git"
+        );
+        assert_eq!(
+            resolve_ssh_alias("gitea:o/r", &resolve),
+            "gitea.example.com:o/r"
+        );
+        assert_eq!(
+            resolve_ssh_alias("https://gitea/o/r.git", &resolve),
+            "https://gitea/o/r.git",
+            "not an SSH remote"
+        );
+        assert_eq!(
+            resolve_ssh_alias("git@github.com:o/r.git", &resolve),
+            "git@github.com:o/r.git",
+            "no alias"
+        );
+
+        let forge = detect(
+            &|_| None,
+            Some(&resolve_ssh_alias("git@gitea:o/r.git", &resolve)),
+        )
+        .unwrap();
+        assert_eq!(
+            (forge.kind, forge.url.as_str(), forge.repo.as_str()),
+            (ForgeKind::Gitea, "https://gitea.example.com", "o/r")
+        );
+    }
+
+    #[test]
+    fn ssh_config_includes_are_followed() {
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        std::fs::create_dir_all(ssh.join("config.d")).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            "Include config.d/*\nHost fallback\n HostName fallback.example\n",
+        )
+        .unwrap();
+        std::fs::write(
+            ssh.join("config.d/forge"),
+            "Host forge\n  HostName forge.example.org\n",
+        )
+        .unwrap();
+        let text = read_ssh_config(&ssh.join("config"), &ssh, 0);
+        assert_eq!(
+            ssh_hostname(&text, "forge").as_deref(),
+            Some("forge.example.org")
+        );
+        assert_eq!(
+            ssh_hostname(&text, "fallback").as_deref(),
+            Some("fallback.example")
+        );
     }
 }

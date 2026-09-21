@@ -1814,6 +1814,7 @@ smoke_cost::set_contains
             };
             let unknown = crate::doctor::Report {
                 platform: "t".into(),
+                forge_url: None,
                 repository: None,
                 branch: None,
                 findings: vec![crate::doctor::Finding {

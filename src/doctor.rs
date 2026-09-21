@@ -76,6 +76,9 @@ impl Finding {
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
     pub platform: String,
+    /// Web address of the forge the platform checks read, when one was identified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forge_url: Option<String>,
     pub repository: Option<String>,
     pub branch: Option<String>,
     pub findings: Vec<Finding>,
@@ -96,8 +99,12 @@ impl Report {
 
     pub fn render_text(&self) -> String {
         let mut out = format!(
-            "platform: {}   repository: {}   branch: {}\n\n",
+            "platform: {}{}   repository: {}   branch: {}\n\n",
             self.platform,
+            self.forge_url
+                .as_deref()
+                .map(|u| format!(" ({u})"))
+                .unwrap_or_default(),
             self.repository.as_deref().unwrap_or("-"),
             self.branch.as_deref().unwrap_or("-")
         );
@@ -1612,7 +1619,7 @@ pub fn run(input: &DoctorInput) -> Report {
                                 Status::Unknown,
                                 format!("could not read the default branch of {}: {e}", forge.repo),
                             )
-                            .fix(access_hint(forge.kind)),
+                            .fix(access_hint(forge.kind, &e)),
                         ),
                     }
                 }
@@ -1632,7 +1639,7 @@ pub fn run(input: &DoctorInput) -> Report {
                                 Status::Unknown,
                                 format!("could not read the protection of `{b}`: {e}"),
                             )
-                            .fix(access_hint(forge.kind)),
+                            .fix(access_hint(forge.kind, &e)),
                         ),
                     }
                 }
@@ -1642,13 +1649,18 @@ pub fn run(input: &DoctorInput) -> Report {
 
     Report {
         platform: platform_name,
+        forge_url: input.forge.as_ref().ok().map(|f| f.url.clone()),
         repository,
         branch,
         findings,
     }
 }
 
-fn access_hint(kind: ForgeKind) -> &'static str {
+fn access_hint(kind: ForgeKind, error: &str) -> &'static str {
+    // A transport failure is about the address, not the credentials.
+    if error.contains("request to ") && error.contains(" failed") {
+        return "Check the forge's web address: set DISCIPLINE_FORGE_URL (for example https://git.example.com) when the remote's host is not where the API is served, or use --local-only.";
+    }
     match kind {
         ForgeKind::GitHub => "Set GH_TOKEN or GITHUB_TOKEN (or DISCIPLINE_FORGE_TOKEN) with read access, or use --local-only.",
         ForgeKind::GitLab => "Set GITLAB_TOKEN (or DISCIPLINE_FORGE_TOKEN), or use --local-only.",
@@ -2189,9 +2201,19 @@ test:
     }
 
     #[test]
+    fn an_unreachable_host_points_at_the_address_not_the_token() {
+        let dns = "request to gitea failed: io: failed to lookup address information";
+        assert!(access_hint(ForgeKind::Gitea, dns).contains("DISCIPLINE_FORGE_URL"));
+        let auth =
+            "gitea.example.com answered HTTP 403 Only signed in user is allowed to call APIs.";
+        assert!(access_hint(ForgeKind::Gitea, auth).contains("GITEA_TOKEN"));
+    }
+
+    #[test]
     fn exit_code_follows_the_gate_contract() {
         let report = |s: &[Status]| Report {
             platform: "t".into(),
+            forge_url: None,
             repository: None,
             branch: None,
             findings: s.iter().map(|&st| Finding::new("x", st, "")).collect(),
