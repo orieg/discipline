@@ -76,7 +76,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched host/runner provenance |
 | `gates.bench-regression.base_file` | string | *(unset)* | In-job base benchmark result file path for dual-file regression checks |
 | `gates.bench-regression.enabled` | boolean | `true` | Whether this gate is active |
-| `gates.bench-regression.exempt_arms` | list | `[]` | Declared exempt benchmark arms |
+| `gates.bench-regression.exempt_arms` | list | `[]` | Benchmark arms exempted from regression checks: exact name, the name as the benchmark prints it (`map_get random` matches `map_get/random`), a glob (`*.heap.*`), a trailing-`*` prefix, or a `::`/`/` path suffix. An entry matching no arm in the run is an error. |
 | `gates.bench-regression.exempt_paths` | list | *(6 entries)* | File path globs exempted from this gate |
 | `gates.bench-regression.head_file` | string | *(unset)* | In-job head benchmark result file path for dual-file regression checks |
 | `gates.bench-regression.max_noise_cv` | number | *(unset)* | Maximum acceptable coefficient of variation (std_dev / mean) |

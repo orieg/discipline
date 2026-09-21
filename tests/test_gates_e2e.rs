@@ -7303,3 +7303,207 @@ fn suppression_delta_defaults_to_nonblocking_warning() {
         "error"
     );
 }
+
+// ---- bench-regression: arm exemptions, memory rows, zero estimates ----------
+
+/// Runs the bench suite in dual-file mode against two in-job result files.
+fn bench_dual(repo: &Repo, base: Option<&str>, head: &str, config: &str) -> common::Run {
+    let head_file = repo.dir.path().join("head_bench_out.json");
+    std::fs::write(&head_file, head).unwrap();
+    let head_s = head_file.to_str().unwrap().to_string();
+    let mut args = vec!["--suite", "bench", "--config-override", config];
+    let base_s;
+    if let Some(b) = base {
+        let base_file = repo.dir.path().join("base_bench_out.json");
+        std::fs::write(&base_file, b).unwrap();
+        base_s = base_file.to_str().unwrap().to_string();
+        args.extend(["--bench-base-file", base_s.as_str()]);
+    }
+    args.extend(["--bench-head-file", head_s.as_str()]);
+    repo.check(&args)
+}
+
+fn notes_of(run: &common::Run, gate: &str) -> Vec<String> {
+    run.outcome(gate)["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap().to_string())
+        .collect()
+}
+
+const MEMORY_AND_TIMING_BASE: &str = r#"{"benchmarks": {
+    "core.bitset.write.judy": {"median_ms": 14.53, "runs_ms": [14.39, 14.48, 14.51, 14.53, 14.54, 14.54, 14.60]},
+    "core.bitset.heap.judy": {"median_ms": 0, "heap_bytes": 160, "rss_bytes": 20480},
+    "core.int_to_int.heap.php": {"median_ms": 0, "heap_bytes": 4096, "rss_bytes": 40960}
+}}"#;
+
+#[test]
+fn bench_regression_parses_memory_rows_alongside_timing_rows() {
+    // Memory rows carry `median_ms: 0`; they used to be parsed as timing with a
+    // 0.0 point estimate and abort the gate with exit 2. Consumer-reported.
+    let repo = Repo::new();
+    repo.commit("init");
+    let cfg = "[gates.bench-regression]\nseverity = \"error\"\ntolerance_pct = 5.0\n";
+
+    let same = bench_dual(
+        &repo,
+        Some(MEMORY_AND_TIMING_BASE),
+        MEMORY_AND_TIMING_BASE,
+        cfg,
+    );
+    assert_eq!(same.code, 0, "{}{}", same.stdout, same.stderr);
+
+    let grown = MEMORY_AND_TIMING_BASE.replace("\"heap_bytes\": 160", "\"heap_bytes\": 320");
+    let run = bench_dual(&repo, Some(MEMORY_AND_TIMING_BASE), &grown, cfg);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("bench-regression");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let msg = violations[0]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("core.bitset.heap.judy") && msg.contains("160 -> 320 bytes"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn bench_regression_exempt_arms_accepts_globs() {
+    let repo = Repo::new();
+    repo.commit("init");
+    let base = r#"{"arms": {"core.bitset.heap.judy": 1000, "core.int_to_int.heap.php": 1000, "core.bitset.write.judy": 1000}}"#;
+    let head = r#"{"arms": {"core.bitset.heap.judy": 1500, "core.int_to_int.heap.php": 1500, "core.bitset.write.judy": 1000}}"#;
+
+    let unexempt = bench_dual(
+        &repo,
+        Some(base),
+        head,
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    );
+    assert_eq!(unexempt.code, 1, "{}", unexempt.stdout);
+    assert_eq!(unexempt.violations("bench-regression").len(), 2);
+
+    let run = bench_dual(
+        &repo,
+        Some(base),
+        head,
+        "[gates.bench-regression]\nseverity = \"error\"\nexempt_arms = [\"*.heap.*\"]\n",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let notes = notes_of(&run, "bench-regression");
+    for arm in ["core.bitset.heap.judy", "core.int_to_int.heap.php"] {
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains(arm) && n.contains("exempt")),
+            "{arm} not exempted: {notes:?}"
+        );
+    }
+}
+
+#[test]
+fn bench_regression_exempt_arms_accepts_the_printed_arm_form() {
+    // The benchmark prints `map_get random`; the violation names `map_get/random`.
+    let repo = Repo::new();
+    repo.commit("init");
+    let console = "instructions::cost::map_get random:\"random\"\n  Instructions:               1,500|1,000 (+50.0000%)\n";
+
+    let unexempt = bench_dual(
+        &repo,
+        None,
+        console,
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    );
+    assert_eq!(unexempt.code, 1, "{}", unexempt.stdout);
+    let msg = unexempt.violations("bench-regression")[0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(msg.contains("map_get/random"), "{msg}");
+
+    let run = bench_dual(
+        &repo,
+        None,
+        console,
+        "[gates.bench-regression]\nseverity = \"error\"\nexempt_arms = [\"map_get random\"]\n",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
+#[test]
+fn bench_regression_stale_exempt_arm_is_an_error() {
+    let repo = Repo::new();
+    repo.commit("init");
+    let arms = r#"{"arms": {"map_get/random": 1000}}"#;
+
+    // Dual-file mode: `set_contains` matches no arm in the run.
+    let run = bench_dual(
+        &repo,
+        Some(arms),
+        arms,
+        "[gates.bench-regression]\nexempt_arms = [\"map_get random\", \"set_contains\"]\n",
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("bench-regression");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["title"], "Stale Benchmark Arm Exemption");
+    assert_eq!(violations[0]["severity"], "error");
+    assert!(violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("set_contains"));
+
+    // Git mode: an entry covering an arm in an unchanged tracked artifact is live;
+    // only an entry matching no tracked artifact is stale.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("benchmarks/a_bench.json", r#"{"arms": {"map_get": 1000}}"#),
+            (
+                "benchmarks/b_bench.json",
+                r#"{"arms": {"set_contains": 1000}}"#,
+            ),
+        ],
+        "base: benchmarks",
+    );
+    repo.write("benchmarks/a_bench.json", r#"{"arms": {"map_get": 1001}}"#);
+    let live = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\nexempt_arms = [\"set_contains\"]\n",
+    ]);
+    assert_eq!(live.code, 0, "{}{}", live.stdout, live.stderr);
+
+    let stale = repo.check(&[
+        "--suite",
+        "bench",
+        "--config-override",
+        "[gates.bench-regression]\nseverity = \"error\"\nexempt_arms = [\"set_insert\"]\n",
+    ]);
+    assert_eq!(stale.code, 1, "{}{}", stale.stdout, stale.stderr);
+    assert_eq!(
+        stale.titles("bench-regression"),
+        vec!["Stale Benchmark Arm Exemption".to_string()]
+    );
+}
+
+#[test]
+fn bench_regression_zero_point_estimate_is_not_comparable() {
+    let repo = Repo::new();
+    repo.commit("init");
+    let zero = r#"{"benchmarks": {"core.noop.judy": {"median_ms": 0}}}"#;
+    let run = bench_dual(
+        &repo,
+        Some(zero),
+        zero,
+        "[gates.bench-regression]\nseverity = \"error\"\n",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let notes = notes_of(&run, "bench-regression");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("core.noop.judy") && n.contains("not comparable")),
+        "{notes:?}"
+    );
+}

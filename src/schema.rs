@@ -258,7 +258,7 @@ pub fn generate_schema() -> Value {
                     "head_file": { "type": "string", "description": "In-job head benchmark result file path for dual-file regression checks" },
                     "noise_floor_pct": { "type": "number", "description": "Noise floor percentage (default: 0.5%)" },
                     "advisory_pct": { "type": "number", "description": "Advisory review percentage (default: 0.1%)" },
-                    "exempt_arms": { "$ref": "#/$defs/StringListOrReset", "description": "Declared exempt benchmark arms" },
+                    "exempt_arms": { "$ref": "#/$defs/StringListOrReset", "description": "Benchmark arms exempted from regression checks: exact name, the name as the benchmark prints it (`map_get random` matches `map_get/random`), a glob (`*.heap.*`), a trailing-`*` prefix, or a `::`/`/` path suffix. An entry matching no arm in the run is an error." },
                     "require_sourced_override": { "type": "boolean", "description": "Require allow-regression reasons to cite a CI run URL or artifact path and name the arms" }
                 }
             },

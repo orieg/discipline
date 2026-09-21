@@ -1766,6 +1766,74 @@ smoke_cost::set_contains
         },
     ),
     (
+        "bench-regression: exempt_arms globs, printed form, and stale entries discriminate",
+        || {
+            use crate::guards::perf::{report_stale_exempt_arms, ArmExemptions};
+            use crate::guards::GateOutcome;
+
+            let entries = vec!["*.heap.*".to_string(), "map_get random".to_string()];
+            let ex = ArmExemptions::new(&entries)?;
+            let globbed = ex.matches("core.bitset.heap.judy") && ex.matches("core.int_to_int.heap.php");
+            let printed = ex.matches("map_get/random");
+            let untouched = !ex.matches("core.bitset.write.judy") && !ex.matches("map_insert/random");
+            let malformed_rejected = ArmExemptions::new(&["core.[heap".to_string()]).is_err();
+
+            let arms = vec!["map_get/random".to_string(), "core.bitset.heap.judy".to_string()];
+            let mut live = GateOutcome::new("bench-regression");
+            report_stale_exempt_arms(&entries, &arms, None, &mut live)?;
+            let mut stale_entries = entries.clone();
+            stale_entries.push("set_contains".to_string());
+            let mut stale = GateOutcome::new("bench-regression");
+            report_stale_exempt_arms(&stale_entries, &arms, None, &mut stale)?;
+
+            Ok(globbed
+                && printed
+                && untouched
+                && malformed_rejected
+                && live.violations.is_empty()
+                && stale.violations.len() == 1)
+        },
+    ),
+    (
+        "bench-regression: memory rows gate as byte counters and zero timing is not comparable",
+        || {
+            use crate::config::{BenchRegressionGate, Severity};
+            use crate::guards::perf::bounds::DiscreteMetric;
+            use crate::guards::perf::{
+                evaluate_metrics_regression_with_directives, parse_metrics, MetricValue,
+            };
+            use crate::guards::GateOutcome;
+
+            let json = r#"{"benchmarks": {
+                "core.bitset.heap.judy": {"median_ms": 0, "heap_bytes": 160, "rss_bytes": 20480},
+                "core.noop.judy": {"median_ms": 0}
+            }}"#;
+            let m = parse_metrics("bench.json", json)?;
+            let heap = m.iter().find(|x| x.name == "core.bitset.heap.judy");
+            let memory_ok = heap.is_some_and(|h| {
+                h.unit == "bytes" && h.value == MetricValue::Discrete(DiscreteMetric::new(160))
+            });
+
+            let settings = BenchRegressionGate::default();
+            let mut same = GateOutcome::new("bench-regression");
+            evaluate_metrics_regression_with_directives(
+                &[], &settings, &m, &m, "b.json", "h.json", Severity::Error, &mut same,
+            )?;
+            let zero_named = same.violations.is_empty()
+                && same
+                    .notes
+                    .iter()
+                    .any(|n| n.contains("core.noop.judy") && n.contains("not comparable"));
+
+            let grown = parse_metrics("bench.json", &json.replace("\"heap_bytes\": 160", "\"heap_bytes\": 320"))?;
+            let mut regressed = GateOutcome::new("bench-regression");
+            evaluate_metrics_regression_with_directives(
+                &[], &settings, &m, &grown, "b.json", "h.json", Severity::Error, &mut regressed,
+            )?;
+            Ok(memory_ok && zero_named && regressed.violations.len() == 1)
+        },
+    ),
+    (
         "scope-confinement: check_path_confinement discriminates authorized, forbidden, and exempt files",
         || {
             use globset::{Glob, GlobSetBuilder};

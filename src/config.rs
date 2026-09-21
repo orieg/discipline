@@ -749,7 +749,11 @@ pub struct BenchRegressionGate {
     pub noise_floor_pct: Option<f64>,
     /// Advisory review percentage (default: 0.1%). Regressions above this render review notices in notes.
     pub advisory_pct: Option<f64>,
-    /// Declared exempt arms (e.g. random arms of map_get, set_contains).
+    /// Benchmark arms exempted from regression checks. Matches the exact name, the name
+    /// as the benchmark prints it (`map_get random` matches `map_get/random`), a glob
+    /// (`*.heap.*`, `*::random_*`), a trailing-`*` prefix, or a `::`/`/` path suffix.
+    /// An entry that matches no arm in the run is an error, so a stale exemption cannot
+    /// silently stop covering something.
     pub exempt_arms: Vec<String>,
     /// Require allow-regression directive reasons to carry a verifiable citation and arm names.
     pub require_sourced_override: bool,

@@ -252,8 +252,12 @@ impl DiscreteMetric {
     }
 
     /// Compute exact percentage delta: `((head - base) / base) * 100.0`.
-    /// Returns an error if base is 0.
+    /// A zero base with a zero head is unchanged (0.0). A zero base with a non-zero head
+    /// has no finite percentage and returns an error.
     pub fn delta_pct(&self, head: &DiscreteMetric) -> Result<f64> {
+        if self.count == 0 && head.count == 0 {
+            return Ok(0.0);
+        }
         if self.count == 0 {
             bail!("cannot compute percentage regression against base count of 0");
         }
@@ -277,7 +281,7 @@ pub struct RegressionDecision {
     pub point_delta_pct: f64,
     /// Whether the regression is statistically verified beyond `tolerance_pct`.
     pub is_regression: bool,
-    /// Method used: `"conservative_interval"` or `"point_estimate_only"`.
+    /// Method used: `"conservative_interval"`, `"not_comparable_no_ci"`, or `"not_comparable_zero_base"`.
     pub method: &'static str,
     /// Diagnostic note explaining interval clearing or overlap.
     pub note: String,
@@ -294,23 +298,33 @@ pub struct RegressionDecision {
 ///
 /// If confidence intervals are missing, falls back to point estimate comparison and notes
 /// the absence of interval bounds.
+///
+/// A base point estimate (or base upper confidence bound) of 0.0 admits no relative delta;
+/// the verdict is the named degradation `"not_comparable_zero_base"`, never a regression and
+/// never an error (fail-closed contract F7, docs/ARCHITECTURE.md section 3).
 pub fn evaluate_continuous_regression(
     base: &ContinuousEstimate,
     head: &ContinuousEstimate,
     tolerance_pct: f64,
 ) -> Result<RegressionDecision> {
-    if base.point_estimate == 0.0 {
-        bail!("cannot compute regression against base point estimate of 0.0");
+    let zero_upper = base.ci.as_ref().is_some_and(|ci| ci.upper == 0.0);
+    if base.point_estimate == 0.0 || zero_upper {
+        return Ok(RegressionDecision {
+            delta_pct: 0.0,
+            point_delta_pct: 0.0,
+            is_regression: false,
+            method: "not_comparable_zero_base",
+            note: format!(
+                "not comparable (zero base estimate): base point estimate {} {} admits no relative delta (head: {} {}); a zero timing usually means the row is not a timing measurement",
+                base.point_estimate, base.unit, head.point_estimate, head.unit
+            ),
+        });
     }
 
     let point_delta_pct =
         ((head.point_estimate - base.point_estimate) / base.point_estimate) * 100.0;
 
     if let (Some(base_ci), Some(head_ci)) = (&base.ci, &head.ci) {
-        if base_ci.upper == 0.0 {
-            bail!("cannot compute regression against base upper confidence bound of 0.0");
-        }
-
         let delta_min = ((head_ci.lower - base_ci.upper) / base_ci.upper) * 100.0;
         let is_regression = delta_min > tolerance_pct;
 
@@ -467,6 +481,28 @@ mod tests {
         );
         assert!((decision.point_delta_pct - 2.0).abs() < 1e-6);
         assert!(decision.note.contains("not comparable (no CI available)"));
+    }
+
+    #[test]
+    fn zero_base_point_estimate_is_not_comparable() {
+        let zero = ContinuousEstimate::point_only(0.0, "ms").unwrap();
+        let head = ContinuousEstimate::point_only(1.0, "ms").unwrap();
+        let decision = evaluate_continuous_regression(&zero, &head, 0.5)
+            .expect("a zero base point estimate must not bail");
+        assert!(!decision.is_regression);
+        assert_eq!(decision.method, "not_comparable_zero_base");
+        assert!(decision.note.contains("not comparable"));
+
+        let zero_ci = ContinuousEstimate::with_ci(0.0, 0.0, 0.0, 0.95, "ms").unwrap();
+        let decision_ci = evaluate_continuous_regression(&zero_ci, &zero_ci, 0.5).unwrap();
+        assert_eq!(decision_ci.method, "not_comparable_zero_base");
+    }
+
+    #[test]
+    fn discrete_zero_to_zero_is_unchanged() {
+        let zero = DiscreteMetric::new(0);
+        assert_eq!(zero.delta_pct(&DiscreteMetric::new(0)).unwrap(), 0.0);
+        assert!(zero.delta_pct(&DiscreteMetric::new(1)).is_err());
     }
 
     #[test]

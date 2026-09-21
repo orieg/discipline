@@ -784,8 +784,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Deleted benchmark files without authorization (exit 1).
   - Benchmarks renamed away without baseline (exit 1).
   - Unmatched host/runner provenance tags between base and head.
+  - Memory growth in generic JSON rows with no usable timing signal (`{"median_ms": 0, "heap_bytes": 160, "rss_bytes": 20480}`): the row is a deterministic byte counter (`heap_bytes`, else `bytes`, else `rss_bytes`) gated like instruction counts.
+  - Stale `exempt_arms` entries that match no benchmark arm in the run (error, whatever the gate severity). In git mode the arms are those of every tracked benchmark artifact at head.
+- **Arm exemptions (`exempt_arms`):** an entry matches an arm by exact name, trailing-`*` literal prefix, `::` path suffix or its `/` parameter head, glob (`*.heap.*`, `*::random_*`), or the form the harness prints (`map_get random` for the reported arm `map_get/random`). A malformed glob is a configuration error (exit 2).
 - **Degradation without failure:**
-  When wall-clock benchmarks lack confidence intervals on either base or head, the engine degrades the verdict to **"not comparable (no CI available)"** in notes and does not fail the build on bare point estimates.
+  When wall-clock benchmarks lack confidence intervals on either base or head, the engine degrades the verdict to **"not comparable (no CI available)"** in notes and does not fail the build on bare point estimates. A zero base timing estimate degrades to **"not comparable (zero base estimate)"** in the same way.
 - **Passing override directive (accepted):**
   ```text
   allow-regression: search_bench intentional algorithmic trade-off for zero-allocation scan
@@ -794,7 +797,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Uncommitted benchmark results (benchmark files must be committed or generated in CI workspace).
   - Wall-clock variance from co-resident CPU contention without sample distribution statistics.
 - **Lifting directive:** `allow-regression: <benchmark-name-or-path> <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `tolerance_pct`, `paths`, `provenance`, `allow_cross_host`, `max_noise_cv`, `noise_margin_pct`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `tolerance_pct`, `paths`, `provenance`, `allow_cross_host`, `max_noise_cv`, `noise_margin_pct`, `exempt_arms`.
 
 ---
 

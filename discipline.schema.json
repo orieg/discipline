@@ -97,7 +97,7 @@
         },
         "exempt_arms": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Declared exempt benchmark arms"
+          "description": "Benchmark arms exempted from regression checks: exact name, the name as the benchmark prints it (`map_get random` matches `map_get/random`), a glob (`*.heap.*`), a trailing-`*` prefix, or a `::`/`/` path suffix. An entry matching no arm in the run is an error."
         },
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"

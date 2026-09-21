@@ -256,7 +256,46 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
         )?;
     }
 
+    // Stale exemptions are judged against every arm in the tracked benchmark artifacts at
+    // head, not only the changed ones: an entry covering an unchanged artifact is live.
+    if !settings.exempt_arms.is_empty() {
+        if let Some(arms) = head_arm_names(ctx, &watched, &exempt, &mut out)? {
+            report_stale_exempt_arms(&settings.exempt_arms, &arms, None, &mut out)?;
+        }
+    }
+
     Ok(out)
+}
+
+/// Arm names across every tracked, watched, non-exempt benchmark artifact at head.
+/// `None` (with a named note) when an artifact cannot be read or parsed, so staleness
+/// cannot be determined.
+fn head_arm_names(
+    ctx: &Context,
+    watched: &PathFilter,
+    exempt: &PathFilter,
+    out: &mut GateOutcome,
+) -> Result<Option<Vec<String>>> {
+    let mut arms = Vec::new();
+    for path in ctx.git.tracked_files()? {
+        if !watched.matches(&path) || exempt.matches(&path) {
+            continue;
+        }
+        let parsed = ctx
+            .git
+            .head_bytes(&path)?
+            .map(|raw| parse_metrics(&path, &String::from_utf8_lossy(&raw)));
+        match parsed {
+            Some(Ok(metrics)) => arms.extend(metrics.into_iter().map(|m| m.name)),
+            _ => {
+                out.notes.push(format!(
+                    "stale `exempt_arms` check skipped: benchmark artifact `{path}` could not be read or parsed at head"
+                ));
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(arms))
 }
 
 fn run_dual_file_bench_regression(
@@ -403,6 +442,11 @@ fn run_dual_file_bench_regression(
         &mut out,
     )?;
 
+    if !settings.exempt_arms.is_empty() {
+        let arms: Vec<String> = head_metrics.iter().map(|m| m.name.clone()).collect();
+        report_stale_exempt_arms(&settings.exempt_arms, &arms, Some(h_path), &mut out)?;
+    }
+
     Ok(out)
 }
 
@@ -471,25 +515,11 @@ pub fn evaluate_metrics_regression_with_directives(
     let advisory_threshold = settings.advisory_pct.unwrap_or(0.1);
     let effective_tolerance = settings.tolerance_pct + settings.noise_margin_pct.unwrap_or(0.0);
 
+    let exemptions = ArmExemptions::new(&settings.exempt_arms)?;
     let mut discrete_regressions: Vec<(String, f64, u64, u64, String)> = Vec::new();
 
     for h in head_metrics {
-        let is_exempt = settings.exempt_arms.iter().any(|ex| {
-            if ex == &h.name {
-                return true;
-            }
-            if let Some(prefix) = ex.strip_suffix('*') {
-                if h.name.starts_with(prefix) {
-                    return true;
-                }
-            }
-            if let Some(tail) = h.name.rsplit("::").next() {
-                if tail == ex || tail.split('/').next() == Some(ex) {
-                    return true;
-                }
-            }
-            false
-        });
+        let is_exempt = exemptions.matches(&h.name);
 
         if is_exempt {
             out.notes.push(format!(
@@ -594,7 +624,7 @@ pub fn evaluate_metrics_regression_with_directives(
                             ),
                         );
                     }
-                } else if decision.method == "not_comparable_no_ci"
+                } else if decision.method.starts_with("not_comparable")
                     || decision.point_delta_pct > effective_tolerance
                 {
                     out.notes
@@ -768,6 +798,132 @@ pub fn evaluate_metrics_regression_with_directives(
         }
     }
 
+    Ok(())
+}
+
+/// Printed arm form (`map_get random`, or the full iai header
+/// `instructions::cost::map_get random:"random"`) mapped to the reported name `map_get/random`.
+static PRINTED_ARM: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^(?:[\w:]+::)?(\w+)\s+([^:\s"\(]+):?.*$"#).unwrap());
+
+/// One `exempt_arms` entry, in every form it may match under.
+struct ArmExemption {
+    raw: String,
+    /// The entry as written, plus the reported name when the entry is in printed form.
+    forms: Vec<String>,
+    /// Compiled glob for each form that carries glob metacharacters.
+    globs: Vec<globset::GlobMatcher>,
+}
+
+impl ArmExemption {
+    fn new(raw: &str) -> Result<Self> {
+        let mut forms = vec![raw.to_string()];
+        if raw.contains(char::is_whitespace) {
+            if let Some(cap) = PRINTED_ARM.captures(raw.trim()) {
+                let reported = format!("{}/{}", &cap[1], &cap[2]);
+                if !forms.contains(&reported) {
+                    forms.push(reported);
+                }
+            }
+        }
+        let mut globs = Vec::new();
+        for form in &forms {
+            if form.contains(['*', '?', '[', '{']) {
+                let glob = globset::Glob::new(form).with_context(|| {
+                    format!("invalid glob `{form}` in `gates.bench-regression.exempt_arms`")
+                })?;
+                globs.push(glob.compile_matcher());
+            }
+        }
+        Ok(Self {
+            raw: raw.to_string(),
+            forms,
+            globs,
+        })
+    }
+
+    fn matches(&self, name: &str) -> bool {
+        // `::` path suffix (`tests/perf.py::test_x` -> `test_x`).
+        let tail = name.rsplit("::").next().unwrap_or(name);
+        let literal = self.forms.iter().any(|ex| {
+            // exact
+            ex == name
+                // trailing-wildcard literal prefix
+                || ex.strip_suffix('*').is_some_and(|p| name.starts_with(p))
+                // path suffix, or its `/` parameter head (`map_get/random` -> `map_get`)
+                || tail == ex
+                || tail.split('/').next() == Some(ex.as_str())
+        });
+        literal || self.globs.iter().any(|g| g.is_match(name))
+    }
+}
+
+/// Compiled `gates.bench-regression.exempt_arms` entries.
+///
+/// An entry exempts an arm when it is the arm name exactly, a trailing-`*` literal prefix of it,
+/// its `::` path suffix or that suffix's `/` parameter head, a glob matching it (`*.heap.*`),
+/// or the printed form a benchmark harness shows for it (`map_get random` for `map_get/random`).
+pub struct ArmExemptions {
+    entries: Vec<ArmExemption>,
+}
+
+impl ArmExemptions {
+    /// Fails on an entry that is a malformed glob (F6: strict configuration).
+    pub fn new(entries: &[String]) -> Result<Self> {
+        Ok(Self {
+            entries: entries
+                .iter()
+                .map(|e| ArmExemption::new(e))
+                .collect::<Result<_>>()?,
+        })
+    }
+
+    /// Whether any entry exempts the arm `name`.
+    pub fn matches(&self, name: &str) -> bool {
+        self.entries.iter().any(|e| e.matches(name))
+    }
+
+    /// Entries, as written, that exempt none of `arms`.
+    pub fn unmatched<'a, I>(&self, arms: I) -> Vec<&str>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let arms: Vec<&str> = arms.into_iter().collect();
+        self.entries
+            .iter()
+            .filter(|e| !arms.iter().any(|a| e.matches(a)))
+            .map(|e| e.raw.as_str())
+            .collect()
+    }
+}
+
+/// Reports every `exempt_arms` entry that matches no arm in `arms` as a violation.
+///
+/// A stale exemption is how a gate quietly stops covering something, so it is an error
+/// regardless of the gate's configured severity: it is a deterministic configuration
+/// defect, not measurement noise. No directive lifts it; the fix is to edit the entry.
+pub fn report_stale_exempt_arms(
+    exempt_arms: &[String],
+    arms: &[String],
+    location: Option<&str>,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let exemptions = ArmExemptions::new(exempt_arms)?;
+    for entry in exemptions.unmatched(arms.iter().map(String::as_str)) {
+        out.push(
+            crate::config::Severity::Error,
+            "Stale Benchmark Arm Exemption",
+            location,
+            None,
+            format!(
+                "`gates.bench-regression.exempt_arms` entry `{entry}` matches no benchmark arm in this run ({} arm(s) examined); a stale exemption silently stops covering whatever it was written for",
+                arms.len()
+            ),
+            &format!(
+                "remove `{entry}` from `exempt_arms`, or correct it to the arm name as reported or printed by the benchmark"
+            ),
+        );
+    }
     Ok(())
 }
 
@@ -1216,6 +1372,24 @@ fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
                 })
                 .and_then(|v| v.as_f64());
 
+            // Memory rows (`{"median_ms": 0, "heap_bytes": 160, "rss_bytes": 20480}`) carry a
+            // placeholder zero timing. With no usable timing signal they are parsed as a
+            // deterministic byte counter so they gate like instruction counts, not as a
+            // 0.0 wall-clock estimate that admits no relative delta.
+            let timing_usable = median_val.is_some_and(|m| m > 0.0)
+                || runs_arr.is_some_and(|r| r.iter().filter_map(|v| v.as_f64()).any(|v| v > 0.0));
+            if !timing_usable {
+                if let Some(bytes) = memory_bytes(b)? {
+                    metrics.push(BenchmarkMetric {
+                        name: name.clone(),
+                        count: bytes as f64,
+                        value: MetricValue::Discrete(DiscreteMetric::new(bytes)),
+                        unit: "bytes".to_string(),
+                    });
+                    continue;
+                }
+            }
+
             if let Some(runs) = runs_arr {
                 let sample_vec: Vec<f64> = runs.iter().filter_map(|v| v.as_f64()).collect();
                 if !sample_vec.is_empty() {
@@ -1266,6 +1440,26 @@ fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
     }
 
     Ok(metrics)
+}
+
+/// Memory footprint of a benchmark row, preferring `heap_bytes` (allocator-counted, deterministic)
+/// over a generic `bytes` field and `rss_bytes` (resident set size, page-granular).
+/// A present field that is not a non-negative integer is malformed.
+fn memory_bytes(row: &serde_json::Value) -> Result<Option<u64>> {
+    for key in ["heap_bytes", "bytes", "rss_bytes"] {
+        if let Some(v) = row.get(key) {
+            let Some(n) = v
+                .as_f64()
+                .filter(|n| n.is_finite() && *n >= 0.0 && n.fract() == 0.0)
+            else {
+                bail!(
+                    "malformed memory benchmark row: `{key}` is not a non-negative integer ({v})"
+                );
+            };
+            return Ok(Some(n as u64));
+        }
+    }
+    Ok(None)
 }
 
 fn parse_text_metrics(content: &str) -> Vec<BenchmarkMetric> {
@@ -1529,6 +1723,199 @@ smoke_cost::set_contains
         assert_eq!(base.len(), 1);
         assert_eq!(base[0].name, "map_insert/random");
         assert_eq!(base[0].count, 1000.0);
+    }
+
+    fn exempt(entries: &[&str]) -> ArmExemptions {
+        let owned: Vec<String> = entries.iter().map(|e| e.to_string()).collect();
+        ArmExemptions::new(&owned).unwrap()
+    }
+
+    const MIXED_TIMING_AND_MEMORY: &str = r#"{
+        "benchmarks": {
+            "core.bitset.write.judy": {
+                "median_ms": 14.5314,
+                "runs_ms": [14.3895, 14.476, 14.5057, 14.5314, 14.5369, 14.538, 14.5991]
+            },
+            "core.bitset.read.judy": { "median_ms": 5.12 },
+            "core.bitset.heap.judy": { "median_ms": 0, "heap_bytes": 160, "rss_bytes": 20480 },
+            "core.int_to_int.heap.php": { "median_ms": 0, "rss_bytes": 40960 }
+        }
+    }"#;
+
+    #[test]
+    fn memory_rows_parse_as_discrete_bytes_alongside_timing_rows() {
+        let metrics = parse_metrics("baselines/latest.json", MIXED_TIMING_AND_MEMORY).unwrap();
+        assert_eq!(metrics.len(), 4);
+
+        let write = metrics
+            .iter()
+            .find(|m| m.name == "core.bitset.write.judy")
+            .unwrap();
+        assert!(matches!(write.value, MetricValue::Continuous(_)));
+        assert_eq!(write.unit, "ms");
+
+        // heap_bytes is preferred over rss_bytes: allocator counts are deterministic,
+        // resident set size carries page granularity.
+        let heap = metrics
+            .iter()
+            .find(|m| m.name == "core.bitset.heap.judy")
+            .unwrap();
+        assert_eq!(heap.value, MetricValue::Discrete(DiscreteMetric::new(160)));
+        assert_eq!(heap.unit, "bytes");
+
+        let rss = metrics
+            .iter()
+            .find(|m| m.name == "core.int_to_int.heap.php")
+            .unwrap();
+        assert_eq!(rss.value, MetricValue::Discrete(DiscreteMetric::new(40960)));
+        assert_eq!(rss.unit, "bytes");
+    }
+
+    #[test]
+    fn memory_rows_gate_as_deterministic_counters() {
+        use crate::config::{BenchRegressionGate, Severity};
+        let settings = BenchRegressionGate {
+            tolerance_pct: 5.0,
+            ..Default::default()
+        };
+        let base = parse_metrics("b.json", MIXED_TIMING_AND_MEMORY).unwrap();
+        let grown = MIXED_TIMING_AND_MEMORY.replace("\"heap_bytes\": 160", "\"heap_bytes\": 320");
+        let head = parse_metrics("h.json", &grown).unwrap();
+        let mut out = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &[],
+            &settings,
+            &base,
+            &head,
+            "b.json",
+            "h.json",
+            Severity::Error,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out.violations.len(), 1, "{:?}", out.violations);
+        assert!(out.violations[0].message.contains("core.bitset.heap.judy"));
+        assert!(out.violations[0].message.contains("160 -> 320 bytes"));
+
+        // Unchanged memory rows evaluate cleanly: no bail on the zero timing field.
+        let mut clean = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &[],
+            &settings,
+            &base,
+            &base,
+            "b.json",
+            "h.json",
+            Severity::Error,
+            &mut clean,
+        )
+        .unwrap();
+        assert!(clean.violations.is_empty(), "{:?}", clean.violations);
+    }
+
+    #[test]
+    fn zero_point_estimate_is_not_comparable_rather_than_a_bail() {
+        use crate::config::{BenchRegressionGate, Severity};
+        let json = r#"{"benchmarks": {"core.noop.judy": {"median_ms": 0}}}"#;
+        let metrics = parse_metrics("b.json", json).unwrap();
+        assert!(matches!(metrics[0].value, MetricValue::Continuous(_)));
+        let mut out = GateOutcome::new(GATE);
+        evaluate_metrics_regression_with_directives(
+            &[],
+            &BenchRegressionGate::default(),
+            &metrics,
+            &metrics,
+            "b.json",
+            "h.json",
+            Severity::Error,
+            &mut out,
+        )
+        .expect("a zero point estimate must not abort the gate");
+        assert!(out.violations.is_empty());
+        assert!(
+            out.notes
+                .iter()
+                .any(|n| n.contains("core.noop.judy") && n.contains("not comparable")),
+            "{:?}",
+            out.notes
+        );
+    }
+
+    #[test]
+    fn exempt_arms_accepts_globs() {
+        let ex = exempt(&["*.heap.*"]);
+        assert!(ex.matches("core.bitset.heap.judy"));
+        assert!(ex.matches("core.int_to_int.heap.php"));
+        assert!(!ex.matches("core.bitset.write.judy"));
+
+        let suffix = exempt(&["*.heap"]);
+        assert!(suffix.matches("core.bitset.heap"));
+        assert!(!suffix.matches("core.bitset.heap.judy"));
+
+        let path = exempt(&["*::random_*"]);
+        assert!(path.matches("tests/test_perf.py::random_lookup"));
+        assert!(!path.matches("tests/test_perf.py::sequential_lookup"));
+    }
+
+    #[test]
+    fn exempt_arms_preserves_existing_forms() {
+        // exact
+        assert!(exempt(&["map_get/random"]).matches("map_get/random"));
+        // trailing-wildcard literal prefix, including glob metacharacters in the prefix
+        assert!(exempt(&["map_get*"]).matches("map_get/random"));
+        assert!(exempt(&["bm[1]*"]).matches("bm[1]/large"));
+        // `::` path suffix and `/` parameter head
+        assert!(exempt(&["test_serialize"]).matches("tests/test_perf.py::test_serialize"));
+        assert!(exempt(&["map_get"]).matches("map_get/random"));
+        // negative controls
+        assert!(!exempt(&["map_get"]).matches("map_insert/random"));
+        assert!(!exempt(&["map"]).matches("map_get/random"));
+    }
+
+    #[test]
+    fn exempt_arms_accepts_the_printed_arm_form() {
+        let sample = "instructions::cost::map_get random:\"random\"\n  Instructions:               1,050|1,000 (+5.0000%)\n";
+        let (head, _) = parse_iai_callgrind_console_both(sample);
+        assert_eq!(head[0].name, "map_get/random");
+
+        assert!(exempt(&["map_get random"]).matches(&head[0].name));
+        assert!(exempt(&["instructions::cost::map_get random:\"random\""]).matches(&head[0].name));
+        assert!(!exempt(&["map_get sequential"]).matches(&head[0].name));
+        assert!(!exempt(&["map_insert random"]).matches(&head[0].name));
+    }
+
+    #[test]
+    fn exempt_arms_rejects_a_malformed_glob() {
+        assert!(ArmExemptions::new(&["core.[heap".to_string()]).is_err());
+    }
+
+    #[test]
+    fn stale_exempt_arm_is_an_error() {
+        let arms = vec![
+            "map_get/random".to_string(),
+            "core.bitset.heap.judy".to_string(),
+        ];
+        let entries = vec![
+            "map_get random".to_string(),
+            "*.heap.*".to_string(),
+            "set_contains".to_string(),
+        ];
+        let ex = ArmExemptions::new(&entries).unwrap();
+        assert_eq!(
+            ex.unmatched(arms.iter().map(String::as_str)),
+            vec!["set_contains"]
+        );
+
+        let mut out = GateOutcome::new(GATE);
+        report_stale_exempt_arms(&entries, &arms, Some("h.json"), &mut out).unwrap();
+        assert_eq!(out.violations.len(), 1, "{:?}", out.violations);
+        assert_eq!(out.violations[0].title, "Stale Benchmark Arm Exemption");
+        assert_eq!(out.violations[0].severity, crate::config::Severity::Error);
+        assert!(out.violations[0].message.contains("set_contains"));
+
+        let mut live = GateOutcome::new(GATE);
+        report_stale_exempt_arms(&entries[..2], &arms, Some("h.json"), &mut live).unwrap();
+        assert!(live.violations.is_empty());
     }
 
     #[test]
