@@ -1,0 +1,9 @@
+# Changes that can weaken the gates need the owner's review.
+# At the repository root so GitHub, Gitea and Forgejo mirrors all read it.
+/discipline.toml      @orieg
+/deny.toml            @orieg
+/action.yml           @orieg
+/.github/workflows/   @orieg
+/.gitea/workflows/    @orieg
+/.forgejo/workflows/  @orieg
+/CODEOWNERS           @orieg

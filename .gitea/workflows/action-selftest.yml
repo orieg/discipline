@@ -9,6 +9,10 @@ name: Action self-test (Gitea)
 on:
   push:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
 
 jobs:
   action:

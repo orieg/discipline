@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # `edited`: a changed PR description (a directive added or removed) re-runs the gates.
+    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
