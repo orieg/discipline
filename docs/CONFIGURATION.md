@@ -737,7 +737,7 @@ When an authorized directive is parsed and applied:
 
 ## Grandfathering Baseline Mode
 
-When adopting Discipline on existing brownfield repositories, pre-existing code may trigger numerous violations across historical files (measured at v0.4.2: 51 findings on `orieg/expanse` and 26 on `orieg/php-judy`, nearly all pre-existing). Rather than disabling gates or littering inline directives across legacy files, Discipline provides a grandfathering baseline mode.
+When adopting Discipline on existing brownfield repositories, pre-existing code may trigger numerous violations across historical files (measured at v0.4.2 on two consumer repositories: 51 and 26 findings, nearly all pre-existing). Rather than disabling gates or littering inline directives across legacy files, Discipline provides a grandfathering baseline mode.
 
 ### 1. Generating a Baseline
 
@@ -745,8 +745,8 @@ There are two modes, and they record different populations. Pick by what you are
 
 | Mode | Command | Records | Use when |
 |---|---|---|---|
-| **Whole tree** | `discipline baseline --write --whole-tree` | Every pre-existing finding in the repository | **Adopting Discipline on an existing repository.** |
-| Diff | `discipline baseline --write --base origin/main` | Only the findings the current change introduced | Deliberately grandfathering findings a specific change adds. |
+| **Whole tree** | `discipline baseline --write --whole-tree` | Every pre-existing blocking finding in the repository | **Adopting Discipline on an existing repository.** |
+| Diff | `discipline baseline --write --base origin/main` | Only the blocking findings the current change introduced | Deliberately grandfathering findings a specific change adds. |
 
 For brownfield adoption, use **whole-tree** mode:
 
@@ -762,6 +762,27 @@ Whole-tree mode measures against the empty tree, so every tracked file is in sco
 `--whole-tree` and `--base` are mutually exclusive: one measures the repository, the other measures a change.
 
 Whole-tree mode is for recording a baseline, not for checking. `discipline check` always measures a change.
+
+#### Which severities are recorded
+
+A baseline exists to let a blocking finding through, so by default it records only findings whose **effective** severity (after `severity` settings and finding-level overrides) would fail `discipline check` under the same configuration:
+
+| Invocation | Records | Skips |
+|---|---|---|
+| `discipline baseline --write` | `error` | `warning`, `note` |
+| `discipline baseline --write --fail-on-warnings` (or `DISCIPLINE_FAIL_ON_WARNINGS=true`, which the CI integrations set from their `fail_on_warnings` input) | `error`, `warning` | `note` |
+| `discipline baseline --write --all-severities` | `error`, `warning`, `note` | nothing |
+
+A non-blocking finding gains nothing from being grandfathered: `check` already passes with it, and it stays visible in every report. Recording it only adds bulk and, as the code moves, stale-entry churn. On one consumer repository (built-in defaults plus `provenance-tags`), a whole-tree baseline recorded 651 entries when every severity was recorded; 483 of them were warnings and notes that never block, including 230 C/C++ parse warnings and 231 lint-suppression warnings. The default records the 168 that block. Use `--all-severities` when you intend to raise a gate's severity later and want the existing population grandfathered in advance; run `baseline` with the same `--fail-on-warnings` setting that `check` uses in CI.
+
+Nothing is dropped silently. Both the dry run and `--write` print what was recorded and what was skipped, by severity and gate:
+
+```text
+ok: recorded 1 grandfathered finding to discipline-baseline.toml
+  recorded: 1 error
+  skipped: 1 warning (suppression-delta: 1), 1 note (pii: 1)
+  (non-blocking under the current configuration; pass --all-severities to record them, or --fail-on-warnings if `check` runs with it)
+```
 
 The file records a line-number-independent SHA-256 fingerprint per finding:
 

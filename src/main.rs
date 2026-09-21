@@ -702,11 +702,23 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         }
     }
 
+    let policy = discipline::baseline::RecordPolicy {
+        fail_on_warnings: args.fail_on_warnings,
+        all_severities: args.all_severities,
+    };
+    let mut recorded = discipline::baseline::SeverityTally::default();
+    let mut skipped = discipline::baseline::SeverityTally::default();
+
     for o in &summary.outcomes {
         if !o.enabled {
             continue;
         }
         for v in &o.violations {
+            if !policy.records(v.severity) {
+                skipped.add(v.severity, v.gate);
+                continue;
+            }
+            recorded.add(v.severity, v.gate);
             let fp = discipline::baseline::compute_violation_fingerprint_with_content(v, |f| {
                 git.head_content(f).ok().flatten()
             });
@@ -726,6 +738,24 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         findings: entries,
     };
 
+    // Nothing disappears silently: say what was left out and how to include it.
+    let breakdown = {
+        let mut b = format!(
+            "  recorded: {}\n  skipped: {}",
+            recorded.summary(),
+            skipped.summary_by_gate()
+        );
+        if skipped.total() > 0 {
+            b.push_str(if policy.fail_on_warnings {
+                "\n  (notes never block; pass --all-severities to record them anyway)"
+            } else {
+                "\n  (non-blocking under the current configuration; pass --all-severities to record them, \
+                 or --fail-on-warnings if `check` runs with it)"
+            });
+        }
+        b
+    };
+
     if args.write {
         baseline_obj.write_to_file(&baseline_path)?;
         println!(
@@ -739,6 +769,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             },
             args.baseline_file.display()
         );
+        println!("{breakdown}");
         if !baseline_obj.findings.is_empty() {
             println!(
                 "\nTo commit this baseline under `config-integrity`, include this directive on its own line in the commit message or PR body:\n  allow-gate-weakening: baseline initial grandfathered baseline"
@@ -755,6 +786,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
                 "s"
             }
         );
+        println!("{breakdown}");
         println!(
             "Run `discipline baseline --write` to record them to {}.",
             args.baseline_file.display()

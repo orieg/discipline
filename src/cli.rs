@@ -297,6 +297,17 @@ pub struct BaselineArgs {
     #[arg(long, conflicts_with = "base")]
     pub whole_tree: bool,
 
+    /// Also record warnings and notes. By default only findings that would
+    /// block under the current configuration are recorded: `error`, plus
+    /// `warning` under --fail-on-warnings
+    #[arg(long)]
+    pub all_severities: bool,
+
+    /// Treat warnings as blocking when choosing what to record (same switch
+    /// as `check --fail-on-warnings`)
+    #[arg(long, env = "DISCIPLINE_FAIL_ON_WARNINGS")]
+    pub fail_on_warnings: bool,
+
     /// Trust the workspace and disable libgit2 repository owner validation
     #[arg(long)]
     pub trust_workspace: bool,

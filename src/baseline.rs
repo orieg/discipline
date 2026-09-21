@@ -9,6 +9,7 @@
 //! sha256(gate + rule + path + normalized_content_hash), so unrelated line additions or deletions
 //! do not churn the baseline.
 
+use crate::config::Severity;
 use crate::guards::{GateOutcome, Violation};
 use crate::report::gitlab::sha256_hex;
 use anyhow::{Context as _, Result};
@@ -67,6 +68,100 @@ impl DisciplineBaseline {
         std::fs::write(path, out)
             .with_context(|| format!("failed to write baseline file `{}`", path.display()))?;
         Ok(())
+    }
+}
+
+/// Which findings `discipline baseline` records.
+///
+/// A baseline exists to let a blocking finding through. A finding that never
+/// blocks (a `note`, or a `warning` without `fail_on_warnings`) buys nothing
+/// by being grandfathered and only adds bulk and stale-entry churn, so the
+/// default records exactly the findings that would fail `check` under the same
+/// configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordPolicy {
+    /// `check` would treat warnings as failures.
+    pub fail_on_warnings: bool,
+    /// Record every severity regardless (for a consumer that intends to
+    /// tighten severities later).
+    pub all_severities: bool,
+}
+
+impl RecordPolicy {
+    pub fn records(&self, severity: Severity) -> bool {
+        self.all_severities
+            || match severity {
+                Severity::Error => true,
+                Severity::Warning => self.fail_on_warnings,
+                Severity::Note => false,
+            }
+    }
+}
+
+/// Per-severity, per-gate counts of findings, for the recorded/skipped report.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SeverityTally {
+    /// Indexed error, warning, note: the order the report prints them in.
+    by_severity: [BTreeMap<String, usize>; 3],
+}
+
+const SEVERITY_ORDER: [Severity; 3] = [Severity::Error, Severity::Warning, Severity::Note];
+
+fn severity_index(severity: Severity) -> usize {
+    match severity {
+        Severity::Error => 0,
+        Severity::Warning => 1,
+        Severity::Note => 2,
+    }
+}
+
+impl SeverityTally {
+    pub fn add(&mut self, severity: Severity, gate: &str) {
+        *self.by_severity[severity_index(severity)]
+            .entry(gate.to_string())
+            .or_insert(0) += 1;
+    }
+
+    pub fn total(&self) -> usize {
+        self.by_severity.iter().flat_map(|g| g.values()).sum()
+    }
+
+    /// `1 error, 2 warnings`, or `none`.
+    pub fn summary(&self) -> String {
+        self.render(false)
+    }
+
+    /// `2 warnings (agent-diff: 1, pii: 1), 1 note (pii: 1)`, or `none`.
+    pub fn summary_by_gate(&self) -> String {
+        self.render(true)
+    }
+
+    fn render(&self, with_gates: bool) -> String {
+        let parts: Vec<String> = self
+            .by_severity
+            .iter()
+            .zip(SEVERITY_ORDER)
+            .filter(|(gates, _)| !gates.is_empty())
+            .map(|(gates, sev)| {
+                let n: usize = gates.values().sum();
+                let plural = if n == 1 { "" } else { "s" };
+                let mut s = format!("{n} {sev}{plural}");
+                if with_gates {
+                    let g = gates
+                        .iter()
+                        .map(|(gate, c)| format!("{gate}: {c}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    s.push_str(&format!(" ({g})"));
+                }
+                s
+            })
+            .collect();
+        if parts.is_empty() {
+            "none".to_string()
+        } else {
+            parts.join(", ")
+        }
     }
 }
 
@@ -250,7 +345,48 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Severity;
+
+    #[test]
+    fn record_policy_follows_what_would_block() {
+        let default = RecordPolicy {
+            fail_on_warnings: false,
+            all_severities: false,
+        };
+        assert!(default.records(Severity::Error));
+        assert!(!default.records(Severity::Warning));
+        assert!(!default.records(Severity::Note));
+
+        let strict = RecordPolicy {
+            fail_on_warnings: true,
+            all_severities: false,
+        };
+        assert!(strict.records(Severity::Error));
+        assert!(strict.records(Severity::Warning));
+        assert!(!strict.records(Severity::Note));
+
+        let all = RecordPolicy {
+            fail_on_warnings: false,
+            all_severities: true,
+        };
+        assert!(all.records(Severity::Warning));
+        assert!(all.records(Severity::Note));
+    }
+
+    #[test]
+    fn severity_tally_renders_in_severity_order_with_gates() {
+        let mut t = SeverityTally::default();
+        assert_eq!(t.summary(), "none");
+        t.add(Severity::Note, "pii");
+        t.add(Severity::Warning, "pii");
+        t.add(Severity::Warning, "agent-diff");
+        t.add(Severity::Error, "time-estimates");
+        assert_eq!(t.total(), 4);
+        assert_eq!(t.summary(), "1 error, 2 warnings, 1 note");
+        assert_eq!(
+            t.summary_by_gate(),
+            "1 error (time-estimates: 1), 2 warnings (agent-diff: 1, pii: 1), 1 note (pii: 1)"
+        );
+    }
 
     #[test]
     fn test_baseline_roundtrip() {

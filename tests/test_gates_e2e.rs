@@ -7238,7 +7238,14 @@ fn baseline_whole_tree_records_pre_existing_findings_for_brownfield_adoption() {
     repo.commit("chore: pre-existing debt on main");
     repo.git(&["checkout", "-q", "-B", "work"]);
 
-    let diff_mode = repo.run(&["baseline", "--write", "--base", "main"], &[]);
+    // Both findings are non-blocking warnings under the built-in defaults, and
+    // `baseline` records only blocking findings unless told otherwise. This
+    // test is about which POPULATION each mode reaches, so it records every
+    // severity; the severity policy is pinned in tests/test_adoption.rs.
+    let diff_mode = repo.run(
+        &["baseline", "--write", "--all-severities", "--base", "main"],
+        &[],
+    );
     assert_eq!(
         diff_mode.code, 0,
         "{}{}",
@@ -7258,7 +7265,10 @@ fn baseline_whole_tree_records_pre_existing_findings_for_brownfield_adoption() {
 
     // Whole-tree mode measures against the empty tree, so every tracked file
     // is in scope and the diff-scoped gates see the existing population too.
-    let whole = repo.run(&["baseline", "--write", "--whole-tree"], &[]);
+    let whole = repo.run(
+        &["baseline", "--write", "--all-severities", "--whole-tree"],
+        &[],
+    );
     assert_eq!(whole.code, 0, "{}{}", whole.stdout, whole.stderr);
     let recorded = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
     assert!(
