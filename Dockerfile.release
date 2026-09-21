@@ -2,7 +2,8 @@
 # Minimal OCI container image for discipline: universal CI/CD sentinel and AI agent diff guard.
 # Packaged with statically linked musl binary and git for containerized CI execution.
 
-FROM alpine:3.21
+# Pinned by digest so a rebuild of a tag uses the same base; bump deliberately.
+FROM alpine:3.21@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507
 
 # Install CA certificates for secure checkouts and git for local repository operations
 # Configure system-wide safe.directory = '*' while still root before switching to unprivileged user

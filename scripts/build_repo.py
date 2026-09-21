@@ -68,7 +68,15 @@ def main():
 
 
 def gpg(*argv: str) -> None:
-    subprocess.run(["gpg", "--batch", "--yes", *argv], check=True)
+    """Run gpg non-interactively. A passphrase-protected key reads its passphrase from
+    REPO_SIGNING_PASSPHRASE through loopback pinentry: a CI runner has no TTY."""
+    passphrase = os.environ.get("REPO_SIGNING_PASSPHRASE")
+    extra = ["--pinentry-mode", "loopback", "--passphrase-fd", "0"] if passphrase else []
+    subprocess.run(
+        ["gpg", "--batch", "--yes", *extra, *argv],
+        check=True,
+        input=passphrase.encode() if passphrase else None,
+    )
 
 
 def sign_repositories(apt_out: str, rpm_out: str, key: str) -> None:

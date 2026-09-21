@@ -347,6 +347,22 @@ pub fn run_checks(
         outcomes.push(outcome);
     }
 
+    // A submodule pointer change is skipped by every gate (its content is another
+    // repository). Say so where a deletion or an out-of-scope change would be judged.
+    let submodules = ctx.git.changed_submodules()?;
+    if !submodules.is_empty() {
+        let note = format!(
+            "not inspected: submodule pointer change(s) at {} (review the submodule's own history)",
+            submodules.join(", ")
+        );
+        for o in outcomes
+            .iter_mut()
+            .filter(|o| o.enabled && matches!(o.gate, "deletion-rationale" | "scope-confinement"))
+        {
+            o.notes.push(note.clone());
+        }
+    }
+
     for note in &ctx.directive_notes {
         let target_gate = if note.contains("removes") || note.contains("deletes") {
             "deletion-rationale"

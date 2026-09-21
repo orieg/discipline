@@ -196,9 +196,12 @@ Direct `.rpm` package downloads and repodata manifests: [Discipline RPM Reposito
   ```bash
   brew install orieg/tap/discipline
   ```
-- **MacPorts**:
+- **MacPorts**: each release attaches a generated `Portfile`. Until the port is in the MacPorts tree, install it from a local ports tree:
   ```bash
-  sudo port install discipline
+  mkdir -p ~/ports/devel/discipline
+  curl -fsSL -o ~/ports/devel/discipline/Portfile https://github.com/orieg/discipline/releases/latest/download/Portfile
+  # Once: add `file:///Users/<you>/ports` above the rsync line in /opt/local/etc/macports/sources.conf
+  (cd ~/ports && portindex) && sudo port install discipline
   ```
 
 ### Rust Toolchain

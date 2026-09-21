@@ -110,10 +110,6 @@ path = "man/man5/discipline.toml.5"
 regex = '''"Discipline v([0-9]+\.[0-9]+\.[0-9]+)"'''
 
 [[gates.version-lockstep.groups.sources]]
-path = "packaging/macports/Portfile"
-regex = '''(?m)^version\s+([0-9]+\.[0-9]+\.[0-9]+)$'''
-
-[[gates.version-lockstep.groups.sources]]
 path = ".pre-commit-hooks.yaml"
 regex = '''rev: v([0-9]+\.[0-9]+\.[0-9]+)'''
 

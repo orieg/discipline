@@ -993,6 +993,48 @@ fn load_context(raw: &str) -> Result<String> {
         .with_context(|| format!("{CONTEXT_ENV} names `{t}`, which could not be read"))
 }
 
+/// The configured default, which only fits GitHub Actions.
+pub const DEFAULT_WORKFLOW: &str = ".github/workflows/ci.yml";
+
+/// The workflow whose rollup supplies the context. An explicit `workflow` is used as is.
+/// Left at the default, the running workflow named by `GITHUB_WORKFLOW_REF`
+/// (`owner/repo/<path>@<ref>`) wins, then the first `ci.yml` that exists under
+/// `.github/`, `.gitea/` or `.forgejo/workflows/`.
+pub fn resolve_workflow(
+    configured: &str,
+    workflow_ref: Option<&str>,
+    exists: impl Fn(&str) -> bool,
+) -> Result<String> {
+    if configured != DEFAULT_WORKFLOW {
+        return Ok(configured.to_string());
+    }
+    if let Some(r) = workflow_ref {
+        let path = r.split('@').next().unwrap_or_default();
+        // Drop `owner/repo/`: the workflow path starts at the first dot directory.
+        if let Some(i) = path.find("/.") {
+            let candidate = &path[i + 1..];
+            if exists(candidate) {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
+    let candidates = [
+        DEFAULT_WORKFLOW,
+        ".gitea/workflows/ci.yml",
+        ".forgejo/workflows/ci.yml",
+    ];
+    candidates
+        .iter()
+        .find(|c| exists(c))
+        .map(|c| c.to_string())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no workflow to check: set `[gates.ci-skip-set] workflow` (tried {})",
+                candidates.join(", ")
+            )
+        })
+}
+
 pub fn evaluate_ci_skip_set(ctx: &Context) -> Result<GateOutcome> {
     let raw = std::env::var(CONTEXT_ENV).ok();
     evaluate_with(ctx, raw.as_deref(), &github_from_env())
@@ -1014,20 +1056,24 @@ fn evaluate_with(
         ));
         return Ok(out);
     };
-    if exempt_filter(settings)?.matches(&settings.workflow) {
+    let workflow = resolve_workflow(
+        &settings.workflow,
+        std::env::var("GITHUB_WORKFLOW_REF").ok().as_deref(),
+        |p| ctx.git.head_content(p).ok().flatten().is_some(),
+    )?;
+    if workflow != settings.workflow {
+        out.notes.push(format!("workflow: `{workflow}` (detected)"));
+    }
+    if exempt_filter(settings)?.matches(&workflow) {
         out.notes.push(format!(
-            "not evaluated: `{}` matches `exempt_paths`",
-            settings.workflow
+            "not evaluated: `{workflow}` matches `exempt_paths`"
         ));
         return Ok(out);
     }
 
     let needs_json = load_context(raw)?;
-    let workflow_src = ctx.git.head_content(&settings.workflow)?.with_context(|| {
-        format!(
-            "`[gates.ci-skip-set] workflow = \"{}\"` is not a file at HEAD",
-            settings.workflow
-        )
+    let workflow_src = ctx.git.head_content(&workflow)?.with_context(|| {
+        format!("`[gates.ci-skip-set] workflow = \"{workflow}\"` is not a file at HEAD")
     })?;
     let change_job = Some(settings.change_job.as_str()).filter(|s| !s.is_empty());
     let spec = SkipSetSpec {
@@ -1036,7 +1082,7 @@ fn evaluate_with(
         github,
     };
     let report = check_skip_set(&workflow_src, &needs_json, &spec)
-        .with_context(|| format!("could not read the skip set of `{}`", settings.workflow))?;
+        .with_context(|| format!("could not read the skip set of `{workflow}`"))?;
 
     out.examined = report.examined;
     out.notes.extend(report.notes);
@@ -1044,7 +1090,7 @@ fn evaluate_with(
         out.push(
             settings.severity,
             &title(f.kind, &f.job),
-            Some(&settings.workflow),
+            Some(&workflow),
             job_line(&workflow_src, &f.job),
             f.message,
             remediation(f.kind),
@@ -1500,5 +1546,45 @@ jobs:
         assert!(!eval("vars.X == 'y'").1.is_empty());
         assert!(!eval("github.event_name < 'z'").1.is_empty());
         assert!(!eval("github.event_name == \"push\"").1.is_empty());
+    }
+
+    #[test]
+    fn the_workflow_is_detected_when_left_at_the_default() {
+        let exists = |files: &'static [&'static str]| move |p: &str| files.contains(&p);
+        // Explicit configuration wins.
+        assert_eq!(
+            resolve_workflow("ci/pipeline.yml", None, exists(&[])).unwrap(),
+            "ci/pipeline.yml"
+        );
+        // The running workflow, as the runner names it.
+        assert_eq!(
+            resolve_workflow(
+                DEFAULT_WORKFLOW,
+                Some("o/r/.github/workflows/checks.yml@refs/pull/7/merge"),
+                exists(&[".github/workflows/checks.yml", ".github/workflows/ci.yml"])
+            )
+            .unwrap(),
+            ".github/workflows/checks.yml"
+        );
+        // Gitea and Forgejo layouts.
+        assert_eq!(
+            resolve_workflow(
+                DEFAULT_WORKFLOW,
+                None,
+                exists(&[".forgejo/workflows/ci.yml"])
+            )
+            .unwrap(),
+            ".forgejo/workflows/ci.yml"
+        );
+        assert_eq!(
+            resolve_workflow(DEFAULT_WORKFLOW, None, exists(&[".gitea/workflows/ci.yml"])).unwrap(),
+            ".gitea/workflows/ci.yml"
+        );
+        // Nothing to check is an error that says what was tried.
+        let err = resolve_workflow(DEFAULT_WORKFLOW, None, exists(&[])).unwrap_err();
+        assert!(
+            err.to_string().contains(".forgejo/workflows/ci.yml"),
+            "{err}"
+        );
     }
 }

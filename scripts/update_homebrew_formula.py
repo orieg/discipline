@@ -235,16 +235,10 @@ def main():
         help="Path to SHA256SUMS file",
     )
     parser.add_argument(
-        "--formula-file",
-        type=Path,
-        default=Path("packaging/homebrew/discipline.rb"),
-        help="Target formula file to update (default: packaging/homebrew/discipline.rb)",
-    )
-    parser.add_argument(
         "--output",
         type=Path,
         default=None,
-        help="Output path for the generated formula (defaults to --formula-file)",
+        help="Output path for the generated formula (the release attaches it as discipline.rb)",
     )
     parser.add_argument(
         "--push-to-tap",
@@ -280,10 +274,15 @@ def main():
     if not validate_ruby_syntax(content):
         sys.exit(1)
 
-    out_file = args.output or args.formula_file
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.write_text(content, encoding="utf-8")
-    print(f"Generated Homebrew formula (v{version}) at {out_file}")
+    if args.output is None and not args.push_to_tap:
+        print("Error: pass --output and/or --push-to-tap", file=sys.stderr)
+        sys.exit(2)
+    out_file = args.output
+    if out_file is not None:
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(content, encoding="utf-8")
+    if out_file is not None:
+        print(f"Generated Homebrew formula (v{version}) at {out_file}")
 
     if args.push_to_tap:
         deploy_key = args.deploy_key or os.environ.get("HOMEBREW_TAP_DEPLOY_KEY")

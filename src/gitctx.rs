@@ -446,6 +446,32 @@ impl GitCtx {
         }
     }
 
+    /// Submodule pointers (gitlinks) the change adds, moves, bumps or removes. They are
+    /// left out of [`GitCtx::changed_files`]: no gate can read a submodule's content.
+    pub fn changed_submodules(&self) -> Result<Vec<String>> {
+        let tree = self.base_tree()?;
+        let mut opts = DiffOptions::new();
+        opts.context_lines(0);
+        let diff = if self.staged {
+            self.repo
+                .diff_tree_to_index(tree.as_ref(), None, Some(&mut opts))?
+        } else {
+            self.repo
+                .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))?
+        };
+        let mut out = BTreeSet::new();
+        for delta in diff.deltas() {
+            for f in [delta.new_file(), delta.old_file()] {
+                if f.mode() == git2::FileMode::Commit {
+                    if let Some(p) = f.path() {
+                        out.insert(p.to_string_lossy().replace('\\', "/"));
+                    }
+                }
+            }
+        }
+        Ok(out.into_iter().collect())
+    }
+
     pub fn changed_files(&self) -> Result<Vec<ChangedFile>> {
         let tree = self.base_tree()?;
         let mut opts = DiffOptions::new();

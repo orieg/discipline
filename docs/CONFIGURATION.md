@@ -112,7 +112,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.ci-skip-set.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.ci-skip-set.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ci-skip-set.unconditional_jobs` | list | `[]` | Jobs that must never be skipped, whatever their dependencies did |
-| `gates.ci-skip-set.workflow` | string | `".github/workflows/ci.yml"` | Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT) |
+| `gates.ci-skip-set.workflow` | string | `".github/workflows/ci.yml"` | Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT). Left at the default, the running workflow (GITHUB_WORKFLOW_REF) or the first ci.yml under .github/, .gitea/ or .forgejo/workflows/ is used |
 | `gates.command.allow_zero` | boolean | `false` | Whether zero items selected is allowed |
 | `gates.command.canary_command` | string | *(unset)* | Optional negative-control canary command |
 | `gates.command.canary_expected_diagnostic` | string | *(unset)* | Expected diagnostic string that canary must produce |
@@ -709,8 +709,10 @@ Discipline is available as a standalone static binary across Linux and macOS.
   # Homebrew
   brew install orieg/tap/discipline
 
-  # MacPorts
-  sudo port install discipline
+  # MacPorts: from the Portfile attached to each release, via a local ports tree
+  mkdir -p ~/ports/devel/discipline
+  curl -fsSL -o ~/ports/devel/discipline/Portfile https://github.com/orieg/discipline/releases/latest/download/Portfile
+  (cd ~/ports && portindex) && sudo port install discipline   # after adding file:///Users/<you>/ports to sources.conf
   ```
 
 - **Cargo**:

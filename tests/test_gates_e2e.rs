@@ -7227,6 +7227,12 @@ fn submodule_gitlink_entries_do_not_break_the_run() {
         "gitlink surfaced as a read error: {}",
         run.stderr
     );
+    // Skipped, but not silently: the deletion gate names what it did not inspect.
+    let notes = run.outcome("deletion-rationale")["notes"].to_string();
+    assert!(
+        notes.contains("submodule pointer change(s) at third_party/dep"),
+        "{notes}"
+    );
 }
 
 #[test]

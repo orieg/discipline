@@ -443,7 +443,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "workflow": { "type": "string", "description": "Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT)" },
+                    "workflow": { "type": "string", "description": "Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT). Left at the default, the running workflow (GITHUB_WORKFLOW_REF) or the first ci.yml under .github/, .gitea/ or .forgejo/workflows/ is used" },
                     "change_job": { "type": "string", "description": "Change-detection job whose outputs gate the conditional jobs; it must have succeeded. Empty string = no such job" },
                     "unconditional_jobs": { "$ref": "#/$defs/StringListOrReset", "description": "Jobs that must never be skipped, whatever their dependencies did" }
                 }

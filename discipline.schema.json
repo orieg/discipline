@@ -245,7 +245,7 @@
           "description": "Jobs that must never be skipped, whatever their dependencies did"
         },
         "workflow": {
-          "description": "Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT)",
+          "description": "Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT). Left at the default, the running workflow (GITHUB_WORKFLOW_REF) or the first ci.yml under .github/, .gitea/ or .forgejo/workflows/ is used",
           "type": "string"
         }
       },

@@ -14,6 +14,9 @@ permissions: read-all
 
 env:
   CARGO_TERM_COLOR: always
+  # Release binaries are built with a pinned toolchain so a rebuild of the same tag
+  # uses the same compiler. CI tracks `stable`; bump this deliberately.
+  RELEASE_TOOLCHAIN: 1.98.1
 
 jobs:
   verify:
@@ -47,6 +50,7 @@ jobs:
           esac
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --check
@@ -84,6 +88,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
           targets: ${{ matrix.target }}
       - name: Install musl toolchain
         if: matrix.static
@@ -194,9 +199,21 @@ jobs:
           python3 scripts/update_homebrew_formula.py \
             --version "${VERSION}" \
             --checksums dist/SHA256SUMS \
-            --formula-file packaging/homebrew/discipline.rb \
             --output dist/discipline.rb
           # The tap is updated by `promote`, after `smoke` has proven the release.
+      - name: Generate the MacPorts Portfile
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # The source archive GitHub serves for the tag is what MacPorts fetches.
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "${RUNNER_TEMP}/source.tar.gz" \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz"
+          python3 scripts/generate_portfile.py --version "${VERSION}" \
+            --tarball "${RUNNER_TEMP}/source.tar.gz" --cargo-lock Cargo.lock --output dist/Portfile
       - name: Create the GitHub release
         shell: bash
         env:
@@ -233,7 +250,7 @@ jobs:
           else
             gh release create "${TAG}" --draft "${flags[@]}"
           fi
-          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/discipline_*.deb dist/discipline-*.rpm dist/discipline.rb dist/SHA256SUMS --clobber
+          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/discipline_*.deb dist/discipline-*.rpm dist/discipline.rb dist/Portfile dist/SHA256SUMS --clobber
           gh release edit "${TAG}" --draft=false --latest=false
       - name: Prepare container image binaries
         shell: bash
@@ -263,6 +280,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern=v{{version}}
       - name: Build and push multi-arch OCI container image
+        id: image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.15.0
         with:
           context: .
@@ -271,6 +289,13 @@ jobs:
           push: true
           tags: ${{ steps.meta_docker.outputs.tags }}
           labels: ${{ steps.meta_docker.outputs.labels }}
+      # The image gets the same build provenance as the archives, stored with it in
+      # the registry; `promote` verifies it before moving any floating tag.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
 
   # Consume the release exactly as a user does: download, verify the checksum,
   # run. Uses the action at the tagged commit with no `binary_path`.
@@ -353,6 +378,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.10.0
+      - name: Image provenance verifies
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: gh attestation verify "oci://ghcr.io/${GITHUB_REPOSITORY}:v${VERSION}" --repo "${GITHUB_REPOSITORY}"
       - name: Move the floating container tags
         shell: bash
         env:
