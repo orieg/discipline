@@ -546,3 +546,39 @@ jobs:
           count="$(echo "${NEEDS}" | jq 'length')"
           [ "${count}" -eq 10 ] || { echo "::error::expected 10 needed jobs, saw ${count}"; exit 1; }
           [ -z "${bad}" ] || { echo "::error::not successful: ${bad}"; exit 1; }
+      # Dogfood ci-skip-set on this rollup's own runtime context. Every job
+      # above is unconditional, so each must have run; the inverted canary
+      # proves the gate evaluated the context rather than noting it absent.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: discipline-x86_64-unknown-linux-musl
+          path: .ci-bin
+      - name: Skip set matches each job's if (ci-skip-set)
+        shell: bash
+        env:
+          DISCIPLINE_CI_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          set -euo pipefail
+          chmod +x .ci-bin/discipline
+          report="${RUNNER_TEMP}/skip-set.json"
+          .ci-bin/discipline check --suite integrity --base HEAD --format github-summary --json-out "${report}"
+          count="$(echo "${DISCIPLINE_CI_CONTEXT}" | jq 'length')"
+          jq -e --argjson n "${count}" '.outcomes[] | select(.gate == "ci-skip-set") | .examined == $n and (.violations | length) == 0' "${report}" \
+            || { echo "::error::ci-skip-set did not evaluate all ${count} rollup dependencies"; exit 1; }
+      - name: "Inverted canary: a skipped unconditional job is reported by ci-skip-set"
+        shell: bash
+        env:
+          NEEDS: ${{ toJson(needs) }}
+        run: |
+          set -euo pipefail
+          first="$(echo "${NEEDS}" | jq -r 'keys[0]')"
+          DISCIPLINE_CI_CONTEXT="$(echo "${NEEDS}" | jq -c --arg j "${first}" '.[$j].result = "skipped"')"
+          export DISCIPLINE_CI_CONTEXT
+          report="${RUNNER_TEMP}/skip-set-canary.json"
+          rc=0
+          .ci-bin/discipline check --suite integrity --base HEAD --format json --json-out "${report}" > /dev/null || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "::error::expected exit 1 from the canary, got ${rc}"; exit 1; }
+          jq -e --arg t "\`${first}\` skipped although its \`if:\` is true" \
+            '[.outcomes[] | select(.gate == "ci-skip-set") | .violations[].title] | any(. == $t)' "${report}" \
+            || { echo "::error::canary did not carry the ci-skip-set diagnostic"; jq '.outcomes[] | select(.gate == "ci-skip-set")' "${report}"; exit 1; }
