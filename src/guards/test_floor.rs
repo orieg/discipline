@@ -197,6 +197,21 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
+    // Base ref discipline.toml takes precedence over HEAD discipline.toml to prevent self-lowering.
+    let explicit_floor = base_min_tests.or(head_min_tests).or(base_floor_const);
+
+    // The zero-config ratchet counts the base ref statically; it cannot build
+    // and run the base ref's tests. Comparing that against a runtime count
+    // mixes two counting bases (see docs/GATES.md, test-floor), so the result
+    // would be meaningless in either direction. Refuse before running anything.
+    if settings.test_command.is_some() && explicit_floor.is_none() {
+        bail!(
+            "test-floor: `test_command` supplies a runtime test count, but no floor is configured to \
+             compare it against; set `min_tests` (or `constant_file` + `constant_name`) to a count on \
+             the same basis, or remove `test_command` to use the static ratchet"
+        );
+    }
+
     // 5. Calculate measured test count.
     let measured_count = if let Some(cmd) = &settings.test_command {
         count_tests_via_command(cmd, Path::new(ctx.git.root()))?
@@ -205,10 +220,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     };
     out.examined = measured_count;
 
-    // 6. Determine effective floor and compare.
-    // Base ref discipline.toml takes precedence over HEAD discipline.toml to prevent self-lowering.
-    let explicit_floor = base_min_tests.or(head_min_tests).or(base_floor_const);
-
+    // 6. Compare against the effective floor.
     if let Some(floor) = explicit_floor {
         if measured_count + settings.tolerance < floor {
             if let Some(ov) = find_test_floor_override(ctx) {

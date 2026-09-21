@@ -251,3 +251,101 @@ fn baseline_default_is_sufficient_for_check_to_pass_and_keeps_warnings_visible()
         "the skipped note stays visible"
     );
 }
+
+// ---- test-floor: runtime counting basis via test_command ---------------------
+
+/// Stands in for `cargo test -- --list`: five `: test` lines across two
+/// binaries, plus the lines a real listing interleaves that must not count.
+const LISTING_SCRIPT: &str = "\
+#!/bin/sh
+echo 'unit::adds: test'
+echo 'unit::orders: test'
+echo 'unit::bench_insert: benchmark'
+echo '3 tests, 1 benchmark'
+echo 'integration::round_trip: test'
+echo 'integration::rejects_empty: test'
+echo 'src/lib.rs - read (line 3): test'
+echo '3 tests, 0 benchmarks'
+";
+
+fn floor_config(min_tests: Option<usize>) -> String {
+    let floor = min_tests
+        .map(|n| format!("min_tests = {n}\n"))
+        .unwrap_or_default();
+    format!(
+        r#"
+[meta]
+version = 1
+name = "adoption"
+
+[gates.test-floor]
+enabled = true
+test_command = "sh scripts/list-tests.sh"
+{floor}"#
+    )
+}
+
+#[test]
+fn test_floor_ratchet_compares_the_test_command_count_not_the_static_count() {
+    // The static count of this repository is 2 (tests/a.rs holds two #[test]
+    // functions); the listing reports 5. Each floor below separates the bases.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("scripts/list-tests.sh", LISTING_SCRIPT),
+            ("discipline.toml", &floor_config(Some(5))),
+        ],
+        "chore: floor on the runtime listing",
+    );
+
+    // Floor 5 passes only on the runtime basis (static 2 < 5 would fire).
+    let at_floor = repo.check(&[]);
+    assert_eq!(at_floor.code, 0, "{}{}", at_floor.stdout, at_floor.stderr);
+    let outcome = at_floor.outcome("test-floor");
+    assert_eq!(outcome["examined"], 5, "{outcome}");
+    assert!(at_floor.violations("test-floor").is_empty(), "{outcome}");
+
+    // Floor 6 fires, and the message quotes the runtime count.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("scripts/list-tests.sh", LISTING_SCRIPT),
+            ("discipline.toml", &floor_config(Some(6))),
+        ],
+        "chore: floor above the runtime listing",
+    );
+    let below = repo.check(&[]);
+    assert_eq!(below.code, 1, "{}{}", below.stdout, below.stderr);
+    let v = below.violations("test-floor");
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0]["title"], "Test Count Below Floor");
+    assert!(
+        v[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Workspace test count (5) is below the required floor of 6"),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn test_floor_test_command_without_an_explicit_floor_fails_closed() {
+    // With no floor configured the ratchet would compare the runtime count at
+    // HEAD against a STATIC count of the base ref: two different bases. That
+    // comparison is refused rather than silently passing or failing.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("scripts/list-tests.sh", LISTING_SCRIPT),
+            ("discipline.toml", &floor_config(None)),
+        ],
+        "chore: runtime listing without a floor",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr.contains("test_command") && run.stderr.contains("min_tests"),
+        "the error must name the missing key:\n{}",
+        run.stderr
+    );
+}
