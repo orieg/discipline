@@ -7,7 +7,8 @@
 //!   (excluding first-party action prefixes like `actions/` and `github/`).
 //! - Existing unpinned actions from base ref are grandfathered in and not flagged as new findings.
 //! - Masked failures (`continue-on-error: true`) and error suppression (`|| true`, `set +e`) are forbidden.
-//! - Verification jobs and steps (testing, linting, gates) cannot be deleted without an override.
+//! - Verification jobs and steps (testing, linting, gates) cannot be deleted without an override;
+//!   a step renamed with a similar body is paired with its base form, not reported as deleted.
 //! - Compilation / lint flags cannot be dropped (`-D warnings`, `--locked`, `--all-targets`).
 //! - Action inputs to `orieg/discipline` cannot be weakened (`disable`, `fail_on_warnings: false`, narrowed `suite`, etc.).
 //! - Workflow permissions cannot be widened from `read` to `write` without an override.
@@ -360,17 +361,23 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 .cloned()
                                 .unwrap_or_default();
 
-                            for b_step in &base_steps {
-                                if is_verification_step(b_step) {
-                                    let matched = head_steps
-                                        .iter()
-                                        .any(|h_step| steps_match_identity(b_step, h_step));
-                                    if !matched {
-                                        let step_name = b_step
-                                            .get("name")
-                                            .and_then(|n| n.as_str())
-                                            .or_else(|| b_step.get("id").and_then(|i| i.as_str()))
-                                            .unwrap_or("unnamed verification step");
+                            let pairs = pair_steps(&base_steps, &head_steps);
+                            for (b_step, pair) in base_steps.iter().zip(&pairs) {
+                                if !is_verification_step(b_step) {
+                                    continue;
+                                }
+                                let step_name = step_label(b_step, "unnamed verification step");
+                                match pair {
+                                    Some(StepMatch::Same(_)) => {}
+                                    Some(StepMatch::Renamed { head, similarity }) => {
+                                        let new_name =
+                                            step_label(&head_steps[*head], "unnamed step");
+                                        out.notes.push(format!(
+                                            "{path}: verification step '{step_name}' in job '{job_id}' was renamed to '{new_name}' (run body similarity {similarity:.2} >= rename threshold {STEP_RENAME_SIMILARITY:.2}); treated as a rename, not a deletion"
+                                        ));
+                                    }
+                                    None => {
+                                        let why = deletion_reason(b_step, &head_steps, &pairs);
                                         record_or_excuse(
                                             ctx,
                                             Some(&head_content),
@@ -379,7 +386,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                             "Deletion of Verification Step",
                                             Some(path.clone()),
                                             find_line_number(&head_content, job_id),
-                                            format!("Verification step '{step_name}' in job '{job_id}' was deleted."),
+                                            format!("Verification step '{step_name}' in job '{job_id}' was deleted: no step in head matches it by id, name, or run body ({why})."),
                                             format!("Restore step '{step_name}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
                                             step_name,
                                         );
@@ -499,16 +506,28 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                         .and_then(|s| s.as_sequence());
 
                     if let Some(steps) = job_v.get("steps").and_then(|s| s.as_sequence()) {
-                        for step in steps {
+                        // Head step index -> the base step it was renamed from, so a
+                        // renamed step is still compared against its base form.
+                        let mut renamed_from: HashMap<usize, &serde_yaml::Value> = HashMap::new();
+                        if let Some(b_steps) = base_job_steps {
+                            for (bi, pair) in pair_steps(b_steps, steps).into_iter().enumerate() {
+                                if let Some(StepMatch::Renamed { head, .. }) = pair {
+                                    renamed_from.insert(head, &b_steps[bi]);
+                                }
+                            }
+                        }
+                        for (step_idx, step) in steps.iter().enumerate() {
                             let step_name = step.get("name").and_then(|n| n.as_str()).unwrap_or("");
                             let step_id = step.get("id").and_then(|i| i.as_str()).unwrap_or("");
                             let uses_str = step.get("uses").and_then(|u| u.as_str());
                             let run_str = step.get("run").and_then(|r| r.as_str());
 
                             // Find matching base step
-                            let base_step = base_job_steps.and_then(|b_steps| {
-                                b_steps.iter().find(|b| steps_match_identity(b, step))
-                            });
+                            let base_step = base_job_steps
+                                .and_then(|b_steps| {
+                                    b_steps.iter().find(|b| steps_match_identity(b, step))
+                                })
+                                .or_else(|| renamed_from.get(&step_idx).copied());
 
                             let approx_line = find_step_line(
                                 &head_content,
@@ -902,6 +921,188 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
     Ok(out)
 }
 
+/// Minimum run-body similarity (Dice coefficient over whitespace tokens) for a
+/// base step with no id/name match to be paired with an unmatched head step as
+/// a rename.
+pub(crate) const STEP_RENAME_SIMILARITY: f64 = 0.6;
+
+/// How a base step was found in the head workflow.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum StepMatch {
+    /// Matched by id, name, action, or first run line.
+    Same(usize),
+    /// No identity match; paired by run-body similarity.
+    Renamed { head: usize, similarity: f64 },
+}
+
+/// The `run:` script of a step without its full-line shell comments: what
+/// actually executes. Comments neither make two steps different nor keep a
+/// commented-out command alive.
+fn executable_run(step: &serde_yaml::Value) -> Option<String> {
+    step.get("run").and_then(|r| r.as_str()).map(|run| {
+        run.lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+
+/// Whitespace tokens of what a step executes: its `run:` script (comment
+/// lines excluded), or its action (ref stripped) and `with:` inputs. Empty
+/// when the step has neither.
+fn step_body_tokens(step: &serde_yaml::Value) -> Vec<String> {
+    if let Some(run) = executable_run(step) {
+        return run.split_whitespace().map(str::to_string).collect();
+    }
+    let mut tokens = Vec::new();
+    if let Some(uses) = step.get("uses").and_then(|u| u.as_str()) {
+        tokens.push(format!("uses:{}", uses.split('@').next().unwrap_or(uses)));
+        if let Some(with) = step.get("with").and_then(|w| w.as_mapping()) {
+            for (k, v) in with {
+                let v = serde_yaml::to_string(v).unwrap_or_default();
+                tokens.push(format!("{}={}", k.as_str().unwrap_or(""), v.trim()));
+            }
+        }
+    }
+    tokens
+}
+
+/// Dice coefficient over the multisets of body tokens of two steps:
+/// `2 * |A ∩ B| / (|A| + |B|)`, in `[0, 1]`. A `run:` step and a `uses:`
+/// step never share tokens. Two empty bodies score 0: no evidence either way.
+pub(crate) fn step_body_similarity(a: &serde_yaml::Value, b: &serde_yaml::Value) -> f64 {
+    let ta = step_body_tokens(a);
+    let tb = step_body_tokens(b);
+    if ta.is_empty() || tb.is_empty() {
+        return 0.0;
+    }
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for t in &ta {
+        *counts.entry(t.as_str()).or_default() += 1;
+    }
+    let mut common = 0usize;
+    for t in &tb {
+        if let Some(c) = counts.get_mut(t.as_str()) {
+            if *c > 0 {
+                *c -= 1;
+                common += 1;
+            }
+        }
+    }
+    (2 * common) as f64 / (ta.len() + tb.len()) as f64
+}
+
+/// Pairs each base step with the head step it became.
+///
+/// Pass 1 matches by identity (id, name, action, first run line), as before.
+/// Pass 2 takes every base step still unmatched and pairs it with the head
+/// step, not matched in pass 1 and not already taken, whose body is most
+/// similar, provided the similarity reaches [`STEP_RENAME_SIMILARITY`] and
+/// the head step still carries every verification marker (`test`, `clippy`,
+/// `lint`, ...) the base step's body carried; ties go to the head step
+/// closest in position. A step whose name and body both changed past the
+/// threshold, or whose body stopped verifying, stays unpaired, i.e. deleted.
+pub(crate) fn pair_steps(
+    base: &[serde_yaml::Value],
+    head: &[serde_yaml::Value],
+) -> Vec<Option<StepMatch>> {
+    let mut pairs: Vec<Option<StepMatch>> = base
+        .iter()
+        .map(|b| {
+            head.iter()
+                .position(|h| steps_match_identity(b, h))
+                .map(StepMatch::Same)
+        })
+        .collect();
+    let mut taken: Vec<bool> = head
+        .iter()
+        .map(|h| base.iter().any(|b| steps_match_identity(b, h)))
+        .collect();
+
+    // Best candidates first, so a strong rename is not pre-empted by a weak one.
+    let mut candidates: Vec<(f64, usize, usize, usize)> = Vec::new();
+    for (bi, b) in base.iter().enumerate() {
+        if pairs[bi].is_some() {
+            continue;
+        }
+        for (hi, h) in head.iter().enumerate() {
+            if taken[hi] {
+                continue;
+            }
+            let sim = step_body_similarity(b, h);
+            // A rename keeps what the step verifies: `cargo test` renamed and
+            // turned into `cargo build` is a deletion however similar the rest.
+            if sim >= STEP_RENAME_SIMILARITY
+                && verifying_body_markers(b).is_subset(&verifying_body_markers(h))
+            {
+                candidates.push((sim, bi.abs_diff(hi), bi, hi));
+            }
+        }
+    }
+    candidates.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)));
+    for (sim, _, bi, hi) in candidates {
+        if pairs[bi].is_none() && !taken[hi] {
+            pairs[bi] = Some(StepMatch::Renamed {
+                head: hi,
+                similarity: sim,
+            });
+            taken[hi] = true;
+        }
+    }
+    pairs
+}
+
+/// Why no head step was accepted as the rename of `b_step`: the closest
+/// unmatched head step and the rule that refused it.
+fn deletion_reason(
+    b_step: &serde_yaml::Value,
+    head_steps: &[serde_yaml::Value],
+    pairs: &[Option<StepMatch>],
+) -> String {
+    let claimed = |hi: usize| {
+        pairs.iter().any(|p| match p {
+            Some(StepMatch::Same(h)) => *h == hi,
+            Some(StepMatch::Renamed { head, .. }) => *head == hi,
+            None => false,
+        })
+    };
+    let closest = head_steps
+        .iter()
+        .enumerate()
+        .filter(|(hi, _)| !claimed(*hi))
+        .map(|(_, h)| (step_body_similarity(b_step, h), h))
+        .max_by(|x, y| x.0.total_cmp(&y.0));
+    match closest {
+        Some((sim, h)) if sim >= STEP_RENAME_SIMILARITY => {
+            let kept = verifying_body_markers(h);
+            let mut lost: Vec<&str> = verifying_body_markers(b_step)
+                .into_iter()
+                .filter(|m| !kept.contains(m))
+                .collect();
+            lost.sort_unstable();
+            let lost: Vec<String> = lost.iter().map(|m| format!("`{m}`")).collect();
+            format!(
+                "the closest unmatched head step, '{}', has run body similarity {sim:.2}, but no longer carries {} from the deleted step's body, so it is not a rename",
+                step_label(h, "unnamed step"),
+                lost.join(", ")
+            )
+        }
+        Some((sim, h)) => format!(
+            "the closest unmatched head step, '{}', has run body similarity {sim:.2}, below the rename threshold {STEP_RENAME_SIMILARITY:.2}",
+            step_label(h, "unnamed step")
+        ),
+        None => "no unmatched head step remains to be a rename of it".to_string(),
+    }
+}
+
+/// Display label of a step: its name, else its id, else `fallback`.
+fn step_label<'a>(step: &'a serde_yaml::Value, fallback: &'a str) -> &'a str {
+    step.get("name")
+        .and_then(|n| n.as_str())
+        .or_else(|| step.get("id").and_then(|i| i.as_str()))
+        .unwrap_or(fallback)
+}
+
 fn steps_match_identity(a: &serde_yaml::Value, b: &serde_yaml::Value) -> bool {
     let a_id = a.get("id").and_then(|i| i.as_str());
     let b_id = b.get("id").and_then(|i| i.as_str());
@@ -938,26 +1139,44 @@ fn steps_match_identity(a: &serde_yaml::Value, b: &serde_yaml::Value) -> bool {
     false
 }
 
-fn is_verification_step(step: &serde_yaml::Value) -> bool {
-    if let Some(run) = step.get("run").and_then(|r| r.as_str()) {
+/// Substrings of a `run:` script that mark a step as verifying something.
+const VERIFYING_RUN_MARKERS: &[&str] = &[
+    "test",
+    "clippy",
+    "cargo check",
+    "fmt --check",
+    "lint",
+    "pytest",
+    "discipline",
+    "audit",
+];
+
+/// Substrings of a `uses:` action that mark a step as verifying something.
+const VERIFYING_USES_MARKERS: &[&str] = &["discipline", "clippy", "actionlint"];
+
+/// The verification markers a step's executable body (not its name, not its
+/// comment lines) carries.
+fn verifying_body_markers(step: &serde_yaml::Value) -> HashSet<&'static str> {
+    markers_in(step, executable_run(step))
+}
+
+fn markers_in(step: &serde_yaml::Value, run: Option<String>) -> HashSet<&'static str> {
+    let mut found = HashSet::new();
+    if let Some(run) = run {
         let r = run.to_ascii_lowercase();
-        if r.contains("test")
-            || r.contains("clippy")
-            || r.contains("cargo check")
-            || r.contains("fmt --check")
-            || r.contains("lint")
-            || r.contains("pytest")
-            || r.contains("discipline")
-            || r.contains("audit")
-        {
-            return true;
-        }
+        found.extend(VERIFYING_RUN_MARKERS.iter().filter(|m| r.contains(*m)));
     }
     if let Some(uses) = step.get("uses").and_then(|u| u.as_str()) {
         let u = uses.to_ascii_lowercase();
-        if u.contains("discipline") || u.contains("clippy") || u.contains("actionlint") {
-            return true;
-        }
+        found.extend(VERIFYING_USES_MARKERS.iter().filter(|m| u.contains(*m)));
+    }
+    found
+}
+
+fn is_verification_step(step: &serde_yaml::Value) -> bool {
+    let raw_run = step.get("run").and_then(|r| r.as_str()).map(str::to_string);
+    if !markers_in(step, raw_run).is_empty() {
+        return true;
     }
     if let Some(name) = step.get("name").and_then(|n| n.as_str()) {
         let n = name.to_ascii_lowercase();
@@ -1248,5 +1467,161 @@ jobs:
         assert!(!needs.is_empty());
         assert!(!jobs.contains("deploy"));
         assert!(!needs.contains("deploy"));
+    }
+
+    fn steps(yaml: &str) -> Vec<serde_yaml::Value> {
+        serde_yaml::from_str::<serde_yaml::Value>(yaml)
+            .unwrap()
+            .as_sequence()
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn rename_threshold_is_pinned() {
+        assert_eq!(STEP_RENAME_SIMILARITY, 0.6);
+        let a = &steps("- run: cargo test --locked")[0];
+        let b = &steps("- run: cargo test --locked --workspace")[0];
+        let c = &steps("- run: cargo build")[0];
+        // 2*3/(3+4) = 0.857 clears the threshold; 2*1/(3+2) = 0.4 does not.
+        assert!((step_body_similarity(a, b) - 6.0 / 7.0).abs() < 1e-9);
+        assert!((step_body_similarity(a, c) - 0.4).abs() < 1e-9);
+        assert_eq!(step_body_similarity(a, a), 1.0);
+    }
+
+    #[test]
+    fn renamed_step_with_unchanged_body_pairs_as_rename() {
+        let base = steps(
+            "- uses: actions/checkout@v4\n- name: Check a.sh b.sh\n  run: |\n    ./a.sh\n    ./b.sh\n",
+        );
+        let head = steps(
+            "- uses: actions/checkout@v4\n- name: Check a.sh b.sh c.sh\n  run: |\n    ./a.sh\n    ./b.sh\n    ./c.sh\n",
+        );
+        let pairs = pair_steps(&base, &head);
+        assert_eq!(pairs[0], Some(StepMatch::Same(0)));
+        match pairs[1] {
+            Some(StepMatch::Renamed {
+                head: 1,
+                similarity,
+            }) => {
+                assert!(similarity >= STEP_RENAME_SIMILARITY, "{similarity}")
+            }
+            other => panic!("expected rename, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn renamed_and_rewritten_step_is_not_paired() {
+        let base = steps("- name: Run tests\n  run: cargo test --locked\n");
+        let head = steps("- name: Smoke\n  run: echo ok\n");
+        assert_eq!(pair_steps(&base, &head), vec![None]);
+    }
+
+    #[test]
+    fn removed_step_is_not_paired_with_an_unrelated_survivor() {
+        let base = steps(
+            "- name: Build\n  run: cargo build --locked\n- name: Run tests\n  run: cargo test --locked\n",
+        );
+        let head = steps("- name: Build\n  run: cargo build --locked\n");
+        assert_eq!(
+            pair_steps(&base, &head),
+            vec![Some(StepMatch::Same(0)), None]
+        );
+
+        // The survivor is similar (2*2/6 = 0.67) and verifies the same thing,
+        // but it already matched its own base step: it cannot also be the
+        // rename of the removed one.
+        let base = steps(
+            "- name: Unit tests\n  run: cargo test --lib\n- name: All tests\n  run: cargo test --workspace\n",
+        );
+        let head = steps("- name: Unit tests\n  run: cargo test --lib\n");
+        assert!(step_body_similarity(&base[1], &head[0]) >= STEP_RENAME_SIMILARITY);
+        assert_eq!(
+            pair_steps(&base, &head),
+            vec![Some(StepMatch::Same(0)), None]
+        );
+    }
+
+    #[test]
+    fn rename_pairing_prefers_the_closest_position_on_a_tie() {
+        let base = steps("- name: A\n  run: make check\n- name: B\n  run: make lint\n");
+        let head = steps("- name: X\n  run: make check\n- name: Y\n  run: make check\n");
+        let pairs = pair_steps(&base, &head);
+        assert!(
+            matches!(pairs[0], Some(StepMatch::Renamed { head: 0, .. })),
+            "{pairs:?}"
+        );
+        // `make lint` vs `make check` is 0.5: below the threshold.
+        assert_eq!(pairs[1], None);
+    }
+
+    #[test]
+    fn rename_that_drops_the_verification_command_is_not_paired() {
+        // Similar enough by tokens (2*2/6 = 0.67), but `test` is gone.
+        let base = steps("- name: Run tests\n  run: cargo test --locked\n");
+        let head = steps("- name: Compile\n  run: cargo build --locked\n");
+        assert!(step_body_similarity(&base[0], &head[0]) >= STEP_RENAME_SIMILARITY);
+        assert_eq!(pair_steps(&base, &head), vec![None]);
+    }
+
+    #[test]
+    fn one_head_step_is_the_rename_of_at_most_one_base_step() {
+        // Two verification steps collapse into one renamed step: one of them
+        // was deleted, and pairing must not hide that.
+        let base = steps("- name: Test A\n  run: make test\n- name: Test B\n  run: make test\n");
+        let head = steps("- name: Tests\n  run: make test\n");
+        let pairs = pair_steps(&base, &head);
+        assert!(
+            matches!(pairs[0], Some(StepMatch::Renamed { head: 0, .. })),
+            "{pairs:?}"
+        );
+        assert_eq!(pairs[1], None);
+    }
+
+    #[test]
+    fn shell_comment_lines_do_not_count_toward_similarity() {
+        // Documenting a step's body with comments leaves it the same step.
+        let base = steps("- name: Self-tests a b\n  run: |\n    python3 a.py --self-test\n    python3 b.py --self-test\n");
+        let head = steps("- name: Self-tests a b c\n  run: |\n    python3 a.py --self-test\n    # c.py needs a PMU to collect anything, but its parser and\n    # its rendering rules are all checkable without one.\n    python3 c.py --self-test\n    python3 b.py --self-test\n");
+        assert!((step_body_similarity(&base[0], &head[0]) - 0.8).abs() < 1e-9);
+
+        // Commenting the old command out does not keep the step alive.
+        let base = steps("- name: Run tests\n  run: cargo test --locked\n");
+        let head = steps("- name: Smoke\n  run: |\n    # cargo test --locked\n    echo ok\n");
+        assert_eq!(step_body_similarity(&base[0], &head[0]), 0.0);
+        assert_eq!(pair_steps(&base, &head), vec![None]);
+    }
+
+    #[test]
+    fn deletion_reason_names_the_rule_that_refused_the_rename() {
+        let base = steps("- name: Run tests\n  run: cargo test --locked\n");
+        let swapped = steps("- name: Compile\n  run: cargo build --locked\n");
+        let reason = deletion_reason(&base[0], &swapped, &pair_steps(&base, &swapped));
+        assert!(
+            reason.contains("'Compile'")
+                && reason.contains("0.67")
+                && reason.contains("no longer carries `test`"),
+            "{reason}"
+        );
+        assert!(!reason.contains("below the rename threshold"), "{reason}");
+
+        let rewritten = steps("- name: Smoke\n  run: echo ok\n");
+        let reason = deletion_reason(&base[0], &rewritten, &pair_steps(&base, &rewritten));
+        assert!(
+            reason.contains("'Smoke'") && reason.contains("0.00, below the rename threshold 0.60"),
+            "{reason}"
+        );
+
+        let reason = deletion_reason(&base[0], &[], &pair_steps(&base, &[]));
+        assert!(reason.contains("no unmatched head step"), "{reason}");
+    }
+
+    #[test]
+    fn verification_step_detection_still_reads_the_raw_run_text() {
+        // Unchanged by rename pairing: comment text still marks a step as
+        // verification, so its deletion stays guarded.
+        let s = steps("- name: Step\n  run: |\n    # run the lint pass\n    ./ci.sh\n");
+        assert!(is_verification_step(&s[0]));
+        assert!(verifying_body_markers(&s[0]).is_empty());
     }
 }

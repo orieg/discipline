@@ -895,7 +895,7 @@
       "properties": {
         "allow_patterns": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Regex patterns permitted as operational exceptions"
+          "description": "Regex patterns permitted as operational exceptions; matched per line and across soft-wrapped lines of a paragraph, exempting only the matched text"
         },
         "diff_only": {
           "description": "When true, scans only modified lines in the git diff rather than all tracked files",

@@ -590,7 +590,9 @@ pub struct TimeEstimateGate {
     pub include: Vec<String>,
     /// Additional banned regexes.
     pub extra_patterns: Vec<String>,
-    /// A line matching any of these is not a violation.
+    /// Text matched by any of these is not a violation. Patterns match per
+    /// line and across soft-wrapped lines of a paragraph; the exemption covers
+    /// only the matched text.
     pub allow_patterns: Vec<String>,
     pub scan_pr_body: bool,
     /// When true, scans only modified lines in the git diff rather than all tracked files.

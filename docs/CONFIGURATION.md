@@ -236,7 +236,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.test-floor.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.test-floor.test_command` | string | *(unset)* | Custom command to list or count tests |
 | `gates.test-floor.tolerance` | integer | `0` | Allowed test count decrease below floor or base before violation (default: 0) |
-| `gates.time-estimates.allow_patterns` | list | `[]` | Regex patterns permitted as operational exceptions |
+| `gates.time-estimates.allow_patterns` | list | `[]` | Regex patterns permitted as operational exceptions; matched per line and across soft-wrapped lines of a paragraph, exempting only the matched text |
 | `gates.time-estimates.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
 | `gates.time-estimates.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.time-estimates.exempt_paths` | list | `[]` | File path globs exempted from this gate |

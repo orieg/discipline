@@ -412,6 +412,79 @@ pub(crate) fn is_exempt_time_estimate(
     !is_time_estimate_violation(line, line, matched, false)
 }
 
+/// Byte spans, per line, of the text matched by any `allow_pattern`.
+///
+/// Each pattern is matched twice: against every line on its own (so `^` and
+/// `$` keep their per-line meaning) and against every paragraph with its
+/// soft-wrapped lines joined by a single space (so a phrase that wraps across
+/// a line break can still be matched). A paragraph ends at a blank line or a
+/// code fence. A paragraph match is mapped back onto the part of each line it
+/// covers; the exemption therefore binds to the matched text, never to the
+/// whole line or paragraph.
+fn allow_pattern_spans(text: &str, allowed: &[Regex]) -> Vec<Vec<(usize, usize)>> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut spans: Vec<Vec<(usize, usize)>> = vec![Vec::new(); lines.len()];
+    if allowed.is_empty() {
+        return spans;
+    }
+
+    for (idx, line) in lines.iter().enumerate() {
+        for re in allowed {
+            spans[idx].extend(re.find_iter(line).map(|m| (m.start(), m.end())));
+        }
+    }
+
+    // (line index, start in joined text, leading-whitespace bytes, content length)
+    let mut para: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut joined = String::new();
+    let mut flush = |para: &mut Vec<(usize, usize, usize, usize)>, joined: &mut String| {
+        if para.len() > 1 {
+            for re in allowed {
+                for m in re.find_iter(joined) {
+                    for &(line_idx, seg_start, lead, len) in para.iter() {
+                        let seg_end = seg_start + len;
+                        let (a, b) = (m.start().max(seg_start), m.end().min(seg_end));
+                        if a < b {
+                            spans[line_idx].push((a - seg_start + lead, b - seg_start + lead));
+                        }
+                    }
+                }
+            }
+        }
+        para.clear();
+        joined.clear();
+    };
+
+    let mut fence: Option<&str> = None;
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if let Some(m) = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m)) {
+            flush(&mut para, &mut joined);
+            fence = match fence {
+                None => Some(m),
+                Some(open) if open == m => None,
+                keep => keep,
+            };
+            continue;
+        }
+        if fence.is_some() {
+            continue;
+        }
+        let content = trimmed.trim_end();
+        if content.is_empty() {
+            flush(&mut para, &mut joined);
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push(' ');
+        }
+        para.push((idx, joined.len(), line.len() - trimmed.len(), content.len()));
+        joined.push_str(content);
+    }
+    flush(&mut para, &mut joined);
+    spans
+}
+
 pub(crate) fn scan_text_for_time_estimates(
     text: &str,
     banned: &[Regex],
@@ -420,6 +493,7 @@ pub(crate) fn scan_text_for_time_estimates(
     let mut violations = Vec::new();
     let mut fence: Option<&str> = None;
     let mut table = MarkdownTableTracker::default();
+    let allowed_spans = allow_pattern_spans(text, allowed);
 
     for (idx, line) in text.lines().enumerate() {
         let trimmed = line.trim_start();
@@ -440,9 +514,7 @@ pub(crate) fn scan_text_for_time_estimates(
         if line_allows(line, "time-estimates") {
             continue;
         }
-        if allowed.iter().any(|re| re.is_match(line)) {
-            continue;
-        }
+        let exempt_spans = allowed_spans.get(idx).map(Vec::as_slice).unwrap_or(&[]);
 
         let clauses = split_into_clauses(line);
         let mut seen_spans: Vec<(usize, usize)> = Vec::new();
@@ -451,6 +523,14 @@ pub(crate) fn scan_text_for_time_estimates(
                 for hit in re.find_iter(clause) {
                     let abs_start = clause_start + hit.start();
                     let abs_end = clause_start + hit.end();
+                    // An allow_pattern exempts the text it matched, never the
+                    // rest of the line or paragraph.
+                    if exempt_spans
+                        .iter()
+                        .any(|(s, e)| abs_start < *e && abs_end > *s)
+                    {
+                        continue;
+                    }
                     if seen_spans
                         .iter()
                         .any(|(s, e)| !(abs_end <= *s || abs_start >= *e))
@@ -1102,6 +1182,58 @@ mod tests {
                 "clause at {start} does not match slice in emdash line"
             );
         }
+    }
+
+    #[test]
+    fn allow_pattern_exempts_a_phrase_wrapped_across_lines() {
+        let banned = compile(time_estimate_patterns(), "t").unwrap();
+        let wrapped = "The run held the one-minute load\naverage below 1.5.\n";
+        // Control: without an allow pattern the wrapped term of art fires.
+        let bare = scan_text_for_time_estimates(wrapped, &banned, &[]);
+        assert_eq!(bare, vec![(1, "one-minute".to_string())]);
+
+        let allowed = compile(["one-minute load average"], "allow").unwrap();
+        assert_eq!(
+            scan_text_for_time_estimates(wrapped, &banned, &allowed),
+            Vec::<(usize, String)>::new(),
+            "a multi-word allow_pattern must match across a soft wrap"
+        );
+
+        // An indented continuation (list item) is still one paragraph.
+        let listed = "- The run held the one-minute load\n  average below 1.5.\n";
+        assert!(scan_text_for_time_estimates(listed, &banned, &allowed).is_empty());
+
+        // A blank line ends the paragraph: the phrase no longer exists.
+        let split = "The run held the one-minute load\n\naverage below 1.5.\n";
+        assert_eq!(
+            scan_text_for_time_estimates(split, &banned, &allowed),
+            vec![(1, "one-minute".to_string())]
+        );
+    }
+
+    #[test]
+    fn allow_pattern_binds_to_the_match_not_the_paragraph() {
+        let banned = compile(time_estimate_patterns(), "t").unwrap();
+        let allowed = compile(["one-minute load average"], "allow").unwrap();
+
+        // Unrelated estimate on the wrapped line, after the exempted phrase.
+        let para = "The run held the one-minute load\naverage below 1.5, so we ship in 3 weeks.\n";
+        assert_eq!(
+            scan_text_for_time_estimates(para, &banned, &allowed),
+            vec![(2, "3 weeks".to_string())]
+        );
+
+        // Unrelated estimate on the SAME line as the exempted phrase.
+        let same = "The one-minute load average held, so we ship in 3 weeks.\n";
+        assert_eq!(
+            scan_text_for_time_estimates(same, &banned, &allowed),
+            vec![(1, "3 weeks".to_string())]
+        );
+
+        // Line anchors keep their per-line meaning.
+        let anchored = compile([r"^timeout: \d+"], "allow").unwrap();
+        let text = "Config notes\ntimeout: 30 minutes per shard\n";
+        assert!(scan_text_for_time_estimates(text, &banned, &anchored).is_empty());
     }
 
     #[test]

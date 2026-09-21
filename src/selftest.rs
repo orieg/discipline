@@ -1505,6 +1505,40 @@ jobs:
         },
     ),
     (
+        "ci-integrity: renamed step pairs by run body, renamed-and-rewritten step does not",
+        || {
+            use crate::guards::ci_integrity::{pair_steps, StepMatch};
+            let seq = |y: &str| -> Result<Vec<serde_yaml::Value>> {
+                Ok(serde_yaml::from_str::<Vec<serde_yaml::Value>>(y)?)
+            };
+            let base = seq("- name: Lint a.sh b.sh\n  run: |\n    ./a.sh\n    ./b.sh\n")?;
+            let renamed = seq("- name: Lint scripts\n  run: |\n    ./a.sh\n    ./b.sh\n")?;
+            let rewritten = seq("- name: Lint scripts\n  run: echo skipped\n")?;
+            let is_rename = matches!(
+                pair_steps(&base, &renamed)[0],
+                Some(StepMatch::Renamed { head: 0, .. })
+            );
+            Ok(is_rename && pair_steps(&base, &rewritten)[0].is_none())
+        },
+    ),
+    (
+        "time-estimates: allow_pattern spans a soft wrap and binds to its match",
+        || {
+            use crate::guards::hygiene::scan_text_for_time_estimates;
+            let banned: Vec<Regex> = time_estimate_patterns()
+                .iter()
+                .map(|p| Regex::new(p))
+                .collect::<Result<_, _>>()?;
+            let allowed = vec![Regex::new("one-minute load average")?];
+            let wrapped = "The run held the one-minute load\naverage below 1.5.\n";
+            let mixed = "The run held the one-minute load\naverage below 1.5, so we ship in 3 weeks.\n";
+            Ok(!scan_text_for_time_estimates(wrapped, &banned, &[]).is_empty()
+                && scan_text_for_time_estimates(wrapped, &banned, &allowed).is_empty()
+                && scan_text_for_time_estimates(mixed, &banned, &allowed)
+                    == vec![(2, "3 weeks".to_string())])
+        },
+    ),
+    (
         "bench-regression: iai console parsing, two-tier threshold, and sourced overrides",
         || {
             use crate::config::{BenchRegressionGate, Severity};

@@ -7655,3 +7655,210 @@ fn pr_checklist_still_fires_when_no_test_is_added_anywhere() {
     assert_eq!(run.titles("pr-checklist").len(), 1, "{}", run.stdout);
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
 }
+
+// ---- ci-integrity: step renames vs deletions -------------------------------
+
+/// A workflow whose `lint` job runs a step named after the scripts it runs,
+/// so the name changes whenever a script is added. `{name}` and `{run}` are
+/// substituted per case.
+const RENAME_WF: &str = "name: CI
+permissions: read-all
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: {name}
+        run: |
+{run}
+      - name: Build
+        run: cargo build --locked
+  ci-gate:
+    needs: [lint]
+    runs-on: ubuntu-latest
+";
+
+fn rename_wf(name: &str, run_lines: &[&str]) -> String {
+    let run: Vec<String> = run_lines.iter().map(|l| format!("          {l}")).collect();
+    RENAME_WF
+        .replace("{name}", name)
+        .replace("{run}", &run.join("\n"))
+}
+
+fn rename_repo() -> Repo {
+    let repo = Repo::new();
+    repo.write(
+        ".github/workflows/ci.yml",
+        &rename_wf(
+            "Lint check-docs.sh check-links.sh",
+            &["./scripts/check-docs.sh", "./scripts/check-links.sh"],
+        ),
+    );
+    repo.commit("ci: base workflow");
+    repo
+}
+
+#[test]
+fn ci_integrity_step_renamed_with_unchanged_body_is_a_rename_not_a_deletion() {
+    let repo = rename_repo();
+    repo.write(
+        ".github/workflows/ci.yml",
+        &rename_wf(
+            "Lint docs and links",
+            &["./scripts/check-docs.sh", "./scripts/check-links.sh"],
+        ),
+    );
+    repo.commit("ci: rename the lint step");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert!(
+        run.titles("ci-integrity").is_empty(),
+        "a rename is not a deletion: {}",
+        run.stdout
+    );
+    let notes = run.outcome("ci-integrity")["notes"].to_string();
+    assert!(
+        notes.contains("renamed to 'Lint docs and links'")
+            && notes.contains("'Lint check-docs.sh check-links.sh'"),
+        "the rename is reported as a rename: {notes}"
+    );
+
+    // The consumer's case: a script is added, so both the name and the body
+    // grow. Still a rename.
+    repo.write(
+        ".github/workflows/ci.yml",
+        &rename_wf(
+            "Lint check-docs.sh check-links.sh check-toc.sh",
+            &[
+                "./scripts/check-docs.sh",
+                "./scripts/check-links.sh",
+                "./scripts/check-toc.sh",
+            ],
+        ),
+    );
+    repo.commit("ci: add a lint script");
+    let grown = repo.check(&["--base", "HEAD~2"]);
+    assert!(grown.titles("ci-integrity").is_empty(), "{}", grown.stdout);
+}
+
+#[test]
+fn ci_integrity_step_removed_outright_is_still_a_deletion() {
+    let repo = rename_repo();
+    let removed = rename_wf(
+        "Lint check-docs.sh check-links.sh",
+        &["./scripts/check-docs.sh", "./scripts/check-links.sh"],
+    )
+    .replace(
+        "      - name: Lint check-docs.sh check-links.sh\n        run: |\n          ./scripts/check-docs.sh\n          ./scripts/check-links.sh\n",
+        "",
+    );
+    assert!(!removed.contains("check-docs"), "fixture removes the step");
+    repo.write(".github/workflows/ci.yml", &removed);
+    repo.commit("ci: drop the lint step");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.titles("ci-integrity"),
+        vec!["Deletion of Verification Step"],
+        "{}",
+        run.stdout
+    );
+    let msg = run.violations("ci-integrity")[0]["message"].to_string();
+    assert!(
+        msg.contains("was deleted") && msg.contains("no step in head matches it"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn ci_integrity_step_renamed_and_rewritten_is_still_a_deletion() {
+    let repo = rename_repo();
+    repo.write(
+        ".github/workflows/ci.yml",
+        &rename_wf("Lint", &["echo skipped"]),
+    );
+    repo.commit("ci: rename and rewrite the lint step");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.titles("ci-integrity"),
+        vec!["Deletion of Verification Step"],
+        "renaming and rewriting a verification step in one change deletes it: {}",
+        run.stdout
+    );
+    let msg = run.violations("ci-integrity")[0]["message"].to_string();
+    assert!(
+        msg.contains("'Lint check-docs.sh check-links.sh'")
+            && msg.contains("below the rename threshold"),
+        "{msg}"
+    );
+}
+
+// ---- time-estimates: allow_patterns across a soft wrap ---------------------
+
+fn allow_pattern_repo() -> Repo {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n\n[gates.time-estimates]\nallow_patterns = [\"one-minute load average\"]\n",
+    );
+    repo.commit("chore: config");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo
+}
+
+#[test]
+fn time_estimates_wrapped_phrase_is_exempted_by_a_multi_word_allow_pattern() {
+    let repo = allow_pattern_repo();
+    repo.write(
+        "docs/ops.md",
+        "# Ops\n\nThe run held the one-minute load\naverage below 1.5 throughout.\n",
+    );
+    repo.commit("docs: ops");
+    let run = repo.check(&[]);
+    assert!(run.titles("time-estimates").is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn time_estimates_unrelated_estimate_in_the_same_paragraph_still_fires() {
+    let repo = allow_pattern_repo();
+    repo.write(
+        "docs/ops.md",
+        "# Ops\n\nThe run held the one-minute load\naverage below 1.5, so we ship in 3 weeks.\n",
+    );
+    repo.commit("docs: ops");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("time-estimates"),
+        vec!["Time Estimate"],
+        "{}",
+        run.stdout
+    );
+    let v = &run.violations("time-estimates")[0];
+    assert_eq!(v["line"], 4, "{v}");
+    assert!(v["message"].to_string().contains("3 weeks"), "{v}");
+}
+
+#[test]
+fn ci_integrity_renamed_step_is_still_compared_against_its_base_form() {
+    // Pairing a rename with its base step keeps the flag-drop checks armed:
+    // renaming a step must not launder dropping `--locked` from it.
+    let repo = rename_repo();
+    let head = rename_wf(
+        "Lint check-docs.sh check-links.sh",
+        &["./scripts/check-docs.sh", "./scripts/check-links.sh"],
+    )
+    .replace(
+        "      - name: Build\n        run: cargo build --locked\n",
+        "      - name: Compile\n        run: cargo build\n",
+    );
+    assert!(head.contains("name: Compile"), "fixture renames the step");
+    repo.write(".github/workflows/ci.yml", &head);
+    repo.commit("ci: rename build step");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run.titles("ci-integrity"),
+        vec!["Cargo Flag Dropped (--locked)"],
+        "{}",
+        run.stdout
+    );
+}

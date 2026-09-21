@@ -377,6 +377,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Benchmark measurements ("ran in 4.2 seconds").
   - Historical durations and narration ("was maintained for three years", "forty minutes later — a commit ordering", "shipped a day ago"). <!-- discipline:allow(time-estimates) -->
   - Code inside fenced blocks (` ``` `).
+  - An estimate split across a line break (`ship in 3` / `weeks`): built-in and `extra_patterns` matches are found within a single line, then scoped to the clause that contains them. <!-- discipline:allow(time-estimates) -->
+- **`allow_patterns` scope:** each pattern is matched against every line and against every paragraph with its soft-wrapped lines joined by one space (a blank line or a code fence ends the paragraph), so a phrase that wraps, such as `one-minute load average` split after `load`, is still matched. The exemption covers only the text the pattern matched: an estimate elsewhere on the same line or in the same paragraph still fires. `^` and `$` keep their per-line meaning. To exempt a whole line, write the pattern to match the whole line (`^Status:.*`).
 - **Lifting directive:** In markdown: `<!-- discipline:allow(time-estimates) -->` or inline marker `docs-lint: allow` on the matching line.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `include`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 
@@ -601,6 +603,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Steps carrying `continue-on-error: true`.
   - Commands masking exit codes (`|| true`, `set +e`).
   - Documented job count mismatches when `documented_job_count_path` is configured.
+  - Deleted verification jobs and steps (`Deletion of Verification Step`). A base step is found in head by id, name, action, or first `run:` line; failing that, it is paired as a **rename** with an otherwise unmatched head step whose body (`run:` script without its full-line `#` comments, or action and `with:` inputs) has token Dice similarity of at least 0.60 (`STEP_RENAME_SIMILARITY`) and still carries every verification marker (`test`, `clippy`, `lint`, ...) the base body carried; ties go to the nearest position. A rename is reported in the gate notes, not as a violation, and the renamed step is still checked against its base form (dropped flags, `continue-on-error`). A step whose name and body both changed past the threshold, or whose body stopped verifying, is reported as deleted, with the closest candidate and its similarity in the message.
 - **Passing commit / PR description (accepted):**
   ```text
   allow-ci-weakening: ci-gate temporary rollup relaxation during migration
@@ -1020,7 +1023,7 @@ Discipline provides universal static binary drop-in replacements for the legacy 
 | `vacuous-tests` | *(none — new capability)* | Language-specific AST helper detection (Python non-test methods, C/C++ non-zero return / throw helper recognition). |
 | `ignored-tests` | *(none — new capability)* | Distinguishes newly arriving ignored tests from modified tests, configurable approved skip predicates (`cfg_attr(miri, ignore)`). |
 | `deletion-rationale` | `scripts/check_deletion_rationale.py` | Line-anchored directive parsing, configurable `require_scope` and `allow_hidden` directive controls. |
-| `time-estimates` | `scripts/check_docs_hygiene.py` | Paragraph and sentence-level boundary lookarounds avoiding `\b` false positives on symbols (`×`, `~`), diff-scoped mode (`diff_only = true`), operational term-of-art and wrap window exemptions, `docs-lint: allow` alias. |
+| `time-estimates` | `scripts/check_docs_hygiene.py` | Clause-level (sentence-fragment) scoping of matches within a line, boundary lookarounds avoiding `\b` false positives on symbols (`×`, `~`), diff-scoped mode (`diff_only = true`), operational term-of-art and wrap window exemptions, `docs-lint: allow` alias. Paragraph scope applies to `allow_patterns` only (they match across soft-wrapped lines); built-in patterns do not detect an estimate split across a line break. |
 | `pii` | `scripts/check_docs_hygiene.py` | Full test code inspection without blind spots, JSON string unescaping, cross-tree agent config directory/playbook detection, secret-backed hostname denylist. |
 | `test-floor` | `scripts/check_test_floors.py` | Automatic base-ref constant extraction, direct `test_command` execution, fail-closed handling on unresolvable base floors, `allow-test-shrink:` override. |
 | `ci-integrity` | `scripts/check_ci_gate.py`, `scripts/check_gate_floor.py`, `scripts/check_ci_filters.py` | Complete rollup job `needs:` closure validation, 40-character commit SHA pinning, masked failure detection (`continue-on-error`, `\|\| true`, `set +e`), `allow-ci-weakening:` override. |

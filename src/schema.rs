@@ -196,7 +196,7 @@ pub fn generate_schema() -> Value {
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "include": { "$ref": "#/$defs/StringListOrReset", "description": "File globs swept for duration estimates" },
                     "extra_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional banned regex patterns" },
-                    "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns permitted as operational exceptions" },
+                    "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns permitted as operational exceptions; matched per line and across soft-wrapped lines of a paragraph, exempting only the matched text" },
                     "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" },
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" }
                 }
