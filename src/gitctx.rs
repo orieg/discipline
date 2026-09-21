@@ -290,6 +290,38 @@ impl GitCtx {
     /// `staged = true` inspects the index against `HEAD` (pre-commit hook).
     /// Otherwise the working tree is measured against the merge base of
     /// `base_ref` and `HEAD`.
+    /// Open the repository with the **empty tree** as the comparison base, so
+    /// every tracked file reads as added.
+    ///
+    /// This is the population a brownfield adopter needs: the findings that
+    /// already exist, rather than the findings a change introduced. On a clean
+    /// branch the ordinary base is `HEAD`, the diff is empty, and diff-scoped
+    /// gates legitimately report nothing — which leaves a consumer with no way
+    /// to grandfather existing debt.
+    ///
+    /// Not a checking mode: a gate run this way reports the whole repository,
+    /// so it is used by `discipline baseline --whole-tree` only.
+    pub fn open_whole_tree() -> Result<Self> {
+        let repo = discover_repository(".")?;
+        if repo.is_bare() {
+            bail!("bare repositories are not supported");
+        }
+        if repo
+            .head()
+            .ok()
+            .and_then(|h| h.peel_to_commit().ok())
+            .is_none()
+        {
+            bail!("repository has no commits; nothing to baseline");
+        }
+        Ok(Self {
+            repo,
+            base: None,
+            base_label: "empty tree (whole-tree baseline)".to_string(),
+            staged: false,
+        })
+    }
+
     pub fn open(base_ref: &str, staged: bool) -> Result<Self> {
         let repo = discover_repository(".")?;
         if repo.is_bare() {

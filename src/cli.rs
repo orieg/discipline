@@ -292,6 +292,11 @@ pub struct BaselineArgs {
     #[arg(short, long, value_enum, default_value_t = SuiteChoice::All)]
     pub suite: SuiteChoice,
 
+    /// Record every pre-existing finding in the tree, not just the diff.
+    /// Use when adopting discipline on an existing repository; conflicts with --base
+    #[arg(long, conflicts_with = "base")]
+    pub whole_tree: bool,
+
     /// Trust the workspace and disable libgit2 repository owner validation
     #[arg(long)]
     pub trust_workspace: bool,

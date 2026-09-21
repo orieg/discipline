@@ -652,8 +652,12 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     if args.trust_workspace {
         std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
     }
-    let base_ref = discipline::gitctx::detect_base_ref(args.base.as_deref(), None, None);
-    let git = GitCtx::open(&base_ref, false)?;
+    let git = if args.whole_tree {
+        GitCtx::open_whole_tree()?
+    } else {
+        let base_ref = discipline::gitctx::detect_base_ref(args.base.as_deref(), None, None);
+        GitCtx::open(&base_ref, false)?
+    };
     let (config, config_path) = load_config(&args.config, Some(git.root()), None, None)?;
 
     let commits = git.commits()?;

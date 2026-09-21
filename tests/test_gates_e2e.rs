@@ -7213,3 +7213,57 @@ fn submodule_gitlink_entries_do_not_break_the_run() {
         run.stderr
     );
 }
+
+#[test]
+fn baseline_whole_tree_records_pre_existing_findings_for_brownfield_adoption() {
+    // Adopting the gate on an existing repository needs the population of
+    // findings that ALREADY exist. Whole-tree gates (pii, time-estimates) scan
+    // the tree regardless of the diff, so the default mode reaches them. The
+    // DIFF-SCOPED gates are the gap: on a clean branch nothing changed, so a
+    // pre-existing vacuous test can never be grandfathered, and a consumer has
+    // to leave the gate disabled instead.
+    let repo = Repo::new();
+    // The debt must live on main so the working branch is genuinely clean and
+    // the diff against main is empty — the brownfield situation.
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("docs/legacy.md", "Ships in 3 weeks.\n");
+    repo.write("tests/ghost.rs", "#[test]\nfn ghost() {}\n");
+    repo.commit("chore: pre-existing debt on main");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    let diff_mode = repo.run(&["baseline", "--write", "--base", "main"], &[]);
+    assert_eq!(
+        diff_mode.code, 0,
+        "{}{}",
+        diff_mode.stdout, diff_mode.stderr
+    );
+    let diff_recorded = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert!(
+        diff_recorded.contains("time-estimates"),
+        "whole-tree gates are reachable in the default mode, got:\n{diff_recorded}"
+    );
+    assert!(
+        !diff_recorded.contains("vacuous-tests"),
+        "the default mode cannot reach a diff-scoped gate on a clean branch, got:\n{diff_recorded}"
+    );
+
+    std::fs::remove_file(repo.file("discipline-baseline.toml")).unwrap();
+
+    // Whole-tree mode measures against the empty tree, so every tracked file
+    // is in scope and the diff-scoped gates see the existing population too.
+    let whole = repo.run(&["baseline", "--write", "--whole-tree"], &[]);
+    assert_eq!(whole.code, 0, "{}{}", whole.stdout, whole.stderr);
+    let recorded = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert!(
+        recorded.contains("vacuous-tests") && recorded.contains("time-estimates"),
+        "whole-tree baseline must span diff-scoped AND whole-tree gates, got:\n{recorded}"
+    );
+
+    // --whole-tree and --base are mutually exclusive: one measures the tree,
+    // the other measures a change.
+    let clash = repo.run(
+        &["baseline", "--write", "--whole-tree", "--base", "main"],
+        &[],
+    );
+    assert_ne!(clash.code, 0, "--whole-tree with --base must be refused");
+}
