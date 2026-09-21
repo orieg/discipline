@@ -29,11 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Built mode: CodeQL runs the cargo build itself, so build scripts and
-          # proc macros are expanded from real compiler output instead of the
-          # source-only extraction of `none`.
           - language: rust
-            build-mode: autobuild
+            build-mode: none
           - language: actions
             build-mode: none
           - language: python
