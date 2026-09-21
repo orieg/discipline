@@ -3,7 +3,10 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
-use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn, UnsafeSite};
+use super::functions::{self, FunctionSpec};
+use super::{
+    AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn, UnsafeSite,
+};
 
 /// Rust language pack implementing [`LanguagePack`].
 pub struct RustPack;
@@ -11,6 +14,13 @@ pub struct RustPack;
 impl LanguagePack for RustPack {
     fn id(&self) -> &'static str {
         "rust"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(
+            fact,
+            Fact::Tests | Fact::EscapeHatches | Fact::UnsafeSites | Fact::Functions
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -21,7 +31,7 @@ impl LanguagePack for RustPack {
         super::extension(path) == Some("rs")
     }
 
-    fn extract(&self, _path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
+    fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
@@ -53,6 +63,7 @@ impl LanguagePack for RustPack {
         cx.visit(root, &mut Vec::new());
         cx.resolve_same_file_helpers();
         cx.facts.build_compile_time_test();
+        cx.facts.functions = functions::extract(root, src, path, &RUST_FUNCTIONS);
         Ok(cx.facts)
     }
 }
@@ -853,6 +864,65 @@ fn split_top_level(s: &str) -> Vec<&str> {
     parts.push(&s[start..]);
     parts
 }
+
+/// A `#[test]`-like attribute precedes the function.
+fn rust_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+    if functions::test_path(path) {
+        return true;
+    }
+    let mut prev = node.prev_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                let name = attribute_name(p.utf8_text(src.as_bytes()).unwrap_or(""));
+                if matches!(
+                    name.as_str(),
+                    "test" | "rstest" | "test_case" | "quickcheck" | "bench"
+                ) {
+                    return true;
+                }
+                prev = p.prev_sibling();
+            }
+            "line_comment" | "block_comment" => prev = p.prev_sibling(),
+            _ => break,
+        }
+    }
+    false
+}
+
+/// A trait method with a default body is a real body; one without is not a `function_item`
+/// with a `body` field, so nothing to skip here beyond `#[cfg(test)]` modules.
+fn rust_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if p.kind() == "mod_item" {
+            let mut prev = p.prev_sibling();
+            while let Some(a) = prev {
+                if a.kind() != "attribute_item" {
+                    break;
+                }
+                if is_cfg_test_suppression(a.utf8_text(src.as_bytes()).unwrap_or(""))
+                    || a.utf8_text(src.as_bytes()).unwrap_or("").replace(' ', "") == "#[cfg(test)]"
+                {
+                    return true;
+                }
+                prev = a.prev_sibling();
+            }
+        }
+        cur = p.parent();
+    }
+    false
+}
+
+pub const RUST_FUNCTIONS: FunctionSpec = FunctionSpec {
+    function_kinds: &["function_item"],
+    name_fields: &["name"],
+    body_fields: &["body"],
+    ignored_kinds: &["line_comment", "block_comment"],
+    skip: rust_fn_skip,
+    is_test: rust_fn_is_test,
+    classify: functions::classify_rust,
+};
 
 #[cfg(test)]
 mod tests {

@@ -10,6 +10,7 @@ use anyhow::Result;
 pub mod c_cpp;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
+pub mod functions;
 #[cfg(feature = "lang-go")]
 pub mod r#go;
 #[cfg(feature = "lang-golden")]
@@ -36,6 +37,12 @@ pub trait LanguagePack: Send + Sync {
     /// Stable kebab-case pack identifier (e.g. "rust", "golden", "python", "javascript").
     fn id(&self) -> &'static str;
 
+    /// Which facts this pack fills in. A gate that needs a fact the pack does not supply
+    /// names the file as not analysed instead of reading an empty list as "none found".
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(fact, Fact::Tests | Fact::EscapeHatches)
+    }
+
     /// Human-readable display name (e.g. "Rust", "Golden/Snapshot", "Python").
     fn name(&self) -> &'static str;
 
@@ -44,6 +51,15 @@ pub trait LanguagePack: Send + Sync {
 
     /// Extract language-neutral facts from source text.
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts>;
+}
+
+/// A kind of fact a pack may or may not extract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fact {
+    Tests,
+    EscapeHatches,
+    UnsafeSites,
+    Functions,
 }
 
 /// Registry of active language packs.
@@ -236,6 +252,8 @@ pub struct ParsedFileFacts {
     pub tests: Vec<TestFn>,
     pub unsafe_sites: Vec<UnsafeSite>,
     pub escape_hatches: Vec<EscapeHatchSite>,
+    /// Every function with a body, and what the body amounts to (`Fact::Functions`).
+    pub functions: Vec<functions::FunctionFacts>,
     /// Number of compile-time assertions outside tests (e.g. `const _: () = assert!(...)`, `static_assert`).
     pub compile_time_asserts: usize,
     /// Line of the first compile-time assertion (if any).
@@ -256,6 +274,7 @@ impl Default for ParsedFileFacts {
             tests: Vec::new(),
             unsafe_sites: Vec::new(),
             escape_hatches: Vec::new(),
+            functions: Vec::new(),
             compile_time_asserts: 0,
             compile_time_assert_line: None,
             compile_time_test: Some(TestFn {

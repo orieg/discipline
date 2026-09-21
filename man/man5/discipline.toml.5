@@ -151,6 +151,9 @@ PR title or description links a tracking issue (#123, Fixes #123) (hygiene; defa
 .B [gates.config-integrity]
 a change cannot weaken its own discipline.toml without a token (integrity; default: on, error; languages: any)
 .TP
+.B [gates.stub-bodies]
+added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null (agent-guard; default: on, error; languages: Rust, Python, JS/TS, Go, Java, C#)
+.TP
 .B [gates.toolchain-config]
 compiler, linter, type\-checker, test\-runner and coverage configuration cannot be loosened without a token (integrity; default: on, error; languages: tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit)
 .TP

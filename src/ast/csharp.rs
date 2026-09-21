@@ -3,7 +3,8 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
-use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn};
+use super::functions::{self, FunctionSpec};
+use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// C# language pack implementing [`LanguagePack`].
 pub struct CSharpPack;
@@ -11,6 +12,10 @@ pub struct CSharpPack;
 impl LanguagePack for CSharpPack {
     fn id(&self) -> &'static str {
         "csharp"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(fact, Fact::Tests | Fact::EscapeHatches | Fact::Functions)
     }
 
     fn name(&self) -> &'static str {
@@ -49,6 +54,7 @@ impl LanguagePack for CSharpPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
+        extractor.facts.functions = functions::extract(root, src, path, &CSHARP_FUNCTIONS);
         Ok(extractor.facts)
     }
 }
@@ -550,6 +556,57 @@ impl<'a> CSharpExtractor<'a> {
         false
     }
 }
+
+fn csharp_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
+    let mut cursor = node.walk();
+    let is_abstract = node.children(&mut cursor).any(|c| {
+        c.kind() == "modifier"
+            && c.utf8_text(src.as_bytes())
+                .is_ok_and(|t| t == "abstract" || t == "extern" || t == "partial")
+    });
+    if is_abstract {
+        return true;
+    }
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if p.kind() == "interface_declaration" {
+            return true;
+        }
+        cur = p.parent();
+    }
+    false
+}
+
+fn csharp_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+    if functions::test_path(path) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).any(|c| {
+        c.kind() == "attribute_list"
+            && c.utf8_text(src.as_bytes()).is_ok_and(|t| {
+                t.contains("Fact")
+                    || t.contains("Theory")
+                    || t.contains("TestMethod")
+                    || t.contains("Test]")
+            })
+    });
+    found
+}
+
+pub const CSHARP_FUNCTIONS: FunctionSpec = FunctionSpec {
+    function_kinds: &[
+        "method_declaration",
+        "constructor_declaration",
+        "local_function_statement",
+    ],
+    name_fields: &["name"],
+    body_fields: &["body", "block", "arrow_expression_clause"],
+    ignored_kinds: &["comment"],
+    skip: csharp_fn_skip,
+    is_test: csharp_fn_is_test,
+    classify: functions::classify_jvm,
+};
 
 #[cfg(test)]
 mod tests {

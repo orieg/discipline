@@ -2076,6 +2076,124 @@ fn suppression_delta_is_a_delta_read_from_the_syntax_tree() {
     assert_eq!(lifted.violations("suppression-delta").len(), 2);
 }
 
+// ---- stub-bodies -----------------------------------------------------------
+
+#[test]
+fn stub_bodies_reports_added_stubs_and_gutted_bodies_across_languages() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/lib.rs",
+        "pub fn parse(s: &str) -> Option<u32> {\n    s.trim().parse().ok()\n}\n",
+    );
+    repo.write("pkg/svc.py", "def render(x):\n    return str(x) * 2\n");
+    repo.write(
+        "web/api.ts",
+        "export function load(id: string) {\n  return fetch(id).then((r) => r.json());\n}\n",
+    );
+    repo.commit("feat: real bodies");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: a refactor that keeps bodies substantive, an added no-op, a stub
+    // inside a test, and a Protocol member.
+    repo.write(
+        "src/lib.rs",
+        "pub fn parse(s: &str) -> Option<u32> {\n    let t = s.trim();\n    t.parse().ok()\n}\n\
+         pub fn noop() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn later() { todo!() }\n}\n",
+    );
+    repo.write(
+        "pkg/svc.py",
+        "from typing import Protocol\n\nclass Renderer(Protocol):\n    def render(self, x): ...\n\n\
+         def render(x):\n    \"\"\"Render twice.\"\"\"\n    return str(x) * 2\n",
+    );
+    repo.commit("refactor: tidy");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("stub-bodies").is_empty(),
+        "{:?}",
+        quiet.violations("stub-bodies")
+    );
+    assert_eq!(quiet.outcome("stub-bodies")["examined"], 3);
+
+    // One gutted body per language and one added stub.
+    repo.write(
+        "src/lib.rs",
+        "pub fn parse(s: &str) -> Option<u32> {\n    None\n}\npub fn validate(s: &str) -> bool {\n    todo!()\n}\n",
+    );
+    repo.write(
+        "pkg/svc.py",
+        "def render(x):\n    raise NotImplementedError\n",
+    );
+    repo.write(
+        "web/api.ts",
+        "export function load(id: string) {\n  throw new Error('not implemented');\n}\n",
+    );
+    repo.commit("feat: wire up later");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut titled: Vec<(String, String, String)> = run
+        .violations("stub-bodies")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["title"].as_str().unwrap().to_string(),
+                v["message"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    titled.sort();
+    assert_eq!(titled.len(), 4, "{titled:?}");
+    assert_eq!(titled[0].0, "pkg/svc.py");
+    assert_eq!(titled[0].1, "Function Body Replaced By Stub");
+    assert!(titled[0].2.contains(
+        "`render` had a body on the base side and now has stub `raise NotImplementedError`"
+    ));
+    assert_eq!(titled[1].1, "Function Body Replaced By Stub");
+    assert!(
+        titled[1].2.contains("`parse`") && titled[1].2.contains("bare `None`"),
+        "{}",
+        titled[1].2
+    );
+    assert_eq!(titled[2].1, "Stub Body Added");
+    assert!(titled[2]
+        .2
+        .contains("`validate` is added with the body `todo!()`"));
+    assert_eq!(titled[3].0, "web/api.ts");
+
+    // A function name lifts its own finding; a file path lifts every finding in the file.
+    repo.commit(
+        "feat: explain\n\nallow-stub: validate schema lands with the next migration\n\
+         allow-stub: pkg/svc.py rendering moves to the worker in the follow-up",
+    );
+    let lifted = repo.check(&[]);
+    assert_eq!(
+        lifted.violations("stub-bodies").len(),
+        2,
+        "{:?}",
+        lifted.violations("stub-bodies")
+    );
+    assert_eq!(
+        lifted.outcome("stub-bodies")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // A pack without function facts names its files instead of passing them.
+    let repo = Repo::new();
+    repo.write("lib/a.rb", "def a\n  raise NotImplementedError\nend\n");
+    repo.commit("feat: ruby stub");
+    let run = repo.check(&[]);
+    assert!(run.titles("stub-bodies").is_empty());
+    let notes = run.outcome("stub-bodies")["notes"].to_string();
+    assert!(
+        notes.contains("supplies no function facts") && notes.contains("lib/a.rb"),
+        "{notes}"
+    );
+}
+
 // ---- override policy -------------------------------------------------------
 
 /// A change that disables two gates and excuses both from its commit body.
@@ -2697,7 +2815,7 @@ fn override_record_audit_trail_and_step_outputs() {
         .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
     assert!(run
         .stdout
-        .contains("gates:  19 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"));
+        .contains("gates:  20 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"));
     assert!(run.stdout.contains("overrides: 1"));
 
     // Check GITHUB_OUTPUT contents
@@ -2708,14 +2826,14 @@ fn override_record_audit_trail_and_step_outputs() {
         "{step_output}"
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
-    assert!(step_output.contains("passed_gates=19"), "{step_output}");
+    assert!(step_output.contains("passed_gates=20"), "{step_output}");
     assert!(step_output.contains("examined_items=19"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 19 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"
+            "**Summary:** 20 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"
         ),
         "{step_summary}"
     );

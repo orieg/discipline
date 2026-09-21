@@ -288,6 +288,16 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "stub-bodies: a body replaced by todo!() is reported, a body given to a stub is not",
+        || {
+            use crate::guards::stub_bodies::judge;
+            let v = AssertVocabulary::default();
+            let real = analyze("pub fn f(x: u8) -> u8 { x + 1 }", &v)?.functions;
+            let stub = analyze("pub fn f(x: u8) -> u8 { todo!() }", &v)?.functions;
+            Ok(judge(&real, &stub).len() == 1 && judge(&stub, &real).is_empty())
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;

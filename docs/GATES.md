@@ -29,6 +29,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`shell-secrets`](#shell-secrets) | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`config-integrity`](#config-integrity) | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
+| [`stub-bodies`](#stub-bodies) | agent-guard | **shipped** | Rust, Python, JS/TS, Go, Java, C# | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
 | [`toolchain-config`](#toolchain-config) | integrity | **shipped** | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](#scope-confinement) | agent-guard | **shipped** | any | changes stay inside authorized paths |
 | [`suppression-delta`](#suppression-delta) | agent-guard | **shipped** | per pack | newly added linter / compiler suppression annotations |
@@ -108,6 +109,7 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `agent-scratch` | on, `error` | High: a tracked path matching agent state directories. | False block: a deliberately committed directory of the same name, exempted by path. Miss: private agent state in history. | The path set is narrow and the committed state is not reversible once pushed. |
 | `shell-secrets` | on, `error` (token rules) / `warning` (heuristic rules) | High for structured tokens; heuristic for argv and pipe patterns. | False block: a token-shaped test fixture, exempted by path. Miss: a live credential in history. | The split already downgrades the heuristic rules at finding level. |
 | `config-integrity` | on, `error` | High: base and head configuration are diffed structurally. | False block: an intended loosening needs `allow-gate-weakening:`. Miss: a change lowering its own bar (F9). | The gate protects every other gate; it cannot be advisory. |
+| `stub-bodies` | on, `error` | High: the body is read from the syntax tree and is the whole body; base and head are compared per function. | False block: a deliberate placeholder needs `allow-stub:`. Miss: a stub that carries one extra statement, or a body that special-cases the inputs its tests use. | An added `todo!()` or a body replaced by `return null` is the change no other gate sees. |
 | `toolchain-config` | on, `error` | High for a data file: base and head are diffed structurally against a per-tool rule table. A configuration written as code is reported at `warning` as changed, not analysed. | False block: an intended loosening needs `allow-toolchain-weakening:`. Miss: a lint or type bar lowered in the same change that would have failed it. | Same stakes as `ci-integrity` dropping `-D warnings`, one file over. |
 | `ci-integrity` | on, `error` | High for `continue-on-error`, `\|\| true` and unpinned actions in modified workflows (`diff_only = true`). | False block: an intended pattern needs `allow-ci-weakening:`. Miss: a rollup that reports green while a job is skipped. | Only modified workflows are scanned by default, so pre-existing patterns do not block adoption. |
 | `ci-skip-set` | on, `error` | High: each `needs` result is compared to its job's `if:` evaluated over the observed filter outputs; an unmodelled term is a finding, not a guess. Inert (a named "not evaluated" note) unless the rollup job supplies `DISCIPLINE_CI_CONTEXT`. | False block: a rollup whose workflow uses an `if:` form outside the modelled subset. Miss: a skip set the evaluator cannot distinguish from a legitimate one (all filters false on a change that touches no filtered path), reported as a note. | Supplying the context is the opt-in, so enabling it by default costs an ordinary diff check nothing. |
@@ -252,6 +254,31 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Commented-out test functions in languages other than Rust (the Rust pack reports them here).
 - **Lifting directive:** `allow-ignore: <test-name> <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `approved_predicates`.
+
+#### `stub-bodies`
+- **Rule:** An added function is not a stub, and an existing body is not replaced by one. Each language pack supplying function facts (`Fact::Functions`) reports every function with a body and what the body amounts to: a **stub** (the whole body is a not-implemented marker), **empty**, **trivial** (one bare constant return) or **substantive**. Functions pair by name and order between the base and head side.
+- **Languages:** Rust (`todo!()`, `unimplemented!()`, `panic!("not implemented")`), Python (`pass`, `...`, `raise NotImplementedError`), JS/TS (`throw new Error("not implemented" / "TODO")`), Go (`panic("not implemented")`), Java and C# (`throw new UnsupportedOperationException` / `NotImplementedException`). PHP, Ruby and C/C++ packs do not supply function facts yet; their changed files are named in the notes as not analysed.
+- **What it catches:**
+  - `Stub Body Added`: a new non-test function whose whole body is a stub marker.
+  - `Function Body Replaced By Stub`: a function whose base body was substantive and whose head body is a stub, empty, or a bare constant return (`None`, `return null`, `return nil, nil`).
+- **Failing diff (rejected):**
+  ```diff
+  - pub fn parse(s: &str) -> Option<u32> { s.trim().parse().ok() }
+  + pub fn parse(s: &str) -> Option<u32> { None }
+  + pub fn validate(s: &str) -> bool { todo!() }
+  ```
+- **Passing commit / PR body (accepted):**
+  ```text
+  allow-stub: validate schema lands with the next migration
+  ```
+- **What it does NOT catch:**
+  - An added empty or constant-returning function (`fn noop() {}`, `return null`): a no-op is a legitimate shape for a new function; only a marker that says "not implemented" is reported when added.
+  - A stub padded with a second statement (a log line, an assignment), or a body that special-cases the inputs its tests use: mutation presets of the `command` gate are the control for that class.
+  - Test functions, `#[cfg(test)]` modules, abstract and overload members, Protocol / interface declarations, `.pyi` stubs.
+  - A body changed for the worse while staying substantive.
+- **Lifting directive:** `allow-stub: <function-name-or-path> <reason>`. A file path lifts every finding in that file.
+- **Default:** on, `error`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `unsafe-safety-comment`
 - **Rule:** Every `unsafe` block, `unsafe fn`, or `unsafe impl` on an added line must be preceded by a load-bearing `// SAFETY:` comment. Deleting a `// SAFETY:` comment above an existing block is also blocked.

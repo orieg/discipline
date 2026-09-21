@@ -113,6 +113,7 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 | [`shell-secrets`](docs/GATES.md#shell-secrets) | hygiene | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](docs/GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`config-integrity`](docs/GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
+| [`stub-bodies`](docs/GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C# | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
 | [`toolchain-config`](docs/GATES.md#toolchain-config) | integrity | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](docs/GATES.md#scope-confinement) | agent-guard | any | changes stay inside authorized paths |
 | [`suppression-delta`](docs/GATES.md#suppression-delta) | agent-guard | per pack | newly added linter / compiler suppression annotations |

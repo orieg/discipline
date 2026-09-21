@@ -5,8 +5,9 @@ use tree_sitter::{Node, Parser};
 
 use std::collections::{HashMap, HashSet};
 
+use super::functions::{self, FunctionSpec};
 use super::{
-    AssertVocabulary, EscapeHatchSite, HelperFacts, LanguagePack, ParsedFileFacts, TestFn,
+    AssertVocabulary, EscapeHatchSite, Fact, HelperFacts, LanguagePack, ParsedFileFacts, TestFn,
 };
 
 /// Python language pack implementing [`LanguagePack`].
@@ -15,6 +16,10 @@ pub struct PythonPack;
 impl LanguagePack for PythonPack {
     fn id(&self) -> &'static str {
         "python"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(fact, Fact::Tests | Fact::EscapeHatches | Fact::Functions)
     }
 
     fn name(&self) -> &'static str {
@@ -55,6 +60,7 @@ impl LanguagePack for PythonPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
+        extractor.facts.functions = functions::extract(root, src, path, &PYTHON_FUNCTIONS);
         Ok(extractor.facts)
     }
 }
@@ -806,6 +812,63 @@ impl<'a> PythonExtractor<'a> {
         false
     }
 }
+
+/// Abstract methods, overload signatures, Protocol members and `.pyi` stubs are
+/// declarations, not bodies to judge.
+fn python_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
+    let t = |n: tree_sitter::Node| n.utf8_text(src.as_bytes()).unwrap_or("");
+    if let Some(parent) = node.parent() {
+        if parent.kind() == "decorated_definition" {
+            let mut cursor = parent.walk();
+            for child in parent.children(&mut cursor) {
+                if child.kind() == "decorator" {
+                    let d = t(child);
+                    if d.contains("abstractmethod")
+                        || d.contains("overload")
+                        || d.contains("abstractproperty")
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if p.kind() == "class_definition" {
+            if let Some(sup) = p.child_by_field_name("superclasses") {
+                let s = t(sup);
+                if s.contains("Protocol") || s.contains("TypedDict") || s.contains("NamedTuple") {
+                    return true;
+                }
+            }
+        }
+        cur = p.parent();
+    }
+    false
+}
+
+fn python_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+    if path.ends_with(".pyi") {
+        return true;
+    }
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(src.as_bytes()).ok())
+        .unwrap_or("");
+    functions::test_path(path) || name.starts_with("test_") || is_python_test_path(path)
+}
+
+pub const PYTHON_FUNCTIONS: FunctionSpec = FunctionSpec {
+    function_kinds: &["function_definition"],
+    name_fields: &["name"],
+    body_fields: &["body"],
+    // A docstring is an expression statement holding a string.
+    ignored_kinds: &["comment"],
+    skip: python_fn_skip,
+    is_test: python_fn_is_test,
+    classify: functions::classify_python,
+};
 
 #[cfg(test)]
 mod tests {

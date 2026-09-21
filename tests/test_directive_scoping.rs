@@ -5,7 +5,7 @@
 //! 2. Naming ONE subject lifts exactly 1 finding.
 //! 3. Overrides counter in report equals the number of lifted findings.
 //!
-//! Covers all 35 directives (25 canonical + 10 deprecated aliases).
+//! Covers all 36 directives (26 canonical + 10 deprecated aliases).
 
 mod common;
 use common::Repo;
@@ -77,11 +77,11 @@ fn evaluate_findings_for_directive(
 }
 
 #[test]
-fn test_all_35_directives_table_driven_scoping() {
+fn test_all_36_directives_table_driven_scoping() {
     assert_eq!(
         KNOWN_DIRECTIVES.len(),
-        35,
-        "KNOWN_DIRECTIVES must contain exactly 35 directives (25 canonical + 10 deprecated)"
+        36,
+        "KNOWN_DIRECTIVES must contain exactly 36 directives (26 canonical + 10 deprecated)"
     );
 
     let mut results = Vec::with_capacity(KNOWN_DIRECTIVES.len());
@@ -186,7 +186,7 @@ fn test_all_35_directives_table_driven_scoping() {
     }
 
     // Print table for user reporting
-    println!("\n=== TABLE-DRIVEN DIRECTIVE SCOPING RESULTS (35 DIRECTIVES) ===");
+    println!("\n=== TABLE-DRIVEN DIRECTIVE SCOPING RESULTS (36 DIRECTIVES) ===");
     println!(
         "| # | Directive | Status | Gate | Subject Kind | Sample Subject | Unrelated Lifts | 1-Subj Lifts | Overrides | Verdict |"
     );

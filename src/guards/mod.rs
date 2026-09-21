@@ -20,6 +20,7 @@ pub mod provenance_tags;
 pub mod sanitizers;
 pub mod scope_confinement;
 pub mod shell_secrets;
+pub mod stub_bodies;
 pub mod suppression_delta;
 pub mod test_budget;
 pub mod test_floor;
@@ -331,6 +332,7 @@ pub fn run_checks(
             "issue-link" => issue_link::evaluate_issue_link(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
             "toolchain-config" => toolchain_config::toolchain_config(ctx),
+            "stub-bodies" => stub_bodies::stub_bodies(ctx),
             "golden-output" => integrity::golden_output(ctx),
             "bench-regression" => perf::bench_regression(ctx),
             "command" => command::evaluate_command(ctx),
@@ -421,6 +423,8 @@ pub fn run_checks(
             "version-lockstep"
         } else if note.contains("allow-scope") {
             "scope-confinement"
+        } else if note.contains("allow-stub") {
+            "stub-bodies"
         } else if note.contains("allow-toolchain-weakening") {
             "toolchain-config"
         } else if note.contains("allow-suppression") {
@@ -449,6 +453,7 @@ pub fn run_checks(
                         | "ignored-tests"
                         | "config-integrity"
                         | "toolchain-config"
+                        | "stub-bodies"
                         | "golden-output"
                         | "bench-regression"
                         | "command"

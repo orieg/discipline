@@ -3,7 +3,8 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
-use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn};
+use super::functions::{self, FunctionSpec};
+use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Go language pack implementing [`LanguagePack`].
 pub struct GoPack;
@@ -11,6 +12,10 @@ pub struct GoPack;
 impl LanguagePack for GoPack {
     fn id(&self) -> &'static str {
         "go"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(fact, Fact::Tests | Fact::EscapeHatches | Fact::Functions)
     }
 
     fn name(&self) -> &'static str {
@@ -46,6 +51,7 @@ impl LanguagePack for GoPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
+        extractor.facts.functions = functions::extract(root, src, path, &GO_FUNCTIONS);
         Ok(extractor.facts)
     }
 }
@@ -469,6 +475,24 @@ impl<'a> GoExtractor<'a> {
         }
     }
 }
+
+fn go_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(src.as_bytes()).ok())
+        .unwrap_or("");
+    path.ends_with("_test.go") || is_go_test_function_name(name)
+}
+
+pub const GO_FUNCTIONS: FunctionSpec = FunctionSpec {
+    function_kinds: &["function_declaration", "method_declaration"],
+    name_fields: &["name"],
+    body_fields: &["body"],
+    ignored_kinds: &["comment"],
+    skip: functions::skip_none,
+    is_test: go_fn_is_test,
+    classify: functions::classify_go,
+};
 
 #[cfg(test)]
 mod tests {

@@ -485,6 +485,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("pr-checklist", false, Severity::Error),
     ("config-integrity", true, Severity::Error),
     ("toolchain-config", true, Severity::Error),
+    ("stub-bodies", true, Severity::Error),
     ("golden-output", true, Severity::Error),
     ("dependency-delta", true, Severity::Error),
     ("test-budget", true, Severity::Error),

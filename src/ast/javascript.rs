@@ -3,7 +3,8 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
-use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn};
+use super::functions::{self, FunctionSpec};
+use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// JavaScript & TypeScript language pack implementing [`LanguagePack`].
 pub struct JavaScriptPack;
@@ -11,6 +12,10 @@ pub struct JavaScriptPack;
 impl LanguagePack for JavaScriptPack {
     fn id(&self) -> &'static str {
         "javascript"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(fact, Fact::Tests | Fact::EscapeHatches | Fact::Functions)
     }
 
     fn name(&self) -> &'static str {
@@ -52,6 +57,7 @@ impl LanguagePack for JavaScriptPack {
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
+        extractor.facts.functions = functions::extract(root, src, path, &JS_FUNCTIONS);
         Ok(extractor.facts)
     }
 }
@@ -495,6 +501,66 @@ impl<'a> JsExtractor<'a> {
         false
     }
 }
+
+/// Overload signatures, abstract members and `declare` blocks carry no body.
+fn js_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        match p.kind() {
+            "ambient_declaration" | "interface_declaration" | "abstract_class_declaration"
+                if node.kind() != "method_definition" =>
+            {
+                return true
+            }
+            "ambient_declaration" | "interface_declaration" => return true,
+            _ => {}
+        }
+        cur = p.parent();
+    }
+    let t = node.utf8_text(src.as_bytes()).unwrap_or("");
+    t.trim_start().starts_with("abstract ") || t.trim_start().starts_with("declare ")
+}
+
+fn js_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+    if functions::test_path(path) {
+        return true;
+    }
+    // A callback passed to `it(` / `test(` / `describe(`.
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if p.kind() == "call_expression" {
+            let callee = p
+                .child_by_field_name("function")
+                .and_then(|f| f.utf8_text(src.as_bytes()).ok())
+                .unwrap_or("");
+            let leaf = callee.rsplit('.').next().unwrap_or(callee);
+            if matches!(
+                leaf,
+                "it" | "test" | "describe" | "beforeEach" | "afterEach"
+            ) {
+                return true;
+            }
+        }
+        cur = p.parent();
+    }
+    false
+}
+
+pub const JS_FUNCTIONS: FunctionSpec = FunctionSpec {
+    function_kinds: &[
+        "function_declaration",
+        "method_definition",
+        "arrow_function",
+        "function_expression",
+        "generator_function_declaration",
+    ],
+    name_fields: &["name"],
+    body_fields: &["body", "statement_block"],
+    ignored_kinds: &["comment"],
+    skip: js_fn_skip,
+    is_test: js_fn_is_test,
+    classify: functions::classify_javascript,
+};
 
 #[cfg(test)]
 mod tests {

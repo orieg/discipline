@@ -3,7 +3,8 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
-use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn};
+use super::functions::{self, FunctionSpec};
+use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Java language pack implementing [`LanguagePack`].
 pub struct JavaPack;
@@ -11,6 +12,10 @@ pub struct JavaPack;
 impl LanguagePack for JavaPack {
     fn id(&self) -> &'static str {
         "java"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(fact, Fact::Tests | Fact::EscapeHatches | Fact::Functions)
     }
 
     fn name(&self) -> &'static str {
@@ -46,6 +51,7 @@ impl LanguagePack for JavaPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
+        extractor.facts.functions = functions::extract(root, src, path, &JAVA_FUNCTIONS);
         Ok(extractor.facts)
     }
 }
@@ -551,6 +557,31 @@ impl<'a> JavaExtractor<'a> {
         result
     }
 }
+
+/// A method without a `body` field (abstract, interface) never reaches the classifier;
+/// a `default` interface method or a class method does.
+fn java_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+    if functions::test_path(path) || is_java_test_path(path) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).any(|c| {
+        c.kind() == "modifiers"
+            && c.utf8_text(src.as_bytes())
+                .is_ok_and(|t| t.contains("@Test") || t.contains("@ParameterizedTest"))
+    });
+    found
+}
+
+pub const JAVA_FUNCTIONS: FunctionSpec = FunctionSpec {
+    function_kinds: &["method_declaration", "constructor_declaration"],
+    name_fields: &["name"],
+    body_fields: &["body"],
+    ignored_kinds: &["line_comment", "block_comment"],
+    skip: functions::skip_none,
+    is_test: java_fn_is_test,
+    classify: functions::classify_jvm,
+};
 
 #[cfg(test)]
 mod tests {

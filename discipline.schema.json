@@ -1347,6 +1347,14 @@
           ],
           "description": "no command-line secrets or unverified piped scripts in shell, docker, or CI"
         },
+        "stub-bodies": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null"
+        },
         "suppression-delta": {
           "allOf": [
             {
