@@ -484,6 +484,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("provenance-tags", false, Severity::Error),
     ("pr-checklist", false, Severity::Error),
     ("config-integrity", true, Severity::Error),
+    ("toolchain-config", true, Severity::Error),
     ("golden-output", true, Severity::Error),
     ("dependency-delta", true, Severity::Error),
     ("test-budget", true, Severity::Error),

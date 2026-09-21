@@ -1135,8 +1135,8 @@ discipline self-test</div>
 
     <div class="gate-search-wrapper">
 <!-- generated:gate-search -->
-      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 31 gates by id, category, language, or rule..." aria-label="Search active gates">
-      <span id="gate-count" class="gate-count">Showing 31 of 31 gates</span>
+      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 32 gates by id, category, language, or rule..." aria-label="Search active gates">
+      <span id="gate-count" class="gate-count">Showing 32 of 32 gates</span>
 <!-- /generated -->
     </div>
 
@@ -1236,6 +1236,13 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>a change cannot weaken its own discipline.toml without a token</td>
+          </tr>
+          <tr>
+            <td class="gate-id">toolchain-config</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit</span></td>
+            <td>compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token</td>
           </tr>
           <tr>
             <td class="gate-id">scope-confinement</td>

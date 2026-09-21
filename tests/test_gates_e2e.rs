@@ -1898,6 +1898,124 @@ fn test_floor_counts_tests_that_run_not_tests_that_exist() {
     assert!(notes.contains("tests/broken.py"), "{notes}");
 }
 
+// ---- toolchain-config ------------------------------------------------------
+
+#[test]
+fn toolchain_config_reports_a_lowered_bar_and_lifts_it_by_key_or_path() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tsconfig.json",
+        "{\n  // strict everywhere\n  \"compilerOptions\": { \"strict\": true, \"target\": \"es2020\" },\n}\n",
+    );
+    repo.write(
+        "pyproject.toml",
+        "[project]\nname = \"a\"\nversion = \"1\"\n[tool.coverage.report]\nfail_under = 90\n",
+    );
+    repo.write("eslint.config.js", "export default [];\n");
+    repo.commit("chore: toolchain");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: a target bump, a version bump, a formatting-only change.
+    repo.write(
+        "tsconfig.json",
+        "{\"compilerOptions\": {\"strict\": true, \"target\": \"es2022\"}}\n",
+    );
+    repo.write(
+        "pyproject.toml",
+        "[project]\nname = \"a\"\nversion = \"2\"\n[tool.coverage.report]\nfail_under = 90\n",
+    );
+    repo.commit("chore: bump");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("toolchain-config").is_empty(),
+        "{:?}",
+        quiet.titles("toolchain-config")
+    );
+    assert_eq!(quiet.outcome("toolchain-config")["examined"], 2);
+
+    repo.write(
+        "tsconfig.json",
+        "{\"compilerOptions\": {\"strict\": false, \"target\": \"es2022\"}}\n",
+    );
+    repo.write(
+        "pyproject.toml",
+        "[project]\nname = \"a\"\nversion = \"2\"\n[tool.coverage.report]\nfail_under = 40\n",
+    );
+    repo.write("eslint.config.js", "export default [{ rules: {} }];\n");
+    repo.commit("chore: relax");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let v = run.violations("toolchain-config");
+    let titled: Vec<(String, String)> = v
+        .iter()
+        .map(|x| {
+            (
+                x["title"].as_str().unwrap().to_string(),
+                x["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        titled,
+        vec![
+            (
+                "Toolchain Configuration Changed (not analysed)".to_string(),
+                "warning".to_string()
+            ),
+            (
+                "Toolchain Configuration Weakened".to_string(),
+                "error".to_string()
+            ),
+            (
+                "Toolchain Configuration Weakened".to_string(),
+                "error".to_string()
+            ),
+        ]
+    );
+    assert!(v[1]["message"]
+        .as_str()
+        .unwrap()
+        .contains("`tool.coverage.report.fail_under` lowered from 90 to 40"));
+    assert!(v[2]["message"]
+        .as_str()
+        .unwrap()
+        .contains("`compilerOptions.strict` switched off"));
+
+    // The key's last segment, the full key, and the file path each lift their own finding.
+    repo.commit(
+        "chore: explain\n\nallow-toolchain-weakening: strict migrating the legacy tree file by file\n\
+         allow-toolchain-weakening: tool.coverage.report.fail_under generated bindings landed uncovered\n\
+         allow-toolchain-weakening: eslint.config.js flat config adopts the shared preset",
+    );
+    let lifted = repo.check(&[]);
+    assert!(
+        lifted.titles("toolchain-config").is_empty(),
+        "{:?}",
+        lifted.titles("toolchain-config")
+    );
+    assert_eq!(
+        lifted.outcome("toolchain-config")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(lifted.code, 0);
+
+    // Deleting a configuration file, and one that no longer parses.
+    repo.remove("tsconfig.json");
+    repo.write("pyproject.toml", "[project\n");
+    repo.commit("chore: break");
+    assert_eq!(
+        repo.check(&[]).titles("toolchain-config"),
+        vec![
+            "Toolchain Configuration Unreadable",
+            "Toolchain Configuration Deleted"
+        ]
+    );
+}
+
 // ---- override policy -------------------------------------------------------
 
 /// A change that disables two gates and excuses both from its commit body.
@@ -2519,7 +2637,7 @@ fn override_record_audit_trail_and_step_outputs() {
         .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
     assert!(run
         .stdout
-        .contains("gates:  18 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"));
+        .contains("gates:  19 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"));
     assert!(run.stdout.contains("overrides: 1"));
 
     // Check GITHUB_OUTPUT contents
@@ -2530,14 +2648,14 @@ fn override_record_audit_trail_and_step_outputs() {
         "{step_output}"
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
-    assert!(step_output.contains("passed_gates=18"), "{step_output}");
+    assert!(step_output.contains("passed_gates=19"), "{step_output}");
     assert!(step_output.contains("examined_items=19"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 18 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"
+            "**Summary:** 19 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"
         ),
         "{step_summary}"
     );

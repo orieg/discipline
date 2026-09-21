@@ -1379,6 +1379,14 @@
           ],
           "description": "no calendar / duration estimates in markdown or the PR body"
         },
+        "toolchain-config": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token"
+        },
         "unsafe-budget": {
           "allOf": [
             {

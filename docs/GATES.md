@@ -29,6 +29,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`shell-secrets`](#shell-secrets) | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`config-integrity`](#config-integrity) | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
+| [`toolchain-config`](#toolchain-config) | integrity | **shipped** | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](#scope-confinement) | agent-guard | **shipped** | any | changes stay inside authorized paths |
 | [`suppression-delta`](#suppression-delta) | agent-guard | **shipped** | per pack | newly added linter / compiler suppression annotations |
 | [`provenance-tags`](#provenance-tags) | hygiene | **shipped** | any | published numerics carry (measured|target|projected) |
@@ -107,6 +108,7 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `agent-scratch` | on, `error` | High: a tracked path matching agent state directories. | False block: a deliberately committed directory of the same name, exempted by path. Miss: private agent state in history. | The path set is narrow and the committed state is not reversible once pushed. |
 | `shell-secrets` | on, `error` (token rules) / `warning` (heuristic rules) | High for structured tokens; heuristic for argv and pipe patterns. | False block: a token-shaped test fixture, exempted by path. Miss: a live credential in history. | The split already downgrades the heuristic rules at finding level. |
 | `config-integrity` | on, `error` | High: base and head configuration are diffed structurally. | False block: an intended loosening needs `allow-gate-weakening:`. Miss: a change lowering its own bar (F9). | The gate protects every other gate; it cannot be advisory. |
+| `toolchain-config` | on, `error` | High for a data file: base and head are diffed structurally against a per-tool rule table. A configuration written as code is reported at `warning` as changed, not analysed. | False block: an intended loosening needs `allow-toolchain-weakening:`. Miss: a lint or type bar lowered in the same change that would have failed it. | Same stakes as `ci-integrity` dropping `-D warnings`, one file over. |
 | `ci-integrity` | on, `error` | High for `continue-on-error`, `\|\| true` and unpinned actions in modified workflows (`diff_only = true`). | False block: an intended pattern needs `allow-ci-weakening:`. Miss: a rollup that reports green while a job is skipped. | Only modified workflows are scanned by default, so pre-existing patterns do not block adoption. |
 | `ci-skip-set` | on, `error` | High: each `needs` result is compared to its job's `if:` evaluated over the observed filter outputs; an unmodelled term is a finding, not a guess. Inert (a named "not evaluated" note) unless the rollup job supplies `DISCIPLINE_CI_CONTEXT`. | False block: a rollup whose workflow uses an `if:` form outside the modelled subset. Miss: a skip set the evaluator cannot distinguish from a legitimate one (all filters false on a change that touches no filtered path), reported as a note. | Supplying the context is the opt-in, so enabling it by default costs an ordinary diff check nothing. |
 | `test-floor` | on, `error` | High: the base-ref test count is the floor unless one is configured. | False block: a test consolidation needs `allow-test-shrink:`. Miss: silent test-count erosion. | The ratchet is relative to the base ref, so it never fails a repository for its existing state. |
@@ -536,6 +538,36 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Tightening edits (enabling gates, adding denylists, raising severity) — tightening is permitted freely.
   - Workflow-level switches (`disable:` in GitHub Actions steps) — protected by `ci-integrity`.
 - **Lifting directive:** `allow-gate-weakening: <gate-id> <reason>` in PR description or commit message.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`.
+
+#### `toolchain-config`
+- **Rule:** A change cannot loosen the compiler, linter, type-checker, test-runner or coverage configuration it is judged by without an explicit override directive. Each recognised file is loaded on the base side and the head side into one generic tree (TOML, YAML, JSON with comments, INI, PHPUnit's root attributes) and diffed against a rule table (`src/guards/toolchain_config.rs::RULES`) that says which key paths loosen in which direction.
+- **Languages:** `tsconfig*.json` / `jsconfig.json`; `ruff.toml` and `pyproject.toml` (`[tool.ruff]`, `[tool.mypy]`, `[tool.pytest.ini_options]`, `[tool.coverage]`); `mypy.ini`, `pytest.ini`, `tox.ini`, `setup.cfg`, `.coveragerc`, `.flake8`; `Cargo.toml` (`[lints]`, `[workspace.lints]`), `.cargo/config.toml` (`rustflags`), `.config/nextest.toml`; `.eslintrc` (JSON / YAML forms); `.golangci.yml`; `jest.config.json` and `package.json` (`jest`); `codecov.yml`; `phpstan.neon`; `phpunit.xml`.
+- **What it catches:**
+  - A strictness switch turned off (`strict`, `noImplicitAny`, `xfail_strict`, `fail-fast`, `failOnWarning`, ...) or a laxness switch turned on (`skipLibCheck`, `ignore_missing_imports`, `ignore_errors`, `disable-all`).
+  - A lint level lowered (`error` / `deny` / `forbid` to `warn` / `off` / `allow`) in ESLint rules or Cargo `[lints]`.
+  - A select / enable list shrunk; an ignore / exclude / disable / `per-file-ignores` list grown.
+  - A floor lowered or removed (`fail_under`, `coverageThreshold`, codecov `target`, phpstan `level`); a cap raised (`retries`, `max-line-length`, codecov `threshold`).
+  - A strict flag lost (`-D warnings`, `--strict-markers`, `--cov-fail-under`, `-Werror`) or a lax flag gained (`--reruns`, `--ignore`, `-A`, `--cap-lints`) in `rustflags` or pytest `addopts`.
+  - A recognised configuration file deleted, or one that no longer parses on one side.
+  - A configuration written as code (`eslint.config.js`, `jest.config.ts`, `vitest.config.*`, `.eslintrc.js`, `conftest.py`) **changed**: reported at `warning` as not analysed, because whether code loosens a bar cannot be read from a diff.
+- **Failing diff (rejected):**
+  ```diff
+  // tsconfig.json
+  - "strict": true,
+  + "strict": false,
+  ```
+- **Passing commit / PR body (accepted):**
+  ```text
+  allow-toolchain-weakening: strict migrating the legacy tree file by file
+  ```
+- **What it does NOT catch:**
+  - A tool or option not in the rule table. A file it does not recognise is not examined.
+  - A list that appears where none was (`select = ["E"]` narrowing a tool's default set): defaults differ per tool version and are not modelled.
+  - What a configuration file pulls in (`extends`, `include`, presets): only the file's own keys are read.
+  - A lowering expressed in code, in a CI command line (see `ci-integrity`), or in an environment variable.
+- **Lifting directive:** `allow-toolchain-weakening: <subject> <reason>`, where the subject is the option's key path (`compilerOptions.strict`), its last segment (`strict`), or the file path (which lifts every finding in that file, and is the only form for a not-analysed or deleted file).
+- **Default:** on, `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `golden-output`

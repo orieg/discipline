@@ -264,6 +264,9 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.time-estimates.include` | list | `["**/*.md"]` | File globs swept for duration estimates |
 | `gates.time-estimates.scan_pr_body` | boolean | `true` | Whether to scan PR description text |
 | `gates.time-estimates.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.toolchain-config.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.toolchain-config.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.toolchain-config.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.unsafe-budget.allow_increase` | boolean | `false` | Whether total unsafe count may increase over base ref without override |
 | `gates.unsafe-budget.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.unsafe-budget.exempt_paths` | list | `[]` | File path globs exempted from this gate |
@@ -404,6 +407,7 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 | `allow-ignore:` / `discipline:allow(ignored-tests)` / `allow(ignored-tests)` | `ignored-tests` | Test function name |
 | `allow-gate-weakening:` / `discipline:allow(config-integrity)` / `allow(config-integrity)` | `config-integrity` | Gate id |
 | `allow-golden-update:` / `discipline:allow(golden-output)` / `allow(golden-output)` | `golden-output` | Snapshot/fixture file path or directory prefix |
+| `allow-toolchain-weakening:` / `discipline:allow(toolchain-config)` / `allow(toolchain-config)` | `toolchain-config` | Option key path (`compilerOptions.strict`), its last segment, or the configuration file path |
 | `allow-regression:` / `discipline:allow(bench-regression)` / `allow(bench-regression)` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
 | `allow-command:` / `discipline:allow(command)` / `allow(command)` | `command` | Subcommand or command line invocation, plus non-empty rationale |
 | `allow-dependency:` / `discipline:allow(dependency-delta)` / `allow(dependency-delta)` | `dependency-delta` | Dependency package name or manifest path |

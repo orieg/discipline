@@ -23,6 +23,7 @@ pub mod shell_secrets;
 pub mod suppression_delta;
 pub mod test_budget;
 pub mod test_floor;
+pub mod toolchain_config;
 pub mod unsafe_budget;
 pub mod version_lockstep;
 
@@ -329,6 +330,7 @@ pub fn run_checks(
             "shell-secrets" => shell_secrets::evaluate_shell_secrets(ctx),
             "issue-link" => issue_link::evaluate_issue_link(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
+            "toolchain-config" => toolchain_config::toolchain_config(ctx),
             "golden-output" => integrity::golden_output(ctx),
             "bench-regression" => perf::bench_regression(ctx),
             "command" => command::evaluate_command(ctx),
@@ -419,6 +421,8 @@ pub fn run_checks(
             "version-lockstep"
         } else if note.contains("allow-scope") {
             "scope-confinement"
+        } else if note.contains("allow-toolchain-weakening") {
+            "toolchain-config"
         } else if note.contains("allow-suppression") {
             "suppression-delta"
         } else if note.contains("allow-checklist") {
@@ -444,6 +448,7 @@ pub fn run_checks(
                         | "assertion-reduction"
                         | "ignored-tests"
                         | "config-integrity"
+                        | "toolchain-config"
                         | "golden-output"
                         | "bench-regression"
                         | "command"

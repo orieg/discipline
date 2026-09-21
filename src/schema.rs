@@ -20,6 +20,7 @@ pub fn generate_schema() -> Value {
             "pii" => "#/$defs/PiiGate",
             "agent-scratch" => "#/$defs/ScratchGate",
             "golden-output" => "#/$defs/GoldenGate",
+            "toolchain-config" => "#/$defs/BasicGate",
             "bench-regression" => "#/$defs/BenchRegressionGate",
             "unsafe-safety-comment" => "#/$defs/UnsafeSafetyCommentGate",
             "command" => "#/$defs/CommandGate",

@@ -74,8 +74,9 @@ pub fn extract_rust_budgets(content: &str, path: &str) -> Vec<BudgetMetric> {
     let re_proptest_cases = Regex::new(r"(?:cases\s*:\s*|with_cases\s*\(\s*)(\d+)").unwrap();
     // Regex for proptest max_shrink_iters: `max_shrink_iters: 1000`
     let re_shrink = Regex::new(r"max_shrink_iters\s*:\s*(\d+)").unwrap();
-    // Regex for quickcheck tests: `.tests(1000)` or `tests\s*=\s*(\d+)`
-    let re_qc_tests = Regex::new(r"(?:\.tests\s*\(\s*|tests\s*=\s*)(\d+)").unwrap();
+    // Regex for quickcheck tests: `.tests(1000)` or a bare `tests = 1000`. The word
+    // boundary keeps `min_tests = 40` (a test-floor setting) out of it.
+    let re_qc_tests = Regex::new(r"(?:\.tests\s*\(\s*|\btests\s*=\s*)(\d+)").unwrap();
     // Regex for quickcheck gen_size: `.gen_size(1000)`
     let re_qc_gen = Regex::new(r"\.gen_size\s*\(\s*(\d+)").unwrap();
 
@@ -609,6 +610,12 @@ mod tests {
 
         let qc_gen = metrics.iter().find(|m| m.subject == "quickcheck gen_size");
         assert_eq!(qc_gen.unwrap().value, 50);
+
+        // A test-floor setting quoted in a fixture is not a quickcheck budget.
+        let floor = extract_rust_budgets("let cfg = \"min_tests = 40\";\n", "tests/e2e.rs");
+        assert!(floor.is_empty(), "{floor:?}");
+        let bare = extract_rust_budgets("tests = 300\n", "tests/qc.rs");
+        assert_eq!(bare.len(), 1);
     }
 
     #[test]

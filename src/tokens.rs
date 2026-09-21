@@ -141,6 +141,14 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_doc: "Gate id",
     },
     DirectiveSpec {
+        canonical: "allow-toolchain-weakening",
+        deprecated: None,
+        gate: "toolchain-config",
+        subject_kind: DirectiveSubjectKind::RuleName,
+        subject_doc:
+            "Option key path (e.g. `compilerOptions.strict`), its last segment, or the file path",
+    },
+    DirectiveSpec {
         canonical: "allow-golden-update",
         deprecated: None,
         gate: "golden-output",
@@ -283,13 +291,14 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     },
 ];
 
-/// The 34 named directives recognized by discipline (24 canonical + 10 deprecated aliases).
+/// The 35 named directives recognized by discipline (25 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 24 Canonical
+    // 25 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
     "allow-gate-weakening",
+    "allow-toolchain-weakening",
     "allow-golden-update",
     "allow-regression",
     "allow-command",
@@ -343,6 +352,11 @@ pub const ALLOW_GATE_WEAKENING: &[&str] = &[
     "allow-gate-weakening",
     "discipline:allow(config-integrity)",
     "allow(config-integrity)",
+];
+pub const ALLOW_TOOLCHAIN_WEAKENING: &[&str] = &[
+    "allow-toolchain-weakening",
+    "discipline:allow(toolchain-config)",
+    "allow(toolchain-config)",
 ];
 pub const ALLOW_GOLDEN_UPDATE: &[&str] = &[
     "allow-golden-update",
@@ -475,6 +489,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-ignore" => ALLOW_IGNORE,
         "allow-gate-weakening" => ALLOW_GATE_WEAKENING,
         "allow-golden-update" => ALLOW_GOLDEN_UPDATE,
+        "allow-toolchain-weakening" => ALLOW_TOOLCHAIN_WEAKENING,
         "allow-regression" => ALLOW_REGRESSION,
         "allow-command" => ALLOW_COMMAND,
         "allow-dependency" => ALLOW_DEPENDENCY,
@@ -513,6 +528,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-assertion-drop",
     "allow-ignore",
     "allow-gate-weakening",
+    "allow-toolchain-weakening",
     "allow-golden-update",
     "allow-regression",
     "allow-command",
@@ -553,6 +569,8 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow(ignored-tests)",
     "discipline:allow(config-integrity)",
     "allow(config-integrity)",
+    "discipline:allow(toolchain-config)",
+    "allow(toolchain-config)",
     "discipline:allow(golden-output)",
     "allow(golden-output)",
     "discipline:allow(bench-regression)",

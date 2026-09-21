@@ -260,6 +260,20 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "toolchain-config: strict switched off is a weakening, switched on is not",
+        || {
+            use crate::guards::toolchain_config::{classify, diff_trees, load, Classified};
+            let Some(Classified::Data { name, rules }) = classify("tsconfig.json") else {
+                anyhow::bail!("tsconfig.json not classified");
+            };
+            let on = load(&name, "{\"compilerOptions\": {\"strict\": true}}")
+                .ok_or_else(|| anyhow::anyhow!("unparsed"))?;
+            let off = load(&name, "{\"compilerOptions\": {\"strict\": false}}")
+                .ok_or_else(|| anyhow::anyhow!("unparsed"))?;
+            Ok(diff_trees(&on, &off, &rules).len() == 1 && diff_trees(&off, &on, &rules).is_empty())
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;
