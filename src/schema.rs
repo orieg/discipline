@@ -113,15 +113,15 @@ pub fn generate_schema() -> Value {
             "gates": {
                 "type": "object",
                 "additionalProperties": false,
-                "description": "Per-gate settings. By default, every available gate is enabled at severity \"error\".",
+                "description": "Per-gate settings. Each gate has a built-in default enablement and severity; see docs/GATES.md \"Default Severity by Gate\".",
                 "properties": Value::Object(gate_properties)
             }
         },
         "$defs": {
             "Severity": {
                 "type": "string",
-                "enum": ["error", "warning", "info"],
-                "description": "Violation severity: error (blocking, exit 1), warning (non-blocking), or info."
+                "enum": ["error", "warning", "note"],
+                "description": "Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational)."
             },
             "StringListOrReset": {
                 "description": "A list of strings, or a table with reset = true to clear lower precedence layers.",
@@ -160,8 +160,8 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "extra_assert_macros": { "$ref": "#/$defs/StringListOrReset" },
-                    "assert_helper_fns": { "$ref": "#/$defs/StringListOrReset" },
+                    "extra_assert_macros": { "$ref": "#/$defs/StringListOrReset", "description": "Additional macro names treated as assertions" },
+                    "assert_helper_fns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional function names treated as assertions" },
                     "min_assertions_per_test": { "type": "integer", "description": "Minimum assertions required per test method" }
                 }
             },
@@ -172,7 +172,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "paths": { "$ref": "#/$defs/StringListOrReset", "description": "Path globs where file deletions require a rationale" },
                     "require_scope": { "type": "boolean", "description": "When true, directive must name the deleted file or test" },
                     "allow_hidden": { "type": ["boolean", "null"], "description": "When true, HTML-comment-wrapped directives are accepted for deletions" }
                 }
@@ -194,9 +194,9 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "include": { "$ref": "#/$defs/StringListOrReset" },
-                    "extra_patterns": { "$ref": "#/$defs/StringListOrReset" },
-                    "allow_patterns": { "$ref": "#/$defs/StringListOrReset" },
+                    "include": { "$ref": "#/$defs/StringListOrReset", "description": "File globs swept for duration estimates" },
+                    "extra_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional banned regex patterns" },
+                    "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns permitted as operational exceptions" },
                     "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" },
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" }
                 }
@@ -211,10 +211,10 @@ pub fn generate_schema() -> Value {
                     "home_paths": { "type": "boolean", "description": "Check for leaked home directory paths" },
                     "lan_ips": { "type": "boolean", "description": "Check for leaked private LAN IPs" },
                     "secrets": { "type": "boolean", "description": "Check for leaked private keys and high-entropy API tokens" },
-                    "allowed_users": { "$ref": "#/$defs/StringListOrReset" },
-                    "hostname_denylist": { "$ref": "#/$defs/StringListOrReset" },
-                    "extra_patterns": { "$ref": "#/$defs/StringListOrReset" },
-                    "allow_patterns": { "$ref": "#/$defs/StringListOrReset" },
+                    "allowed_users": { "$ref": "#/$defs/StringListOrReset", "description": "Username tokens permitted inside home-directory paths" },
+                    "hostname_denylist": { "$ref": "#/$defs/StringListOrReset", "description": "Whole-token, case-insensitive hostnames that must not appear" },
+                    "extra_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional regex patterns to reject" },
+                    "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns exempted from rejection" },
                     "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" },
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" },
                     "agent_config_refs": { "type": "boolean", "description": "When true, flags references to personal agent configuration directories and playbook docs" }
@@ -227,7 +227,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "paths": { "$ref": "#/$defs/StringListOrReset" }
+                    "paths": { "$ref": "#/$defs/StringListOrReset", "description": "Directory and file globs that must never be tracked" }
                 }
             },
             "GoldenGate": {
@@ -237,7 +237,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "paths": { "$ref": "#/$defs/StringListOrReset", "description": "Committed golden/snapshot globs whose edits require a directive" },
                     "allow_updates": { "type": "boolean", "description": "Permit snapshot updates without error" }
                 }
             },
@@ -251,7 +251,7 @@ pub fn generate_schema() -> Value {
                     "tolerance_pct": { "type": "number", "description": "Maximum allowed regression percentage" },
                     "noise_margin_pct": { "type": "number", "description": "Configurable noise margin added to tolerance_pct" },
                     "max_noise_cv": { "type": "number", "description": "Maximum acceptable coefficient of variation (std_dev / mean)" },
-                    "paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "paths": { "$ref": "#/$defs/StringListOrReset", "description": "Benchmark artifact globs tracked across revisions" },
                     "provenance": { "type": "string", "description": "Expected host/runner provenance tag for benchmark artifacts" },
                     "allow_cross_host": { "type": "boolean", "description": "Allow benchmark comparison across mismatched host/runner provenance" },
                     "base_file": { "type": "string", "description": "In-job base benchmark result file path for dual-file regression checks" },
@@ -467,6 +467,7 @@ pub fn generate_schema() -> Value {
                                 "name": { "type": "string", "description": "Name of the version lockstep group" },
                                 "sources": {
                                     "type": "array",
+                                    "description": "Files and capture regexes whose versions must match",
                                     "items": {
                                         "type": "object",
                                         "required": ["path", "regex"],

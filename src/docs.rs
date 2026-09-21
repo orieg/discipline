@@ -252,8 +252,25 @@ pub fn render_gates_catalog_markdown(
 
 /// Render gates HTML table rows for `docs/index.html`.
 pub fn render_gates_html(gates: &[GateInfo]) -> String {
+    let defaults = crate::config::DisciplineConfig::default_for_repo("");
     let mut out = String::new();
     for g in gates.iter().filter(|g| g.available) {
+        // The badge is the compiled default, never a hand-typed label.
+        let badge = match defaults.gates.settings(g.id) {
+            Some(s) if !s.enabled() => "<span class=\"gate-badge badge-lang\">Off</span>",
+            Some(s) => match s.severity() {
+                crate::config::Severity::Error => {
+                    "<span class=\"gate-badge badge-error\">Error</span>"
+                }
+                crate::config::Severity::Warning => {
+                    "<span class=\"gate-badge badge-warn\">Warning</span>"
+                }
+                crate::config::Severity::Note => {
+                    "<span class=\"gate-badge badge-lang\">Note</span>"
+                }
+            },
+            None => "<span class=\"gate-badge badge-lang\">n/a</span>",
+        };
         let suite_name = match g.suite {
             Suite::AgentGuard => "Agent Guard",
             Suite::Hygiene => "Hygiene",
@@ -267,9 +284,10 @@ pub fn render_gates_html(gates: &[GateInfo]) -> String {
             other => other,
         };
         out.push_str(&format!(
-            "          <tr>\n            <td class=\"gate-id\">{}</td>\n            <td>{}</td>\n            <td><span class=\"gate-badge badge-error\">Error</span></td>\n            <td><span class=\"gate-badge badge-lang\">{}</span></td>\n            <td>{}</td>\n          </tr>\n",
+            "          <tr>\n            <td class=\"gate-id\">{}</td>\n            <td>{}</td>\n            <td>{}</td>\n            <td><span class=\"gate-badge badge-lang\">{}</span></td>\n            <td>{}</td>\n          </tr>\n",
             g.id,
             suite_name,
+            badge,
             lang_badge,
             html_escape(g.summary)
         ));
@@ -277,60 +295,187 @@ pub fn render_gates_html(gates: &[GateInfo]) -> String {
     out.trim_end().to_string()
 }
 
+/// One row of the generated configuration reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigKeyRow {
+    /// Dotted key path, e.g. `gates.pii.allowed_users` or `gates.command.commands[].name`.
+    pub path: String,
+    pub ty: String,
+    pub default: String,
+    pub description: String,
+}
+
+/// Enumerate every configuration key the JSON Schema accepts, in schema order.
+///
+/// The key set, types and descriptions come from [`generate_schema`] (the same
+/// value `discipline schema` prints) and the defaults come from the compiled
+/// `Default` implementations, so the reference table cannot drift from either.
+pub fn config_key_rows() -> Vec<ConfigKeyRow> {
+    let schema = generate_schema();
+    let defaults = serde_json::to_value(crate::config::DisciplineConfig::default_for_repo(""))
+        .unwrap_or(serde_json::Value::Null);
+    let mut rows = Vec::new();
+    collect_rows(&schema, &schema, "", Some(&defaults), &mut rows);
+    rows
+}
+
+fn resolve_ref<'a>(
+    root: &'a serde_json::Value,
+    node: &'a serde_json::Value,
+) -> &'a serde_json::Value {
+    let reference = node
+        .get("$ref")
+        .or_else(|| {
+            node.get("allOf")
+                .and_then(|a| a.get(0))
+                .and_then(|a| a.get("$ref"))
+        })
+        .and_then(|r| r.as_str());
+    match reference.and_then(|r| r.strip_prefix("#/$defs/")) {
+        Some(name) => root.get("$defs").and_then(|d| d.get(name)).unwrap_or(node),
+        None => node,
+    }
+}
+
+/// Walk `node`'s `properties`, emitting one row per leaf key. `defaults` is the
+/// serialized compiled default at the same position, or `None` inside an array
+/// item where no per-entry default exists.
+fn collect_rows(
+    root: &serde_json::Value,
+    node: &serde_json::Value,
+    prefix: &str,
+    defaults: Option<&serde_json::Value>,
+    rows: &mut Vec<ConfigKeyRow>,
+) {
+    let node = resolve_ref(root, node);
+    let Some(props) = node.get("properties").and_then(|p| p.as_object()) else {
+        return;
+    };
+    let required: Vec<&str> = node
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|r| r.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    for (key, prop) in props {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        let child_default = defaults.and_then(|d| d.get(key));
+        let target = resolve_ref(root, prop);
+        let is_table = (target.get("properties").is_some() && prop.get("$ref").is_none())
+            || prop.get("allOf").is_some();
+        if is_table {
+            collect_rows(root, prop, &path, child_default, rows);
+            continue;
+        }
+        let items = prop.get("items");
+        if let Some(items) = items.filter(|i| resolve_ref(root, i).get("properties").is_some()) {
+            rows.push(ConfigKeyRow {
+                path: path.clone(),
+                ty: "array of tables".to_string(),
+                default: format_default(prop, required.contains(&key.as_str()), child_default),
+                description: describe(root, key, prop),
+            });
+            collect_rows(root, items, &format!("{path}[]"), None, rows);
+            continue;
+        }
+        rows.push(ConfigKeyRow {
+            path,
+            ty: type_label(prop),
+            default: format_default(prop, required.contains(&key.as_str()), child_default),
+            description: describe(root, key, prop),
+        });
+    }
+}
+
+fn type_label(prop: &serde_json::Value) -> String {
+    match prop.get("$ref").and_then(|r| r.as_str()) {
+        Some("#/$defs/StringListOrReset") => return "list".to_string(),
+        Some("#/$defs/Severity") => return "string".to_string(),
+        _ => {}
+    }
+    match prop.get("type") {
+        Some(serde_json::Value::String(t)) if t == "array" => "list".to_string(),
+        Some(serde_json::Value::String(t)) => t.clone(),
+        Some(serde_json::Value::Array(ts)) => ts
+            .iter()
+            .filter_map(|t| t.as_str())
+            .collect::<Vec<_>>()
+            .join(" or "),
+        _ => "value".to_string(),
+    }
+}
+
+fn describe(root: &serde_json::Value, key: &str, prop: &serde_json::Value) -> String {
+    let own = prop.get("description").and_then(|d| d.as_str());
+    let text = match own {
+        Some(d) => d.to_string(),
+        None => match key {
+            "severity" => resolve_ref(root, prop)
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            "exempt_paths" => "File path globs exempted from this gate".to_string(),
+            _ => String::new(),
+        },
+    };
+    table_cell(&text)
+}
+
+fn format_default(
+    prop: &serde_json::Value,
+    required: bool,
+    value: Option<&serde_json::Value>,
+) -> String {
+    if let Some(c) = prop.get("const") {
+        return format!("`{c}`");
+    }
+    if required {
+        return "*(required)*".to_string();
+    }
+    let Some(value) = value else {
+        return "*(per entry)*".to_string();
+    };
+    match value {
+        serde_json::Value::Null => "*(unset)*".to_string(),
+        serde_json::Value::Array(items) if !items.is_empty() => {
+            let compact = value.to_string();
+            if compact.len() <= 48 {
+                code_cell(&compact)
+            } else {
+                format!("*({} entries)*", items.len())
+            }
+        }
+        other => code_cell(&other.to_string()),
+    }
+}
+
+fn code_cell(s: &str) -> String {
+    let fence = if s.contains('`') { "``" } else { "`" };
+    table_cell(&format!("{fence}{s}{fence}"))
+}
+
+fn table_cell(s: &str) -> String {
+    s.replace('|', "\\|")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\n', " ")
+}
+
 /// Render configuration schema Markdown table.
 pub fn render_config_schema_markdown() -> String {
-    String::from(
-        "| Section / Key | Type | Default | Description |\n|---|---|---|---|\n\
-| `meta.version` | integer | `1` | Configuration schema version (must be 1) |\n\
-| `meta.name` | string | `\"\"` | Repository or project name |\n\
-| `meta.description` | string | `\"\"` | Optional description of the project |\n\
-| `directives.sources` | list | `[\"pr-body\", \"commits\"]` | Allowed directive source channels |\n\
-| `directives.allow_hidden` | boolean | `false` | Allow directives inside HTML comments `<!-- -->` |\n\
-| `directives.fail_on_overrides` | boolean | `false` | Treat applied overrides as failures requiring human sign-off |\n\
-| `directives.allowed_override_actors` | list | `[]` | Actors authorized to apply overrides even when fail_on_overrides is true |\n\
-| `gates.<id>.enabled` | boolean | `true` | Whether this gate is active |\n\
-| `gates.<id>.severity` | string | `\"error\"` | Violation severity: `\"error\"` (blocking) or `\"warning\"` (non-blocking) |\n\
-| `gates.<id>.exempt_paths` | list | `[]` | File path globs exempted from gate evaluation |\n\
-| `gates.assertion-reduction.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |\n\
-| `gates.assertion-reduction.assert_helper_fns` | list | `[]` | Additional function names treated as assertions |\n\
-| `gates.vacuous-tests.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |\n\
-| `gates.vacuous-tests.assert_helper_fns` | list | `[]` | Additional function names treated as assertions |\n\
-| `gates.unsafe-safety-comment.placeholders` | list | `[]` | Additional placeholder phrases to reject in SAFETY comments |\n\
-| `gates.deletion-rationale.paths` | list | `[\"**\"]` | Path globs where file deletions require a rationale |\n\
-| `gates.time-estimates.include` | list | `[\"**/*.md\"]` | Markdown file globs swept for duration estimates |\n\
-| `gates.time-estimates.extra_patterns` | list | `[]` | Additional custom banned regex patterns |\n\
-| `gates.time-estimates.allow_patterns` | list | `[...]` | Regex patterns permitted as operational exceptions |\n\
-| `gates.time-estimates.scan_pr_body` | boolean | `true` | Whether to scan the PR description text |\n\
-| `gates.pii.home_paths` | boolean | `true` | Check for leaked workstation home directory paths |\n\
-| `gates.pii.lan_ips` | boolean | `true` | Check for leaked private RFC 1918 LAN IP addresses |\n\
-| `gates.pii.allowed_users` | list | `[...]` | Allowed username tokens in paths |\n\
-| `gates.pii.hostname_denylist` | list | `[]` | Whole-token case-insensitive hostnames to reject |\n\
-| `gates.pii.extra_patterns` | list | `[]` | Additional regex patterns to reject |\n\
-| `gates.pii.allow_patterns` | list | `[]` | Custom regex patterns exempted from rejection |\n\
-| `gates.pii.scan_pr_body` | boolean | `true` | Whether to scan the PR description text |\n\
-| `gates.agent-scratch.paths` | list | `[...]` | Directory and file globs forbidden from being tracked |\n\
-| `gates.golden-output.paths` | list | `[...]` | Committed golden/snapshot globs requiring override to edit |\n\
-| `gates.bench-regression.tolerance_pct` | number | `0.5` | Maximum allowed benchmark regression percentage |\n\
-| `gates.bench-regression.paths` | list | `[...]` | Benchmark artifact globs tracked across revisions |\n\
-| `gates.bench-regression.base_file` | string | `\"\"` | Baseline benchmark output file for dual-file regression checks |\n\
-| `gates.bench-regression.head_file` | string | `\"\"` | Current benchmark output file for dual-file regression checks |\n\
-| `gates.bench-regression.noise_floor_pct` | number | `0.5` | Multi-arm noise floor threshold percentage |\n\
-| `gates.bench-regression.advisory_pct` | number | `0.1` | Advisory threshold percentage for reporting minor regressions |\n\
-| `gates.bench-regression.exempt_arms` | list | `[]` | Benchmark arm names exempted from regression checks |\n\
-| `gates.bench-regression.require_sourced_override` | boolean | `false` | Require regression overrides to cite CI run URL or committed artifact |\n\
-| `gates.bench-regression.provenance` | string | `\"\"` | Expected host or runner provenance tag for benchmark artifacts |\n\
-| `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched provenance tags |\n\
-| `gates.provenance-tags.include` | list | `[\"**/*.md\"]` | Markdown file globs swept for provenance and hygiene |\n\
-| `gates.provenance-tags.check_tables` | boolean | `true` | Verify table unit-bearing numerics carry provenance tags |\n\
-| `gates.provenance-tags.check_mechanisms` | boolean | `true` | Verify mechanism claims cite hardware counters or hypothesis qualifiers |\n\
-| `gates.provenance-tags.check_intervals` | boolean | `true` | Verify wall-clock ratios cite confidence intervals or provisional markers |\n\
-| `gates.provenance-tags.check_paired_figures` | boolean | `true` | Verify paired figures cite shared workload or differentiation markers |\n\
-| `gates.provenance-tags.scan_pr_body` | boolean | `true` | Whether to scan the PR description text |\n\
-| `gates.shell-secrets.extra_secret_patterns` | list | `[]` | Additional custom regex patterns for sensitive secret variable names |\n\
-| `gates.shell-secrets.allow_patterns` | list | `[]` | Custom regex patterns exempted from violation |\n\
-| `gates.issue-link.pattern` | string | `\"\"` | Custom regex pattern required in PR title or body |\n\
-| `gates.issue-link.require_in_commit_if_no_pr` | boolean | `false` | Require issue link in commit messages when no PR metadata is supplied |\n",
-    )
+    let mut out =
+        String::from("| Section / Key | Type | Default | Description |\n|---|---|---|---|\n");
+    for row in config_key_rows() {
+        out.push_str(&format!(
+            "| `{}` | {} | {} | {} |\n",
+            row.path, row.ty, row.default, row.description
+        ));
+    }
+    out
 }
 
 /// Render CLI reference Markdown from clap definition.

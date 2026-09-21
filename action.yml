@@ -10,7 +10,7 @@ branding:
 # text and must not be parsed as shell.
 inputs:
   config:
-    description: 'Path to discipline.toml. When the file is absent, built-in defaults apply (every available gate on).'
+    description: 'Path to discipline.toml. When the file is absent, built-in defaults apply (each gate at its built-in default enablement and severity).'
     required: false
     default: 'discipline.toml'
   suite:

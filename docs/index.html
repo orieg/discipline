@@ -1144,7 +1144,7 @@ discipline self-test</div>
           <tr>
             <th>Gate ID</th>
             <th>Category</th>
-            <th>Severity</th>
+            <th>Default</th>
             <th>Languages</th>
             <th>Rule Description</th>
           </tr>
@@ -1154,7 +1154,7 @@ discipline self-test</div>
           <tr>
             <td class="gate-id">agents-md</td>
             <td>Agent Guard</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-warn">Warning</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it</td>
           </tr>
@@ -1196,7 +1196,7 @@ discipline self-test</div>
           <tr>
             <td class="gate-id">time-estimates</td>
             <td>Hygiene</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-warn">Warning</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>no calendar / duration estimates in markdown or the PR body</td>
           </tr>
@@ -1224,7 +1224,7 @@ discipline self-test</div>
           <tr>
             <td class="gate-id">issue-link</td>
             <td>Hygiene</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>PR title or description links a tracking issue (#123, Fixes #123)</td>
           </tr>
@@ -1238,21 +1238,21 @@ discipline self-test</div>
           <tr>
             <td class="gate-id">scope-confinement</td>
             <td>Agent Guard</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>changes stay inside authorized paths</td>
           </tr>
           <tr>
             <td class="gate-id">suppression-delta</td>
             <td>Agent Guard</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-warn">Warning</span></td>
             <td><span class="gate-badge badge-lang">per pack</span></td>
             <td>new #[allow], commented-out tests, cfg-gated tests</td>
           </tr>
           <tr>
             <td class="gate-id">provenance-tags</td>
             <td>Hygiene</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>published numerics carry (measured|target|projected)</td>
           </tr>
@@ -1294,7 +1294,7 @@ discipline self-test</div>
           <tr>
             <td class="gate-id">pr-checklist</td>
             <td>Hygiene</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>ticked PR checkboxes are reconciled against the diff</td>
           </tr>
@@ -1308,56 +1308,56 @@ discipline self-test</div>
           <tr>
             <td class="gate-id">sanitizers</td>
             <td>Verification</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Rust, C/C++</span></td>
             <td>ASan / TSan preset with audited suppressions and a race canary</td>
           </tr>
           <tr>
             <td class="gate-id">msrv</td>
             <td>Quality</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Rust</span></td>
             <td>cargo check under the pinned MSRV</td>
           </tr>
           <tr>
             <td class="gate-id">miri</td>
             <td>Verification</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Rust</span></td>
             <td>Miri tiers with zero-tests guard</td>
           </tr>
           <tr>
             <td class="gate-id">unsafe-budget</td>
             <td>Verification</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Rust</span></td>
             <td>unsafe count ratchet</td>
           </tr>
           <tr>
             <td class="gate-id">bench-regression</td>
             <td>Performance</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-warn">Warning</span></td>
             <td><span class="gate-badge badge-lang">Rust, Go, Python, C/C++</span></td>
             <td>benchmark drift via harness adapters (deterministic counts or BCa intervals)</td>
           </tr>
           <tr>
             <td class="gate-id">archive-contents</td>
             <td>Integrity</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>distribution archive must contain required paths and zero forbidden developer artifacts</td>
           </tr>
           <tr>
             <td class="gate-id">manifest-sync</td>
             <td>Integrity</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>reconcile git-tracked files against packaging manifest declarations</td>
           </tr>
           <tr>
             <td class="gate-id">version-lockstep</td>
             <td>Integrity</td>
-            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>version declarations across headers, manifests, and files must remain in lockstep</td>
           </tr>
@@ -1400,7 +1400,7 @@ discipline self-test</div>
     <tr>
       <td class="gate-id">config</td>
       <td><code>discipline.toml</code></td>
-      <td>Path to discipline.toml. When the file is absent, built-in defaults apply (every available gate on).</td>
+      <td>Path to discipline.toml. When the file is absent, built-in defaults apply (each gate at its built-in default enablement and severity).</td>
     </tr>
     <tr>
       <td class="gate-id">suite</td>

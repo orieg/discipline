@@ -2,7 +2,8 @@
 #
 # Most available gates are on at severity "error" by default, so this file only
 # needs to state what differs. In dogfood, we configure time-estimates,
-# bench-regression, and agents-md to severity "error" for maximum verification rigor.
+# bench-regression, agents-md, and suppression-delta to severity "error" for
+# maximum verification rigor.
 # `discipline gates` prints the effective state; the annotated reference lives in
 # docs/CONFIGURATION.md.
 
@@ -18,6 +19,9 @@ severity = "error"
 severity = "error"
 
 [gates.bench-regression]
+severity = "error"
+
+[gates.suppression-delta]
 severity = "error"
 
 [gates.assertion-reduction]

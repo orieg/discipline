@@ -160,7 +160,7 @@ fn load_config(
         );
     } else {
         eprintln!(
-            "{} no discipline.toml; using built-in defaults (every available gate on).",
+            "{} no discipline.toml; using built-in defaults (`discipline gates` shows which gates are on).",
             style::yellow("note:")
         );
         let config = DisciplineConfig::resolve(None, &overrides)?;
@@ -598,7 +598,7 @@ fn init(name: Option<String>) -> Result<bool> {
     let starter = format!(
         r#"# discipline.toml — configuration for Discipline CI gatekeeper.
 #
-# Schema version 1. By default, every available gate is enabled at severity = "error".
+# Schema version 1. Gates run at their built-in default enablement and severity.
 # You only need to specify settings that differ from the defaults.
 # Run `discipline gates` to view the effective status of all gates.
 
@@ -627,7 +627,7 @@ name = "{project_name}"
     );
     std::fs::write(&config_path, starter)?;
     println!(
-        "{} wrote minimal discipline.toml for `{project_name}` with every available gate on.",
+        "{} wrote minimal discipline.toml for `{project_name}` using built-in gate defaults.",
         style::green("ok:")
     );
     Ok(true)

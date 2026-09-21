@@ -377,7 +377,9 @@ mod tests {
     fn test_suppression_delta_defaults() {
         let gate = SuppressionDeltaGate::default();
         assert!(gate.enabled);
-        assert_eq!(gate.severity, Severity::Error);
+        // Non-blocking by default: `#[allow]` / `# noqa` are routine reviewed
+        // escape hatches, so the population in an unknown repository is high.
+        assert_eq!(gate.severity, Severity::Warning);
         assert_eq!(gate.max_increase, 0);
     }
 

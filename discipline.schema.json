@@ -36,7 +36,8 @@
       "additionalProperties": false,
       "properties": {
         "assert_helper_fns": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Additional function names treated as assertions"
         },
         "enabled": {
           "description": "Whether this gate is active",
@@ -46,7 +47,8 @@
           "$ref": "#/$defs/StringListOrReset"
         },
         "extra_assert_macros": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Additional macro names treated as assertions"
         },
         "min_assertions_per_test": {
           "description": "Minimum assertions required per test method",
@@ -117,7 +119,8 @@
           "type": "number"
         },
         "paths": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Benchmark artifact globs tracked across revisions"
         },
         "provenance": {
           "description": "Expected host/runner provenance tag for benchmark artifacts",
@@ -327,7 +330,8 @@
           "$ref": "#/$defs/StringListOrReset"
         },
         "paths": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Path globs where file deletions require a rationale"
         },
         "require_scope": {
           "description": "When true, directive must name the deleted file or test",
@@ -394,7 +398,8 @@
           "$ref": "#/$defs/StringListOrReset"
         },
         "paths": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Committed golden/snapshot globs whose edits require a directive"
         },
         "severity": {
           "$ref": "#/$defs/Severity"
@@ -555,10 +560,12 @@
           "type": "boolean"
         },
         "allow_patterns": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Regex patterns exempted from rejection"
         },
         "allowed_users": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Username tokens permitted inside home-directory paths"
         },
         "diff_only": {
           "description": "When true, scans only modified lines in the git diff rather than all tracked files",
@@ -572,14 +579,16 @@
           "$ref": "#/$defs/StringListOrReset"
         },
         "extra_patterns": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Additional regex patterns to reject"
         },
         "home_paths": {
           "description": "Check for leaked home directory paths",
           "type": "boolean"
         },
         "hostname_denylist": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Whole-token, case-insensitive hostnames that must not appear"
         },
         "lan_ips": {
           "description": "Check for leaked private LAN IPs",
@@ -710,7 +719,8 @@
           "$ref": "#/$defs/StringListOrReset"
         },
         "paths": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Directory and file globs that must never be tracked"
         },
         "severity": {
           "$ref": "#/$defs/Severity"
@@ -719,11 +729,11 @@
       "type": "object"
     },
     "Severity": {
-      "description": "Violation severity: error (blocking, exit 1), warning (non-blocking), or info.",
+      "description": "Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational).",
       "enum": [
         "error",
         "warning",
-        "info"
+        "note"
       ],
       "type": "string"
     },
@@ -884,7 +894,8 @@
       "additionalProperties": false,
       "properties": {
         "allow_patterns": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Regex patterns permitted as operational exceptions"
         },
         "diff_only": {
           "description": "When true, scans only modified lines in the git diff rather than all tracked files",
@@ -898,10 +909,12 @@
           "$ref": "#/$defs/StringListOrReset"
         },
         "extra_patterns": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Additional banned regex patterns"
         },
         "include": {
-          "$ref": "#/$defs/StringListOrReset"
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "File globs swept for duration estimates"
         },
         "scan_pr_body": {
           "description": "Whether to scan PR description text",
@@ -980,6 +993,7 @@
                 "type": "string"
               },
               "sources": {
+                "description": "Files and capture regexes whose versions must match",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
@@ -1045,7 +1059,7 @@
     },
     "gates": {
       "additionalProperties": false,
-      "description": "Per-gate settings. By default, every available gate is enabled at severity \"error\".",
+      "description": "Per-gate settings. Each gate has a built-in default enablement and severity; see docs/GATES.md \"Default Severity by Gate\".",
       "properties": {
         "agent-scratch": {
           "allOf": [

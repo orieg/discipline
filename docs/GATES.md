@@ -89,14 +89,35 @@ Discipline organizes violation severity into a 3-tier hierarchy based on detecti
 
 ### Default Severity by Gate
 
-While most integrity and correctness gates default to `error`, gates with higher false-positive susceptibility on brownfield repositories default to `warning`:
+Default enablement and default severity are part of the compatibility contract (`docs/ARCHITECTURE.md` §3.1): within a major version a default may only become stricter unless the change is recorded in the [Default Changes ledger](ROADMAP.md#default-changes-compatibility-ledger). `tests/test_config.rs::default_enablement_and_severity_match_snapshot` pins every row below, so a default cannot change without a deliberate edit that shows up in review.
 
-| Gate | Default Severity | Rationale |
-|---|---|---|
-| `time-estimates` | `warning` | Prose sweeps can catch calendar references or historical notes in documentation. Measured at v0.4.2: 51 errors across `orieg/expanse` and 26 in `orieg/php-judy`, nearly all pre-existing documentation. Defaults to warning so new adopters can triage without blocking PRs. |
-| `bench-regression` | `warning` | Hardware jitter, noisy CI environments, and varying runner CPUs can trigger spurious regressions on wall-clock benchmarks. Projects requiring strict performance gates can configure `severity = "error"` or run with `--fail-on-warnings`. |
-| `agents-md` | `warning` | Forked or missing `AGENTS.md` guidance is an engineering hygiene issue rather than a broken build or code safety defect. |
-| *All other gates* | `error` | Syntactic regressions, assertion drops, vacuous tests, safety decay, and secret leaks default to blocking errors. |
+A default is chosen from two inputs: **detection confidence** (how often a finding on an arbitrary repository is a real defect) and the **cost of being wrong** (a false block stops an unrelated merge; a missed finding lets erosion through). A gate whose finding population in an unknown repository is high because the flagged construct is also a routine, reviewed practice defaults to `warning`: it stays visible in every report and blocks under `--fail-on-warnings` or an explicit `severity = "error"`.
+
+**Default-on gates:**
+
+| Gate | Default | Detection confidence | Cost of being wrong | Rationale |
+|---|---|---|---|---|
+| `assertion-reduction` | on, `error` | High: AST count and strength comparison of the same test on base and head. | False block: a legitimate test refactor needs a scoped `allow-assertion-drop:` directive. Miss: silent loss of coverage. | The construct flagged (a test losing assertions) is rare in reviewed changes and is the core erosion this tool exists to stop. |
+| `vacuous-tests` | on, `error` | High: AST detection of a new test with no non-tautological assertion. | False block: an assertion helper not yet listed in `assert_helper_fns`. Miss: a test that can never fail. | Only new tests are judged, so the population is bounded by the change itself. |
+| `ignored-tests` | on, `error` (conditional skips: `note`) | High: AST skip markers on tests added or changed in the diff. | False block: an intentional skip needs `allow-ignore:`. Miss: a disabled test counted as passing. | Platform-predicated skips are already downgraded to `note`; unconditional skips are rare and deliberate. |
+| `unsafe-safety-comment` | on, `error` | High: AST `unsafe` block or impl without a preceding `// SAFETY:` comment. | False block: a missing comment on a sound block, fixed by writing it. Miss: an undocumented soundness invariant. | Only diff-touched unsafe sites are checked; writing the comment is the fix. |
+| `deletion-rationale` | on, `error` | High: git records the deletion exactly. | False block: a planned removal needs one `removes:` line. Miss: a stealth deletion of tests or benchmarks. | Deletions are infrequent and the fix is a single scoped line. |
+| `pii` | on, `error` | High for home paths, LAN IPs and denylisted hosts; `diff_only = false`, so the whole tracked tree is swept. | False block: a pre-existing documentation path. Miss: a leaked workstation path or internal host in a public repository. | A leak is not reversible once published. Brownfield adopters use `diff_only = true`, `allowed_users`, or the grandfathering baseline. |
+| `agent-scratch` | on, `error` | High: a tracked path matching agent state directories. | False block: a deliberately committed directory of the same name, exempted by path. Miss: private agent state in history. | The path set is narrow and the committed state is not reversible once pushed. |
+| `shell-secrets` | on, `error` (token rules) / `warning` (heuristic rules) | High for structured tokens; heuristic for argv and pipe patterns. | False block: a token-shaped test fixture, exempted by path. Miss: a live credential in history. | The split already downgrades the heuristic rules at finding level. |
+| `config-integrity` | on, `error` | High: base and head configuration are diffed structurally. | False block: an intended loosening needs `allow-gate-weakening:`. Miss: a change lowering its own bar (F9). | The gate protects every other gate; it cannot be advisory. |
+| `ci-integrity` | on, `error` | High for `continue-on-error`, `\|\| true` and unpinned actions in modified workflows (`diff_only = true`). | False block: an intended pattern needs `allow-ci-weakening:`. Miss: a rollup that reports green while a job is skipped. | Only modified workflows are scanned by default, so pre-existing patterns do not block adoption. |
+| `test-floor` | on, `error` | High: the base-ref test count is the floor unless one is configured. | False block: a test consolidation needs `allow-test-shrink:`. Miss: silent test-count erosion. | The ratchet is relative to the base ref, so it never fails a repository for its existing state. |
+| `golden-output` | on, `error` | High: an edit to a committed golden or snapshot file. | False block: a legitimate snapshot update needs `allow-golden-update:`. Miss: an expectation rewritten to match a regression. | Snapshot edits are exactly the change a reviewer must see called out. |
+| `dependency-delta` | on, `error` | High: manifest diffs are parsed; only changed dependencies are judged. | False block: a new dependency outside the allow-list needs `allow-dependency:` or an allow-list entry. Miss: a wildcard or unpinned git dependency. | The judged population is the dependencies the change adds. |
+| `test-budget` | on, `error` | High: property-test and fuzz budgets compared base to head. | False block: an intended budget cut needs `allow-test-shrink:`. Miss: a fuzz or proptest budget quietly reduced. | Budgets are rarely edited and a cut is a deliberate decision. |
+| `command` | on, `error` | Inert until a `command`, `preset`, or `DISCIPLINE_COMMAND` is configured; then the configured tool's own verdict. | False block: only a failure of the tool the repository chose to run. Miss: none while inert. | Enabling it by default costs nothing; configuring it is the opt-in. |
+| `suppression-delta` | on, **`warning`** | Syntactically high, semantically low: `#[allow(...)]` is the reviewed escape hatch from `clippy -D warnings`, and `# noqa` / `// nolint` are routine. | False block at `error`: 78 findings (measured) across one consumer's last 100 merged pull requests, nearly all reviewed and intended. Miss at `warning`: none; the finding is still reported. | The flagged construct is a normal reviewed practice, so blocking by default fails ordinary changes. Repositories that treat every new suppression as a defect set `severity = "error"` (this repository does). |
+| `time-estimates` | on, `warning` | Heuristic prose match over the whole tree (`diff_only = false`). | False block at `error`: at v0.4.2, 51 findings (measured) in one consumer repository and 26 (measured) in another, nearly all pre-existing documentation. | Prose context decides whether a duration is an estimate. |
+| `bench-regression` | on, `warning` | Depends on the adapter: deterministic counts are high, wall-clock intervals are hardware-sensitive. | False block: runner jitter on wall-clock benchmarks. Miss: a real regression, still reported. | Projects with deterministic counters set `severity = "error"`. |
+| `agents-md` | on, `warning` | High, but the finding is documentation hygiene, not a code defect. | False block: a repository without an agent guide fails every change. | Missing or forked guidance does not make a change unsafe. |
+
+**Default-off gates** (`issue-link`, `provenance-tags`, `pr-checklist`, `scope-confinement`, `archive-contents`, `manifest-sync`, `version-lockstep`, `sanitizers`, `miri`, `unsafe-budget`, `msrv`) need repository-specific input (a tracker convention, archive path, manifest rules, version sources, toolchain) or encode a policy most repositories do not hold. They default to `error` so that enabling one is a single `enabled = true` line that blocks.
 
 ### Finding-Level Severity Overrides
 
@@ -328,7 +349,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Pre-existing suppression annotations present on the base ref.
   - Suppressions inside explicitly exempted file paths.
 - **Lifting directive:** `allow-suppression: <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `patterns`.
+- **Default:** on, severity `warning` (see [Default Severity by Gate](#default-severity-by-gate)).
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `max_increase`, `allowed_suppressions`.
 
 ---
 

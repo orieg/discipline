@@ -14,11 +14,11 @@ This document provides the complete specification of `discipline`'s configuratio
 
 ## Configuration Layers & Precedence
 
-Discipline employs a 5-layer configuration hierarchy. With zero configuration, every available gate executes at its built-in default severity: correctness and integrity gates default to `error`, while heuristic and brownfield-sensitive gates (`time-estimates`, `bench-regression`, and `agents-md`) default to `warning` by design. Every layer merges deterministically; nothing turns off silently.
+Discipline employs a 5-layer configuration hierarchy. With zero configuration, each available gate runs with its built-in default enablement and severity: correctness and integrity gates default to `error`, while heuristic and brownfield-sensitive gates (`time-estimates`, `bench-regression`, `agents-md`, and `suppression-delta`) default to `warning` by design, and gates that need repository-specific input are off until enabled. The *Default* column of the schema table below is generated from the compiled defaults; per-gate rationale is in [`GATES.md`](GATES.md#default-severity-by-gate), and changes to defaults are recorded in the [Default Changes ledger](ROADMAP.md#default-changes-compatibility-ledger). Every layer merges deterministically; nothing turns off silently.
 
 | Layer | Source | Precedence | Description |
 |---|---|---|---|
-| **1. Built-in defaults** | Compiled binary | Lowest | Every available gate enabled (correctness/integrity: `"error"`, heuristic/bench: `"warning"`). |
+| **1. Built-in defaults** | Compiled binary | Lowest | Per-gate default enablement and severity (correctness/integrity: `"error"`, heuristic/bench/suppression: `"warning"`; input-dependent gates off). |
 | **2. Repository configuration** | `discipline.toml` | ↑ | Durable, peer-reviewed repository policy. |
 | **3. Inline TOML override** | `--config-override`, `DISCIPLINE_CONFIG_OVERRIDE`, action input `config_override` | ↑ | Per-workflow tuning without modifying files. |
 | **4. Gate switches** | `--enable` / `--disable`, `DISCIPLINE_ENABLE` / `DISCIPLINE_DISABLE`, action inputs `enable` / `disable` | ↑ | Command-line switches (comma- or newline-separated). |
@@ -48,55 +48,229 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 <!-- generated:config-schema -->
 | Section / Key | Type | Default | Description |
 |---|---|---|---|
-| `meta.version` | integer | `1` | Configuration schema version (must be 1) |
-| `meta.name` | string | `""` | Repository or project name |
-| `meta.description` | string | `""` | Optional description of the project |
-| `directives.sources` | list | `["pr-body", "commits"]` | Allowed directive source channels |
-| `directives.allow_hidden` | boolean | `false` | Allow directives inside HTML comments `<!-- -->` |
-| `directives.fail_on_overrides` | boolean | `false` | Treat applied overrides as failures requiring human sign-off |
-| `directives.allowed_override_actors` | list | `[]` | Actors authorized to apply overrides even when fail_on_overrides is true |
-| `gates.<id>.enabled` | boolean | `true` | Whether this gate is active |
-| `gates.<id>.severity` | string | `"error"` | Violation severity: `"error"` (blocking) or `"warning"` (non-blocking) |
-| `gates.<id>.exempt_paths` | list | `[]` | File path globs exempted from gate evaluation |
-| `gates.assertion-reduction.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |
+| `directives.allow_hidden` | boolean | `false` | Allow directives hidden inside HTML comments &lt;!-- --&gt; (default: false) |
+| `directives.allowed_override_actors` | list | `[]` | Actors authorized to apply overrides even when fail_on_overrides is true (default: []) |
+| `directives.fail_on_overrides` | boolean | `false` | Treat applied overrides as failures requiring human sign-off (default: false) |
+| `directives.sources` | list | `["pr-body","commits"]` | Allowed directive sources: pr-body, commits (default: ["pr-body", "commits"]) |
+| `gates.agent-scratch.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.agent-scratch.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.agent-scratch.paths` | list | *(7 entries)* | Directory and file globs that must never be tracked |
+| `gates.agent-scratch.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.agents-md.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.agents-md.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.agents-md.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.archive-contents.archive_path` | string | *(unset)* | Glob pattern matching the built archive file |
+| `gates.archive-contents.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.archive-contents.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.archive-contents.forbidden_patterns` | list | `[]` | Regex patterns forbidden inside the archive |
+| `gates.archive-contents.required_paths` | list | `[]` | Files required to exist inside the archive |
+| `gates.archive-contents.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.archive-contents.strip_components` | integer | `0` | Leading directory components to strip from archive paths |
 | `gates.assertion-reduction.assert_helper_fns` | list | `[]` | Additional function names treated as assertions |
-| `gates.vacuous-tests.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |
-| `gates.vacuous-tests.assert_helper_fns` | list | `[]` | Additional function names treated as assertions |
-| `gates.unsafe-safety-comment.placeholders` | list | `[]` | Additional placeholder phrases to reject in SAFETY comments |
+| `gates.assertion-reduction.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.assertion-reduction.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.assertion-reduction.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |
+| `gates.assertion-reduction.min_assertions_per_test` | integer | *(unset)* | Minimum assertions required per test method |
+| `gates.assertion-reduction.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.bench-regression.advisory_pct` | number | `0.1` | Advisory review percentage (default: 0.1%) |
+| `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched host/runner provenance |
+| `gates.bench-regression.base_file` | string | *(unset)* | In-job base benchmark result file path for dual-file regression checks |
+| `gates.bench-regression.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.bench-regression.exempt_arms` | list | `[]` | Declared exempt benchmark arms |
+| `gates.bench-regression.exempt_paths` | list | *(6 entries)* | File path globs exempted from this gate |
+| `gates.bench-regression.head_file` | string | *(unset)* | In-job head benchmark result file path for dual-file regression checks |
+| `gates.bench-regression.max_noise_cv` | number | *(unset)* | Maximum acceptable coefficient of variation (std_dev / mean) |
+| `gates.bench-regression.noise_floor_pct` | number | `0.5` | Noise floor percentage (default: 0.5%) |
+| `gates.bench-regression.noise_margin_pct` | number | *(unset)* | Configurable noise margin added to tolerance_pct |
+| `gates.bench-regression.paths` | list | *(6 entries)* | Benchmark artifact globs tracked across revisions |
+| `gates.bench-regression.provenance` | string | *(unset)* | Expected host/runner provenance tag for benchmark artifacts |
+| `gates.bench-regression.require_sourced_override` | boolean | `false` | Require allow-regression reasons to cite a CI run URL or artifact path and name the arms |
+| `gates.bench-regression.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.bench-regression.tolerance_pct` | number | `0.5` | Maximum allowed regression percentage |
+| `gates.ci-integrity.diff_only` | boolean | `true` | When true, scans only modified workflow files rather than all workflows |
+| `gates.ci-integrity.documented_job_count_path` | string | *(unset)* | Path to catalog documentation stating job count |
+| `gates.ci-integrity.documented_job_count_pattern` | string | *(unset)* | Regex pattern to extract job count from documentation |
+| `gates.ci-integrity.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.ci-integrity.excluded_jobs` | list | `["detect-changes"]` | Job names excluded from rollup dependency requirements |
+| `gates.ci-integrity.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.ci-integrity.first_party_action_prefixes` | list | `["actions/","github/"]` | Action prefixes considered first-party and excused from commit SHA pinning |
+| `gates.ci-integrity.forbid_continue_on_error` | boolean | `true` | Forbid continue-on-error: true in workflow jobs or steps |
+| `gates.ci-integrity.forbid_or_true` | boolean | `true` | Forbid \|\| true and set +e error masking in run commands |
+| `gates.ci-integrity.pin_actions` | boolean | `true` | Ensure third-party GitHub actions are pinned by 40-character commit SHA |
+| `gates.ci-integrity.rollup_job` | string | `"ci-gate"` | Name of the rollup job that must depend on all jobs |
+| `gates.ci-integrity.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.ci-integrity.workflows` | list | *(2 entries)* | Workflow file patterns to inspect |
+| `gates.command.allow_zero` | boolean | `false` | Whether zero items selected is allowed |
+| `gates.command.canary_command` | string | *(unset)* | Optional negative-control canary command |
+| `gates.command.canary_expected_diagnostic` | string | *(unset)* | Expected diagnostic string that canary must produce |
+| `gates.command.command` | string | *(unset)* | Primary command to execute |
+| `gates.command.commands` | array of tables | `[]` | Multi-command suite entries |
+| `gates.command.commands[].allow_zero` | boolean | *(per entry)* | Whether zero items selected is allowed |
+| `gates.command.commands[].canary_command` | string | *(per entry)* | Optional negative-control canary command |
+| `gates.command.commands[].canary_expected_diagnostic` | string | *(per entry)* | Expected diagnostic string that canary must produce |
+| `gates.command.commands[].command` | string | *(per entry)* | Command string to execute |
+| `gates.command.commands[].count_pattern` | string | *(per entry)* | Regex pattern to extract an integer count |
+| `gates.command.commands[].forbid_output` | list | *(per entry)* | Output patterns that must not appear in stdout or stderr |
+| `gates.command.commands[].min_count` | integer | *(per entry)* | Minimum count required |
+| `gates.command.commands[].name` | string | *(required)* | Name or identifier of the command |
+| `gates.command.commands[].preset` | string | *(per entry)* | Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom) |
+| `gates.command.commands[].timeout_seconds` | integer | *(per entry)* | Execution timeout in seconds |
+| `gates.command.commands[].zero_items_pattern` | string | *(per entry)* | Pattern that indicates zero items were executed |
+| `gates.command.count_pattern` | string | *(unset)* | Regex pattern to extract an integer count |
+| `gates.command.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.command.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.command.forbid_output` | list | `[]` | Output patterns that must not appear in stdout or stderr |
+| `gates.command.min_count` | integer | *(unset)* | Minimum count required |
+| `gates.command.preset` | string | *(unset)* | Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom) |
+| `gates.command.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.command.timeout_seconds` | integer | *(unset)* | Execution timeout in seconds (default: 60s) |
+| `gates.command.zero_items_pattern` | string | *(unset)* | Pattern that indicates zero items were executed |
+| `gates.config-integrity.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.config-integrity.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.config-integrity.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.deletion-rationale.allow_hidden` | boolean or null | *(unset)* | When true, HTML-comment-wrapped directives are accepted for deletions |
+| `gates.deletion-rationale.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.deletion-rationale.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.deletion-rationale.paths` | list | `["**"]` | Path globs where file deletions require a rationale |
-| `gates.time-estimates.include` | list | `["**/*.md"]` | Markdown file globs swept for duration estimates |
-| `gates.time-estimates.extra_patterns` | list | `[]` | Additional custom banned regex patterns |
-| `gates.time-estimates.allow_patterns` | list | `[...]` | Regex patterns permitted as operational exceptions |
-| `gates.time-estimates.scan_pr_body` | boolean | `true` | Whether to scan the PR description text |
-| `gates.pii.home_paths` | boolean | `true` | Check for leaked workstation home directory paths |
-| `gates.pii.lan_ips` | boolean | `true` | Check for leaked private RFC 1918 LAN IP addresses |
-| `gates.pii.allowed_users` | list | `[...]` | Allowed username tokens in paths |
-| `gates.pii.hostname_denylist` | list | `[]` | Whole-token case-insensitive hostnames to reject |
-| `gates.pii.extra_patterns` | list | `[]` | Additional regex patterns to reject |
-| `gates.pii.allow_patterns` | list | `[]` | Custom regex patterns exempted from rejection |
-| `gates.pii.scan_pr_body` | boolean | `true` | Whether to scan the PR description text |
-| `gates.agent-scratch.paths` | list | `[...]` | Directory and file globs forbidden from being tracked |
-| `gates.golden-output.paths` | list | `[...]` | Committed golden/snapshot globs requiring override to edit |
-| `gates.bench-regression.tolerance_pct` | number | `0.5` | Maximum allowed benchmark regression percentage |
-| `gates.bench-regression.paths` | list | `[...]` | Benchmark artifact globs tracked across revisions |
-| `gates.bench-regression.base_file` | string | `""` | Baseline benchmark output file for dual-file regression checks |
-| `gates.bench-regression.head_file` | string | `""` | Current benchmark output file for dual-file regression checks |
-| `gates.bench-regression.noise_floor_pct` | number | `0.5` | Multi-arm noise floor threshold percentage |
-| `gates.bench-regression.advisory_pct` | number | `0.1` | Advisory threshold percentage for reporting minor regressions |
-| `gates.bench-regression.exempt_arms` | list | `[]` | Benchmark arm names exempted from regression checks |
-| `gates.bench-regression.require_sourced_override` | boolean | `false` | Require regression overrides to cite CI run URL or committed artifact |
-| `gates.bench-regression.provenance` | string | `""` | Expected host or runner provenance tag for benchmark artifacts |
-| `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched provenance tags |
-| `gates.provenance-tags.include` | list | `["**/*.md"]` | Markdown file globs swept for provenance and hygiene |
-| `gates.provenance-tags.check_tables` | boolean | `true` | Verify table unit-bearing numerics carry provenance tags |
-| `gates.provenance-tags.check_mechanisms` | boolean | `true` | Verify mechanism claims cite hardware counters or hypothesis qualifiers |
-| `gates.provenance-tags.check_intervals` | boolean | `true` | Verify wall-clock ratios cite confidence intervals or provisional markers |
-| `gates.provenance-tags.check_paired_figures` | boolean | `true` | Verify paired figures cite shared workload or differentiation markers |
-| `gates.provenance-tags.scan_pr_body` | boolean | `true` | Whether to scan the PR description text |
-| `gates.shell-secrets.extra_secret_patterns` | list | `[]` | Additional custom regex patterns for sensitive secret variable names |
-| `gates.shell-secrets.allow_patterns` | list | `[]` | Custom regex patterns exempted from violation |
-| `gates.issue-link.pattern` | string | `""` | Custom regex pattern required in PR title or body |
+| `gates.deletion-rationale.require_scope` | boolean | `true` | When true, directive must name the deleted file or test |
+| `gates.deletion-rationale.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.dependency-delta.allow_dependencies` | list | `[]` | Explicit list of allowed dependency package names |
+| `gates.dependency-delta.allow_wildcards` | boolean | `false` | Whether wildcard versions are permitted (default: false) |
+| `gates.dependency-delta.deny_dependencies` | list | `[]` | Explicit list of forbidden dependency package names |
+| `gates.dependency-delta.deny_file` | string | `"deny.toml"` | Path to deny.toml policy file |
+| `gates.dependency-delta.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.dependency-delta.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.dependency-delta.manifests` | list | *(9 entries)* | Manifest file globs to inspect |
+| `gates.dependency-delta.require_git_pins` | boolean | `true` | Whether git dependencies must specify an immutable commit or tag pin (default: true) |
+| `gates.dependency-delta.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.golden-output.allow_updates` | boolean | *(per entry)* | Permit snapshot updates without error |
+| `gates.golden-output.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.golden-output.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.golden-output.paths` | list | *(4 entries)* | Committed golden/snapshot globs whose edits require a directive |
+| `gates.golden-output.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.ignored-tests.approved_predicates` | list | `[]` | Conditional ignore predicates (e.g. miri) approved by policy |
+| `gates.ignored-tests.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.ignored-tests.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.ignored-tests.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.issue-link.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.issue-link.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.issue-link.pattern` | string | *(unset)* | Custom regex pattern required in PR title or body |
 | `gates.issue-link.require_in_commit_if_no_pr` | boolean | `false` | Require issue link in commit messages when no PR metadata is supplied |
+| `gates.issue-link.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.manifest-sync.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.manifest-sync.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.manifest-sync.rules` | array of tables | `[]` | Rules reconciling packaging manifests against git-tracked files |
+| `gates.manifest-sync.rules[].exclude_paths` | list | *(per entry)* | Globs excluded from manifest registration requirement |
+| `gates.manifest-sync.rules[].extract_regex` | string | *(required)* | Regex to extract relative file paths from manifest |
+| `gates.manifest-sync.rules[].manifest` | string | *(required)* | Path to packaging manifest (e.g. package.xml) |
+| `gates.manifest-sync.rules[].watched_paths` | list | *(required)* | Git file globs that must be registered in the manifest |
+| `gates.manifest-sync.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.miri.args` | list | `[]` | Additional CLI arguments passed to cargo miri test |
+| `gates.miri.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.miri.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.miri.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.miri.timeout_seconds` | integer | `600` | Maximum execution time in seconds before failing closed (default: 600) |
+| `gates.msrv.command` | string or null | *(unset)* | Command to run to verify MSRV compatibility |
+| `gates.msrv.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.msrv.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.msrv.pinned_version` | string or null | *(unset)* | Explicit MSRV version string (e.g. "1.90.0") |
+| `gates.msrv.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.pii.agent_config_refs` | boolean | `true` | When true, flags references to personal agent configuration directories and playbook docs |
+| `gates.pii.allow_patterns` | list | `[]` | Regex patterns exempted from rejection |
+| `gates.pii.allowed_users` | list | *(8 entries)* | Username tokens permitted inside home-directory paths |
+| `gates.pii.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
+| `gates.pii.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.pii.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.pii.extra_patterns` | list | `[]` | Additional regex patterns to reject |
+| `gates.pii.home_paths` | boolean | `true` | Check for leaked home directory paths |
+| `gates.pii.hostname_denylist` | list | `[]` | Whole-token, case-insensitive hostnames that must not appear |
+| `gates.pii.lan_ips` | boolean | `true` | Check for leaked private LAN IPs |
+| `gates.pii.scan_pr_body` | boolean | `true` | Whether to scan PR description text |
+| `gates.pii.secrets` | boolean | `true` | Check for leaked private keys and high-entropy API tokens |
+| `gates.pii.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.pr-checklist.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.pr-checklist.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.pr-checklist.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.provenance-tags.check_intervals` | boolean | `true` | Check published wall-clock ratios for confidence intervals or explicit qualifiers |
+| `gates.provenance-tags.check_mechanisms` | boolean | `true` | Check for mechanism claims without hardware counter evidence or explicit hypothesis qualifiers |
+| `gates.provenance-tags.check_paired_figures` | boolean | `true` | Check paired figures for shared workload IDs or differentiation tags |
+| `gates.provenance-tags.check_tables` | boolean | `true` | Check markdown tables for unit-bearing numbers without table or caption provenance tags |
+| `gates.provenance-tags.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.provenance-tags.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.provenance-tags.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.sanitizers.canary` | boolean | `false` | Whether to verify a negative-control race canary before main tests |
+| `gates.sanitizers.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.sanitizers.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.sanitizers.sanitizer` | string | `"address"` | Sanitizer name to activate (e.g. "address", "thread") |
+| `gates.sanitizers.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.sanitizers.timeout_seconds` | integer | `300` | Maximum execution time in seconds (default: 300) |
+| `gates.scope-confinement.allowed_paths` | list | `[]` | Glob patterns of paths agents are authorized to modify |
+| `gates.scope-confinement.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.scope-confinement.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.scope-confinement.forbidden_paths` | list | `[]` | Glob patterns of paths agents are strictly forbidden to touch |
+| `gates.scope-confinement.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.shell-secrets.allow_patterns` | list | `[]` | Custom regex patterns exempted from violation |
+| `gates.shell-secrets.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
+| `gates.shell-secrets.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.shell-secrets.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.shell-secrets.extra_secret_patterns` | list | `[]` | Additional custom regex patterns for sensitive secret variable names |
+| `gates.shell-secrets.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.suppression-delta.allowed_suppressions` | list | `[]` | Specific suppression patterns explicitly permitted by policy |
+| `gates.suppression-delta.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.suppression-delta.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.suppression-delta.max_increase` | integer | `0` | Maximum net increase in suppression annotations permitted (default: 0) |
+| `gates.suppression-delta.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.test-budget.corpus_dirs` | list | *(3 entries)* | Corpus directory patterns to monitor for seed file shrink |
+| `gates.test-budget.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.test-budget.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.test-budget.fuzz_targets` | list | `["fuzz/Cargo.toml","fuzz/fuzz_targets/**"]` | Fuzz manifest and harness globs |
+| `gates.test-budget.scan_scripts` | boolean | `true` | Whether to scan shell scripts |
+| `gates.test-budget.scan_workflows` | boolean | `true` | Whether to scan workflow files |
+| `gates.test-budget.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.test-floor.constant_file` | string | *(unset)* | File containing a floor constant |
+| `gates.test-floor.constant_name` | string | *(unset)* | Name of the floor constant in constant_file |
+| `gates.test-floor.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.test-floor.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.test-floor.min_tests` | integer | *(unset)* | Minimum required workspace test count |
+| `gates.test-floor.required_suites` | list | `[]` | Required test suite files that must exist |
+| `gates.test-floor.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.test-floor.test_command` | string | *(unset)* | Custom command to list or count tests |
+| `gates.test-floor.tolerance` | integer | `0` | Allowed test count decrease below floor or base before violation (default: 0) |
+| `gates.time-estimates.allow_patterns` | list | `[]` | Regex patterns permitted as operational exceptions |
+| `gates.time-estimates.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
+| `gates.time-estimates.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.time-estimates.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.time-estimates.extra_patterns` | list | `[]` | Additional banned regex patterns |
+| `gates.time-estimates.include` | list | `["**/*.md"]` | File globs swept for duration estimates |
+| `gates.time-estimates.scan_pr_body` | boolean | `true` | Whether to scan PR description text |
+| `gates.time-estimates.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.unsafe-budget.allow_increase` | boolean | `false` | Whether total unsafe count may increase over base ref without override |
+| `gates.unsafe-budget.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.unsafe-budget.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.unsafe-budget.max_unsafe` | integer or null | *(unset)* | Maximum total number of unsafe sites allowed in head ref |
+| `gates.unsafe-budget.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.unsafe-safety-comment.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.unsafe-safety-comment.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.unsafe-safety-comment.placeholders` | list | *(17 entries)* | Additional placeholder words or phrases to reject in SAFETY comments |
+| `gates.unsafe-safety-comment.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.vacuous-tests.assert_helper_fns` | list | `[]` | Additional function names treated as assertions |
+| `gates.vacuous-tests.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.vacuous-tests.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.vacuous-tests.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |
+| `gates.vacuous-tests.min_assertions_per_test` | integer | *(unset)* | Minimum assertions required per test method |
+| `gates.vacuous-tests.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.version-lockstep.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.version-lockstep.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.version-lockstep.groups` | array of tables | `[]` | Groups of sources that must declare identical version strings |
+| `gates.version-lockstep.groups[].name` | string | *(required)* | Name of the version lockstep group |
+| `gates.version-lockstep.groups[].sources` | array of tables | *(required)* | Files and capture regexes whose versions must match |
+| `gates.version-lockstep.groups[].sources[].path` | string | *(required)* | Source file path |
+| `gates.version-lockstep.groups[].sources[].regex` | string | *(required)* | Regex pattern capturing the version string in group 1 |
+| `gates.version-lockstep.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `meta.description` | string | *(per entry)* | Optional short description of the project |
+| `meta.mode` | string | `"enforcing"` | Operating mode: 'enforcing' exits non-zero on violations; 'advisory' runs all checks and emits reports but exits 0. |
+| `meta.name` | string | *(required)* | Repository or project name |
+| `meta.version` | integer | `1` | Configuration schema version (must be 1) |
 <!-- /generated -->
 
 ---
@@ -110,7 +284,7 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 <!-- generated:action-inputs -->
 | Input | Default | Description |
 |---|---|---|
-| `config` | `discipline.toml` | Path to discipline.toml. When the file is absent, built-in defaults apply (every available gate on). |
+| `config` | `discipline.toml` | Path to discipline.toml. When the file is absent, built-in defaults apply (each gate at its built-in default enablement and severity). |
 | `suite` | `all` | Suite to run: all, agent-guard, hygiene, integrity |
 | `base_ref` | *(none)* | Branch or commit the change is measured against. Default: PR base branch, else the pushed-from commit, else the default branch. |
 | `enable` | *(none)* | Gate ids to force on (comma or newline separated). See `discipline gates`. |

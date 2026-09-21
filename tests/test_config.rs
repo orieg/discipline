@@ -460,3 +460,99 @@ mode = "advisory"
     let back = DisciplineConfig::from_toml_str(&serialized).unwrap();
     assert_eq!(back.meta.mode, discipline::config::RunMode::Advisory);
 }
+
+/// Compatibility contract (docs/ARCHITECTURE.md §3.1): the built-in default
+/// enablement and severity of every gate. Changing a default fails this test
+/// until the snapshot is updated deliberately, so the change is visible in
+/// review. Within a major version a default may only become STRICTER without a
+/// release-note entry in docs/ROADMAP.md ("Default Changes").
+const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
+    ("agents-md", true, Severity::Warning),
+    ("assertion-reduction", true, Severity::Error),
+    ("vacuous-tests", true, Severity::Error),
+    ("ignored-tests", true, Severity::Error),
+    ("unsafe-safety-comment", true, Severity::Error),
+    ("deletion-rationale", true, Severity::Error),
+    ("scope-confinement", false, Severity::Error),
+    ("suppression-delta", true, Severity::Warning),
+    ("time-estimates", true, Severity::Warning),
+    ("pii", true, Severity::Error),
+    ("agent-scratch", true, Severity::Error),
+    ("shell-secrets", true, Severity::Error),
+    ("issue-link", false, Severity::Error),
+    ("provenance-tags", false, Severity::Error),
+    ("pr-checklist", false, Severity::Error),
+    ("config-integrity", true, Severity::Error),
+    ("golden-output", true, Severity::Error),
+    ("dependency-delta", true, Severity::Error),
+    ("test-budget", true, Severity::Error),
+    ("ci-integrity", true, Severity::Error),
+    ("test-floor", true, Severity::Error),
+    ("archive-contents", false, Severity::Error),
+    ("manifest-sync", false, Severity::Error),
+    ("version-lockstep", false, Severity::Error),
+    ("command", true, Severity::Error),
+    ("sanitizers", false, Severity::Error),
+    ("miri", false, Severity::Error),
+    ("unsafe-budget", false, Severity::Error),
+    ("msrv", false, Severity::Error),
+    ("bench-regression", true, Severity::Warning),
+];
+
+#[test]
+fn default_enablement_and_severity_match_snapshot() {
+    let defaults = DisciplineConfig::default_for_repo("t");
+    let available: Vec<&str> = GATES.iter().filter(|g| g.available).map(|g| g.id).collect();
+    for id in &available {
+        assert!(
+            DEFAULTS_SNAPSHOT.iter().any(|(s, _, _)| s == id),
+            "{id} has no entry in DEFAULTS_SNAPSHOT; add it deliberately"
+        );
+    }
+    let mut drift = Vec::new();
+    for (id, enabled, severity) in DEFAULTS_SNAPSHOT {
+        assert!(
+            available.contains(id),
+            "{id} is in DEFAULTS_SNAPSHOT but is not an available gate"
+        );
+        let s = defaults.gates.settings(id).expect("available gate");
+        if s.enabled() != *enabled || s.severity() != *severity {
+            drift.push(format!(
+                "{id}: snapshot ({enabled}, {severity}) != compiled ({}, {})",
+                s.enabled(),
+                s.severity()
+            ));
+        }
+    }
+    assert!(
+        drift.is_empty(),
+        "default enablement/severity changed; update DEFAULTS_SNAPSHOT and record the change \
+         in docs/ROADMAP.md \"Default Changes\": {drift:#?}"
+    );
+}
+
+#[test]
+fn schema_severity_enum_matches_accepted_severities() {
+    let schema = discipline::schema::generate_schema();
+    let values: Vec<String> = schema["$defs"]["Severity"]["enum"]
+        .as_array()
+        .expect("Severity enum")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    for v in &values {
+        let body = format!("[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\nseverity = \"{v}\"\n");
+        let parsed = DisciplineConfig::from_toml_str(&body);
+        assert!(
+            parsed.is_ok(),
+            "schema advertises severity {v:?} but the config parser rejects it: {:?}",
+            parsed.err()
+        );
+    }
+    for sev in [Severity::Error, Severity::Warning, Severity::Note] {
+        assert!(
+            values.contains(&sev.to_string()),
+            "config accepts severity {sev} but the schema does not list it: {values:?}"
+        );
+    }
+}

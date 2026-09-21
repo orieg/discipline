@@ -1225,7 +1225,7 @@ impl Default for SuppressionDeltaGate {
     fn default() -> Self {
         Self {
             enabled: true,
-            severity: Severity::Error,
+            severity: Severity::Warning,
             exempt_paths: Vec::new(),
             max_increase: 0,
             allowed_suppressions: Vec::new(),

@@ -6317,6 +6317,13 @@ forbidden_paths = [".github/**"]
 
 // ---- suppression-delta -----------------------------------------------------
 
+/// `suppression-delta` defaults to `warning`; these tests exercise the blocking
+/// path, so they opt into `severity = "error"` explicitly.
+const SUPPRESSION_BLOCKING: &[&str] = &[
+    "--config-override",
+    "[gates.suppression-delta]\nseverity = \"error\"",
+];
+
 #[test]
 fn suppression_delta_detects_new_suppression_and_accepts_waiver() {
     let repo = Repo::new();
@@ -6326,19 +6333,19 @@ fn suppression_delta_detects_new_suppression_and_accepts_waiver() {
         &format!("{GOOD_LIB}\n#[allow(dead_code)]\nfn unused() {{}}\n"),
     );
     repo.commit("refactor: add lint suppression");
-    let run_bad = repo.check(&[]);
+    let run_bad = repo.check(SUPPRESSION_BLOCKING);
     assert_eq!(run_bad.code, 1);
     assert!(!run_bad.titles("suppression-delta").is_empty());
 
     // 2. Waiver via directive passes
     repo.commit("refactor: add lint suppression with waiver\n\ndiscipline:allow(suppression-delta): dead_code retained during refactor");
-    let run_ov = repo.check(&[]);
+    let run_ov = repo.check(SUPPRESSION_BLOCKING);
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
 
     // 3. Clean code without suppression passes
     repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn clean() {{}}\n"));
     repo.commit("feat: clean function");
-    let run_ok = repo.check(&[]);
+    let run_ok = repo.check(SUPPRESSION_BLOCKING);
     assert_eq!(run_ok.code, 0, "{}{}", run_ok.stdout, run_ok.stderr);
 }
 
@@ -6588,7 +6595,7 @@ fn test_suppression_delta_scoped_override_q1() {
 
     // 1. Commit with unrelated reason -> all 3 findings fire, exit code 1
     repo.commit("refactor: add suppressions\n\nallow-suppression: totally unrelated words here");
-    let run1 = repo.check(&[]);
+    let run1 = repo.check(SUPPRESSION_BLOCKING);
     assert_eq!(run1.code, 1);
     let v1 = run1.violations("suppression-delta");
     assert_eq!(
@@ -6606,7 +6613,7 @@ fn test_suppression_delta_scoped_override_q1() {
         "-m",
         "refactor: add suppressions\n\nallow-suppression: dead_code legacy cleanup",
     ]);
-    let run2 = repo.check(&[]);
+    let run2 = repo.check(SUPPRESSION_BLOCKING);
     assert_eq!(run2.code, 1);
     let v2 = run2.violations("suppression-delta");
     assert_eq!(v2.len(), 2, "expected 2 remaining violations: {:#?}", v2);
@@ -6622,7 +6629,7 @@ fn test_suppression_delta_scoped_override_q1() {
 
     // 3. Amend commit naming all three -> 0 findings remain, exit code 0
     repo.git(&["commit", "-q", "--amend", "-m", "refactor: add suppressions\n\nallow-suppression: dead_code noqa type: ignore legacy cleanup"]);
-    let run3 = repo.check(&[]);
+    let run3 = repo.check(SUPPRESSION_BLOCKING);
     assert_eq!(run3.code, 0, "{}{}", run3.stdout, run3.stderr);
     assert_eq!(run3.violations("suppression-delta").len(), 0);
 
@@ -6634,7 +6641,7 @@ fn test_suppression_delta_scoped_override_q1() {
         "-m",
         "refactor: add suppressions\n\nallow-suppression: src/lib.rs legacy cleanup",
     ]);
-    let run4 = repo.check(&[]);
+    let run4 = repo.check(SUPPRESSION_BLOCKING);
     assert_eq!(run4.code, 1);
     let v4 = run4.violations("suppression-delta");
     assert_eq!(v4.len(), 2, "expected 2 violations for test.py: {:#?}", v4);
@@ -7266,4 +7273,33 @@ fn baseline_whole_tree_records_pre_existing_findings_for_brownfield_adoption() {
         &[],
     );
     assert_ne!(clash.code, 0, "--whole-tree with --base must be refused");
+}
+
+#[test]
+fn suppression_delta_defaults_to_nonblocking_warning() {
+    let repo = Repo::new();
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\n#[allow(dead_code)]\nfn unused() {{}}\n"),
+    );
+    repo.commit("refactor: add lint suppression");
+
+    // Built-in default: the finding is reported, as a warning, and does not block.
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let v = run.violations("suppression-delta");
+    assert_eq!(v.len(), 1, "{v:#?}");
+    assert_eq!(v[0]["severity"], "warning", "{v:#?}");
+
+    // --fail-on-warnings promotes it to blocking.
+    let strict = repo.check(&["--fail-on-warnings"]);
+    assert_eq!(strict.code, 1, "{}{}", strict.stdout, strict.stderr);
+
+    // An explicit severity = "error" restores blocking behaviour.
+    let blocking = repo.check(SUPPRESSION_BLOCKING);
+    assert_eq!(blocking.code, 1, "{}{}", blocking.stdout, blocking.stderr);
+    assert_eq!(
+        blocking.violations("suppression-delta")[0]["severity"],
+        "error"
+    );
 }

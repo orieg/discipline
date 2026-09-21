@@ -200,3 +200,142 @@ fn test_check_links_script_fails_on_broken_anchor() {
         "check-links.py must fail on broken anchor"
     );
 }
+
+/// Every property key the JSON Schema exposes, collected by walking the raw
+/// schema JSON (independently of the renderer under test).
+fn all_schema_property_names() -> std::collections::BTreeSet<String> {
+    fn walk(v: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
+        match v {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Object(props)) = map.get("properties") {
+                    out.extend(props.keys().cloned());
+                }
+                for child in map.values() {
+                    walk(child, out);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|c| walk(c, out)),
+            _ => {}
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    walk(&discipline::schema::generate_schema(), &mut out);
+    // `reset` / `items` belong to the list-reset helper, not to a config key.
+    out.remove("reset");
+    out.remove("items");
+    out
+}
+
+/// Every `gates.<id>.<key>` path the schema accepts, resolved through `$ref`.
+fn all_gate_key_paths() -> Vec<String> {
+    let schema = discipline::schema::generate_schema();
+    let defs = &schema["$defs"];
+    let mut paths = Vec::new();
+    let gates = schema["properties"]["gates"]["properties"]
+        .as_object()
+        .expect("gates.properties is an object");
+    for (id, entry) in gates {
+        let reference = entry["allOf"][0]["$ref"]
+            .as_str()
+            .expect("gate entry references a $def");
+        let def_name = reference.trim_start_matches("#/$defs/");
+        let props = defs[def_name]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{def_name} has properties"));
+        for key in props.keys() {
+            paths.push(format!("gates.{id}.{key}"));
+        }
+    }
+    paths
+}
+
+#[test]
+fn test_config_reference_lists_every_schema_key() {
+    let table = discipline::docs::render_config_schema_markdown();
+    let names = all_schema_property_names();
+    assert!(names.len() > 100, "schema walk found {} keys", names.len());
+    let missing: Vec<&String> = names
+        .iter()
+        .filter(|k| {
+            // A key is present when it is a segment of some row's dotted path.
+            let segment = [
+                format!("`{k}."),
+                format!(".{k}."),
+                format!(".{k}`"),
+                format!(".{k}[]"),
+            ];
+            !segment.iter().any(|s| table.contains(s.as_str()))
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} schema keys absent from the generated config table: {missing:?}",
+        missing.len()
+    );
+    let missing_paths: Vec<String> = all_gate_key_paths()
+        .into_iter()
+        .filter(|p| !table.contains(&format!("`{p}`")))
+        .collect();
+    assert!(
+        missing_paths.is_empty(),
+        "gate key paths absent from the generated config table: {missing_paths:?}"
+    );
+}
+
+#[test]
+fn test_config_reference_rows_are_complete() {
+    let table = discipline::docs::render_config_schema_markdown();
+    for row in table.lines().skip(2) {
+        let cells: Vec<&str> = row.trim_matches('|').split(" | ").collect();
+        assert_eq!(cells.len(), 4, "malformed row: {row}");
+        for cell in &cells {
+            assert!(!cell.trim().is_empty(), "empty cell in row: {row}");
+        }
+    }
+    // The Default column is derived from the compiled defaults, not hand-typed.
+    assert!(
+        table.contains("| `gates.suppression-delta.severity` | string | `\"warning\"` |"),
+        "suppression-delta severity row does not show the compiled default"
+    );
+    assert!(
+        table.contains("| `gates.miri.enabled` | boolean | `false` |"),
+        "miri enabled row does not show the compiled default"
+    );
+}
+
+#[test]
+fn test_committed_configuration_md_lists_every_schema_key() {
+    let doc = std::fs::read_to_string("docs/CONFIGURATION.md").expect("read CONFIGURATION.md");
+    let missing: Vec<String> = all_gate_key_paths()
+        .into_iter()
+        .filter(|p| !doc.contains(&format!("`{p}`")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} gate keys absent from docs/CONFIGURATION.md (run `discipline docs --write`): {missing:?}",
+        missing.len()
+    );
+}
+
+#[test]
+fn test_gates_html_severity_badge_reflects_compiled_default() {
+    let html = discipline::docs::render_gates_html(discipline::config::GATES);
+    let row = |id: &str| -> String {
+        let start = html
+            .find(&format!("<td class=\"gate-id\">{id}</td>"))
+            .unwrap_or_else(|| panic!("{id} row missing"));
+        let end = html[start..].find("</tr>").unwrap() + start;
+        html[start..end].to_string()
+    };
+    assert!(
+        row("suppression-delta").contains("badge-warn\">Warning<"),
+        "{}",
+        row("suppression-delta")
+    );
+    assert!(
+        row("assertion-reduction").contains("badge-error\">Error<"),
+        "{}",
+        row("assertion-reduction")
+    );
+    assert!(row("miri").contains(">Off<"), "{}", row("miri"));
+}
