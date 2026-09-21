@@ -456,35 +456,35 @@ mod tests {
         }
         #[cfg(feature = "lang-php")]
         {
-            assert!(reg.is_supported("bindings/php/tests/ExpanseTest.php"));
+            assert!(reg.is_supported("bindings/php/tests/ExampleTest.php"));
             let php_pack = reg.find_pack("Test.php").expect("php pack found");
             assert_eq!(php_pack.id(), "php");
             assert_eq!(php_pack.name(), "PHP");
         }
         #[cfg(feature = "lang-c")]
         {
-            assert!(reg.is_supported("crates/expanse-capi/smoke/modern_api_smoke.c"));
+            assert!(reg.is_supported("crates/example-capi/smoke/modern_api_smoke.c"));
             let c_pack = reg.find_pack("smoke.c").expect("c pack found");
             assert_eq!(c_pack.id(), "c");
             assert_eq!(c_pack.name(), "C");
         }
         #[cfg(feature = "lang-cpp")]
         {
-            assert!(reg.is_supported("tests/test_expanse.cpp"));
+            assert!(reg.is_supported("tests/test_example.cpp"));
             let cpp_pack = reg.find_pack("test.cpp").expect("cpp pack found");
             assert_eq!(cpp_pack.id(), "cpp");
             assert_eq!(cpp_pack.name(), "C++");
         }
         #[cfg(feature = "lang-csharp")]
         {
-            assert!(reg.is_supported("bindings/dotnet/tests/Expanse.NET.Tests/ExpanseMapTests.cs"));
+            assert!(reg.is_supported("bindings/dotnet/tests/Example.NET.Tests/ExampleMapTests.cs"));
             let csharp_pack = reg.find_pack("test.cs").expect("csharp pack found");
             assert_eq!(csharp_pack.id(), "csharp");
             assert_eq!(csharp_pack.name(), "C#");
         }
         #[cfg(feature = "lang-ruby")]
         {
-            assert!(reg.is_supported("bindings/ruby/test/test_expanse.rb"));
+            assert!(reg.is_supported("bindings/ruby/test/test_example.rb"));
             let ruby_pack = reg.find_pack("test.rb").expect("ruby pack found");
             assert_eq!(ruby_pack.id(), "ruby");
             assert_eq!(ruby_pack.name(), "Ruby");

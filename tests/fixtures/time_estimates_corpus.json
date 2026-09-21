@@ -421,7 +421,7 @@
   },
   {
     "id": "tn-01",
-    "text": "Expanse is a replacement for the 20-year-old C library.",
+    "text": "Example is a replacement for the 20-year-old C library.",
     "is_violation": false,
     "category": "historical_age",
     "description": "Historical library age"

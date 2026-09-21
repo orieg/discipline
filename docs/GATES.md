@@ -457,7 +457,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 #### `issue-link`
 - **Rule:** Every pull request title or description must reference a tracking issue (`#123`, `Fixes #123`, `Closes #123`), or carry an explicit `no-issue:` rationale.
 - **Default:** `enabled = false` (opt-in).
-- **False-Positive Rationale:** Field measurements on `orieg/expanse` and public open-source repositories demonstrate that `issue-link` produces disproportionate friction on routine maintenance PRs — documentation improvements, small chore PRs, dependency updates, and internal refactors — where formal tracking issues are neither required nor created. Repositories requiring tracking issues on all PRs can opt in via `[gates.issue-link] enabled = true`.
+- **False-Positive Rationale:** Field measurements on consumer repositories and public open-source projects demonstrate that `issue-link` produces disproportionate friction on routine maintenance PRs — documentation improvements, small chore PRs, dependency updates, and internal refactors — where formal tracking issues are neither required nor created. Repositories requiring tracking issues on all PRs can opt in via `[gates.issue-link] enabled = true`.
 - **Languages:** Any.
 - **What it catches:**
   - PRs with no referenced issue in the PR title or PR description.
@@ -468,7 +468,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 #### `provenance-tags`
 - **Rule:** Published numeric claims, tables, mechanism assertions, wall-clock intervals, and paired comparisons in markdown files and PR bodies must carry truthful provenance tags, hardware counter evidence, confidence intervals, or explicit hypothesis/differentiation qualifiers.
 - **Default:** `enabled = false` (opt-in).
-- **False-Positive Rationale:** Field measurements on `orieg/expanse` and public open-source repositories indicate that `provenance-tags` produces excessive noise on tabular benchmark comparisons, descriptive configuration tables, and architectural diagrams that are illustrative or descriptive rather than novel-claim-bearing. Repositories publishing empirical research benchmarks and requiring strict provenance tagging can opt in via `[gates.provenance-tags] enabled = true`.
+- **False-Positive Rationale:** Field measurements on consumer repositories and public open-source projects indicate that `provenance-tags` produces excessive noise on tabular benchmark comparisons, descriptive configuration tables, and architectural diagrams that are illustrative or descriptive rather than novel-claim-bearing. Repositories publishing empirical research benchmarks and requiring strict provenance tagging can opt in via `[gates.provenance-tags] enabled = true`.
 - **Languages:** Markdown (`*.md`) and PR description.
 - **What it catches:**
   - Markdown tables containing unit-bearing numbers (`ns`, `µs`, `ms`, `ops/s`, `Mops/s`, `B/key`, etc.) without a provenance tag (`(measured: host, commit)`, `(target)`, or `(projected)`).
@@ -705,7 +705,7 @@ To port the other way, adopting the static basis instead, run `discipline check`
 - **What it catches:**
   - Missing distribution archives when required (fails closed with exit 2).
   - Ambiguous archive glob patterns matching multiple candidate archives (fails closed with exit 2).
-  - Missing `required_paths` in the archive (e.g. `config.m4`, `php_judy.h`, `LICENSE`, `README.md`).
+  - Missing `required_paths` in the archive (e.g. `config.m4`, `example_ext.h`, `LICENSE`, `README.md`).
   - Forbidden entries matching `forbidden_patterns` regexes (e.g. `.git*`, `tools/**`, `tests/**`, private keys, local dev artifacts).
   - Supports `strip_components = 1` for archives rooted in a versioned directory (e.g. `Judy-2.6.0/config.m4`).
 - **Failing archive example (rejected):**
@@ -1160,7 +1160,7 @@ ratchet = true
 
 ## Legacy Script Parity & Replacement Reference
 
-Discipline provides universal static binary drop-in replacements for the legacy verification scripts in high-assurance repositories (such as `orieg/expanse`):
+Discipline provides universal static binary drop-in replacements for the legacy verification scripts in high-assurance repositories:
 
 | Gate | Replaced Legacy Script | Discipline Enhancements & Behavioral Differences |
 |---|---|---|

@@ -680,19 +680,19 @@ end
     }
 
     #[test]
-    fn test_expanse_ruby_test_fixture() {
+    fn test_example_ruby_test_fixture() {
         let src = r#"
 require "minitest/autorun"
-require_relative "../lib/expanse"
+require_relative "../lib/example"
 
-class TestExpanse < Minitest::Test
+class TestExample < Minitest::Test
   def test_version
-    refute_nil Expanse.version
-    assert_match(/\d+\.\d+\.\d+/, Expanse.version)
+    refute_nil Example.version
+    assert_match(/\d+\.\d+\.\d+/, Example.version)
   end
 
   def test_set
-    set = Expanse::Set.new
+    set = Example::Set.new
     assert_equal 0, set.size
     assert set.empty?
 
@@ -729,7 +729,7 @@ class TestExpanse < Minitest::Test
   end
 
   def test_map
-    map = Expanse::Map.new
+    map = Example::Map.new
     assert_equal 0, map.size
 
     map[10] = 100
@@ -758,7 +758,7 @@ class TestExpanse < Minitest::Test
   end
 
   def test_strmap
-    strmap = Expanse::StrMap.new
+    strmap = Example::StrMap.new
     assert_equal 0, strmap.size
 
     strmap["alpha"] = 1
@@ -779,7 +779,7 @@ class TestExpanse < Minitest::Test
   end
 
   def test_bytesmap
-    bytesmap = Expanse::BytesMap.new
+    bytesmap = Example::BytesMap.new
     assert_equal 0, bytesmap.size
 
     k1 = "\x00\x01\xFE\xFF".b
@@ -798,7 +798,7 @@ class TestExpanse < Minitest::Test
   end
 
   def test_blobmap
-    blobmap = Expanse::BlobMap.new
+    blobmap = Example::BlobMap.new
     assert_equal 0, blobmap.size
 
     blobmap.set(100, "hello world", hot_meta: 1234)
@@ -819,19 +819,19 @@ end
         let pack = RubyPack;
         let facts = pack
             .extract(
-                "bindings/ruby/test/test_expanse.rb",
+                "bindings/ruby/test/test_example.rb",
                 src,
                 &AssertVocabulary::default(),
             )
             .expect("extract succeeds");
 
         assert_eq!(facts.tests.len(), 6);
-        assert_eq!(facts.tests[0].name, "TestExpanse#test_version");
-        assert_eq!(facts.tests[1].name, "TestExpanse#test_set");
-        assert_eq!(facts.tests[2].name, "TestExpanse#test_map");
-        assert_eq!(facts.tests[3].name, "TestExpanse#test_strmap");
-        assert_eq!(facts.tests[4].name, "TestExpanse#test_bytesmap");
-        assert_eq!(facts.tests[5].name, "TestExpanse#test_blobmap");
+        assert_eq!(facts.tests[0].name, "TestExample#test_version");
+        assert_eq!(facts.tests[1].name, "TestExample#test_set");
+        assert_eq!(facts.tests[2].name, "TestExample#test_map");
+        assert_eq!(facts.tests[3].name, "TestExample#test_strmap");
+        assert_eq!(facts.tests[4].name, "TestExample#test_bytesmap");
+        assert_eq!(facts.tests[5].name, "TestExample#test_blobmap");
 
         // Verify none of the real tests are vacuous or ignored
         for t in &facts.tests {

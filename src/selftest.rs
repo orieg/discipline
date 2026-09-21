@@ -1795,7 +1795,7 @@ smoke_cost::set_contains
             let _ = std::fs::remove_file(&temp_path);
             let entries = entries?;
             let has_required = entries.contains(&"config.m4".to_string());
-            let missing_required = !entries.contains(&"php_judy.h".to_string());
+            let missing_required = !entries.contains(&"example_ext.h".to_string());
 
             let forbidden_re = Regex::new(r"^tools/")?;
             let has_forbidden = entries.iter().any(|e| forbidden_re.is_match(e));
@@ -1840,11 +1840,11 @@ smoke_cost::set_contains
     (
         "version-lockstep: verifies multi-source equality and detects mismatch",
         || {
-            let header = "#define PHP_JUDY_VERSION \"2.6.0\"\n";
+            let header = "#define EXAMPLE_EXT_VERSION \"2.6.0\"\n";
             let manifest_match = "<release>2.6.0</release>";
             let manifest_mismatch = "<release>2.5.0</release>";
 
-            let h_re = Regex::new(r#"#define\s+PHP_JUDY_VERSION\s+"([^"]+)""#)?;
+            let h_re = Regex::new(r#"#define\s+EXAMPLE_EXT_VERSION\s+"([^"]+)""#)?;
             let m_re = Regex::new(r#"<release>([^<]+)</release>"#)?;
 
             let h_ver = h_re.captures(header).and_then(|c| c.get(1)).map(|m| m.as_str()).unwrap();

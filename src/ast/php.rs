@@ -517,9 +517,9 @@ class CalcTest extends PHPUnit\Framework\TestCase {
     }
 
     #[test]
-    fn test_expanse_php_test_parsing() {
+    fn test_example_php_test_parsing() {
         let src = r#"<?php
-class ExpanseTest extends PHPUnit\Framework\TestCase
+class ExampleTest extends PHPUnit\Framework\TestCase
 {
     public function testSet()
     {
@@ -534,11 +534,11 @@ class ExpanseTest extends PHPUnit\Framework\TestCase
         let pack = PhpPack;
         let vocab = AssertVocabulary::default();
         let facts = pack
-            .extract("bindings/php/tests/ExpanseTest.php", src, &vocab)
+            .extract("bindings/php/tests/ExampleTest.php", src, &vocab)
             .unwrap();
 
         assert_eq!(facts.tests.len(), 1);
-        assert_eq!(facts.tests[0].name, "ExpanseTest::testSet");
+        assert_eq!(facts.tests[0].name, "ExampleTest::testSet");
         assert_eq!(facts.tests[0].total_asserts, 4);
         assert_eq!(facts.tests[0].strong_asserts, 1);
         assert!(!facts.tests[0].is_vacuous());

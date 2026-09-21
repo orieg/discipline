@@ -560,7 +560,7 @@ mod tests {
         let pack = CSharpPack;
         assert_eq!(pack.id(), "csharp");
         assert_eq!(pack.name(), "C#");
-        assert!(pack.matches("ExpanseMapTests.cs"));
+        assert!(pack.matches("ExampleMapTests.cs"));
         assert!(pack.matches("tests/UnitTest.cs"));
         assert!(!pack.matches("test.cpp"));
         assert!(!pack.matches("test.java"));
@@ -621,21 +621,21 @@ public class CalcTests
     }
 
     #[test]
-    fn test_expanse_dotnet_map_tests_fixture() {
+    fn test_example_dotnet_map_tests_fixture() {
         let src = r#"
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
-namespace Expanse.Tests;
+namespace Example.Tests;
 
-public class ExpanseMapTests
+public class ExampleMapTests
 {
     [Fact]
     public void BasicCrudAndIndexer()
     {
-        using var map = new ExpanseMap();
+        using var map = new ExampleMap();
         Assert.Equal(0, map.Count);
         Assert.True(map.IsEmpty);
 
@@ -663,7 +663,7 @@ public class ExpanseMapTests
         let pack = CSharpPack;
         let facts = pack
             .extract(
-                "bindings/dotnet/tests/Expanse.NET.Tests/ExpanseMapTests.cs",
+                "bindings/dotnet/tests/Example.NET.Tests/ExampleMapTests.cs",
                 src,
                 &AssertVocabulary::default(),
             )

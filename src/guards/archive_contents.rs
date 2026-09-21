@@ -360,12 +360,12 @@ mod tests {
         let mut zip = zip::ZipWriter::new(f);
         let options = zip::write::FileOptions::default();
 
-        zip.start_file("pkg/php_judy.h", options).unwrap();
-        zip.write_all(b"#define PHP_JUDY_VERSION 2.6.0").unwrap();
+        zip.start_file("pkg/example_ext.h", options).unwrap();
+        zip.write_all(b"#define EXAMPLE_EXT_VERSION 2.6.0").unwrap();
         zip.finish().unwrap();
 
         let entries = read_archive_entries(&zip_path, 1).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0], "php_judy.h");
+        assert_eq!(entries[0], "example_ext.h");
     }
 }

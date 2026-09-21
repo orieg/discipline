@@ -442,46 +442,46 @@ Discipline distinguishes between **configurable** and **bypassable**:
 2. **Directive channel enforcement:** Directives are parsed exclusively from trusted channels specified in `directives.sources` (defaulting to `["pr-body", "commits"]`).
 3. **Hidden directive policy:** By default, HTML comment-wrapped directives in PR bodies are forbidden (`directives.allow_hidden = false`) to ensure reviewers see all requested waivers.
 4. **Machine gate for human sign-off:** When `directives.fail_on_overrides = true` (or `--fail-on-overrides`), any applied override causes Discipline to exit `1`, requiring an authorized human approver to bypass or merge.
-5. **Residual gap:** Workflow files (`.github/workflows/*.yml`) are evaluated by CI from the PR head commit; an agent could conceivably edit the workflow step to pass `disable: ...`. Repositories should protect workflow files and `discipline.toml` with `CODEOWNERS` and branch protection rules until the planned `ci-integrity` gate ships.
+5. **Residual gap:** Workflow files (`.github/workflows/*.yml`) are evaluated by CI from the PR head commit; an agent could conceivably edit the workflow step to pass `disable: ...`. The `ci-integrity` gate catches the common forms of this in modified workflows: masked failures (`continue-on-error`, `|| true`, `set +e`), unpinned actions, deleted verification steps, and a rollup job whose `needs` no longer covers every verification job. Repositories should still protect workflow files and `discipline.toml` with `CODEOWNERS` and branch protection, because a workflow can be rewritten in ways no static check anticipates.
 
 ---
 
 ## Adoption Configurations
 
-Reference configurations proven in production repositories:
+Reference configurations measured on real consumer repositories. Paths are illustrative; adapt them to your layout.
 
-### `orieg/php-judy` (C Extension & PHP Runtime)
+### C Extension with a PHP Runtime
 
-Measured residue against merge base `HEAD~30` with unconfigured defaults:
-- `time-estimates`: 1 violation (`BENCHMARK.md:1857`, historical runtime duration `one day`). <!-- discipline:allow(time-estimates) -->
-- `assertion-reduction`: 1 violation (`tests/string_to_entry_005.phpt`, newly added NUL-bearing PHP test fixture).
-- `pii`: 1 violation (`examples/ip-range-lookup.php`, sample LAN address `192.168.1.50`). <!-- discipline:allow(pii) -->
-- `agents-md`: 1 violation (`CLAUDE.md`, unlinked guide diverging from `AGENTS.md`).
-- 5 informational warnings (Zend engine C preprocessor macro expansions in `php_judy.c`, `php_judy.h`, `judy_handlers.c`, `judy_iterator.c`, `Judy_arginfo.h`).
+Measured residue against merge base `HEAD~30` with unconfigured defaults on a reference consumer:
+- `time-estimates`: 1 violation (a benchmark document describing a historical runtime duration).
+- `assertion-reduction`: 1 violation (a newly added PHP test fixture that intentionally contains NUL bytes).
+- `pii`: 1 violation (an example script whose sample data is a private LAN address).
+- `agents-md`: 1 violation (a `CLAUDE.md` that diverged from `AGENTS.md` instead of symlinking it).
+- 5 informational warnings (Zend engine C preprocessor macros that the C grammar cannot fully parse).
 
 Minimal configuration:
 
 ```toml
 [meta]
 version = 1
-name = "php-judy"
+name = "example-ext"
 
 [gates.pii]
-# Sample script demonstrating IP address lookup on Judy arrays
+# Example script whose sample data is a private LAN address
 exempt_paths = [
     "examples/ip-range-lookup.php",
 ]
 
 [gates.time-estimates]
-# Historical benchmark documentation references runtime durations
+# Benchmark documentation references historical runtime durations
 exempt_paths = [
     "BENCHMARK.md",
 ]
 
 [gates.assertion-reduction]
-# PHP binary string entry test intentionally contains NUL bytes
+# Binary-safe string test intentionally contains NUL bytes
 exempt_paths = [
-    "tests/string_to_entry_005.phpt",
+    "tests/binary_safe_005.phpt",
 ]
 ```
 

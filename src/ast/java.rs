@@ -533,12 +533,12 @@ mod tests {
     #[test]
     fn test_junit5_test_extraction_and_assertion_counting() {
         let src = r#"
-package io.github.orieg.expanse;
+package io.github.example.project;
 
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
-class ExpanseMapTest {
+class ExampleMapTest {
     @Test
     void testSlotSegment() {
         assertEquals(99L, 99L + 0);
@@ -552,12 +552,12 @@ class ExpanseMapTest {
 "#;
         let pack = JavaPack;
         let facts = pack
-            .extract("ExpanseMapTest.java", src, &AssertVocabulary::default())
+            .extract("ExampleMapTest.java", src, &AssertVocabulary::default())
             .expect("extraction must succeed");
 
         assert_eq!(facts.tests.len(), 1);
         let t = &facts.tests[0];
-        assert_eq!(t.name, "ExpanseMapTest.testSlotSegment");
+        assert_eq!(t.name, "ExampleMapTest.testSlotSegment");
         assert_eq!(t.total_asserts, 4);
         assert_eq!(t.strong_asserts, 2); // assertEquals + assertThrows
         assert_eq!(t.tautologies, 2); // assertTrue(true) + assertFalse(false)

@@ -547,11 +547,11 @@ mod tests {
         let findings = scan_markdown_text(retracted_exp, "t.md", false, false, false, true);
         assert!(findings.is_empty());
 
-        let cross_ascii = "libexpanse retires 0.55x the instructions of stock libjudy on random 1M lookup and is 1.11x slower in wall clock.\n";
+        let cross_ascii = "libexample retires 0.55x the instructions of stock libjudy on random 1M lookup and is 1.11x slower in wall clock.\n";
         let findings = scan_markdown_text(cross_ascii, "t.md", false, false, false, true);
         assert_eq!(findings.len(), 1);
 
-        let cross_unicode = "libexpanse retires 0.55× the instructions of stock libjudy on random 1M lookup and is 1.11× slower in wall clock.\n";
+        let cross_unicode = "libexample retires 0.55× the instructions of stock libjudy on random 1M lookup and is 1.11× slower in wall clock.\n";
         let findings = scan_markdown_text(cross_unicode, "t.md", false, false, false, true);
         assert_eq!(findings.len(), 1);
 

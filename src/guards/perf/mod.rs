@@ -1435,7 +1435,7 @@ fn parse_json_metrics(val: &serde_json::Value) -> Result<Vec<BenchmarkMetric>> {
         }
     }
 
-    // 4. Object/map of benchmarks (e.g. php-judy / generic custom JSON: {"benchmarks": { "<name>": { "runs_ms": [...], "median_ms": ... } }})
+    // 4. Object/map of benchmarks (e.g. a custom JSON harness: {"benchmarks": { "<name>": { "runs_ms": [...], "median_ms": ... } }})
     if let Some(benchmarks_map) = val.get("benchmarks").and_then(|b| b.as_object()) {
         for (name, b) in benchmarks_map {
             let mut unit = "ms".to_string();
@@ -2177,7 +2177,7 @@ smoke_cost::set_contains
         let dir_unnamed = vec![ParsedDirective {
             directive: "allow-regression".to_string(),
             reason:
-                "coordination trade refs https://github.com/orieg/expanse/actions/runs/34490311084"
+                "coordination trade refs https://github.com/example-org/example-project/actions/runs/34490311084"
                     .to_string(),
             source: OverrideSource::PrBody,
             hidden: false,

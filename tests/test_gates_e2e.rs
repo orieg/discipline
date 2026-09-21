@@ -209,7 +209,7 @@ fn php_source_files_are_analysed_by_php_pack() {
 fn c_cpp_source_files_are_analysed_by_c_cpp_pack() {
     let repo = Repo::new();
     repo.write(
-        "crates/expanse-capi/smoke/modern_api_smoke.c",
+        "crates/example-capi/smoke/modern_api_smoke.c",
         "#include <assert.h>\nint main(void) { int v = 42; assert(v == 42); return 0; }\n",
     );
     repo.write(
@@ -232,8 +232,8 @@ fn c_cpp_source_files_are_analysed_by_c_cpp_pack() {
 fn csharp_source_files_are_analysed_by_csharp_pack() {
     let repo = Repo::new();
     repo.write(
-        "tests/ExpanseMapTests.cs",
-        "using Xunit;\npublic class ExpanseMapTests {\n    [Fact]\n    public void BasicCrud() { int val = 42; Assert.Equal(42, val); }\n}\n",
+        "tests/ExampleMapTests.cs",
+        "using Xunit;\npublic class ExampleMapTests {\n    [Fact]\n    public void BasicCrud() { int val = 42; Assert.Equal(42, val); }\n}\n",
     );
     repo.commit("feat: csharp tests");
     let run = repo.check(&[]);
@@ -251,8 +251,8 @@ fn csharp_source_files_are_analysed_by_csharp_pack() {
 fn ruby_source_files_are_analysed_by_ruby_pack() {
     let repo = Repo::new();
     repo.write(
-        "test/test_expanse.rb",
-        "class TestExpanse < Minitest::Test\n  def test_crud\n    val = 42\n    assert_equal 42, val\n  end\nend\n",
+        "test/test_example.rb",
+        "class TestExample < Minitest::Test\n  def test_crud\n    val = 42\n    assert_equal 42, val\n  end\nend\n",
     );
     repo.commit("feat: ruby tests");
     let run = repo.check(&[]);
@@ -958,7 +958,7 @@ fn time_estimates_contextual_exemptions_and_discrimination() {
     repo.write(
         "docs/good.md",
         r#"# System Architecture
-Expanse is a replacement for the 20-year-old C library.
+Example is a replacement for the 20-year-old C library.
 Invariants unchecked for 20 years (§6.5) hold.
 The 20-year invariants hold.
 Bug survived 19 years before discovery.
@@ -5112,7 +5112,7 @@ fn ignored_tests_distinguishes_arrives_ignored_from_no_longer_runs_and_honors_ap
 }
 
 #[test]
-fn vacuous_tests_precision_python_and_cpp_expanse_patterns() {
+fn vacuous_tests_precision_python_and_cpp_example_patterns() {
     let repo = Repo::new();
     repo.write(
         "tests/test_helpers.py",
@@ -5877,7 +5877,7 @@ strip_components = 1
         "base: configure archive-contents",
     );
 
-    let dist_archive = repo.path().join("dist/php-judy-2.6.0.tar.gz");
+    let dist_archive = repo.path().join("dist/example-ext-2.6.0.tar.gz");
 
     // Positive control: valid archive with required paths and no leaks
     create_test_archive_tgz(
@@ -6075,17 +6075,17 @@ enabled = true
 [[gates.version-lockstep.groups]]
 name = "judy-release"
 sources = [
-  { path = "php_judy.h", regex = '#define\s+PHP_JUDY_VERSION\s+"([^"]+)"' },
+  { path = "example_ext.h", regex = '#define\s+EXAMPLE_EXT_VERSION\s+"([^"]+)"' },
   { path = "package.xml", regex = '<release>\s*<version>\s*<release>([^<]+)</release>' },
 ]
 "#;
-    let header_v1 = "#define PHP_JUDY_VERSION \"2.6.0\"\n";
+    let header_v1 = "#define EXAMPLE_EXT_VERSION \"2.6.0\"\n";
     let manifest_v1 = "<release><version><release>2.6.0</release></version></release>\n";
 
     repo.commit_base_files(
         &[
             ("discipline.toml", config),
-            ("php_judy.h", header_v1),
+            ("example_ext.h", header_v1),
             ("package.xml", manifest_v1),
         ],
         "base: configure version-lockstep in sync",
@@ -6129,7 +6129,7 @@ sources = [
     );
 
     // Negative control 2: missing source file (fails closed with exit 2)
-    repo.git(&["rm", "-q", "php_judy.h"]);
+    repo.git(&["rm", "-q", "example_ext.h"]);
     repo.commit("chore: delete header");
     let run_missing = repo.check(&[]);
     assert_eq!(run_missing.code, 2);

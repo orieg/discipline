@@ -1236,9 +1236,9 @@ removes: tests/old.rs inside a fence
         assert_eq!(extract_citation("measured at commit 4c4e852"), None);
         assert_eq!(
             extract_citation(
-                "TLB win, run https://github.com/orieg/expanse/actions/runs/33325789949"
+                "TLB win, run https://github.com/example-org/example-project/actions/runs/33325789949"
             ),
-            Some("https://github.com/orieg/expanse/actions/runs/33325789949".to_string())
+            Some("https://github.com/example-org/example-project/actions/runs/33325789949".to_string())
         );
         assert_eq!(
             extract_citation("paired CI in results/baseline_vs_libjudy.json"),
@@ -1251,14 +1251,14 @@ removes: tests/old.rs inside a fence
             Some("docs/benchmarks/concurrency/results/fallback_maturity.json".to_string())
         );
 
-        let pr822 = "zero-sharing per-writer coordination under feature lock-padded (refs CI run https://github.com/orieg/expanse/actions/runs/34490311084)";
-        assert!(extract_citation(pr822).is_some());
+        let lock_padded_reason = "zero-sharing per-writer coordination under feature lock-padded (refs CI run https://github.com/example-org/example-project/actions/runs/34490311084)";
+        assert!(extract_citation(lock_padded_reason).is_some());
         let regressed = vec![
             "instructions::cost::sync_map_insert/random".to_string(),
             "instructions::cost::sync_set_insert/random".to_string(),
         ];
         assert_eq!(
-            unapproved_regressed_arms(pr822, &regressed),
+            unapproved_regressed_arms(lock_padded_reason, &regressed),
             vec![
                 "instructions::cost::sync_map_insert/random",
                 "instructions::cost::sync_set_insert/random"
