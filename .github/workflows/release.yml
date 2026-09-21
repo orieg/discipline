@@ -52,6 +52,10 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      - name: Generated docs, man pages and links are current
+        run: |
+          cargo run --locked --quiet -- docs --check
+          python3 tests/action/check-links.py
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories bans licenses sources
@@ -185,7 +189,6 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.verify.outputs.version }}
-          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY || '' }}
         run: |
           set -euo pipefail
           python3 scripts/update_homebrew_formula.py \
@@ -193,15 +196,7 @@ jobs:
             --checksums dist/SHA256SUMS \
             --formula-file packaging/homebrew/discipline.rb \
             --output dist/discipline.rb
-          if [ -n "${HOMEBREW_TAP_DEPLOY_KEY}" ]; then
-            python3 scripts/update_homebrew_formula.py \
-              --version "${VERSION}" \
-              --checksums dist/SHA256SUMS \
-              --push-to-tap orieg/homebrew-tap \
-              --deploy-key "${HOMEBREW_TAP_DEPLOY_KEY}"
-          else
-            echo "::notice::HOMEBREW_TAP_DEPLOY_KEY not configured; skipping automatic push to orieg/homebrew-tap"
-          fi
+          # The tap is updated by `promote`, after `smoke` has proven the release.
       - name: Create the GitHub release
         shell: bash
         env:
@@ -222,8 +217,8 @@ jobs:
           if [ "${PRERELEASE}" = "true" ]; then
             flags+=(--prerelease)
           fi
-          # Draft first: the release only becomes visible (and `latest`) once
-          # every asset is attached.
+          # Draft first: the release only becomes visible once every asset is
+          # attached. It becomes `latest` in `promote`, after `smoke` passes.
           if gh release view "${TAG}" >/dev/null 2>&1; then
             echo "Release ${TAG} already exists; updating notes and assets"
             gh release edit "${TAG}" --notes-file "${clean_notes}"
@@ -231,7 +226,7 @@ jobs:
             gh release create "${TAG}" --draft "${flags[@]}"
           fi
           gh release upload "${TAG}" dist/discipline-*.tar.gz dist/discipline_*.deb dist/discipline-*.rpm dist/discipline.rb dist/SHA256SUMS --clobber
-          gh release edit "${TAG}" --draft=false
+          gh release edit "${TAG}" --draft=false --latest=false
       - name: Prepare container image binaries
         shell: bash
         run: |
@@ -254,14 +249,11 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.7.0
         with:
           images: ghcr.io/${{ github.repository }}
+          # Exact tags only; the floating ones (`v0`, `0.7`, `latest`) move in
+          # `promote` once `smoke` has passed.
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
             type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
-            type=raw,value=latest,enable=${{ needs.verify.outputs.prerelease == 'false' }}
       - name: Build and push multi-arch OCI container image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.15.0
         with:
@@ -327,10 +319,71 @@ jobs:
             gh attestation verify "${f}" --repo "${GITHUB_REPOSITORY}"
           done
 
+  # Everything a floating reference resolves to moves here, after `smoke`:
+  # the `latest` release, the floating container tags and the Homebrew tap.
+  promote:
+    needs: [verify, smoke]
+    if: needs.verify.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Mark the release latest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --latest
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.10.0
+      - name: Move the floating container tags
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          major="${VERSION%%.*}"
+          minor="${VERSION%.*}"
+          # Re-tag the manifest `publish` pushed and `smoke` proved; nothing is rebuilt.
+          docker buildx imagetools create \
+            -t "${IMAGE}:${major}" -t "${IMAGE}:v${major}" \
+            -t "${IMAGE}:${minor}" -t "${IMAGE}:v${minor}" \
+            -t "${IMAGE}:latest" \
+            "${IMAGE}:v${VERSION}"
+      - name: Update the Homebrew tap
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_DEPLOY_KEY}" ]; then
+            echo "::notice::HOMEBREW_TAP_DEPLOY_KEY not configured; skipping automatic push to orieg/homebrew-tap"
+            exit 0
+          fi
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern SHA256SUMS --dir dist
+          python3 scripts/update_homebrew_formula.py \
+            --version "${VERSION}" \
+            --checksums dist/SHA256SUMS \
+            --push-to-tap orieg/homebrew-tap \
+            --deploy-key "${HOMEBREW_TAP_DEPLOY_KEY}"
+
   # `uses: orieg/discipline@v0` follows this tag. It moves last, and only for
   # stable releases, so the floating tag never points at an unproven release.
   move-major-tag:
-    needs: [verify, smoke]
+    needs: [verify, smoke, promote]
     if: needs.verify.outputs.prerelease == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 5

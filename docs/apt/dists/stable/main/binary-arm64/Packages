@@ -1,9 +1,0 @@
-Package: discipline
-Version: 0.3.0
-Architecture: arm64
-Maintainer: Discipline Contributors <https://github.com/orieg/discipline>
-Description: Universal CI/CD gatekeeper and AI coding agent diff sentinel
-Filename: pool/main/discipline_0.3.0_arm64.deb
-Size: 3168238
-SHA256: 8a749325232ce32cd98ff84f1d2cf40ad67bcd4c5ea8e3605dd61c1e1c2fa983
-

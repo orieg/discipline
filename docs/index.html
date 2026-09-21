@@ -1702,17 +1702,17 @@ discipline self-test</div>
       </div>
       <div class="install-card">
         <h4>Debian / Ubuntu (APT)</h4>
-        <div class="install-snippet">echo "deb [trusted=yes] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list && sudo apt update && sudo apt install -y discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Official APT repo for Debian 11+ and Ubuntu 20.04+. <a href="apt/" style="color: var(--accent);">Browse repo &rarr;</a></p>
+        <div class="install-snippet">curl -fsSL https://orieg.github.io/discipline/apt/discipline-archive-keyring.gpg | sudo tee /usr/share/keyrings/discipline-archive-keyring.gpg &gt;/dev/null && echo "deb [signed-by=/usr/share/keyrings/discipline-archive-keyring.gpg] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list && sudo apt update && sudo apt install -y discipline</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Signed APT repo for Debian 11+ and Ubuntu 20.04+. <a href="apt/" style="color: var(--accent);">Browse repo &rarr;</a></p>
       </div>
       <div class="install-card">
         <h4>Enterprise Linux / Fedora (RPM)</h4>
         <div class="install-snippet">sudo dnf config-manager --add-repo https://orieg.github.io/discipline/rpm/discipline.repo && sudo dnf install -y discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Official RPM repo for RHEL 8/9/10, Fedora, CentOS, Rocky, Alma. <a href="rpm/" style="color: var(--accent);">Browse repo &rarr;</a></p>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Signed RPM repo (repository metadata is GPG-verified) for RHEL 8/9/10, Fedora, CentOS, Rocky, Alma. <a href="rpm/" style="color: var(--accent);">Browse repo &rarr;</a></p>
       </div>
       <div class="install-card">
         <h4>Homebrew (macOS & Linux)</h4>
-        <div class="install-snippet">brew tap orieg/tap && brew install discipline</div>
+        <div class="install-snippet">brew install orieg/tap/discipline</div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Native formula for Apple Silicon, Intel macOS, and Linux.</p>
       </div>
       <div class="install-card">

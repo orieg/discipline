@@ -395,8 +395,9 @@ def build_apt_repo(
     <div class="card">
       <h2>Quick Setup</h2>
       <p style="color: var(--text-muted); margin-top: 0.5rem;">Add the official repository source to your system:</p>
-      <pre><code># 1. Add repository source
-echo "deb [trusted=yes] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
+      <pre><code># 1. Install the repository signing key and add the source
+curl -fsSL https://orieg.github.io/discipline/apt/discipline-archive-keyring.gpg | sudo tee /usr/share/keyrings/discipline-archive-keyring.gpg &gt;/dev/null
+echo "deb [signed-by=/usr/share/keyrings/discipline-archive-keyring.gpg] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
 
 # 2. Update apt cache and install discipline
 sudo apt-get update

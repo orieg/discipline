@@ -10,7 +10,9 @@ if [ "$#" -eq 0 ] || [ "${1#-}" != "$1" ]; then
     exec discipline "$@"
 elif [ "$1" = "discipline" ]; then
     exec "$@"
-elif [ "$1" = "check" ] || [ "$1" = "diff" ] || [ "$1" = "gates" ] || [ "$1" = "init" ] || [ "$1" = "schema" ] || [ "$1" = "self-test" ] || [ "$1" = "docs" ] || [ "$1" = "install-hooks" ]; then
+elif ! command -v "$1" >/dev/null 2>&1; then
+    # Not a program on PATH: a discipline subcommand (check, doctor, baseline, bench, ...).
+    # Deciding by exclusion keeps new subcommands working without editing this list.
     exec discipline "$@"
 else
     # Execute arbitrary shell commands (e.g. `sh -c '...'` for in-container pipelines)

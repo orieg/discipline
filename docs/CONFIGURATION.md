@@ -693,7 +693,8 @@ Discipline is available as a standalone static binary across Linux and macOS.
 - **Debian / Ubuntu (APT)**:
   ```bash
   sudo apt update && sudo apt install -y ca-certificates
-  echo "deb [trusted=yes] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
+  curl -fsSL https://orieg.github.io/discipline/apt/discipline-archive-keyring.gpg | sudo tee /usr/share/keyrings/discipline-archive-keyring.gpg >/dev/null
+  echo "deb [signed-by=/usr/share/keyrings/discipline-archive-keyring.gpg] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
   sudo apt update && sudo apt install -y discipline
   ```
 
@@ -706,7 +707,7 @@ Discipline is available as a standalone static binary across Linux and macOS.
 - **macOS (Homebrew & MacPorts)**:
   ```bash
   # Homebrew
-  brew tap orieg/tap && brew install discipline
+  brew install orieg/tap/discipline
 
   # MacPorts
   sudo port install discipline

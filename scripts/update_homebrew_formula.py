@@ -37,22 +37,21 @@ def parse_checksums(checksums_path: Path) -> dict[str, str]:
 
 def generate_formula(version: str, checksums: dict[str, str]) -> str:
     """Generate the Homebrew Formula Ruby content with release checksums."""
-    darwin_arm = checksums.get(
-        "discipline-aarch64-apple-darwin.tar.gz",
-        "0000000000000000000000000000000000000000000000000000000000000000",
-    )
-    darwin_intel = checksums.get(
-        "discipline-x86_64-apple-darwin.tar.gz",
-        "0000000000000000000000000000000000000000000000000000000000000000",
-    )
-    linux_arm = checksums.get(
-        "discipline-aarch64-unknown-linux-musl.tar.gz",
-        "0000000000000000000000000000000000000000000000000000000000000000",
-    )
-    linux_intel = checksums.get(
-        "discipline-x86_64-unknown-linux-musl.tar.gz",
-        "0000000000000000000000000000000000000000000000000000000000000000",
-    )
+    # A missing archive is an error, never a placeholder checksum: a formula with a
+    # zero digest would install nothing on that platform, silently.
+    archives = {
+        "darwin_arm": "discipline-aarch64-apple-darwin.tar.gz",
+        "darwin_intel": "discipline-x86_64-apple-darwin.tar.gz",
+        "linux_arm": "discipline-aarch64-unknown-linux-musl.tar.gz",
+        "linux_intel": "discipline-x86_64-unknown-linux-musl.tar.gz",
+    }
+    missing = [name for name in archives.values() if name not in checksums]
+    if missing:
+        raise SystemExit(f"error: SHA256SUMS has no entry for {', '.join(missing)}")
+    darwin_arm = checksums[archives["darwin_arm"]]
+    darwin_intel = checksums[archives["darwin_intel"]]
+    linux_arm = checksums[archives["linux_arm"]]
+    linux_intel = checksums[archives["linux_intel"]]
 
     return f"""# typed: false
 # frozen_string_literal: true

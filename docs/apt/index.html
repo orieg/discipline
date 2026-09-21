@@ -395,7 +395,7 @@
         <li><a href="../apt/" class="active">APT</a></li>
         <li><a href="../rpm/">RPM</a></li>
         <li><a href="https://github.com/orieg/discipline/blob/main/docs/ARCHITECTURE.md">Docs</a></li>
-        <li><a href="https://github.com/orieg/discipline" class="nav-pill">GitHub &bull; v0.3.0</a></li>
+        <li><a href="https://github.com/orieg/discipline" class="nav-pill">GitHub &bull; v0.7.0</a></li>
       </ul>
       <button class="theme-toggle theme-toggle-desktop" type="button" onclick="toggleTheme()" aria-label="Toggle color theme" title="Toggle color theme">
         <span class="theme-icon-system" aria-hidden="true">&#9681;</span>
@@ -407,14 +407,15 @@
 
   <main>
   <div class="container">
-    <h1>Discipline APT Repository <span class="badge">v0.3.0</span></h1>
+    <h1>Discipline APT Repository <span class="badge">v0.7.0</span></h1>
     <p style="color: var(--text-muted);">Official Debian and Ubuntu package repository for <strong><a href="https://github.com/orieg/discipline">Discipline</a></strong> &mdash; universal CI/CD diff sentinel and AI coding agent gatekeeper.</p>
 
     <div class="card">
       <h2>Quick Setup</h2>
       <p style="color: var(--text-muted); margin-top: 0.5rem;">Add the official repository source to your system:</p>
-      <pre><code># 1. Add repository source
-echo "deb [trusted=yes] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
+      <pre><code># 1. Install the repository signing key and add the source
+curl -fsSL https://orieg.github.io/discipline/apt/discipline-archive-keyring.gpg | sudo tee /usr/share/keyrings/discipline-archive-keyring.gpg &gt;/dev/null
+echo "deb [signed-by=/usr/share/keyrings/discipline-archive-keyring.gpg] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
 
 # 2. Update apt cache and install discipline
 sudo apt-get update
@@ -436,12 +437,12 @@ sudo apt-get install -y discipline</code></pre>
             <tr>
               <td><strong>discipline</strong></td>
               <td><code>amd64</code></td>
-              <td><a href="pool/main/discipline_0.3.0_amd64.deb">discipline_0.3.0_amd64.deb</a></td>
+              <td><a href="pool/main/discipline_0.7.0_amd64.deb">discipline_0.7.0_amd64.deb</a></td>
             </tr>
             <tr>
               <td><strong>discipline</strong></td>
               <td><code>arm64</code></td>
-              <td><a href="pool/main/discipline_0.3.0_arm64.deb">discipline_0.3.0_arm64.deb</a></td>
+              <td><a href="pool/main/discipline_0.7.0_arm64.deb">discipline_0.7.0_arm64.deb</a></td>
             </tr>
           </tbody>
         </table>

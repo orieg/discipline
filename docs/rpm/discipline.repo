@@ -2,5 +2,7 @@
 name=Discipline Enterprise Linux Repository
 baseurl=https://orieg.github.io/discipline/rpm/
 enabled=1
+# The repository metadata is signed; it pins every package's SHA-256.
+repo_gpgcheck=1
 gpgcheck=0
-repo_gpgcheck=0
+gpgkey=https://orieg.github.io/discipline/rpm/RPM-GPG-KEY-discipline

@@ -186,8 +186,10 @@ def build_rpm_repo(
 name=Discipline Enterprise Linux Repository
 baseurl=https://orieg.github.io/discipline/rpm/
 enabled=1
+# The repository metadata is signed; it pins every package's SHA-256.
+repo_gpgcheck=1
 gpgcheck=0
-repo_gpgcheck=0
+gpgkey=https://orieg.github.io/discipline/rpm/RPM-GPG-KEY-discipline
 """
     with open(os.path.join(output_dir, "discipline.repo"), "w", encoding="utf-8") as f:
         f.write(repo_file_content)

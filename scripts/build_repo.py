@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import subprocess
 import sys
 
 # Ensure local scripts directory is in sys.path
@@ -36,7 +37,19 @@ def main():
         default=None,
         help="Package version string (defaults to Cargo.toml version).",
     )
+    parser.add_argument(
+        "--sign-key",
+        default=None,
+        help="GPG key id that signs the APT Release file and the RPM repomd.xml. Required unless --unsigned.",
+    )
+    parser.add_argument(
+        "--unsigned",
+        action="store_true",
+        help="Build without signatures (local previews only; never publish an unsigned repository).",
+    )
     args = parser.parse_args()
+    if not args.sign_key and not args.unsigned:
+        sys.exit("error: pass --sign-key KEYID (or --unsigned for a local preview)")
 
     ver = args.version or get_default_version()
     apt_out = os.path.join(args.docs_dir, "apt")
@@ -48,7 +61,33 @@ def main():
     print(f"Building Discipline RPM repository (v{ver}) into {rpm_out}...")
     build_rpm_repo(args.artifacts_dir, rpm_out, allow_empty=args.allow_empty, version=ver)
 
+    if args.sign_key:
+        sign_repositories(apt_out, rpm_out, args.sign_key)
+
     print("All package repositories successfully generated.")
+
+
+def gpg(*argv: str) -> None:
+    subprocess.run(["gpg", "--batch", "--yes", *argv], check=True)
+
+
+def sign_repositories(apt_out: str, rpm_out: str, key: str) -> None:
+    """Sign the APT Release file and the RPM repomd.xml, and publish the public key."""
+    release = os.path.join(apt_out, "dists", "stable", "Release")
+    if not os.path.exists(release):
+        sys.exit(f"error: {release} is missing; nothing to sign")
+    gpg("--local-user", key, "--clearsign", "--output", os.path.join(os.path.dirname(release), "InRelease"), release)
+    gpg("--local-user", key, "--armor", "--detach-sign", "--output", release + ".gpg", release)
+    with open(os.path.join(apt_out, "discipline-archive-keyring.gpg"), "wb") as f:
+        f.write(subprocess.run(["gpg", "--batch", "--export", key], check=True, capture_output=True).stdout)
+
+    repomd = os.path.join(rpm_out, "repodata", "repomd.xml")
+    if not os.path.exists(repomd):
+        sys.exit(f"error: {repomd} is missing; nothing to sign")
+    gpg("--local-user", key, "--armor", "--detach-sign", "--output", repomd + ".asc", repomd)
+    with open(os.path.join(rpm_out, "RPM-GPG-KEY-discipline"), "wb") as f:
+        f.write(subprocess.run(["gpg", "--batch", "--armor", "--export", key], check=True, capture_output=True).stdout)
+    print(f"Signed APT Release and RPM repomd.xml with {key}")
 
 
 if __name__ == "__main__":

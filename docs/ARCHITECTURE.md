@@ -321,10 +321,15 @@ Third-party GitHub Actions are pinned by full commit SHA. Tooling binaries (`act
 Releases are triggered exclusively by pushing a `vX.Y.Z` tag:
 1. **Verify:** Asserts tag matches `Cargo.toml` version, tagged commit resides on `main`, and tests/lints/deny pass.
 2. **Build:** Compiles 4 static release targets (`x86_64-musl`, `aarch64-musl`, `x86_64-darwin`, `aarch64-darwin`); executes `self-test` on each.
-3. **Publish:** Generates `SHA256SUMS`, attaches build-provenance attestations, creates GitHub release.
+3. **Publish:** Generates `SHA256SUMS`, attaches build-provenance attestations, creates the GitHub release (not yet `latest`), and pushes the container image under its exact tags (`0.7.0`, `v0.7.0`) only.
 4. **Smoke test:** Action downloads published release assets on Linux and macOS, validates checksums, tests clean and negative fixtures, and verifies GitHub attestations.
-5. **Move major tag:** Advances floating major version tag (`v0`) only after all smoke tests succeed.
-6. **Post-release guard:** Verifies via `tests/action/check-major-tag.sh` that the major tag dereferences to the release commit.
+5. **Promote:** Only after every smoke test succeeds: marks the release `latest`, re-tags the proven image manifest as `v0`, `0`, `v0.7`, `0.7` and `latest` (no rebuild), and updates the Homebrew tap.
+6. **Move major tag:** Advances floating major version tag (`v0`) last. A workflow using `@v0` runs the binary of the version in that tag's `Cargo.toml`, never `latest`, so the action code and the binary always come from the same release.
+7. **Post-release guard:** Verifies via `tests/action/check-major-tag.sh` that the major tag dereferences to the release commit.
+
+### 8.2.1 Documentation Site and Package Repositories (`.github/workflows/pages.yml`)
+
+The site is built from `docs/` and deployed through GitHub Pages' Actions source. The APT and RPM repositories are assembled at deploy time from the latest stable release's `.deb` and `.rpm` assets (checked against its `SHA256SUMS`) and signed with the `REPO_SIGNING_KEY` secret: an APT `InRelease` / `Release.gpg` and an RPM `repomd.xml.asc`, with the public keys published as `apt/discipline-archive-keyring.gpg` and `rpm/RPM-GPG-KEY-discipline`. No package or repository metadata is committed. Without the key the workflow fails rather than publish an unsigned repository. It runs on every docs change and on each published release.
 
 #### Major Tag Floating Pointer Invariant
 Major tags (`v0`, `v1`) provide consumer convenience for action workflows (`uses: orieg/discipline@v0`). The release workflow contract mandates that **major tags are moved exclusively by the release pipeline (`release.yml`) after all smoke tests pass against published release assets**. Moving floating major tags manually or out-of-band bypasses compilation, static linkage verification, attestation generation, and smoke tests, which defeats the security guarantees of the sentinel. To prevent silent tag drift, two automated sentinels enforce this invariant:

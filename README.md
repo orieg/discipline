@@ -165,8 +165,9 @@ bash install.sh --to ~/.local/bin --version v0.6.0
 Add the official APT repository and install via `apt`:
 
 ```bash
-# 1. Add repository source
-echo "deb [trusted=yes] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
+# 1. Install the repository signing key and add the source
+curl -fsSL https://orieg.github.io/discipline/apt/discipline-archive-keyring.gpg | sudo tee /usr/share/keyrings/discipline-archive-keyring.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/discipline-archive-keyring.gpg] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list
 
 # 2. Update package cache and install
 sudo apt update
@@ -193,12 +194,7 @@ Direct `.rpm` package downloads and repodata manifests: [Discipline RPM Reposito
 
 - **Homebrew**:
   ```bash
-  # Single-command install:
   brew install orieg/tap/discipline
-
-  # Or tap first:
-  brew tap orieg/tap
-  brew install discipline
   ```
 - **MacPorts**:
   ```bash
