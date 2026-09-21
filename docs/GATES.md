@@ -249,7 +249,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - Conditional runtime early-returns (`if condition { return; }`).
   - Dynamic test framework skips invoked within function bodies (`pytest.skip(...)`).
-  - Commented-out test functions (covered by `suppression-delta`).
+  - Commented-out test functions in languages other than Rust (the Rust pack reports them here).
 - **Lifting directive:** `allow-ignore: <test-name> <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `approved_predicates`.
 
@@ -336,10 +336,10 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `allowed_paths`, `forbidden_paths`.
 
 #### `suppression-delta`
-- **Rule:** Rejects net increases in compiler, linter, or type checker suppression annotations (`#[allow]`, `#[expect]`, `@ts-ignore`, `@ts-expect-error`, `/* eslint-disable */`, `# noqa`, `// nolint`, `#pragma warning disable`) across tracked source files unless explicitly authorized.
-- **Languages:** Rust, Python, TypeScript, JavaScript, Go, C/C++, C#.
+- **Rule:** Rejects net increases in compiler, linter, or type checker suppression annotations unless explicitly authorized. The sites come from the language packs (`ParsedFileFacts::escape_hatches`), so a marker inside a string literal or an ordinary comment is not one. The count is a delta: each changed file's head side is compared with its base side, and a site that merely moved, or that was already there as often, is not new.
+- **Languages:** every language pack: Rust (`#[allow]`, `#[expect]`, inner forms), Python (`# noqa`, `# type: ignore`, `# pylint: disable`, `# pragma: no cover`), JS/TS (`@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `eslint-disable*`), Java (`@SuppressWarnings` as an annotation), Go (`//nolint`, `//lint:ignore`, `revive:disable`), C/C++ (`NOLINT*`), C# (`#pragma warning disable`, `[SuppressMessage]`), PHP (`@psalm-suppress`, `@phpstan-ignore`, `phpcs:ignore`), Ruby (`rubocop:disable` / `rubocop:todo`).
 - **What it catches:**
-  - Newly added suppression annotations that silence linter or compiler warnings.
+  - A suppression site on the head side that the base side does not have: added, or the same rule repeated once more.
 - **Failing diff (rejected):**
   ```rust
   + #[allow(dead_code, clippy::all)]
@@ -350,10 +350,10 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   allow-suppression: unavoidable legacy FFI bindings in wrapper module
   ```
 - **What it does NOT catch:**
-  - Pre-existing suppression annotations present on the base ref.
+  - Pre-existing suppression annotations present on the base ref, including one that moved to another line.
+  - A suppression widened in place (`#[allow(dead_code)]` to `#[allow(dead_code, unused)]`): the reworded site counts as one new site, named by its new text.
   - Commented-out or `#[cfg]`-gated tests. The Rust pack detects those and reports them through `ignored-tests`; no other pack does.
-  - A suppression moved or reworded on an existing line: the gate reads added lines, not a base-versus-head count.
-  - Suppressions inside explicitly exempted file paths.
+  - Suppressions inside explicitly exempted file paths, and files whose head side does not parse (named in the notes; a base side that does not parse makes every head-side site count as new).
 - **Lifting directive:** `allow-suppression: <reason>`.
 - **Default:** on, severity `warning` (see [Default Severity by Gate](#default-severity-by-gate)).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `max_increase`, `allowed_suppressions`.

@@ -2016,6 +2016,66 @@ fn toolchain_config_reports_a_lowered_bar_and_lifts_it_by_key_or_path() {
     );
 }
 
+#[test]
+fn suppression_delta_is_a_delta_read_from_the_syntax_tree() {
+    // A suppression that moves within a file, or sits inside a string, is not new.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/lib.rs",
+        "#[allow(dead_code)]\nfn old() {}\n\npub fn keep() -> u8 { 1 }\n",
+    );
+    repo.commit("chore: lib");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "src/lib.rs",
+        "pub fn keep() -> u8 { 1 }\n\npub fn note() -> &'static str { \"#[allow(dead_code)] is banned here\" }\n\n#[allow(dead_code)]\nfn old() {}\n",
+    );
+    repo.commit("refactor: reorder");
+    let run = repo.check(SUPPRESSION_BLOCKING);
+    assert!(
+        run.titles("suppression-delta").is_empty(),
+        "{:?}",
+        run.violations("suppression-delta")
+    );
+    assert_eq!(run.outcome("suppression-delta")["examined"], 1);
+
+    // A second copy of the same suppression is new; the count is a multiset.
+    repo.write(
+        "src/lib.rs",
+        "#[allow(dead_code)]\nfn old() {}\n#[allow(dead_code)]\nfn older() {}\npub fn keep() -> u8 { 1 }\n",
+    );
+    repo.commit("refactor: park another");
+    let run = repo.check(SUPPRESSION_BLOCKING);
+    assert_eq!(run.violations("suppression-delta").len(), 1);
+    assert_eq!(run.violations("suppression-delta")[0]["line"], 3);
+
+    // Java's @SuppressWarnings is an annotation, not a comment; Go's lint:ignore and
+    // TypeScript's @ts-nocheck are read too.
+    let repo = Repo::new();
+    repo.write(
+        "src/main/java/A.java",
+        "public class A {\n  @SuppressWarnings(\"unchecked\")\n  void f() {}\n}\n",
+    );
+    repo.write(
+        "pkg/a.go",
+        "package a\n\n//lint:ignore SA1019 legacy\nfunc F() {}\n",
+    );
+    repo.write("web/a.ts", "// @ts-nocheck\nexport const a = 1;\n");
+    repo.commit("chore: three suppressions");
+    let run = repo.check(SUPPRESSION_BLOCKING);
+    let files: Vec<String> = run
+        .violations("suppression-delta")
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(files, vec!["pkg/a.go", "src/main/java/A.java", "web/a.ts"]);
+    // Naming the annotation's rule lifts it.
+    repo.commit("chore: explain\n\nallow-suppression: unchecked raw generics from the vendor SDK");
+    let lifted = repo.check(SUPPRESSION_BLOCKING);
+    assert_eq!(lifted.violations("suppression-delta").len(), 2);
+}
+
 // ---- override policy -------------------------------------------------------
 
 /// A change that disables two gates and excuses both from its commit body.

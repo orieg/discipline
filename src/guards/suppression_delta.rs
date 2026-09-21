@@ -1,108 +1,125 @@
 //! Suppression delta sentinel (`suppression-delta`).
 //!
-//! Prevents quality degradation from agents introducing new compiler, type checker,
-//! or linter suppression attributes (e.g. `#[allow]`, `@ts-ignore`, `# noqa`).
+//! A change must not add compiler, type-checker or linter suppressions (`#[allow]`,
+//! `@ts-ignore`, `# noqa`, `NOLINT`, `@SuppressWarnings`, ...) without saying why.
+//!
+//! The sites come from the language packs (`ParsedFileFacts::escape_hatches`), so a
+//! marker inside a string or an ordinary comment is not one, and the count is a delta:
+//! the head side of each changed file is compared with its base side, and a site that
+//! merely moved is not new. `unsafe` sites are left to `unsafe-safety-comment` and
+//! `unsafe-budget`.
 
-use crate::ast::{language_for, Language};
+use crate::ast::{default_registry, AssertVocabulary, EscapeHatchSite};
 use crate::guards::{line_allows, Context, GateOutcome};
 use crate::tokens::ALLOW_SUPPRESSION;
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
-use std::fs;
+use std::collections::HashMap;
 
 pub const GATE: &str = "suppression-delta";
 
-fn matches_language(lang: Language, pattern_lang: &str) -> bool {
-    matches!(
-        (lang, pattern_lang),
-        (Language::Rust, "rust")
-            | (Language::Python, "python")
-            | (
-                Language::JavaScript | Language::TypeScript,
-                "javascript" | "typescript"
-            )
-            | (Language::C | Language::Cpp, "c/c++")
-            | (Language::Go, "go")
-            | (Language::CSharp, "c#")
-    )
+/// A suppression site as this gate sees it: what kind, which rule, and the text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Site {
+    pub line: usize,
+    /// `type-ignore` or `linter-disable`.
+    pub kind: &'static str,
+    pub rule: String,
+    pub snippet: String,
 }
 
-fn line_matches_suppression(lang: Language, trimmed: &str, pattern: &str) -> bool {
-    match lang {
-        Language::Rust => {
-            (trimmed.starts_with("#[allow(")
-                || trimmed.starts_with("#![allow(")
-                || trimmed.starts_with("#[expect(")
-                || trimmed.starts_with("#![expect("))
-                && trimmed.contains(pattern)
-        }
-        _ => trimmed.contains(pattern),
+impl Site {
+    /// Identity across a move: kind, rule and whitespace-normalised text, not the line.
+    fn signature(&self) -> (&'static str, String, String) {
+        (
+            self.kind,
+            self.rule.trim().to_string(),
+            self.snippet
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
     }
 }
 
-struct SuppressionPattern {
-    pattern: &'static str,
-    language: &'static str,
+pub fn sites_of(hatches: &[EscapeHatchSite]) -> Vec<Site> {
+    hatches
+        .iter()
+        .filter_map(|h| match h {
+            EscapeHatchSite::TypeIgnore {
+                line,
+                tool,
+                snippet,
+            } => Some(Site {
+                line: *line,
+                kind: "type-ignore",
+                rule: tool.clone(),
+                snippet: snippet.clone(),
+            }),
+            EscapeHatchSite::LinterDisable {
+                line,
+                rule,
+                snippet,
+            } => Some(Site {
+                line: *line,
+                kind: "linter-disable",
+                rule: rule.clone(),
+                snippet: snippet.clone(),
+            }),
+            EscapeHatchSite::UnsafeBlock { .. } => None,
+        })
+        .collect()
 }
 
-static SUPPRESSION_PATTERNS: &[SuppressionPattern] = &[
-    SuppressionPattern {
-        pattern: "#[allow(",
-        language: "rust",
-    },
-    SuppressionPattern {
-        pattern: "#[expect(",
-        language: "rust",
-    },
-    SuppressionPattern {
-        pattern: "# noqa",
-        language: "python",
-    },
-    SuppressionPattern {
-        pattern: "# type: ignore",
-        language: "python",
-    },
-    SuppressionPattern {
-        pattern: "# pylint: disable",
-        language: "python",
-    },
-    SuppressionPattern {
-        pattern: "// @ts-ignore",
-        language: "typescript",
-    },
-    SuppressionPattern {
-        pattern: "// @ts-nocheck",
-        language: "typescript",
-    },
-    SuppressionPattern {
-        pattern: "/* eslint-disable",
-        language: "javascript",
-    },
-    SuppressionPattern {
-        pattern: "// eslint-disable-next-line",
-        language: "javascript",
-    },
-    SuppressionPattern {
-        pattern: "// NOLINT",
-        language: "c/c++",
-    },
-    SuppressionPattern {
-        pattern: "// NOLINTNEXTLINE",
-        language: "c/c++",
-    },
-    SuppressionPattern {
-        pattern: "//nolint",
-        language: "go",
-    },
-    SuppressionPattern {
-        pattern: "//lint:ignore",
-        language: "go",
-    },
-    SuppressionPattern {
-        pattern: "#pragma warning disable",
-        language: "c#",
-    },
-];
+/// Sites on the head side that the base side does not have (as a multiset). A site the
+/// base had at another line, or the same site repeated as often as before, is not new.
+pub fn new_sites(base: &[Site], head: &[Site]) -> Vec<Site> {
+    let mut budget: HashMap<_, usize> = HashMap::new();
+    for s in base {
+        *budget.entry(s.signature()).or_default() += 1;
+    }
+    let mut new = Vec::new();
+    for s in head {
+        match budget.get_mut(&s.signature()) {
+            Some(n) if *n > 0 => *n -= 1,
+            _ => new.push(s.clone()),
+        }
+    }
+    new
+}
+
+/// The pattern name `extract_suppression_rules` keys on, from the site's text.
+fn pattern_of(site: &Site) -> String {
+    let t = site.snippet.trim();
+    let starts = |p: &str| t.starts_with(p);
+    if starts("#[allow(") || starts("#![allow(") {
+        "#[allow(".into()
+    } else if starts("#[expect(") || starts("#![expect(") {
+        "#[expect(".into()
+    } else if t.contains("# noqa") {
+        "# noqa".into()
+    } else if t.contains("type: ignore") {
+        "# type: ignore".into()
+    } else if t.contains("pylint: disable") {
+        "# pylint: disable".into()
+    } else if t.contains("@ts-nocheck") {
+        "// @ts-nocheck".into()
+    } else if t.contains("@ts-expect-error") {
+        "// @ts-expect-error".into()
+    } else if t.contains("@ts-ignore") {
+        "// @ts-ignore".into()
+    } else if t.contains("eslint-disable") {
+        "eslint-disable".into()
+    } else if t.contains("NOLINT") {
+        "// NOLINT".into()
+    } else if t.contains("nolint") || t.contains("lint:ignore") {
+        "//nolint".into()
+    } else if t.contains("pragma warning disable") {
+        "#pragma warning disable".into()
+    } else {
+        site.rule.clone()
+    }
+}
 
 pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.suppression_delta;
@@ -128,82 +145,84 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
         .build()
         .unwrap_or_else(|_| GlobSetBuilder::new().build().unwrap());
 
-    let root = ctx.git.root();
-    let mut detected_suppressions: Vec<(String, usize, &'static str, String, String)> = Vec::new();
-    let mut total_added_lines = 0;
+    let registry = default_registry();
+    let vocab = AssertVocabulary::default();
+    // (path, site, pattern name)
+    let mut detected: Vec<(String, Site, String)> = Vec::new();
 
     for file in &changed {
         if file.is_deleted() || exempt_set.is_match(&file.path) {
             continue;
         }
-
-        let Some(lang) = language_for(&file.path) else {
+        let Some(pack) = registry.find_pack(&file.path) else {
             continue;
         };
-
-        let full_path = root.join(&file.path);
-        if !full_path.is_file() {
+        let Some(head_src) = ctx.git.head_content(&file.path)? else {
             continue;
-        }
-
-        let content = match fs::read_to_string(&full_path) {
-            Ok(c) => c,
-            Err(_) => continue, // binary or unreadable file
         };
-
-        for (lineno, line) in content.lines().enumerate() {
-            let line_idx = lineno + 1;
-            // Only inspect newly added lines in the diff
-            if !file.added_lines.contains(&line_idx) {
+        let head_facts = match pack.extract(&file.path, &head_src, &vocab) {
+            Ok(f) => f,
+            Err(e) => {
+                out.notes.push(format!(
+                    "`{}`: not analysed, the head side does not parse ({e})",
+                    file.path
+                ));
                 continue;
             }
-            total_added_lines += 1;
+        };
+        let base_sites = match ctx.git.base_content(&file.old_path)? {
+            Some(base_src) => match pack.extract(&file.old_path, &base_src, &vocab) {
+                Ok(f) => sites_of(&f.escape_hatches),
+                Err(_) => {
+                    out.notes.push(format!(
+                        "`{}`: the base side does not parse; every head-side suppression is judged as new",
+                        file.path
+                    ));
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
+        let head_sites = sites_of(&head_facts.escape_hatches);
+        out.examined += head_sites.len();
 
-            if line_allows(line, GATE) {
+        for site in new_sites(&base_sites, &head_sites) {
+            let line_text = head_src
+                .lines()
+                .nth(site.line.saturating_sub(1))
+                .unwrap_or("");
+            if line_allows(line_text, GATE) {
                 out.overrides.push(crate::tokens::OverrideRecord {
                     gate: GATE.to_string(),
-                    subject: format!("{}:{line_idx}", file.path),
+                    subject: format!("{}:{}", file.path, site.line),
                     directive: format!("discipline:allow({GATE})"),
                     reason: "inline exemption marker".to_string(),
                     source: crate::tokens::OverrideSource::Inline {
                         file: file.path.clone(),
-                        line: line_idx,
+                        line: site.line,
                     },
                     hidden: true,
                 });
                 continue;
             }
-
-            let trimmed = line.trim();
-            for sp in SUPPRESSION_PATTERNS {
-                if !matches_language(lang, sp.language) {
-                    continue;
-                }
-                if line_matches_suppression(lang, trimmed, sp.pattern) {
-                    // Check if specifically allowed by configuration
-                    let is_allowed = settings
-                        .allowed_suppressions
-                        .iter()
-                        .any(|a| trimmed.contains(a));
-                    if !is_allowed {
-                        detected_suppressions.push((
-                            file.path.clone(),
-                            line_idx,
-                            sp.language,
-                            sp.pattern.to_string(),
-                            line.trim().to_string(),
-                        ));
-                    }
-                }
+            if settings
+                .allowed_suppressions
+                .iter()
+                .any(|a| site.snippet.contains(a.as_str()))
+            {
+                continue;
             }
+            let pat = pattern_of(&site);
+            detected.push((file.path.clone(), site, pat));
         }
     }
 
-    out.examined = total_added_lines;
-
     let mut unwaived = Vec::new();
-    for (path, lno, lang, pat, snippet) in &detected_suppressions {
-        let mut candidate_subjects = extract_suppression_rules(snippet, pat);
+    for (path, site, pat) in &detected {
+        let mut candidate_subjects = extract_suppression_rules(&site.snippet, pat);
+        if !site.rule.is_empty() {
+            candidate_subjects.push(site.rule.clone());
+        }
         candidate_subjects.push(path.clone());
         if let Some(file_name) = path.rsplit('/').next() {
             if file_name != path {
@@ -223,23 +242,23 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
             out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` for suppression `{}` in `{}:{}` ({})",
-                ov.directive, ov.reason, matched_subj, path, lno, ov.source
+                ov.directive, ov.reason, matched_subj, path, site.line, ov.source
             ));
         } else {
-            unwaived.push((path, lno, lang, pat, snippet));
+            unwaived.push((path, site, pat));
         }
     }
 
     if unwaived.len() > settings.max_increase {
-        for (path, lno, lang, pat, snippet) in &unwaived {
+        for (path, site, pat) in &unwaived {
             out.add_violation(
                 ctx.overridable(settings.severity),
                 path,
-                **lno,
-                format!("new {lang} suppression `{pat}` introduced without override"),
+                site.line,
+                format!("new {} suppression `{pat}` introduced without override", site.kind),
                 format!(
                     "line contains suppression annotation `{}`: `{}`; use `discipline:allow(suppression-delta): <rule-or-path> <reason>` to waive",
-                    pat, snippet
+                    pat, site.snippet
                 ),
             );
         }
@@ -381,6 +400,25 @@ mod tests {
         // escape hatches, so the population in an unknown repository is high.
         assert_eq!(gate.severity, Severity::Warning);
         assert_eq!(gate.max_increase, 0);
+    }
+
+    #[test]
+    fn a_moved_or_repeated_site_is_not_new_and_an_added_one_is() {
+        use super::{new_sites, Site};
+        let site = |line: usize, rule: &str| Site {
+            line,
+            kind: "linter-disable",
+            rule: rule.into(),
+            snippet: format!("#[allow({rule})]"),
+        };
+        let base = vec![site(3, "dead_code"), site(9, "unused")];
+        let moved = vec![site(30, "unused"), site(12, "dead_code")];
+        assert!(new_sites(&base, &moved).is_empty());
+        let grown = vec![site(3, "dead_code"), site(9, "unused"), site(20, "unused")];
+        assert_eq!(new_sites(&base, &grown), vec![site(20, "unused")]);
+        let swapped = vec![site(3, "dead_code"), site(9, "clippy::all")];
+        assert_eq!(new_sites(&base, &swapped), vec![site(9, "clippy::all")]);
+        assert_eq!(new_sites(&[], &base).len(), 2);
     }
 
     #[test]

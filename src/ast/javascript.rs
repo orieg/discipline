@@ -174,7 +174,10 @@ impl<'a> JsExtractor<'a> {
                 .trim_end_matches("*/")
                 .trim();
 
-            if trimmed.starts_with("@ts-ignore") || trimmed.starts_with("@ts-expect-error") {
+            if trimmed.starts_with("@ts-ignore")
+                || trimmed.starts_with("@ts-expect-error")
+                || trimmed.starts_with("@ts-nocheck")
+            {
                 self.facts.escape_hatches.push(EscapeHatchSite::TypeIgnore {
                     line,
                     tool: "typescript".to_string(),

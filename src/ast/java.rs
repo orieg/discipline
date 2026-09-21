@@ -85,6 +85,32 @@ impl<'a> JavaExtractor<'a> {
 
     fn collect_comments_and_escape_hatches(&mut self, node: Node) {
         let kind = node.kind();
+        if kind == "annotation" || kind == "marker_annotation" {
+            let name = node
+                .child_by_field_name("name")
+                .map(|n| self.text(n))
+                .unwrap_or("");
+            if name == "SuppressWarnings" {
+                let rule = node
+                    .child_by_field_name("arguments")
+                    .map(|a| {
+                        self.text(a)
+                            .trim_matches(['(', ')'])
+                            .trim()
+                            .trim_matches('"')
+                            .to_string()
+                    })
+                    .unwrap_or_else(|| "all".to_string());
+                self.facts
+                    .escape_hatches
+                    .push(EscapeHatchSite::LinterDisable {
+                        line: node.start_position().row + 1,
+                        rule,
+                        snippet: self.text(node).to_string(),
+                    });
+            }
+            return;
+        }
         if kind == "line_comment" || kind == "block_comment" {
             let text = self.text(node);
             let line = node.start_position().row + 1;

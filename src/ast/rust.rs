@@ -110,6 +110,25 @@ impl<'a> Extractor<'a> {
 
     fn visit(&mut self, node: Node, mods: &mut Vec<String>) {
         match node.kind() {
+            "attribute_item" | "inner_attribute_item" => {
+                let text = self.text(node);
+                let name = attribute_name(text);
+                if name == "allow" || name == "expect" {
+                    let rule = text
+                        .split_once('(')
+                        .map(|(_, r)| r.trim_end_matches(']').trim_end_matches(')').trim())
+                        .unwrap_or("")
+                        .to_string();
+                    self.facts
+                        .escape_hatches
+                        .push(EscapeHatchSite::LinterDisable {
+                            line: node.start_position().row + 1,
+                            rule,
+                            snippet: text.trim().to_string(),
+                        });
+                }
+                return;
+            }
             "mod_item" => {
                 let name = node
                     .child_by_field_name("name")

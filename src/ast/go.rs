@@ -102,7 +102,10 @@ impl<'a> GoExtractor<'a> {
                 .trim_end_matches("*/")
                 .trim();
 
-            if trimmed.starts_with("nolint") || trimmed.starts_with("revive:disable") {
+            if trimmed.starts_with("nolint")
+                || trimmed.starts_with("lint:ignore")
+                || trimmed.starts_with("revive:disable")
+            {
                 self.facts
                     .escape_hatches
                     .push(EscapeHatchSite::LinterDisable {

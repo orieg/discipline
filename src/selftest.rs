@@ -274,6 +274,20 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "suppression-delta: a moved suppression is not new, an added one is",
+        || {
+            use crate::guards::suppression_delta::new_sites;
+            let v = AssertVocabulary::default();
+            let facts = |src: &str| analyze(src, &v).map(|f| f.escape_hatches);
+            let base = facts("#[allow(dead_code)]\nfn a() {}\nfn b() {}\n")?;
+            let moved = facts("fn b() {}\n#[allow(dead_code)]\nfn a() {}\n")?;
+            let added = facts("#[allow(dead_code)]\nfn a() {}\n#[allow(unused)]\nfn b() {}\n")?;
+            let sites = |h: &[crate::ast::EscapeHatchSite]| crate::guards::suppression_delta::sites_of(h);
+            Ok(new_sites(&sites(&base), &sites(&moved)).is_empty()
+                && new_sites(&sites(&base), &sites(&added)).len() == 1)
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;
