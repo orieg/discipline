@@ -22,7 +22,8 @@ spec:
         value: ""
         description: "Pull request body markdown text for directive and hygiene inspection"
       - name: discipline-image
-        value: "ghcr.io/orieg/discipline:latest"
+        # Major tag tracks the latest v0 release; pin an exact version (v0.6.0) or a digest for reproducible gating.
+        value: "ghcr.io/orieg/discipline:v0"
         description: "Discipline container image"
 
   templates:

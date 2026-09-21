@@ -295,6 +295,14 @@ pub fn render_gates_html(gates: &[GateInfo]) -> String {
     out.trim_end().to_string()
 }
 
+/// Gate search box and count for `docs/index.html`, sized from the registry.
+pub fn render_gate_search_html(gates: &[GateInfo]) -> String {
+    let n = gates.iter().filter(|g| g.available).count();
+    format!(
+        "      <input type=\"text\" id=\"gate-search\" class=\"gate-search-input\" placeholder=\"Search {n} gates by id, category, language, or rule...\" aria-label=\"Search active gates\">\n      <span id=\"gate-count\" class=\"gate-count\">Showing {n} of {n} gates</span>"
+    )
+}
+
 /// One row of the generated configuration reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigKeyRow {
@@ -589,6 +597,7 @@ pub fn update_generated_regions(
                         render_action_outputs_markdown(spec)
                     }
                 }
+                "gate-search" => render_gate_search_html(gates),
                 "config-schema" | "schema" => render_config_schema_markdown(),
                 "cli" => render_cli_markdown(),
                 other => bail!(
@@ -776,6 +785,23 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         }
     }
 
+    // 4. Process the generated gate list in man/man5/discipline.toml.5
+    let man5_path = root.join("man/man5/discipline.toml.5");
+    if man5_path.exists() {
+        let original = std::fs::read_to_string(&man5_path)?;
+        let updated = update_roff_region(&original, "gates", &render_gates_roff(GATES))
+            .with_context(|| format!("in {}", man5_path.display()))?;
+        if original != updated {
+            has_diffs = true;
+            eprintln!("{}", unified_diff(&man5_path, &original, &updated));
+            if write {
+                std::fs::write(&man5_path, &updated)
+                    .with_context(|| format!("failed to write {}", man5_path.display()))?;
+                println!("Updated {}", man5_path.display());
+            }
+        }
+    }
+
     if has_diffs {
         if write {
             println!("Reference docs, schemas, and man pages written successfully.");
@@ -791,9 +817,184 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
     }
 }
 
-/// Generate man1 page for discipline CLI.
+/// Generate the man1 page: the top-level synopsis and options, then every visible
+/// subcommand's synopsis, description and options in one page. Packaging installs this
+/// single file, so the page carries no references to per-command pages.
 pub fn generate_man1() -> Result<String> {
+    let mut root = <crate::cli::Cli as clap::CommandFactory>::command();
+    root.build();
+    let man = clap_mangen::Man::new(root.clone());
     let mut buf = Vec::new();
-    clap_mangen::Man::new(<crate::cli::Cli as clap::CommandFactory>::command()).render(&mut buf)?;
+    man.render_title(&mut buf)?;
+    man.render_name_section(&mut buf)?;
+    man.render_synopsis_section(&mut buf)?;
+    man.render_description_section(&mut buf)?;
+    man.render_options_section(&mut buf)?;
+    buf.extend_from_slice(b".SH COMMANDS\n");
+    render_man1_commands(&root, &mut buf)?;
+    buf.extend_from_slice(MAN1_TRAILER.as_bytes());
+    man.render_version_section(&mut buf)?;
     Ok(String::from_utf8(buf)?)
+}
+
+/// Sections of the man1 page that clap does not describe.
+const MAN1_TRAILER: &str = r#".SH EXIT STATUS
+.TP
+.B 0
+Every enabled gate passed, or advisory mode is on.
+.TP
+.B 1
+At least one blocking violation.
+.TP
+.B 2
+Could not check: a gate could not run, a tool or input was missing, the configuration
+was invalid, or the base ref could not be resolved. Never a pass.
+.SH FILES
+.TP
+.I discipline.toml
+Repository configuration; see
+.BR discipline.toml (5).
+.TP
+.I discipline-baseline.toml
+Grandfathered findings written by
+.BR "discipline baseline \-\-write" .
+.SH SEE ALSO
+.BR discipline.toml (5),
+.BR git (1)
+.PP
+Gate reference: https://orieg.github.io/discipline/
+"#;
+
+fn render_man1_commands(cmd: &clap::Command, buf: &mut Vec<u8>) -> Result<()> {
+    for sub in cmd
+        .get_subcommands()
+        .filter(|s| !s.is_hide_set() && s.get_name() != "help")
+    {
+        let name = sub.get_bin_name().unwrap_or_else(|| sub.get_name());
+        buf.extend_from_slice(format!(".SS \"{name}\"\n").as_bytes());
+        let man = clap_mangen::Man::new(sub.clone());
+        let mut part = Vec::new();
+        man.render_description_section(&mut part)?;
+        man.render_synopsis_section(&mut part)?;
+        if sub.get_arguments().any(|a| !a.is_hide_set()) {
+            man.render_options_section(&mut part)?;
+        }
+        // Section headings of the subcommand page become paragraph labels.
+        for line in String::from_utf8(part)?.lines() {
+            match line.strip_prefix(".SH ") {
+                Some("DESCRIPTION") => {}
+                Some("SYNOPSIS") => buf.extend_from_slice(b".PP\n"),
+                Some(heading) => buf.extend_from_slice(
+                    format!(".PP\n\\fB{}\\fR\n", heading.trim_matches('"')).as_bytes(),
+                ),
+                None => {
+                    buf.extend_from_slice(line.as_bytes());
+                    buf.push(b'\n');
+                }
+            }
+        }
+        render_man1_commands(sub, buf)?;
+    }
+    Ok(())
+}
+
+/// Roff gate list for `discipline.toml(5)`, from the gate registry and compiled defaults.
+pub fn render_gates_roff(gates: &[GateInfo]) -> String {
+    let defaults = crate::config::DisciplineConfig::default_for_repo("");
+    let mut out = String::new();
+    for g in gates.iter().filter(|g| g.available) {
+        let default = match defaults.gates.settings(g.id) {
+            Some(s) if !s.enabled() => "off".to_string(),
+            Some(s) => format!("on, {}", s.severity()),
+            None => "n/a".to_string(),
+        };
+        out.push_str(&format!(
+            ".TP\n.B [gates.{}]\n{} ({}; default: {}; languages: {})\n",
+            g.id,
+            roff_escape(g.summary),
+            g.suite.label(),
+            default,
+            roff_escape(g.languages)
+        ));
+    }
+    out
+}
+
+fn roff_escape(s: &str) -> String {
+    let s = s.replace('\\', "\\e").replace('-', "\\-");
+    // A line starting with `.` or `'` would be read as a request.
+    if s.starts_with('.') || s.starts_with('\'') {
+        format!("\\&{s}")
+    } else {
+        s
+    }
+}
+
+/// Replace the lines between `.\" generated:<name>` and `.\" /generated` in a roff file.
+pub fn update_roff_region(original: &str, name: &str, content: &str) -> Result<String> {
+    let open = format!(".\\\" generated:{name}");
+    let close = ".\\\" /generated";
+    let Some(start) = original.lines().position(|l| l.trim() == open) else {
+        bail!("missing roff marker `{open}`");
+    };
+    let lines: Vec<&str> = original.lines().collect();
+    let Some(end) = lines[start + 1..].iter().position(|l| l.trim() == close) else {
+        bail!("unclosed roff marker `{open}`");
+    };
+    let end = start + 1 + end;
+    let mut out: Vec<String> = lines[..=start].iter().map(|l| l.to_string()).collect();
+    out.extend(content.lines().map(str::to_string));
+    out.extend(lines[end..].iter().map(|l| l.to_string()));
+    Ok(out.join("\n") + "\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn man1_documents_every_visible_command_in_one_page() {
+        let page = generate_man1().unwrap();
+        // No references to per-command pages: packaging installs only this file.
+        assert!(!page.contains("discipline\\-check(1)"), "{page}");
+        for name in [
+            "check",
+            "diff",
+            "baseline",
+            "init",
+            "gates",
+            "schema",
+            "self-test",
+            "bench",
+        ] {
+            let heading = format!(".SS \"discipline {name}\"");
+            assert!(page.contains(&heading), "missing {heading}");
+        }
+        assert!(page.contains(".SH EXIT STATUS"));
+        assert!(
+            !page.contains(".SS \"discipline docs\""),
+            "hidden command documented"
+        );
+    }
+
+    #[test]
+    fn man5_gate_list_covers_every_available_gate_with_its_default() {
+        let roff = render_gates_roff(GATES);
+        let available = GATES.iter().filter(|g| g.available).count();
+        assert_eq!(roff.matches(".TP\n.B [gates.").count(), available);
+        assert!(roff.contains("[gates.provenance-tags]\n") && roff.contains("default: off"));
+        assert!(roff.contains("default: on, error"));
+    }
+
+    #[test]
+    fn roff_region_replacement_is_exact_and_requires_both_markers() {
+        let doc = "a\n.\\\" generated:gates\nold\n.\\\" /generated\nz\n";
+        let out = update_roff_region(doc, "gates", "new1\nnew2").unwrap();
+        assert_eq!(
+            out,
+            "a\n.\\\" generated:gates\nnew1\nnew2\n.\\\" /generated\nz\n"
+        );
+        assert!(update_roff_region("a\n", "gates", "x").is_err());
+        assert!(update_roff_region(".\\\" generated:gates\nold\n", "gates", "x").is_err());
+    }
 }

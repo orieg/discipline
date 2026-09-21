@@ -65,6 +65,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
+permissions:
+  contents: read
+
 jobs:
   discipline:
     runs-on: ubuntu-latest
@@ -81,7 +84,9 @@ The floating `@v0` ref automatically tracks the latest `v0.x.y` release while pi
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding an authorized override directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
 
-For other CI platforms and orchestrators:
+A check only blocks a merge when the branch requires it. See [Repository Protection](docs/guides/ci-platforms.md#8-repository-protection) for the settings (required check, up-to-date branch, no bypass, CODEOWNERS on gate configuration) and a ruleset example.
+
+For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo, Azure Pipelines, Bitbucket, CircleCI and Jenkins are in [`templates/`](templates/), indexed in the [CI guide](docs/guides/ci-platforms.md#7-other-ci-platforms-templates)):
 - [GitLab CI/CD Component & Job Guide](docs/CONFIGURATION.md#gitlab-ci-cd)
 - [Forgejo & Gitea Actions Guide](docs/CONFIGURATION.md#forgejo-actions)
 - [Argo Workflows GitOps Template](docs/CONFIGURATION.md#argo-workflows)

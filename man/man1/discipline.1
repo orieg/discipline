@@ -1,12 +1,20 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH discipline 1  "discipline 0.6.0" 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 .SH NAME
 discipline \- Universal CI/CD gatekeeper and AI coding agent diff sentinel
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 .SH SYNOPSIS
 \fBdiscipline\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 .SH DESCRIPTION
 Universal CI/CD gatekeeper and AI coding agent diff sentinel
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
@@ -14,39 +22,629 @@ Print help
 .TP
 \fB\-V\fR, \fB\-\-version\fR
 Print version
-.SH SUBCOMMANDS
-.TP
-discipline\-check(1)
+.SH COMMANDS
+.SS "discipline check"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline check\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-commit\fR] [\fB\-\-commit\-range\fR] [\fB\-\-staged\fR] [\fB\-\-pr\-body\-file\fR] [\fB\-\-pr\-title\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-fail\-on\-overrides\fR] [\fB\-\-advisory\fR] [\fB\-\-actor\fR] [\fB\-\-directive\-sources\fR] [\fB\-\-trust\-workspace\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-bench\-provenance\fR] [\fB\-\-allow\-cross\-host\-bench\fR] [\fB\-\-bench\-base\-file\fR] [\fB\-\-bench\-head\-file\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-diff(1)
+\fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
+Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
+.RE
+.TP
+\fB\-\-config\-override\fR \fI<CONFIG_OVERRIDE>\fR
+Inline TOML merged over the file (tables merge, lists append, scalars replace)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG_OVERRIDE\fR environment variable. 
+.RE
+.TP
+\fB\-\-enable\fR \fI<ENABLE>\fR
+Gate ids to force on (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_ENABLE\fR environment variable. 
+.RE
+.TP
+\fB\-\-disable\fR \fI<DISABLE>\fR
+Gate ids to force off (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_DISABLE\fR environment variable. 
+.RE
+.TP
+\fB\-s\fR, \fB\-\-suite\fR \fI<SUITE>\fR [default: all]
+Which check suite to run
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+all
+.IP \(bu 2
+agent\-guard
+.IP \(bu 2
+hygiene
+.IP \(bu 2
+integrity
+.IP \(bu 2
+quality
+.IP \(bu 2
+verification
+.IP \(bu 2
+bench
+.RE
+.TP
+\fB\-b\fR, \fB\-\-base\fR \fI<BASE>\fR
+Base branch or commit to measure the change against (auto\-detected in CI if omitted)
+.RS
+May also be specified with the \fBDISCIPLINE_BASE_REF\fR environment variable. 
+.RE
+.TP
+\fB\-\-commit\fR \fI<COMMIT>\fR
+Specific commit to inspect (compares against parent commit <sha>~1)
+.TP
+\fB\-\-commit\-range\fR \fI<COMMIT_RANGE>\fR
+Commit range to inspect (<before>..<after> or <before>...<after>)
+.TP
+\fB\-\-staged\fR
+Inspect the index against HEAD instead (pre\-commit hook mode)
+.TP
+\fB\-\-pr\-body\-file\fR \fI<PR_BODY_FILE>\fR
+File holding the PR body or commit message (override directives, hygiene scanning). Falls back to the PR_BODY environment variable
+.TP
+\fB\-\-pr\-title\fR \fI<PR_TITLE>\fR
+PR title for PR\-level hygiene checks (e.g. issue\-link). Falls back to the PR_TITLE environment variable
+.RS
+May also be specified with the \fBPR_TITLE\fR environment variable. 
+.RE
+.TP
+\fB\-\-fail\-on\-warnings\fR
+Treat warnings as failures
+.RS
+May also be specified with the \fBDISCIPLINE_FAIL_ON_WARNINGS\fR environment variable. 
+.RE
+.TP
+\fB\-\-fail\-on\-overrides\fR
+Treat applied overrides as failures (requires human sign\-off)
+.RS
+May also be specified with the \fBDISCIPLINE_FAIL_ON_OVERRIDES\fR environment variable. 
+.RE
+.TP
+\fB\-\-advisory\fR
+Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur
+.RS
+May also be specified with the \fBDISCIPLINE_ADVISORY\fR environment variable. 
+.RE
+.TP
+\fB\-\-actor\fR \fI<ACTOR>\fR
+Actor executing the check (for actor\-aware override authorization). Falls back to DISCIPLINE_ACTOR, GITHUB_ACTOR, GITEA_ACTOR, FORGEJO_ACTOR, GITLAB_USER_LOGIN
+.RS
+May also be specified with the \fBDISCIPLINE_ACTOR\fR environment variable. 
+.RE
+.TP
+\fB\-\-directive\-sources\fR \fI<DIRECTIVE_SOURCES>\fR
+Comma\-separated list of allowed directive sources (pr\-body, commits)
+.RS
+May also be specified with the \fBDISCIPLINE_DIRECTIVE_SOURCES\fR environment variable. 
+.RE
+.TP
+\fB\-\-trust\-workspace\fR
+Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)
+.TP
+\fB\-q\fR, \fB\-\-quiet\fR
+Suppress output on success (only print output when violations are found)
+.TP
+\fB\-f\fR, \fB\-\-format\fR \fI<FORMAT>\fR [default: terminal]
+Output format
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+terminal
+.IP \(bu 2
+github\-summary
+.IP \(bu 2
+json
+.IP \(bu 2
+junit
+.IP \(bu 2
+sarif
+.IP \(bu 2
+gitlab
+.IP \(bu 2
+agent\-prompt
+.RE
+.TP
+\fB\-\-json\-out\fR \fI<JSON_OUT>\fR
+Also write the JSON report to this path, whatever \-\-format is
+.TP
+\fB\-o\fR, \fB\-\-output\-file\fR \fI<OUTPUT_FILE>\fR
+Write the formatted report to this path
+.TP
+\fB\-\-report\-gitlab\fR \fI<REPORT_GITLAB>\fR
+Write GitLab Code Quality JSON report to this path
+.RS
+May also be specified with the \fBDISCIPLINE_REPORT_GITLAB\fR environment variable. 
+.RE
+.TP
+\fB\-\-report\-junit\fR \fI<REPORT_JUNIT>\fR
+Write JUnit XML report to this path
+.RS
+May also be specified with the \fBDISCIPLINE_REPORT_JUNIT\fR environment variable. 
+.RE
+.TP
+\fB\-\-report\-sarif\fR \fI<REPORT_SARIF>\fR
+Write SARIF report to this path
+.RS
+May also be specified with the \fBDISCIPLINE_REPORT_SARIF\fR environment variable. 
+.RE
+.TP
+\fB\-\-bench\-provenance\fR \fI<BENCH_PROVENANCE>\fR
+Expected host or runner provenance tag for benchmark artifacts
+.RS
+May also be specified with the \fBDISCIPLINE_BENCH_PROVENANCE\fR environment variable. 
+.RE
+.TP
+\fB\-\-allow\-cross\-host\-bench\fR
+Allow benchmark comparison across mismatched host/runner provenance tags
+.RS
+May also be specified with the \fBDISCIPLINE_ALLOW_CROSS_HOST_BENCH\fR environment variable. 
+.RE
+.TP
+\fB\-\-bench\-base\-file\fR \fI<BENCH_BASE_FILE>\fR
+In\-job base benchmark result file for bench\-regression dual\-mode
+.RS
+May also be specified with the \fBDISCIPLINE_BENCH_BASE_FILE\fR environment variable. 
+.RE
+.TP
+\fB\-\-bench\-head\-file\fR \fI<BENCH_HEAD_FILE>\fR
+In\-job head benchmark result file for bench\-regression dual\-mode
+.RS
+May also be specified with the \fBDISCIPLINE_BENCH_HEAD_FILE\fR environment variable. 
+.RE
+.TP
+\fB\-\-baseline\-file\fR \fI<BASELINE_FILE>\fR
+Path to grandfathering baseline file (defaults to discipline\-baseline.toml if present)
+.TP
+\fB\-\-no\-baseline\fR
+Ignore grandfathering baseline even if present
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline diff"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 Shorthand for checking uncommitted or working tree changes against HEAD
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline diff\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-\-trust\-workspace\fR] [\fB\-\-advisory\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-baseline(1)
+\fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
+Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
+.RE
+.TP
+\fB\-\-config\-override\fR \fI<CONFIG_OVERRIDE>\fR
+Inline TOML merged over the file (tables merge, lists append, scalars replace)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG_OVERRIDE\fR environment variable. 
+.RE
+.TP
+\fB\-\-enable\fR \fI<ENABLE>\fR
+Gate ids to force on (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_ENABLE\fR environment variable. 
+.RE
+.TP
+\fB\-\-disable\fR \fI<DISABLE>\fR
+Gate ids to force off (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_DISABLE\fR environment variable. 
+.RE
+.TP
+\fB\-s\fR, \fB\-\-suite\fR \fI<SUITE>\fR [default: all]
+Which check suite to run
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+all
+.IP \(bu 2
+agent\-guard
+.IP \(bu 2
+hygiene
+.IP \(bu 2
+integrity
+.IP \(bu 2
+quality
+.IP \(bu 2
+verification
+.IP \(bu 2
+bench
+.RE
+.TP
+\fB\-b\fR, \fB\-\-base\fR \fI<BASE>\fR
+Base branch or commit ref to compare against (defaults to HEAD for uncommitted changes)
+.TP
+\fB\-f\fR, \fB\-\-format\fR \fI<FORMAT>\fR [default: terminal]
+Output format
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+terminal
+.IP \(bu 2
+github\-summary
+.IP \(bu 2
+json
+.IP \(bu 2
+junit
+.IP \(bu 2
+sarif
+.IP \(bu 2
+gitlab
+.IP \(bu 2
+agent\-prompt
+.RE
+.TP
+\fB\-\-json\-out\fR \fI<JSON_OUT>\fR
+Also write the JSON report to this path, whatever \-\-format is
+.TP
+\fB\-o\fR, \fB\-\-output\-file\fR \fI<OUTPUT_FILE>\fR
+Write the formatted report to this path
+.TP
+\fB\-\-report\-gitlab\fR \fI<REPORT_GITLAB>\fR
+Write GitLab Code Quality JSON report to this path
+.RS
+May also be specified with the \fBDISCIPLINE_REPORT_GITLAB\fR environment variable. 
+.RE
+.TP
+\fB\-\-report\-junit\fR \fI<REPORT_JUNIT>\fR
+Write JUnit XML report to this path
+.RS
+May also be specified with the \fBDISCIPLINE_REPORT_JUNIT\fR environment variable. 
+.RE
+.TP
+\fB\-\-report\-sarif\fR \fI<REPORT_SARIF>\fR
+Write SARIF report to this path
+.RS
+May also be specified with the \fBDISCIPLINE_REPORT_SARIF\fR environment variable. 
+.RE
+.TP
+\fB\-\-baseline\-file\fR \fI<BASELINE_FILE>\fR
+Path to grandfathering baseline file (defaults to discipline\-baseline.toml if present)
+.TP
+\fB\-\-no\-baseline\fR
+Ignore grandfathering baseline even if present
+.TP
+\fB\-\-trust\-workspace\fR
+Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)
+.TP
+\fB\-\-advisory\fR
+Advisory mode: run checks and emit reports, but exit 0 even if violations are found
+.RS
+May also be specified with the \fBDISCIPLINE_ADVISORY\fR environment variable. 
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline baseline"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 Record or manage grandfathered finding baselines
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline baseline\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-\-write\fR] [\fB\-\-baseline\-file\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-\-whole\-tree\fR] [\fB\-\-all\-severities\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-trust\-workspace\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-init(1)
+\fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
+Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
+.RE
+.TP
+\fB\-\-config\-override\fR \fI<CONFIG_OVERRIDE>\fR
+Inline TOML merged over the file (tables merge, lists append, scalars replace)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG_OVERRIDE\fR environment variable. 
+.RE
+.TP
+\fB\-\-enable\fR \fI<ENABLE>\fR
+Gate ids to force on (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_ENABLE\fR environment variable. 
+.RE
+.TP
+\fB\-\-disable\fR \fI<DISABLE>\fR
+Gate ids to force off (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_DISABLE\fR environment variable. 
+.RE
+.TP
+\fB\-\-write\fR
+Record current findings to the baseline file
+.TP
+\fB\-\-baseline\-file\fR \fI<BASELINE_FILE>\fR [default: discipline\-baseline.toml]
+Path to grandfathering baseline file (defaults to discipline\-baseline.toml)
+.TP
+\fB\-b\fR, \fB\-\-base\fR \fI<BASE>\fR
+Base branch or commit ref to compare against
+.RS
+May also be specified with the \fBDISCIPLINE_BASE_REF\fR environment variable. 
+.RE
+.TP
+\fB\-s\fR, \fB\-\-suite\fR \fI<SUITE>\fR [default: all]
+Specific suite to run: all, agent\-guard, hygiene, integrity ...
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+all
+.IP \(bu 2
+agent\-guard
+.IP \(bu 2
+hygiene
+.IP \(bu 2
+integrity
+.IP \(bu 2
+quality
+.IP \(bu 2
+verification
+.IP \(bu 2
+bench
+.RE
+.TP
+\fB\-\-whole\-tree\fR
+Record every pre\-existing finding in the tree, not just the diff. Use when adopting discipline on an existing repository; conflicts with \-\-base
+.TP
+\fB\-\-all\-severities\fR
+Also record warnings and notes. By default only findings that would block under the current configuration are recorded: `error`, plus `warning` under \-\-fail\-on\-warnings
+.TP
+\fB\-\-fail\-on\-warnings\fR
+Treat warnings as blocking when choosing what to record (same switch as `check \-\-fail\-on\-warnings`)
+.RS
+May also be specified with the \fBDISCIPLINE_FAIL_ON_WARNINGS\fR environment variable. 
+.RE
+.TP
+\fB\-\-trust\-workspace\fR
+Trust the workspace and disable libgit2 repository owner validation
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline init"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 Write a discipline.toml with every available gate at its default
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline init\fR [\fB\-n\fR|\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-gates(1)
+\fB\-n\fR, \fB\-\-name\fR \fI<NAME>\fR
+Name of the project (defaults to current directory name)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline gates"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 List every gate: id, suite, availability, and effective state
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline gates\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-schema(1)
+\fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
+Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
+.RE
+.TP
+\fB\-\-config\-override\fR \fI<CONFIG_OVERRIDE>\fR
+Inline TOML merged over the file (tables merge, lists append, scalars replace)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG_OVERRIDE\fR environment variable. 
+.RE
+.TP
+\fB\-\-enable\fR \fI<ENABLE>\fR
+Gate ids to force on (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_ENABLE\fR environment variable. 
+.RE
+.TP
+\fB\-\-disable\fR \fI<DISABLE>\fR
+Gate ids to force off (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_DISABLE\fR environment variable. 
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline schema"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 Print the JSON Schema for discipline.toml
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline schema\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-self\-test(1)
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline self-test"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 Run the embedded negative / positive controls against this binary
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline self\-test\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-completions(1)
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline completions"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish)
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline completions\fR [\fB\-h\fR|\fB\-\-help\fR] <\fISHELL\fR> 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-install\-hooks(1)
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fISHELL\fR>
+Target shell for completion script
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+bash
+.IP \(bu 2
+elvish
+.IP \(bu 2
+fish
+.IP \(bu 2
+powershell
+.IP \(bu 2
+zsh
+.RE
+.SS "discipline install-hooks"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 Install pre\-commit hook in the local git repository
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline install\-hooks\fR [\fB\-f\fR|\fB\-\-force\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-bench(1)
+\fB\-f\fR, \fB\-\-force\fR
+Overwrite existing pre\-commit hook if present
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline bench"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 Benchmark tooling for the bench\-regression gate
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline bench\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
 .TP
-discipline\-help(1)
-Print this message or the help of the given subcommand(s)
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline bench derive"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Derive paired\-ratio noise floors and baseline ratios from repeated same\-commit runs
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline bench derive\fR [\fB\-\-baseline\fR] [\fB\-\-allow\-mixed\-commits\fR] [\fB\-\-ceiling\-pct\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRUNS\fR> 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-baseline\fR \fI<BASELINE>\fR
+Merge the derived platform entry into this ratio baseline file (created if absent)
+.TP
+\fB\-\-allow\-mixed\-commits\fR
+Accept runs of different commits (recorded in the baseline); only when the differences cannot move a number
+.TP
+\fB\-\-ceiling\-pct\fR \fI<CEILING_PCT>\fR [default: 50]
+Derived cell floors above this percentage are reported but not gated
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIRUNS\fR>
+`discipline\-bench\-ratio/v1` run files of the same code (at least two)
+.SH EXIT STATUS
+.TP
+.B 0
+Every enabled gate passed, or advisory mode is on.
+.TP
+.B 1
+At least one blocking violation.
+.TP
+.B 2
+Could not check: a gate could not run, a tool or input was missing, the configuration
+was invalid, or the base ref could not be resolved. Never a pass.
+.SH FILES
+.TP
+.I discipline.toml
+Repository configuration; see
+.BR discipline.toml (5).
+.TP
+.I discipline-baseline.toml
+Grandfathered findings written by
+.BR "discipline baseline \-\-write" .
+.SH SEE ALSO
+.BR discipline.toml (5),
+.BR git (1)
+.PP
+Gate reference: https://orieg.github.io/discipline/
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
 .SH VERSION
 v0.6.0

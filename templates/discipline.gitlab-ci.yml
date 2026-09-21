@@ -9,7 +9,8 @@ spec:
       default: test
       description: "Pipeline stage in which the discipline check job runs"
     image:
-      default: "ghcr.io/orieg/discipline:latest"
+      # Major tag tracks the latest v0 release; pin an exact version (v0.6.0) or a digest for reproducible gating.
+      default: "ghcr.io/orieg/discipline:v0"
       description: "Container image containing the statically-linked discipline binary"
     base_ref:
       default: ""

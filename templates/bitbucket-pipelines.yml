@@ -2,7 +2,8 @@
 # Bitbucket Pipelines template for Discipline Diff Sentinel & AI Coding Agent Gatekeeper
 # Reference: https://support.atlassian.com/bitbucket-cloud/docs/configure-bitbucket-pipelinesyml/
 
-image: ghcr.io/orieg/discipline:latest
+# Major tag tracks the latest v0 release; pin an exact version (v0.6.0) or a digest for reproducible gating.
+image: ghcr.io/orieg/discipline:v0
 
 pipelines:
   pull-requests:

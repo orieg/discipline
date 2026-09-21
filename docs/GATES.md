@@ -1167,7 +1167,7 @@ Discipline provides universal static binary drop-in replacements for the legacy 
 
 | Gate | Replaced Legacy Script | Discipline Enhancements & Behavioral Differences |
 |---|---|---|
-| `assertion-reduction` | *(none — new capability)* | Multi-language AST extraction (11 language packs), callback-aware function tracking, compile-time assertions (`static_assert`, `const _: () = assert!`). |
+| `assertion-reduction` | *(none — new capability)* | Multi-language AST extraction (10 language packs), callback-aware function tracking, compile-time assertions (`static_assert`, `const _: () = assert!`). |
 | `vacuous-tests` | *(none — new capability)* | Language-specific AST helper detection (Python non-test methods, C/C++ non-zero return / throw helper recognition). |
 | `ignored-tests` | *(none — new capability)* | Distinguishes newly arriving ignored tests from modified tests, configurable approved skip predicates (`cfg_attr(miri, ignore)`). |
 | `deletion-rationale` | `scripts/check_deletion_rationale.py` | Line-anchored directive parsing, configurable `require_scope` and `allow_hidden` directive controls. |

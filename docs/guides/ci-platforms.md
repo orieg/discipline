@@ -6,7 +6,7 @@ permalink: /guides/ci-platforms/
 
 # CI/CD Platform Integration Guide
 
-This how-to guide walks through integrating `discipline` into major continuous integration, GitOps, and local developer workflows. Discipline runs as a single static binary with zero external dependencies and communicates natively with CI runners via standard exit codes, SARIF reports, JUnit XML, and GitLab Code Quality JSON.
+This how-to guide walks through integrating `discipline` into major continuous integration, GitOps, and local developer workflows. Discipline runs as a single static binary with no runtime dependencies (the opt-in citation and issue-state checks call `gh`) and communicates with CI runners via standard exit codes, SARIF reports, JUnit XML, and GitLab Code Quality JSON. A gate only protects a branch when the platform refuses merges that fail it: see [Repository Protection](#8-repository-protection).
 
 ---
 
@@ -87,7 +87,7 @@ To customize runner parameters, define a standalone job using the official minim
 discipline:gate:
   stage: test
   image:
-    name: ghcr.io/orieg/discipline:latest
+    name: ghcr.io/orieg/discipline:v0
     entrypoint: [""]
   variables:
     GIT_STRATEGY: clone
@@ -229,3 +229,91 @@ discipline check --staged
 # Fast diff inspection of unstaged working tree changes
 discipline diff
 ```
+
+---
+
+## 7. Other CI Platforms (Templates)
+
+Copy-paste starting points live in [`templates/`](https://github.com/orieg/discipline/tree/main/templates). Each runs the official container image, fetches the merge base, and writes `discipline-report.json`:
+
+| Platform | Template | Base ref |
+|---|---|---|
+| GitLab CI/CD (component) | [`discipline.gitlab-ci.yml`](https://github.com/orieg/discipline/blob/main/templates/discipline.gitlab-ci.yml) | `base_ref` input, else `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` |
+| Argo Workflows | [`argo-workflow-template.yaml`](https://github.com/orieg/discipline/blob/main/templates/argo-workflow-template.yaml) | `target-branch` parameter |
+| Azure Pipelines | [`azure-pipelines.yml`](https://github.com/orieg/discipline/blob/main/templates/azure-pipelines.yml) | `System.PullRequest.TargetBranch`, else `main` |
+| Bitbucket Pipelines | [`bitbucket-pipelines.yml`](https://github.com/orieg/discipline/blob/main/templates/bitbucket-pipelines.yml) | `BITBUCKET_PR_DESTINATION_BRANCH`, else `main` |
+| CircleCI | [`circleci-config.yml`](https://github.com/orieg/discipline/blob/main/templates/circleci-config.yml) | `CIRCLE_BASE_REVISION`, else `origin/main` |
+| Jenkins | [`Jenkinsfile`](https://github.com/orieg/discipline/blob/main/templates/Jenkinsfile) | `CHANGE_TARGET`, else `main` |
+
+The templates reference the `v0` image tag, which tracks the latest `v0.x.y` release. Pin an exact version (`v0.6.0`) or an image digest when a gate verdict must be reproducible from the pipeline file alone. If the merge base cannot be fetched, `discipline check` exits 2 rather than checking against the wrong base.
+
+---
+
+## 8. Repository Protection
+
+A failing gate blocks nothing unless the platform refuses to merge the change. Discipline cannot check these settings itself (it reads the repository, not the platform's configuration), so set them once when adopting it.
+
+### Protection checklist
+
+| Setting | Why |
+|---|---|
+| **Require the check before merge** on the default branch | Without it a red run is advisory. Require the rollup job (for example `ci-gate`) that `needs:` every verification job, including discipline, rather than each job by name; `ci-integrity` keeps that rollup complete. |
+| **Require the branch to be up to date** before merge | Discipline evaluates the diff against the merge base. A stale green run says nothing about the combined result. |
+| **Block force pushes and branch deletion** | A rewritten default branch removes the base that ratchets (`test-floor`, `test-budget`, `unsafe-budget`) and config-integrity compare against. |
+| **No bypass for administrators** | An admin merge skips every gate. Leave the bypass list empty and fix a stuck check instead of overriding it. |
+| **Require pull requests** (and review, with more than one maintainer) | Directives are read from the PR description and commits. A direct push has no PR body, so it cannot carry a reviewed override. |
+| **Protect gate configuration with CODEOWNERS** | Put `discipline.toml`, `discipline-baseline.toml`, `.github/workflows/`, and any registry the gates read (for example a superseded-figure registry) under a code owner, so weakening them needs a named reviewer. `config-integrity` and `ci-integrity` catch the common forms; review catches the rest. |
+| **Require signed commits** (optional) | Ties commits to verified identities. Rebase locally (`git rebase origin/main`) when a branch falls behind; a server-side "update branch" rebase rewrites commits unsigned and the merge is then blocked. |
+| **Least-privilege workflow token** | `permissions: contents: read` is enough for the action. Run discipline on `pull_request`, not `pull_request_target`, so untrusted code never runs with a write token. |
+
+Add `edited` to the `pull_request` event types so that changing a PR description (adding or removing a directive) re-runs the gate. With a merge queue, also trigger on `merge_group` and require the same check there.
+
+### GitHub: ruleset example
+
+A ruleset on the default branch with a required rollup check, up-to-date policy, no force pushes or deletions, and no bypass:
+
+```bash
+gh api --method POST repos/OWNER/REPO/rulesets --input - <<'JSON'
+{
+  "name": "default branch protection",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    { "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [ { "context": "ci-gate" } ] } },
+    { "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": true,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false } },
+    { "type": "non_fast_forward" },
+    { "type": "deletion" }
+  ]
+}
+JSON
+```
+
+A single-maintainer repository cannot approve its own pull requests: drop the `pull_request` rule's review count to `0` (keep the rule so changes still arrive as pull requests), or leave it out. Add `{ "type": "required_signatures" }` to require signed commits. Replace `ci-gate` with the name of your rollup job, or with `discipline` if the gate is its own workflow.
+
+Minimal `CODEOWNERS` (`.github/CODEOWNERS`):
+
+```text
+/discipline.toml             @OWNER
+/discipline-baseline.toml    @OWNER
+/.github/workflows/          @OWNER
+```
+
+### GitLab
+
+Under **Settings → Repository → Protected branches**, allow no one to push or force push to the default branch. Under **Settings → Merge requests**, enable **Pipelines must succeed**. Add approval rules and `CODEOWNERS` with **Code owner approval** on the protected branch. Use the [component](#2-gitlab-ci-cd) in the merge request pipeline so the check runs against the target branch.
+
+### Gitea & Forgejo
+
+Under **Settings → Branches → Branch protection** for the default branch, enable **Status check** with the discipline job (or its rollup) as a required context, disable force push, require approvals as the team allows, and list `discipline.toml` and the workflow directory under **Protected file patterns**.
+

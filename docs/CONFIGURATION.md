@@ -446,7 +446,7 @@ Discipline distinguishes between **configurable** and **bypassable**:
 2. **Directive channel enforcement:** Directives are parsed exclusively from trusted channels specified in `directives.sources` (defaulting to `["pr-body", "commits"]`).
 3. **Hidden directive policy:** By default, HTML comment-wrapped directives in PR bodies are forbidden (`directives.allow_hidden = false`) to ensure reviewers see all requested waivers.
 4. **Machine gate for human sign-off:** When `directives.fail_on_overrides = true` (or `--fail-on-overrides`), any applied override causes Discipline to exit `1`, requiring an authorized human approver to bypass or merge.
-5. **Residual gap:** Workflow files (`.github/workflows/*.yml`) are evaluated by CI from the PR head commit; an agent could conceivably edit the workflow step to pass `disable: ...`. The `ci-integrity` gate catches the common forms of this in modified workflows: masked failures (`continue-on-error`, `|| true`, `set +e`), unpinned actions, deleted verification steps, and a rollup job whose `needs` no longer covers every verification job. Repositories should still protect workflow files and `discipline.toml` with `CODEOWNERS` and branch protection, because a workflow can be rewritten in ways no static check anticipates.
+5. **Residual gap:** Workflow files (`.github/workflows/*.yml`) are evaluated by CI from the PR head commit; an agent could conceivably edit the workflow step to pass `disable: ...`. The `ci-integrity` gate catches the common forms of this in modified workflows: masked failures (`continue-on-error`, `|| true`, `set +e`), unpinned actions, deleted verification steps, and a rollup job whose `needs` no longer covers every verification job. Repositories should still protect workflow files and `discipline.toml` with `CODEOWNERS` and branch protection, because a workflow can be rewritten in ways no static check anticipates; see [Repository Protection](guides/ci-platforms.md#8-repository-protection).
 
 ---
 
@@ -531,7 +531,7 @@ Or configure a standalone job emitting native GitLab Code Quality diffs:
 discipline:gate:
   stage: test
   image:
-    name: ghcr.io/orieg/discipline:latest
+    name: ghcr.io/orieg/discipline:v0
     entrypoint: [""]
   variables:
     GIT_STRATEGY: clone
@@ -635,7 +635,7 @@ docker run --rm -v "$PWD":/workspace ghcr.io/orieg/discipline:latest check --bas
 #### Container Runner Environments (Environments Forbidding `uses:`)
 The minimal container image contains only the static binary and git; it does **not** include a Node.js runtime.
 
-In GitHub Actions, Gitea Actions (`act_runner`), and Forgejo Actions, `actions/checkout` requires Node.js. As a result, `actions/checkout` cannot run inside a job container using `runs-on: docker://ghcr.io/orieg/discipline:latest`.
+In GitHub Actions, Gitea Actions (`act_runner`), and Forgejo Actions, `actions/checkout` requires Node.js. As a result, `actions/checkout` cannot run inside a job container using `runs-on: docker://ghcr.io/orieg/discipline:v0`.
 
 **Recommended CI Integration Patterns:**
 
@@ -656,7 +656,7 @@ In GitHub Actions, Gitea Actions (`act_runner`), and Forgejo Actions, `actions/c
    ```yaml
    jobs:
      discipline:
-       runs-on: docker://ghcr.io/orieg/discipline:latest
+       runs-on: docker://ghcr.io/orieg/discipline:v0
        steps:
          - run: |
              git clone --depth 50 "${REPO_URL}" .
@@ -667,7 +667,7 @@ In GitHub Actions, Gitea Actions (`act_runner`), and Forgejo Actions, `actions/c
    ```yaml
    discipline:
      image:
-       name: ghcr.io/orieg/discipline:latest
+       name: ghcr.io/orieg/discipline:v0
        entrypoint: [""]
      variables:
        GIT_STRATEGY: clone

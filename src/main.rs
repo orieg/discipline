@@ -11,9 +11,25 @@ use discipline::style;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+/// Rust ignores SIGPIPE, so a closed reader (`discipline gates | head -1`) turns every
+/// later `println!` into a panic. Restore the default so the process ends the way other
+/// Unix tools do: killed by the signal, which a pipeline still sees as a non-zero status.
+#[cfg(unix)]
+fn restore_sigpipe() {
+    // SAFETY: called first in `main`, before any thread is spawned; `signal` with
+    // `SIG_DFL` only resets the disposition of SIGPIPE and touches no Rust-managed memory.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_sigpipe() {}
+
 /// 0 = pass, 1 = violations, 2 = the check itself could not run. Keeping the
 /// last two apart lets CI tell "the change is bad" from "the gate is broken".
 fn main() -> ExitCode {
+    restore_sigpipe();
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {

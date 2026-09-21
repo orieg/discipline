@@ -16,12 +16,13 @@ pool:
   vmImage: 'ubuntu-latest'
 
 container:
-  image: ghcr.io/orieg/discipline:latest
+  # Major tag tracks the latest v0 release; pin an exact version (v0.6.0) or a digest for reproducible gating.
+  image: ghcr.io/orieg/discipline:v0
   options: --user 10001:10001
 
 variables:
-  # Target base ref to compare against in PR or branch builds
-  DISCIPLINE_BASE_REF: $[ coalesce(variables['System.PullRequest.TargetBranch'], 'origin/main') ]
+  # Target branch in PR builds (`refs/heads/<branch>`), else main
+  DISCIPLINE_BASE_REF: $[ coalesce(variables['System.PullRequest.TargetBranch'], 'main') ]
 
 steps:
   - checkout: self
@@ -29,9 +30,12 @@ steps:
 
   - script: |
       set -euo pipefail
-      echo "Target base ref: ${DISCIPLINE_BASE_REF}"
-      git fetch origin "${DISCIPLINE_BASE_REF}" --depth=100 || true
-      discipline check --base "${DISCIPLINE_BASE_REF}" --json-out discipline-report.json
+      # A PR checkout has no local branches: compare against the remote-tracking ref.
+      base="${DISCIPLINE_BASE_REF#refs/heads/}"
+      base="${base#origin/}"
+      echo "Target base ref: origin/${base}"
+      git fetch origin "${base}" --depth=100 || true
+      discipline check --base "origin/${base}" --json-out discipline-report.json
     displayName: 'Run Discipline Gatekeeper'
 
   - publish: $(System.DefaultWorkingDirectory)/discipline-report.json

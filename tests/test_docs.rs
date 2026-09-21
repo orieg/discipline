@@ -339,3 +339,22 @@ fn test_gates_html_severity_badge_reflects_compiled_default() {
     );
     assert!(row("miri").contains(">Off<"), "{}", row("miri"));
 }
+
+/// `discipline gates | head -1` must not panic when the reader goes away: the process
+/// ends the way other Unix tools do (SIGPIPE), never with a panic backtrace.
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_does_not_panic() {
+    use std::os::unix::process::ExitStatusExt;
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+        .arg("gates")
+        .stdout(writer)
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert_eq!(out.status.signal(), Some(libc::SIGPIPE), "{:?}", out.status);
+}
