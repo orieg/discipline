@@ -46,6 +46,13 @@ jobs:
         run: python3 tests/action/check_ecosystem_theme.py --local-only
       - name: Test release notes sanitiser
         run: python3 tests/action/sanitize-release-notes.py --test
+      - name: Release notes carry the compatibility ledger
+        run: |
+          python3 scripts/release_notes_upgrade.py --test
+          version="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          # The version being prepared must have ledger rows or none at all; this
+          # renders them so a malformed table fails here, not during a release.
+          python3 scripts/release_notes_upgrade.py --version "${version}" > /dev/null
       - name: Test major tag drift detector
         run: tests/action/test-check-major-tag.sh
       - name: Lint PR title for unquoted mentions

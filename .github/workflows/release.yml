@@ -212,6 +212,14 @@ jobs:
             -f tag_name="${TAG}" \
             --jq .body > "${raw_notes}"
           python3 tests/action/sanitize-release-notes.py "${raw_notes}" "${clean_notes}"
+          # Default and behaviour changes from the compatibility ledger go first:
+          # pull-request titles alone do not say what a consumer must change.
+          upgrade="$(mktemp)"
+          python3 scripts/release_notes_upgrade.py --version "${TAG}" > "${upgrade}"
+          if [ -s "${upgrade}" ]; then
+            cat "${upgrade}" - < "${clean_notes}" > "${clean_notes}.tmp"
+            mv "${clean_notes}.tmp" "${clean_notes}"
+          fi
 
           flags=(--verify-tag --title "${TAG}" --notes-file "${clean_notes}")
           if [ "${PRERELEASE}" = "true" ]; then

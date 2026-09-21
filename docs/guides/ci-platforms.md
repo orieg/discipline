@@ -76,7 +76,7 @@ Include the official component in `.gitlab-ci.yml`:
 
 ```yaml
 include:
-  - remote: 'https://raw.githubusercontent.com/orieg/discipline/main/templates/discipline.gitlab-ci.yml'
+  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.7.0/templates/discipline.gitlab-ci.yml'
 ```
 
 ### Custom Container Job
@@ -176,7 +176,7 @@ spec:
 Official multi-architecture (`linux/amd64`, `linux/arm64`) OCI images are published to GitHub Container Registry:
 - `ghcr.io/orieg/discipline:latest`
 - `ghcr.io/orieg/discipline:v0`
-- `ghcr.io/orieg/discipline:v0.6.0`
+- `ghcr.io/orieg/discipline:v0.7.0`
 
 ### Running Locally via Docker
 
@@ -205,7 +205,7 @@ Add Discipline to `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/orieg/discipline
-    rev: v0.6.0
+    rev: v0.7.0
     hooks:
       - id: discipline          # builds via cargo on first run
       # Or: - id: discipline-system # invokes pre-installed binary on PATH
@@ -245,7 +245,7 @@ Copy-paste starting points live in [`templates/`](https://github.com/orieg/disci
 | CircleCI | [`circleci-config.yml`](https://github.com/orieg/discipline/blob/main/templates/circleci-config.yml) | `CIRCLE_BASE_REVISION`, else `origin/main` |
 | Jenkins | [`Jenkinsfile`](https://github.com/orieg/discipline/blob/main/templates/Jenkinsfile) | `CHANGE_TARGET`, else `main` |
 
-The templates reference the `v0` image tag, which tracks the latest `v0.x.y` release. Pin an exact version (`v0.6.0`) or an image digest when a gate verdict must be reproducible from the pipeline file alone. If the merge base cannot be fetched, `discipline check` exits 2 rather than checking against the wrong base.
+The templates reference the `v0` image tag, which tracks the latest `v0.x.y` release. Pin an exact version (`v0.7.0`) or an image digest when a gate verdict must be reproducible from the pipeline file alone. If the merge base cannot be fetched, `discipline check` exits 2 rather than checking against the wrong base.
 
 ---
 

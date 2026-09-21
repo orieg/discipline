@@ -52,3 +52,91 @@ change_job = ""
 allow_dependencies = ["serde_yaml", "tar", "flate2", "zip", "bzip2-rs", "libc", "clap_mangen", "clap_complete"]
 
 
+
+# Every place a release version is written must say the same version. A bump
+# that misses one fails this gate instead of shipping stale instructions.
+[gates.version-lockstep]
+enabled = true
+
+[[gates.version-lockstep.groups]]
+name = "release"
+
+[[gates.version-lockstep.groups.sources]]
+path = "Cargo.toml"
+regex = '''(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "README.md"
+regex = '''install\.sh --to ~/\.local/bin --version v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "README.md"
+regex = '''Pin `@v([0-9]+\.[0-9]+\.[0-9]+)`'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/CONFIGURATION.md"
+regex = '''rev: v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/CONFIGURATION.md"
+regex = '''orieg/discipline/v([0-9]+\.[0-9]+\.[0-9]+)/templates'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/CONFIGURATION.md"
+regex = '''ghcr\.io/orieg/discipline:v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/guides/ci-platforms.md"
+regex = '''rev: v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/guides/ci-platforms.md"
+regex = '''orieg/discipline/v([0-9]+\.[0-9]+\.[0-9]+)/templates'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/guides/ci-platforms.md"
+regex = '''ghcr\.io/orieg/discipline:v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/index.html"
+regex = '''rev:</span> v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/index.html"
+regex = '''orieg/discipline/v([0-9]+\.[0-9]+\.[0-9]+)/templates'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "man/man5/discipline.toml.5"
+regex = '''"Discipline v([0-9]+\.[0-9]+\.[0-9]+)"'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "packaging/macports/Portfile"
+regex = '''(?m)^version\s+([0-9]+\.[0-9]+\.[0-9]+)$'''
+
+[[gates.version-lockstep.groups.sources]]
+path = ".pre-commit-hooks.yaml"
+regex = '''rev: v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/Jenkinsfile"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/argo-workflow-template.yaml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/azure-pipelines.yml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/bitbucket-pipelines.yml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/circleci-config.yml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/discipline.gitlab-ci.yml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
