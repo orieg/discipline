@@ -524,7 +524,7 @@ Include the remote pipeline template directly:
 
 ```yaml
 include:
-  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.7.0/templates/discipline.gitlab-ci.yml'
+  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.7.1/templates/discipline.gitlab-ci.yml'
 ```
 
 Or configure a standalone job emitting native GitLab Code Quality diffs:
@@ -599,7 +599,7 @@ Use [`templates/argo-workflow-template.yaml`](https://github.com/orieg/disciplin
 ```yaml
 repos:
   - repo: https://github.com/orieg/discipline
-    rev: v0.7.0
+    rev: v0.7.1
     hooks:
       - id: discipline          # compiles via cargo
       # Or: - id: discipline-system # uses pre-installed binary on PATH
@@ -615,7 +615,7 @@ discipline check --staged
 Official multi-arch (`linux/amd64`, `linux/arm64`) minimal OCI container images are published to GitHub Container Registry:
 - `ghcr.io/orieg/discipline:latest`
 - `ghcr.io/orieg/discipline:v0`
-- `ghcr.io/orieg/discipline:v0.7.0`
+- `ghcr.io/orieg/discipline:v0.7.1`
 
 Images are built on Alpine Linux with the statically linked musl `discipline` binary and `git` on `PATH`.
 
