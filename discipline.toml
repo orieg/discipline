@@ -42,6 +42,12 @@ enabled = true
 [gates.pii]
 exempt_paths = ["tests/fixtures/**"]
 
+# This workflow has no path-filtered jobs and no change-detection job; every job
+# in the ci-gate rollup is unconditional, so each is checked through GitHub's
+# implicit success() on its dependencies.
+[gates.ci-skip-set]
+change_job = ""
+
 [gates.dependency-delta]
 allow_dependencies = ["serde_yaml", "tar", "flate2", "zip", "bzip2-rs", "libc", "clap_mangen", "clap_complete"]
 

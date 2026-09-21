@@ -1,6 +1,7 @@
 pub mod agent_diff;
 pub mod archive_contents;
 pub mod ci_integrity;
+pub mod ci_skip_set;
 pub mod command;
 pub mod dependency;
 pub mod hygiene;
@@ -295,6 +296,7 @@ pub fn run_checks(
             "test-budget" => test_budget::evaluate_test_budget(ctx),
             "test-floor" => test_floor::evaluate_test_floor(ctx),
             "ci-integrity" => ci_integrity::evaluate_ci_integrity(ctx),
+            "ci-skip-set" => ci_skip_set::evaluate_ci_skip_set(ctx),
             "provenance-tags" => provenance_tags::evaluate_provenance_tags(ctx),
             "archive-contents" => archive_contents::evaluate_archive_contents(ctx),
             "manifest-sync" => manifest_sync::evaluate_manifest_sync(ctx),

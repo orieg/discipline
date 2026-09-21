@@ -196,6 +196,34 @@
       },
       "type": "object"
     },
+    "CiSkipSetGate": {
+      "additionalProperties": false,
+      "properties": {
+        "change_job": {
+          "description": "Change-detection job whose outputs gate the conditional jobs; it must have succeeded. Empty string = no such job",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "unconditional_jobs": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Jobs that must never be skipped, whatever their dependencies did"
+        },
+        "workflow": {
+          "description": "Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "CommandEntry": {
       "additionalProperties": false,
       "properties": {
@@ -1108,6 +1136,14 @@
             }
           ],
           "description": "workflow weakening: continue-on-error, || true, unpinned actions"
+        },
+        "ci-skip-set": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CiSkipSetGate"
+            }
+          ],
+          "description": "rollup skip set matches each job's `if:` under the observed filter outputs"
         },
         "command": {
           "allOf": [

@@ -487,6 +487,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("dependency-delta", true, Severity::Error),
     ("test-budget", true, Severity::Error),
     ("ci-integrity", true, Severity::Error),
+    ("ci-skip-set", true, Severity::Error),
     ("test-floor", true, Severity::Error),
     ("archive-contents", false, Severity::Error),
     ("manifest-sync", false, Severity::Error),

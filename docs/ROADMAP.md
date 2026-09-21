@@ -51,6 +51,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel.
 | [`suppression-delta`](GATES.md#suppression-delta) | agent-guard | per pack | new #[allow], commented-out tests, cfg-gated tests |
 | [`provenance-tags`](GATES.md#provenance-tags) | hygiene | any | published numerics carry (measured|target|projected) |
 | [`ci-integrity`](GATES.md#ci-integrity) | integrity | any | workflow weakening: continue-on-error, || true, unpinned actions |
+| [`ci-skip-set`](GATES.md#ci-skip-set) | integrity | any | rollup skip set matches each job's `if:` under the observed filter outputs |
 | [`test-floor`](GATES.md#test-floor) | integrity | any | test-count ratchet read from the base ref |
 | [`golden-output`](GATES.md#golden-output) | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
 | [`dependency-delta`](GATES.md#dependency-delta) | integrity | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |

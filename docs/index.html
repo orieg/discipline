@@ -1264,6 +1264,13 @@ discipline self-test</div>
             <td>workflow weakening: continue-on-error, || true, unpinned actions</td>
           </tr>
           <tr>
+            <td class="gate-id">ci-skip-set</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>rollup skip set matches each job's `if:` under the observed filter outputs</td>
+          </tr>
+          <tr>
             <td class="gate-id">test-floor</td>
             <td>Integrity</td>
             <td><span class="gate-badge badge-error">Error</span></td>
@@ -1496,6 +1503,11 @@ discipline self-test</div>
       <td class="gate-id">no_baseline</td>
       <td><code>false</code></td>
       <td>Ignore grandfathering baseline even if present.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">ci_context</td>
+      <td><em>(none)</em></td>
+      <td>Rollup job only: `toJson(needs)` of the rollup job (inline JSON, or a path to a file holding it) for the ci-skip-set gate. Empty: the gate reports &quot;not evaluated&quot;.</td>
     </tr>
   </tbody>
 </table>

@@ -1522,6 +1522,37 @@ jobs:
         },
     ),
     (
+        "ci-skip-set: skip under a true `if:` is caught, a consistent skip set passes",
+        || {
+            use crate::guards::ci_skip_set::{check_skip_set, FindingKind, SkipSetSpec};
+            use std::collections::BTreeMap;
+            let workflow = "
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+  miri:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.rust-src == 'true' || contains(needs.detect-changes.outputs.changed-jobs, '|miri|')
+";
+            let github = BTreeMap::from([("event_name".to_string(), "pull_request".to_string())]);
+            let spec = SkipSetSpec {
+                change_job: Some("detect-changes"),
+                unconditional_jobs: &[],
+                github: &github,
+            };
+            let ctx = |miri: &str| {
+                format!(
+                    r#"{{"detect-changes":{{"result":"success","outputs":{{"rust-src":"false","changed-jobs":"|miri|"}}}},"miri":{{"result":"{miri}","outputs":{{}}}}}}"#
+                )
+            };
+            let consistent = check_skip_set(workflow, &ctx("success"), &spec)?;
+            let narrowed = check_skip_set(workflow, &ctx("skipped"), &spec)?;
+            Ok(consistent.findings.is_empty()
+                && narrowed.findings.len() == 1
+                && narrowed.findings[0].kind == FindingKind::SkippedWhileGateTrue)
+        },
+    ),
+    (
         "time-estimates: allow_pattern spans a soft wrap and binds to its match",
         || {
             use crate::guards::hygiene::scan_text_for_time_estimates;

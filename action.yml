@@ -89,6 +89,10 @@ inputs:
     description: 'Ignore grandfathering baseline even if present.'
     required: false
     default: 'false'
+  ci_context:
+    description: 'Rollup job only: `toJson(needs)` of the rollup job (inline JSON, or a path to a file holding it) for the ci-skip-set gate. Empty: the gate reports "not evaluated".'
+    required: false
+    default: ''
 
 outputs:
   status:
@@ -264,6 +268,7 @@ runs:
         DISCIPLINE_DIRECTIVE_SOURCES: ${{ inputs.directive_sources }}
         DISCIPLINE_BASELINE: ${{ inputs.baseline_file }}
         DISCIPLINE_NO_BASELINE: ${{ inputs.no_baseline == 'true' && 'true' || 'false' }}
+        DISCIPLINE_CI_CONTEXT: ${{ inputs.ci_context }}
         INPUT_SUITE: ${{ inputs.suite }}
         PR_BODY: ${{ inputs.pr_body }}
         PR_TITLE: ${{ inputs.pr_title }}

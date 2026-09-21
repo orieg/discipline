@@ -100,6 +100,12 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.ci-integrity.rollup_job` | string | `"ci-gate"` | Name of the rollup job that must depend on all jobs |
 | `gates.ci-integrity.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ci-integrity.workflows` | list | *(2 entries)* | Workflow file patterns to inspect |
+| `gates.ci-skip-set.change_job` | string | `"detect-changes"` | Change-detection job whose outputs gate the conditional jobs; it must have succeeded. Empty string = no such job |
+| `gates.ci-skip-set.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.ci-skip-set.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.ci-skip-set.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.ci-skip-set.unconditional_jobs` | list | `[]` | Jobs that must never be skipped, whatever their dependencies did |
+| `gates.ci-skip-set.workflow` | string | `".github/workflows/ci.yml"` | Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT) |
 | `gates.command.allow_zero` | boolean | `false` | Whether zero items selected is allowed |
 | `gates.command.canary_command` | string | *(unset)* | Optional negative-control canary command |
 | `gates.command.canary_expected_diagnostic` | string | *(unset)* | Expected diagnostic string that canary must produce |
@@ -304,6 +310,7 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `download_url` | `https://github.com/orieg/discipline/releases` | Base URL of the release store, for mirrors. |
 | `baseline_file` | *(none)* | Path to grandfathering baseline file (defaults to discipline-baseline.toml if present). |
 | `no_baseline` | `false` | Ignore grandfathering baseline even if present. |
+| `ci_context` | *(none)* | Rollup job only: `toJson(needs)` of the rollup job (inline JSON, or a path to a file holding it) for the ci-skip-set gate. Empty: the gate reports "not evaluated". |
 <!-- /generated -->
 
 ### Action Outputs
@@ -830,6 +837,65 @@ Subsequent runs automatically detect `discipline-baseline.toml` if present:
 ## Recipes & Monorepo Setup
 
 Discipline natively supports polyglot monorepos and multi-tier architectures using path scoping, vocabulary extension, and command gate presets.
+
+### Rollup Skip-Set Check (`ci-skip-set`)
+
+A path-filtered matrix makes its rollup job count `skipped` as passing. The [`ci-skip-set`](GATES.md#ci-skip-set) gate checks that every skip matches the job's own `if:` under the filter outputs the rollup observed, so an all-false filter evaluation cannot render as a green rollup over a run that verified nothing.
+
+The input is runtime data that exists only inside the rollup job, so the workflow supplies it and the binary stays offline:
+
+| Surface | Value |
+|---|---|
+| `DISCIPLINE_CI_CONTEXT` | `${{ toJson(needs) }}` of the rollup job: inline JSON, or a path to a file holding it. Unset or empty: the gate reports `not evaluated` and examines nothing. |
+| Action input `ci_context` | Passed to the binary as `DISCIPLINE_CI_CONTEXT` through `env:`. |
+| `GITHUB_EVENT_NAME`, `GITHUB_REF`, `GITHUB_REF_NAME`, `GITHUB_REF_TYPE`, `GITHUB_BASE_REF`, `GITHUB_HEAD_REF`, `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_OWNER` | Read for `github.*` terms in an `if:`. The runner sets them; an unset one makes a term that reads it unverifiable. |
+
+The rollup must list the change-detection job in its `needs`, because the filter outputs are read from `needs.<change_job>.outputs`. Configure the gate once:
+
+```toml
+[gates.ci-skip-set]
+workflow = ".github/workflows/ci.yml"   # the file this rollup runs in
+change_job = "detect-changes"            # "" when the workflow has none
+unconditional_jobs = ["detect-changes", "docs-lint"]
+```
+
+Copy-paste rollup job. Every value reaches the shell through `env:`; nothing is interpolated into `run:`.
+
+```yaml
+  ci-gate:
+    if: always()
+    needs: [detect-changes, docs-lint, lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: No required job failed
+        shell: bash
+        env:
+          NEEDS: ${{ toJson(needs) }}
+        run: |
+          set -euo pipefail
+          bad="$(echo "${NEEDS}" | jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key] | join(", ")')"
+          [ -z "${bad}" ] || { echo "::error::not successful: ${bad}"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the other integrity gates diff against the base
+      - name: Skip set matches each job's if
+        uses: orieg/discipline@v0
+        with:
+          suite: integrity
+          ci_context: ${{ toJson(needs) }}
+```
+
+With the standalone binary instead of the action:
+
+```yaml
+      - name: Skip set matches each job's if
+        env:
+          DISCIPLINE_CI_CONTEXT: ${{ toJson(needs) }}
+        run: discipline check --suite integrity
+```
+
+To verify the gate evaluated rather than passed on a missing context, assert its `examined` count in the JSON report: `jq -e '.outcomes[] | select(.gate == "ci-skip-set") | .examined > 0' report.json`.
 
 ### Polyglot Monorepo: Rust Core + TypeScript Frontend + Python Tooling
 

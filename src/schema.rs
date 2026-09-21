@@ -27,6 +27,7 @@ pub fn generate_schema() -> Value {
             "test-budget" => "#/$defs/TestBudgetGate",
             "test-floor" => "#/$defs/TestFloorGate",
             "ci-integrity" => "#/$defs/CiIntegrityGate",
+            "ci-skip-set" => "#/$defs/CiSkipSetGate",
             "shell-secrets" => "#/$defs/ShellSecretsGate",
             "issue-link" => "#/$defs/IssueLinkGate",
             "provenance-tags" => "#/$defs/ProvenanceTagsGate",
@@ -410,6 +411,18 @@ pub fn generate_schema() -> Value {
                     "documented_job_count_path": { "type": "string", "description": "Path to catalog documentation stating job count" },
                     "documented_job_count_pattern": { "type": "string", "description": "Regex pattern to extract job count from documentation" },
                     "first_party_action_prefixes": { "$ref": "#/$defs/StringListOrReset", "description": "Action prefixes considered first-party and excused from commit SHA pinning" }
+                }
+            },
+            "CiSkipSetGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "workflow": { "type": "string", "description": "Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT)" },
+                    "change_job": { "type": "string", "description": "Change-detection job whose outputs gate the conditional jobs; it must have succeeded. Empty string = no such job" },
+                    "unconditional_jobs": { "$ref": "#/$defs/StringListOrReset", "description": "Jobs that must never be skipped, whatever their dependencies did" }
                 }
             },
             "ArchiveContentsGate": {

@@ -1699,7 +1699,7 @@ fn override_record_audit_trail_and_step_outputs() {
         .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
     assert!(run
         .stdout
-        .contains("gates:  18 passed, 0 failed, 12 disabled (19 items examined)"));
+        .contains("gates:  19 passed, 0 failed, 12 disabled (19 items examined)"));
     assert!(run.stdout.contains("overrides: 1"));
 
     // Check GITHUB_OUTPUT contents
@@ -1710,13 +1710,13 @@ fn override_record_audit_trail_and_step_outputs() {
         "{step_output}"
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
-    assert!(step_output.contains("passed_gates=18"), "{step_output}");
+    assert!(step_output.contains("passed_gates=19"), "{step_output}");
     assert!(step_output.contains("examined_items=19"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
-        step_summary.contains("**Summary:** 18 passed, 0 failed, 12 disabled (19 items examined)"),
+        step_summary.contains("**Summary:** 19 passed, 0 failed, 12 disabled (19 items examined)"),
         "{step_summary}"
     );
     assert!(

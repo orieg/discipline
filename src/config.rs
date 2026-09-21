@@ -167,6 +167,13 @@ pub const GATES: &[GateInfo] = &[
         available: true,
     },
     GateInfo {
+        id: "ci-skip-set",
+        suite: Suite::Integrity,
+        summary: "rollup skip set matches each job's `if:` under the observed filter outputs",
+        languages: "any",
+        available: true,
+    },
+    GateInfo {
         id: "test-floor",
         suite: Suite::Integrity,
         summary: "test-count ratchet read from the base ref",
@@ -370,6 +377,7 @@ pub struct Gates {
     pub test_budget: TestBudgetGate,
     pub test_floor: TestFloorGate,
     pub ci_integrity: CiIntegrityGate,
+    pub ci_skip_set: CiSkipSetGate,
     pub shell_secrets: ShellSecretsGate,
     pub issue_link: IssueLinkGate,
     pub provenance_tags: ProvenanceTagsGate,
@@ -418,6 +426,7 @@ impl_gate_settings!(
     TestBudgetGate,
     TestFloorGate,
     CiIntegrityGate,
+    CiSkipSetGate,
     ShellSecretsGate,
     IssueLinkGate,
     ProvenanceTagsGate,
@@ -1105,6 +1114,37 @@ impl Default for CiIntegrityGate {
     }
 }
 
+/// `ci-skip-set`: runtime check of a rollup job's skip set. It reads the
+/// rollup's `needs` context from `DISCIPLINE_CI_CONTEXT`; with no context it
+/// reports a named "not evaluated" note and never passes or fails silently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CiSkipSetGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Repo-relative path of the workflow whose rollup supplies the context.
+    pub workflow: String,
+    /// Change-detection job whose outputs gate the conditional jobs. It must
+    /// have succeeded. Empty string = the workflow has no such job.
+    pub change_job: String,
+    /// Jobs that must never be `skipped`, whatever their dependencies did.
+    pub unconditional_jobs: Vec<String>,
+}
+
+impl Default for CiSkipSetGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            workflow: ".github/workflows/ci.yml".to_string(),
+            change_job: "detect-changes".to_string(),
+            unconditional_jobs: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ArchiveContentsGate {
@@ -1369,6 +1409,7 @@ impl Gates {
             "test-budget" => &self.test_budget,
             "test-floor" => &self.test_floor,
             "ci-integrity" => &self.ci_integrity,
+            "ci-skip-set" => &self.ci_skip_set,
             "provenance-tags" => &self.provenance_tags,
             "archive-contents" => &self.archive_contents,
             "manifest-sync" => &self.manifest_sync,
