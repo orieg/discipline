@@ -35,6 +35,8 @@ pub enum Commands {
     InstallHooks(InstallHooksArgs),
     /// Benchmark tooling for the bench-regression gate
     Bench(BenchArgs),
+    /// Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check
+    Doctor(DoctorArgs),
 }
 
 #[derive(Args, Debug)]
@@ -82,6 +84,7 @@ impl Commands {
             Commands::Docs(_) => "docs",
             Commands::InstallHooks(_) => "install-hooks",
             Commands::Bench(_) => "bench",
+            Commands::Doctor(_) => "doctor",
         }
     }
 }
@@ -352,6 +355,31 @@ pub struct InitArgs {
     /// Name of the project (defaults to current directory name)
     #[arg(short, long)]
     pub name: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct DoctorArgs {
+    /// Branch whose protection is checked (default: the repository's default branch)
+    #[arg(long)]
+    pub branch: Option<String>,
+    /// Repository as OWNER/NAME (default: GITHUB_REPOSITORY, else the `origin` remote)
+    #[arg(long)]
+    pub repo: Option<String>,
+    /// Check only local files; skip the platform API
+    #[arg(long)]
+    pub local_only: bool,
+    /// Treat warnings as failures
+    #[arg(long)]
+    pub strict: bool,
+    /// Output format
+    #[arg(short, long, value_enum, default_value = "text")]
+    pub format: DoctorFormat,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoctorFormat {
+    Text,
+    Json,
 }
 
 #[derive(Args, Debug)]

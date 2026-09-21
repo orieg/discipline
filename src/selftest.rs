@@ -1787,6 +1787,43 @@ smoke_cost::set_contains
         },
     ),
     (
+        "doctor: a required check must run discipline; could-not-check is never healthy",
+        || {
+            use crate::doctor::{analyse_workflows, protection_findings, Protection, Status};
+            let wf = "on:\n  pull_request:\n    types: [opened, synchronize, reopened, edited]\npermissions: read-all\njobs:\n  d:\n    steps: [{uses: orieg/discipline@v0}]\n  ci-gate:\n    needs: d\n    steps: [{run: echo}]\n";
+            let jobs = analyse_workflows(&[("ci.yml".to_string(), wf.to_string())], false).jobs;
+            let mut p = Protection {
+                strict: true,
+                force_push_blocked: true,
+                deletion_blocked: true,
+                pull_request_required: true,
+                bypass: Some(Vec::new()),
+                ..Protection::default()
+            };
+            p.required_contexts.insert("ci-gate".to_string());
+            let good = protection_findings(&p, &jobs);
+            p.required_contexts = ["lint".to_string()].into_iter().collect();
+            let wrong = protection_findings(&p, &jobs);
+            let required = |f: &[crate::doctor::Finding]| {
+                f.iter().find(|x| x.id == "required-check").map(|x| x.status)
+            };
+            let unknown = crate::doctor::Report {
+                platform: "t".into(),
+                repository: None,
+                branch: None,
+                findings: vec![crate::doctor::Finding {
+                    id: "platform",
+                    status: Status::Unknown,
+                    summary: String::new(),
+                    remediation: None,
+                }],
+            };
+            Ok(required(&good) == Some(Status::Pass)
+                && required(&wrong) == Some(Status::Fail)
+                && unknown.exit_code(false) == 2)
+        },
+    ),
+    (
         "presets: cargo-public-api, miri, and sanitizers preset resolution",
         || {
             use crate::guards::presets::resolve_preset;

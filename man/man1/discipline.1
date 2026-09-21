@@ -619,6 +619,46 @@ Print help
 .TP
 <\fIRUNS\fR>
 `discipline\-bench\-ratio/v1` run files of the same code (at least two)
+.SS "discipline doctor"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline doctor\fR [\fB\-\-branch\fR] [\fB\-\-repo\fR] [\fB\-\-local\-only\fR] [\fB\-\-strict\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+Branch whose protection is checked (default: the repository\*(Aqs default branch)
+.TP
+\fB\-\-repo\fR \fI<REPO>\fR
+Repository as OWNER/NAME (default: GITHUB_REPOSITORY, else the `origin` remote)
+.TP
+\fB\-\-local\-only\fR
+Check only local files; skip the platform API
+.TP
+\fB\-\-strict\fR
+Treat warnings as failures
+.TP
+\fB\-f\fR, \fB\-\-format\fR \fI<FORMAT>\fR [default: text]
+Output format
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+text
+.IP \(bu 2
+json
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SH EXIT STATUS
 .TP
 .B 0

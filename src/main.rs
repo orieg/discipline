@@ -100,6 +100,7 @@ fn run_command(command: Commands) -> Result<bool> {
         Commands::Docs(args) => docs(args),
         Commands::InstallHooks(args) => install_hooks(args),
         Commands::Bench(args) => discipline::guards::perf::paired_ratio::cli_bench(args),
+        Commands::Doctor(args) => doctor(args),
     }
 }
 
@@ -809,6 +810,41 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             args.baseline_file.display()
         );
         Ok(true)
+    }
+}
+
+fn doctor(args: discipline::cli::DoctorArgs) -> Result<bool> {
+    use discipline::doctor::{detect_platform, run, DoctorInput};
+    let git = GitCtx::open_whole_tree()?;
+    let remote = git.remote_url("origin");
+    let repository = args
+        .repo
+        .clone()
+        .or_else(|| discipline::guards::claim_registry::repository_slug(&git));
+    let platform = if args.repo.is_some() || std::env::var("GITHUB_REPOSITORY").is_ok() {
+        discipline::doctor::Platform::GitHub
+    } else {
+        detect_platform(remote.as_deref())
+    };
+    let gh = discipline::guards::perf::citation::LiveInstruments::new(&git);
+    let report = run(&DoctorInput {
+        root: git.root(),
+        repository,
+        branch: args.branch.clone(),
+        platform,
+        local_only: args.local_only,
+        gh: &gh,
+    });
+    match args.format {
+        discipline::cli::DoctorFormat::Text => print!("{}", report.render_text()),
+        discipline::cli::DoctorFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&report)?)
+        }
+    }
+    match report.exit_code(args.strict) {
+        0 => Ok(true),
+        1 => Ok(false),
+        _ => bail!("some checks could not be decided (see `unknown` above)"),
     }
 }
 

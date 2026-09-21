@@ -251,7 +251,15 @@ The templates reference the `v0` image tag, which tracks the latest `v0.x.y` rel
 
 ## 8. Repository Protection
 
-A failing gate blocks nothing unless the platform refuses to merge the change. Discipline cannot check these settings itself (it reads the repository, not the platform's configuration), so set them once when adopting it.
+A failing gate blocks nothing unless the platform refuses to merge the change. Set these once when adopting discipline, then verify them with `discipline doctor`:
+
+```bash
+discipline doctor                # workflows, CODEOWNERS, and the default branch's protection
+discipline doctor --local-only   # repository files only, no platform API
+discipline doctor --strict       # warnings fail too (exit 1)
+```
+
+`doctor` reads which workflow jobs run discipline and which rollup jobs depend on them, then asks the platform (GitHub, through `gh api`) whether a required check on the default branch is one of them. It also reports the up-to-date policy, force-push and deletion blocking, the pull-request requirement, bypass actors, workflow triggers and token permissions, and `CODEOWNERS` coverage of the gate configuration. Exit `0` means nothing failed, `1` a check failed, and `2` a check could not be decided (no `gh`, no access, a platform other than GitHub). Rulesets are read with ordinary read access; classic branch protection needs an admin token. Platform checks for GitLab, Gitea and Forgejo are not implemented yet: use `--local-only` there and the settings below.
 
 ### Protection checklist
 

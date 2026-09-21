@@ -362,6 +362,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `completions` | Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish) |
 | `install-hooks` | Install pre-commit hook in the local git repository |
 | `bench` | Benchmark tooling for the bench-regression gate |
+| `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
 <!-- /generated -->
 
 ### Exit Codes

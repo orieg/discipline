@@ -5,6 +5,7 @@ pub mod baseline;
 pub mod cli;
 pub mod config;
 pub mod docs;
+pub mod doctor;
 pub mod gitctx;
 pub mod guards;
 pub mod report;
