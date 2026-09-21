@@ -31,11 +31,10 @@ pub struct Located<'a> {
     pub test: &'a TestFn,
 }
 
-/// Runs every diff-based agent-guard gate and returns one outcome per gate.
-/// Disabled gates are filtered by the caller; computing them is cheap.
-pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
-    let gates = &ctx.config.gates;
-    let vocab = AssertVocabulary {
+/// The assertion vocabulary the agent-guard gates extract facts with.
+pub(crate) fn assert_vocabulary(config: &crate::config::DisciplineConfig) -> AssertVocabulary {
+    let gates = &config.gates;
+    AssertVocabulary {
         extra_macros: [
             &gates.assertion_reduction.extra_assert_macros[..],
             &gates.vacuous_tests.extra_assert_macros[..],
@@ -47,7 +46,14 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         ]
         .concat(),
         safety_placeholders: gates.unsafe_safety_comment.placeholders.clone(),
-    };
+    }
+}
+
+/// Runs every diff-based agent-guard gate and returns one outcome per gate.
+/// Disabled gates are filtered by the caller; computing them is cheap.
+pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
+    let gates = &ctx.config.gates;
+    let vocab = assert_vocabulary(ctx.config);
 
     let registry = default_registry();
     let changed = ctx.git.changed_files()?;

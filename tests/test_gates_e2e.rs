@@ -7507,3 +7507,151 @@ fn bench_regression_zero_point_estimate_is_not_comparable() {
         "{notes:?}"
     );
 }
+
+// ---- test detection: Python helpers and collection rules --------------------
+
+#[test]
+fn python_test_calling_raising_helper_is_not_an_assertion_reduction() {
+    // A consumer refactored inline asserts into same-file helpers that
+    // `raise` on mismatch; the gate reported the assertions dropping.
+    let repo = Repo::new();
+    repo.write(
+        "tests/test_plan.py",
+        "def test_plan():\n    assert schedule() == [1, 2]\n    assert role() == \"leader\"\n",
+    );
+    repo.commit("test: add plan test");
+    repo.write(
+        "tests/test_plan.py",
+        "def check_schedule(got):\n    if got != [1, 2]:\n        raise AssertionError(got)\n\n\
+         def check_role(got):\n    if got != \"leader\":\n        raise AssertionError(got)\n\n\
+         def test_plan():\n    check_schedule(schedule())\n    check_role(role())\n",
+    );
+    repo.commit("refactor: move plan checks into helpers");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert!(
+        run.titles("assertion-reduction").is_empty(),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+
+    // Negative control: the helpers stop raising, so the test checks nothing.
+    repo.write(
+        "tests/test_plan.py",
+        "def check_schedule(got):\n    print(got)\n\n\
+         def check_role(got):\n    print(got)\n\n\
+         def test_plan():\n    check_schedule(schedule())\n    check_role(role())\n",
+    );
+    repo.commit("refactor: log instead of raising");
+    let run_bad = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_bad.titles("assertion-reduction").len(),
+        1,
+        "{}",
+        run_bad.stdout
+    );
+}
+
+#[test]
+fn python_self_test_function_is_not_collected_as_a_test() {
+    let repo = Repo::new();
+    repo.write(
+        "scripts/check_thing.py",
+        "def self_test():\n    assert parse(\"a\") == \"a\"\n    assert parse(\"b\") == \"b\"\n    return 0\n",
+    );
+    repo.commit("feat: add checker script");
+    // Refactoring the script's self-check is not test erosion: pytest and
+    // unittest never collect `self_test`.
+    repo.write(
+        "scripts/check_thing.py",
+        "def self_test():\n    return 0 if all(parse(c) == c for c in \"ab\") else 1\n",
+    );
+    repo.commit("refactor: fold self-check into one expression");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert!(
+        run.titles("assertion-reduction").is_empty(),
+        "{}",
+        run.stdout
+    );
+    assert!(run.titles("vacuous-tests").is_empty(), "{}", run.stdout);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
+#[test]
+fn python_test_functions_and_test_class_methods_are_still_collected() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/test_calc.py",
+        "def test_add():\n    assert add(1, 1) == 2\n    assert add(2, 2) == 4\n\n\
+         class TestMul:\n    def test_mul(self):\n        assert mul(2, 3) == 6\n        assert mul(1, 1) == 1\n",
+    );
+    repo.commit("test: add calc tests");
+    repo.write(
+        "tests/test_calc.py",
+        "def test_add():\n    assert add(1, 1) == 2\n\n\
+         class TestMul:\n    def test_mul(self):\n        assert mul(2, 3) == 6\n",
+    );
+    repo.commit("test: trim calc tests");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let titles = run.titles("assertion-reduction");
+    assert_eq!(titles.len(), 2, "{}", run.stdout);
+    let messages: Vec<String> = run
+        .violations("assertion-reduction")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.contains("`test_add`")),
+        "{messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("`TestMul::test_mul`")),
+        "{messages:?}"
+    );
+}
+
+// ---- pr-checklist: test functions, not just test files ---------------------
+
+fn pr_checklist_repo() -> Repo {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n\n[gates.pr-checklist]\nenabled = true\n",
+    );
+    repo.write(
+        "src/lib.rs",
+        "pub fn double(x: u32) -> u32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(double(2), 4);\n    }\n}\n",
+    );
+    repo.commit("feat: double");
+    repo
+}
+
+#[test]
+fn pr_checklist_accepts_test_added_inside_mod_tests_of_a_source_file() {
+    let repo = pr_checklist_repo();
+    repo.write(
+        "src/lib.rs",
+        "pub fn double(x: u32) -> u32 {\n    x * 2\n}\n\npub fn triple(x: u32) -> u32 {\n    x * 3\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(double(2), 4);\n    }\n\n    #[test]\n    fn triples() {\n        assert_eq!(triple(2), 6);\n    }\n}\n",
+    );
+    repo.commit("feat: triple");
+    repo.write("body.md", "- [x] Tests added\n");
+    let run = repo.check(&["--base", "HEAD~1", "--pr-body-file", "body.md"]);
+    assert!(run.titles("pr-checklist").is_empty(), "{}", run.stdout);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
+#[test]
+fn pr_checklist_still_fires_when_no_test_is_added_anywhere() {
+    let repo = pr_checklist_repo();
+    // The file already holds a test; changing only its non-test code adds
+    // no test, so the ticked box is a false claim.
+    repo.write(
+        "src/lib.rs",
+        "pub fn double(x: u32) -> u32 {\n    x + x\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(double(2), 4);\n    }\n}\n",
+    );
+    repo.commit("refactor: double by addition");
+    repo.write("body.md", "- [x] Tests added\n");
+    let run = repo.check(&["--base", "HEAD~1", "--pr-body-file", "body.md"]);
+    assert_eq!(run.titles("pr-checklist").len(), 1, "{}", run.stdout);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+}

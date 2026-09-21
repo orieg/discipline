@@ -247,19 +247,19 @@ impl<'a> CSharpExtractor<'a> {
                             .child_by_field_name("name")
                             .map(|n| self.text(n))
                             .unwrap_or("");
+                        // `[NUnit.Framework.Test]` names the same attribute as `[Test]`.
+                        let attr_name = attr_name.rsplit('.').next().unwrap_or(attr_name);
+                        let attr_name = attr_name.strip_suffix("Attribute").unwrap_or(attr_name);
 
                         if matches!(
                             attr_name,
                             "Fact"
-                                | "FactAttribute"
                                 | "Theory"
-                                | "TheoryAttribute"
                                 | "Test"
-                                | "TestAttribute"
                                 | "TestCase"
-                                | "TestCaseAttribute"
+                                | "TestCaseSource"
                                 | "TestMethod"
-                                | "TestMethodAttribute"
+                                | "DataTestMethod"
                         ) {
                             is_test = true;
                             // Check for xUnit Skip = "..." in attribute arguments
@@ -296,14 +296,8 @@ impl<'a> CSharpExtractor<'a> {
             }
         }
 
-        // Check naming convention in test files if no attributes present
-        if !is_test
-            && self.is_test_path
-            && (method_name.starts_with("Test") || method_name.starts_with("test_"))
-        {
-            is_test = true;
-        }
-
+        // xUnit, NUnit and MSTest discover tests by attribute only: a method
+        // named `TestConnection` without one is a helper, never run as a test.
         if !is_test {
             return None;
         }
@@ -823,5 +817,51 @@ public class HelperTests
         assert_eq!(t.total_asserts, 1);
         assert_eq!(t.strong_asserts, 1);
         assert!(!t.is_vacuous());
+    }
+
+    #[test]
+    fn unattributed_test_named_method_is_not_collected() {
+        // xUnit, NUnit and MSTest discover by attribute only; a helper named
+        // `TestConnection` in a test project is never run as a test.
+        let src = r#"
+public class DbFixture
+{
+    public bool TestConnection()
+    {
+        return true;
+    }
+
+    public void test_seed_data()
+    {
+    }
+}
+
+public class DbTests
+{
+    [Fact]
+    public void Connects()
+    {
+        Assert.True(new DbFixture().TestConnection());
+    }
+
+    [NUnit.Framework.Test]
+    public void Seeds()
+    {
+        Assert.Equal(1, 1 + 0);
+    }
+
+    [DataTestMethod]
+    public void Rows()
+    {
+        Assert.AreEqual(2, 1 + 1);
+    }
+}
+"#;
+        let facts = CSharpPack
+            .extract("tests/DbTests.cs", src, &AssertVocabulary::default())
+            .expect("extract succeeds");
+        let mut names: Vec<&str> = facts.tests.iter().map(|t| t.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["Connects", "Rows", "Seeds"]);
     }
 }

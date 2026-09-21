@@ -491,6 +491,34 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "python: a same-file helper that raises is an assertion, resolved one level",
+        || {
+            use crate::ast::LanguagePack;
+            let py_pack = crate::ast::python::PythonPack;
+            let vocab = AssertVocabulary::default();
+            let src = "def check(x):\n    if x != 1:\n        raise AssertionError(x)\n\ndef outer(x):\n    check(x)\n\ndef test_direct():\n    check(f())\n\ndef test_nested():\n    outer(f())\n";
+            let facts = py_pack.extract("tests/test_mod.py", src, &vocab)?;
+            let by = |n: &str| facts.tests.iter().find(|t| t.name == n);
+            Ok(by("test_direct").is_some_and(|t| t.total_asserts == 1)
+                && by("test_nested").is_some_and(|t| t.total_asserts == 0))
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
+        "python: only pytest/unittest-collected names are tests (`self_test` is not)",
+        || {
+            use crate::ast::LanguagePack;
+            let py_pack = crate::ast::python::PythonPack;
+            let vocab = AssertVocabulary::default();
+            let src = "import unittest\n\ndef self_test():\n    assert f() == 1\n\ndef test_a():\n    assert f() == 1\n\nclass TestB:\n    def test_b(self):\n        assert f() == 1\n\nclass C(unittest.TestCase):\n    def testC(self):\n        self.assertEqual(f(), 1)\n\nclass Helper:\n    def test_h(self):\n        assert f() == 1\n";
+            let facts = py_pack.extract("pkg/mod.py", src, &vocab)?;
+            let mut names: Vec<&str> = facts.tests.iter().map(|t| t.name.as_str()).collect();
+            names.sort_unstable();
+            Ok(names == ["C::testC", "TestB::test_b", "test_a"])
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "python: context manager assertions and class/module pytestmark skips are detected",
         || {
             use crate::ast::LanguagePack;
@@ -674,6 +702,18 @@ const CASES: &[Case] = &[
             Ok(strong_facts.tests[0].strong_asserts == 2
                 && weak_facts.tests[0].strong_asserts == 0
                 && weak_facts.tests[0].total_asserts == 2)
+        },
+    ),
+    #[cfg(feature = "lang-csharp")]
+    (
+        "csharp: tests are discovered by attribute, not by a `Test*` method name",
+        || {
+            use crate::ast::LanguagePack;
+            let pack = crate::ast::csharp::CSharpPack;
+            let vocab = AssertVocabulary::default();
+            let src = "public class T {\n    public bool TestConnection() { return true; }\n    [Xunit.Fact]\n    public void Works() { Assert.Equal(1, 1 + 0); }\n}\n";
+            let facts = pack.extract("tests/T.cs", src, &vocab)?;
+            Ok(facts.tests.len() == 1 && facts.tests[0].name == "Works")
         },
     ),
     #[cfg(feature = "lang-csharp")]
@@ -1898,6 +1938,18 @@ smoke_cost::set_contains
                 && unbacked.iter().any(|c| c.subject == "docs")
                 && unbacked.iter().any(|c| c.subject == "bench")
                 && backed.is_empty())
+        },
+    ),
+    (
+        "pr-checklist: a test function added or extended in any file backs a test claim",
+        || {
+            use crate::guards::pr_checklist::added_or_extended_tests;
+            let v = AssertVocabulary::default();
+            let base = analyze("fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() { assert_eq!(1, 1 + 0); }\n}\n", &v)?;
+            let added = analyze("fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() { assert_eq!(1, 1 + 0); }\n    #[test]\n    fn b() { assert_eq!(2, 1 + 1); }\n}\n", &v)?;
+            let untouched = analyze("fn f() { let _ = 1; }\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() { assert_eq!(1, 1 + 0); }\n}\n", &v)?;
+            Ok(added_or_extended_tests(&base.tests, &added.tests) == 1
+                && added_or_extended_tests(&base.tests, &untouched.tests) == 0)
         },
     ),
     (
