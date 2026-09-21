@@ -712,6 +712,10 @@
           "description": "Check paired figures for shared workload IDs or differentiation tags",
           "type": "boolean"
         },
+        "check_pending_citations": {
+          "description": "A pending-measurement statement must cite a tracking issue",
+          "type": "boolean"
+        },
         "check_tables": {
           "description": "Check markdown tables for unit-bearing numbers without table or caption provenance tags",
           "type": "boolean"
@@ -723,8 +727,20 @@
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"
         },
+        "require_open_pending_issues": {
+          "description": "A pending-measurement statement must cite at least one open issue, checked with gh; implies check_pending_citations",
+          "type": "boolean"
+        },
         "severity": {
           "$ref": "#/$defs/Severity"
+        },
+        "superseded_json_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Globs of tracked JSON datasets swept for registered figures"
+        },
+        "superseded_registry": {
+          "description": "Path (read at HEAD) of a JSON registry of withdrawn figures; a registered figure may be republished only next to a retraction marker",
+          "type": "string"
         }
       },
       "type": "object"

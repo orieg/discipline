@@ -10,7 +10,7 @@
 //! - Paired figures (e.g. `11.9 ns vs 108.9 ns`, cross-metric statements)
 //!   require shared workload IDs (`(workload: id)`) or documented differentiation markers.
 
-use super::{exempt_filter, Context, GateOutcome, PathFilter};
+use super::{claim_registry, exempt_filter, Context, GateOutcome, PathFilter};
 use crate::config::GateSettings;
 use crate::tokens;
 use anyhow::Result;
@@ -398,6 +398,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
     let exempt = exempt_filter(settings)?;
     let patterns = vec!["**/*.md".to_string(), "**/*.markdown".to_string()];
     let doc_filter = PathFilter::new(&patterns)?;
+    let json_filter = PathFilter::new(&settings.superseded_json_paths)?;
 
     // Collect candidate markdown files: changed files if diff-scoped, or tracked files
     let changed_files = ctx.git.changed_files()?;
@@ -406,6 +407,24 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
         .map(|f| f.path.clone())
         .filter(|p| doc_filter.matches(p) && !exempt.matches(p))
         .collect();
+
+    let registry = match &settings.superseded_registry {
+        Some(path) => {
+            let Some(text) = ctx.git.head_content(path)? else {
+                anyhow::bail!(
+                    "provenance-tags: superseded_registry `{path}` is not present at HEAD"
+                );
+            };
+            Some((path.clone(), claim_registry::load_registry(&text, path)?))
+        }
+        None => None,
+    };
+    let check_pending = settings.check_pending_citations || settings.require_open_pending_issues;
+    let instruments = crate::guards::perf::citation::LiveInstruments::new(ctx.git);
+    let mut issue_states = settings.require_open_pending_issues.then(|| {
+        claim_registry::IssueStates::new(&instruments, claim_registry::repository_slug(ctx.git))
+    });
+    let mut undecidable: Vec<String> = Vec::new();
 
     let mut scanned_count = 0;
 
@@ -416,7 +435,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
         };
 
         scanned_count += 1;
-        let findings = scan_markdown_text(
+        let mut findings = scan_markdown_text(
             &content,
             path,
             settings.check_tables,
@@ -424,6 +443,17 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
             settings.check_intervals,
             settings.check_paired_figures,
         );
+        if check_pending && !is_agent_guide(path) {
+            let stripped = strip_fences(&content.lines().collect::<Vec<_>>());
+            let (problems, unknown) =
+                claim_registry::scan_pending(&stripped, issue_states.as_mut());
+            findings.extend(problems.into_iter().map(pending_finding));
+            undecidable.extend(
+                unknown
+                    .into_iter()
+                    .map(|u| format!("{path}:{}: {}", u.line, u.reasons.join("; "))),
+            );
+        }
 
         for f in findings {
             let override_rec = ctx.find_override(GATE, tokens::ALLOW_PROVENANCE, path);
@@ -451,7 +481,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
     // Also scan PR body if provided
     if let Some(ref body) = ctx.pr_body {
         scanned_count += 1;
-        let findings = scan_markdown_text(
+        let mut findings = scan_markdown_text(
             body,
             "PR body",
             settings.check_tables,
@@ -459,6 +489,17 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
             settings.check_intervals,
             settings.check_paired_figures,
         );
+        if check_pending {
+            let stripped = strip_fences(&body.lines().collect::<Vec<_>>());
+            let (problems, unknown) =
+                claim_registry::scan_pending(&stripped, issue_states.as_mut());
+            findings.extend(problems.into_iter().map(pending_finding));
+            undecidable.extend(
+                unknown
+                    .into_iter()
+                    .map(|u| format!("PR body:{}: {}", u.line, u.reasons.join("; "))),
+            );
+        }
 
         for f in findings {
             let severity = if f.is_warning {
@@ -477,8 +518,133 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
+    if !undecidable.is_empty() {
+        anyhow::bail!(
+            "provenance-tags: could not decide the state of issues cited by pending statements \
+             (require_open_pending_issues needs `gh` with read access; set DISCIPLINE_GH / GH_TOKEN): {}",
+            undecidable.join(" | ")
+        );
+    }
+
+    if let Some((registry_path, figures)) = &registry {
+        // A changed registry can withdraw a figure that is already published, so the
+        // sweep widens to every tracked document; otherwise only changed files are read.
+        let registry_changed = changed_files.iter().any(|f| &f.path == registry_path);
+        let sweep: Vec<String> = if registry_changed {
+            ctx.git.tracked_files()?
+        } else {
+            changed_files.iter().map(|f| f.path.clone()).collect()
+        };
+        let mut swept = 0;
+        for path in &sweep {
+            if exempt.matches(path) || path == registry_path {
+                continue;
+            }
+            let is_doc = doc_filter.matches(path);
+            let is_json = json_filter.matches(path) && path.ends_with(".json");
+            if !is_doc && !is_json {
+                continue;
+            }
+            let Some(content) = ctx.git.head_content(path)? else {
+                continue;
+            };
+            swept += 1;
+            let hits: Vec<(Option<usize>, String)> = if is_doc {
+                let stripped = strip_fences(&content.lines().collect::<Vec<_>>());
+                claim_registry::scan_superseded(&stripped, figures)?
+                    .into_iter()
+                    .map(|h| {
+                        let replacement = if h.replacement.is_empty() {
+                            String::new()
+                        } else {
+                            format!("; replacement: {}", h.replacement)
+                        };
+                        (
+                            Some(h.line),
+                            format!(
+                                "`{}` is superseded figure `{}`, published without a retraction marker{replacement}",
+                                h.matched, h.figure_id
+                            ),
+                        )
+                    })
+                    .collect()
+            } else {
+                let value: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+                    anyhow::anyhow!("provenance-tags: `{path}` is not valid JSON: {e}")
+                })?;
+                claim_registry::scan_superseded_json(&value, figures)?
+                    .into_iter()
+                    .map(|(key, msg)| (None, format!("{key}: {msg}")))
+                    .collect()
+            };
+            for (line, message) in hits {
+                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_PROVENANCE, path) {
+                    out.overrides.push(ov);
+                } else {
+                    out.push(
+                        settings.severity(),
+                        "Superseded Figure Republished",
+                        Some(path),
+                        line,
+                        message,
+                        "Replace the figure with its current value, or mark it retracted/superseded within three lines.",
+                    );
+                }
+            }
+        }
+        if let Some(ref body) = ctx.pr_body {
+            let stripped = strip_fences(&body.lines().collect::<Vec<_>>());
+            for h in claim_registry::scan_superseded(&stripped, figures)? {
+                out.push(
+                    settings.severity(),
+                    "Superseded Figure Republished",
+                    Some("PR body"),
+                    Some(h.line),
+                    format!(
+                        "`{}` is superseded figure `{}`, published without a retraction marker",
+                        h.matched, h.figure_id
+                    ),
+                    "Replace the figure with its current value, or mark it retracted/superseded.",
+                );
+            }
+        }
+        scanned_count += swept;
+        out.notes.push(format!(
+            "superseded registry `{registry_path}`: {} figure(s); {swept} file(s) swept{}",
+            figures.len(),
+            if registry_changed {
+                " (registry changed: every tracked document)"
+            } else {
+                ""
+            }
+        ));
+    }
+
     out.examined = scanned_count;
     Ok(out)
+}
+
+fn is_agent_guide(path: &str) -> bool {
+    path.ends_with("AGENTS.md") || path.ends_with("CLAUDE.md") || path.ends_with("GEMINI.md")
+}
+
+fn pending_finding((line, problem): (usize, claim_registry::PendingProblem)) -> HygieneFinding {
+    let message = match problem {
+        claim_registry::PendingProblem::NoCitation => {
+            "pending measurement statement cites no tracking issue".to_string()
+        }
+        claim_registry::PendingProblem::Closed(issues) => format!(
+            "pending measurement statement cites only closed issue(s): {}",
+            issues.join(", ")
+        ),
+    };
+    HygieneFinding {
+        line,
+        title: "Pending Measurement Without Open Issue",
+        message,
+        remediation: "Cite an open tracking issue (#123) after the pending statement, or state the measured result.",
+        is_warning: false,
+    }
 }
 
 #[cfg(test)]

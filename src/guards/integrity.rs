@@ -26,7 +26,20 @@ const LOOSER_WHEN_GROWN: &[&str] = &[
     "allowed_rules",
 ];
 /// List options where a *shorter* list is looser.
-const LOOSER_WHEN_SHRUNK: &[&str] = &["paths", "include", "extra_patterns", "hostname_denylist"];
+const LOOSER_WHEN_SHRUNK: &[&str] = &[
+    "paths",
+    "include",
+    "extra_patterns",
+    "hostname_denylist",
+    "superseded_json_paths",
+    "citation_source_paths",
+    "citation_measurement_jobs",
+];
+/// Optional references to evidence files: removing one, or pointing it elsewhere, drops
+/// or replaces what the gate checks against.
+const EVIDENCE_REFERENCES: &[&str] = &["superseded_registry", "ratio_baseline"];
+/// Mode switches whose non-default value is the stricter check.
+const STRICTER_MODES: &[(&str, &str)] = &[("mode", "paired-ratio")];
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Weakening {
@@ -275,7 +288,25 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
             })
         };
         for (key, bv) in b {
-            let Some(hv) = h.get(key) else { continue };
+            let Some(hv) = h.get(key) else {
+                if EVIDENCE_REFERENCES.contains(&key.as_str()) {
+                    note(format!("`{key}` removed (was {bv})"));
+                }
+                continue;
+            };
+            if EVIDENCE_REFERENCES.contains(&key.as_str()) && bv != hv {
+                note(format!("`{key}` changed from {bv} to {hv}"));
+                continue;
+            }
+            if let (Value::String(bs), Value::String(hs)) = (bv, hv) {
+                if STRICTER_MODES
+                    .iter()
+                    .any(|(k, strict)| k == key && bs == strict && hs != strict)
+                {
+                    note(format!("`{key}` changed from {bs} to {hs}"));
+                    continue;
+                }
+            }
             match (bv, hv) {
                 (Value::Boolean(true), Value::Boolean(false)) => {
                     note(format!("`{key}` changed from true to false"))
@@ -380,5 +411,53 @@ mod tests {
         assert!(has("command", "`min_count` decreased from 10 to 5"));
         assert!(has("unsafe-budget", "`max_unsafe` increased from 5 to 10"));
         assert!(has("pii", "`diff_only` changed from false to true"));
+    }
+
+    #[test]
+    fn evidence_references_and_strict_modes_cannot_be_dropped_silently() {
+        let base = cfg(
+            "[gates.provenance-tags]\nsuperseded_registry = \"reg.json\"\n\
+             superseded_json_paths = [\"docs/**/*.json\"]\nrequire_open_pending_issues = true\n\
+             [gates.bench-regression]\nmode = \"paired-ratio\"\nratio_baseline = \"b.json\"\n\
+             citation_source_paths = [\"src\"]\n",
+        );
+        let removed = cfg("[gates.bench-regression]\nratio_baseline = \"other.json\"\n");
+        let found = diff_configs(&base, &removed).unwrap();
+        let has = |gate: &str, needle: &str| {
+            found
+                .iter()
+                .any(|w| w.gate == gate && w.what.contains(needle))
+        };
+        assert!(
+            has("provenance-tags", "`superseded_registry` removed"),
+            "{found:?}"
+        );
+        assert!(
+            has("provenance-tags", "`superseded_json_paths` lost 1"),
+            "{found:?}"
+        );
+        assert!(
+            has(
+                "provenance-tags",
+                "`require_open_pending_issues` changed from true to false"
+            ),
+            "{found:?}"
+        );
+        assert!(
+            has("bench-regression", "`mode` changed from paired-ratio"),
+            "{found:?}"
+        );
+        assert!(
+            has("bench-regression", "`ratio_baseline` changed from"),
+            "{found:?}"
+        );
+        assert!(
+            has("bench-regression", "`citation_source_paths` lost 1"),
+            "{found:?}"
+        );
+
+        // Adopting the registry or the stricter mode is not a weakening.
+        let plain = cfg("");
+        assert!(diff_configs(&plain, &base).unwrap().is_empty());
     }
 }

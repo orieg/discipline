@@ -42,6 +42,7 @@ flate2 = { version = "1.0", default-features = false, features = ["rust_backend"
 tar = { version = "0.4", default-features = false }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 bzip2-rs = { version = "0.1.2", default-features = false }
+fancy-regex = "0.19.2"
 
 [features]
 default = [

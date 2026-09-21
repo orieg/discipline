@@ -291,7 +291,11 @@ pub fn generate_schema() -> Value {
                     "check_tables": { "type": "boolean", "description": "Check markdown tables for unit-bearing numbers without table or caption provenance tags" },
                     "check_mechanisms": { "type": "boolean", "description": "Check for mechanism claims without hardware counter evidence or explicit hypothesis qualifiers" },
                     "check_intervals": { "type": "boolean", "description": "Check published wall-clock ratios for confidence intervals or explicit qualifiers" },
-                    "check_paired_figures": { "type": "boolean", "description": "Check paired figures for shared workload IDs or differentiation tags" }
+                    "check_paired_figures": { "type": "boolean", "description": "Check paired figures for shared workload IDs or differentiation tags" },
+                    "superseded_registry": { "type": "string", "description": "Path (read at HEAD) of a JSON registry of withdrawn figures; a registered figure may be republished only next to a retraction marker" },
+                    "superseded_json_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs of tracked JSON datasets swept for registered figures" },
+                    "check_pending_citations": { "type": "boolean", "description": "A pending-measurement statement must cite a tracking issue" },
+                    "require_open_pending_issues": { "type": "boolean", "description": "A pending-measurement statement must cite at least one open issue, checked with gh; implies check_pending_citations" }
                 }
             },
             "UnsafeSafetyCommentGate": {

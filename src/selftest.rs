@@ -1749,6 +1749,44 @@ smoke_cost::set_contains
         },
     ),
     (
+        "provenance-tags: superseded-figure registry and pending-measurement issue citations",
+        || {
+            use crate::guards::claim_registry::{
+                load_registry, scan_pending, scan_superseded, IssueStates, PendingProblem,
+            };
+            use crate::guards::perf::citation::{CannedInstruments, Unavailable};
+            let lines = |t: &str| -> Vec<(usize, String)> {
+                t.lines().enumerate().map(|(i, l)| (i + 1, l.to_string())).collect()
+            };
+            let reg = load_registry(
+                r#"{"figures": [{"id": "f", "patterns": ["(?<![\\w.])1\\.11\\s*x"], "context": ["lookup", "stock"]}]}"#,
+                "reg.json",
+            )?;
+            let bare = scan_superseded(&lines("Stock lookup is 1.11x slower."), &reg)?;
+            let marked = scan_superseded(&lines("Stock lookup was 1.11x slower (retracted)."), &reg)?;
+            let other_number = scan_superseded(&lines("Stock lookup is 21.11x slower."), &reg)?;
+            let broken_registry = load_registry(r#"{"figures": [{"id": "a", "patterns": ["("]}]}"#, "r").is_err();
+
+            let (uncited, _) = scan_pending(&lines("B is pending re-run."), None);
+            let mut canned = CannedInstruments::default();
+            canned
+                .responses
+                .insert("repos/o/r/issues/1".into(), serde_json::json!({"state": "closed"}));
+            let mut states = IssueStates::new(&canned, Some("o/r".into()));
+            let (closed, _) = scan_pending(&lines("B is pending re-run (#1)."), Some(&mut states));
+            let mut blind = IssueStates::new(&Unavailable, Some("o/r".into()));
+            let (_, undecided) = scan_pending(&lines("B is pending re-run (#1)."), Some(&mut blind));
+
+            Ok(bare.len() == 1
+                && marked.is_empty()
+                && other_number.is_empty()
+                && broken_registry
+                && uncited == vec![(1, PendingProblem::NoCitation)]
+                && matches!(closed.as_slice(), [(1, PendingProblem::Closed(_))])
+                && undecided.len() == 1)
+        },
+    ),
+    (
         "presets: cargo-public-api, miri, and sanitizers preset resolution",
         || {
             use crate::guards::presets::resolve_preset;

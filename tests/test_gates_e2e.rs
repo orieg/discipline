@@ -7878,3 +7878,170 @@ fn ci_integrity_renamed_step_is_still_compared_against_its_base_form() {
         run.stdout
     );
 }
+
+const SUPERSEDED_REGISTRY: &str = r#"{"figures": [{"id": "old_deficit",
+  "patterns": ["(?<![\\w.])1\\.11\\s*[x×](?!\\w)"],
+  "context": ["lookup", "stock"], "replacement": "1.031x [1.024, 1.038]"}]}"#;
+
+const REGISTRY_CONFIG: &str =
+    "[gates.provenance-tags]\nenabled = true\nsuperseded_registry = \"figures.json\"\nsuperseded_json_paths = [\"data/*.json\"]\n";
+
+#[test]
+fn provenance_tags_superseded_figure_needs_a_retraction_marker() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("figures.json", SUPERSEDED_REGISTRY),
+            ("docs/perf.md", "# Perf\n"),
+        ],
+        "base: registry",
+    );
+
+    repo.write(
+        "docs/perf.md",
+        "# Perf\n\nRandom lookup is 1.11x slower than stock.\n",
+    );
+    repo.write("data/chart.json", r#"{"lookup_vs_stock": "1.11x"}"#);
+    repo.commit("docs: republish figure");
+    let run = repo.check(&["--config-override", REGISTRY_CONFIG]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    let v = run.violations("provenance-tags");
+    let files: Vec<&str> = v.iter().filter_map(|x| x["file"].as_str()).collect();
+    assert!(files.contains(&"docs/perf.md"), "{v:?}");
+    assert!(files.contains(&"data/chart.json"), "{v:?}");
+    let superseded = v
+        .iter()
+        .filter(|x| x["title"].as_str() == Some("Superseded Figure Republished"))
+        .count();
+    assert_eq!(superseded, 2, "{v:?}");
+
+    repo.write(
+        "docs/perf.md",
+        "# Perf\n\nRandom lookup was 1.11x slower than stock (retracted: loaded host).\n",
+    );
+    repo.write("data/chart.json", r#"{"lookup_vs_stock": "1.031x"}"#);
+    repo.commit("docs: retract figure");
+    let run = repo.check(&["--config-override", REGISTRY_CONFIG]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+}
+
+#[test]
+fn provenance_tags_changed_registry_sweeps_unchanged_documents() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("figures.json", r#"{"figures": []}"#),
+            (
+                "docs/old.md",
+                "# Old\n\nRandom lookup is 1.11x slower than stock.\n",
+            ),
+        ],
+        "base: empty registry and an old figure",
+    );
+    repo.write("figures.json", SUPERSEDED_REGISTRY);
+    repo.commit("docs: withdraw the figure");
+    let run = repo.check(&["--config-override", REGISTRY_CONFIG]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    let v = run.violations("provenance-tags");
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0]["file"].as_str(), Some("docs/old.md"));
+}
+
+#[test]
+fn provenance_tags_missing_or_malformed_registry_is_could_not_check() {
+    let repo = Repo::new();
+    repo.commit_base("docs/perf.md", "# Perf\n", "base");
+    repo.write("docs/perf.md", "# Perf\n\nText.\n");
+    repo.commit("docs: edit");
+    let missing = repo.check(&["--config-override", REGISTRY_CONFIG]);
+    assert_eq!(missing.code, 2, "{}", missing.stderr);
+    assert!(
+        missing.stderr.contains("figures.json"),
+        "{}",
+        missing.stderr
+    );
+
+    repo.write(
+        "figures.json",
+        r#"{"figures": [{"id": "a", "patterns": ["(unclosed"]}]}"#,
+    );
+    repo.commit("docs: broken registry");
+    let broken = repo.check(&["--config-override", REGISTRY_CONFIG]);
+    assert_eq!(broken.code, 2, "{}", broken.stderr);
+    assert!(
+        broken.stderr.contains("does not compile"),
+        "{}",
+        broken.stderr
+    );
+}
+
+#[test]
+fn provenance_tags_pending_statement_must_cite_an_open_issue() {
+    let repo = Repo::new();
+    repo.commit_base("docs/perf.md", "# Perf\n", "base");
+
+    // A citation is required once the check is on.
+    repo.write(
+        "docs/perf.md",
+        "# Perf\n\nArm B is pending re-run on the reference host.\n",
+    );
+    repo.commit("docs: pending");
+    let cfg = "[gates.provenance-tags]\nenabled = true\ncheck_pending_citations = true\n";
+    let run = repo.check(&["--config-override", cfg]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert!(run
+        .titles("provenance-tags")
+        .contains(&"Pending Measurement Without Open Issue".to_string()));
+
+    // Issue state: #1 closed, #2 open, answered by a stand-in for `gh`.
+    let gh = repo.file("fake-gh.sh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\ncase \"$2\" in\n  */issues/1) echo '{\"state\":\"closed\"}' ;;\n  */issues/2) echo '{\"state\":\"open\"}' ;;\n  *) echo 'not found' >&2; exit 1 ;;\nesac\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let gh = gh.to_str().unwrap().to_string();
+    let open_cfg = "[gates.provenance-tags]\nenabled = true\nrequire_open_pending_issues = true\nexempt_paths = [\"fake-gh.sh\"]\n";
+    let env = [("DISCIPLINE_GH", gh.as_str()), ("GITHUB_REPOSITORY", "o/r")];
+    let args = [
+        "check",
+        "--format",
+        "json",
+        "--base",
+        "main",
+        "--config-override",
+        open_cfg,
+    ];
+
+    repo.write("docs/perf.md", "# Perf\n\nArm B is pending re-run (#1).\n");
+    repo.commit("docs: cite closed issue");
+    let closed = repo.run(&args, &env);
+    assert_eq!(closed.code, 1, "{}", closed.stderr);
+    assert!(
+        closed.stdout.contains("closed issue(s): #1"),
+        "{}",
+        closed.stdout
+    );
+
+    repo.write(
+        "docs/perf.md",
+        "# Perf\n\nArm B is pending re-run (#1, #2).\n",
+    );
+    repo.commit("docs: cite open issue");
+    let open = repo.run(&args, &env);
+    assert_eq!(open.code, 0, "{}", open.stdout);
+
+    // Without a usable `gh` the state is undecidable: could-not-check, not a pass.
+    let blind = repo.run(&args, &[("GITHUB_REPOSITORY", "o/r")]);
+    assert_eq!(blind.code, 2, "{}", blind.stderr);
+    assert!(
+        blind.stderr.contains("o/r#1") || blind.stderr.contains("o/r#2"),
+        "{}",
+        blind.stderr
+    );
+}

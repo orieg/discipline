@@ -1,0 +1,655 @@
+//! Retracted-figure registry and pending-measurement citations (`provenance-tags`).
+//!
+//! Two claim checks that need data outside the line being read:
+//!
+//! - **Superseded figures.** A repository keeps a registry of figures it has withdrawn
+//!   (`superseded_registry`, a JSON file at `HEAD`). A registered figure may be published
+//!   again only next to a retraction marker (`retracted`, `superseded`, `corrected`, ...)
+//!   within three lines of it. A registry pattern matches only when at least two of the
+//!   figure's context words (one, when it declares one) appear in the same sentence or
+//!   table cell, or in the surrounding window, so an unrelated `12.0x` does not fire.
+//!   Tracked JSON datasets named by `superseded_json_paths` are swept value by value.
+//! - **Pending measurements.** A statement that a measurement is pending (`pending re-run`,
+//!   `pending re-measurement`, ...) must cite a tracking issue within the next 150
+//!   characters. With `require_open_pending_issues`, at least one cited issue must be
+//!   open: an issue closed while the text still says "pending" is a stale claim.
+//!
+//! Registry format (unknown fields are ignored, so a registry can carry its own notes):
+//!
+//! ```json
+//! { "figures": [ { "id": "...", "patterns": ["regex", ...], "context": ["word", ...],
+//!                  "array_sequence": ["1.5", "2.0"], "replacement": "..." } ] }
+//! ```
+//!
+//! Patterns are compiled case-insensitively with look-around support. A registry that is
+//! missing at `HEAD`, is not JSON, or holds a pattern that does not compile is a
+//! could-not-check (exit 2), never an empty registry.
+//!
+//! Issue state comes from `gh api` through the same instruments as bench citation
+//! freshness; the binary has no network stack (AGENTS.md §3.3). An issue whose state the
+//! instruments cannot decide is reported by name as could-not-check.
+
+use crate::guards::perf::citation::CitationInstruments;
+use anyhow::{bail, Context as _, Result};
+use regex::Regex;
+use std::collections::BTreeMap;
+use std::sync::LazyLock;
+
+/// Lines on each side of a registered figure searched for a retraction marker.
+pub const RETRACTION_WINDOW: usize = 3;
+
+/// Characters after a pending statement searched for its issue citation.
+pub const PENDING_CITATION_SPAN: usize = 150;
+
+/// JSON object keys whose values record a retraction rather than publish a figure.
+const JSON_SKIP_KEYS: &[&str] = &[
+    "provenance",
+    "removed_for_lack_of_provenance",
+    "retraction",
+    "meta",
+    "description",
+    "_comment",
+];
+
+static RETRACTION_MARKERS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:retract(?:ed|ion|ing)?|withdraw(?:n)?|supersed(?:ed|es|ing)?|correct(?:ed|ion)?|previously|refut(?:ed|es|ing)?|stale|anti-example|strawman|earlier|was measured with|both were|unmeasured|unverified|definitional|indicative)\b",
+    )
+    .unwrap()
+});
+
+static PENDING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:pending\s+(?:(?:a\s+)?(?:tagged\s+)?(?:reference-host|quiet-host|fair-baseline|clean-host)\s+)?(?:re-run|re-measurement|run)|unverified\s+until\s+the\s+next\s+nightly\s+baseline\s+run)\b",
+    )
+    .unwrap()
+});
+
+static ISSUE_REF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(?:issues|pull)/(\d+)|(?:#|issues/)(\d+)",
+    )
+    .unwrap()
+});
+
+/// One withdrawn figure.
+#[derive(Debug)]
+pub struct SupersededFigure {
+    pub id: String,
+    pub patterns: Vec<fancy_regex::Regex>,
+    /// Lower-cased context words.
+    pub context: Vec<String>,
+    /// A retracted run of array values, compared as strings.
+    pub array_sequence: Option<Vec<String>>,
+    pub replacement: String,
+}
+
+impl SupersededFigure {
+    /// Context words that must co-occur with a pattern match.
+    fn required_context(&self) -> usize {
+        self.context.len().min(2)
+    }
+
+    fn context_hits(&self, texts: &[&str]) -> usize {
+        self.context
+            .iter()
+            .filter(|c| texts.iter().any(|t| t.contains(c.as_str())))
+            .count()
+    }
+}
+
+/// Parse a superseded-figure registry. `path` names it in errors.
+pub fn load_registry(json: &str, path: &str) -> Result<Vec<SupersededFigure>> {
+    let root: serde_json::Value = serde_json::from_str(json)
+        .with_context(|| format!("superseded registry `{path}` is not valid JSON"))?;
+    let Some(figures) = root.get("figures").and_then(|f| f.as_array()) else {
+        bail!("superseded registry `{path}` has no `figures` array");
+    };
+    let mut out = Vec::with_capacity(figures.len());
+    for (i, fig) in figures.iter().enumerate() {
+        let Some(id) = fig.get("id").and_then(|v| v.as_str()) else {
+            bail!("superseded registry `{path}`: figure {i} has no string `id`");
+        };
+        let strings = |key: &str| -> Result<Vec<String>> {
+            match fig.get(key) {
+                None => Ok(Vec::new()),
+                Some(serde_json::Value::Array(items)) => items
+                    .iter()
+                    .map(|v| match v {
+                        serde_json::Value::String(s) => Ok(s.clone()),
+                        serde_json::Value::Number(n) => Ok(n.to_string()),
+                        _ => bail!(
+                            "superseded registry `{path}`: `{id}.{key}` holds a non-string entry"
+                        ),
+                    })
+                    .collect(),
+                Some(_) => bail!("superseded registry `{path}`: `{id}.{key}` is not an array"),
+            }
+        };
+        let mut patterns = Vec::new();
+        for (j, p) in strings("patterns")?.iter().enumerate() {
+            let re = fancy_regex::Regex::new(&format!("(?i){p}")).with_context(|| {
+                format!("superseded registry `{path}`: `{id}.patterns[{j}]` does not compile")
+            })?;
+            patterns.push(re);
+        }
+        let array_sequence = fig
+            .get("array_sequence")
+            .map(|_| strings("array_sequence"))
+            .transpose()?
+            .filter(|s| !s.is_empty());
+        if patterns.is_empty() && array_sequence.is_none() {
+            bail!(
+                "superseded registry `{path}`: `{id}` has neither `patterns` nor `array_sequence`"
+            );
+        }
+        out.push(SupersededFigure {
+            id: id.to_string(),
+            patterns,
+            context: strings("context")?
+                .into_iter()
+                .map(|c| c.to_lowercase())
+                .collect(),
+            array_sequence,
+            replacement: fig
+                .get("replacement")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// A registered figure published without a retraction marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupersededHit {
+    pub line: usize,
+    pub figure_id: String,
+    pub matched: String,
+    pub replacement: String,
+}
+
+/// Split a line into sentences and table cells: the unit a context word must share.
+fn chunks(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    for cell in text.split('|') {
+        let mut start = 0;
+        let bytes = cell.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if matches!(bytes[i], b'.' | b'!' | b'?')
+                && bytes.get(i + 1).is_some_and(|b| b.is_ascii_whitespace())
+            {
+                out.push(&cell[start..=i]);
+                start = i + 1;
+            }
+            i += 1;
+        }
+        out.push(&cell[start..]);
+    }
+    out.into_iter()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
+/// Scan fence-stripped markdown lines `(line number, text)` for registered figures.
+pub fn scan_superseded(
+    lines: &[(usize, String)],
+    registry: &[SupersededFigure],
+) -> Result<Vec<SupersededHit>> {
+    let mut hits = Vec::new();
+    if registry.is_empty() {
+        return Ok(hits);
+    }
+    for (idx, (line, text)) in lines.iter().enumerate() {
+        let lo = idx.saturating_sub(RETRACTION_WINDOW);
+        let hi = (idx + RETRACTION_WINDOW + 1).min(lines.len());
+        let window: String = lines[lo..hi]
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let retracted = RETRACTION_MARKERS.is_match(&window);
+        let window_lower = window.to_lowercase();
+        for chunk in chunks(text) {
+            let chunk_lower = chunk.to_lowercase();
+            for fig in registry {
+                // Context is a cheap substring test and a hit needs it, so it gates the
+                // (backtracking) pattern search.
+                if fig.context_hits(&[&chunk_lower, &window_lower]) < fig.required_context() {
+                    continue;
+                }
+                for pat in &fig.patterns {
+                    let Some(m) = pat
+                        .find(chunk)
+                        .with_context(|| format!("superseded pattern for `{}` failed", fig.id))?
+                    else {
+                        continue;
+                    };
+                    if !retracted {
+                        hits.push(SupersededHit {
+                            line: *line,
+                            figure_id: fig.id.clone(),
+                            matched: m.as_str().trim().to_string(),
+                            replacement: fig.replacement.clone(),
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    Ok(hits)
+}
+
+/// Sweep a JSON dataset for registered figures. Returns `(key path, message)` pairs.
+pub fn scan_superseded_json(
+    value: &serde_json::Value,
+    registry: &[SupersededFigure],
+) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    walk_json(value, "root", registry, &mut out)?;
+    Ok(out)
+}
+
+fn walk_json(
+    value: &serde_json::Value,
+    key_path: &str,
+    registry: &[SupersededFigure],
+    out: &mut Vec<(String, String)>,
+) -> Result<()> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                if JSON_SKIP_KEYS.contains(&k.as_str()) || k.starts_with("retraction_") {
+                    continue;
+                }
+                walk_json(v, &format!("{key_path}.{k}"), registry, out)?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            let as_strings: Vec<String> = items
+                .iter()
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .collect();
+            for fig in registry {
+                let Some(seq) = &fig.array_sequence else {
+                    continue;
+                };
+                if as_strings.windows(seq.len()).any(|w| w == seq.as_slice()) {
+                    out.push((
+                        key_path.to_string(),
+                        format!("retracted sequence of `{}` ({})", fig.id, seq.join(", ")),
+                    ));
+                }
+            }
+            for (i, v) in items.iter().enumerate() {
+                walk_json(v, &format!("{key_path}[{i}]"), registry, out)?;
+            }
+        }
+        serde_json::Value::String(s) => {
+            let lower = s.to_lowercase();
+            let key_lower = key_path.to_lowercase();
+            for fig in registry {
+                if fig.context_hits(&[&lower, &key_lower]) < fig.required_context() {
+                    continue;
+                }
+                for pat in &fig.patterns {
+                    let Some(m) = pat
+                        .find(s)
+                        .with_context(|| format!("superseded pattern for `{}` failed", fig.id))?
+                    else {
+                        continue;
+                    };
+                    out.push((
+                        key_path.to_string(),
+                        format!("`{}` is superseded figure `{}`", m.as_str().trim(), fig.id),
+                    ));
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Why a pending statement fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingProblem {
+    /// No issue is cited within [`PENDING_CITATION_SPAN`] characters.
+    NoCitation,
+    /// Every cited issue is closed.
+    Closed(Vec<String>),
+}
+
+/// A pending statement whose cited issues' state could not be decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingUndecidable {
+    pub line: usize,
+    pub reasons: Vec<String>,
+}
+
+/// Issue state lookups, cached per `owner/repo#n` across one evaluation.
+pub struct IssueStates<'a> {
+    instruments: &'a dyn CitationInstruments,
+    repo: Option<String>,
+    cache: BTreeMap<String, std::result::Result<bool, String>>,
+}
+
+impl<'a> IssueStates<'a> {
+    /// `repo` is `owner/name`, used for bare `#123` references.
+    pub fn new(instruments: &'a dyn CitationInstruments, repo: Option<String>) -> Self {
+        Self {
+            instruments,
+            repo,
+            cache: BTreeMap::new(),
+        }
+    }
+
+    /// `Ok(true)` when open, `Ok(false)` when closed, `Err` when undecidable.
+    fn is_open(
+        &mut self,
+        owner_repo: Option<&str>,
+        number: &str,
+    ) -> std::result::Result<bool, String> {
+        let Some(slug) = owner_repo.map(str::to_string).or_else(|| self.repo.clone()) else {
+            return Err(format!(
+                "#{number}: no repository to resolve it in (GITHUB_REPOSITORY is unset and `origin` is not a GitHub remote)"
+            ));
+        };
+        let key = format!("{slug}#{number}");
+        if let Some(hit) = self.cache.get(&key) {
+            return hit.clone();
+        }
+        let answer = self
+            .instruments
+            .gh_api(&format!("repos/{slug}/issues/{number}"))
+            .and_then(|v| match v.get("state").and_then(|s| s.as_str()) {
+                Some(s) if s.eq_ignore_ascii_case("open") => Ok(true),
+                Some(s) if s.eq_ignore_ascii_case("closed") => Ok(false),
+                _ => Err("response carries no `state`".to_string()),
+            })
+            .map_err(|e| format!("{key}: {e}"));
+        self.cache.insert(key, answer.clone());
+        answer
+    }
+}
+
+/// Scan fence-stripped lines for pending statements. With `states`, cited issues must
+/// include an open one; without, a citation is enough.
+pub fn scan_pending(
+    lines: &[(usize, String)],
+    mut states: Option<&mut IssueStates<'_>>,
+) -> (Vec<(usize, PendingProblem)>, Vec<PendingUndecidable>) {
+    let mut problems = Vec::new();
+    let mut undecidable = Vec::new();
+    for (line, text) in lines {
+        for m in PENDING.find_iter(text) {
+            let after: String = text[m.end()..]
+                .chars()
+                .take(PENDING_CITATION_SPAN)
+                .collect();
+            let refs: Vec<(Option<String>, String)> = ISSUE_REF
+                .captures_iter(&after)
+                .map(|c| match (c.get(1), c.get(2), c.get(3)) {
+                    (Some(o), Some(r), Some(n)) => (
+                        Some(format!("{}/{}", o.as_str(), r.as_str())),
+                        n.as_str().to_string(),
+                    ),
+                    _ => (
+                        None,
+                        c.get(4).map(|n| n.as_str()).unwrap_or_default().to_string(),
+                    ),
+                })
+                .collect();
+            if refs.is_empty() {
+                problems.push((*line, PendingProblem::NoCitation));
+                break;
+            }
+            let Some(states) = states.as_deref_mut() else {
+                continue;
+            };
+            let mut closed = Vec::new();
+            let mut unknown = Vec::new();
+            let mut open = false;
+            for (slug, n) in &refs {
+                match states.is_open(slug.as_deref(), n) {
+                    Ok(true) => {
+                        open = true;
+                        break;
+                    }
+                    Ok(false) => closed.push(format!("#{n}")),
+                    Err(e) => unknown.push(e),
+                }
+            }
+            if open {
+                continue;
+            }
+            if !unknown.is_empty() {
+                undecidable.push(PendingUndecidable {
+                    line: *line,
+                    reasons: unknown,
+                });
+            } else {
+                problems.push((*line, PendingProblem::Closed(closed)));
+            }
+            break;
+        }
+    }
+    (problems, undecidable)
+}
+
+/// `owner/name` of the repository under review: `GITHUB_REPOSITORY`, else a GitHub
+/// `origin` remote.
+pub fn repository_slug(git: &crate::gitctx::GitCtx) -> Option<String> {
+    if let Some(s) = std::env::var("GITHUB_REPOSITORY")
+        .ok()
+        .filter(|s| s.contains('/') && !s.trim().is_empty())
+    {
+        return Some(s.trim().to_string());
+    }
+    let url = git.remote_url("origin")?;
+    parse_github_remote(&url)
+}
+
+/// `owner/name` from a GitHub remote URL (https or ssh form).
+pub fn parse_github_remote(url: &str) -> Option<String> {
+    static REMOTE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$").unwrap()
+    });
+    let c = REMOTE.captures(url.trim())?;
+    Some(format!("{}/{}", &c[1], &c[2]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::guards::perf::citation::{CannedInstruments, Unavailable};
+
+    const REGISTRY: &str = r#"{
+      "_comment": ["notes are ignored"],
+      "figures": [
+        { "id": "old_deficit",
+          "patterns": ["(?<![\\w.])1\\.11\\s*[x×](?!\\w)", "(?<![\\w.])11%\\s*slower"],
+          "context": ["lookup", "stock", "deficit"],
+          "replacement": "1.031x [1.024, 1.038]",
+          "rationale": "ignored field" },
+        { "id": "old_curve", "array_sequence": [1.0, 1.9, 12.0], "context": [] }
+      ]
+    }"#;
+
+    fn lines(text: &str) -> Vec<(usize, String)> {
+        text.lines()
+            .enumerate()
+            .map(|(i, l)| (i + 1, l.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn registry_loads_lookbehind_patterns_and_ignores_unknown_fields() {
+        let reg = load_registry(REGISTRY, "reg.json").unwrap();
+        assert_eq!(reg.len(), 2);
+        assert_eq!(reg[0].patterns.len(), 2);
+        assert_eq!(reg[0].context, vec!["lookup", "stock", "deficit"]);
+        assert_eq!(
+            reg[1].array_sequence.as_deref(),
+            Some(&["1.0".to_string(), "1.9".to_string(), "12.0".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn malformed_registries_are_errors_not_empty() {
+        assert!(load_registry("not json", "r").is_err());
+        assert!(load_registry(r#"{"items": []}"#, "r").is_err());
+        assert!(load_registry(r#"{"figures": [{"patterns": ["x"]}]}"#, "r").is_err());
+        assert!(load_registry(
+            r#"{"figures": [{"id": "a", "patterns": ["(unclosed"]}]}"#,
+            "r"
+        )
+        .is_err());
+        assert!(load_registry(r#"{"figures": [{"id": "a"}]}"#, "r").is_err());
+    }
+
+    #[test]
+    fn unretracted_figure_with_context_fires_and_retraction_marker_clears_it() {
+        let reg = load_registry(REGISTRY, "r").unwrap();
+        let bad = lines("Random lookup is 1.11x slower than stock.");
+        let hits = scan_superseded(&bad, &reg).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].figure_id, "old_deficit");
+        assert_eq!(hits[0].matched, "1.11x");
+        assert_eq!(hits[0].line, 1);
+
+        let retracted =
+            lines("Random lookup was 1.11x slower than stock (retracted: loaded host).");
+        assert!(scan_superseded(&retracted, &reg).unwrap().is_empty());
+
+        // The marker may sit up to three lines away, not four.
+        let near = lines("Retracted figures:\n\n\nRandom lookup 1.11x vs stock.");
+        assert!(scan_superseded(&near, &reg).unwrap().is_empty());
+        let far = lines("Retracted figures:\n\n\n\nRandom lookup 1.11x vs stock.");
+        assert_eq!(scan_superseded(&far, &reg).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn figure_without_its_context_or_inside_a_longer_number_does_not_fire() {
+        let reg = load_registry(REGISTRY, "r").unwrap();
+        // One context word is not enough when the figure declares three.
+        assert!(
+            scan_superseded(&lines("Compression is 1.11x better on lookup."), &reg)
+                .unwrap()
+                .is_empty()
+        );
+        // Lookbehind: 21.11x is a different number.
+        assert!(
+            scan_superseded(&lines("Stock lookup is 21.11x slower."), &reg)
+                .unwrap()
+                .is_empty()
+        );
+        // Unicode multiplication sign and a table cell are both matched.
+        assert_eq!(
+            scan_superseded(&lines("| stock lookup | 1.11× |"), &reg)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn json_sweep_matches_strings_and_sequences_and_skips_retraction_keys() {
+        let reg = load_registry(REGISTRY, "r").unwrap();
+        let data: serde_json::Value = serde_json::json!({
+            "lookup_vs_stock": { "label": "11% slower" },
+            "series": [0.5, 1.0, 1.9, 12.0],
+            "retraction": { "label": "stock lookup 11% slower" },
+            "unrelated": "11% slower"
+        });
+        let hits = scan_superseded_json(&data, &reg).unwrap();
+        let paths: Vec<&str> = hits.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(paths.contains(&"root.lookup_vs_stock.label"), "{hits:?}");
+        assert!(paths.contains(&"root.series"), "{hits:?}");
+        assert!(!paths.iter().any(|p| p.contains("retraction")), "{hits:?}");
+        assert!(!paths.contains(&"root.unrelated"), "{hits:?}");
+    }
+
+    #[test]
+    fn pending_statement_needs_a_citation() {
+        let (p, u) = scan_pending(
+            &lines("Arm B is pending re-run on the reference host."),
+            None,
+        );
+        assert_eq!(p, vec![(1, PendingProblem::NoCitation)]);
+        assert!(u.is_empty());
+        let (p, _) = scan_pending(&lines("Arm B is pending re-run (#812)."), None);
+        assert!(p.is_empty());
+        let (p, _) = scan_pending(&lines("Nothing is pending here."), None);
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn pending_citation_must_include_an_open_issue_when_state_is_required() {
+        let mut canned = CannedInstruments::default();
+        canned.responses.insert(
+            "repos/o/r/issues/1".into(),
+            serde_json::json!({"state": "closed"}),
+        );
+        canned.responses.insert(
+            "repos/o/r/issues/2".into(),
+            serde_json::json!({"state": "open"}),
+        );
+        canned.responses.insert(
+            "repos/x/y/issues/9".into(),
+            serde_json::json!({"state": "OPEN"}),
+        );
+
+        let mut states = IssueStates::new(&canned, Some("o/r".into()));
+        let (p, u) = scan_pending(&lines("B is pending re-run (#1)."), Some(&mut states));
+        assert_eq!(p, vec![(1, PendingProblem::Closed(vec!["#1".into()]))]);
+        assert!(u.is_empty());
+
+        let (p, u) = scan_pending(&lines("B is pending re-run (#1, #2)."), Some(&mut states));
+        assert!(p.is_empty() && u.is_empty());
+
+        let (p, u) = scan_pending(
+            &lines("B is pending re-run, see https://github.com/x/y/issues/9."),
+            Some(&mut states),
+        );
+        assert!(p.is_empty() && u.is_empty());
+    }
+
+    #[test]
+    fn undecidable_issue_state_is_reported_not_passed() {
+        let mut states = IssueStates::new(&Unavailable, Some("o/r".into()));
+        let (p, u) = scan_pending(&lines("B is pending re-run (#5)."), Some(&mut states));
+        assert!(p.is_empty());
+        assert_eq!(u.len(), 1);
+        assert!(u[0].reasons[0].contains("o/r#5"), "{u:?}");
+
+        let mut no_repo = IssueStates::new(&Unavailable, None);
+        let (_, u) = scan_pending(&lines("B is pending re-run (#5)."), Some(&mut no_repo));
+        assert!(u[0].reasons[0].contains("no repository"), "{u:?}");
+    }
+
+    #[test]
+    fn github_remote_forms_parse() {
+        assert_eq!(
+            parse_github_remote("https://github.com/o/r.git").as_deref(),
+            Some("o/r")
+        );
+        assert_eq!(
+            parse_github_remote("git@github.com:o/r.git").as_deref(),
+            Some("o/r")
+        );
+        assert_eq!(
+            parse_github_remote("https://github.com/o/r").as_deref(),
+            Some("o/r")
+        );
+        assert_eq!(parse_github_remote("https://gitlab.com/o/r.git"), None);
+    }
+}

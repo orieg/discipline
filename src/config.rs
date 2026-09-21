@@ -874,6 +874,16 @@ pub struct ProvenanceTagsGate {
     pub check_intervals: bool,
     /// Check paired figures (e.g. 11.9 ns vs 108.9 ns) for shared workload IDs or differentiation tags.
     pub check_paired_figures: bool,
+    /// Repository path (read at HEAD) of a JSON registry of withdrawn figures. A registered
+    /// figure may be republished only next to a retraction marker.
+    pub superseded_registry: Option<String>,
+    /// Globs of tracked JSON datasets swept for registered figures.
+    pub superseded_json_paths: Vec<String>,
+    /// A pending-measurement statement must cite a tracking issue.
+    pub check_pending_citations: bool,
+    /// A pending-measurement statement must cite at least one open issue (checked with `gh`).
+    /// Implies `check_pending_citations`.
+    pub require_open_pending_issues: bool,
 }
 
 impl Default for ProvenanceTagsGate {
@@ -886,6 +896,10 @@ impl Default for ProvenanceTagsGate {
             check_mechanisms: true,
             check_intervals: true,
             check_paired_figures: true,
+            superseded_registry: None,
+            superseded_json_paths: Vec::new(),
+            check_pending_citations: false,
+            require_open_pending_issues: false,
         }
     }
 }

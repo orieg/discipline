@@ -2,6 +2,7 @@ pub mod agent_diff;
 pub mod archive_contents;
 pub mod ci_integrity;
 pub mod ci_skip_set;
+pub mod claim_registry;
 pub mod command;
 pub mod dependency;
 pub mod hygiene;

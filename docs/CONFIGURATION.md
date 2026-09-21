@@ -207,10 +207,14 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.provenance-tags.check_intervals` | boolean | `true` | Check published wall-clock ratios for confidence intervals or explicit qualifiers |
 | `gates.provenance-tags.check_mechanisms` | boolean | `true` | Check for mechanism claims without hardware counter evidence or explicit hypothesis qualifiers |
 | `gates.provenance-tags.check_paired_figures` | boolean | `true` | Check paired figures for shared workload IDs or differentiation tags |
+| `gates.provenance-tags.check_pending_citations` | boolean | `false` | A pending-measurement statement must cite a tracking issue |
 | `gates.provenance-tags.check_tables` | boolean | `true` | Check markdown tables for unit-bearing numbers without table or caption provenance tags |
 | `gates.provenance-tags.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.provenance-tags.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.provenance-tags.require_open_pending_issues` | boolean | `false` | A pending-measurement statement must cite at least one open issue, checked with gh; implies check_pending_citations |
 | `gates.provenance-tags.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.provenance-tags.superseded_json_paths` | list | `[]` | Globs of tracked JSON datasets swept for registered figures |
+| `gates.provenance-tags.superseded_registry` | string | *(unset)* | Path (read at HEAD) of a JSON registry of withdrawn figures; a registered figure may be republished only next to a retraction marker |
 | `gates.sanitizers.canary` | boolean | `false` | Whether to verify a negative-control race canary before main tests |
 | `gates.sanitizers.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.sanitizers.exempt_paths` | list | `[]` | File path globs exempted from this gate |

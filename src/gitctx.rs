@@ -668,6 +668,14 @@ impl GitCtx {
             .unwrap_or(false))
     }
 
+    /// URL of the remote `name`, if it exists and has one.
+    pub fn remote_url(&self, name: &str) -> Option<String> {
+        self.repo
+            .find_remote(name)
+            .ok()
+            .and_then(|r| r.url().ok().map(str::to_string))
+    }
+
     /// Full hex id of the `HEAD` commit, if there is one.
     pub fn head_oid(&self) -> Option<String> {
         self.repo

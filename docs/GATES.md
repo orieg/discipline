@@ -475,13 +475,16 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Unverified mechanism claims (`memory-latency-bound`, `branch-misprediction`, `TLB-bound`, etc.) without citing hardware counters (`perf stat`, `cycle_activity`, etc.) or marking as `hypothesis` / `unmeasured`.
   - Wall-clock ratios (`2.9x faster`, `3.1x speedup`) without confidence intervals (`[lo, hi]`, `BCa`, `CI`) or provisional markers.
   - Paired comparison figures (`11.9 ns vs 108.9 ns`, cross-metric comparisons) without shared workload tags (`(workload: id)`) or documented differentiation markers.
+  - **Superseded figures** (with `superseded_registry`): a figure the repository has withdrawn, republished without a retraction marker (`retracted`, `superseded`, `corrected`, `previously`, ...) within three lines. The registry is a JSON file at `HEAD`: `{"figures": [{"id", "patterns", "context", "array_sequence", "replacement"}]}`; unknown fields are ignored. Patterns are case-insensitive and may use look-around. A pattern counts only when at least two of the figure's `context` words (one, if it lists one) appear in the same sentence or table cell or in the surrounding lines. Tracked JSON datasets matched by `superseded_json_paths` are swept value by value (string values by pattern, arrays by `array_sequence`; `provenance`, `retraction*`, `meta`, `description` and `_comment` keys are skipped). Changed files are swept; when the registry itself changes, every tracked markdown file and matching dataset is swept, so withdrawing a figure finds where it is already published.
+  - **Pending measurements** (with `check_pending_citations`): a statement that a measurement is pending (`pending re-run`, `pending re-measurement`, `pending a quiet-host run`, ...) with no issue cited (`#123`, `issues/123`, or a GitHub issue URL) within the next 150 characters. With `require_open_pending_issues`, at least one cited issue must be open, checked with `gh api` (`DISCIPLINE_GH`, repository from `GITHUB_REPOSITORY` or a GitHub `origin`): text still saying "pending" after its issue closed is stale. Agent guides (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) are not read for this check.
+- **Could not check (exit 2):** a configured registry missing at `HEAD`, not JSON, or holding a pattern that does not compile; a swept dataset that is not JSON; with `require_open_pending_issues`, an issue whose state `gh` cannot report (not installed, unauthenticated, rate limited, no repository to resolve `#123` in). Each is named in the error.
 - **Passing examples (accepted):**
   - Table caption carrying `*(measured: host, commit)*` or `*(target)*`.
   - Mechanism claim citing `perf stat` counters or labeled as `(hypothesis — unmeasured pending PMU counters)`.
   - Wall-clock speedup citing `[2.7x, 3.1x] BCa 95% CI` or `(provisional pending re-measurement)`.
   - Paired comparison citing `(workload: uniform-random)`.
-- **Lifting directive:** `allow-provenance: <file-or-path> <reason>` in PR body or commit, or inline `<!-- discipline:allow(provenance-tags) -->`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `include`, `check_tables`, `check_mechanisms`, `check_intervals`, `check_paired_figures`, `scan_pr_body`.
+- **Lifting directive:** `allow-provenance: <file-or-path> <reason>` in PR body or commit (aliases: `allow-unpaired-figures`, `discipline:allow(provenance-tags)`). Findings in the PR body itself are not liftable.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `check_tables`, `check_mechanisms`, `check_intervals`, `check_paired_figures`, `superseded_registry`, `superseded_json_paths`, `check_pending_citations`, `require_open_pending_issues`.
 
 #### `pr-checklist`
 - **Rule:** Reconciles ticked checklist items in PR descriptions (`- [x] Tests added/updated`, `- [x] Documentation updated`, `- [x] Benchmarks added`) against actual modified files in the pull request diff to prevent vacuous checkoffs. A test claim is backed by a changed test file, or by a test function the change adds or extends (more effective assertions) in any file a language pack analyses, so a `#[test]` added to a `mod tests` inside `src/` counts. A renamed test adds nothing.
@@ -1171,11 +1174,14 @@ Discipline provides universal static binary drop-in replacements for the legacy 
 | `time-estimates` | `scripts/check_docs_hygiene.py` | Clause-level (sentence-fragment) scoping of matches within a line, boundary lookarounds avoiding `\b` false positives on symbols (`×`, `~`), diff-scoped mode (`diff_only = true`), operational term-of-art and wrap window exemptions, `docs-lint: allow` alias. Paragraph scope applies to `allow_patterns` only (they match across soft-wrapped lines); built-in patterns do not detect an estimate split across a line break. |
 | `pii` | `scripts/check_docs_hygiene.py` | Full test code inspection without blind spots, JSON string unescaping, cross-tree agent config directory/playbook detection, secret-backed hostname denylist. |
 | `test-floor` | `scripts/check_test_floors.py` | Automatic base-ref constant extraction, direct `test_command` execution, fail-closed handling on unresolvable base floors, `allow-test-shrink:` override. |
-| `ci-integrity` | `scripts/check_ci_gate.py`, `scripts/check_ci_filters.py` | Complete rollup job `needs:` closure validation, 40-character commit SHA pinning, masked failure detection (`continue-on-error`, `\|\| true`, `set +e`), `allow-ci-weakening:` override. |
+| `ci-integrity` | `scripts/check_ci_gate.py` | Complete rollup job `needs:` closure validation, 40-character commit SHA pinning, masked failure detection (`continue-on-error`, `\|\| true`, `set +e`), `allow-ci-weakening:` override. |
 | `ci-skip-set` | A rollup skip-set floor script | Parses each job's `if:` as an expression instead of splitting on `\|\|`, models GitHub's implicit `success()` over transitive dependencies, reads filter outputs from the same `toJson(needs)` as the results, reports an absent boolean filter output by name, fails closed on unmodelled terms. |
 | `bench-regression` | `scripts/perf_report.py`, `scripts/wasm_fuel.py` | In-job dual-file mode (`--bench-base-file` and `--bench-head-file`), `iai-callgrind` console line and neutral JSON parsers, two-tier threshold (single-worst >5% or $\ge 2$ arms regressing >0.5% noise floor, advisory 0.1%), declared arm exemptions, sourced overrides verifying CI URL or committed artifact and named arms, missing-baseline fatal fail-closed. |
-| `provenance-tags` | `scripts/check_docs_hygiene.py` | Table numeric provenance (`(measured: host, commit)`, `(target)`, `(projected)`), mechanism claim hardware counter citations, wall-clock intervals, paired comparison tags (`(workload: id)`). |
+| `provenance-tags` | `scripts/check_docs_hygiene.py` | Table numeric provenance (`(measured: host, commit)`, `(target)`, `(projected)`), mechanism claim hardware counter citations, wall-clock intervals, paired comparison tags (`(workload: id)`), a superseded-figure registry over markdown and JSON datasets, and pending-measurement issue citations checked for an open issue. |
 | `command` | Bespoke shell runner wrappers | Universal fail-closed timeout wrapper, zero-tests guards, turnkey presets (`cargo-public-api`, `miri`, `sanitizers`, `loom`, `cargo-deny`, `cargo-mutants`). |
+
+
+**Not replaced:** a test that exercises a workflow's path filters against a golden change-set → job-set table. `ci-skip-set` checks that the rollup's skip set agrees with the filter outputs the run observed; it cannot tell whether a filter computed the right value from a correct change set. Keep that table in the repository's own tests.
 
 ---
 
@@ -1201,5 +1207,5 @@ The official container image (`ghcr.io/orieg/discipline`) intentionally relaxes 
 
 ## Roadmap & Future Gates
 
-All 30 foundational gates across the six suites are fully implemented and shipped in Discipline v0.6.0+. Future candidate research gates under evaluation (including paired within-run ratio benchmarking, mutation score floor, and fuzz corpus drift) are documented in [ROADMAP.md](ROADMAP.md).
+All 31 gates across the six suites are implemented and shipped; `discipline gates` lists them with their effective state. Paired within-run ratio benchmarking shipped as `bench-regression` `mode = "paired-ratio"`. Known limitations and candidate work are tracked in the "Outstanding Checks & Known Limitations" section of [ROADMAP.md](ROADMAP.md).
 
