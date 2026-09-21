@@ -491,6 +491,44 @@ pub fn line_allows(line: &str, gate: &str) -> bool {
     rest[..end].split(',').any(|g| g.trim() == gate)
 }
 
+/// Signatures that mean **the tool never ran**, as opposed to the tool running
+/// and finding a violation.
+///
+/// Fail-closed contract (docs/ARCHITECTURE.md §3, F1/F2): "could not check" is
+/// exit 2 and must never be reported as "violation found". A missing rustup
+/// component or a nightly-only flag on a stable toolchain is an environment
+/// fault; reporting it as detected undefined behaviour or a detected data race
+/// inverts the meaning of the result and trains readers to distrust the gate.
+const TOOLCHAIN_UNAVAILABLE_SIGNATURES: &[&str] = &[
+    "is not available for the", // rustup: component missing for this toolchain
+    "only accepted on the nightly", // -Z flag used on a stable channel
+    "no such subcommand",       // cargo subcommand not installed
+    "is not installed",         // rustup: toolchain not installed
+    "command not found",
+    "not recognized as an internal or external command",
+    "error: rustup could not",
+    "requires a nightly",
+    "requires nightly",
+];
+
+/// Returns the offending diagnostic line when `stdout`/`stderr` show that the
+/// tool could not run at all. Callers turn this into an `Err` (exit 2) instead
+/// of a violation.
+pub fn toolchain_unavailable(stdout: &str, stderr: &str) -> Option<String> {
+    for stream in [stderr, stdout] {
+        for line in stream.lines() {
+            let lower = line.to_lowercase();
+            if TOOLCHAIN_UNAVAILABLE_SIGNATURES
+                .iter()
+                .any(|sig| lower.contains(sig))
+            {
+                return Some(line.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,5 +567,41 @@ mod tests {
         assert!(f.matches("Cargo.lock"));
         assert!(!f.matches("docs/GATES.md"));
         assert!(PathFilter::new(&["[".into()]).is_err());
+    }
+
+    #[test]
+    fn toolchain_unavailable_distinguishes_environment_faults_from_findings() {
+        // Positive controls: the tool never ran.
+        for bad in [
+            "error: the 'miri' component which provides the command 'cargo-miri' is not available for the 'stable-aarch64-apple-darwin' toolchain",
+            "error: the `-Z` flag is only accepted on the nightly channel of Cargo, but this is the `stable` channel",
+            "error: no such subcommand: `miri`",
+            "error: toolchain 'nightly-x86_64-unknown-linux-gnu' is not installed",
+            "cargo: command not found",
+        ] {
+            assert!(
+                toolchain_unavailable("", bad).is_some(),
+                "missed environment fault: {bad}"
+            );
+        }
+
+        // Negative controls: the tool RAN and found something. These must stay
+        // violations, or the fix would silently disarm both gates.
+        for real in [
+            "error: Undefined Behavior: attempting a read access using <untagged> at alloc1[0x0]",
+            "ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010",
+            "WARNING: ThreadSanitizer: data race (pid=1234)",
+            "test result: FAILED. 3 passed; 1 failed",
+            "assertion `left == right` failed",
+        ] {
+            assert!(
+                toolchain_unavailable("", real).is_none(),
+                "environment fault falsely claimed for a real finding: {real}"
+            );
+        }
+
+        // stdout is inspected too, and the offending line is returned.
+        let hit = toolchain_unavailable("error: no such subcommand: `miri`", "").unwrap();
+        assert!(hit.contains("no such subcommand"), "got: {hit}");
     }
 }

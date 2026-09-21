@@ -6490,10 +6490,27 @@ enabled = true
     );
     repo.commit("chore: enable miri gate");
 
-    // 1. Negative control: execution without waiver fails (exit 1)
+    // 1. Negative control. Two legitimate outcomes, and the REASON must match
+    //    the exit code (fail-closed contract, docs/ARCHITECTURE.md §3 F1/F2):
+    //      exit 2 = the toolchain is absent, so the gate could not check;
+    //      exit 1 = miri ran and found undefined behavior.
+    //    Reporting a missing component as detected UB is the defect this pins.
     let run_bad = repo.check(&[]);
-    assert_eq!(run_bad.code, 1);
-    assert!(!run_bad.titles("miri").is_empty());
+    match run_bad.code {
+        2 => assert!(
+            run_bad.stderr.contains("miri could not run"),
+            "exit 2 must name the environment fault, got: {}",
+            run_bad.stderr
+        ),
+        1 => assert!(
+            !run_bad.titles("miri").is_empty(),
+            "exit 1 must carry a miri finding"
+        ),
+        other => panic!(
+            "unexpected exit {other}: {}{}",
+            run_bad.stdout, run_bad.stderr
+        ),
+    }
 
     // 2. With waiver directive, execution or missing cargo-miri is waived
     repo.commit(
@@ -6527,10 +6544,25 @@ canary = false
     );
     repo.commit("chore: enable sanitizers gate");
 
-    // 1. Negative control: execution without waiver fails (exit 1)
+    // 1. Negative control. As for miri: exit 2 when the nightly toolchain is
+    //    absent (could not check), exit 1 only when a sanitizer actually ran
+    //    and reported a memory-safety or race violation.
     let run_bad = repo.check(&[]);
-    assert_eq!(run_bad.code, 1);
-    assert!(!run_bad.titles("sanitizers").is_empty());
+    match run_bad.code {
+        2 => assert!(
+            run_bad.stderr.contains("could not run"),
+            "exit 2 must name the environment fault, got: {}",
+            run_bad.stderr
+        ),
+        1 => assert!(
+            !run_bad.titles("sanitizers").is_empty(),
+            "exit 1 must carry a sanitizers finding"
+        ),
+        other => panic!(
+            "unexpected exit {other}: {}{}",
+            run_bad.stdout, run_bad.stderr
+        ),
+    }
 
     // 2. With waiver directive, execution on non-nightly host is waived
     repo.commit("chore: run sanitizers with waiver\n\ndiscipline:allow(sanitizers): nightly toolchain unavailable");

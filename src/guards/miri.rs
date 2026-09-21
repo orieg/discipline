@@ -5,7 +5,7 @@
 
 use crate::guards::command::run_command_bounded;
 use crate::guards::presets::resolve_preset;
-use crate::guards::{Context, GateOutcome};
+use crate::guards::{toolchain_unavailable, Context, GateOutcome};
 use crate::tokens::ALLOW_MIRI;
 use anyhow::Result;
 
@@ -108,6 +108,13 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
                 "override applied: `{}: {}` (miri failure allowed) ({})",
                 ov.directive, ov.reason, ov.source
             ));
+        } else if let Some(fault) = toolchain_unavailable(stdout, stderr) {
+            // Fail-closed: the tool never ran, so this is "could not check"
+            // (exit 2), never "undefined behavior detected" (exit 1).
+            anyhow::bail!(
+                "miri could not run: {fault}. Install the component \
+                 (`rustup +nightly component add miri`) or disable the `miri` gate."
+            );
         } else {
             let diag = if !stderr.is_empty() { stderr } else { stdout };
             out.add_violation(
@@ -138,6 +145,10 @@ pub fn evaluate_miri_output(
         }
     }
     if !status_success {
+        // An environment fault is not a finding: see guards::toolchain_unavailable.
+        if toolchain_unavailable(stdout, stderr).is_some() {
+            return Some("toolchain");
+        }
         return Some("failure");
     }
     None
@@ -153,5 +164,25 @@ mod tests {
         assert!(!gate.enabled);
         assert_eq!(gate.severity, Severity::Error);
         assert_eq!(gate.timeout_seconds, 600);
+    }
+
+    #[test]
+    fn miri_classifies_missing_toolchain_as_could_not_check_not_as_ub() {
+        use super::evaluate_miri_output;
+        // The tool never ran: rustup has no miri component for this toolchain.
+        let env_fault = "error: the 'miri' component which provides the command 'cargo-miri' is not available for the 'stable-aarch64-apple-darwin' toolchain";
+        assert_eq!(
+            evaluate_miri_output(false, "", env_fault, None),
+            Some("toolchain"),
+            "a missing toolchain must not be reported as detected undefined behavior"
+        );
+
+        // The tool RAN and found real UB: still a failure.
+        let real_ub =
+            "error: Undefined Behavior: attempting a read access using <untagged> at alloc1[0x0]";
+        assert_eq!(
+            evaluate_miri_output(false, "", real_ub, None),
+            Some("failure")
+        );
     }
 }

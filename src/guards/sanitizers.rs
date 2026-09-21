@@ -5,7 +5,7 @@
 
 use crate::guards::command::run_command_bounded;
 use crate::guards::presets::resolve_preset;
-use crate::guards::{Context, GateOutcome};
+use crate::guards::{toolchain_unavailable, Context, GateOutcome};
 use crate::tokens::ALLOW_SANITIZERS;
 use anyhow::Result;
 
@@ -109,6 +109,15 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
                 "override applied: `{}: {}` (sanitizer failure allowed) ({})",
                 ov.directive, ov.reason, ov.source
             ));
+        } else if let Some(fault) = toolchain_unavailable(&res.stdout, &res.stderr) {
+            // Fail-closed: a missing nightly channel or sanitizer support means
+            // the run never happened; reporting it as a detected race would
+            // invert the meaning of the result.
+            anyhow::bail!(
+                "sanitizer ({}) could not run: {fault}. Sanitizers need a nightly \
+                 toolchain (`cargo +nightly`) or the gate must be disabled.",
+                settings.sanitizer
+            );
         } else {
             let diag = if !res.stderr.is_empty() {
                 &res.stderr
