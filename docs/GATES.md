@@ -990,10 +990,10 @@ Discipline provides universal static binary drop-in replacements for the legacy 
 
 | Gate | Replaced Legacy Script | Discipline Enhancements & Behavioral Differences |
 |---|---|---|
-| `assertion-reduction` | `scripts/check_diff_guards.py` | Multi-language AST extraction (11 language packs), callback-aware function tracking, compile-time assertions (`static_assert`, `const _: () = assert!`). |
-| `vacuous-tests` | `scripts/check_diff_guards.py` | Language-specific AST helper detection (Python non-test methods, C/C++ non-zero return / throw helper recognition). |
-| `ignored-tests` | `scripts/check_diff_guards.py` | Distinguishes newly arriving ignored tests from modified tests, configurable approved skip predicates (`cfg_attr(miri, ignore)`). |
-| `deletion-rationale` | `scripts/check_diff_guards.py` | Line-anchored directive parsing, configurable `require_scope` and `allow_hidden` directive controls. |
+| `assertion-reduction` | *(none — new capability)* | Multi-language AST extraction (11 language packs), callback-aware function tracking, compile-time assertions (`static_assert`, `const _: () = assert!`). |
+| `vacuous-tests` | *(none — new capability)* | Language-specific AST helper detection (Python non-test methods, C/C++ non-zero return / throw helper recognition). |
+| `ignored-tests` | *(none — new capability)* | Distinguishes newly arriving ignored tests from modified tests, configurable approved skip predicates (`cfg_attr(miri, ignore)`). |
+| `deletion-rationale` | `scripts/check_deletion_rationale.py` | Line-anchored directive parsing, configurable `require_scope` and `allow_hidden` directive controls. |
 | `time-estimates` | `scripts/check_docs_hygiene.py` | Paragraph and sentence-level boundary lookarounds avoiding `\b` false positives on symbols (`×`, `~`), diff-scoped mode (`diff_only = true`), operational term-of-art and wrap window exemptions, `docs-lint: allow` alias. |
 | `pii` | `scripts/check_docs_hygiene.py` | Full test code inspection without blind spots, JSON string unescaping, cross-tree agent config directory/playbook detection, secret-backed hostname denylist. |
 | `test-floor` | `scripts/check_test_floors.py` | Automatic base-ref constant extraction, direct `test_command` execution, fail-closed handling on unresolvable base floors, `allow-test-shrink:` override. |
