@@ -176,7 +176,7 @@ spec:
 Official multi-architecture (`linux/amd64`, `linux/arm64`) OCI images are published to GitHub Container Registry:
 - `ghcr.io/orieg/discipline:latest`
 - `ghcr.io/orieg/discipline:v0`
-- `ghcr.io/orieg/discipline:v0.5.1`
+- `ghcr.io/orieg/discipline:v0.6.0`
 
 ### Running Locally via Docker
 
@@ -205,7 +205,7 @@ Add Discipline to `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/orieg/discipline
-    rev: v0.5.1
+    rev: v0.6.0
     hooks:
       - id: discipline          # builds via cargo on first run
       # Or: - id: discipline-system # invokes pre-installed binary on PATH

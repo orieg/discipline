@@ -1026,5 +1026,5 @@ The official container image (`ghcr.io/orieg/discipline`) intentionally relaxes 
 
 ## Roadmap & Future Gates
 
-All 30 foundational gates across the six suites are fully implemented and shipped in Discipline v0.5.1+. Future candidate research gates under evaluation (including paired within-run ratio benchmarking, mutation score floor, and fuzz corpus drift) are documented in [ROADMAP.md](ROADMAP.md).
+All 30 foundational gates across the six suites are fully implemented and shipped in Discipline v0.6.0+. Future candidate research gates under evaluation (including paired within-run ratio benchmarking, mutation score floor, and fuzz corpus drift) are documented in [ROADMAP.md](ROADMAP.md).
 
