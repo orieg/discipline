@@ -1,7 +1,9 @@
 //! Version declaration lockstep sentinel (`version-lockstep`).
 //!
 //! Guarantees that version declarations across multiple files (C headers,
-//! packaging manifests, docs, lockfiles) remain strictly synchronized.
+//! packaging manifests, docs, lockfiles) remain strictly synchronized. A
+//! mismatch is reported against the file that drifted from the group's
+//! consensus version.
 
 use crate::guards::{Context, GateOutcome};
 use crate::tokens;
@@ -91,10 +93,14 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
 
         total_examined += extracted.len();
 
-        let baseline_ver = &extracted[0].1;
-        let has_mismatch = extracted.iter().any(|(_, v)| v != baseline_ver);
+        let reference = consensus_version(&extracted);
+        let drifted: Vec<&str> = extracted
+            .iter()
+            .filter(|(_, v)| v != reference)
+            .map(|(p, _)| p.as_str())
+            .collect();
 
-        if has_mismatch {
+        if let Some(first_drifted) = drifted.first().copied() {
             let allowed = ctx
                 .find_override(GATE, tokens::ALLOW_VERSION_MISMATCH, &group.name)
                 .or_else(|| {
@@ -108,18 +114,30 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 let details = extracted
                     .iter()
-                    .map(|(p, v)| format!("  - `{}` declares `{}`", p, v))
+                    .map(|(p, v)| {
+                        let mark = if v != reference { " (drifted)" } else { "" };
+                        format!("  - `{p}` declares `{v}`{mark}")
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
 
+                // The finding points at the file that drifted from the group's
+                // consensus, so an annotation lands where the edit is needed.
                 out.push(
                     ctx.overridable(settings.severity),
                     "Version Declaration Lockstep Mismatch",
-                    Some(&group.name),
+                    Some(first_drifted),
                     None,
                     format!(
-                        "version declarations in group `{}` disagree across sources:\n{}",
-                        group.name, details
+                        "version declarations in group `{}` disagree: {} drifted from `{}`:\n{}",
+                        group.name,
+                        drifted
+                            .iter()
+                            .map(|p| format!("`{p}`"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        reference,
+                        details
                     ),
                     &format!(
                         "synchronize version strings across all sources in group `{}` or justify with `allow-version-mismatch: {} <reason>`",
@@ -134,14 +152,27 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
     Ok(out)
 }
 
+/// The version most sources in a group agree on; a tie goes to the version
+/// declared first, so the group's first source is the reference for a pair.
+fn consensus_version(extracted: &[(String, String)]) -> &str {
+    let mut best: Option<(&str, usize)> = None;
+    for (_, candidate) in extracted {
+        let count = extracted.iter().filter(|(_, v)| v == candidate).count();
+        if best.is_none_or(|(_, c)| count > c) {
+            best = Some((candidate.as_str(), count));
+        }
+    }
+    best.map(|(v, _)| v).unwrap_or("")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_version_regexes() {
-        let c_header = "#define PHP_JUDY_VERSION \"2.6.0\"\n";
-        let c_re = Regex::new(r#"#define\s+PHP_JUDY_VERSION\s+"([^"]+)""#).unwrap();
+        let c_header = "#define EXAMPLE_VERSION \"2.6.0\"\n";
+        let c_re = Regex::new(r#"#define\s+EXAMPLE_VERSION\s+"([^"]+)""#).unwrap();
         let cap = c_re.captures(c_header).unwrap();
         assert_eq!(cap.get(1).unwrap().as_str(), "2.6.0");
 
@@ -149,5 +180,28 @@ mod tests {
         let xml_re = Regex::new(r#"<release>([^<]+)</release>"#).unwrap();
         let cap2 = xml_re.captures(xml).unwrap();
         assert_eq!(cap2.get(1).unwrap().as_str(), "2.6.0");
+    }
+
+    fn sources(versions: &[&str]) -> Vec<(String, String)> {
+        versions
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (format!("f{i}"), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn consensus_is_the_majority_version() {
+        assert_eq!(consensus_version(&sources(&["1.0", "1.1", "1.1"])), "1.1");
+        assert_eq!(consensus_version(&sources(&["1.1", "1.1", "1.0"])), "1.1");
+    }
+
+    #[test]
+    fn consensus_tie_goes_to_the_first_declared_version() {
+        assert_eq!(consensus_version(&sources(&["1.0", "1.1"])), "1.0");
+        assert_eq!(
+            consensus_version(&sources(&["2.0", "1.0", "1.0", "2.0"])),
+            "2.0"
+        );
     }
 }

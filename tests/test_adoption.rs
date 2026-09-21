@@ -349,3 +349,124 @@ fn test_floor_test_command_without_an_explicit_floor_fails_closed() {
         run.stderr
     );
 }
+
+// ---- version-lockstep: the documented multi-ecosystem example ----------------
+
+const GATES_MD: &str = include_str!("../docs/GATES.md");
+const EXAMPLE_BEGIN: &str = "<!-- version-lockstep-example:begin -->";
+const EXAMPLE_END: &str = "<!-- version-lockstep-example:end -->";
+
+/// The `toml` block between the example markers in docs/GATES.md, verbatim.
+fn documented_lockstep_config() -> String {
+    let start = GATES_MD
+        .find(EXAMPLE_BEGIN)
+        .expect("docs/GATES.md is missing the version-lockstep example begin marker");
+    let rest = &GATES_MD[start + EXAMPLE_BEGIN.len()..];
+    let end = rest
+        .find(EXAMPLE_END)
+        .expect("docs/GATES.md is missing the version-lockstep example end marker");
+    let block = &rest[..end];
+    let body = block
+        .split_once("```toml\n")
+        .expect("example must be a ```toml fence")
+        .1;
+    let body = body
+        .rsplit_once("```")
+        .expect("example fence must be closed")
+        .0;
+    body.to_string()
+}
+
+/// Every file the documented example names, with the project version at `V`
+/// and decoy versions (parent POM, dependencies, toolchain floors, split
+/// version macros) that a loosely anchored regex would capture instead.
+fn lockstep_files(v: &str) -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "Cargo.toml",
+            format!(
+                "[package]\nname = \"example-lib\"\nrust-version = \"1.75\"\nversion = \"{v}\"\nedition = \"2021\"\n\n[dependencies]\nserde = {{ version = \"1.0.200\" }}\n"
+            ),
+        ),
+        (
+            "package.json",
+            format!(
+                "{{\n  \"name\": \"example-lib\",\n  \"version\": \"{v}\",\n  \"dependencies\": {{\n    \"left-pad\": \"1.3.0\"\n  }},\n  \"engines\": {{ \"node\": \">=18\" }}\n}}\n"
+            ),
+        ),
+        (
+            "dotnet/ExampleLib.csproj",
+            format!(
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <PackageReference Include=\"Newtonsoft.Json\" Version=\"13.0.3\" />\n  </ItemGroup>\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n    <Version>{v}</Version>\n  </PropertyGroup>\n</Project>\n"
+            ),
+        ),
+        (
+            "java/pom.xml",
+            format!(
+                "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <parent>\n    <groupId>org.example</groupId>\n    <artifactId>example-parent</artifactId>\n    <version>7.0.0</version>\n  </parent>\n  <artifactId>example-lib</artifactId>\n  <version>{v}</version>\n  <dependencies>\n    <dependency>\n      <groupId>junit</groupId>\n      <artifactId>junit</artifactId>\n      <version>4.13.2</version>\n    </dependency>\n  </dependencies>\n</project>\n"
+            ),
+        ),
+        (
+            "ruby/example-lib.gemspec",
+            format!(
+                "Gem::Specification.new do |spec|\n  spec.name = \"example-lib\"\n  spec.required_ruby_version = \">= 3.0\"\n  spec.version = \"{v}\"\n  spec.add_dependency \"rake\", \"~> 13.0\"\nend\n"
+            ),
+        ),
+        (
+            "include/example_lib.h",
+            format!(
+                "#ifndef EXAMPLE_LIB_H\n#define EXAMPLE_LIB_H\n#define EXAMPLE_VERSION_MAJOR 1\n#define EXAMPLE_VERSION \"{v}\"\n#endif\n"
+            ),
+        ),
+    ]
+}
+
+#[test]
+fn version_lockstep_documented_example_passes_in_sync_and_names_each_drifted_file() {
+    let config = format!(
+        "[meta]\nversion = 1\nname = \"example-lib\"\n\n{}",
+        documented_lockstep_config()
+    );
+
+    // (a) every ecosystem agrees: pass, and all six sources were read.
+    let repo = Repo::new();
+    let mut base: Vec<(&str, String)> = lockstep_files("1.4.2");
+    base.push(("discipline.toml", config.clone()));
+    let base_refs: Vec<(&str, &str)> = base.iter().map(|(p, c)| (*p, c.as_str())).collect();
+    repo.commit_base_files(&base_refs, "chore: example-lib 1.4.2 across ecosystems");
+    let ok = repo.check(&[]);
+    assert_eq!(ok.code, 0, "{}{}", ok.stdout, ok.stderr);
+    let outcome = ok.outcome("version-lockstep");
+    assert_eq!(outcome["enabled"], true, "{outcome}");
+    assert_eq!(outcome["examined"], 6, "{outcome}");
+
+    // (b) drift each file in turn: the gate fires and names THAT file. Doing
+    // it per file proves every documented regex reads the project's own
+    // version rather than a decoy.
+    for (drifted, _) in lockstep_files("1.4.2") {
+        let repo = Repo::new();
+        repo.commit_base_files(&base_refs, "chore: example-lib 1.4.2 across ecosystems");
+        let content = lockstep_files("1.4.3")
+            .into_iter()
+            .find(|(p, _)| *p == drifted)
+            .unwrap()
+            .1;
+        repo.write(drifted, &content);
+        repo.commit(&format!("chore: bump {drifted} alone"));
+
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 1, "{drifted}\n{}{}", run.stdout, run.stderr);
+        let v = run.violations("version-lockstep");
+        assert_eq!(v.len(), 1, "{drifted}: {v:?}");
+        assert_eq!(v[0]["title"], "Version Declaration Lockstep Mismatch");
+        assert_eq!(
+            v[0]["file"], drifted,
+            "the finding must point at the drifted file: {v:?}"
+        );
+        let msg = v[0]["message"].as_str().unwrap();
+        assert!(
+            msg.contains(&format!("`{drifted}` declares `1.4.3`")),
+            "{drifted}: {msg}"
+        );
+    }
+}

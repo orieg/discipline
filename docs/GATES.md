@@ -721,18 +721,88 @@ To port the other way, adopting the static basis instead, run `discipline check`
 - **What it catches:**
   - Missing source files (fails closed with exit 2).
   - Unparseable source regexes or regexes failing to match the source file (fails closed with exit 2).
-  - Mismatched extracted versions across declared files in a group (e.g., `php_judy.h` has `"2.6.0"` while `package.xml` has `"2.6.1"`).
+  - Mismatched extracted versions across declared files in a group (e.g., `example_lib.h` has `"2.6.0"` while `package.xml` has `"2.6.1"`). The finding points at the file that drifted from the version most sources in the group agree on (a tie goes to the version declared first), and its message lists every source with the version it declares.
 - **Failing diff example (rejected):**
-  Bumping version in `package.xml` to `2.6.1` while `#define PHP_JUDY_VERSION` in `php_judy.h` remains `2.6.0`.
+  Bumping version in `package.xml` to `2.6.1` while `#define EXAMPLE_VERSION` in `example_lib.h` remains `2.6.0`.
 - **Passing PR description (accepted):**
   ```text
-  allow-version-mismatch: php-judy-release staged release version bump across branches
+  allow-version-mismatch: example-release staged release version bump across branches
   ```
 - **What it does NOT catch:**
   - Unconfigured files or uncaptured version substrings.
   - Version increments in unversioned changelogs without regex capture groups.
 - **Lifting directive:** `allow-version-mismatch: <group-name> <reason>` in PR description or commit message.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `groups` (`name`, `sources` (`path`, `regex`)).
+
+##### Writing `groups`: a worked multi-ecosystem example
+
+Each source is a file and a regex. The gate reads the **first match** of the regex in the file and takes capture group 1 as the version (the whole match when the regex has no group). So the regex must be anchored tightly enough that its first match is the project's own version and not a dependency's, a parent's or a toolchain floor. Every source in a group must declare the same version; a group needs at least two sources.
+
+The example below keeps one library, `example-lib`, in lockstep across six ecosystems. It is not illustrative only: `tests/test_adoption.rs` reads this exact block from this file, builds a repository containing all six files (with decoy versions next to each real one), and checks that the gate passes when they agree and names the drifted file when any one of them is bumped alone.
+
+<!-- version-lockstep-example:begin -->
+```toml
+[gates.version-lockstep]
+enabled = true
+
+[[gates.version-lockstep.groups]]
+name = "example-release"
+
+# Rust. `[package]` then the first line-leading `version =` after it, so a
+# dependency's `version = "..."` inline table or `rust-version` never matches.
+[[gates.version-lockstep.groups.sources]]
+path = "Cargo.toml"
+regex = '''(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"'''
+
+# npm. The first "version" key, which is the top-level one: dependency
+# entries are keyed by package name, not by "version".
+[[gates.version-lockstep.groups.sources]]
+path = "package.json"
+regex = '''"version"\s*:\s*"([^"]+)"'''
+
+# NuGet. The <Version> element; a <PackageReference Version="..."> is an
+# attribute, so it cannot match.
+[[gates.version-lockstep.groups.sources]]
+path = "dotnet/ExampleLib.csproj"
+regex = '''<Version>([^<]+)</Version>'''
+
+# Maven. The <version> that follows the project's own <artifactId>, not the
+# <parent> block's version or a dependency's.
+[[gates.version-lockstep.groups.sources]]
+path = "java/pom.xml"
+regex = '''<artifactId>example-lib</artifactId>\s*<version>([^<]+)</version>'''
+
+# RubyGems. `spec.version = "..."`; `required_ruby_version` does not match
+# because the regex needs `.version` directly.
+[[gates.version-lockstep.groups.sources]]
+path = "ruby/example-lib.gemspec"
+regex = '''\.version\s*=\s*(?:"|')([^"']+)(?:"|')'''
+
+# C header. The string macro, not EXAMPLE_VERSION_MAJOR and friends: the
+# regex requires whitespace and a quote right after the macro name.
+[[gates.version-lockstep.groups.sources]]
+path = "include/example_lib.h"
+regex = '''#define\s+EXAMPLE_VERSION\s+"([^"]+)"'''
+```
+<!-- version-lockstep-example:end -->
+
+The files it reads look like this (the version is `1.4.2` everywhere):
+
+| File | The line the regex captures from |
+|---|---|
+| `Cargo.toml` | `version = "1.4.2"` under `[package]` |
+| `package.json` | `"version": "1.4.2",` |
+| `dotnet/ExampleLib.csproj` | `<Version>1.4.2</Version>` |
+| `java/pom.xml` | `<artifactId>example-lib</artifactId>` then `<version>1.4.2</version>` |
+| `ruby/example-lib.gemspec` | `spec.version = "1.4.2"` |
+| `include/example_lib.h` | `#define EXAMPLE_VERSION "1.4.2"` |
+
+Notes for adapting it:
+- Write regexes in TOML literal strings (`'...'` or `'''...'''`) so backslashes reach the regex engine unescaped. Use `'''...'''` when the regex itself contains a `'`, as the gemspec one does.
+- `^` and `$` match only at the start and end of the file unless the regex starts with `(?m)`; `.` crosses newlines only with `(?s)`. The Cargo regex uses both.
+- A crate that inherits its version (`version.workspace = true`) declares it in the workspace root's `[workspace.package]` table instead: point the source at that file with `(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"`.
+- A gemspec that reads `ExampleLib::VERSION` holds no literal: point the source at `lib/example_lib/version.rb` with `VERSION\s*=\s*(?:"|')([^"']+)(?:"|')`.
+- A group whose files are released separately belongs in its own group; lifting a mismatch names the group: `allow-version-mismatch: example-release <reason>`.
 
 ---
 
