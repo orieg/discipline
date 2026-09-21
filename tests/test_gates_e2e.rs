@@ -7168,3 +7168,48 @@ fn completions_subcommand_outputs_valid_shell_script() {
         assert!(!run.stdout.is_empty(), "completions for {shell} was empty");
     }
 }
+
+#[test]
+fn submodule_gitlink_entries_do_not_break_the_run() {
+    // A gitlink (mode 160000) is a directory on disk, not a file. Every
+    // file-reading gate used to hit it in turn and abort the whole run with
+    // "failed to read `<path>`: Is a directory (os error 21)", so any change
+    // that bumped a submodule pointer turned the gate red with no route
+    // forward. Shipping since the first release; reported by a consumer.
+    let repo = Repo::new();
+
+    // Build a real mode-160000 index entry without needing a second clone.
+    let head = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    repo.git(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{head},third_party/dep"),
+    ]);
+    repo.write(".gitmodules", "[submodule \"third_party/dep\"]\n\tpath = third_party/dep\n\turl = https://example.invalid/dep.git\n");
+    repo.git(&["add", ".gitmodules"]);
+    // The directory must exist on disk: that is what turns a read of the
+    // gitlink path into "Is a directory (os error 21)".
+    std::fs::create_dir_all(repo.file("third_party/dep")).unwrap();
+    std::fs::write(repo.file("third_party/dep/README"), "vendored\n").unwrap();
+    repo.git(&["commit", "-q", "-m", "feat: vendor a submodule"]);
+
+    let run = repo.check(&["--base", "main"]);
+    assert_ne!(
+        run.code, 2,
+        "a gitlink must not abort the run: {}{}",
+        run.stdout, run.stderr
+    );
+    assert!(
+        !run.stderr.contains("Is a directory"),
+        "gitlink surfaced as a read error: {}",
+        run.stderr
+    );
+}

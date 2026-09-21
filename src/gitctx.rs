@@ -430,6 +430,15 @@ impl GitCtx {
 
         let mut files: BTreeMap<String, ChangedFile> = BTreeMap::new();
         for delta in diff.deltas() {
+            // A gitlink (mode 160000, a submodule pointer) is a directory on
+            // disk, not a file. Enumerating it hands every file-reading gate a
+            // path that fails with "Is a directory", aborting the whole run, so
+            // any change bumping a submodule pointer turned the gate red.
+            if delta.new_file().mode() == git2::FileMode::Commit
+                || delta.old_file().mode() == git2::FileMode::Commit
+            {
+                continue;
+            }
             let kind = match delta.status() {
                 Delta::Added | Delta::Untracked | Delta::Copied => ChangeKind::Added,
                 Delta::Modified | Delta::Typechange => ChangeKind::Modified,
