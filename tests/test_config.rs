@@ -1,3 +1,4 @@
+mod common;
 use discipline::config::{split_list, DisciplineConfig, Overrides, Severity, GATES};
 use std::path::Path;
 
@@ -556,4 +557,40 @@ fn schema_severity_enum_matches_accepted_severities() {
             "config accepts severity {sev} but the schema does not list it: {values:?}"
         );
     }
+}
+
+/// Every environment variable the binary reads must be isolated by the test harness, or a
+/// developer's shell (or a CI runner's own variables) could decide a test's verdict.
+#[test]
+fn test_harness_isolates_every_environment_variable_the_binary_reads() {
+    let family = regex::Regex::new(
+        r#""((?:DISCIPLINE|GITHUB|GITEA|FORGEJO|GITLAB|CI|PR|GH|DOCS)_[A-Z0-9_]+)""#,
+    )
+    .unwrap();
+    // Set explicitly by the harness rather than removed.
+    let set_by_harness = ["DISCIPLINE_NO_NETWORK"];
+    let mut missing = std::collections::BTreeSet::new();
+    let mut stack = vec![std::path::PathBuf::from("src")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for c in family.captures_iter(&text) {
+                    let name = c[1].to_string();
+                    if !common::ISOLATED_ENV_VARS.contains(&name.as_str())
+                        && !set_by_harness.contains(&name.as_str())
+                    {
+                        missing.insert(format!("{name} ({})", path.display()));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "add to tests/common/mod.rs ISOLATED_ENV_VARS: {missing:?}"
+    );
 }

@@ -70,7 +70,7 @@ impl Run {
     }
 }
 
-const ISOLATED_ENV_VARS: &[&str] = &[
+pub const ISOLATED_ENV_VARS: &[&str] = &[
     "PR_BODY",
     "PR_TITLE",
     "GITHUB_STEP_SUMMARY",
@@ -110,6 +110,23 @@ const ISOLATED_ENV_VARS: &[&str] = &[
     "GITEA_TOKEN",
     "FORGEJO_TOKEN",
     "GITLAB_TOKEN",
+    "CI_PIPELINE_SOURCE",
+    "DISCIPLINE_ALLOW_COMMAND_CHANGE",
+    "DISCIPLINE_ALLOW_CROSS_HOST_BENCH",
+    "DISCIPLINE_BENCH_BASE_FILE",
+    "DISCIPLINE_BENCH_HEAD_FILE",
+    "DISCIPLINE_BENCH_PROVENANCE",
+    "DISCIPLINE_COMMAND",
+    "DISCIPLINE_TRUST_WORKSPACE",
+    "DOCS_HOSTNAME_DENYLIST",
+    "FORGEJO_EVENT_NAME",
+    "GITEA_EVENT_NAME",
+    "GITHUB_HEAD_REF",
+    "GITHUB_OUTPUT",
+    "GITHUB_REF",
+    "GITHUB_REF_NAME",
+    "GITHUB_REF_TYPE",
+    "GITHUB_REPOSITORY_OWNER",
     "DISCIPLINE_FORGE_API_URL",
     "DISCIPLINE_FORGE_ALLOW_HTTP",
     "GH_TOKEN",
@@ -284,6 +301,12 @@ impl Repo {
         for var in ISOLATED_ENV_VARS {
             cmd.env_remove(var);
         }
+        // Prefix-built names too (`DISCIPLINE_COMMAND_<GATE>`, ...).
+        for (k, _) in std::env::vars() {
+            if k.starts_with("DISCIPLINE_") {
+                cmd.env_remove(k);
+            }
+        }
         // No test reaches a real forge: only a loopback FakeForge is allowed.
         cmd.env("DISCIPLINE_NO_NETWORK", "1");
         let has_pr_body = env.iter().any(|(k, _)| *k == "PR_BODY");
@@ -306,6 +329,13 @@ impl Repo {
         for var in ISOLATED_ENV_VARS {
             cmd.env_remove(var);
         }
+        // Prefix-built names too (`DISCIPLINE_COMMAND_<GATE>`, ...).
+        for (k, _) in std::env::vars() {
+            if k.starts_with("DISCIPLINE_") {
+                cmd.env_remove(k);
+            }
+        }
+        cmd.env("DISCIPLINE_NO_NETWORK", "1");
         cmd.envs(env.iter().copied());
         let out = cmd.output().unwrap();
         Run {

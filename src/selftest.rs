@@ -1795,7 +1795,7 @@ smoke_cost::set_contains
         "doctor: a required check must run discipline; could-not-check is never healthy",
         || {
             use crate::doctor::{analyse_workflows, protection_findings, Protection, Status};
-            let wf = "on:\n  pull_request:\n    types: [opened, synchronize, reopened, edited]\npermissions: read-all\njobs:\n  d:\n    steps: [{uses: orieg/discipline@v0}]\n  ci-gate:\n    needs: d\n    steps: [{run: echo}]\n";
+            let wf = "on:\n  pull_request:\n    types: [opened, synchronize, reopened, edited]\npermissions: read-all\njobs:\n  d:\n    steps: [{uses: orieg/discipline@v0}]\n  ci-gate:\n    if: always()\n    needs: d\n    steps:\n      - run: test \"${{ needs.d.result }}\" = success\n";
             let jobs = analyse_workflows(&[("ci.yml".to_string(), wf.to_string())], false).jobs;
             let mut p = Protection {
                 strict: true,

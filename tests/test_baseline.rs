@@ -484,3 +484,16 @@ fn test_baseline_partial_suite_write_preserves_other_suites() {
         "baseline must preserve grandfathered entries from unexamined suites"
     );
 }
+
+#[test]
+fn baseline_write_refuses_to_replace_an_unreadable_baseline() {
+    let repo = Repo::new();
+    repo.commit_base("README.md", "x\n", "base");
+    repo.write("discipline-baseline.toml", "this is [[[ not toml\n");
+    let run = repo.run(&["baseline", "--write", "--suite", "integrity"], &[]);
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    assert!(run.stderr.contains("could not be read"), "{}", run.stderr);
+    // The file is left as it was, not rewritten without the other suites' entries.
+    let after = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert_eq!(after, "this is [[[ not toml\n");
+}

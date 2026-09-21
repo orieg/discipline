@@ -62,6 +62,14 @@ pub struct GateOutcome {
 }
 
 impl GateOutcome {
+    /// Enabled, examined nothing, found nothing, and says why: "not evaluated: ...".
+    pub fn is_not_evaluated(&self) -> bool {
+        self.enabled
+            && self.examined == 0
+            && self.violations.is_empty()
+            && self.notes.iter().any(|n| n.starts_with("not evaluated"))
+    }
+
     pub fn new(gate: &'static str) -> Self {
         let info = gate_info(gate).expect("gate id registered in config::GATES");
         Self {
@@ -176,13 +184,22 @@ impl CheckSummary {
 
                 if has_failure {
                     failed += 1;
-                } else {
+                } else if !o.is_not_evaluated() {
                     passed += 1;
                 }
             }
         }
 
         (passed, failed, disabled, examined)
+    }
+
+    /// Enabled gates that examined nothing because their input was absent (a named
+    /// "not evaluated" note). Counted neither as passed nor as failed.
+    pub fn not_evaluated_count(&self) -> usize {
+        self.outcomes
+            .iter()
+            .filter(|o| o.is_not_evaluated())
+            .count()
     }
 }
 

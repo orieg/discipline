@@ -25,6 +25,7 @@ const LOOSER_WHEN_GROWN: &[&str] = &[
     "approved_predicates",
     "allowed_rules",
     "pending_issue_repos",
+    "exempt_arms",
 ];
 /// List options where a *shorter* list is looser.
 const LOOSER_WHEN_SHRUNK: &[&str] = &[
@@ -35,10 +36,25 @@ const LOOSER_WHEN_SHRUNK: &[&str] = &[
     "superseded_json_paths",
     "citation_source_paths",
     "citation_measurement_jobs",
+    "unconditional_jobs",
 ];
 /// Optional references to evidence files: removing one, or pointing it elsewhere, drops
 /// or replaces what the gate checks against.
-const EVIDENCE_REFERENCES: &[&str] = &["superseded_registry", "ratio_baseline"];
+const EVIDENCE_REFERENCES: &[&str] = &[
+    "superseded_registry",
+    "ratio_baseline",
+    "workflow",
+    "change_job",
+];
+/// Numeric tolerances where a larger value is looser.
+const LOOSER_WHEN_INCREASED: &[&str] = &[
+    "tolerance_pct",
+    "ratio_tolerance_pct",
+    "noise_floor_pct",
+    "noise_margin_pct",
+    "advisory_pct",
+    "max_noise_cv",
+];
 /// Mode switches whose non-default value is the stricter check.
 const STRICTER_MODES: &[(&str, &str)] = &[("mode", "paired-ratio")];
 
@@ -336,6 +352,16 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                         note(format!("`{key}` increased from {bi} to {hi}"));
                     }
                 }
+                (Value::Float(bf), Value::Float(hf))
+                    if LOOSER_WHEN_INCREASED.contains(&key.as_str()) && hf > bf =>
+                {
+                    note(format!("`{key}` increased from {bf} to {hf}"))
+                }
+                (Value::Integer(bi), Value::Float(hf))
+                    if LOOSER_WHEN_INCREASED.contains(&key.as_str()) && *hf > *bi as f64 =>
+                {
+                    note(format!("`{key}` increased from {bi} to {hf}"))
+                }
                 (Value::String(bs), Value::String(hs))
                     if key == "severity"
                         && ((bs == "error" && (hs == "warning" || hs == "note"))
@@ -454,6 +480,35 @@ mod tests {
         );
         assert!(
             has("bench-regression", "`citation_source_paths` lost 1"),
+            "{found:?}"
+        );
+
+        // Keys added with ci-skip-set and bench rigor.
+        let skip_base = cfg("[gates.ci-skip-set]\nunconditional_jobs = [\"lint\"]\n\
+             [gates.bench-regression]\nratio_tolerance_pct = 2.0\nexempt_arms = [\"a\"]\n");
+        let skip_head = cfg(
+            "[gates.ci-skip-set]\nunconditional_jobs = []\nchange_job = \"\"\nworkflow = \"x.yml\"\n\
+             [gates.bench-regression]\nratio_tolerance_pct = 9.5\nexempt_arms = [\"a\", \"*\"]\n",
+        );
+        let skip_found = diff_configs(&skip_base, &skip_head).unwrap();
+        let has = |gate: &str, needle: &str| {
+            skip_found
+                .iter()
+                .any(|w| w.gate == gate && w.what.contains(needle))
+        };
+        let found = &skip_found;
+        assert!(
+            has("ci-skip-set", "`unconditional_jobs` lost 1"),
+            "{found:?}"
+        );
+        assert!(has("ci-skip-set", "`change_job` changed"), "{found:?}");
+        assert!(has("ci-skip-set", "`workflow` changed"), "{found:?}");
+        assert!(
+            has("bench-regression", "`ratio_tolerance_pct` increased"),
+            "{found:?}"
+        );
+        assert!(
+            has("bench-regression", "`exempt_arms` gained 1"),
             "{found:?}"
         );
 

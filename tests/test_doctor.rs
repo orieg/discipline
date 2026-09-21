@@ -16,10 +16,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: orieg/discipline@v0
   ci-gate:
+    if: always()
     needs: [discipline]
     runs-on: ubuntu-latest
     steps:
-      - run: echo ok
+      - env:
+          NEEDS: ${{ toJson(needs) }}
+        run: echo \"$NEEDS\" | jq -e 'all(.[]; .result == \"success\")'
 ";
 
 const CODEOWNERS: &str = "/discipline.toml @o\n/.github/workflows/ @o\n";
@@ -307,4 +310,26 @@ fn pending_issue_state_is_read_from_gitea() {
 
 fn as_refs<'a>(v: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
     v.iter().map(|(k, val)| (*k, val.as_str())).collect()
+}
+
+#[test]
+fn an_invalid_forge_setting_is_not_replaced_by_a_github_guess() {
+    let repo = protected_repo();
+    let run = repo.run(
+        &["doctor", "--repo", "o/r"],
+        &[("DISCIPLINE_FORGE", "gitlub")],
+    );
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("gitlub"), "{}", run.stdout);
+}
+
+#[test]
+fn a_gate_without_its_input_is_reported_as_not_evaluated() {
+    let repo = protected_repo();
+    repo.write("README.md", "change\n");
+    repo.commit("docs");
+    let run = repo.run(&["check", "--base", "main"], &[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    // ci-skip-set needs DISCIPLINE_CI_CONTEXT; without it the gate is neither passed nor failed.
+    assert!(run.stdout.contains("1 not evaluated"), "{}", run.stdout);
 }

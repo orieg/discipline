@@ -127,8 +127,13 @@ pub struct DisciplineJob {
     pub job_id: String,
     /// Check-run name of the job itself (`name:` or the job id).
     pub context: String,
-    /// Check-run names of jobs that transitively `needs:` it (rollups).
+    /// Check-run names of rollup jobs that fail when it fails: it is a direct `needs:`,
+    /// the rollup runs even after a failure (`if: always()`, `!cancelled()`, `failure()`),
+    /// and a step reads the `needs` results.
     pub rollups: Vec<String>,
+    /// Jobs that depend on it but would be skipped, or pass, when it fails. A skipped
+    /// required check counts as passed, so requiring one of these enforces nothing.
+    pub weak_rollups: Vec<String>,
     /// Display names of the workflow (`name:` and the file name), which Gitea and Forgejo
     /// put in front of the job name in status contexts.
     pub workflow_names: Vec<String>,
@@ -189,6 +194,107 @@ fn job_needs(job: &serde_yaml::Value) -> Vec<String> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// Whether `from` depends on `target` through a chain of `needs:`.
+fn depends_transitively(jobs: &[(String, &serde_yaml::Value)], from: &str, target: &str) -> bool {
+    let needs_of = |id: &str| {
+        jobs.iter()
+            .find(|(j, _)| j == id)
+            .map(|(_, job)| job_needs(job))
+            .unwrap_or_default()
+    };
+    let mut stack = needs_of(from);
+    let mut seen = BTreeSet::new();
+    while let Some(j) = stack.pop() {
+        if j == target {
+            return true;
+        }
+        if seen.insert(j.clone()) {
+            stack.extend(needs_of(&j));
+        }
+    }
+    false
+}
+
+/// A rollup fails when a job it needs failed: it runs regardless of that result and
+/// a step reads the results. Without `if: always()` (or `!cancelled()` / `failure()`)
+/// the rollup is skipped, and a skipped required check counts as passed.
+fn rollup_enforces(job: &serde_yaml::Value) -> bool {
+    let runs_after_failure = job
+        .get("if")
+        .map(|v| match v {
+            serde_yaml::Value::String(s) => s.clone(),
+            other => serde_yaml::to_string(other).unwrap_or_default(),
+        })
+        .is_some_and(|c| {
+            c.contains("always()") || c.contains("!cancelled()") || c.contains("failure()")
+        });
+    let reads_results = job
+        .get("steps")
+        .and_then(|s| s.as_sequence())
+        .is_some_and(|steps| {
+            steps.iter().any(|st| {
+                serde_yaml::to_string(st)
+                    .unwrap_or_default()
+                    .contains("needs")
+            })
+        });
+    runs_after_failure && reads_results
+}
+
+/// Why a job that runs discipline cannot fail, if it cannot.
+fn nonblocking_reason(job: &serde_yaml::Value, self_action: bool) -> Option<String> {
+    let truthy = |v: Option<&serde_yaml::Value>| match v {
+        Some(serde_yaml::Value::Bool(b)) => *b,
+        Some(serde_yaml::Value::String(s)) => s.trim() == "true",
+        _ => false,
+    };
+    if truthy(job.get("continue-on-error")) {
+        return Some("the job has `continue-on-error: true`".to_string());
+    }
+    let steps: Vec<&serde_yaml::Value> = job
+        .get("steps")
+        .and_then(|s| s.as_sequence())
+        .map(|s| s.iter().collect())
+        .unwrap_or_default();
+    // The job can fail on discipline if any discipline step can: one that is not masked,
+    // or a masked canary whose outcome a later step checks (`steps.<id>.outcome`).
+    let mut first_reason = None;
+    for (i, step) in steps.iter().enumerate() {
+        if !step_runs_discipline(step, self_action) {
+            continue;
+        }
+        let reason = if truthy(step.get("continue-on-error")) {
+            Some("its discipline step has `continue-on-error: true`")
+        } else if truthy(step.get("with").and_then(|w| w.get("advisory"))) {
+            Some("the action runs with `advisory: true`")
+        } else if step.get("run").and_then(|r| r.as_str()).is_some_and(|run| {
+            run.lines().any(|l| {
+                let l = l.trim();
+                (l.contains("discipline check") || l.contains("discipline diff"))
+                    && (l.contains("|| true") || l.contains("|| :") || l.contains("--advisory"))
+            })
+        }) {
+            Some("its `discipline check` exit status is masked")
+        } else {
+            None
+        };
+        let reason = reason?;
+        let checked_later = step.get("id").and_then(|v| v.as_str()).is_some_and(|id| {
+            steps[i + 1..].iter().any(|later| {
+                let text = serde_yaml::to_string(later).unwrap_or_default();
+                text.contains(&format!("steps.{id}.outcome"))
+                    || text.contains(&format!("steps.{id}.conclusion"))
+                    || text.contains(&format!("steps.{id}.outputs.status"))
+            })
+        });
+        if checked_later {
+            return None;
+        }
+        first_reason.get_or_insert(reason);
+    }
+    first_reason.map(str::to_string)
 }
 
 /// `on:` of a workflow as a map from event name to its configuration.
@@ -279,28 +385,6 @@ pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> Local
             continue;
         }
 
-        // Transitive dependents of each discipline job.
-        let needs: BTreeMap<&str, Vec<String>> = jobs
-            .iter()
-            .map(|(id, job)| (id.as_str(), job_needs(job)))
-            .collect();
-        let depends_on = |from: &str, target: &str| -> bool {
-            let mut stack = vec![from.to_string()];
-            let mut seen = BTreeSet::new();
-            while let Some(j) = stack.pop() {
-                if !seen.insert(j.clone()) {
-                    continue;
-                }
-                for n in needs.get(j.as_str()).into_iter().flatten() {
-                    if n == target {
-                        return true;
-                    }
-                    stack.push(n.clone());
-                }
-            }
-            false
-        };
-
         let events = triggers(&wf);
         let wf_perm = permission_level(wf.get("permissions"));
         // Worst token level across this workflow's discipline jobs (None = inherited).
@@ -309,11 +393,33 @@ pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> Local
             if !runs.contains(id) {
                 continue;
             }
-            let rollups = jobs
-                .iter()
-                .filter(|(other, _)| other != id && depends_on(other, id))
-                .map(|(other, j)| job_context(other, j))
-                .collect();
+            let mut rollups = Vec::new();
+            let mut weak_rollups = Vec::new();
+            for (other, oj) in &jobs {
+                if other == id {
+                    continue;
+                }
+                if job_needs(oj).contains(id) {
+                    if rollup_enforces(oj) {
+                        rollups.push(job_context(other, oj));
+                    } else {
+                        weak_rollups.push(job_context(other, oj));
+                    }
+                } else if depends_transitively(&jobs, other, id) {
+                    weak_rollups.push(job_context(other, oj));
+                }
+            }
+            let nonblocking = nonblocking_reason(job, self_action);
+            if let Some(why) = &nonblocking {
+                facts.findings.push(
+                    Finding::new(
+                        "non-blocking",
+                        Status::Fail,
+                        format!("{path} job `{id}` runs discipline but cannot fail: {why}"),
+                    )
+                    .fix("Remove continue-on-error, `|| true` and `advisory: true` from the discipline job."),
+                );
+            }
             let mut workflow_names = Vec::new();
             if let Some(n) = wf.get("name").and_then(|n| n.as_str()) {
                 workflow_names.push(n.trim().to_string());
@@ -326,8 +432,9 @@ pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> Local
                 job_id: id.clone(),
                 context: job_context(id, job),
                 rollups,
+                weak_rollups,
                 workflow_names,
-                allow_failure: false,
+                allow_failure: nonblocking.is_some(),
             });
             let level = permission_level(job.get("permissions")).or(wf_perm);
             let rank = |l: Option<u8>| l.unwrap_or(3);
@@ -605,16 +712,19 @@ pub fn analyse_gitlab_ci(content: &str) -> LocalFacts {
                     job_id: "discipline".into(),
                     context: "discipline".into(),
                     rollups: Vec::new(),
+                    weak_rollups: Vec::new(),
                     workflow_names: Vec::new(),
                     allow_failure: allow,
                 });
             }
         }
-        for (k, job) in map {
+        for (k, raw) in map {
             let Some(id) = k.as_str() else { continue };
-            if id.starts_with('.') || GITLAB_RESERVED.contains(&id) || !job.is_mapping() {
+            if id.starts_with('.') || GITLAB_RESERVED.contains(&id) || !raw.is_mapping() {
                 continue;
             }
+            let resolved = gitlab_resolve_extends(map, raw, 0);
+            let job = &resolved;
             let image = match job.get("image") {
                 Some(serde_yaml::Value::String(s)) => s.clone(),
                 Some(v) => v
@@ -652,8 +762,9 @@ pub fn analyse_gitlab_ci(content: &str) -> LocalFacts {
                     job_id: id.to_string(),
                     context: id.to_string(),
                     rollups: Vec::new(),
+                    weak_rollups: Vec::new(),
                     workflow_names: Vec::new(),
-                    allow_failure: as_bool(job.get("allow_failure")).unwrap_or(false),
+                    allow_failure: gitlab_job_can_fail_silently(job),
                 });
             }
         }
@@ -692,6 +803,62 @@ pub fn analyse_gitlab_ci(content: &str) -> LocalFacts {
         }
     }
     facts
+}
+
+/// A GitLab job with its `extends:` templates merged in (parents first, the job last).
+fn gitlab_resolve_extends(
+    all: &serde_yaml::Mapping,
+    job: &serde_yaml::Value,
+    depth: usize,
+) -> serde_yaml::Value {
+    let parents: Vec<String> = match job.get("extends") {
+        Some(serde_yaml::Value::String(s)) => vec![s.clone()],
+        Some(serde_yaml::Value::Sequence(seq)) => seq
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut merged = serde_yaml::Mapping::new();
+    if depth < 10 {
+        for parent in parents {
+            if let Some(p) = all.get(serde_yaml::Value::String(parent)) {
+                if let serde_yaml::Value::Mapping(pm) = gitlab_resolve_extends(all, p, depth + 1) {
+                    merged.extend(pm);
+                }
+            }
+        }
+    }
+    if let Some(own) = job.as_mapping() {
+        merged.extend(own.clone());
+    }
+    serde_yaml::Value::Mapping(merged)
+}
+
+/// Whether a GitLab job's failure leaves the pipeline green: `allow_failure: true` (or an
+/// `exit_codes` form), `when: manual` without `allow_failure: false`, or a `rules:` entry
+/// that sets either.
+fn gitlab_job_can_fail_silently(job: &serde_yaml::Value) -> bool {
+    let allow = |v: &serde_yaml::Value| match v.get("allow_failure") {
+        Some(serde_yaml::Value::Bool(b)) => Some(*b),
+        Some(serde_yaml::Value::String(s)) => Some(s.trim() == "true"),
+        Some(serde_yaml::Value::Mapping(_)) => Some(true),
+        _ => None,
+    };
+    let manual = |v: &serde_yaml::Value| v.get("when").and_then(|w| w.as_str()) == Some("manual");
+    let silent = |v: &serde_yaml::Value| match allow(v) {
+        Some(a) => a,
+        None => manual(v),
+    };
+    silent(job)
+        || job
+            .get("rules")
+            .and_then(|r| r.as_sequence())
+            .is_some_and(|rules| {
+                rules
+                    .iter()
+                    .any(|r| allow(r) == Some(true) || (manual(r) && allow(r) != Some(false)))
+            })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -908,8 +1075,12 @@ pub fn gitea_protection(
                     .or_else(|| r.get("branch_name"))
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
+                // Gitea and Forgejo match rule names with `/` as a separator: `*` does
+                // not cover `release/1.0`.
                 name == branch
-                    || globset::Glob::new(name)
+                    || globset::GlobBuilder::new(name)
+                        .literal_separator(true)
+                        .build()
                         .map(|g| g.compile_matcher().is_match(branch))
                         .unwrap_or(false)
             };
@@ -1049,12 +1220,29 @@ pub fn gitlab_protection(
 }
 
 /// Status-check names a forge reports for the jobs that run discipline and their rollups.
-pub fn candidate_contexts(kind: ForgeKind, jobs: &[DisciplineJob]) -> Vec<String> {
+/// With `enforcing`, only blocking discipline jobs and rollups that fail with them;
+/// otherwise the names that look related but would not block a merge.
+pub fn candidate_contexts(kind: ForgeKind, jobs: &[DisciplineJob], enforcing: bool) -> Vec<String> {
     let mut out = BTreeSet::new();
     for j in jobs {
-        let names: Vec<&str> = std::iter::once(j.context.as_str())
-            .chain(j.rollups.iter().map(|s| s.as_str()))
-            .collect();
+        let names: Vec<&str> = if enforcing {
+            if j.allow_failure {
+                continue;
+            }
+            std::iter::once(j.context.as_str())
+                .chain(j.rollups.iter().map(|s| s.as_str()))
+                .collect()
+        } else {
+            let own = j.allow_failure.then_some(j.context.as_str());
+            own.into_iter()
+                .chain(j.weak_rollups.iter().map(|s| s.as_str()))
+                .chain(if j.allow_failure {
+                    j.rollups.iter().map(|s| s.as_str()).collect()
+                } else {
+                    Vec::new()
+                })
+                .collect()
+        };
         match kind {
             ForgeKind::Gitea | ForgeKind::Forgejo => {
                 // "<workflow display name> / <job name> (<event>)", as both forges format it.
@@ -1130,7 +1318,8 @@ pub fn protection_findings(
             ),
         });
     } else {
-        let candidates = candidate_contexts(kind, jobs);
+        let candidates = candidate_contexts(kind, jobs, true);
+        let weak = candidate_contexts(kind, jobs, false);
         let enforcing: Vec<&String> = p
             .required_contexts
             .iter()
@@ -1144,6 +1333,32 @@ pub fn protection_findings(
             out.push(
                 Finding::new("required-check", Status::Fail, "no status check is required before merge")
                     .fix("Require the rollup job (or the discipline job) as a status check on the branch."),
+            );
+        } else if enforcing.is_empty()
+            && p.required_contexts.iter().any(|r| {
+                weak.iter()
+                    .any(|c| context_matches(r, c, p.context_patterns))
+            })
+        {
+            let named: Vec<&str> = p
+                .required_contexts
+                .iter()
+                .filter(|r| {
+                    weak.iter()
+                        .any(|c| context_matches(r, c, p.context_patterns))
+                })
+                .map(|s| s.as_str())
+                .collect();
+            out.push(
+                Finding::new(
+                    "required-check",
+                    Status::Fail,
+                    format!(
+                        "required check {} depends on discipline but passes (or is skipped) when discipline fails",
+                        named.join(", ")
+                    ),
+                )
+                .fix("Give the rollup `if: always()`, list the discipline job in its `needs:` directly, and fail a step when any `needs.*.result` is not success; or require the discipline job itself."),
             );
         } else if enforcing.is_empty() {
             let shown: Vec<&str> = candidates
@@ -1469,9 +1684,13 @@ jobs:
     runs-on: ubuntu-latest
     steps: [{ run: echo done }]
   ci-gate:
-    needs: [lint, report]
+    if: always()
+    needs: [lint, gate, report]
     runs-on: ubuntu-latest
-    steps: [{ run: "true" }]
+    steps:
+      - env:
+          NEEDS: ${{ toJson(needs) }}
+        run: echo "$NEEDS" | jq -e 'all(.[]; .result == "success")'
 "#;
 
     fn wf(content: &str) -> Vec<(String, String)> {
@@ -1485,7 +1704,9 @@ jobs:
         let j = &facts.jobs[0];
         assert_eq!(j.job_id, "gate");
         assert_eq!(j.context, "Discipline");
-        assert_eq!(j.rollups, vec!["report".to_string(), "ci-gate".to_string()]);
+        // `ci-gate` fails when `gate` fails; `report` is skipped and would count as passed.
+        assert_eq!(j.rollups, vec!["ci-gate".to_string()]);
+        assert_eq!(j.weak_rollups, vec!["report".to_string()]);
         let status = |id: &str| facts.findings.iter().find(|f| f.id == id).unwrap().status;
         assert_eq!(status("workflows"), Status::Pass);
         assert_eq!(status("trigger"), Status::Pass);
@@ -1654,6 +1875,94 @@ jobs:
     }
 
     #[test]
+    fn a_rollup_that_skips_or_ignores_results_does_not_enforce_discipline() {
+        let gh = github(full_rules(), serde_json::json!([]));
+        let p = github_protection(&gh, &forge(ForgeKind::GitHub), "main").unwrap();
+        for weak in [
+            // No `if: always()`: skipped when `gate` fails, and skipped counts as passed.
+            WF.replace(
+                "    if: always()\n    needs: [lint, gate, report]",
+                "    needs: [lint, gate, report]",
+            ),
+            // Runs always but never reads the results.
+            WF.replace(
+                "        run: echo \"$NEEDS\" | jq -e 'all(.[]; .result == \"success\")'",
+                "        run: echo done",
+            )
+            .replace(
+                "      - env:\n          NEEDS: ${{ toJson(needs) }}\n",
+                "      - ",
+            ),
+        ] {
+            let jobs = analyse_workflows(&wf(&weak), false).jobs;
+            assert!(jobs[0].rollups.is_empty(), "{weak}");
+            let f = protection_findings(ForgeKind::GitHub, &p, &jobs);
+            let rc = f.iter().find(|x| x.id == "required-check").unwrap();
+            assert_eq!(rc.status, Status::Fail, "{weak}");
+            assert!(
+                rc.summary.contains("passes (or is skipped)"),
+                "{}",
+                rc.summary
+            );
+        }
+    }
+
+    #[test]
+    fn a_masked_canary_whose_outcome_is_checked_still_blocks() {
+        let canary = WF.replace(
+            "      - uses: orieg/discipline@v0\n",
+            "      - id: bad\n        continue-on-error: true\n        uses: orieg/discipline@v0\n      - run: test \"${{ steps.bad.outcome }}\" = failure\n",
+        );
+        let facts = analyse_workflows(&wf(&canary), false);
+        assert!(
+            facts.findings.iter().all(|f| f.id != "non-blocking"),
+            "{:?}",
+            facts.findings
+        );
+        assert!(!facts.jobs[0].allow_failure);
+    }
+
+    #[test]
+    fn a_discipline_job_that_cannot_fail_does_not_count() {
+        for (variant, why) in [
+            (
+                WF.replace(
+                    "  gate:\n    name: Discipline\n",
+                    "  gate:\n    name: Discipline\n    continue-on-error: true\n",
+                ),
+                "continue-on-error",
+            ),
+            (
+                WF.replace(
+                    "      - uses: orieg/discipline@v0\n",
+                    "      - uses: orieg/discipline@v0\n        with:\n          advisory: true\n",
+                ),
+                "advisory",
+            ),
+            (
+                WF.replace(
+                    "      - uses: orieg/discipline@v0\n",
+                    "      - run: discipline check --base origin/main || true\n",
+                ),
+                "masked",
+            ),
+        ] {
+            let facts = analyse_workflows(&wf(&variant), false);
+            assert!(
+                facts.findings.iter().any(|f| f.id == "non-blocking"
+                    && f.status == Status::Fail
+                    && f.summary.contains(why)),
+                "{why}: {:?}",
+                facts.findings
+            );
+            let gh = github(full_rules(), serde_json::json!([]));
+            let p = github_protection(&gh, &forge(ForgeKind::GitHub), "main").unwrap();
+            let f = protection_findings(ForgeKind::GitHub, &p, &facts.jobs);
+            assert_eq!(f[0].status, Status::Fail, "{why}: {f:?}");
+        }
+    }
+
+    #[test]
     fn classic_protection_is_merged_and_unreadable_classic_is_an_error() {
         let mut gh = github(serde_json::json!([]), serde_json::json!([]));
         gh.responses.insert(
@@ -1763,6 +2072,16 @@ jobs:
             assert_eq!(get(id).status, Status::Warn, "{id}");
             assert!(get(id).summary.contains("not visible"), "{id}");
         }
+        // A `*` rule does not cover a branch with a `/` in it.
+        api.responses.insert(
+            "gitea:repos/o/r/branch_protections".into(),
+            serde_json::json!([{"rule_name": "*", "enable_status_check": true,
+              "status_check_contexts": ["CI / ci-gate (pull_request)"]}]),
+        );
+        let p = gitea_protection(&api, &forge(ForgeKind::Gitea), "release/1.0").unwrap();
+        assert!(!p.protected, "{p:?}");
+        let p = gitea_protection(&api, &forge(ForgeKind::Gitea), "main").unwrap();
+        assert!(p.protected);
         // Unprotected branch, readable rules: nothing required.
         api.responses.insert(
             "gitea:repos/o/r/branch_protections".into(),
@@ -1838,6 +2157,21 @@ test:
             .findings
             .iter()
             .any(|f| f.id == "allow-failure" && f.status == Status::Fail));
+        for silent in [
+            "check:\n  script: [discipline check]\n  when: manual\n",
+            "check:\n  script: [discipline check]\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n      allow_failure: true\n",
+            ".base:\n  allow_failure: true\ncheck:\n  extends: .base\n  script: [discipline check]\n",
+        ] {
+            let f = analyse_gitlab_ci(silent);
+            assert!(f.jobs[0].allow_failure, "{silent}");
+        }
+        let blocking = analyse_gitlab_ci(
+            ".base:\n  allow_failure: true\ncheck:\n  extends: .base\n  allow_failure: false\n  script: [discipline check]\n  when: manual\n",
+        );
+        assert!(
+            !blocking.jobs[0].allow_failure,
+            "an explicit allow_failure: false wins"
+        );
         let none = analyse_gitlab_ci("test:\n  script: [make]\n");
         assert_eq!(none.findings[0].status, Status::Fail);
 

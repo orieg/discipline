@@ -709,13 +709,18 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
 
     // Preserve existing findings for gates that were not examined in this run (e.g. when --suite was passed)
     if baseline_path.exists() {
-        if let Ok(existing) =
-            discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path)
-        {
-            for entry in existing.findings {
-                if !examined_gates.contains(entry.gate.as_str()) {
-                    entries.push(entry);
-                }
+        // An unreadable baseline is not an empty one: rewriting it would drop every entry
+        // for the gates this run did not examine.
+        let existing = discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path)
+            .with_context(|| {
+                format!(
+                    "existing baseline `{}` could not be read; fix or remove it before --write",
+                    args.baseline_file.display()
+                )
+            })?;
+        for entry in existing.findings {
+            if !examined_gates.contains(entry.gate.as_str()) {
+                entries.push(entry);
             }
         }
     }
@@ -824,7 +829,11 @@ fn doctor(args: discipline::cli::DoctorArgs) -> Result<bool> {
                 f.repo = repo.clone();
                 Ok(f)
             }
-            // An explicit repository without a detectable forge is taken to be GitHub.
+            // An explicit repository without a detectable forge is taken to be GitHub,
+            // unless DISCIPLINE_FORGE was set: an invalid value stays an error.
+            Err(e) if std::env::var("DISCIPLINE_FORGE").is_ok_and(|v| !v.trim().is_empty()) => {
+                Err(e)
+            }
             Err(_) => Ok(discipline::forge::Forge {
                 kind: discipline::forge::ForgeKind::GitHub,
                 url: "https://github.com".into(),

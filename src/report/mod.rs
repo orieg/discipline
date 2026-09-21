@@ -169,11 +169,15 @@ fn render_terminal_to_writer<W: Write>(
     let total_ov = summary.total_overrides();
     let (passed, failed, disabled, examined) =
         summary.gate_counts(fail_on_warnings, fail_on_overrides);
-    let disabled_suffix = if disabled > 0 {
+    let mut disabled_suffix = if disabled > 0 {
         format!(", {disabled} disabled")
     } else {
         String::new()
     };
+    let not_evaluated = summary.not_evaluated_count();
+    if not_evaluated > 0 {
+        disabled_suffix.push_str(&format!(", {not_evaluated} not evaluated"));
+    }
     let items_label = if examined == 1 { "item" } else { "items" };
     writeln!(
         w,
@@ -280,11 +284,15 @@ pub fn render_step_summary_to_writer(
 
     let (passed, failed, disabled, examined) =
         summary.gate_counts(fail_on_warnings, fail_on_overrides);
-    let disabled_suffix = if disabled > 0 {
+    let mut disabled_suffix = if disabled > 0 {
         format!(", {disabled} disabled")
     } else {
         String::new()
     };
+    let not_evaluated = summary.not_evaluated_count();
+    if not_evaluated > 0 {
+        disabled_suffix.push_str(&format!(", {not_evaluated} not evaluated"));
+    }
     let items_label = if examined == 1 { "item" } else { "items" };
     let total_ov = summary.total_overrides();
     let baselined_part = if summary.baselined > 0 {
