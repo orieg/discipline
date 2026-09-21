@@ -1596,6 +1596,7 @@ pub fn run(input: &DoctorInput) -> Report {
     });
 
     let mut platform_name = "local".to_string();
+    let mut gitea_version: Option<String> = None;
     let mut repository = None;
     let mut branch = input.branch.clone();
     if !input.local_only {
@@ -1609,6 +1610,14 @@ pub fn run(input: &DoctorInput) -> Report {
             }
             Ok(forge) => {
                 platform_name = forge.kind.label().to_string();
+                if forge.kind == ForgeKind::Gitea {
+                    gitea_version = input
+                        .api
+                        .get(forge, "version")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.get("version")?.as_str().map(str::to_string));
+                }
                 repository = Some(forge.repo.clone());
                 if branch.is_none() {
                     match default_branch(input.api, forge) {
@@ -1647,12 +1656,73 @@ pub fn run(input: &DoctorInput) -> Report {
         }
     }
 
+    let gitea_workflows = input
+        .forge
+        .as_ref()
+        .is_ok_and(|f| f.kind == ForgeKind::Gitea);
+    qualify_token_findings(&mut findings, gitea_workflows, gitea_version.as_deref());
+
     Report {
         platform: platform_name,
         forge_url: input.forge.as_ref().ok().map(|f| f.url.clone()),
         repository,
         branch,
         findings,
+    }
+}
+
+/// First Gitea release whose Actions token honours a workflow's `permissions:`
+/// (go-gitea/gitea#36173). Earlier versions ignore the key.
+pub const GITEA_PERMISSIONS_SINCE: (u64, u64, u64) = (1, 26, 0);
+
+/// `major.minor.patch` of a version string such as `1.24.6` or `1.26.0+dev-12-gabc`.
+pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = v
+        .trim()
+        .trim_start_matches('v')
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|p| !p.is_empty())
+        .map(|p| p.parse::<u64>().ok());
+    Some((
+        parts.next()??,
+        parts.next()??,
+        parts.next().flatten().unwrap_or(0),
+    ))
+}
+
+/// A `permissions:` fix only helps where the runner honours it. On Gitea below 1.26 the
+/// key is ignored, so the token warning becomes information; when the version is
+/// unknown (or the workflow is a Gitea one), the remediation says which version it needs.
+fn qualify_token_findings(findings: &mut [Finding], gitea: bool, version: Option<&str>) {
+    let (major, minor, patch) = GITEA_PERMISSIONS_SINCE;
+    let since = format!("{major}.{minor}.{patch}");
+    for f in findings
+        .iter_mut()
+        .filter(|f| f.id == "token" && f.status == Status::Warn)
+    {
+        let gitea_file = f.summary.starts_with(".gitea/");
+        if !(gitea || gitea_file) {
+            continue;
+        }
+        match version.and_then(parse_version) {
+            Some(v) if v < GITEA_PERMISSIONS_SINCE => {
+                let shown = version.unwrap_or_default();
+                f.status = Status::Info;
+                f.summary = format!(
+                    "{} (Gitea {shown} ignores `permissions:`; the instance scopes the token)",
+                    f.summary
+                );
+                f.remediation = Some(format!(
+                    "Upgrade to Gitea {since} or later, then set `permissions: contents: read`."
+                ));
+            }
+            Some(_) => {}
+            None => {
+                f.remediation = Some(format!(
+                    "Set `permissions: contents: read` on the workflow or job (honoured by Gitea {since} and later; older versions ignore it)."
+                ));
+            }
+        }
     }
 }
 
@@ -2207,6 +2277,58 @@ test:
         let auth =
             "gitea.example.com answered HTTP 403 Only signed in user is allowed to call APIs.";
         assert!(access_hint(ForgeKind::Gitea, auth).contains("GITEA_TOKEN"));
+    }
+
+    #[test]
+    fn gitea_token_findings_follow_the_instance_version() {
+        let warn = || {
+            vec![Finding::new(
+                "token",
+                Status::Warn,
+                ".gitea/workflows/ci.yml: discipline jobs inherit the repository's default token permissions",
+            )
+            .fix("Set `permissions: contents: read` on the workflow or job.")]
+        };
+        let mut old = warn();
+        qualify_token_findings(&mut old, true, Some("1.24.6"));
+        assert_eq!(old[0].status, Status::Info);
+        assert!(
+            old[0].summary.contains("Gitea 1.24.6 ignores"),
+            "{}",
+            old[0].summary
+        );
+        assert!(old[0].remediation.as_deref().unwrap().contains("1.26.0"));
+
+        let mut new = warn();
+        qualify_token_findings(&mut new, true, Some("1.26.1+dev-3-gabc"));
+        assert_eq!(new[0].status, Status::Warn);
+        assert_eq!(
+            new[0].remediation.as_deref(),
+            Some("Set `permissions: contents: read` on the workflow or job.")
+        );
+
+        let mut unknown = warn();
+        qualify_token_findings(&mut unknown, false, None);
+        assert_eq!(unknown[0].status, Status::Warn);
+        assert!(unknown[0]
+            .remediation
+            .as_deref()
+            .unwrap()
+            .contains("Gitea 1.26.0 and later"));
+
+        let mut github =
+            vec![Finding::new("token", Status::Warn, ".github/workflows/ci.yml: x").fix("f")];
+        qualify_token_findings(&mut github, false, None);
+        assert_eq!(
+            github[0].remediation.as_deref(),
+            Some("f"),
+            "GitHub workflows are untouched"
+        );
+
+        assert_eq!(parse_version("1.24.6"), Some((1, 24, 6)));
+        assert_eq!(parse_version("v1.26"), Some((1, 26, 0)));
+        assert_eq!(parse_version("12.0.4+gitea-1.22.0"), Some((12, 0, 4)));
+        assert_eq!(parse_version("dev"), None);
     }
 
     #[test]

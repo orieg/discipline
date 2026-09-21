@@ -377,3 +377,43 @@ fn an_ssh_host_alias_in_the_remote_resolves_to_its_hostname() {
     assert_eq!(run.code, 2, "{}", run.stdout);
     assert!(run.stdout.contains("(https://forge)"), "{}", run.stdout);
 }
+
+#[test]
+fn a_gitea_below_1_26_turns_the_token_warning_into_information() {
+    let repo = Repo::new();
+    // No `permissions:` in the workflow: a warning on GitHub, inert on Gitea 1.24.
+    repo.commit_base_files(
+        &[(
+            ".gitea/workflows/ci.yml",
+            &WORKFLOW.replace("permissions:\n  contents: read\n", ""),
+        )],
+        "base",
+    );
+    let api = FakeForge::start();
+    api.serve("version", serde_json::json!({"version": "1.24.6"}));
+    api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));
+    api.serve_raw("repos/o/r/branch_protections", 200, &[], "[]");
+    let url = api.url();
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("DISCIPLINE_FORGE", "gitea"),
+        ("DISCIPLINE_FORGE_URL", "https://git.example.com"),
+        ("DISCIPLINE_FORGE_REPO", "o/r"),
+    ];
+    let run = repo.run(&["doctor", "--format", "json"], &env);
+    let st = statuses(&run.stdout);
+    assert!(st.contains(&("token".into(), "info".into())), "{st:?}");
+    assert!(
+        run.stdout.contains("Gitea 1.24.6 ignores"),
+        "{}",
+        run.stdout
+    );
+
+    api.serve("version", serde_json::json!({"version": "1.26.0"}));
+    let run = repo.run(&["doctor", "--format", "json"], &env);
+    assert!(
+        statuses(&run.stdout).contains(&("token".into(), "warn".into())),
+        "{}",
+        run.stdout
+    );
+}

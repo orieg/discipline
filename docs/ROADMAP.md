@@ -143,6 +143,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| v0.7.2 | `doctor` | On Gitea, doctor reads the instance version; below 1.26 (which ignores a workflow's `permissions:`) the token finding is information, not a warning, and names the upgrade. | narrower | None. |
 | v0.7.1 | forge access | An SSH remote's host is resolved through `~/.ssh/config` (`Host` alias to `HostName`, with `Include`) before the forge's API address is built; `doctor` prints that address (`forge_url` in JSON) and points an unreachable host at `DISCIPLINE_FORGE_URL`. | reclassified | None; set `DISCIPLINE_FORGE_URL` if the API is served elsewhere than the SSH host. |
 | v0.7.0 | configuration | New keys (`superseded_registry`, `pending_issue_repos`, `mode`, `citation_*`, `[gates.ci-skip-set]`, ...) are rejected by older binaries, which refuse unknown keys. | stricter | Upgrade every binary that reads the file (pre-commit `rev:`, pinned images) together. |
 | v0.7.0 | `test-floor` | `test_command` without `min_tests` or a `constant_*` floor exits 2 instead of passing. | stricter | Set `min_tests`, or remove `test_command`. |
