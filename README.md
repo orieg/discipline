@@ -89,6 +89,8 @@ jobs:
 The floating `@v0` ref tracks the latest `v0.x.y` release, and moves only after that release has passed its smoke tests. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger). Pin `@v0.9.0` when a verdict must be reproducible from the workflow file alone.
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding an authorized override directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
+>
+> **Note on `push`:** the action also runs on `push` events (base `github.event.before`), but a push run reads directives from the pushed commits' messages only: a squash or rebase merge drops the PR body, so a waiver that passed on the pull request fails the push run on `main` that follows. Gate on `pull_request` as above; if you also run on `push`, put directives in commit messages too. Details: [Override Directives](docs/CONFIGURATION.md#override-directives).
 
 A check only blocks a merge when the branch requires it. See [Repository Protection](docs/guides/ci-platforms.md#8-repository-protection) for the settings (required check, up-to-date branch, no bypass, CODEOWNERS on gate configuration) and a ruleset example.
 

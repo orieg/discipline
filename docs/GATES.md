@@ -824,6 +824,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```text
   allow-ci-weakening: ci-gate temporary rollup relaxation during migration
   ```
+  - `Verification Step Narrowed` (warning): a verification step, including the discipline step, gains a step-level `if:` or its `if:` changes, so it no longer runs on every event or condition it ran on before (`if: github.event_name == 'pull_request'` on the gate stops it gating pushes to the default branch). The `always()` / `failure()` forms are `Conditional Masking on Verification Step`. Lifted with `allow-gate-weakening: ci-integrity <reason>`.
 - **What it does NOT catch:**
   - Local actions (`./...`) and docker actions (`docker://...`).
   - Workflows matching `excluded_jobs` (e.g. `detect-changes`).

@@ -329,6 +329,8 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 
 The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Actions, and Forgejo Actions. It operates with zero Node.js runtime overhead, executing entirely via shell and the static binary.
 
+The action runs on `pull_request`, `merge_group` and `push` events (the base is `github.base_ref`, the merge group's base, or `github.event.before`). On `push` there is no pull request body to read directives from; see [Override Directives](#override-directives) for what each event sees and why a squash or rebase merge drops PR-body waivers.
+
 ### Action Inputs
 
 <!-- generated:action-inputs -->
@@ -412,6 +414,14 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 ## Override Directives
 
 Legitimate test refactorings, file deletions, or configuration adjustments are authorized through scoped directives in the PR description or commit messages. Directives never apply globally: they must name the exact subject they cover.
+
+**Which sources each event sees.** A `pull_request` run reads the pull request's body and the branch's commit messages. A `push` run (and `--commit` / `--commit-range`) reads only the pushed commits' messages: there is no pull request in its payload. A squash merge builds the commit message from the branch's commits, a rebase merge keeps them as they were, and a merge commit's default message carries neither — so a waiver written only in the PR body is not seen by the push run on the default branch that follows the merge, and that run fails on a change the pull request had already passed. Options, in the order to prefer them: gate on `pull_request` (the event whose body is the review record) and do not run the gate on `push` to the default branch; or put the directive in a commit message as well; or, once shipped, enable the `merged-pr-body` source, which resolves each pushed commit's merged pull request through the forge and reads its body under the same trust rules. On a push, a finding that a PR-body directive would have lifted says so in its remediation and in the gate's notes, and `doctor` reports a workflow that runs the gate on `push` to a default branch whose merge method allows squash or rebase.
+
+| Event | Sources read (`directives.sources` default `["pr-body", "commits"]`) |
+|---|---|
+| `pull_request`, `merge_group` | PR body (`pr-body`), branch commit messages (`commits`) |
+| `push` to any branch, `--commit`, `--commit-range` | pushed commit messages (`commits`) only; `merged-pr-body` when enabled (planned) |
+| `--staged` (local) | `--pr-body-file` if given, else none; staged changes have no commits |
 
 ### Syntax & Grammar
 

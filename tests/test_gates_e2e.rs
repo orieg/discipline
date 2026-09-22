@@ -3343,6 +3343,61 @@ fn unreachable_assertions_do_not_count() {
 }
 
 #[test]
+fn a_push_run_says_why_a_pr_body_waiver_is_out_of_scope() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("AGENTS.md", "# Rules\n\nRun the tests.\n");
+    repo.commit("docs: rules");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "AGENTS.md",
+        "# Rules\n\nRun the tests.\n\nNever skip a failing test.\n",
+    );
+    // The squash commit carries the branch's messages, not the PR body.
+    repo.commit("docs: rules (#12)");
+
+    // On the pull request the body lifts it.
+    let pr = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("PR_BODY", "allow-agent-instructions: AGENTS.md reviewed")],
+    );
+    assert_eq!(pr.code, 0, "{}", pr.stdout);
+
+    // On the push run the same change fails, and the finding says why.
+    let push = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("GITHUB_EVENT_NAME", "push"), ("PR_BODY", "")],
+    );
+    assert_eq!(push.code, 1);
+    let v = push.violations("instruction-smuggling");
+    assert_eq!(v.len(), 1, "{v:?}");
+    let remediation = v[0]["remediation"].as_str().unwrap();
+    assert!(
+        remediation.contains("this run is a push")
+            && remediation.contains("PR-body directives are not in scope")
+            && remediation.contains("merged-pr-body"),
+        "{remediation}"
+    );
+    assert!(
+        notes_of(&push, "instruction-smuggling")
+            .iter()
+            .any(|n| n.starts_with("push event:")),
+        "{:?}",
+        notes_of(&push, "instruction-smuggling")
+    );
+    // A pull-request run's remediation carries no such note.
+    let pr_fail = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("PR_BODY", "")],
+    );
+    let r = pr_fail.violations("instruction-smuggling")[0]["remediation"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!r.contains("this run is a push"), "{r}");
+}
+
+#[test]
 fn unsafe_trait_with_a_safety_doc_section_abc_stubs_and_past_intervals_are_not_findings() {
     let repo = Repo::new();
     repo.write(

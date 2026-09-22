@@ -508,7 +508,8 @@ fn check(args: CheckArgs) -> Result<bool> {
         &config,
     );
 
-    let pr_body = if raw_pr_body.is_some() {
+    let had_pr_body = raw_pr_body.is_some();
+    let pr_body = if had_pr_body {
         raw_pr_body
     } else if is_push_or_commit {
         git.head_commit_body().ok().filter(|b| !b.trim().is_empty())
@@ -579,6 +580,35 @@ fn check(args: CheckArgs) -> Result<bool> {
             return Err(err);
         }
     };
+
+    // A push run reads no pull-request body. A finding whose remediation points at a
+    // PR-body directive would send a maintainer to edit a body this run never reads;
+    // say so, and name the sources a push does read.
+    if is_push_or_commit && !had_pr_body {
+        let push_note = "this run is a push (or a commit range), so PR-body directives are not in scope: \
+                         only the pushed commits' messages are read. A squash or rebase merge drops the \
+                         pull request's body, and a merge commit's default message does not carry it. \
+                         Put the directive in a commit message, restrict the step to pull_request, or \
+                         enable the `merged-pr-body` directive source.";
+        for outcome in &mut summary.outcomes {
+            let mut affected = false;
+            for v in &mut outcome.violations {
+                let mentions_directive = v.remediation.as_deref().is_some_and(|r| {
+                    r.contains("allow-") || r.contains("removes:") || r.contains("no-issue:")
+                });
+                if mentions_directive {
+                    affected = true;
+                    if let Some(r) = &mut v.remediation {
+                        r.push_str(" Note: ");
+                        r.push_str(push_note);
+                    }
+                }
+            }
+            if affected {
+                outcome.notes.push(format!("push event: {push_note}"));
+            }
+        }
+    }
 
     // Run-level override limits: a budget, and an approval read from the forge.
     let pull = detect_pull_context_from_ci();

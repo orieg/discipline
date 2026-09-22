@@ -894,6 +894,45 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 }
                             }
 
+                            // 5d'. A verification step that newly runs on fewer events or
+                            // conditions: a step-level `if:` added, or changed. The always() /
+                            // failure() forms are 5d's; a plain narrowing is a weakening of
+                            // the same kind as continue-on-error, reported at warning.
+                            if is_verification_step(step) {
+                                let head_if = step.get("if").map(if_text);
+                                let base_if = base_step.and_then(|b| b.get("if")).map(if_text);
+                                let masking = |t: &str| {
+                                    let l = t.to_ascii_lowercase();
+                                    l.contains("always()") || l.contains("failure()")
+                                };
+                                if let Some(h) = head_if.as_deref().filter(|h| !masking(h)) {
+                                    if base_if.as_deref() != Some(h) {
+                                        let if_line = find_line_after(
+                                            &head_content,
+                                            "if:",
+                                            approx_line.unwrap_or(1),
+                                        )
+                                        .or(approx_line);
+                                        let what = match &base_if {
+                                            None => format!("gains 'if: {h}'"),
+                                            Some(b) => format!("changes 'if: {b}' to 'if: {h}'"),
+                                        };
+                                        record_or_excuse(
+                                            ctx,
+                                            Some(&head_content),
+                                            &mut out,
+                                            Severity::Warning,
+                                            "Verification Step Narrowed",
+                                            Some(path.clone()),
+                                            if_line,
+                                            format!("Verification step '{}' in job '{job_id}' {what}: it no longer runs on every event or condition it ran on before.", step_label(step, "unnamed step")),
+                                            "Run the step unconditionally, or record the narrowing with allow-gate-weakening: ci-integrity <reason>. A discipline step restricted to pull_request stops gating pushes to the default branch; the `merged-pr-body` directive source is the alternative when PR-body waivers are the reason.",
+                                            "if-narrowed",
+                                        );
+                                    }
+                                }
+                            }
+
                             // 5e. continue-on-error
                             if settings.forbid_continue_on_error
                                 && step.get("continue-on-error").and_then(|c| c.as_bool())
@@ -1329,6 +1368,18 @@ pub fn run_is_advisory(run: &str) -> bool {
             && (l.contains("discipline check") || l.contains("discipline diff"))
             && l.split_whitespace().any(|w| w == "--advisory")
     })
+}
+
+/// The text of a step or job `if:` value (a string, or a bare boolean).
+fn if_text(v: &serde_yaml::Value) -> String {
+    match v {
+        serde_yaml::Value::String(s) => s.trim().to_string(),
+        serde_yaml::Value::Bool(b) => b.to_string(),
+        other => serde_yaml::to_string(other)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+    }
 }
 
 fn is_verification_step(step: &serde_yaml::Value) -> bool {
