@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 /// One finding per severity, each from a gate whose severity is pinned in the
 /// config so the fixture does not depend on built-in defaults:
 /// - `time-estimates` at `error`      (docs/legacy.md)
-/// - `suppression-delta` at `warning` (src/legacy.rs)
+/// - `vacuous-tests` at `warning` (tests/legacy.rs; a state of the test, so a whole-tree
+///   baseline records it, unlike a delta rule)
 /// - `pii` at `note`                  (docs/contact.md, a LAN address)
 const SEVERITY_CONFIG: &str = r#"
 [meta]
@@ -22,7 +23,7 @@ name = "adoption"
 [gates.time-estimates]
 severity = "error"
 
-[gates.suppression-delta]
+[gates.vacuous-tests]
 severity = "warning"
 
 [gates.pii]
@@ -42,8 +43,8 @@ fn severity_fixture_with_debt_on(branch: &str) -> Repo {
     repo.write("discipline.toml", SEVERITY_CONFIG);
     repo.write("docs/legacy.md", "Ships in 3 weeks.\n");
     repo.write(
-        "src/legacy.rs",
-        "#[allow(dead_code)]\nfn unused() -> u8 {\n    1\n}\n",
+        "tests/legacy.rs",
+        "#[test]\nfn unused() {\n    let _x = 1;\n}\n",
     );
     // Assembled at runtime so this source file does not itself carry the address.
     repo.write(
@@ -103,7 +104,7 @@ fn baseline_fixture_carries_one_finding_per_severity() {
         "{sev:?}"
     );
     assert_eq!(
-        sev.get(&("suppression-delta".into(), "warning".into())),
+        sev.get(&("vacuous-tests".into(), "warning".into())),
         Some(&1),
         "{sev:?}"
     );
@@ -133,7 +134,7 @@ fn baseline_whole_tree_records_only_blocking_findings_by_default() {
     );
     assert!(
         run.stdout
-            .contains("skipped: 1 warning (suppression-delta: 1), 1 note (pii: 1)"),
+            .contains("skipped: 1 warning (vacuous-tests: 1), 1 note (pii: 1)"),
         "missing skipped breakdown:\n{}",
         run.stdout
     );
@@ -152,7 +153,7 @@ fn baseline_whole_tree_records_only_blocking_findings_by_default() {
     );
     assert!(
         dry.stdout
-            .contains("skipped: 1 warning (suppression-delta: 1), 1 note (pii: 1)"),
+            .contains("skipped: 1 warning (vacuous-tests: 1), 1 note (pii: 1)"),
         "{}",
         dry.stdout
     );
@@ -170,7 +171,7 @@ fn baseline_all_severities_records_warnings_and_notes() {
         recorded_by_gate(&repo),
         BTreeMap::from([
             ("pii".to_string(), 1),
-            ("suppression-delta".to_string(), 1),
+            ("vacuous-tests".to_string(), 1),
             ("time-estimates".to_string(), 1),
         ]),
         "{}",
@@ -209,7 +210,7 @@ fn baseline_under_fail_on_warnings_records_warnings_but_not_notes() {
         assert_eq!(
             recorded_by_gate(&repo),
             BTreeMap::from([
-                ("suppression-delta".to_string(), 1),
+                ("vacuous-tests".to_string(), 1),
                 ("time-estimates".to_string(), 1),
             ]),
             "{args:?} {env:?}\n{}",
@@ -246,7 +247,7 @@ fn baseline_default_is_sufficient_for_check_to_pass_and_keeps_warnings_visible()
     assert_eq!(json["errors"], 0, "{json}");
     assert_eq!(json["baselined"], 1, "{json}");
     assert_eq!(
-        check.violations("suppression-delta").len(),
+        check.violations("vacuous-tests").len(),
         1,
         "the skipped warning stays visible"
     );

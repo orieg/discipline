@@ -228,9 +228,12 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.provenance-tags.check_paired_figures` | boolean | `true` | Check paired figures for shared workload IDs or differentiation tags |
 | `gates.provenance-tags.check_pending_citations` | boolean | `false` | A pending-measurement statement must cite a tracking issue |
 | `gates.provenance-tags.check_tables` | boolean | `true` | Check markdown tables for unit-bearing numbers without table or caption provenance tags |
+| `gates.provenance-tags.deterministic_units` | list | `[]` | Units whose figures are deterministic and exempt from the interval requirement, added to the built-in list |
+| `gates.provenance-tags.diff_only` | boolean | `false` | Judge only paragraphs that contain an added line (default: false, the whole changed file) |
 | `gates.provenance-tags.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.provenance-tags.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.provenance-tags.pending_issue_repos` | list | `[]` | Other repositories (owner/name) whose issues a pending statement may cite; by default only this repository's issues count |
+| `gates.provenance-tags.ratio_satisfied_by` | list | `[]` | What satisfies a published wall-clock ratio, replacing the built-in list when set: interval, marker:&lt;word&gt;, artifact:&lt;glob&gt;, regex:&lt;pattern&gt; (paragraph-scoped) |
 | `gates.provenance-tags.require_open_pending_issues` | boolean | `false` | A pending-measurement statement must cite at least one open issue, read from the forge (gh on GitHub, curl on GitLab, Gitea and Forgejo); implies check_pending_citations |
 | `gates.provenance-tags.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.provenance-tags.superseded_json_paths` | list | `[]` | Globs of tracked JSON datasets swept for registered figures |
@@ -878,6 +881,8 @@ Whole-tree mode measures against the empty tree, so every tracked file is in sco
 
 - **Whole-tree gates** such as `pii` and `time-estimates` scan the tree regardless of the diff, so diff mode already reaches their pre-existing findings.
 - **Diff-scoped gates** such as `vacuous-tests`, `assertion-reduction`, `ci-integrity` and `provenance-tags` only look at what changed. On a clean branch the diff is empty, so diff mode records **none** of their pre-existing findings, and the gate cannot be enabled without first fixing everything it would report.
+
+A whole-tree baseline diffs against the empty tree, so every file is "added". Gates whose rule describes a change (`dependency-delta`, `ignored-tests`, `config-integrity`, `ci-integrity`, `build-hooks`, `error-swallowing`, `stub-bodies`, `suppression-delta`, and the other delta rules) are reported as not evaluated in that mode and record nothing: a dependency that exists is not debt. Rules describing a state (`pii`, `time-estimates`, `vacuous-tests`, `unsafe-safety-comment`, invisible characters) are recorded. A symlink is its target, enumerated once.
 
 `--whole-tree` and `--base` are mutually exclusive: one measures the repository, the other measures a change.
 

@@ -435,6 +435,12 @@ impl GitCtx {
         })
     }
 
+    /// A whole-tree run diffs against the empty tree: every file is "added". A gate whose
+    /// rule describes a change has nothing to describe there.
+    pub fn is_whole_tree(&self) -> bool {
+        self.base.is_none() && !self.staged
+    }
+
     pub fn base_label(&self) -> &str {
         &self.base_label
     }
@@ -504,6 +510,13 @@ impl GitCtx {
             // any change bumping a submodule pointer turned the gate red.
             if delta.new_file().mode() == git2::FileMode::Commit
                 || delta.old_file().mode() == git2::FileMode::Commit
+            {
+                continue;
+            }
+            // A symlink (`CLAUDE.md -> AGENTS.md`) is its target, which is enumerated on
+            // its own; `tracked_files` skips symlinks for the same reason.
+            if delta.new_file().mode() == git2::FileMode::Link
+                || delta.old_file().mode() == git2::FileMode::Link
             {
                 continue;
             }

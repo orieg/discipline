@@ -89,6 +89,8 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("commands", Direction::Shrunk),
     ("mock_setup_fns", Direction::Shrunk),
     ("required_trailers", Direction::Shrunk),
+    ("ratio_satisfied_by", Direction::Grown),
+    ("deterministic_units", Direction::Grown),
     ("agent_markers", Direction::Shrunk),
     ("review_trailer", Direction::Evidence),
     ("mock_assert_fns", Direction::Shrunk),

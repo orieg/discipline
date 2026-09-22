@@ -310,6 +310,31 @@ pub fn run_checks(
         bail!("git tracks no files here; refusing to report a pass over an empty tree");
     }
 
+    // Gates whose rule describes a change (base against head). A whole-tree run has no
+    // change: every file is "added", so these would record every dependency, every
+    // ignored test and every instruction file as debt.
+    const DELTA_ONLY_GATES: &[&str] = &[
+        "assertion-reduction",
+        "ignored-tests",
+        "deletion-rationale",
+        "config-integrity",
+        "toolchain-config",
+        "build-hooks",
+        "ci-integrity",
+        "ci-skip-set",
+        "golden-output",
+        "dependency-delta",
+        "test-budget",
+        "test-floor",
+        "suppression-delta",
+        "error-swallowing",
+        "stub-bodies",
+        "scope-confinement",
+        "commit-provenance",
+        "bench-regression",
+    ];
+    let whole_tree = ctx.git.is_whole_tree();
+
     let mut outcomes = Vec::new();
     let mut ast_outcomes = None;
     for gate in selected {
@@ -324,6 +349,15 @@ pub fn run_checks(
         if !settings.enabled() && !held_on {
             let mut o = GateOutcome::new(gate.id);
             o.enabled = false;
+            outcomes.push(o);
+            continue;
+        }
+        if whole_tree && DELTA_ONLY_GATES.contains(&gate.id) {
+            let mut o = GateOutcome::new(gate.id);
+            o.notes.push(
+                "not evaluated: this rule describes a change, and a whole-tree baseline has no change to describe"
+                    .to_string(),
+            );
             outcomes.push(o);
             continue;
         }

@@ -322,7 +322,10 @@ pub fn generate_schema() -> Value {
                     "superseded_json_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs of tracked JSON datasets swept for registered figures" },
                     "check_pending_citations": { "type": "boolean", "description": "A pending-measurement statement must cite a tracking issue" },
                     "require_open_pending_issues": { "type": "boolean", "description": "A pending-measurement statement must cite at least one open issue, read from the forge (gh on GitHub, curl on GitLab, Gitea and Forgejo); implies check_pending_citations" },
-                    "pending_issue_repos": { "$ref": "#/$defs/StringListOrReset", "description": "Other repositories (owner/name) whose issues a pending statement may cite; by default only this repository's issues count" }
+                    "pending_issue_repos": { "$ref": "#/$defs/StringListOrReset", "description": "Other repositories (owner/name) whose issues a pending statement may cite; by default only this repository's issues count" },
+                    "ratio_satisfied_by": { "$ref": "#/$defs/StringListOrReset", "description": "What satisfies a published wall-clock ratio, replacing the built-in list when set: interval, marker:<word>, artifact:<glob>, regex:<pattern> (paragraph-scoped)" },
+                    "deterministic_units": { "$ref": "#/$defs/StringListOrReset", "description": "Units whose figures are deterministic and exempt from the interval requirement, added to the built-in list" },
+                    "diff_only": { "type": "boolean", "description": "Judge only paragraphs that contain an added line (default: false, the whole changed file)" }
                 }
             },
             "UnsafeSafetyCommentGate": {

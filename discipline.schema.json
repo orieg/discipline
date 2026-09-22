@@ -756,6 +756,14 @@
           "description": "Check markdown tables for unit-bearing numbers without table or caption provenance tags",
           "type": "boolean"
         },
+        "deterministic_units": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Units whose figures are deterministic and exempt from the interval requirement, added to the built-in list"
+        },
+        "diff_only": {
+          "description": "Judge only paragraphs that contain an added line (default: false, the whole changed file)",
+          "type": "boolean"
+        },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"
@@ -766,6 +774,10 @@
         "pending_issue_repos": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Other repositories (owner/name) whose issues a pending statement may cite; by default only this repository's issues count"
+        },
+        "ratio_satisfied_by": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "What satisfies a published wall-clock ratio, replacing the built-in list when set: interval, marker:<word>, artifact:<glob>, regex:<pattern> (paragraph-scoped)"
         },
         "require_open_pending_issues": {
           "description": "A pending-measurement statement must cite at least one open issue, read from the forge (gh on GitHub, curl on GitLab, Gitea and Forgejo); implies check_pending_citations",

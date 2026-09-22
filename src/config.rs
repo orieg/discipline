@@ -971,6 +971,15 @@ pub struct ProvenanceTagsGate {
     /// Other repositories (`owner/name`) whose issues a pending statement may cite. By
     /// default only this repository's issues count.
     pub pending_issue_repos: Vec<String>,
+    /// What satisfies a published wall-clock ratio, replacing the built-in list when set:
+    /// `interval` (a `[lo, hi]` / BCa / CI mention), `marker:<word>`, `artifact:<glob>`
+    /// (a path reference matching the glob), `regex:<pattern>`. Paragraph-scoped.
+    pub ratio_satisfied_by: Vec<String>,
+    /// Units whose figures are deterministic and exempt from the interval requirement,
+    /// added to the built-in list (instructions, cycles, bytes, allocations).
+    pub deterministic_units: Vec<String>,
+    /// Judge only paragraphs that contain an added line (default: whole changed file).
+    pub diff_only: bool,
 }
 
 impl Default for ProvenanceTagsGate {
@@ -988,6 +997,9 @@ impl Default for ProvenanceTagsGate {
             check_pending_citations: false,
             require_open_pending_issues: false,
             pending_issue_repos: Vec::new(),
+            ratio_satisfied_by: Vec::new(),
+            deterministic_units: Vec::new(),
+            diff_only: false,
         }
     }
 }

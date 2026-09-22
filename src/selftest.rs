@@ -384,6 +384,15 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "provenance-tags: a configured artifact form satisfies a ratio, an unlisted path does not",
+        || {
+            use crate::guards::provenance_tags::interval_evidence_regex;
+            let re = interval_evidence_regex(&["artifact:results/baseline_*".into()])?
+                .ok_or_else(|| anyhow::anyhow!("no pattern"))?;
+            Ok(re.is_match("see results/baseline_a.json") && !re.is_match("see results/x.json"))
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;

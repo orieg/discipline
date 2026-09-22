@@ -209,8 +209,8 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         };
         out.examined += 1;
 
-        // 2. Agent-instruction files.
-        if is_instruction_file(&file.path) {
+        // 2. Agent-instruction files. An edit is a change; a whole-tree run has none.
+        if is_instruction_file(&file.path) && !ctx.git.is_whole_tree() {
             if let Some(ov) =
                 lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
             {

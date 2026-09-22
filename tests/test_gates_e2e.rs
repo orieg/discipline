@@ -2943,6 +2943,157 @@ fn unsafe_trait_with_a_safety_doc_section_abc_stubs_and_past_intervals_are_not_f
     assert!(!repo.check(&[]).titles("time-estimates").is_empty());
 }
 
+#[test]
+fn a_whole_tree_baseline_records_states_not_deltas_and_reads_a_symlink_once() {
+    let repo = Repo::new();
+    repo.write(
+        "Cargo.toml",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\n[dependencies]\nserde = \"1\"\n",
+    );
+    repo.write(
+        "tests/t.rs",
+        "#[test]\n#[ignore]\nfn parked() { assert_eq!(1, 1); }\n#[test]\nfn empty() {}\n",
+    );
+    repo.write("docs/plan.md", "Ships in 3 weeks.\n");
+    std::os::unix::fs::symlink("AGENTS.md", repo.path().join("CLAUDE.md")).unwrap();
+    // A symlink to a file with a state finding: enumerated as a file, it would be read
+    // through the link and reported a second time under its own path.
+    std::os::unix::fs::symlink("plan.md", repo.path().join("docs/plan-copy.md")).unwrap();
+    repo.commit("chore: tree");
+
+    let run = repo.run(
+        &["baseline", "--write", "--whole-tree", "--all-severities"],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let text = std::fs::read_to_string(repo.path().join("discipline-baseline.toml")).unwrap();
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    let findings: Vec<(String, String)> = parsed["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["gate"].as_str().unwrap().to_string(),
+                f.get("file")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .collect();
+    let gates: std::collections::BTreeSet<&str> =
+        findings.iter().map(|(g, _)| g.as_str()).collect();
+    // Delta rules record nothing: every file is "added" against the empty tree.
+    for g in [
+        "dependency-delta",
+        "ignored-tests",
+        "config-integrity",
+        "build-hooks",
+        "instruction-smuggling",
+    ] {
+        assert!(
+            !gates.contains(g),
+            "{g} recorded a delta as debt: {findings:?}"
+        );
+    }
+    // State rules are recorded.
+    assert!(
+        gates.contains("time-estimates") && gates.contains("vacuous-tests"),
+        "{gates:?}"
+    );
+    // The symlink is its target, enumerated once.
+    assert!(
+        !findings
+            .iter()
+            .any(|(_, f)| f == "CLAUDE.md" || f == "docs/plan-copy.md"),
+        "{findings:?}"
+    );
+
+    // A diff check of the same tree still reports the delta rules, and never a finding
+    // under the symlink's own path (the link would otherwise be read through and reported
+    // a second time). The baseline just written would grandfather the target's finding.
+    let delta = repo.check(&["--no-baseline"]);
+    assert!(
+        !delta.titles("dependency-delta").is_empty() || !delta.titles("ignored-tests").is_empty()
+    );
+    let linked: Vec<String> = delta.json()["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|o| o["violations"].as_array().unwrap().clone())
+        .filter_map(|v| v["file"].as_str().map(String::from))
+        .filter(|f| f == "docs/plan-copy.md")
+        .collect();
+    assert!(linked.is_empty(), "{linked:?}");
+    assert!(
+        !delta.titles("time-estimates").is_empty(),
+        "the target itself is still reported"
+    );
+}
+
+#[test]
+fn provenance_tags_ratio_satisfaction_is_configurable_and_diff_only_scopes_to_the_change() {
+    const LINE: &str = "Point lookups are **2.9×–14.5× faster** at 1M keys (sequential 11.9 ns vs 108.9 ns; workload: `core_compare`) *(measured: reference host, `benches/compare.rs`)*.\n";
+    let cfg = |extra: &str| {
+        format!("{CONFIG_HEAD}[gates.provenance-tags]\nenabled = true\ncheck_tables = false\ncheck_mechanisms = false\ncheck_paired_figures = false\n{extra}")
+    };
+    // Built-in rule: the bare ratio is a finding.
+    let repo = Repo::new();
+    repo.write("discipline.toml", &cfg(""));
+    repo.write("docs/perf.md", &format!("# Perf\n\n{LINE}"));
+    repo.commit("docs: perf");
+    assert_eq!(
+        repo.check(&[]).titles("provenance-tags"),
+        vec!["Bare Wall-Clock Ratio Without Interval"]
+    );
+
+    // The consumer's rule: an artifact reference in the paragraph, or a marker, satisfies it.
+    let repo = Repo::new();
+    repo.write("discipline.toml", &cfg("ratio_satisfied_by = [\"interval\", \"artifact:results/perf_*.json\", \"marker:verified-by-hand\"]\n"));
+    repo.write("docs/perf.md", &format!("# Perf\n\n{LINE}Source: `results/perf_2026-09.json`.\n\nA second paragraph is **3× faster**, verified-by-hand.\n\nA third is **4× faster** with no source.\n"));
+    repo.commit("docs: perf");
+    let run = repo.check(&[]);
+    let lines: Vec<u64> = run
+        .violations("provenance-tags")
+        .iter()
+        .map(|v| v["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(lines, vec![8], "{:?}", run.violations("provenance-tags"));
+
+    // A deterministic unit the consumer declares is exempt.
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        &cfg("deterministic_units = [\"page walks\"]\n"),
+    );
+    repo.write(
+        "docs/perf.md",
+        "# Perf\n\nThe fast path is **2.1× faster** at 1,200 page walks per lookup.\n",
+    );
+    repo.commit("docs: perf");
+    assert!(repo.check(&[]).titles("provenance-tags").is_empty());
+
+    // diff_only: a paragraph the change did not touch is not judged.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("discipline.toml", &cfg("diff_only = true\n"));
+    repo.write("docs/perf.md", &format!("# Perf\n\n{LINE}\nUnrelated.\n"));
+    repo.commit("docs: perf");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "docs/perf.md",
+        &format!("# Perf\n\n{LINE}\nUnrelated, edited.\n"),
+    );
+    repo.commit("docs: touch the other paragraph");
+    assert!(repo.check(&[]).titles("provenance-tags").is_empty());
+    let repo2 = Repo::new();
+    repo2.write("discipline.toml", &cfg("diff_only = true\n"));
+    repo2.write("docs/perf.md", &format!("# Perf\n\n{LINE}"));
+    repo2.commit("docs: perf");
+    assert_eq!(repo2.check(&[]).titles("provenance-tags").len(), 1);
+}
+
 // ---- override policy -------------------------------------------------------
 
 /// A change that disables two gates and excuses both from its commit body.

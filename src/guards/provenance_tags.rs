@@ -170,6 +170,74 @@ fn split_sentences(text: &str) -> Vec<String> {
     sentences
 }
 
+/// What one scan judges and what satisfies it.
+#[derive(Default, Clone)]
+pub struct ScanPolicy {
+    pub check_tables: bool,
+    pub check_mechanisms: bool,
+    pub check_intervals: bool,
+    pub check_paired_figures: bool,
+    /// Replaces the built-in interval-evidence pattern when set.
+    pub interval_evidence: Option<Regex>,
+    /// Added to the built-in deterministic-metric pattern when set.
+    pub deterministic: Option<Regex>,
+    /// Judge only paragraphs containing one of these lines.
+    pub added_lines: Option<std::collections::BTreeSet<usize>>,
+}
+
+/// Build the interval-evidence pattern from `ratio_satisfied_by` entries. `None` when the
+/// list is empty (the built-in pattern applies); an error names a bad entry.
+pub fn interval_evidence_regex(forms: &[String]) -> anyhow::Result<Option<Regex>> {
+    if forms.is_empty() {
+        return Ok(None);
+    }
+    let mut parts = Vec::new();
+    for f in forms {
+        let part = if f == "interval" {
+            r"\[\s*[-+]?\d+(?:\.\d+)?[%x×]?\s*,\s*[-+]?\d+(?:\.\d+)?[%x×]?\s*\]|\bBCa\b|confidence interval|\bCI\b|bca_bootstrap".to_string()
+        } else if let Some(w) = f.strip_prefix("marker:") {
+            format!(r"\b{}\b", regex::escape(w.trim()))
+        } else if let Some(g) = f.strip_prefix("artifact:") {
+            // A glob over a path reference: `*` matches within a segment, `**` across.
+            let mut re = String::new();
+            let mut chars = g.trim().chars().peekable();
+            while let Some(c) = chars.next() {
+                match c {
+                    '*' if chars.peek() == Some(&'*') => {
+                        chars.next();
+                        re.push_str(r"[^\s`)\]]*");
+                    }
+                    '*' => re.push_str(r"[^\s`)\]/]*"),
+                    '?' => re.push_str(r"[^\s`)\]/]"),
+                    other => re.push_str(&regex::escape(&other.to_string())),
+                }
+            }
+            re
+        } else if let Some(r) = f.strip_prefix("regex:") {
+            Regex::new(r).map_err(|e| anyhow::anyhow!("ratio_satisfied_by `{f}`: {e}"))?;
+            r.to_string()
+        } else {
+            anyhow::bail!(
+                "ratio_satisfied_by `{f}`: expected `interval`, `marker:<word>`, `artifact:<glob>` or `regex:<pattern>`"
+            );
+        };
+        parts.push(format!("(?:{part})"));
+    }
+    Ok(Some(Regex::new(&format!("(?i){}", parts.join("|")))?))
+}
+
+/// A figure carrying one of `units` is deterministic.
+pub fn deterministic_regex(units: &[String]) -> anyhow::Result<Option<Regex>> {
+    if units.is_empty() {
+        return Ok(None);
+    }
+    let alts: Vec<String> = units.iter().map(|u| regex::escape(u.trim())).collect();
+    Ok(Some(Regex::new(&format!(
+        r"(?i)\d[\d.,]*\s*(?:{})\b",
+        alts.join("|")
+    ))?))
+}
+
 pub fn scan_markdown_text(
     text: &str,
     path_label: &str,
@@ -178,6 +246,28 @@ pub fn scan_markdown_text(
     check_intervals: bool,
     check_paired_figures: bool,
 ) -> Vec<HygieneFinding> {
+    scan_markdown_text_with_policy(
+        text,
+        path_label,
+        &ScanPolicy {
+            check_tables,
+            check_mechanisms,
+            check_intervals,
+            check_paired_figures,
+            ..Default::default()
+        },
+    )
+}
+
+pub fn scan_markdown_text_with_policy(
+    text: &str,
+    path_label: &str,
+    policy: &ScanPolicy,
+) -> Vec<HygieneFinding> {
+    let check_tables = policy.check_tables;
+    let check_mechanisms = policy.check_mechanisms;
+    let check_intervals = policy.check_intervals;
+    let check_paired_figures = policy.check_paired_figures;
     if path_label.ends_with("AGENTS.md")
         || path_label.ends_with("CLAUDE.md")
         || path_label.ends_with("GEMINI.md")
@@ -238,6 +328,12 @@ pub fn scan_markdown_text(
     }
 
     for (para_idx, para) in paras.iter().enumerate() {
+        // `diff_only`: a paragraph the change did not touch is not judged.
+        if let Some(added) = &policy.added_lines {
+            if !para.iter().any(|(n, _)| added.contains(n)) {
+                continue;
+            }
+        }
         let para_text = para
             .iter()
             .map(|(_, t)| t.as_str())
@@ -290,12 +386,20 @@ pub fn scan_markdown_text(
 
         // 3. Wall-Clock Intervals
         if check_intervals {
-            let has_interval_evidence = INTERVAL_EVIDENCE.is_match(&window_text);
+            let has_interval_evidence = match &policy.interval_evidence {
+                Some(re) => re.is_match(&window_text),
+                None => INTERVAL_EVIDENCE.is_match(&window_text),
+            };
             if !has_interval_evidence {
                 for (line_num, text) in para {
+                    let deterministic = DETERMINISTIC_METRIC.is_match(text)
+                        || policy
+                            .deterministic
+                            .as_ref()
+                            .is_some_and(|re| re.is_match(text));
                     if WALLCLOCK_RATIO.is_match(text)
                         && WALLCLOCK_CONTEXT.is_match(text)
-                        && !DETERMINISTIC_METRIC.is_match(text)
+                        && !deterministic
                     {
                         findings.push(HygieneFinding {
                             line: *line_num,
@@ -402,6 +506,8 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
 
     // Collect candidate markdown files: changed files if diff-scoped, or tracked files
     let changed_files = ctx.git.changed_files()?;
+    let interval_evidence = interval_evidence_regex(&settings.ratio_satisfied_by)?;
+    let deterministic = deterministic_regex(&settings.deterministic_units)?;
     let candidate_paths: Vec<String> = changed_files
         .iter()
         .map(|f| f.path.clone())
@@ -443,13 +549,26 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
         };
 
         scanned_count += 1;
-        let mut findings = scan_markdown_text(
+        let added_lines = if settings.diff_only {
+            changed_files
+                .iter()
+                .find(|f| &f.path == path)
+                .map(|f| f.added_lines.clone())
+        } else {
+            None
+        };
+        let mut findings = scan_markdown_text_with_policy(
             &content,
             path,
-            settings.check_tables,
-            settings.check_mechanisms,
-            settings.check_intervals,
-            settings.check_paired_figures,
+            &ScanPolicy {
+                check_tables: settings.check_tables,
+                check_mechanisms: settings.check_mechanisms,
+                check_intervals: settings.check_intervals,
+                check_paired_figures: settings.check_paired_figures,
+                interval_evidence: interval_evidence.clone(),
+                deterministic: deterministic.clone(),
+                added_lines,
+            },
         );
         if check_pending && !is_agent_guide(path) {
             let stripped = strip_fences(&content.lines().collect::<Vec<_>>());
@@ -664,6 +783,31 @@ fn pending_finding((line, problem): (usize, claim_registry::PendingProblem)) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ratio_satisfaction_forms_build_a_pattern_and_bad_entries_are_errors() {
+        let re = interval_evidence_regex(&[
+            "interval".into(),
+            "artifact:results/baseline_*".into(),
+            "marker:superseded".into(),
+            "regex:\\bpending\\b".into(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(re.is_match("see [1.2, 1.4]"));
+        assert!(re.is_match("from results/baseline_2026.json"));
+        assert!(!re.is_match("from results/other.json"));
+        assert!(re.is_match("figure superseded by"));
+        assert!(re.is_match("pending"));
+        assert!(!re.is_match("nothing here"));
+        assert!(interval_evidence_regex(&[]).unwrap().is_none());
+        assert!(interval_evidence_regex(&["bogus".into()]).is_err());
+        assert!(interval_evidence_regex(&["regex:(".into()]).is_err());
+        let det = deterministic_regex(&["instructions".into()])
+            .unwrap()
+            .unwrap();
+        assert!(det.is_match("1,200 instructions") && !det.is_match("12 ns"));
+    }
 
     #[test]
     fn test_table_provenance_check() {

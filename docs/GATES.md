@@ -610,7 +610,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Wall-clock speedup citing `[2.7x, 3.1x] BCa 95% CI` or `(provisional pending re-measurement)`.
   - Paired comparison citing `(workload: uniform-random)`.
 - **Lifting directive:** `allow-provenance: <file-or-path> <reason>` in PR body or commit (aliases: `allow-unpaired-figures`, `discipline:allow(provenance-tags)`). Findings in the PR body itself are not liftable.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `check_tables`, `check_mechanisms`, `check_intervals`, `check_paired_figures`, `superseded_registry`, `superseded_json_paths`, `check_pending_citations`, `require_open_pending_issues`, `pending_issue_repos`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `check_tables`, `check_mechanisms`, `check_intervals`, `check_paired_figures`, `superseded_registry`, `superseded_json_paths`, `check_pending_citations`, `require_open_pending_issues`, `pending_issue_repos`, `ratio_satisfied_by`, `deterministic_units`, `diff_only`.
 
 #### `pr-checklist`
 - **Rule:** Reconciles ticked checklist items in PR descriptions (`- [x] Tests added/updated`, `- [x] Documentation updated`, `- [x] Benchmarks added`) against actual modified files in the pull request diff to prevent vacuous checkoffs. A test claim is backed by a changed test file, or by a test function the change adds or extends (more effective assertions) in any file a language pack analyses, so a `#[test]` added to a `mod tests` inside `src/` counts. A renamed test adds nothing.
@@ -643,6 +643,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - `[tests]`: `functions` or `paths` grown (more code counted as test scope is less code the production-code gates see).
   - Growth of the grandfathering baseline file.
 - **Self-protection:** the gate runs whenever the **base** configuration enables it, whatever the head configuration or `--disable` says, and reports at the stricter of the base and head severity. Every gate option has a declared loosening direction in `src/guards/integrity.rs::KEY_DIRECTIONS`; a unit test fails when an option is added without one.
+- **Configurable ratio satisfaction:** the interval rule is paragraph-scoped. `ratio_satisfied_by` replaces the built-in list of what satisfies a published ratio with the repository's own: `interval` (a `[lo, hi]` / BCa / CI mention), `marker:<word>`, `artifact:<glob>` (a path reference in the paragraph matching the glob), `regex:<pattern>`. `deterministic_units` adds units whose figures are exempt (instructions, cycles, bytes and allocations are built in). `diff_only` judges only paragraphs containing an added line, as the other hygiene gates do. Growing either list is a `config-integrity` weakening.
 - **What it does NOT catch:**
   - Deleting `discipline.toml`: the run falls back to built-in defaults, and only options the base file set stricter than those defaults are reported.
   - A loosening expressed by editing an entry of `commands`, `rules` or `groups` in a way that keeps the entry count: it is reported as one lost entry, without naming the field.
