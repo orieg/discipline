@@ -5,7 +5,7 @@
 pipeline {
     agent {
         docker {
-            // Major tag tracks the latest v0 release; pin an exact version (v0.9.0) or a digest for reproducible gating.
+            // Major tag tracks the latest v0 release; pin an exact version (v0.10.0) or a digest for reproducible gating.
             image 'ghcr.io/orieg/discipline:v0'
             args '--user 10001:10001'
         }
