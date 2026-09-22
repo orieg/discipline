@@ -92,9 +92,42 @@ The floating `@v0` ref tracks the latest `v0.x.y` release, and moves only after 
 
 A check only blocks a merge when the branch requires it. See [Repository Protection](docs/guides/ci-platforms.md#8-repository-protection) for the settings (required check, up-to-date branch, no bypass, CODEOWNERS on gate configuration) and a ruleset example.
 
+### 4. Pre-Merge CI Sentinel (Gitea & Forgejo Actions)
+
+The same composite action runs unchanged under Gitea's `act_runner` and under `forgejo-runner`. Reference it by its full URL, since the runner resolves a bare `owner/repo` against your own instance. Create `.gitea/workflows/discipline.yml` (or `.forgejo/workflows/discipline.yml`):
+
+```yaml
+name: CI Sentinel
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  discipline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # merge base must be reachable
+      - uses: https://github.com/orieg/discipline@v0
+        with:
+          fail_on_warnings: true
+```
+
+The action fetches the matching release archive and its `SHA256SUMS` from GitHub and verifies the checksum before running, so the runner needs outbound HTTPS to `github.com`. On an air-gapped runner, point `binary_path` at a discipline binary already on the runner image (see [Installation](#installation)), or set `download_url` to an internal mirror of the release store:
+
+```yaml
+      - uses: https://github.com/orieg/discipline@v0
+        with:
+          binary_path: /opt/discipline/discipline
+```
+
+The `runs-on` label must map to a runner image with `git`, `curl` (or `wget`) and Node.js (`actions/checkout` is a JavaScript action; the default `act_runner` images qualify). The action itself is shell-only. Gitea and Forgejo name the resulting status check `CI Sentinel / discipline (pull_request)`; use that name when making it a required check on the default branch. `discipline doctor` reads a `GITEA_TOKEN` or `FORGEJO_TOKEN` to confirm the protection is in place. See the [Forgejo & Gitea Actions guide](docs/guides/ci-platforms.md#3-forgejo--gitea-actions) for the full walkthrough.
+
 For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo, Azure Pipelines, Bitbucket, CircleCI and Jenkins are in [`templates/`](templates/), indexed in the [CI guide](docs/guides/ci-platforms.md#7-other-ci-platforms-templates)):
 - [GitLab CI/CD Component & Job Guide](docs/CONFIGURATION.md#gitlab-ci-cd)
-- [Forgejo & Gitea Actions Guide](docs/CONFIGURATION.md#forgejo-actions)
+- [Forgejo & Gitea Actions Guide](docs/guides/ci-platforms.md#3-forgejo--gitea-actions)
 - [Argo Workflows GitOps Template](docs/CONFIGURATION.md#argo-workflows)
 - [pre-commit & Local Git Hooks](docs/CONFIGURATION.md#pre-commit-hook)
 - [Docker Container Run](docs/CONFIGURATION.md#docker-container)

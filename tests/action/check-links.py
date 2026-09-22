@@ -63,6 +63,14 @@ def _make_slug(s):
     return slug
 
 
+def _github_slug(s):
+    """GitHub's own anchor rule: drop punctuation, keep repeated hyphens
+    ("3. Forgejo & Gitea Actions" -> "3-forgejo--gitea-actions")."""
+    slug = s.strip().lower()
+    slug = re.sub(r'[^\w\- ]', '', slug)
+    return slug.replace(' ', '-')
+
+
 def slugify_heading(text):
     """Generate slug candidates for a markdown heading."""
     # Strip markdown links: [text](url) -> text
@@ -74,6 +82,9 @@ def slugify_heading(text):
         text = text.replace(ch, '')
 
     slugs = set()
+    gh = _github_slug(text)
+    if gh:
+        slugs.add(gh)
     s1 = _make_slug(text)
     if s1:
         slugs.add(s1)
