@@ -133,7 +133,7 @@ fn parse_package_lock(content: &str) -> Option<Vec<LockEntry>> {
 }
 
 fn parse_yarn_lock(content: &str) -> Option<Vec<LockEntry>> {
-    // Yarn 2+ ("berry") is YAML with `resolution:` / `checksum:`; not read here.
+    // Yarn 2+ ("berry") is YAML with `resolution:` / `checksum:`; `parse_yarn_berry` reads it.
     if content.contains("__metadata:") || !content.contains("# yarn lockfile v1") {
         return None;
     }
@@ -172,13 +172,291 @@ fn parse_yarn_lock(content: &str) -> Option<Vec<LockEntry>> {
     Some(out)
 }
 
+fn yaml_str<'a>(v: &'a serde_yaml::Value, k: &str) -> Option<&'a str> {
+    v.get(k).and_then(|x| x.as_str())
+}
+
+/// Yarn 2+ ("berry"): YAML, one entry per descriptor set, `resolution:` names the
+/// protocol (`npm:`, `git@`, `https://`), `checksum:` is the hash.
+fn parse_yarn_berry(content: &str) -> Option<Vec<LockEntry>> {
+    let doc: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
+    let map = doc.as_mapping()?;
+    let mut out = Vec::new();
+    for (k, v) in map {
+        let key = k.as_str().unwrap_or("");
+        if key == "__metadata" {
+            continue;
+        }
+        let resolution = yaml_str(v, "resolution").unwrap_or("");
+        // `name@npm:1.0.0`, `@scope/name@npm:1.0.0`, `name@https://...`, `name@git@...`.
+        let (name, locator) = resolution
+            .rsplit_once('@')
+            .filter(|(n, _)| !n.is_empty())
+            .map(|(n, l)| (n.to_string(), l))
+            .unwrap_or_else(|| {
+                let first = key
+                    .split(',')
+                    .next()
+                    .unwrap_or(key)
+                    .trim()
+                    .trim_matches('"');
+                (
+                    first.rsplit_once('@').map_or(first, |(n, _)| n).to_string(),
+                    "",
+                )
+            });
+        let source = if locator.starts_with("npm:") {
+            Source::Registry("registry.yarnpkg.com".to_string())
+        } else if locator.starts_with("workspace:")
+            || locator.starts_with("portal:")
+            || locator.starts_with("link:")
+            || locator.starts_with("file:")
+            || locator.is_empty()
+        {
+            Source::Local
+        } else {
+            Source::Direct(host_of(
+                locator
+                    .trim_start_matches("git@")
+                    .trim_start_matches("git+"),
+            ))
+        };
+        out.push(LockEntry {
+            name,
+            version: yaml_str(v, "version").unwrap_or_default().to_string(),
+            source,
+            has_hash: v.get("checksum").is_some(),
+        });
+    }
+    Some(out)
+}
+
+/// pnpm: YAML, `packages:` keyed by `/name@version` (v6) or `name@version` (v9), each
+/// with `resolution: {integrity, tarball?}`.
+fn parse_pnpm_lock(content: &str) -> Option<Vec<LockEntry>> {
+    let doc: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
+    let packages = doc.get("packages")?.as_mapping()?;
+    let mut out = Vec::new();
+    for (k, v) in packages {
+        let key = k.as_str().unwrap_or("").trim_start_matches('/');
+        // `@scope/name@1.0.0(peer@2)`: the name is everything before the last `@` of the
+        // part that precedes any peer suffix.
+        let bare = key.split('(').next().unwrap_or(key);
+        let (name, version) = bare
+            .rsplit_once('@')
+            .filter(|(n, _)| !n.is_empty())
+            .unwrap_or((bare, ""));
+        let resolution = v.get("resolution");
+        let tarball = resolution.and_then(|r| yaml_str(r, "tarball"));
+        let source = match tarball {
+            Some(t) if t.contains("/-/") => Source::Registry(host_of(t)),
+            Some(t) => Source::Direct(host_of(t)),
+            None => {
+                if resolution.and_then(|r| yaml_str(r, "type")) == Some("git")
+                    || resolution.and_then(|r| yaml_str(r, "repo")).is_some()
+                {
+                    Source::Direct(host_of(
+                        resolution.and_then(|r| yaml_str(r, "repo")).unwrap_or(""),
+                    ))
+                } else if resolution.and_then(|r| yaml_str(r, "directory")).is_some() {
+                    Source::Local
+                } else {
+                    Source::Registry("registry.npmjs.org".to_string())
+                }
+            }
+        };
+        out.push(LockEntry {
+            name: name.to_string(),
+            version: version.to_string(),
+            source,
+            has_hash: resolution.and_then(|r| r.get("integrity")).is_some(),
+        });
+    }
+    Some(out)
+}
+
+/// Poetry: TOML `[[package]]` with an optional `[package.source]` (`type` = `git`, `url`,
+/// `directory`, `file`, or `legacy` for another index) and `[package.files]` hashes.
+fn parse_poetry_lock(content: &str) -> Option<Vec<LockEntry>> {
+    let doc: toml::Value = toml::from_str(content).ok()?;
+    let packages = doc.get("package")?.as_array()?;
+    let mut out = Vec::new();
+    for p in packages {
+        let s = |k: &str| p.get(k).and_then(|v| v.as_str());
+        let src = p.get("source");
+        let src_type = src.and_then(|x| x.get("type")).and_then(|v| v.as_str());
+        let src_url = src.and_then(|x| x.get("url")).and_then(|v| v.as_str());
+        let source = match (src_type, src_url) {
+            (None, _) => Source::Registry("pypi.org".to_string()),
+            (Some("legacy"), Some(u)) => Source::Registry(host_of(u)),
+            (Some("directory"), _) | (Some("file"), _) => Source::Local,
+            (Some(_), Some(u)) => Source::Direct(host_of(u)),
+            (Some(_), None) => Source::Local,
+        };
+        let has_hash = p
+            .get("files")
+            .and_then(|f| f.as_array())
+            .is_some_and(|f| f.iter().any(|e| e.get("hash").is_some()));
+        out.push(LockEntry {
+            name: s("name")?.to_string(),
+            version: s("version").unwrap_or_default().to_string(),
+            source,
+            has_hash,
+        });
+    }
+    Some(out)
+}
+
+/// uv: TOML `[[package]]` with `source = { registry | git | url | editable | path | ... }`
+/// and `sdist` / `wheels` carrying `hash`.
+fn parse_uv_lock(content: &str) -> Option<Vec<LockEntry>> {
+    let doc: toml::Value = toml::from_str(content).ok()?;
+    let packages = doc.get("package")?.as_array()?;
+    let mut out = Vec::new();
+    for p in packages {
+        let s = |k: &str| p.get(k).and_then(|v| v.as_str());
+        let src = p.get("source");
+        let field = |k: &str| src.and_then(|x| x.get(k)).and_then(|v| v.as_str());
+        let source = if let Some(r) = field("registry") {
+            Source::Registry(host_of(r))
+        } else if let Some(u) = field("git").or_else(|| field("url")) {
+            Source::Direct(host_of(u))
+        } else {
+            Source::Local
+        };
+        let hashed = |k: &str| match p.get(k) {
+            Some(toml::Value::Array(a)) => a.iter().any(|w| w.get("hash").is_some()),
+            Some(t) => t.get("hash").is_some(),
+            None => false,
+        };
+        out.push(LockEntry {
+            name: s("name")?.to_string(),
+            version: s("version").unwrap_or_default().to_string(),
+            source,
+            has_hash: hashed("sdist") || hashed("wheels"),
+        });
+    }
+    Some(out)
+}
+
+/// Composer: JSON `packages` / `packages-dev`, each with `dist.url` (and `dist.shasum`,
+/// empty on Packagist) and `source.url`.
+fn parse_composer_lock(content: &str) -> Option<Vec<LockEntry>> {
+    let doc: serde_json::Value = serde_json::from_str(content).ok()?;
+    let mut out = Vec::new();
+    for key in ["packages", "packages-dev"] {
+        let Some(list) = doc.get(key).and_then(|p| p.as_array()) else {
+            continue;
+        };
+        for p in list {
+            let s = |k: &str| p.get(k).and_then(|v| v.as_str());
+            let dist_url = p
+                .get("dist")
+                .and_then(|d| d.get("url"))
+                .and_then(|v| v.as_str());
+            let dist_type = p
+                .get("dist")
+                .and_then(|d| d.get("type"))
+                .and_then(|v| v.as_str());
+            let source = match (dist_type, dist_url) {
+                (Some("path"), _) => Source::Local,
+                (_, Some(u)) if u.contains("api.github.com/repos/") => {
+                    Source::Registry("packagist.org".to_string())
+                }
+                (_, Some(u)) => Source::Direct(host_of(u)),
+                (_, None) => match p
+                    .get("source")
+                    .and_then(|x| x.get("url"))
+                    .and_then(|v| v.as_str())
+                {
+                    Some(u) => Source::Direct(host_of(u)),
+                    None => Source::Local,
+                },
+            };
+            let has_hash = p
+                .get("dist")
+                .and_then(|d| d.get("shasum"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|h| !h.is_empty());
+            out.push(LockEntry {
+                name: s("name")?.to_string(),
+                version: s("version").unwrap_or_default().to_string(),
+                source,
+                has_hash,
+            });
+        }
+    }
+    Some(out)
+}
+
+/// Bundler: `GEM` / `GIT` / `PATH` sections with a `remote:` and indented `specs:`; a
+/// `CHECKSUMS` section (Bundler 2.6+) carries the hashes.
+fn parse_gemfile_lock(content: &str) -> Option<Vec<LockEntry>> {
+    let mut out: Vec<LockEntry> = Vec::new();
+    let mut section = String::new();
+    let mut remote = String::new();
+    let mut in_specs = false;
+    let mut checksums = std::collections::BTreeSet::new();
+    for line in content.lines() {
+        if !line.starts_with(' ') {
+            section = line.trim().to_string();
+            remote.clear();
+            in_specs = false;
+            continue;
+        }
+        let t = line.trim();
+        if section == "CHECKSUMS" {
+            if let Some(name) = t.split(' ').next() {
+                checksums.insert(name.to_string());
+            }
+            continue;
+        }
+        if let Some(r) = t.strip_prefix("remote:") {
+            remote = r.trim().to_string();
+        } else if t == "specs:" {
+            in_specs = true;
+        } else if in_specs && line.starts_with("    ") && !line.starts_with("      ") {
+            // `    name (1.2.3)`: four spaces is a spec, six a dependency of it.
+            let name = t.split(' ').next().unwrap_or("").to_string();
+            let version = t
+                .split_once('(')
+                .map(|(_, v)| v.trim_end_matches(')').to_string())
+                .unwrap_or_default();
+            let source = match section.as_str() {
+                "GEM" => Source::Registry(host_of(&remote)),
+                "GIT" => Source::Direct(host_of(&remote)),
+                _ => Source::Local,
+            };
+            out.push(LockEntry {
+                name,
+                version,
+                source,
+                has_hash: false,
+            });
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    for e in &mut out {
+        e.has_hash = checksums.contains(&e.name);
+    }
+    Some(out)
+}
+
 /// Entries of a lockfile, or `None` when the format is not one this module reads (or the
 /// content does not parse as that format).
 pub fn parse_lock(file_name: &str, content: &str) -> Option<Vec<LockEntry>> {
     match file_name {
         "Cargo.lock" => parse_cargo_lock(content),
         "package-lock.json" => parse_package_lock(content),
+        "yarn.lock" if content.contains("__metadata:") => parse_yarn_berry(content),
         "yarn.lock" => parse_yarn_lock(content),
+        "pnpm-lock.yaml" => parse_pnpm_lock(content),
+        "poetry.lock" => parse_poetry_lock(content),
+        "uv.lock" => parse_uv_lock(content),
+        "composer.lock" => parse_composer_lock(content),
+        "Gemfile.lock" => parse_gemfile_lock(content),
         _ => None,
     }
 }
@@ -435,7 +713,11 @@ source = "git+https://git.example.com/pinned?rev=abc#abc"
             titles("yarn.lock", base, &head),
             vec![("Lockfile Entry From New Source", "@babel/core".to_string())]
         );
-        assert!(parse_lock("yarn.lock", "__metadata:\n  version: 8\n").is_none());
+        // Yarn 2+ is read by its own parser: a metadata-only file has no entries.
+        assert_eq!(
+            parse_lock("yarn.lock", "__metadata:\n  version: 8\n"),
+            Some(vec![])
+        );
         assert!(parse_lock("pnpm-lock.yaml", "lockfileVersion: '9.0'\n").is_none());
         assert!(parse_lock("Cargo.lock", "not toml [[").is_none());
     }
@@ -460,5 +742,57 @@ source = "git+https://git.example.com/pinned?rev=abc#abc"
         );
         assert_eq!(governing_lockfile("tools/pyproject.toml", &tracked), None);
         assert_eq!(governing_lockfile("go.mod", &tracked), None);
+    }
+
+    #[test]
+    fn six_more_formats_report_a_source_swap_and_a_dropped_hash() {
+        // Each base pins a registry package with a hash; each head moves it to another
+        // host and drops the hash. A format that did not parse would report nothing.
+        let cases: [(&str, &str, &str); 6] = [
+            (
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\npackages:\n  left-pad@1.3.0:\n    resolution: {integrity: sha512-abc}\n",
+                "lockfileVersion: '9.0'\npackages:\n  left-pad@1.3.0:\n    resolution: {tarball: https://evil.example/left-pad.tgz}\n",
+            ),
+            (
+                "yarn.lock",
+                "__metadata:\n  version: 8\n\n\"left-pad@npm:^1.3.0\":\n  version: 1.3.0\n  resolution: \"left-pad@npm:1.3.0\"\n  checksum: abc\n",
+                "__metadata:\n  version: 8\n\n\"left-pad@https://evil.example/left-pad.tgz\":\n  version: 1.3.0\n  resolution: \"left-pad@https://evil.example/left-pad.tgz\"\n",
+            ),
+            (
+                "poetry.lock",
+                "[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\nfiles = [{file = \"requests-2.31.0.tar.gz\", hash = \"sha256:abc\"}]\n",
+                "[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\nfiles = []\n\n[package.source]\ntype = \"url\"\nurl = \"https://evil.example/requests.tar.gz\"\n",
+            ),
+            (
+                "uv.lock",
+                "[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\nsource = { registry = \"https://pypi.org/simple\" }\nsdist = { url = \"https://files.pythonhosted.org/r.tar.gz\", hash = \"sha256:abc\" }\n",
+                "[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\nsource = { url = \"https://evil.example/requests.tar.gz\" }\nsdist = { url = \"https://evil.example/requests.tar.gz\" }\n",
+            ),
+            (
+                "composer.lock",
+                "{\"packages\": [{\"name\": \"monolog/monolog\", \"version\": \"3.0.0\", \"dist\": {\"type\": \"zip\", \"url\": \"https://api.github.com/repos/Seldaek/monolog/zipball/abc\", \"shasum\": \"deadbeef\"}}]}",
+                "{\"packages\": [{\"name\": \"monolog/monolog\", \"version\": \"3.0.0\", \"dist\": {\"type\": \"zip\", \"url\": \"https://evil.example/monolog.zip\", \"shasum\": \"\"}}]}",
+            ),
+            (
+                "Gemfile.lock",
+                "GEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.6)\n\nPLATFORMS\n  ruby\n\nCHECKSUMS\n  rake (13.0.6) sha256=abc\n",
+                "GIT\n  remote: https://evil.example/rake.git\n  revision: abc\n  specs:\n    rake (13.0.6)\n\nPLATFORMS\n  ruby\n",
+            ),
+        ];
+        for (file, base, head) in cases {
+            let got = titles(file, base, head);
+            let names: Vec<&str> = got.iter().map(|(t, _)| *t).collect();
+            assert!(
+                names.contains(&"Lockfile Entry From New Source"),
+                "{file}: {got:?}"
+            );
+            assert!(
+                names.contains(&"Lockfile Integrity Hash Dropped"),
+                "{file}: {got:?}"
+            );
+            // Unchanged content reports nothing.
+            assert!(titles(file, base, base).is_empty(), "{file}");
+        }
     }
 }

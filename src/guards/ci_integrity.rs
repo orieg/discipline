@@ -836,6 +836,42 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                             "--locked",
                                         );
                                     }
+                                    // Frozen-install flags of other package managers, and the
+                                    // `npm ci` -> `npm install` swap: each lets an install
+                                    // resolve past the lockfile.
+                                    for flag in FROZEN_INSTALL_FLAGS {
+                                        if base_run.contains(flag) && !head_run.contains(flag) {
+                                            record_or_excuse(
+                                                ctx,
+                                                Some(&head_content),
+                                                &mut out,
+                                                settings.severity,
+                                                "Frozen Install Flag Dropped",
+                                                Some(path.clone()),
+                                                approx_line,
+                                                format!("Step dropped '{flag}' from an install command, permitting an install that resolves past the lockfile."),
+                                                format!("Restore '{flag}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
+                                                flag,
+                                            );
+                                        }
+                                    }
+                                    if base_run.contains("npm ci")
+                                        && !head_run.contains("npm ci")
+                                        && head_run.contains("npm install")
+                                    {
+                                        record_or_excuse(
+                                            ctx,
+                                            Some(&head_content),
+                                            &mut out,
+                                            settings.severity,
+                                            "Install Command Softened",
+                                            Some(path.clone()),
+                                            approx_line,
+                                            "Step replaced 'npm ci' with 'npm install': the install may rewrite the lockfile instead of honouring it.".to_string(),
+                                            "Restore 'npm ci' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                                            "npm ci",
+                                        );
+                                    }
                                     if base_run.contains("--all-targets")
                                         && !head_run.contains("--all-targets")
                                     {
@@ -1381,6 +1417,17 @@ fn if_text(v: &serde_yaml::Value) -> String {
             .to_string(),
     }
 }
+
+/// Flags that make an install honour its lockfile: yarn / pnpm `--frozen-lockfile`, yarn 2+
+/// `--immutable`, pip `--require-hashes`, uv / cargo `--frozen`, poetry `--no-update`.
+/// (`--locked` has its own rule above.)
+pub const FROZEN_INSTALL_FLAGS: &[&str] = &[
+    "--frozen-lockfile",
+    "--immutable",
+    "--require-hashes",
+    "--frozen",
+    "--no-update",
+];
 
 fn is_verification_step(step: &serde_yaml::Value) -> bool {
     let raw_run = step.get("run").and_then(|r| r.as_str()).map(str::to_string);

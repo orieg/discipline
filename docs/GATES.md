@@ -757,7 +757,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Newly introduced dependencies that violate repository `deny.toml` `[bans]` or `[sources]`.
   - Dependencies listed in configured `deny_dependencies`.
   - Newly added dependencies not present in configured `allow_dependencies` (when configured).
-  - **Lockfile integrity** (offline; `Cargo.lock`, `package-lock.json`, `yarn.lock` v1 are read entry by entry, base side against head side):
+  - **Lockfile integrity** (offline; `Cargo.lock`, `package-lock.json`, `yarn.lock` v1 and 2+, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `composer.lock` and `Gemfile.lock` are read entry by entry, base side against head side):
     - `Lockfile Entry From New Source`: an entry fetched from git or a bare URL, or from a registry host that is neither a default registry nor a host the base lockfile already uses (a private registry present on the base side is known).
     - `Lockfile Integrity Hash Dropped`: an entry (same name and version) that carried a checksum / `integrity` on the base side and no longer does.
     - `Manifest Changed Without Lockfile`: the dependency set of a manifest changed while the tracked lockfile governing it (same directory, else the nearest ancestor's) did not. A project that tracks no lockfile is not asked for one; `go.mod` is exempt because requiring an already-indirect module leaves `go.sum` unchanged.
@@ -776,7 +776,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - Unmodified pre-existing dependencies already present in the merge base ref.
   - Whether a package exists, how old it is, or whether its name is a typosquat: that needs a registry lookup, which discipline does not make (`AGENTS.md` §3.3). Use an audit preset of the `command` gate.
-  - Entries of `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `go.sum`, `composer.lock`, `Gemfile.lock` and Yarn 2+ lockfiles: their size is noted, their sources and hashes are not read, and the notes say so.
+  - `go.sum` (requiring an already-indirect module leaves it unchanged) and any lockfile format not listed above: their size is noted, their sources and hashes are not read, and the notes say so. Composer's Packagist entries carry no hash (`dist.shasum` is empty), so a dropped hash is only reported for an entry that had one; a `Gemfile.lock` carries hashes only from Bundler 2.6 (`CHECKSUMS`).
   - A lockfile entry whose version changed within the same source (a routine update).
   - Dependencies explicitly excused via scoped `allow-dependency: <name> <reason>`.
 - **Lifting directive:** `allow-dependency: <dependency-name> <reason>`. A lockfile entry finding is lifted by naming the **package**; a stale or deleted lockfile by naming the **lockfile path**.
@@ -824,6 +824,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```text
   allow-ci-weakening: ci-gate temporary rollup relaxation during migration
   ```
+  - `Frozen Install Flag Dropped`: a `run:` step that carried `--frozen-lockfile`, `--immutable`, `--require-hashes`, `--frozen` or `--no-update` no longer does (the `--locked` case has its own title), so the install may resolve past the lockfile.
+  - `Install Command Softened`: `npm ci` became `npm install`, which may rewrite the lockfile instead of honouring it.
   - `Verification Step Narrowed` (warning): a verification step, including the discipline step, gains a step-level `if:` or its `if:` changes, so it no longer runs on every event or condition it ran on before (`if: github.event_name == 'pull_request'` on the gate stops it gating pushes to the default branch). The `always()` / `failure()` forms are `Conditional Masking on Verification Step`. Lifted with `allow-gate-weakening: ci-integrity <reason>`.
 - **What it does NOT catch:**
   - Local actions (`./...`) and docker actions (`docker://...`).

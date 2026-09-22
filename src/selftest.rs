@@ -460,6 +460,27 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "dependency-delta: pnpm, uv and Gemfile lockfiles are read; a dropped hash is a finding",
+        || {
+            use crate::guards::lockfile::{diff_lock, parse_lock};
+            let pnpm_base = parse_lock("pnpm-lock.yaml", "lockfileVersion: '9.0'\npackages:\n  a@1.0.0:\n    resolution: {integrity: sha512-x}\n")
+                .ok_or_else(|| anyhow::anyhow!("pnpm not read"))?;
+            let pnpm_head = parse_lock("pnpm-lock.yaml", "lockfileVersion: '9.0'\npackages:\n  a@1.0.0:\n    resolution: {}\n")
+                .ok_or_else(|| anyhow::anyhow!("pnpm not read"))?;
+            let uv = parse_lock("uv.lock", "[[package]]\nname = \"a\"\nversion = \"1\"\nsource = { registry = \"https://pypi.org/simple\" }\nsdist = { url = \"https://x/a.tar.gz\", hash = \"sha256:x\" }\n")
+                .ok_or_else(|| anyhow::anyhow!("uv not read"))?;
+            let gem = parse_lock("Gemfile.lock", "GEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.6)\n")
+                .ok_or_else(|| anyhow::anyhow!("gemfile not read"))?;
+            let dropped = diff_lock(&pnpm_base, &pnpm_head);
+            Ok(pnpm_base.len() == 1
+                && pnpm_base[0].has_hash
+                && dropped.iter().any(|f| f.title == "Lockfile Integrity Hash Dropped")
+                && uv[0].has_hash
+                && gem[0].name == "rake"
+                && !gem[0].has_hash)
+        },
+    ),
+    (
         "stub-bodies: a stub padded with a log line is a stub, one preceded by a call is not",
         || {
             use crate::ast::functions::BodyShape;
