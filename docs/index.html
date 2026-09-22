@@ -1135,8 +1135,8 @@ discipline self-test</div>
 
     <div class="gate-search-wrapper">
 <!-- generated:gate-search -->
-      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 36 gates by id, category, language, or rule..." aria-label="Search active gates">
-      <span id="gate-count" class="gate-count">Showing 36 of 36 gates</span>
+      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 37 gates by id, category, language, or rule..." aria-label="Search active gates">
+      <span id="gate-count" class="gate-count">Showing 37 of 37 gates</span>
 <!-- /generated -->
     </div>
 
@@ -1264,6 +1264,13 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C# and prose files (phrases)</span></td>
             <td>no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose</td>
+          </tr>
+          <tr>
+            <td class="gate-id">build-hooks</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env*</span></td>
+            <td>install and build hooks that gain network or shell access, and package-manager configuration edits, need a token</td>
           </tr>
           <tr>
             <td class="gate-id">toolchain-config</td>

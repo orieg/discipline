@@ -98,6 +98,9 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.bench-regression.require_sourced_override` | boolean | `false` | Require allow-regression reasons to cite a CI run URL or artifact path and name the arms. Every citation is also checked for freshness: a cited run must have completed, reached its regression guard, and measured a commit reachable from the head; a cited data artifact must post-date the branch's newest change under `citation_source_paths`. A citation that cannot be checked (no `gh`, unauthenticated, rate limited) is reported by name and leaves the gate armed. |
 | `gates.bench-regression.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.bench-regression.tolerance_pct` | number | `0.5` | Maximum allowed regression percentage |
+| `gates.build-hooks.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.build-hooks.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.build-hooks.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ci-integrity.diff_only` | boolean | `true` | When true, scans only modified workflow files rather than all workflows |
 | `gates.ci-integrity.documented_job_count_path` | string | *(unset)* | Path to catalog documentation stating job count |
 | `gates.ci-integrity.documented_job_count_pattern` | string | *(unset)* | Regex pattern to extract job count from documentation |
@@ -431,6 +434,7 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 | `allow-swallow:` / `discipline:allow(error-swallowing)` / `allow(error-swallowing)` | `error-swallowing` | File path, or `path:line` of the handler |
 | `allow-agent-instructions:` / `discipline:allow(instruction-smuggling)` / `allow(instruction-smuggling)` | `instruction-smuggling` | File path, or `path:line` |
 | `allow-commit-provenance:` / `discipline:allow(commit-provenance)` / `allow(commit-provenance)` | `commit-provenance` | Commit SHA (7 or 40 characters) |
+| `allow-build-hook:` / `discipline:allow(build-hooks)` / `allow(build-hooks)` | `build-hooks` | Hook name (`postinstall`) or file path |
 | `allow-regression:` / `discipline:allow(bench-regression)` / `allow(bench-regression)` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
 | `allow-command:` / `discipline:allow(command)` / `allow(command)` | `command` | Subcommand or command line invocation, plus non-empty rationale |
 | `allow-dependency:` / `discipline:allow(dependency-delta)` / `allow(dependency-delta)` | `dependency-delta` | Dependency package name or manifest path |

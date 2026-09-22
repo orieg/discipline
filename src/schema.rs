@@ -24,6 +24,7 @@ pub fn generate_schema() -> Value {
             "stub-bodies" => "#/$defs/BasicGate",
             "error-swallowing" => "#/$defs/BasicGate",
             "instruction-smuggling" => "#/$defs/BasicGate",
+            "build-hooks" => "#/$defs/BasicGate",
             "bench-regression" => "#/$defs/BenchRegressionGate",
             "unsafe-safety-comment" => "#/$defs/UnsafeSafetyCommentGate",
             "command" => "#/$defs/CommandGate",

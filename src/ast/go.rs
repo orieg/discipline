@@ -74,6 +74,22 @@ impl LanguagePack for GoPack {
                 super::handlers::extract(root, src, &GO_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &GO_RETRIES);
+        super::calls::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &GO_MOCKS,
+            super::calls::SLEEP_VOCAB,
+            super::calls::sleeps,
+        );
+        super::calls::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &GO_MOCKS,
+            super::calls::TRIVIAL_ASSERT_VOCAB,
+            super::calls::trivial_asserts,
+        );
         extractor.facts.prose = super::prose::extract(
             root,
             src,

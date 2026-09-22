@@ -177,6 +177,13 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_doc: "Commit SHA (7 or 40 characters)",
     },
     DirectiveSpec {
+        canonical: "allow-build-hook",
+        deprecated: None,
+        gate: "build-hooks",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "Hook name (`postinstall`) or file path",
+    },
+    DirectiveSpec {
         canonical: "allow-golden-update",
         deprecated: None,
         gate: "golden-output",
@@ -319,9 +326,9 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     },
 ];
 
-/// The 39 named directives recognized by discipline (29 canonical + 10 deprecated aliases).
+/// The 40 named directives recognized by discipline (30 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 29 Canonical
+    // 30 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
@@ -331,6 +338,7 @@ pub const KNOWN_DIRECTIVES: &[&str] = &[
     "allow-swallow",
     "allow-agent-instructions",
     "allow-commit-provenance",
+    "allow-build-hook",
     "allow-golden-update",
     "allow-regression",
     "allow-command",
@@ -409,6 +417,11 @@ pub const ALLOW_COMMIT_PROVENANCE: &[&str] = &[
     "allow-commit-provenance",
     "discipline:allow(commit-provenance)",
     "allow(commit-provenance)",
+];
+pub const ALLOW_BUILD_HOOK: &[&str] = &[
+    "allow-build-hook",
+    "discipline:allow(build-hooks)",
+    "allow(build-hooks)",
 ];
 pub const ALLOW_GOLDEN_UPDATE: &[&str] = &[
     "allow-golden-update",
@@ -546,6 +559,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-swallow" => ALLOW_SWALLOW,
         "allow-agent-instructions" => ALLOW_SMUGGLING,
         "allow-commit-provenance" => ALLOW_COMMIT_PROVENANCE,
+        "allow-build-hook" => ALLOW_BUILD_HOOK,
         "allow-regression" => ALLOW_REGRESSION,
         "allow-command" => ALLOW_COMMAND,
         "allow-dependency" => ALLOW_DEPENDENCY,
@@ -589,6 +603,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-swallow",
     "allow-agent-instructions",
     "allow-commit-provenance",
+    "allow-build-hook",
     "allow-golden-update",
     "allow-regression",
     "allow-command",
@@ -639,6 +654,8 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow(instruction-smuggling)",
     "discipline:allow(commit-provenance)",
     "allow(commit-provenance)",
+    "discipline:allow(build-hooks)",
+    "allow(build-hooks)",
     "discipline:allow(golden-output)",
     "allow(golden-output)",
     "discipline:allow(bench-regression)",

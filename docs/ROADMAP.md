@@ -53,6 +53,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | [`stub-bodies`](GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C# | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
 | [`error-swallowing`](GATES.md#error-swallowing) | agent-guard | Rust, Python, JS/TS, Go, Java, C# | no new empty error handler or discarded Result outside tests |
 | [`instruction-smuggling`](GATES.md#instruction-smuggling) | agent-guard | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C# and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
+| [`build-hooks`](GATES.md#build-hooks) | integrity | package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env* | install and build hooks that gain network or shell access, and package-manager configuration edits, need a token |
 | [`toolchain-config`](GATES.md#toolchain-config) | integrity | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](GATES.md#scope-confinement) | agent-guard | any | changes stay inside authorized paths |
 | [`suppression-delta`](GATES.md#suppression-delta) | agent-guard | per pack | newly added linter / compiler suppression annotations |
@@ -166,6 +167,22 @@ Candidate work from a review of discipline as a safety net against autonomous co
 - **Go / no-go gate:** each item meets the gate contract in `AGENTS.md` §3.4: positive and negative unit controls, an end-to-end case through the binary, a `self-test` case, and a named test that kills a mutated detector. A Tier 2 item additionally names every pack that does not supply its fact.
 - **Status:** Tier 0 shipped, with three named remainders (GitLab `include:` / `rules:` in `ci-integrity`, GitLab approvals in `require_approval`, forge-side `doctor` checks in CI); Tier 1 shipped (`toolchain-config`, lockfile integrity, `golden-output`, `test-floor`, `suppression-delta` on AST facts; the named remainders are `clippy.toml`, added snapshot files, the other lockfile formats, and `test-budget`'s line patterns); Tier 2 shipped (`stub-bodies`, mock infiltration, `error-swallowing`, retry annotations; PHP, Ruby and C/C++ function and handler facts are the named remainder); Tier 3 shipped (`instruction-smuggling`, `commit-provenance`; registry verification declined).
 
+### Phase 9: Review Follow-Ups
+Items from an external written review of Phase 8 (2026-09-21), each checked against the code before acting. The review's "strengths" section was right on the gates and wrong on their reach (six languages for the new facts, not "9+"; `agent_diff` is a module, not a gate).
+
+| Review point | Verdict | Status |
+|---|---|---|
+| Assertion-free tests, tautologies, mocking the system under test | Already covered by `vacuous-tests` (`Vacuous Test Added`, constant-expression tautologies) and the Phase 8 mock rules. The example `assert val is not None` was a real miss: a near-tautology that counts as an assertion. | **Shipped**: `Test Asserts Only Trivial Properties` (`src/ast/calls.rs`, warning) |
+| Assertion density, mutation analysis | `min_assertions_per_test` exists. In-binary mutation stays declined: the `command` gate's mutation presets are the control. | Declined |
+| Package hallucination / slopsquatting | Correct description. Decided offline-only in Phase 8 (§3.3; a lookup discloses internal names). | Declined; see the note below |
+| Build hooks and dotfiles | Correct and the largest gap. | **Shipped**: `build-hooks` gate |
+| Delay-based concurrency patching | Correct. | **Shipped**: `Test Sleeps` through `ignored-tests` (warning) |
+| Reviewer-bot injection in PR descriptions | `instruction-smuggling` already carried `reviewer-steering` for code and prose files; it did not read the PR body or commit messages. | **Shipped**: change-description scan, directive lines excluded |
+
+- **Registry lookup, revisited.** An opt-in `dependency-delta.verify_registry` (default off) that asks crates.io, npm and PyPI whether a newly added direct dependency exists and when it was first published is implementable on the forge client (`src/forge.rs`: TLS, redirect pinning, body cap, `DISCIPLINE_NO_NETWORK`, exit 2 when unreachable). It stays declined until three things are settled: `AGENTS.md` §3.3 must be amended in the same PR; the names it sends are the change's new dependencies, which for a private monorepo means internal package names reaching a public registry, so a `private_prefixes` skip list is a precondition, not an option; and the lookup runs on every check of every PR that adds a dependency, so rate limits and outages become CI failures (exit 2), which the fail-closed contract requires. Lockfile integrity remains the offline control. Reopen when a consumer asks for it with those three answered.
+- **Go / no-go gate:** as Phase 8.
+- **Status:** shipped (`build-hooks`; sleeps, trivial assertions and change-description scanning in existing gates).
+
 ---
 
 ## Default Changes (Compatibility Ledger)
@@ -174,6 +191,7 @@ Default enablement and severity are part of the compatibility contract (`docs/AR
 
 | Release | Gate | Old default | New default | Direction | Reason | Restore previous behaviour |
 |---|---|---|---|---|---|---|
+| unreleased | `build-hooks` | (new gate) | on, `error` | stricter | A new or changed `package.json` lifecycle script, a build script gaining process / network / shell access, or any edit to package-manager configuration (`.npmrc`, `.pypirc`, `pip.conf`, `.cargo/config.toml`, `.env*`) is reported. | `[gates.build-hooks]` `enabled = false` |
 | v0.8.0 | `commit-provenance` | (new gate) | off, `error` | none (off) | Required commit trailers and a review by someone else on agent-produced commits. Off because which trailers a repository requires is its own policy. | n/a |
 | v0.8.0 | `instruction-smuggling` | (new gate) | on, `error` | stricter | Zero-width, bidirectional and tag characters in added lines and any edit to an agent-instruction file (`AGENTS.md`, `.cursorrules`, `copilot-instructions.md`, skill files, ...) are reported; instruction-like phrases and encoded blobs in comments, strings and prose at `warning`. Findings carry location and class only. | `[gates.instruction-smuggling]` `enabled = false` |
 | v0.8.0 | `error-swallowing` | (new gate) | on, `error` | stricter | A new empty error handler or discarded fallible result outside tests is reported, base against head per file. Rust, Python, JS/TS, Go, Java, C#; other packs name their files as not analysed. | `[gates.error-swallowing]` `enabled = false` |
@@ -195,6 +213,9 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | `ignored-tests` | A test that gains a hard-coded delay (`thread::sleep`, `time.sleep`, `setTimeout`, ...) is `Test Sleeps` (warning). | stricter | `allow-ignore: <test> <reason>`. |
+| unreleased | `vacuous-tests` | A new test whose every assertion holds for nearly any value (`is not None`, `toBeDefined`, `.is_ok()`, `assertNotNull`, ...) is `Test Asserts Only Trivial Properties` (warning). | stricter | Assert on the value. |
+| unreleased | `instruction-smuggling` | The PR title and body and every commit message in the range are scanned for instruction phrases (warning) and invisible characters (blocking); directive lines are skipped. `examined` counts them. | stricter | `allow-agent-instructions: pr-body <reason>`. |
 | v0.8.0 | `doctor` | Three review findings from branch rules: `review` (approving-review count), `code-owner-review`, `last-push-approval` (or stale-review dismissal). Each is a warning where the rule is absent, so `--strict` runs on a branch without review rules now fail. | stricter | Add the review rule, or read the finding as advice without `--strict`. |
 | v0.8.0 | `ignored-tests` | A test that gains a retry / flaky marker (`@pytest.mark.flaky`, `jest.retryTimes`, `@RetryingTest`, ...) is reported as `Test Retries On Failure`. | stricter | `allow-ignore: <test> <reason>`. |
 | v0.8.0 | `vacuous-tests`, `assertion-reduction` | Mock usage is read from test bodies. A new test asserting only on a double's interactions is reported (`Test Asserts Only On Mocks`, warning); an existing test whose doubles rose without a stronger assertion on real output is reported (`Mocking Grew Without Stronger Assertions`, warning). New options `mock_setup_fns` / `mock_assert_fns` on both gates. | stricter | `allow-assertion-drop: <test> <reason>` for the delta; assert on the result for the vacuity class. |

@@ -1,5 +1,6 @@
 pub mod agent_diff;
 pub mod archive_contents;
+pub mod build_hooks;
 pub mod ci_gitlab;
 pub mod ci_integrity;
 pub mod ci_skip_set;
@@ -339,6 +340,7 @@ pub fn run_checks(
             "stub-bodies" => stub_bodies::stub_bodies(ctx),
             "error-swallowing" => error_swallowing::error_swallowing(ctx),
             "instruction-smuggling" => instruction_smuggling::instruction_smuggling(ctx),
+            "build-hooks" => build_hooks::build_hooks(ctx),
             "golden-output" => integrity::golden_output(ctx),
             "bench-regression" => perf::bench_regression(ctx),
             "command" => command::evaluate_command(ctx),
@@ -429,6 +431,8 @@ pub fn run_checks(
             "version-lockstep"
         } else if note.contains("allow-scope") {
             "scope-confinement"
+        } else if note.contains("allow-build-hook") {
+            "build-hooks"
         } else if note.contains("allow-commit-provenance") {
             "commit-provenance"
         } else if note.contains("allow-agent-instructions") {
@@ -469,6 +473,7 @@ pub fn run_checks(
                         | "error-swallowing"
                         | "instruction-smuggling"
                         | "commit-provenance"
+                        | "build-hooks"
                         | "golden-output"
                         | "bench-regression"
                         | "command"

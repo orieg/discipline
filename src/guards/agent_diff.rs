@@ -784,6 +784,27 @@ pub fn evaluate_vacuous_tests(
             );
             continue;
         }
+        // Every assertion holds for nearly any value: `is not None`, `toBeDefined`,
+        // `is_ok()`. The test runs the code and checks that something came back.
+        // (`is not None` is a comparison, so the pack may count it as strong; the
+        // trivial count decides.)
+        if a.test.trivial_asserts > 0
+            && a.test.trivial_asserts >= a.test.effective_asserts()
+            && !a.test.should_panic
+        {
+            out.push(
+                crate::config::Severity::Warning,
+                "Test Asserts Only Trivial Properties",
+                Some(a.path),
+                Some(a.test.line),
+                format!(
+                    "New test `{}` makes {} assertion(s) that hold for nearly any value (not-null, defined, ok, truthy); it does not check what the code produced.",
+                    a.test.name, a.test.trivial_asserts
+                ),
+                "Assert on the value or the effect; a not-null check passes any wrong answer.",
+            );
+            continue;
+        }
         if a.test.is_vacuous() {
             let why = if a.test.total_asserts == 0 {
                 "contains no assertion".to_string()
@@ -912,6 +933,43 @@ pub fn evaluate_ignored_tests(
 
     // A test made green by running it again. A retry marker does not skip the test, but
     // it lets a failure through as often as the marker allows.
+    // A delay added to a test: the shape of a race fixed by waiting for it.
+    let newly_slept = pairs
+        .iter()
+        .filter(|p| p.head.sleeps > p.base.sleeps)
+        .map(|p| (p.path, p.head, p.base.sleeps))
+        .chain(
+            added
+                .iter()
+                .filter(|a| a.test.sleeps > 0)
+                .map(|a| (a.path, a.test, 0)),
+        );
+    for (path, test, before) in newly_slept {
+        if exempt.matches(path) {
+            continue;
+        }
+        if let Some(record) =
+            tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
+        {
+            out.overrides.push(record);
+            continue;
+        }
+        out.push(
+            crate::config::Severity::Warning,
+            "Test Sleeps",
+            Some(path),
+            Some(test.line),
+            format!(
+                "Test `{}` carries {} hard-coded delay(s) (was {before}); a timing-dependent pass slows the suite and hides the race.",
+                test.name, test.sleeps
+            ),
+            &format!(
+                "Synchronise on the event the test waits for, or justify the delay: `allow-ignore: {} <reason>`.",
+                leaf_name(test)
+            ),
+        );
+    }
+
     let newly_retried = pairs
         .iter()
         .filter(|p| p.head.retries.is_some() && p.base.retries.is_none())

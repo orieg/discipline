@@ -87,6 +87,22 @@ impl LanguagePack for RustPack {
             cx.facts.swallowed = super::handlers::extract(root, src, &RUST_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut cx.facts.tests, &RUST_RETRIES);
+        super::calls::count(
+            root,
+            src,
+            &mut cx.facts.tests,
+            &RUST_MOCKS,
+            super::calls::SLEEP_VOCAB,
+            super::calls::sleeps,
+        );
+        super::calls::count(
+            root,
+            src,
+            &mut cx.facts.tests,
+            &RUST_MOCKS,
+            super::calls::TRIVIAL_ASSERT_VOCAB,
+            super::calls::trivial_asserts,
+        );
         cx.facts.prose = super::prose::extract(
             root,
             src,
@@ -398,6 +414,8 @@ impl<'a> Extractor<'a> {
             mock_setups: 0,
             mock_asserts: 0,
             retries: None,
+            sleeps: 0,
+            trivial_asserts: 0,
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")

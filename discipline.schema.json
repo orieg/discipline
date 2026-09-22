@@ -1239,6 +1239,14 @@
           ],
           "description": "benchmark drift via harness adapters (deterministic counts or BCa intervals)"
         },
+        "build-hooks": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "install and build hooks that gain network or shell access, and package-manager configuration edits, need a token"
+        },
         "ci-integrity": {
           "allOf": [
             {

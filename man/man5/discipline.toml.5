@@ -163,6 +163,9 @@ no new empty error handler or discarded Result outside tests (agent-guard; defau
 .B [gates.instruction-smuggling]
 no invisible Unicode, unreviewed agent\-instruction edits, or instruction\-like text in comments and prose (agent-guard; default: on, error; languages: any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C# and prose files (phrases))
 .TP
+.B [gates.build-hooks]
+install and build hooks that gain network or shell access, and package\-manager configuration edits, need a token (integrity; default: on, error; languages: package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env*)
+.TP
 .B [gates.toolchain-config]
 compiler, linter, type\-checker, test\-runner and coverage configuration cannot be loosened without a token (integrity; default: on, error; languages: tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit)
 .TP

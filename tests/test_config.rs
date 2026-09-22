@@ -490,6 +490,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("stub-bodies", true, Severity::Error),
     ("error-swallowing", true, Severity::Error),
     ("instruction-smuggling", true, Severity::Error),
+    ("build-hooks", true, Severity::Error),
     ("golden-output", true, Severity::Error),
     ("dependency-delta", true, Severity::Error),
     ("test-budget", true, Severity::Error),

@@ -8,6 +8,7 @@ use anyhow::Result;
 
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
 pub mod c_cpp;
+pub mod calls;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
 pub mod functions;
@@ -208,6 +209,10 @@ pub struct TestFn {
     pub mock_asserts: usize,
     /// A retry / flaky marker on the test (`@pytest.mark.flaky`, `jest.retryTimes`).
     pub retries: Option<String>,
+    /// Hard-coded delays in the body (`thread::sleep`, `time.sleep`, `setTimeout`).
+    pub sleeps: usize,
+    /// Assertions that hold for nearly any value (`is not None`, `toBeDefined`, `is_ok()`).
+    pub trivial_asserts: usize,
 }
 
 impl TestFn {
@@ -309,6 +314,8 @@ impl Default for ParsedFileFacts {
                 mock_setups: 0,
                 mock_asserts: 0,
                 retries: None,
+                sleeps: 0,
+                trivial_asserts: 0,
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -335,6 +342,8 @@ impl ParsedFileFacts {
             mock_setups: 0,
             mock_asserts: 0,
             retries: None,
+            sleeps: 0,
+            trivial_asserts: 0,
         });
     }
 }
@@ -430,6 +439,8 @@ mod tests {
                     mock_setups: 0,
                     mock_asserts: 0,
                     retries: None,
+                    sleeps: 0,
+                    trivial_asserts: 0,
                     ..Default::default()
                 });
             }

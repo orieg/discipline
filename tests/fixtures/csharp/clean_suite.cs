@@ -19,7 +19,7 @@ namespace Discipline.Tests
         public void TestTheory(int val)
         {
             Assert.NotNull(val);
-            Assert.Equal(val, val);
+            Assert.Equal(val * 2, val + val);
         }
 
         [Test]

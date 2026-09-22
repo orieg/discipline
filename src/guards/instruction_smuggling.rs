@@ -316,6 +316,82 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             );
         }
     }
+    // 4. The PR description, title and commit messages: what a review bot reads first.
+    //    Directive lines are the repository's own vocabulary and are skipped.
+    let mut texts: Vec<(String, String)> = Vec::new();
+    if let Some(t) = &ctx.pr_title {
+        texts.push(("pr-title".to_string(), t.clone()));
+    }
+    if let Some(b) = &ctx.pr_body {
+        texts.push(("pr-body".to_string(), b.clone()));
+    }
+    for c in ctx.git.commit_details().unwrap_or_default() {
+        let short: String = c.sha.chars().take(7).collect();
+        texts.push((format!("commit:{short}"), c.message));
+    }
+    let heuristic_sev = match settings.severity() {
+        Severity::Error => Severity::Warning,
+        other => other,
+    };
+    for (where_, text) in texts {
+        out.examined += 1;
+        let kept: Vec<&str> = text
+            .lines()
+            .filter(|l| {
+                let head = l.trim().trim_start_matches("<!--").trim();
+                !head
+                    .split_once(':')
+                    .is_some_and(|(k, _)| tokens::spec_for_directive(k.trim()).is_some())
+            })
+            .collect();
+        let joined = kept.join("\n");
+        let invisible = kept.iter().flat_map(|l| invisible_classes(l, false)).fold(
+            Vec::new(),
+            |mut acc: Vec<&str>, c| {
+                if !acc.contains(&c) {
+                    acc.push(c);
+                }
+                acc
+            },
+        );
+        let mut classes = phrase_classes(&joined);
+        if has_encoded_blob(&joined) {
+            classes.push("encoded-blob");
+        }
+        if invisible.is_empty() && classes.is_empty() {
+            continue;
+        }
+        if let Some(ov) = lift(&where_) {
+            out.overrides.push(ov);
+            continue;
+        }
+        if !invisible.is_empty() {
+            out.push(
+                ctx.overridable(settings.severity()),
+                "Invisible Characters In Change Description",
+                None,
+                None,
+                format!(
+                    "The {where_} contains {} character(s); what a reviewer sees is not what a bot reads.",
+                    invisible.join(" and ")
+                ),
+                &format!("Remove the invisible characters, or record them: `allow-agent-instructions: {where_} <reason>`."),
+            );
+        }
+        if !classes.is_empty() {
+            out.push(
+                ctx.overridable(heuristic_sev),
+                "Instruction-Like Text In Change Description",
+                None,
+                None,
+                format!(
+                    "The {where_} carries text of class {}; a review bot reads it before the diff.",
+                    classes.iter().map(|c| format!("`{c}`")).collect::<Vec<_>>().join(", ")
+                ),
+                &format!("Read it as an instruction to a reviewer bot and decide whether it belongs; record a legitimate one: `allow-agent-instructions: {where_} <reason>`."),
+            );
+        }
+    }
     if out.examined == 0 {
         out.notes.push("no files changed".to_string());
     }

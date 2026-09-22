@@ -83,6 +83,23 @@ impl LanguagePack for PythonPack {
                 super::handlers::extract(root, src, &PYTHON_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &PYTHON_RETRIES);
+        super::calls::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &PYTHON_MOCKS,
+            super::calls::SLEEP_VOCAB,
+            super::calls::sleeps,
+        );
+        super::calls::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &PYTHON_MOCKS,
+            super::calls::TRIVIAL_ASSERT_VOCAB,
+            super::calls::trivial_asserts,
+        );
+        super::calls::count_python_assert_statements(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string"]);
         Ok(extractor.facts)
     }
