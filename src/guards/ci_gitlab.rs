@@ -4,8 +4,9 @@
 //! the Actions rules read, so it is diffed here. Every rule is a base-versus-head delta:
 //! what the base side already tolerated is not reported.
 //!
-//! Not read: pipelines pulled in through `include:` (another file, project or URL), and
-//! narrowing of `rules:` / `only:` / `except:`. A weakening made there passes this gate.
+//! `include: local:` files in the same tree are followed (their jobs are merged with the
+//! pipeline's); `project:`, `remote:` and `template:` includes are named as not read. A
+//! change to a verification job's `rules:` / `only:` / `except:` is a narrowing.
 
 use std::collections::BTreeMap;
 
@@ -36,6 +37,50 @@ const RESERVED: &[&str] = &[
     "spec",
     "pages:deploy",
 ];
+
+/// What a pipeline's `include:` names: local paths (relative to the repository root, the
+/// leading `/` stripped) and the includes this module does not follow, described.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Includes {
+    pub local: Vec<String>,
+    pub not_followed: Vec<String>,
+}
+
+pub fn includes(content: &str) -> Includes {
+    let mut out = Includes::default();
+    for doc in serde_yaml::Deserializer::from_str(content) {
+        // A document that does not parse ends the read: the deserializer does not advance
+        // past it, and the pipeline is reported as unreadable by the diff.
+        let Ok(doc) = <Value as serde::Deserialize>::deserialize(doc) else {
+            break;
+        };
+        let Some(inc) = doc.get("include") else {
+            continue;
+        };
+        let items: Vec<&Value> = match inc {
+            Value::Sequence(seq) => seq.iter().collect(),
+            other => vec![other],
+        };
+        for item in items {
+            match item {
+                Value::String(s) => out.local.push(s.trim_start_matches('/').to_string()),
+                Value::Mapping(m) => {
+                    if let Some(l) = m.get("local").and_then(|v| v.as_str()) {
+                        out.local.push(l.trim_start_matches('/').to_string());
+                    } else {
+                        for k in ["project", "remote", "template", "component"] {
+                            if let Some(v) = m.get(k).and_then(|v| v.as_str()) {
+                                out.not_followed.push(format!("{k}: {v}"));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
 
 /// Whether `path` is a GitLab pipeline file this module reads.
 pub fn is_gitlab_ci_path(path: &str) -> bool {
@@ -131,8 +176,23 @@ fn is_verification_job(name: &str, job: &Value) -> bool {
 
 /// Weakenings `head` makes to the pipeline `base` defined. `Err` = a side does not parse.
 pub fn diff_gitlab_ci(base: &str, head: &str) -> Result<Vec<GitlabWeakening>, String> {
-    let base_jobs = jobs(base).map_err(|e| format!("base side: {e}"))?;
-    let head_jobs = jobs(head).map_err(|e| format!("head side: {e}"))?;
+    diff_gitlab_ci_with(&[base.to_string()], &[head.to_string()])
+}
+
+/// As [`diff_gitlab_ci`], over a pipeline and the local files it includes (each side's
+/// documents are merged; a later document's job of the same name wins, as in GitLab).
+pub fn diff_gitlab_ci_with(
+    base: &[String],
+    head: &[String],
+) -> Result<Vec<GitlabWeakening>, String> {
+    let mut base_jobs = BTreeMap::new();
+    for doc in base {
+        base_jobs.extend(jobs(doc).map_err(|e| format!("base side: {e}"))?);
+    }
+    let mut head_jobs = BTreeMap::new();
+    for doc in head {
+        head_jobs.extend(jobs(doc).map_err(|e| format!("head side: {e}"))?);
+    }
     let mut found = Vec::new();
 
     for (name, b) in &base_jobs {
@@ -170,6 +230,27 @@ pub fn diff_gitlab_ci(base: &str, head: &str) -> Result<Vec<GitlabWeakening>, St
                     ),
                     subject: "when: manual".to_string(),
                 });
+            }
+        }
+        // `rules:` / `only:` / `except:` decide when a job runs; a change on a verification
+        // job narrows (or may narrow) it and is recorded, never silently accepted.
+        if let Some(b) = b {
+            if is_verification_job(name, b) {
+                for key in ["rules", "only", "except"] {
+                    let bv = b.get(key);
+                    let hv = h.get(key);
+                    if bv != hv && hv.is_some() {
+                        found.push(GitlabWeakening {
+                            title: "Verification Job Narrowed",
+                            job: name.clone(),
+                            message: format!(
+                                "Verification job '{name}' {} '{key}:'; it may no longer run on every pipeline it ran on before.",
+                                if bv.is_none() { "gained" } else { "changed" }
+                            ),
+                            subject: key.to_string(),
+                        });
+                    }
+                }
             }
         }
         let base_lines = b.map(script_lines).unwrap_or_default();
@@ -304,5 +385,29 @@ mod tests {
         assert!(is_gitlab_ci_path(".gitlab/ci/test.yml"));
         assert!(!is_gitlab_ci_path(".github/workflows/ci.yml"));
         assert!(!is_gitlab_ci_path("docs/gitlab-ci.yml"));
+    }
+
+    #[test]
+    fn includes_are_followed_when_local_and_rules_changes_narrow_a_verification_job() {
+        let inc = includes("include:\n  - local: /ci/test.yml\n  - project: other/repo\n    file: x.yml\n  - remote: https://x/y.yml\n  - template: Security.gitlab-ci.yml\nstages: [test]\n");
+        assert_eq!(inc.local, vec!["ci/test.yml"]);
+        assert_eq!(inc.not_followed.len(), 3);
+        assert_eq!(includes("include: 'ci/a.yml'\n").local, vec!["ci/a.yml"]);
+        // An unterminated document must not spin the multi-document reader.
+        assert_eq!(includes("unit-tests: [\n"), Includes::default());
+        // A local include that adds allow_failure to a verification job is found.
+        let main = "stages: [test]\n".to_string();
+        let base_inc = "unit-tests:\n  stage: test\n  script:\n    - cargo test\n".to_string();
+        let head_inc = "unit-tests:\n  stage: test\n  script:\n    - cargo test\n  allow_failure: true\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n".to_string();
+        let found = diff_gitlab_ci_with(&[main.clone(), base_inc], &[main, head_inc]).unwrap();
+        let titles: Vec<&str> = found.iter().map(|w| w.title).collect();
+        assert!(
+            titles.contains(&"allow_failure Masks Failure"),
+            "{titles:?}"
+        );
+        assert!(titles.contains(&"Verification Job Narrowed"), "{titles:?}");
+        // Unchanged rules are not a narrowing.
+        let same = "unit-tests:\n  script:\n    - cargo test\n  rules:\n    - if: $X\n".to_string();
+        assert!(diff_gitlab_ci(&same, &same).unwrap().is_empty());
     }
 }

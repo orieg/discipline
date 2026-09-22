@@ -55,6 +55,24 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
             files.push(f.path.clone());
             line_map.insert(f.path, f.added_lines);
         }
+        // A change to a file the pipeline pulls in through `include: local:` is a change
+        // to the pipeline: analyse the (unchanged) pipeline file against its base.
+        let changed = ctx.git.changed_files()?;
+        for pipeline in [".gitlab-ci.yml", ".gitlab-ci.yaml"] {
+            if files.iter().any(|p| p == pipeline) || filter.matches(pipeline) {
+                continue;
+            }
+            let Some(head) = ctx.git.head_content(pipeline)? else {
+                continue;
+            };
+            let local = super::ci_gitlab::includes(&head).local;
+            if changed
+                .iter()
+                .any(|f| local.iter().any(|l| *l == f.path || *l == f.old_path))
+            {
+                files.push(pipeline.to_string());
+            }
+        }
         if files.is_empty() {
             out.notes
                 .push("no workflow files modified in this diff".to_string());
@@ -1321,7 +1339,7 @@ fn markers_in(step: &serde_yaml::Value, run: Option<String>) -> HashSet<&'static
 /// Diff one GitLab pipeline file against its base side. A side that does not parse is a
 /// finding: an unreadable pipeline cannot be shown to be unweakened.
 fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Result<()> {
-    use super::ci_gitlab::{diff_gitlab_ci, verification_jobs};
+    use super::ci_gitlab::verification_jobs;
     let settings = &ctx.config.gates.ci_integrity;
     let base = ctx.git.base_content(path)?;
     let Some(head) = ctx.git.head_content(path)? else {
@@ -1347,14 +1365,33 @@ fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
         return Ok(());
     };
     out.examined += 1;
-    out.notes.push(format!(
-        "`{path}`: pipelines pulled in through `include:` and changes to `rules:` are not read"
-    ));
+    // Local includes are followed on each side; other include kinds are named.
+    let head_inc = super::ci_gitlab::includes(&head);
+    let mut head_docs = vec![head.clone()];
+    for local in &head_inc.local {
+        match ctx.git.head_content(local)? {
+            Some(c) => head_docs.push(c),
+            None => out.notes.push(format!(
+                "`{path}`: included file `{local}` is not in the tree; not read"
+            )),
+        }
+    }
+    for nf in &head_inc.not_followed {
+        out.notes.push(format!(
+            "`{path}`: include `{nf}` is not read (only local includes are followed)"
+        ));
+    }
     // A new pipeline file has nothing to be weakened against.
     let Some(base) = base else {
         return Ok(());
     };
-    match diff_gitlab_ci(&base, &head) {
+    let mut base_docs = vec![base.clone()];
+    for local in &super::ci_gitlab::includes(&base).local {
+        if let Some(c) = ctx.git.base_content(local)? {
+            base_docs.push(c);
+        }
+    }
+    match super::ci_gitlab::diff_gitlab_ci_with(&base_docs, &head_docs) {
         Ok(found) => {
             for w in found {
                 let line = find_line_number(&head, &format!("{}:", w.job));

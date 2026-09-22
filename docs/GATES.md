@@ -717,6 +717,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```text
   allow-toolchain-weakening: strict migrating the legacy tree file by file
   ```
+  - `clippy.toml`: every `*-threshold` / size limit is a cap (raising it loosens), `allowed-*` lists grow, `disallowed-*` lists shrink, `allow-*-in-tests` and the other `allow-*` booleans loosen when switched on.
+  - `Toolchain Configuration Changed (not analysed)` (warning) also when a configuration gains or swaps what it inherits — `extends` / `plugins` (tsconfig, eslintrc), `preset` (jest), `extend` (ruff), `linters.presets` (golangci): what the inherited configuration loosens cannot be read from the diff, so the swap is recorded rather than passed. Losing an `extends` entry stays a `Shrunk` weakening.
 - **What it does NOT catch:**
   - A tool or option not in the rule table. A file it does not recognise is not examined.
   - A list that appears where none was (`select = ["E"]` narrowing a tool's default set): defaults differ per tool version and are not modelled.
@@ -743,6 +745,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```text
   allow-golden-update: tests/golden/api_response.json schema upgrade for version 2 endpoint
   ```
+  - `Snapshot Added For Existing Test`: a new snapshot file whose test already existed on the base side and is not added by this change: Jest `__snapshots__/<file>.snap` (keys ``exports[`<title> 1`]``), insta `snapshots/<crate>__<module>__<test>.snap` (`<module>.rs` beside the directory), syrupy / pytest-snapshot `__snapshots__/<test_file>.ambr` (`# name:` lines). A snapshot arriving with its test is not reported.
 - **What it does NOT catch:**
   - Newly added snapshot files for newly created tests.
 - **Lifting directive:** `allow-golden-update: <path> <reason>`.
@@ -826,6 +829,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```
   - `Frozen Install Flag Dropped`: a `run:` step that carried `--frozen-lockfile`, `--immutable`, `--require-hashes`, `--frozen` or `--no-update` no longer does (the `--locked` case has its own title), so the install may resolve past the lockfile.
   - `Install Command Softened`: `npm ci` became `npm install`, which may rewrite the lockfile instead of honouring it.
+  - GitLab: `include: local:` files in the same tree are followed on both sides (their jobs are diffed with the pipeline's; a local include that adds `allow_failure` is found); `project:`, `remote:`, `template:` and `component:` includes are named in the notes as not read. `Verification Job Narrowed`: an existing verification job gains or changes `rules:` / `only:` / `except:`.
   - `Verification Step Narrowed` (warning): a verification step, including the discipline step, gains a step-level `if:` or its `if:` changes, so it no longer runs on every event or condition it ran on before (`if: github.event_name == 'pull_request'` on the gate stops it gating pushes to the default branch). The `always()` / `failure()` forms are `Conditional Masking on Verification Step`. Lifted with `allow-gate-weakening: ci-integrity <reason>`.
 - **What it does NOT catch:**
   - Local actions (`./...`) and docker actions (`docker://...`).

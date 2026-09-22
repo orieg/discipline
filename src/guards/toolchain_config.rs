@@ -72,6 +72,7 @@ const CODECOV: &[&str] = &["codecov.yml", ".codecov.yml"];
 const NEXTEST: &[&str] = &[".config/nextest.toml"];
 const PHPSTAN: &[&str] = &["phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"];
 const PHPUNIT: &[&str] = &["phpunit.xml", "phpunit.xml.dist"];
+const CLIPPY: &[&str] = &["clippy.toml", ".clippy.toml"];
 
 /// Configurations written as code: read for a change, not for a delta.
 const EXECUTABLE: &[&str] = &[
@@ -93,6 +94,272 @@ const EXECUTABLE: &[&str] = &[
 ];
 
 pub const RULES: &[Rule] = &[
+    // clippy.toml: every threshold is a cap, allow-lists grow, disallow-lists shrink.
+    Rule {
+        files: CLIPPY,
+        path: "too-many-arguments-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "cognitive-complexity-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "type-complexity-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "too-many-lines-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "enum-variant-size-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "array-size-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "vec-box-size-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "max-fn-params-bools",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "max-struct-bools",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "single-char-binding-names-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "trivial-copy-size-limit",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "large-error-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "stack-size-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "max-trait-bounds",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "max-include-file-size",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "excessive-nesting-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "too-large-for-stack",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "unnecessary-box-size",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "literal-representation-threshold",
+        judge: Judge::Cap,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "min-ident-chars-threshold",
+        judge: Judge::Floor,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "enum-variant-name-threshold",
+        judge: Judge::Floor,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "struct-field-name-threshold",
+        judge: Judge::Floor,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "unreadable-literal-lint-fractions",
+        judge: Judge::Floor,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allowed-idents-below-min-chars",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allowed-duplicate-crates",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allowed-prefixes",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allowed-scripts",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allowed-wildcard-imports",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allowed-dotfiles",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "ignore-interior-mutability",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "arithmetic-side-effects-allowed",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "arithmetic-side-effects-allowed-binary",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "arithmetic-side-effects-allowed-unary",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-renamed-params-for",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "doc-valid-idents",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "disallowed-methods",
+        judge: Judge::Shrunk,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "disallowed-types",
+        judge: Judge::Shrunk,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "disallowed-macros",
+        judge: Judge::Shrunk,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "disallowed-names",
+        judge: Judge::Shrunk,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "await-holding-invalid-types",
+        judge: Judge::Shrunk,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-unwrap-in-tests",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-expect-in-tests",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-dbg-in-tests",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-print-in-tests",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-panic-in-tests",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-mixed-uninlined-format-args",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-one-hash-in-raw-strings",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-private-module-inception",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-useless-vec-in-tests",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-comparison-to-zero",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-indexing-slicing-in-tests",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-unwrap-in-consts",
+        judge: Judge::LooserWhenTrue,
+    },
+    Rule {
+        files: CLIPPY,
+        path: "allow-exact-repetitions",
+        judge: Judge::LooserWhenTrue,
+    },
     // TypeScript
     Rule {
         files: TSCONFIG,
@@ -1183,6 +1450,51 @@ pub struct Weakening {
 }
 
 /// What `head` loosens relative to `base` under `rules`.
+/// Keys through which a configuration inherits another one, per file: a gained or swapped
+/// entry pulls in settings this diff cannot read.
+const INHERITANCE: &[(&[&str], &str)] = &[
+    (TSCONFIG, "extends"),
+    (ESLINTRC, "extends"),
+    (ESLINTRC, "plugins"),
+    (ESLINTRC, "overrides.*.extends"),
+    (JEST, "preset"),
+    (JEST, "jest.preset"),
+    (RUFF, "extend"),
+    (PYPROJECT, "tool.ruff.extend"),
+    (GOLANGCI, "linters.presets"),
+];
+
+/// `(key, what was gained)` for every inheritance key of `name` whose head side names an
+/// entry the base side did not.
+pub fn inherited_changes(name: &str, base: &Value, head: &Value) -> Vec<(String, String)> {
+    let applies = |files: &[&str]| {
+        files.iter().any(|f| {
+            if let Some(prefix) = f.strip_suffix(".*.json") {
+                name.starts_with(&format!("{prefix}.")) && name.ends_with(".json")
+            } else {
+                name == *f || name.ends_with(&format!("/{f}"))
+            }
+        })
+    };
+    let mut out = Vec::new();
+    for (files, path) in INHERITANCE {
+        if !applies(files) {
+            continue;
+        }
+        let b_paths: std::collections::BTreeMap<String, &Value> =
+            matching(base, path).into_iter().collect();
+        for (key, h) in matching(head, path) {
+            let bl = b_paths.get(&key).map(|v| as_list(v)).unwrap_or_default();
+            let hl = as_list(h);
+            let gained: Vec<&String> = hl.iter().filter(|x| !bl.contains(x)).collect();
+            if !gained.is_empty() {
+                out.push((key, sample(&gained)));
+            }
+        }
+    }
+    out
+}
+
 pub fn diff_trees(base: &Value, head: &Value, rules: &[&Rule]) -> Vec<Weakening> {
     let mut found = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
@@ -1394,6 +1706,29 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                     );
                     continue;
                 };
+                for (key, gained) in inherited_changes(&name, &base_tree, &head_tree) {
+                    if let Some(ov) = lift(&key).or_else(|| lift(&file.path)) {
+                        out.overrides.push(ov);
+                        continue;
+                    }
+                    let sev = match settings.severity() {
+                        Severity::Error => Severity::Warning,
+                        other => other,
+                    };
+                    out.push(
+                        ctx.overridable(sev),
+                        "Toolchain Configuration Changed (not analysed)",
+                        Some(&file.path),
+                        None,
+                        format!(
+                            "`{key}` in `{}` now inherits {gained}; what an inherited configuration loosens cannot be read from this diff.",
+                            file.path
+                        ),
+                        &format!(
+                            "Review the inherited configuration; record it with `allow-toolchain-weakening: {key} <reason>` if it is intended."
+                        ),
+                    );
+                }
                 for w in diff_trees(&base_tree, &head_tree, &rules) {
                     if let Some(ov) = lift(&w.key)
                         .or_else(|| w.key.rsplit('.').next().and_then(lift))
@@ -1675,5 +2010,69 @@ mod tests {
         assert!(classify("docs/config.toml").is_none());
         assert!(classify("tsconfig.json.bak").is_none());
         assert!(load("tsconfig.json", "{ nope").is_none());
+    }
+
+    #[test]
+    fn clippy_toml_thresholds_are_caps_and_lists_go_their_way() {
+        let got = diff(
+            "clippy.toml",
+            "too-many-arguments-threshold = 7\ncognitive-complexity-threshold = 25\ndisallowed-methods = [\"std::env::set_var\"]\nallowed-scripts = [\"Latin\"]\nallow-unwrap-in-tests = false\n",
+            "too-many-arguments-threshold = 12\ncognitive-complexity-threshold = 25\ndisallowed-methods = []\nallowed-scripts = [\"Latin\", \"Cyrillic\"]\nallow-unwrap-in-tests = true\n",
+        );
+        let mut keys: Vec<&str> = got.iter().map(|(k, _)| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "allow-unwrap-in-tests",
+                "allowed-scripts",
+                "disallowed-methods",
+                "too-many-arguments-threshold",
+            ],
+            "{got:?}"
+        );
+        // Lowering a threshold is a tightening.
+        assert!(diff(
+            "clippy.toml",
+            "too-many-lines-threshold = 100\n",
+            "too-many-lines-threshold = 50\n"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn a_gained_or_swapped_inheritance_is_named_not_passed() {
+        let b = load(
+            "tsconfig.json",
+            "{\"extends\": \"@tsconfig/strictest/tsconfig.json\"}",
+        )
+        .unwrap();
+        let h = load(
+            "tsconfig.json",
+            "{\"extends\": \"@tsconfig/recommended/tsconfig.json\"}",
+        )
+        .unwrap();
+        assert_eq!(
+            inherited_changes("tsconfig.json", &b, &h),
+            vec![(
+                "extends".to_string(),
+                "`@tsconfig/recommended/tsconfig.json`".to_string()
+            )]
+        );
+        assert!(inherited_changes("tsconfig.json", &h, &h).is_empty());
+        let b = load(
+            ".eslintrc.json",
+            "{\"extends\": [\"eslint:recommended\"], \"plugins\": []}",
+        )
+        .unwrap();
+        let h = load(
+            ".eslintrc.json",
+            "{\"extends\": [\"eslint:recommended\", \"plugin:x/lax\"], \"plugins\": [\"x\"]}",
+        )
+        .unwrap();
+        let got = inherited_changes(".eslintrc.json", &b, &h);
+        assert_eq!(got.len(), 2, "{got:?}");
+        // Losing an entry is `Shrunk`'s finding, not this one.
+        assert!(inherited_changes(".eslintrc.json", &h, &b).is_empty());
     }
 }

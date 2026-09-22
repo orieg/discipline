@@ -378,6 +378,82 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
     Ok(out)
 }
 
+/// The test file a snapshot belongs to, and the test names it records.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SnapshotOwner {
+    pub test_file: String,
+    pub tests: Vec<String>,
+}
+
+/// Map a snapshot file to its test file and the tests it records: Jest
+/// `__snapshots__/<file>.snap` (keys ``exports[`<title> 1`]``), insta
+/// `snapshots/<crate>__<module>__<test>.snap` (`<module>.rs` beside the directory),
+/// syrupy / pytest-snapshot `__snapshots__/<test_file>.ambr` (`# name: <test>` lines).
+pub fn snapshot_owner(path: &str, content: &str) -> Option<SnapshotOwner> {
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let (parent, snap_dir) = dir.rsplit_once('/').unwrap_or(("", dir));
+    let join = |p: &str, f: &str| {
+        if p.is_empty() {
+            f.to_string()
+        } else {
+            format!("{p}/{f}")
+        }
+    };
+    if snap_dir == "__snapshots__" {
+        if let Some(stem) = name.strip_suffix(".snap") {
+            // Jest: `foo.test.ts.snap` -> `foo.test.ts`; the keys carry the titles.
+            let tests: Vec<String> = content
+                .lines()
+                .filter_map(|l| l.strip_prefix("exports[`"))
+                // `<describe> <title> 1`: the trailing counter goes, the title stays whole.
+                .filter_map(|l| l.split_once("`]").map(|(t, _)| t))
+                .map(|t| t.rsplit_once(' ').map_or(t, |(t, _)| t).to_string())
+                .collect();
+            return Some(SnapshotOwner {
+                test_file: join(parent, stem),
+                tests,
+            });
+        }
+        if let Some(stem) = name.strip_suffix(".ambr") {
+            let tests: Vec<String> = content
+                .lines()
+                .filter_map(|l| l.strip_prefix("# name: "))
+                .map(|t| t.split('[').next().unwrap_or(t).trim().to_string())
+                .collect();
+            return Some(SnapshotOwner {
+                test_file: join(parent, &format!("{stem}.py")),
+                tests,
+            });
+        }
+        return None;
+    }
+    if snap_dir == "snapshots" {
+        let stem = name.strip_suffix(".snap")?;
+        // insta: `crate__module__test.snap` (a `-N` suffix numbers inline variants).
+        let mut parts: Vec<&str> = stem.split("__").collect();
+        let test = parts.pop()?;
+        let test = test.rsplit_once('-').map_or(test, |(t, n)| {
+            if n.chars().all(|c| c.is_ascii_digit()) {
+                t
+            } else {
+                test
+            }
+        });
+        let module = parts.last().copied().unwrap_or("lib");
+        let test_file = if std::path::Path::new(&join(parent, &format!("{module}/mod.rs"))).exists()
+        {
+            join(parent, &format!("{module}/mod.rs"))
+        } else {
+            join(parent, &format!("{module}.rs"))
+        };
+        return Some(SnapshotOwner {
+            test_file,
+            tests: vec![test.to_string()],
+        });
+    }
+    None
+}
+
 pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
     const GATE: &str = "golden-output";
     let settings = &ctx.config.gates.golden_output;
@@ -405,6 +481,63 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
     let snapshot_only = !changed.iter().any(produces_output);
     for file in &changed {
         if file.kind == ChangeKind::Added {
+            // An added snapshot is fine for a new test; for a test that already existed it
+            // is an expectation written after the fact.
+            let matches_target = path_filter.matches(&file.path);
+            if !matches_target || exempt_filter.matches(&file.path) {
+                continue;
+            }
+            let Some(head) = ctx.git.head_content(&file.path)? else {
+                continue;
+            };
+            let Some(owner) = snapshot_owner(&file.path, &head) else {
+                continue;
+            };
+            // The owning test file must already exist on the base side.
+            if ctx.git.base_content(&owner.test_file)?.is_none() {
+                continue;
+            }
+            out.examined += 1;
+            let added_in_owner: Vec<String> = changed
+                .iter()
+                .find(|f| f.path == owner.test_file)
+                .and_then(|f| {
+                    let content = ctx.git.head_content(&f.path).ok().flatten()?;
+                    Some(
+                        content
+                            .lines()
+                            .enumerate()
+                            .filter(|(i, _)| f.added_lines.contains(&(i + 1)))
+                            .map(|(_, l)| l.to_string())
+                            .collect(),
+                    )
+                })
+                .unwrap_or_default();
+            let unmatched: Vec<&String> = owner
+                .tests
+                .iter()
+                .filter(|t| !added_in_owner.iter().any(|l| l.contains(t.as_str())))
+                .collect();
+            if unmatched.is_empty() {
+                continue;
+            }
+            if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_GOLDEN_UPDATE, &file.path) {
+                out.overrides.push(ov);
+                continue;
+            }
+            out.push(
+                ctx.overridable(settings.severity()),
+                "Snapshot Added For Existing Test",
+                Some(&file.path),
+                None,
+                format!(
+                    "Snapshot `{}` is new, but the test(s) it records ({}) already existed in `{}` and this change does not add them: the expectation was written after the behaviour.",
+                    file.path,
+                    unmatched.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", "),
+                    owner.test_file
+                ),
+                "Confirm the recorded output is the intended one, then record it: `allow-golden-update: <path> <reason>`.",
+            );
             continue;
         }
 
@@ -863,6 +996,32 @@ mod tests {
         for (k, _) in KEY_DIRECTIONS {
             assert!(seen.insert(*k), "`{k}` is classified twice");
         }
+    }
+
+    #[test]
+    fn snapshot_files_map_to_their_test_file_and_tests() {
+        let jest = snapshot_owner(
+            "web/src/__snapshots__/app.test.tsx.snap",
+            "exports[`renders the header 1`] = `<h1/>`;\n\nexports[`renders the footer 1`] = `<p/>`;\n",
+        )
+        .unwrap();
+        assert_eq!(jest.test_file, "web/src/app.test.tsx");
+        assert_eq!(jest.tests, vec!["renders the header", "renders the footer"]);
+        let insta = snapshot_owner(
+            "crates/x/src/snapshots/x__parser__parses_empty-2.snap",
+            "---\n",
+        )
+        .unwrap();
+        assert_eq!(insta.test_file, "crates/x/src/parser.rs");
+        assert_eq!(insta.tests, vec!["parses_empty"]);
+        let ambr = snapshot_owner(
+            "tests/__snapshots__/test_api.ambr",
+            "# name: test_get\n  'x'\n# ---\n# name: test_put[1]\n  'y'\n",
+        )
+        .unwrap();
+        assert_eq!(ambr.test_file, "tests/test_api.py");
+        assert_eq!(ambr.tests, vec!["test_get", "test_put"]);
+        assert!(snapshot_owner("tests/golden/out.txt", "").is_none());
     }
 
     #[test]

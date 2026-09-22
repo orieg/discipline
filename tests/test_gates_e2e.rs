@@ -1602,9 +1602,10 @@ fn ci_integrity_reads_gitlab_pipelines() {
         quiet.titles("ci-integrity")
     );
     assert_eq!(quiet.outcome("ci-integrity")["examined"], 1);
-    assert!(quiet.outcome("ci-integrity")["notes"]
+    // No `include:` in the fixture: nothing to name as not read.
+    assert!(!quiet.outcome("ci-integrity")["notes"]
         .to_string()
-        .contains("`include:`"));
+        .contains("not read"));
 
     repo.write(
         ".gitlab-ci.yml",
@@ -3654,6 +3655,186 @@ fn frozen_install_flags_and_npm_ci_cannot_be_dropped_silently() {
         ],
         "{:?}",
         run.violations("ci-integrity")
+    );
+}
+
+#[test]
+fn a_snapshot_added_for_an_existing_test_is_reported_and_one_for_a_new_test_is_not() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "web/src/app.test.tsx",
+        "test('renders the header', () => {\n  expect(render()).toMatchSnapshot();\n});\n",
+    );
+    repo.write(
+        "crates/x/src/parser.rs",
+        "#[test]\nfn parses_empty() {\n    insta::assert_snapshot!(parse(\"\"));\n}\n",
+    );
+    repo.commit("test: existing tests");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: new tests arrive with their snapshots.
+    repo.write(
+        "web/src/app.test.tsx",
+        "test('renders the header', () => {\n  expect(render()).toMatchSnapshot();\n});\ntest('renders the footer', () => {\n  expect(render()).toMatchSnapshot();\n});\n",
+    );
+    repo.write(
+        "web/src/__snapshots__/app.test.tsx.snap",
+        "exports[`renders the footer 1`] = `<p/>`;\n",
+    );
+    repo.write(
+        "crates/x/src/parser.rs",
+        "#[test]\nfn parses_empty() {\n    insta::assert_snapshot!(parse(\"\"));\n}\n#[test]\nfn parses_list() {\n    insta::assert_snapshot!(parse(\"[]\"));\n}\n",
+    );
+    repo.write(
+        "crates/x/src/snapshots/x__parser__parses_list.snap",
+        "---\nsource: parser.rs\n---\n[]\n",
+    );
+    repo.commit("test: new cases");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("golden-output").is_empty(),
+        "{:?}",
+        quiet.violations("golden-output")
+    );
+
+    // Snapshots appear for tests that already existed, with no new test added.
+    repo.write(
+        "web/src/__snapshots__/app.test.tsx.snap",
+        "exports[`renders the footer 1`] = `<p/>`;\n\nexports[`renders the header 1`] = `<h1/>`;\n",
+    );
+    repo.write(
+        "crates/x/src/snapshots/x__parser__parses_empty.snap",
+        "---\nsource: parser.rs\n---\n\n",
+    );
+    repo.commit("test: record");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut rows: Vec<(String, String)> = run
+        .violations("golden-output")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["title"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    rows.sort();
+    // Against the base both snapshot files are additions; each records a test that existed
+    // there and is not added by the change.
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "crates/x/src/snapshots/x__parser__parses_empty.snap".into(),
+                "Snapshot Added For Existing Test".into()
+            ),
+            (
+                "web/src/__snapshots__/app.test.tsx.snap".into(),
+                "Snapshot Added For Existing Test".into()
+            ),
+        ],
+        "{:?}",
+        run.violations("golden-output")
+    );
+}
+
+#[test]
+fn gitlab_local_includes_are_followed_and_rules_narrowing_is_reported() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(".gitlab-ci.yml", "stages: [test]\ninclude:\n  - local: /ci/test.yml\n  - remote: https://example.invalid/x.yml\nlint:\n  stage: test\n  script:\n    - cargo clippy\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n");
+    repo.write(
+        "ci/test.yml",
+        "unit-tests:\n  stage: test\n  script:\n    - cargo test --locked\n",
+    );
+    repo.commit("ci: pipeline");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "ci/test.yml",
+        "unit-tests:\n  stage: test\n  script:\n    - cargo test --locked\n  allow_failure: true\n",
+    );
+    repo.write(".gitlab-ci.yml", "stages: [test]\ninclude:\n  - local: /ci/test.yml\n  - remote: https://example.invalid/x.yml\nlint:\n  stage: test\n  script:\n    - cargo clippy\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n");
+    repo.commit("ci: soften");
+    let run = repo.check(&[]);
+    let titles = run.titles("ci-integrity");
+    assert!(
+        titles.contains(&"allow_failure Masks Failure".to_string()),
+        "{titles:?}"
+    );
+    let notes = notes_of(&run, "ci-integrity");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("remote: https://example.invalid/x.yml") && n.contains("not read")),
+        "{notes:?}"
+    );
+
+    // An existing verification job that gains rules: narrowed.
+    repo.write(".gitlab-ci.yml", "stages: [test]\ninclude:\n  - local: /ci/test.yml\n  - remote: https://example.invalid/x.yml\nlint:\n  stage: test\n  script:\n    - cargo clippy\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n    - when: never\n");
+    repo.commit("ci: narrow lint");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("ci-integrity")
+            .contains(&"Verification Job Narrowed".to_string()),
+        "{:?}",
+        run.violations("ci-integrity")
+    );
+}
+
+#[test]
+fn clippy_toml_and_an_inherited_configuration_are_judged() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "clippy.toml",
+        "too-many-arguments-threshold = 7\ndisallowed-methods = [\"std::env::set_var\"]\n",
+    );
+    repo.write("tsconfig.json", "{\"extends\": \"@tsconfig/strictest/tsconfig.json\", \"compilerOptions\": {\"strict\": true}}\n");
+    repo.commit("chore: toolchain");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "clippy.toml",
+        "too-many-arguments-threshold = 12\ndisallowed-methods = []\n",
+    );
+    repo.write("tsconfig.json", "{\"extends\": \"@tsconfig/recommended/tsconfig.json\", \"compilerOptions\": {\"strict\": true}}\n");
+    repo.commit("chore: loosen");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut rows: Vec<(String, String, String)> = run
+        .violations("toolchain-config")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["title"].as_str().unwrap().to_string(),
+                v["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "clippy.toml".into(),
+                "Toolchain Configuration Weakened".into(),
+                "error".into()
+            ),
+            (
+                "clippy.toml".into(),
+                "Toolchain Configuration Weakened".into(),
+                "error".into()
+            ),
+            (
+                "tsconfig.json".into(),
+                "Toolchain Configuration Changed (not analysed)".into(),
+                "warning".into()
+            ),
+        ],
+        "{:?}",
+        run.violations("toolchain-config")
     );
 }
 
