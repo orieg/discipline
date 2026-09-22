@@ -142,6 +142,12 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.command.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.command.timeout_seconds` | integer | *(unset)* | Execution timeout in seconds (default: 60s) |
 | `gates.command.zero_items_pattern` | string | *(unset)* | Pattern that indicates zero items were executed |
+| `gates.commit-provenance.agent_markers` | list | *(12 entries)* | Substrings of a trailer line, author name or author email that identify an agent-produced commit |
+| `gates.commit-provenance.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.commit-provenance.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.commit-provenance.required_trailers` | list | `[]` | Trailer keys every commit in the change must carry |
+| `gates.commit-provenance.review_trailer` | string | `"Reviewed-by"` | Trailer an agent-produced commit must carry, naming someone other than its author; empty switches the rule off (default: Reviewed-by) |
+| `gates.commit-provenance.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.config-integrity.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.config-integrity.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.config-integrity.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
@@ -424,6 +430,7 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 | `allow-stub:` / `discipline:allow(stub-bodies)` / `allow(stub-bodies)` | `stub-bodies` | Function name, or the file path |
 | `allow-swallow:` / `discipline:allow(error-swallowing)` / `allow(error-swallowing)` | `error-swallowing` | File path, or `path:line` of the handler |
 | `allow-agent-instructions:` / `discipline:allow(instruction-smuggling)` / `allow(instruction-smuggling)` | `instruction-smuggling` | File path, or `path:line` |
+| `allow-commit-provenance:` / `discipline:allow(commit-provenance)` / `allow(commit-provenance)` | `commit-provenance` | Commit SHA (7 or 40 characters) |
 | `allow-regression:` / `discipline:allow(bench-regression)` / `allow(bench-regression)` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
 | `allow-command:` / `discipline:allow(command)` / `allow(command)` | `command` | Subcommand or command line invocation, plus non-empty rationale |
 | `allow-dependency:` / `discipline:allow(dependency-delta)` / `allow(dependency-delta)` | `dependency-delta` | Dependency package name or manifest path |

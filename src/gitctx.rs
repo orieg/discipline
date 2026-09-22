@@ -17,6 +17,16 @@ pub enum ChangeKind {
     Renamed,
 }
 
+/// One commit of the range under review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitDetail {
+    pub sha: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub committer_email: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChangedFile {
     pub path: String,
@@ -781,6 +791,31 @@ impl GitCtx {
             let short = id_str.chars().take(7).collect::<String>();
             let msg = String::from_utf8_lossy(commit.message_bytes()).into_owned();
             out.push((short, msg));
+        }
+        Ok(out)
+    }
+
+    /// The commits between the base and `HEAD` with their authorship (empty when staged).
+    pub fn commit_details(&self) -> Result<Vec<CommitDetail>> {
+        let (Some(base), false) = (self.base, self.staged) else {
+            return Ok(Vec::new());
+        };
+        let mut walk = self.repo.revwalk()?;
+        walk.push_head()?;
+        walk.hide(base)?;
+        let mut out = Vec::new();
+        for oid in walk {
+            let oid = oid?;
+            let commit = self.repo.find_commit(oid)?;
+            let author = commit.author();
+            let committer = commit.committer();
+            out.push(CommitDetail {
+                sha: format!("{oid}"),
+                author_name: author.name().unwrap_or("").to_string(),
+                author_email: author.email().unwrap_or("").to_string(),
+                committer_email: committer.email().unwrap_or("").to_string(),
+                message: String::from_utf8_lossy(commit.message_bytes()).into_owned(),
+            });
         }
         Ok(out)
     }

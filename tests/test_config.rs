@@ -281,6 +281,7 @@ name = "my-test-proj"
     for g in GATES.iter().filter(|g| g.available) {
         if g.id == "issue-link"
             || g.id == "provenance-tags"
+            || g.id == "commit-provenance"
             || g.id == "archive-contents"
             || g.id == "manifest-sync"
             || g.id == "version-lockstep"
@@ -481,6 +482,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("agent-scratch", true, Severity::Error),
     ("shell-secrets", true, Severity::Error),
     ("issue-link", false, Severity::Error),
+    ("commit-provenance", false, Severity::Error),
     ("provenance-tags", false, Severity::Error),
     ("pr-checklist", false, Severity::Error),
     ("config-integrity", true, Severity::Error),

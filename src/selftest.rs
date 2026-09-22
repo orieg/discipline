@@ -330,6 +330,14 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: the subject is never a trailer, the last paragraph is",
+        || {
+            use crate::guards::commit_provenance::trailers;
+            Ok(trailers("fix: x").is_empty()
+                && trailers("fix: x\n\nReviewed-by: A <a@x>\n").len() == 1)
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;

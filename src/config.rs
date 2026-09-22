@@ -132,6 +132,13 @@ pub const GATES: &[GateInfo] = &[
         available: true,
     },
     GateInfo {
+        id: "commit-provenance",
+        suite: Suite::Hygiene,
+        summary: "commits carry the required trailers; an agent-produced commit carries a review by someone else",
+        languages: "any",
+        available: true,
+    },
+    GateInfo {
         id: "config-integrity",
         suite: Suite::Integrity,
         summary: "a change cannot weaken its own discipline.toml without a token",
@@ -421,6 +428,7 @@ pub struct Gates {
     pub ci_skip_set: CiSkipSetGate,
     pub shell_secrets: ShellSecretsGate,
     pub issue_link: IssueLinkGate,
+    pub commit_provenance: CommitProvenanceGate,
     pub provenance_tags: ProvenanceTagsGate,
     pub archive_contents: ArchiveContentsGate,
     pub manifest_sync: ManifestSyncGate,
@@ -470,6 +478,7 @@ impl_gate_settings!(
     CiSkipSetGate,
     ShellSecretsGate,
     IssueLinkGate,
+    CommitProvenanceGate,
     ProvenanceTagsGate,
     ArchiveContentsGate,
     ManifestSyncGate,
@@ -1149,6 +1158,51 @@ pub struct IssueLinkGate {
     pub require_in_commit_if_no_pr: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CommitProvenanceGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Trailer keys every commit in the change must carry (`Signed-off-by`, `Agent-Tool`).
+    pub required_trailers: Vec<String>,
+    /// Substrings (case-insensitive) of a trailer line, the author name or the author
+    /// email that identify an agent-produced commit.
+    pub agent_markers: Vec<String>,
+    /// Trailer an agent-produced commit must carry, naming someone other than its
+    /// author. Empty switches the agent rule off.
+    pub review_trailer: String,
+}
+
+impl Default for CommitProvenanceGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            required_trailers: Vec::new(),
+            agent_markers: [
+                "Agent-Tool:",
+                "Agent:",
+                "Generated-by:",
+                "Co-authored-by: Claude",
+                "Co-authored-by: Copilot",
+                "Co-authored-by: Gemini",
+                "Co-authored-by: Codex",
+                "Co-authored-by: Cursor",
+                "Co-authored-by: aider",
+                "[bot]",
+                "noreply@anthropic.com",
+                "noreply@openai.com",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            review_trailer: "Reviewed-by".to_string(),
+        }
+    }
+}
+
 impl Default for IssueLinkGate {
     fn default() -> Self {
         Self {
@@ -1526,6 +1580,7 @@ impl Gates {
             "agent-scratch" => &self.agent_scratch,
             "shell-secrets" => &self.shell_secrets,
             "issue-link" => &self.issue_link,
+            "commit-provenance" => &self.commit_provenance,
             "config-integrity" => &self.config_integrity,
             "toolchain-config" => &self.toolchain_config,
             "stub-bodies" => &self.stub_bodies,

@@ -5,6 +5,7 @@ pub mod ci_integrity;
 pub mod ci_skip_set;
 pub mod claim_registry;
 pub mod command;
+pub mod commit_provenance;
 pub mod dependency;
 pub mod error_swallowing;
 pub mod hygiene;
@@ -332,6 +333,7 @@ pub fn run_checks(
             "agent-scratch" => hygiene::agent_scratch(ctx),
             "shell-secrets" => shell_secrets::evaluate_shell_secrets(ctx),
             "issue-link" => issue_link::evaluate_issue_link(ctx),
+            "commit-provenance" => commit_provenance::commit_provenance(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
             "toolchain-config" => toolchain_config::toolchain_config(ctx),
             "stub-bodies" => stub_bodies::stub_bodies(ctx),
@@ -427,6 +429,8 @@ pub fn run_checks(
             "version-lockstep"
         } else if note.contains("allow-scope") {
             "scope-confinement"
+        } else if note.contains("allow-commit-provenance") {
+            "commit-provenance"
         } else if note.contains("allow-agent-instructions") {
             "instruction-smuggling"
         } else if note.contains("allow-swallow") {
@@ -464,6 +468,7 @@ pub fn run_checks(
                         | "stub-bodies"
                         | "error-swallowing"
                         | "instruction-smuggling"
+                        | "commit-provenance"
                         | "golden-output"
                         | "bench-regression"
                         | "command"

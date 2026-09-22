@@ -2546,6 +2546,79 @@ fn instruction_smuggling_reports_invisible_text_instruction_files_and_phrases_by
     assert!(!left.contains(&"Agent Instructions Changed".to_string()));
 }
 
+// ---- commit-provenance -----------------------------------------------------
+
+#[test]
+fn commit_provenance_reads_trailers_and_authorship_of_every_commit_in_the_range() {
+    const CFG: &str =
+        "[gates.commit-provenance]\nenabled = true\nrequired_trailers = [\"Signed-off-by\"]\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("discipline.toml", &format!("{CONFIG_HEAD}{CFG}"));
+    repo.commit("chore: policy\n\nSigned-off-by: Owner <owner@example.test>");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: a signed-off human commit, and an agent commit reviewed by
+    // someone else.
+    repo.write("a.txt", "a\n");
+    repo.commit("feat: a\n\nSigned-off-by: Owner <owner@example.test>");
+    repo.write("b.txt", "b\n");
+    repo.commit(
+        "feat: b\n\nAgent-Tool: coder 1.2\nReviewed-by: Owner <owner@example.test>\nSigned-off-by: Coder Bot <bot@example.test>",
+    );
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("commit-provenance").is_empty(),
+        "{:?}",
+        quiet.violations("commit-provenance")
+    );
+    assert_eq!(quiet.outcome("commit-provenance")["examined"], 2);
+
+    // A commit without the trailer, an agent commit without review, and an agent
+    // commit that reviews itself.
+    repo.write("c.txt", "c\n");
+    repo.commit("feat: c");
+    repo.write("d.txt", "d\n");
+    repo.commit("feat: d\n\nCo-authored-by: Claude <noreply@anthropic.com>\nSigned-off-by: Owner <owner@example.test>");
+    repo.write("e.txt", "e\n");
+    repo.commit("feat: e\n\nAgent-Tool: coder 1.2\nReviewed-by: t <t@example.invalid>\nSigned-off-by: t <t@example.invalid>");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut titles = run.titles("commit-provenance");
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec![
+            "Agent Commit Reviewed By Its Author",
+            "Agent Commit Without Review",
+            "Commit Trailer Missing",
+        ]
+    );
+    assert_eq!(run.outcome("commit-provenance")["examined"], 5);
+
+    // The directive names the commit.
+    let c_sha = repo.git_output(&["rev-parse", "--short=7", "HEAD~2"]);
+    let body = format!(
+        "allow-commit-provenance: {} imported from the vendor drop, no DCO available",
+        c_sha.trim()
+    );
+    let lifted = repo.check_with_pr(&[], &body);
+    assert_eq!(
+        lifted.violations("commit-provenance").len(),
+        2,
+        "{:?}",
+        lifted.violations("commit-provenance")
+    );
+
+    // Staged mode has no commit range: not evaluated, never a pass.
+    repo.write("f.txt", "f\n");
+    repo.git(&["add", "f.txt"]);
+    let staged = repo.check(&["--staged"]);
+    assert!(staged.outcome("commit-provenance")["notes"]
+        .to_string()
+        .contains("not evaluated"));
+}
+
 // ---- override policy -------------------------------------------------------
 
 /// A change that disables two gates and excuses both from its commit body.
@@ -3167,7 +3240,7 @@ fn override_record_audit_trail_and_step_outputs() {
         .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
     assert!(run
         .stdout
-        .contains("gates:  22 passed, 0 failed, 12 disabled, 1 not evaluated (21 items examined)"));
+        .contains("gates:  22 passed, 0 failed, 13 disabled, 1 not evaluated (21 items examined)"));
     assert!(run.stdout.contains("overrides: 1"));
 
     // Check GITHUB_OUTPUT contents
@@ -3185,7 +3258,7 @@ fn override_record_audit_trail_and_step_outputs() {
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 22 passed, 0 failed, 12 disabled, 1 not evaluated (21 items examined)"
+            "**Summary:** 22 passed, 0 failed, 13 disabled, 1 not evaluated (21 items examined)"
         ),
         "{step_summary}"
     );

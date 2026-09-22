@@ -148,6 +148,9 @@ no command\-line secrets or unverified piped scripts in shell, docker, or CI (hy
 .B [gates.issue-link]
 PR title or description links a tracking issue (#123, Fixes #123) (hygiene; default: off; languages: any)
 .TP
+.B [gates.commit-provenance]
+commits carry the required trailers; an agent\-produced commit carries a review by someone else (hygiene; default: off; languages: any)
+.TP
 .B [gates.config-integrity]
 a change cannot weaken its own discipline.toml without a token (integrity; default: on, error; languages: any)
 .TP

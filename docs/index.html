@@ -1135,8 +1135,8 @@ discipline self-test</div>
 
     <div class="gate-search-wrapper">
 <!-- generated:gate-search -->
-      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 35 gates by id, category, language, or rule..." aria-label="Search active gates">
-      <span id="gate-count" class="gate-count">Showing 35 of 35 gates</span>
+      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 36 gates by id, category, language, or rule..." aria-label="Search active gates">
+      <span id="gate-count" class="gate-count">Showing 36 of 36 gates</span>
 <!-- /generated -->
     </div>
 
@@ -1229,6 +1229,13 @@ discipline self-test</div>
             <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>PR title or description links a tracking issue (#123, Fixes #123)</td>
+          </tr>
+          <tr>
+            <td class="gate-id">commit-provenance</td>
+            <td>Hygiene</td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
+            <td><span class="gate-badge badge-lang">Any</span></td>
+            <td>commits carry the required trailers; an agent-produced commit carries a review by someone else</td>
           </tr>
           <tr>
             <td class="gate-id">config-integrity</td>

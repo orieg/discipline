@@ -886,6 +886,11 @@ pub struct Protection {
     pub force_push_blocked: bool,
     pub deletion_blocked: bool,
     pub pull_request_required: bool,
+    /// Approving reviews a pull request needs (`None` when not visible).
+    pub required_approvals: Option<u64>,
+    pub code_owner_review: bool,
+    pub last_push_approval: bool,
+    pub dismiss_stale_reviews: bool,
     pub signatures_required: bool,
     /// Who can bypass the rules (`None` when not visible to this token).
     pub bypass: Option<Vec<String>>,
@@ -959,7 +964,24 @@ pub fn github_protection(
             }
             "non_fast_forward" => p.force_push_blocked = true,
             "deletion" => p.deletion_blocked = true,
-            "pull_request" => p.pull_request_required = true,
+            "pull_request" => {
+                p.pull_request_required = true;
+                let flag = |k: &str| {
+                    params
+                        .and_then(|p| p.get(k))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                };
+                if let Some(n) = params
+                    .and_then(|p| p.get("required_approving_review_count"))
+                    .and_then(|v| v.as_u64())
+                {
+                    p.required_approvals = Some(p.required_approvals.unwrap_or(0).max(n));
+                }
+                p.code_owner_review |= flag("require_code_owner_review");
+                p.last_push_approval |= flag("require_last_push_approval");
+                p.dismiss_stale_reviews |= flag("dismiss_stale_reviews_on_push");
+            }
             "required_signatures" => p.signatures_required = true,
             _ => {}
         }
@@ -1027,8 +1049,18 @@ pub fn github_protection(
                 if enabled("allow_deletions") == Some(false) {
                     p.deletion_blocked = true;
                 }
-                if full.get("required_pull_request_reviews").is_some() {
+                if let Some(reviews) = full.get("required_pull_request_reviews") {
                     p.pull_request_required = true;
+                    let flag = |k: &str| reviews.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+                    if let Some(n) = reviews
+                        .get("required_approving_review_count")
+                        .and_then(|v| v.as_u64())
+                    {
+                        p.required_approvals = Some(p.required_approvals.unwrap_or(0).max(n));
+                    }
+                    p.code_owner_review |= flag("require_code_owner_reviews");
+                    p.last_push_approval |= flag("require_last_push_approval");
+                    p.dismiss_stale_reviews |= flag("dismiss_stale_reviews");
                 }
                 if enabled("required_signatures") == Some(true) {
                     p.signatures_required = true;
@@ -1462,6 +1494,62 @@ pub fn protection_findings(
         )
         .fix("Disallow direct pushes to the branch; directives are read from the PR description.")
     });
+    if p.pull_request_required && kind != ForgeKind::GitLab {
+        // Review rules: what a pull request needs before the change under review can
+        // merge. Each is what makes an override or an agent commit answer to a person.
+        out.push(match p.required_approvals {
+            Some(n) if n >= 1 => Finding::new(
+                "review",
+                Status::Pass,
+                format!("a pull request needs {n} approving review(s)"),
+            ),
+            Some(_) => Finding::new(
+                "review",
+                Status::Warn,
+                "a pull request needs no approving review",
+            )
+            .fix("Require at least one approving review; `directives.require_approval` reads it."),
+            None => Finding::new(
+                "review",
+                Status::Info,
+                "the approving-review count is not visible to this token",
+            ),
+        });
+        out.push(if p.code_owner_review {
+            Finding::new(
+                "code-owner-review",
+                Status::Pass,
+                "code owners must approve changes to the paths they own",
+            )
+        } else {
+            Finding::new(
+                "code-owner-review",
+                Status::Warn,
+                "a CODEOWNERS entry does not require the owner's approval",
+            )
+            .fix("Require code-owner review; without it CODEOWNERS on discipline.toml and the workflows is a notification, not a gate.")
+        });
+        out.push(if p.last_push_approval {
+            Finding::new(
+                "last-push-approval",
+                Status::Pass,
+                "the most recent push needs an approval of its own",
+            )
+        } else if p.dismiss_stale_reviews {
+            Finding::new(
+                "last-push-approval",
+                Status::Pass,
+                "a push dismisses earlier approvals",
+            )
+        } else {
+            Finding::new(
+                "last-push-approval",
+                Status::Warn,
+                "an approval survives a later push; a commit added after the review merges on the review",
+            )
+            .fix("Require approval of the last push, or dismiss stale reviews on push.")
+        });
+    }
     out.push(if kind == ForgeKind::GitLab {
         Finding::new(
             "bypass",
@@ -1907,8 +1995,42 @@ jobs:
              "required_status_checks": [{"context": "ci-gate"}]}},
           {"type": "non_fast_forward", "ruleset_id": 7},
           {"type": "deletion", "ruleset_id": 7},
-          {"type": "pull_request", "ruleset_id": 7, "parameters": {}}
+          {"type": "pull_request", "ruleset_id": 7, "parameters": {"required_approving_review_count": 1, "require_code_owner_review": true, "require_last_push_approval": true}}
         ])
+    }
+
+    #[test]
+    fn review_rules_are_read_from_rulesets_and_classic_protection() {
+        // A bare `pull_request` rule: reviews required, but nothing about them.
+        let bare = serde_json::json!([{"type": "pull_request", "ruleset_id": 7, "parameters": {}}]);
+        let gh = github(bare, serde_json::json!([]));
+        let p = github_protection(&gh, &forge(ForgeKind::GitHub), "main").unwrap();
+        assert!(p.pull_request_required && !p.code_owner_review && !p.last_push_approval);
+        let jobs = analyse_workflows(&wf(WF), false).jobs;
+        let f = protection_findings(ForgeKind::GitHub, &p, &jobs);
+        let status = |id: &str| f.iter().find(|f| f.id == id).unwrap().status;
+        assert_eq!(status("review"), Status::Info);
+        assert_eq!(status("code-owner-review"), Status::Warn);
+        assert_eq!(status("last-push-approval"), Status::Warn);
+
+        // Classic protection carries the same three under other key names.
+        let mut gh = github(serde_json::json!([]), serde_json::json!([]));
+        gh.responses.insert(
+            "github:repos/o/r/branches/main".into(),
+            serde_json::json!({"protected": true, "protection": {"enabled": true}}),
+        );
+        gh.responses.insert(
+            "github:repos/o/r/branches/main/protection".into(),
+            serde_json::json!({"required_pull_request_reviews": {"required_approving_review_count": 2, "require_code_owner_reviews": true, "dismiss_stale_reviews": true}}),
+        );
+        let p = github_protection(&gh, &forge(ForgeKind::GitHub), "main").unwrap();
+        assert_eq!(p.required_approvals, Some(2));
+        assert!(p.code_owner_review && p.dismiss_stale_reviews && !p.last_push_approval);
+        let f = protection_findings(ForgeKind::GitHub, &p, &jobs);
+        let status = |id: &str| f.iter().find(|f| f.id == id).unwrap().status;
+        assert_eq!(status("review"), Status::Pass);
+        assert_eq!(status("code-owner-review"), Status::Pass);
+        assert_eq!(status("last-push-approval"), Status::Pass);
     }
 
     #[test]

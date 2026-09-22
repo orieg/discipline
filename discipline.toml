@@ -39,6 +39,10 @@ enabled = true
 [gates.provenance-tags]
 enabled = true
 
+# An agent-produced commit (by trailer or authorship) carries a review by someone else.
+[gates.commit-provenance]
+enabled = true
+
 [gates.pii]
 exempt_paths = ["tests/fixtures/**"]
 

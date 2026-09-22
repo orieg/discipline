@@ -28,6 +28,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`agent-scratch`](#agent-scratch) | hygiene | **shipped** | any | agent scratch state is never tracked |
 | [`shell-secrets`](#shell-secrets) | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
+| [`commit-provenance`](#commit-provenance) | hygiene | **shipped** | any | commits carry the required trailers; an agent-produced commit carries a review by someone else |
 | [`config-integrity`](#config-integrity) | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
 | [`stub-bodies`](#stub-bodies) | agent-guard | **shipped** | Rust, Python, JS/TS, Go, Java, C# | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
 | [`error-swallowing`](#error-swallowing) | agent-guard | **shipped** | Rust, Python, JS/TS, Go, Java, C# | no new empty error handler or discarded Result outside tests |
@@ -543,6 +544,32 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - `warning`: Heuristic argument and piping patterns (`ARGV-ENV`, `ARGV-DOCKER`, `ARGV-INLINE`, `FLAG-PASSWD`, `INJECT-PIPE`, `INJECT-XARGS`).
 - **Lifting directive:** `secrets-argv-ok: <file-or-line> <reason>` in PR body or commit, or inline `discipline:allow(shell-secrets)`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_secret_patterns`, `allow_patterns`, `diff_only`.
+
+#### `commit-provenance`
+- **Rule:** Every commit between the base and `HEAD` carries the trailers the repository requires, and a commit that identifies itself as agent-produced carries a review trailer naming someone other than its author. Trailers are the last paragraph of the message when every line of it is `Key: value`; the subject paragraph is never read as one.
+- **Languages:** Any (commit metadata).
+- **What it catches:**
+  - `Commit Trailer Missing`: a commit without one of `required_trailers` (`Signed-off-by`, `Agent-Tool`, ...).
+  - `Agent Commit Without Review`: a commit matching an `agent_markers` entry (a trailer line, the author name or the author email; defaults cover `Agent-Tool:`, `Generated-by:`, `Co-authored-by: Claude` / `Copilot` / `Gemini` / `Codex` / `Cursor` / `aider`, `[bot]`, `noreply@anthropic.com`, `noreply@openai.com`) with no `review_trailer` (`Reviewed-by` by default).
+  - `Agent Commit Reviewed By Its Author`: the review trailer names the commit's own author (by name or email).
+- **Failing commit (rejected):**
+  ```text
+  feat: parser
+
+  Agent-Tool: coder 1.2
+  Reviewed-by: Coder Bot <bot@example.test>
+  ```
+- **Passing PR body (accepted):**
+  ```text
+  allow-commit-provenance: 3fa9c1d imported from the vendor drop, no DCO available
+  ```
+- **What it does NOT catch:**
+  - A false trailer: trailers are self-asserted text. This gate makes a missing statement visible; the signals a change cannot forge are the forge's review state (`directives.require_approval`) and commit signatures and review rules on the branch (`discipline doctor`: `signed-commits`, `review`, `code-owner-review`, `last-push-approval`).
+  - An agent commit that carries none of the markers.
+  - Anything in a `--staged` check, which has no commit range: reported as not evaluated.
+- **Lifting directive:** `allow-commit-provenance: <sha> <reason>` (7 or 40 characters).
+- **Default:** off (which trailers a repository requires is its own policy), severity `error`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `required_trailers`, `agent_markers`, `review_trailer`.
 
 #### `issue-link`
 - **Rule:** Every pull request title or description must reference a tracking issue (`#123`, `Fixes #123`, `Closes #123`), or carry an explicit `no-issue:` rationale.

@@ -34,6 +34,7 @@ pub fn generate_schema() -> Value {
             "ci-skip-set" => "#/$defs/CiSkipSetGate",
             "shell-secrets" => "#/$defs/ShellSecretsGate",
             "issue-link" => "#/$defs/IssueLinkGate",
+            "commit-provenance" => "#/$defs/CommitProvenanceGate",
             "provenance-tags" => "#/$defs/ProvenanceTagsGate",
             "archive-contents" => "#/$defs/ArchiveContentsGate",
             "manifest-sync" => "#/$defs/ManifestSyncGate",
@@ -404,6 +405,18 @@ pub fn generate_schema() -> Value {
                     "extra_secret_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional custom regex patterns for sensitive secret variable names" },
                     "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Custom regex patterns exempted from violation" },
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" }
+                }
+            },
+            "CommitProvenanceGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "required_trailers": { "$ref": "#/$defs/StringListOrReset", "description": "Trailer keys every commit in the change must carry" },
+                    "agent_markers": { "$ref": "#/$defs/StringListOrReset", "description": "Substrings of a trailer line, author name or author email that identify an agent-produced commit" },
+                    "review_trailer": { "type": "string", "description": "Trailer an agent-produced commit must carry, naming someone other than its author; empty switches the rule off (default: Reviewed-by)" }
                 }
             },
             "IssueLinkGate": {

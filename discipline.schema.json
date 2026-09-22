@@ -375,6 +375,34 @@
       },
       "type": "object"
     },
+    "CommitProvenanceGate": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_markers": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Substrings of a trailer line, author name or author email that identify an agent-produced commit"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "required_trailers": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Trailer keys every commit in the change must carry"
+        },
+        "review_trailer": {
+          "description": "Trailer an agent-produced commit must carry, naming someone other than its author; empty switches the rule off (default: Reviewed-by)",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "DeletionGate": {
       "additionalProperties": false,
       "properties": {
@@ -1234,6 +1262,14 @@
             }
           ],
           "description": "fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet"
+        },
+        "commit-provenance": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CommitProvenanceGate"
+            }
+          ],
+          "description": "commits carry the required trailers; an agent-produced commit carries a review by someone else"
         },
         "config-integrity": {
           "allOf": [
