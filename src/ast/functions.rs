@@ -179,8 +179,44 @@ pub fn classify_body(body: Node, src: &str, spec: &FunctionSpec) -> BodyShape {
             let t = text(stmts[0], src).trim();
             (spec.classify)(t).unwrap_or(BodyShape::Substantive)
         }
-        _ => BodyShape::Substantive,
+        // A stub padded with statements that cannot affect the result (a log line, a bare
+        // assignment) is still a stub; one preceded by a call is not.
+        _ => {
+            let last = text(stmts[stmts.len() - 1], src).trim();
+            match (spec.classify)(last) {
+                Some(BodyShape::Stub(marker))
+                    if stmts[..stmts.len() - 1]
+                        .iter()
+                        .all(|st| inert_statement(text(*st, src))) =>
+                {
+                    BodyShape::Stub(marker)
+                }
+                _ => BodyShape::Substantive,
+            }
+        }
     }
+}
+
+/// A statement that records or assigns and calls nothing: a logging line, or an
+/// assignment whose right-hand side has no call.
+fn inert_statement(t: &str) -> bool {
+    let t = t.trim().trim_end_matches(';').trim();
+    if super::handlers::is_logging_statement(t) {
+        return true;
+    }
+    let assignment = t.starts_with("let ")
+        || t.starts_with("var ")
+        || t.starts_with("val ")
+        || t.starts_with("const ")
+        || t.starts_with("my ")
+        || t.starts_with('$')
+        || t.starts_with("int ")
+        || t.starts_with("auto ")
+        || t.contains(" = ")
+        || t.contains(" := ");
+    assignment
+        && t.split_once(['=', ':'])
+            .is_some_and(|(_, rhs)| !rhs.contains('('))
 }
 
 fn has_word(hay: &str, needles: &[&str]) -> bool {
@@ -727,5 +763,49 @@ mod pack_tests {
             "class RepoTest {\n    @Test\n    fun finds() {\n        assertEquals(1, 1)\n    }\n}\n",
         );
         assert_eq!(got, vec![("finds".into(), BodyShape::Substantive, true)]);
+    }
+
+    #[test]
+    fn a_stub_padded_with_logging_or_a_bare_assignment_is_a_stub() {
+        let rs = shapes(
+            "src/lib.rs",
+            "fn a() { log::warn!(\"todo\"); todo!() }\nfn b() { init(); todo!() }\nfn c() { let n = 3; eprintln!(\"later {n}\"); unimplemented!() }\nfn d() { let n = compute(); todo!() }\n",
+        );
+        assert_eq!(
+            rs,
+            vec![
+                ("a".into(), stub("todo!()"), false),
+                ("b".into(), BodyShape::Substantive, false),
+                ("c".into(), stub("unimplemented!()"), false),
+                ("d".into(), BodyShape::Substantive, false),
+            ]
+        );
+        let py = shapes(
+            "pkg/a.py",
+            "def a():\n    print(\"later\")\n    raise NotImplementedError\n\ndef b():\n    x = 1\n    raise NotImplementedError\n\ndef c():\n    setup()\n    raise NotImplementedError\n",
+        );
+        assert_eq!(
+            py,
+            vec![
+                ("a".into(), stub("raise NotImplementedError"), false),
+                ("b".into(), stub("raise NotImplementedError"), false),
+                ("c".into(), BodyShape::Substantive, false),
+            ]
+        );
+        let ts = shapes(
+            "src/a.ts",
+            "export function a() {\n  console.warn('todo');\n  throw new Error('not implemented');\n}\nexport function b() {\n  const r = prepare();\n  throw new Error('not implemented');\n}\n",
+        );
+        assert_eq!(
+            ts,
+            vec![
+                (
+                    "a".into(),
+                    stub("throw new Error('not implemented')"),
+                    false
+                ),
+                ("b".into(), BodyShape::Substantive, false),
+            ]
+        );
     }
 }

@@ -40,6 +40,64 @@ pub struct HandlerSpec {
     pub silences: fn(&str) -> bool,
 }
 
+/// Statement heads that only record: a logging or printing call. A handler made of these
+/// alone logs and swallows; a stub padded with these is still a stub.
+pub const LOGGING_VOCAB: &[&str] = &[
+    "log::",
+    "log.",
+    "logger.",
+    "logging.",
+    "tracing::",
+    "warn!(",
+    "info!(",
+    "debug!(",
+    "error!(",
+    "trace!(",
+    "println!(",
+    "eprintln!(",
+    "print!(",
+    "eprint!(",
+    "console.",
+    "print(",
+    "println(",
+    "pprint(",
+    "fmt.Print",
+    "log.Print",
+    "slog.",
+    "zap.",
+    "System.out.print",
+    "System.err.print",
+    "Console.Write",
+    "Debug.Write",
+    "Trace.Write",
+    "_logger.",
+    "Log.",
+    "logger::",
+    "error_log(",
+    "printf(",
+    "fprintf(",
+    "puts ",
+    "puts(",
+    "warn ",
+    "p ",
+    "pp ",
+    "echo ",
+    "var_dump(",
+    "print_r(",
+    "std::cerr",
+    "std::cout",
+    "spdlog::",
+    "LOG(",
+    "LOG_",
+    "NSLog(",
+];
+
+/// Whether a statement's text is a logging or printing call and nothing else.
+pub fn is_logging_statement(t: &str) -> bool {
+    let t = t.trim();
+    LOGGING_VOCAB.iter().any(|v| t.starts_with(v))
+}
+
 fn text<'a>(node: Node, src: &'a str) -> &'a str {
     node.utf8_text(src.as_bytes()).unwrap_or("")
 }
@@ -48,8 +106,9 @@ fn first_line(t: &str) -> String {
     t.lines().next().unwrap_or("").trim().to_string()
 }
 
-/// Whether a handler body does nothing with the error.
-fn body_swallows(body: Node, src: &str, spec: &HandlerSpec) -> bool {
+/// How a handler body fails the error: `empty-handler` when it does nothing with it,
+/// `logging-handler` when every statement only logs it.
+fn body_swallows(body: Node, src: &str, spec: &HandlerSpec) -> Option<&'static str> {
     let mut cursor = body.walk();
     let stmts: Vec<Node> = body
         .named_children(&mut cursor)
@@ -60,20 +119,36 @@ fn body_swallows(body: Node, src: &str, spec: &HandlerSpec) -> bool {
     match stmts.len() {
         // No statement at all (a comment inside the block does not count), or a body
         // that is a bare expression rather than a statement list.
-        0 if has_other_named => true,
+        0 if has_other_named => Some("empty-handler"),
         0 => {
             let inner = text(body, src)
                 .trim()
                 .trim_start_matches('{')
                 .trim_end_matches('}')
                 .trim();
-            inner.is_empty() || spec.trivial.contains(&inner.trim_end_matches(';').trim())
+            let inner = inner.trim_end_matches(';').trim();
+            if inner.is_empty() || spec.trivial.contains(&inner) {
+                Some("empty-handler")
+            } else if is_logging_statement(inner) {
+                Some("logging-handler")
+            } else {
+                None
+            }
         }
         1 => {
             let t = text(stmts[0], src).trim().trim_end_matches(';').trim();
-            spec.trivial.contains(&t)
+            if spec.trivial.contains(&t) {
+                Some("empty-handler")
+            } else if is_logging_statement(t) {
+                Some("logging-handler")
+            } else {
+                None
+            }
         }
-        _ => false,
+        // Several statements that all only log: the error is recorded and dropped. Any
+        // other statement (a re-raise, a return of the error, a state change) handles it.
+        _ if stmts.iter().all(|st| is_logging_statement(text(*st, src))) => Some("logging-handler"),
+        _ => None,
     }
 }
 
@@ -107,13 +182,20 @@ pub fn extract(
                     let t = text(node, src).replace("::", "");
                     let after = t.split_once([':', '{']).map(|(_, r)| r).unwrap_or("");
                     let after = after.trim().trim_end_matches('}').trim();
-                    after.is_empty() || spec.trivial.contains(&after.trim_end_matches(';').trim())
+                    let after = after.trim_end_matches(';').trim();
+                    if after.is_empty() || spec.trivial.contains(&after) {
+                        Some("empty-handler")
+                    } else if is_logging_statement(after) {
+                        Some("logging-handler")
+                    } else {
+                        None
+                    }
                 }
             };
-            if swallows && !expects_the_error(node, src) {
+            if let Some(kind) = swallows.filter(|_| !expects_the_error(node, src)) {
                 out.push(SwallowSite {
                     line,
-                    kind: "empty-handler",
+                    kind,
                     snippet: first_line(text(node, src)),
                 });
             }
@@ -422,5 +504,29 @@ mod pack_tests {
             "class LoaderTest {\n    @Test\n    fun t() {\n        try { g() } catch (e: Exception) { }\n        runCatching { g() }.getOrNull()\n    }\n}\n",
         );
         assert!(test.is_empty(), "{test:?}");
+    }
+
+    #[test]
+    fn a_handler_that_only_logs_swallows_and_one_that_logs_then_acts_does_not() {
+        let py = sites(
+            "pkg/a.py",
+            "def f():\n    try:\n        g()\n    except ValueError as e:\n        log.warning(e)\n    try:\n        g()\n    except OSError as e:\n        logger.error(\"failed: %s\", e)\n        print(e)\n    try:\n        g()\n    except KeyError as e:\n        log.error(e)\n        raise\n    try:\n        g()\n    except IOError as e:\n        log.error(e)\n        return None\n",
+        );
+        assert_eq!(py, vec![(4, "logging-handler"), (8, "logging-handler")]);
+        let js = sites(
+            "src/a.ts",
+            "async function f() {\n  try { await g(); } catch (e) { console.error(e); }\n  try { await g(); } catch (e) { console.error(e); throw e; }\n  try { await g(); } catch (e) { console.error(e); state.failed = true; }\n}\n",
+        );
+        assert_eq!(js, vec![(2, "logging-handler")]);
+        let java = sites(
+            "src/main/java/A.java",
+            "class A {\n  void f() {\n    try { g(); } catch (IOException e) { log.warn(\"x\", e); }\n    try { g(); } catch (IOException e) { LOG.warn(e); metrics.inc(); }\n  }\n}\n",
+        );
+        assert_eq!(java, vec![(3, "logging-handler")]);
+        let kt = sites(
+            "src/main/kotlin/A.kt",
+            "fun f() {\n    try { g() } catch (e: Exception) { println(e) }\n    try { g() } catch (e: Exception) { log.error(e); throw e }\n}\n",
+        );
+        assert_eq!(kt, vec![(2, "logging-handler")]);
     }
 }

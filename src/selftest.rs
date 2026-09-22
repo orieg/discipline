@@ -422,6 +422,35 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "stub-bodies: a stub padded with a log line is a stub, one preceded by a call is not",
+        || {
+            use crate::ast::functions::BodyShape;
+            let v = AssertVocabulary::default();
+            let padded = analyze("fn f() { log::warn!(\"todo\"); todo!() }", &v)?.functions;
+            let real = analyze("fn f() { init(); todo!() }", &v)?.functions;
+            Ok(matches!(padded[0].shape, BodyShape::Stub(_))
+                && matches!(real[0].shape, BodyShape::Substantive))
+        },
+    ),
+    (
+        "error-swallowing: a handler that only logs swallows, one that logs and re-raises does not",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("pkg/a.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let logs = pack
+                .extract("pkg/a.py", "def f():\n    try:\n        g()\n    except E as e:\n        log.error(e)\n", &v)?
+                .swallowed;
+            let acts = pack
+                .extract("pkg/a.py", "def f():\n    try:\n        g()\n    except E as e:\n        log.error(e)\n        raise\n", &v)?
+                .swallowed;
+            Ok(logs.len() == 1 && logs[0].kind == "logging-handler" && acts.is_empty())
+        },
+    ),
+    (
         "unsafe-safety-comment: a `# Safety` rustdoc section documents an unsafe trait",
         || {
             let v = AssertVocabulary::default();

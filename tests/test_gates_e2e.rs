@@ -3184,6 +3184,92 @@ fn kotlin_files_are_judged_by_every_ast_gate() {
 }
 
 #[test]
+fn padded_stubs_and_logging_handlers_are_findings() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/lib.rs",
+        "pub fn parse(s: &str) -> u32 {\n    s.trim().parse().unwrap_or(0)\n}\n",
+    );
+    repo.write(
+        "pkg/io.py",
+        "def load(p):\n    with open(p) as f:\n        return f.read()\n",
+    );
+    repo.commit("feat: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: a stub preceded by real work, a handler that logs and re-raises.
+    repo.write(
+        "src/lib.rs",
+        "pub fn parse(s: &str) -> u32 {\n    let n = normalise(s);\n    todo!(\"{n}\")\n}\n",
+    );
+    repo.write(
+        "pkg/io.py",
+        "def load(p):\n    try:\n        with open(p) as f:\n            return f.read()\n    except OSError as e:\n        log.error(e)\n        raise\n",
+    );
+    repo.commit("wip: normalise first");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("error-swallowing").is_empty(),
+        "{:?}",
+        quiet.violations("error-swallowing")
+    );
+    // `parse` is judged substantive: a call precedes the marker.
+    assert!(
+        quiet.titles("stub-bodies").is_empty(),
+        "{:?}",
+        quiet.violations("stub-bodies")
+    );
+
+    // A stub padded with a log line and a bare assignment; a handler that only logs.
+    repo.write(
+        "src/lib.rs",
+        "pub fn parse(s: &str) -> u32 {\n    let attempt = 1;\n    log::warn!(\"parse: attempt {attempt} on {s}\");\n    todo!()\n}\n",
+    );
+    repo.write(
+        "pkg/io.py",
+        "def load(p):\n    try:\n        with open(p) as f:\n            return f.read()\n    except OSError as e:\n        log.error(e)\n        print(e)\n",
+    );
+    repo.commit("fix: quiet");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let stubs: Vec<(String, u64, String)> = run
+        .violations("stub-bodies")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+                v["title"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        stubs,
+        vec![(
+            "src/lib.rs".to_string(),
+            1,
+            "Function Body Replaced By Stub".to_string()
+        )],
+        "{:?}",
+        run.violations("stub-bodies")
+    );
+    let swallows = run.violations("error-swallowing");
+    assert_eq!(swallows.len(), 1, "{swallows:?}");
+    assert_eq!(swallows[0]["file"], "pkg/io.py");
+    assert_eq!(swallows[0]["line"], 5);
+    assert_eq!(swallows[0]["title"], "Empty Error Handler Added");
+    assert!(
+        swallows[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("logs it, and does nothing else"),
+        "{}",
+        swallows[0]["message"]
+    );
+}
+
+#[test]
 fn unsafe_trait_with_a_safety_doc_section_abc_stubs_and_past_intervals_are_not_findings() {
     let repo = Repo::new();
     repo.write(
