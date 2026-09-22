@@ -498,6 +498,25 @@ fn doctor_reports_a_push_trigger_when_squash_or_rebase_merges_drop_the_pr_body()
         st.contains(&("push-trigger".into(), "warn".into())),
         "{st:?}"
     );
+    // With the source off, a token not shown the merge methods cannot decide.
+    let run = run_with(serde_json::json!({"default_branch": "main"}));
+    let st = statuses(&run.stdout);
+    assert!(
+        st.contains(&("push-trigger".into(), "unknown".into())),
+        "{st:?}"
+    );
+    // With the source on again, the same hidden merge methods are information: the token,
+    // not the method, decides whether the review record reaches the push run.
+    repo.commit_base_files(
+        &[("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n")],
+        "chore: defaults again",
+    );
+    let run = run_with(serde_json::json!({"default_branch": "main"}));
+    let st = statuses(&run.stdout);
+    assert!(
+        st.contains(&("push-trigger".into(), "info".into())),
+        "{st:?}"
+    );
     // The healthy fixture (pull_request only) carries no such finding.
     let quiet = protected_repo();
     let api = github_api(GOOD_RULES);

@@ -4101,6 +4101,52 @@ fn override_budget_caps_what_one_change_may_excuse() {
 }
 
 #[test]
+fn required_approval_is_read_from_gitlab_at_the_merge_requests_head() {
+    let repo = repo_with_two_self_granted_overrides(
+        "require_approval = true\nallowed_override_actors = [\"lead\", \"agent\"]\n",
+    );
+    let check = |mr_sha: &str, approvers: &[&str]| {
+        let api = FakeForge::start();
+        api.serve(
+            "projects/o%2Fr/merge_requests/7",
+            serde_json::json!({"iid": 7, "sha": mr_sha, "author": {"username": "agent"}}),
+        );
+        api.serve(
+            "projects/o%2Fr/merge_requests/7/approvals",
+            serde_json::json!({"approved_by": approvers.iter().map(|u| serde_json::json!({"user": {"username": u}})).collect::<Vec<_>>()}),
+        );
+        let url = api.url();
+        repo.run(
+            &["check", "--format", "json", "--base", "main"],
+            &[
+                ("GITLAB_CI", "true"),
+                ("CI_SERVER_URL", "https://gitlab.example"),
+                ("CI_PROJECT_PATH", "o/r"),
+                ("CI_MERGE_REQUEST_IID", "7"),
+                ("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "abc123"),
+                ("GITLAB_USER_LOGIN", "agent"),
+                ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ],
+        )
+    };
+    // Approved by the listed reviewer at this head: the overrides stand.
+    let ok = check("abc123", &["lead"]);
+    assert_eq!(ok.code, 0, "stdout: {}\nstderr: {}", ok.stdout, ok.stderr);
+    // The author's own approval, an unlisted reviewer, or an approval on record for an
+    // earlier head: refused.
+    for (sha, approvers) in [
+        ("abc123", vec!["agent"]),
+        ("abc123", vec!["stranger"]),
+        ("0ld5ha", vec!["lead"]),
+    ] {
+        let run = check(sha, &approvers);
+        assert_eq!(run.code, 1, "{sha} {approvers:?}: {}", run.stderr);
+        let refusals = run.json()["policy_failures"].as_array().unwrap().clone();
+        assert_eq!(refusals.len(), 1, "{sha} {approvers:?}");
+    }
+}
+
+#[test]
 fn required_approval_is_read_from_the_forge_for_the_checked_head() {
     // The author is a listed actor too: listing does not let anyone approve their own change.
     let repo = repo_with_two_self_granted_overrides(

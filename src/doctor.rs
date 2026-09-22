@@ -1899,10 +1899,19 @@ pub fn run(input: &DoctorInput) -> Report {
                                     Status::Pass,
                                     format!("{jobs} run(s) discipline on push to `{b}`; only merge commits are allowed, so the pull request's body reaches the push run through the merge commit message"),
                                 ),
+                                // GitHub shows the merge methods to push or admin tokens only.
+                                // With `merged-pr-body` on, the method does not decide whether
+                                // the review record reaches the push run; the token does.
+                                None if merged_source_on => Finding::new(
+                                    "push-trigger",
+                                    Status::Info,
+                                    format!("{jobs} run(s) discipline on push to `{b}`; the repository does not show this token which merge methods it allows, and `merged-pr-body` is enabled: the push run reads the merged pull request's body when its token can read pull requests"),
+                                )
+                                .fix("Give the push run a token that can read pull requests (a `contents: read` token cannot on a private repository), or restrict the discipline step to pull_request."),
                                 None => Finding::new(
                                     "push-trigger",
                                     Status::Unknown,
-                                    format!("{jobs} run(s) discipline on push to `{b}`; the repository does not say which merge methods it allows"),
+                                    format!("{jobs} run(s) discipline on push to `{b}`; the repository does not show this token which merge methods it allows (GitHub shows them to push or admin tokens), and `merged-pr-body` is not in `directives.sources`"),
                                 )
                                 .fix(fix),
                             },

@@ -377,6 +377,19 @@ fn detect_pull_context_from_ci() -> Option<discipline::override_policy::PullCont
     .filter_map(|path| std::fs::read_to_string(path).ok())
     .filter_map(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
     .find_map(|json| discipline::override_policy::pull_context(&json))
+    .or_else(|| {
+        // GitLab has no event payload; a merge-request pipeline sets these. The author is
+        // read from the merge request itself when approvals are checked.
+        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+        let number = env("CI_MERGE_REQUEST_IID")?.parse().ok()?;
+        let head_sha =
+            env("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA").or_else(|| env("CI_COMMIT_SHA"))?;
+        Some(discipline::override_policy::PullContext {
+            number,
+            author: env("GITLAB_USER_LOGIN").unwrap_or_default(),
+            head_sha,
+        })
+    })
 }
 
 fn detect_pr_title_from_ci() -> Option<String> {

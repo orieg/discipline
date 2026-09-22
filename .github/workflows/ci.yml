@@ -483,6 +483,15 @@ jobs:
       # misses description edits, a gate file CODEOWNERS does not cover. Warnings fail.
       - name: discipline doctor (local checks)
         run: .ci-bin/discipline doctor --local-only --strict
+      # Forge-side checks with the workflow's read token: the required check, up-to-date
+      # policy, force-push and deletion blocking, review rules, bypass actors, merge
+      # methods. Warnings are visible in the log; `--strict` is switched on once the
+      # branch rules block deletion and require pull requests (both are repository
+      # settings, tracked in docs/ROADMAP.md).
+      - name: discipline doctor (forge checks)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .ci-bin/discipline doctor
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

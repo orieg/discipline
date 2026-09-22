@@ -777,6 +777,53 @@ pub fn merged_pull_for_commit(
     }
 }
 
+/// GitLab: usernames that approve merge request `iid` **at** `head_sha`. The merge request's
+/// `sha` is its current head; an approval is only read when it is the head being checked
+/// (GitLab resets approvals on a new push when the project says so, and the check does not
+/// rely on that). The merge request's author is never an approver.
+fn gitlab_approvers(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    iid: u64,
+    head_sha: &str,
+) -> Result<Vec<String>, String> {
+    let project = gitlab_project_id(&forge.repo);
+    let mr = api
+        .get(forge, &format!("projects/{project}/merge_requests/{iid}"))?
+        .ok_or_else(|| format!("merge request !{iid} does not exist or is not visible"))?;
+    let sha = mr.get("sha").and_then(|v| v.as_str()).unwrap_or_default();
+    if sha != head_sha {
+        // The approvals on record are of another head.
+        return Ok(Vec::new());
+    }
+    let author = mr
+        .get("author")
+        .and_then(|a| a.get("username"))
+        .and_then(|u| u.as_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let approvals = api
+        .get(
+            forge,
+            &format!("projects/{project}/merge_requests/{iid}/approvals"),
+        )?
+        .ok_or_else(|| format!("approvals of merge request !{iid} are not visible"))?;
+    let list = approvals
+        .get("approved_by")
+        .and_then(|a| a.as_array())
+        .ok_or_else(|| format!("approvals of merge request !{iid} carry no `approved_by` list"))?;
+    Ok(list
+        .iter()
+        .filter_map(|e| {
+            e.get("user")
+                .and_then(|u| u.get("username"))
+                .and_then(|u| u.as_str())
+        })
+        .map(|u| u.to_ascii_lowercase())
+        .filter(|u| *u != author)
+        .collect())
+}
+
 /// The most reviews one request returns; a full page means there may be more.
 const REVIEWS_PAGE: usize = 100;
 
@@ -792,7 +839,7 @@ pub fn pull_approvers(
     head_sha: &str,
 ) -> Result<Vec<String>, String> {
     if forge.kind == ForgeKind::GitLab {
-        return Err("review approval lookup is not implemented for GitLab".to_string());
+        return gitlab_approvers(api, forge, number, head_sha);
     }
     let path = format!(
         "repos/{}/pulls/{number}/reviews?per_page={REVIEWS_PAGE}",
@@ -1324,5 +1371,39 @@ mod tests {
             (mr.number, mr.author.as_str(), mr.head_sha.as_str()),
             (8, "agent", "s8")
         );
+    }
+
+    #[test]
+    fn gitlab_approvals_count_only_at_the_head_and_never_the_author() {
+        use super::{pull_approvers, CannedApi};
+        let forge = Forge {
+            kind: ForgeKind::GitLab,
+            url: "https://gitlab.com".into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "gitlab:projects/o%2Fr/merge_requests/7".into(),
+            serde_json::json!({"iid": 7, "sha": "abc123", "author": {"username": "Agent"}}),
+        );
+        api.responses.insert(
+            "gitlab:projects/o%2Fr/merge_requests/7/approvals".into(),
+            serde_json::json!({"approved_by": [{"user": {"username": "lead"}}, {"user": {"username": "agent"}}]}),
+        );
+        assert_eq!(
+            pull_approvers(&api, &forge, 7, "abc123").unwrap(),
+            vec!["lead"]
+        );
+        // An approval of an earlier head is refused: the record is of another commit.
+        assert!(pull_approvers(&api, &forge, 7, "0ld5ha")
+            .unwrap()
+            .is_empty());
+        api.responses.insert(
+            "gitlab:projects/o%2Fr/merge_requests/8".into(),
+            serde_json::Value::Null,
+        );
+        assert!(pull_approvers(&api, &forge, 8, "abc123")
+            .unwrap_err()
+            .contains("!8"));
     }
 }

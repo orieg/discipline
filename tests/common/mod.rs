@@ -151,6 +151,9 @@ pub const ISOLATED_ENV_VARS: &[&str] = &[
     "GITEA_ACTOR",
     "FORGEJO_ACTOR",
     "GITLAB_USER_LOGIN",
+    "CI_MERGE_REQUEST_IID",
+    "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA",
+    "CI_COMMIT_SHA",
 ];
 
 impl Repo {
