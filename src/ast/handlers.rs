@@ -33,6 +33,11 @@ pub struct HandlerSpec {
     /// For a binding statement, the node kinds of a right-hand side that is a call; a
     /// binding of anything else (a tuple, an identifier) is not a discarded result.
     pub call_value_kinds: &'static [&'static str],
+    /// Node kinds of an expression that silences the errors of what it wraps (PHP's `@`,
+    /// Ruby's `rescue` modifier); judged by `silences`.
+    pub silence_kinds: &'static [&'static str],
+    /// Whether a silencing expression's text drops the error rather than handling it.
+    pub silences: fn(&str) -> bool,
 }
 
 fn text<'a>(node: Node, src: &'a str) -> &'a str {
@@ -83,7 +88,9 @@ pub fn extract(
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         let line = node.start_position().row + 1;
-        if spec.handler_kinds.contains(&node.kind()) && !is_test_line(line) {
+        // Ruby's `rescue` keyword token has the same kind as the `rescue` clause; only
+        // the named node is a handler.
+        if node.is_named() && spec.handler_kinds.contains(&node.kind()) && !is_test_line(line) {
             let body = spec.body_fields.iter().find_map(|f| {
                 node.child_by_field_name(f).or_else(|| {
                     let mut cursor = node.walk();
@@ -96,7 +103,8 @@ pub fn extract(
                 // A handler with no body node at all (`except: pass` on one line in some
                 // grammars) is judged by its own text.
                 None => {
-                    let t = text(node, src);
+                    // `Foo::Bar` in an exception path is not the `:` that ends a Python head.
+                    let t = text(node, src).replace("::", "");
                     let after = t.split_once([':', '{']).map(|(_, r)| r).unwrap_or("");
                     let after = after.trim().trim_end_matches('}').trim();
                     after.is_empty() || spec.trivial.contains(&after.trim_end_matches(';').trim())
@@ -120,6 +128,16 @@ pub fn extract(
                     kind: "discarded-result",
                     snippet: first_line(t),
                 });
+            }
+        } else if spec.silence_kinds.contains(&node.kind()) && !is_test_line(line) {
+            let t = text(node, src);
+            if (spec.silences)(t) {
+                out.push(SwallowSite {
+                    line,
+                    kind: "silenced-error",
+                    snippet: first_line(t),
+                });
+                continue;
             }
         }
         let mut cursor = node.walk();
@@ -149,9 +167,14 @@ fn expects_the_error(handler: Node, src: &str) -> bool {
             || t.contains("fail(")
     };
     let mut cursor = try_stmt.walk();
-    let has_failing_else = try_stmt
-        .children(&mut cursor)
-        .any(|c| c.kind() == "else_clause" && fails(text(c, src).trim_start_matches("else:")));
+    let has_failing_else = try_stmt.children(&mut cursor).any(|c| {
+        matches!(c.kind(), "else_clause" | "else")
+            && fails(
+                text(c, src)
+                    .trim_start_matches("else:")
+                    .trim_start_matches("else"),
+            )
+    });
     if has_failing_else {
         return true;
     }
@@ -169,6 +192,26 @@ fn expects_the_error(handler: Node, src: &str) -> bool {
 
 pub fn no_discard(_: &str) -> bool {
     false
+}
+
+/// PHP: `@call()` silences every error the call raises. The node kind is exact
+/// (`error_suppression_expression`), so any text qualifies.
+pub fn php_silences(_: &str) -> bool {
+    true
+}
+
+/// Ruby: `call rescue nil` (and `rescue false` / `[]` / `{}` / `0` / `""`) replaces an
+/// error with a constant. A handler that computes a fallback is not silenced.
+pub fn ruby_silences(t: &str) -> bool {
+    let handler = t.rsplit(" rescue ").next().unwrap_or("").trim();
+    matches!(handler, "nil" | "false" | "[]" | "{}" | "0" | "''" | "\"\"")
+}
+
+/// C / C++: `(void)call()` throws a result away by casting it, the same statement as
+/// Rust's `let _ = call()`; `(void)x` of a variable silences an unused warning and is not
+/// a call (the pack's `call_value_kinds` keep it out).
+pub fn c_discards(t: &str) -> bool {
+    t.trim().starts_with("(void)")
 }
 
 /// Rust: `let _ = f(...)` and `f(...).ok();` throw a `Result` away. A `let _ = ` binding of
@@ -213,6 +256,11 @@ mod tests {
         assert!(go_discards("_, _ = io.Copy(dst, src)"));
         assert!(!go_discards("n, err := w.Write(b)"));
         assert!(!go_discards("_ = x"));
+        assert!(ruby_silences("File.read(p) rescue nil"));
+        assert!(ruby_silences("x = load rescue {}"));
+        assert!(!ruby_silences("x = load rescue fallback(p)"));
+        assert!(c_discards("(void)write(fd, b, n)"));
+        assert!(!c_discards("write(fd, b, n)"));
     }
 }
 
@@ -222,7 +270,11 @@ mod tests {
     feature = "lang-javascript",
     feature = "lang-java",
     feature = "lang-rust",
-    feature = "lang-go"
+    feature = "lang-go",
+    feature = "lang-php",
+    feature = "lang-ruby",
+    feature = "lang-c",
+    feature = "lang-cpp"
 ))]
 mod pack_tests {
     use crate::ast::{default_registry, AssertVocabulary, Fact};
@@ -282,5 +334,53 @@ mod pack_tests {
             "package a\nfunc F() {\n    n, _ := w.Write(b)\n    _ = err\n    n, err := w.Write(b)\n    _ = n\n}\n",
         );
         assert_eq!(go, vec![(3, "discarded-result"), (4, "discarded-result")]);
+    }
+
+    #[test]
+    fn php_ruby_and_c_cpp_handlers_silences_and_discards() {
+        let php = sites(
+            "src/Loader.php",
+            "<?php\nfunction load($p) {\n    try { g(); } catch (\\Throwable $e) { }\n    try { g(); } catch (E $e) { return null; }\n    try { g(); } catch (E $e) { log($e); throw $e; }\n    $x = @file_get_contents($p);\n    @unlink($p);\n    return $x;\n}\nfunction testLoad() { try { load('x'); } catch (E $e) { } $y = @g(); }\n",
+        );
+        assert_eq!(
+            php,
+            vec![
+                (3, "empty-handler"),
+                (4, "empty-handler"),
+                (6, "silenced-error"),
+                (7, "silenced-error")
+            ]
+        );
+        let rb = sites(
+            "lib/loader.rb",
+            "def load(p)\n  begin\n    g\n  rescue Foo::Bar => e\n  end\n  begin\n    g\n  rescue => e\n    nil\n  rescue Other\n    log(e)\n    raise\n  end\n  x = File.read(p) rescue nil\n  y = File.read(p) rescue fallback(p)\n  z = g rescue []\nrescue\n  # nothing\nend\n\ndef check\n  begin\n    g\n  rescue Bad\n  else\n    raise 'did not raise'\n  end\nend\n\ndef test_load\n  begin\n    load('x')\n  rescue\n  end\nend\n",
+        );
+        assert_eq!(
+            rb,
+            vec![
+                (4, "empty-handler"),
+                (8, "empty-handler"),
+                (14, "silenced-error"),
+                (16, "silenced-error"),
+                (17, "empty-handler")
+            ]
+        );
+        let cpp = sites(
+            "src/a.cpp",
+            "int c() {\n  try { g(); } catch (const std::exception& e) { }\n  try { g(); } catch (...) { return false; }\n  try { g(); } catch (E& e) { log(e); throw; }\n  (void)write(1, \"x\", 1);\n  (void)unused;\n  return 1;\n}\nTEST(S, N) { try { g(); } catch (...) { } (void)g(); }\n",
+        );
+        assert_eq!(
+            cpp,
+            vec![
+                (2, "empty-handler"),
+                (3, "empty-handler"),
+                (5, "discarded-result")
+            ]
+        );
+        let c = sites(
+            "src/a.c",
+            "int c(void) {\n  (void)write(1, \"x\", 1);\n  (void)unused;\n  return 1;\n}\n",
+        );
+        assert_eq!(c, vec![(2, "discarded-result")]);
     }
 }

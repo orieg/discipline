@@ -564,6 +564,8 @@ pub const GO_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
     discard_kinds: &["assignment_statement", "short_var_declaration"],
     discards: super::handlers::go_discards,
     call_value_kinds: &[],
+    silence_kinds: &[],
+    silences: super::handlers::no_discard,
 };
 
 pub const GO_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

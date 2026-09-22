@@ -3,9 +3,10 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::functions::{self, FunctionSpec};
 use super::{
-    collect_error_nodes_info, AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts,
-    TestFn,
+    collect_error_nodes_info, AssertVocabulary, EscapeHatchSite, Fact, LanguagePack,
+    ParsedFileFacts, TestFn,
 };
 
 /// C language pack implementing [`LanguagePack`].
@@ -14,6 +15,13 @@ pub struct CPack;
 impl LanguagePack for CPack {
     fn id(&self) -> &'static str {
         "c"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(
+            fact,
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -52,6 +60,7 @@ impl LanguagePack for CPack {
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
+        shared_facts(root, src, path, vocab, &mut extractor.facts);
         Ok(extractor.facts)
     }
 }
@@ -62,6 +71,13 @@ pub struct CppPack;
 impl LanguagePack for CppPack {
     fn id(&self) -> &'static str {
         "cpp"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(
+            fact,
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -103,9 +119,143 @@ impl LanguagePack for CppPack {
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
+        shared_facts(root, src, path, vocab, &mut extractor.facts);
         Ok(extractor.facts)
     }
 }
+
+/// The facts the shared walkers supply, for both grammars (they share node kinds).
+fn shared_facts(
+    root: Node,
+    src: &str,
+    path: &str,
+    vocab: &AssertVocabulary,
+    facts: &mut ParsedFileFacts,
+) {
+    facts.functions = functions::extract(root, src, path, &C_FUNCTIONS);
+    super::mocks::count(
+        root,
+        src,
+        &mut facts.tests,
+        &C_MOCKS,
+        &vocab.mock_setup_fns,
+        &vocab.mock_assert_fns,
+    );
+    {
+        let spans: Vec<(usize, usize)> = facts
+            .tests
+            .iter()
+            .map(|t| (t.line, t.end_line.max(t.line)))
+            .collect();
+        let whole_file = is_c_cpp_test_path(path)
+            || functions::test_path(path)
+            || functions::declared_test_path(path, &vocab.test_paths);
+        let is_test_line = |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
+        facts.swallowed = super::handlers::extract(root, src, &C_HANDLERS, &is_test_line);
+    }
+    super::retries::mark(root, src, &mut facts.tests, &C_RETRIES);
+    if functions::declared_test_path(path, &vocab.test_paths) {
+        for f in &mut facts.functions {
+            f.is_test = true;
+        }
+    }
+    super::calls::count(
+        root,
+        src,
+        &mut facts.tests,
+        &C_MOCKS,
+        super::calls::SLEEP_VOCAB,
+        super::calls::sleeps,
+    );
+    super::calls::count(
+        root,
+        src,
+        &mut facts.tests,
+        &C_MOCKS,
+        super::calls::TRIVIAL_ASSERT_VOCAB,
+        super::calls::trivial_asserts,
+    );
+    facts.prose = super::prose::extract(
+        root,
+        src,
+        &["comment", "string_literal", "raw_string_literal"],
+    );
+}
+
+/// A test-framework macro body (`TEST(Suite, Name) {}`) parses as a function definition
+/// whose declarator is the macro call; a C driver's `test_*` / `*_smoke` function or
+/// anything in a test path is a test too.
+fn c_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+    let decl = node
+        .child_by_field_name("declarator")
+        .and_then(|n| n.utf8_text(src.as_bytes()).ok())
+        .unwrap_or("");
+    let name = decl
+        .split(['(', ' '])
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('*');
+    const MACROS: &[&str] = &[
+        "TEST",
+        "TEST_F",
+        "TEST_P",
+        "TYPED_TEST",
+        "TYPED_TEST_P",
+        "TEST_CASE",
+        "TEST_CASE_METHOD",
+        "SCENARIO",
+        "TEST_CASE_TEMPLATE",
+    ];
+    MACROS.contains(&name)
+        || name.starts_with("test_")
+        || name.ends_with("_test")
+        || name.starts_with("smoke_")
+        || name.ends_with("_smoke")
+        || is_c_cpp_test_path(path)
+        || functions::test_path(path)
+}
+
+pub const C_FUNCTIONS: FunctionSpec = FunctionSpec {
+    // `= default` / `= delete` and a pure-virtual declaration have no `body`.
+    function_kinds: &["function_definition"],
+    name_fields: &["declarator"],
+    body_fields: &["body"],
+    ignored_kinds: &["comment"],
+    skip: functions::skip_none,
+    is_test: c_fn_is_test,
+    classify: functions::classify_c,
+};
+
+pub const C_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
+    call_kinds: &["call_expression"],
+    callee_fields: &["function"],
+};
+
+pub const C_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
+    // C has no `catch_clause`; the kind never matches there.
+    handler_kinds: &["catch_clause"],
+    body_fields: &["body"],
+    ignored_kinds: &["comment"],
+    trivial: &[
+        "return",
+        "return false",
+        "return nullptr",
+        "return NULL",
+        "return {}",
+        "continue",
+        "break",
+    ],
+    // `(void)call()` throws the result away; `(void)x` of a variable is not a call.
+    discard_kinds: &["cast_expression"],
+    discards: super::handlers::c_discards,
+    call_value_kinds: &["call_expression"],
+    silence_kinds: &[],
+    silences: super::handlers::no_discard,
+};
+
+pub const C_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
+    marker_kinds: &["call_expression"],
+};
 
 /// Determines whether a path is conventionally a C or C++ test file.
 pub fn is_c_cpp_test_path(path: &str) -> bool {

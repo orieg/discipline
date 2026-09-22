@@ -3,7 +3,8 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
-use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn};
+use super::functions::{self, FunctionSpec};
+use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Ruby language pack implementing [`LanguagePack`].
 pub struct RubyPack;
@@ -11,6 +12,13 @@ pub struct RubyPack;
 impl LanguagePack for RubyPack {
     fn id(&self) -> &'static str {
         "ruby"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(
+            fact,
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -48,9 +56,110 @@ impl LanguagePack for RubyPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
+        extractor.facts.functions = functions::extract(root, src, path, &RUBY_FUNCTIONS);
+        super::mocks::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &RUBY_MOCKS,
+            &vocab.mock_setup_fns,
+            &vocab.mock_assert_fns,
+        );
+        {
+            let tests = &extractor.facts.tests;
+            let spans: Vec<(usize, usize)> = tests
+                .iter()
+                .map(|t| (t.line, t.end_line.max(t.line)))
+                .collect();
+            let whole_file = is_ruby_test_path(path)
+                || functions::test_path(path)
+                || functions::declared_test_path(path, &vocab.test_paths);
+            let is_test_line =
+                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            extractor.facts.swallowed =
+                super::handlers::extract(root, src, &RUBY_HANDLERS, &is_test_line);
+        }
+        super::retries::mark(root, src, &mut extractor.facts.tests, &RUBY_RETRIES);
+        if functions::declared_test_path(path, &vocab.test_paths) {
+            for f in &mut extractor.facts.functions {
+                f.is_test = true;
+            }
+        }
+        super::calls::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &RUBY_MOCKS,
+            super::calls::SLEEP_VOCAB,
+            super::calls::sleeps,
+        );
+        super::calls::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &RUBY_MOCKS,
+            super::calls::TRIVIAL_ASSERT_VOCAB,
+            super::calls::trivial_asserts,
+        );
+        extractor.facts.prose =
+            super::prose::extract(root, src, &["comment", "string", "heredoc_body"]);
         Ok(extractor.facts)
     }
 }
+
+fn ruby_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(src.as_bytes()).ok())
+        .unwrap_or("");
+    name.starts_with("test_")
+        || name == "test"
+        || is_ruby_test_path(path)
+        || functions::test_path(path)
+}
+
+pub const RUBY_FUNCTIONS: FunctionSpec = FunctionSpec {
+    // `def x; end` has no body node and is not described.
+    function_kinds: &["method", "singleton_method"],
+    name_fields: &["name"],
+    body_fields: &["body"],
+    ignored_kinds: &["comment"],
+    skip: functions::skip_none,
+    is_test: ruby_fn_is_test,
+    classify: functions::classify_ruby,
+};
+
+pub const RUBY_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
+    call_kinds: &["call"],
+    callee_fields: &["method"],
+};
+
+pub const RUBY_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
+    // A `rescue` with no body has no `body` field and is judged by its own text.
+    handler_kinds: &["rescue"],
+    body_fields: &["body"],
+    ignored_kinds: &["comment"],
+    trivial: &[
+        "nil",
+        "false",
+        "return",
+        "return nil",
+        "return false",
+        "next",
+        "[]",
+        "{}",
+    ],
+    discard_kinds: &[],
+    discards: super::handlers::no_discard,
+    call_value_kinds: &[],
+    // `call rescue nil`: the modifier form, when its handler is a constant.
+    silence_kinds: &["rescue_modifier"],
+    silences: super::handlers::ruby_silences,
+};
+
+pub const RUBY_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
+    marker_kinds: &["call"],
+};
 
 /// Determines whether a path is conventionally a Ruby test file.
 pub fn is_ruby_test_path(path: &str) -> bool {

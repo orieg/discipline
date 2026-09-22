@@ -375,6 +375,53 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: PHP `@call()` and Ruby `call rescue nil` are silenced errors, a fallback is not",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let php = reg
+                .find_pack("src/a.php")
+                .ok_or_else(|| anyhow::anyhow!("no php pack"))?
+                .extract("src/a.php", "<?php\nfunction f($p) { $x = @g($p); return $x; }\n", &v)?
+                .swallowed;
+            let rb_pack = reg
+                .find_pack("lib/a.rb")
+                .ok_or_else(|| anyhow::anyhow!("no ruby pack"))?;
+            let nil = rb_pack.extract("lib/a.rb", "def f(p)\n  g(p) rescue nil\nend\n", &v)?.swallowed;
+            let fallback = rb_pack
+                .extract("lib/a.rb", "def f(p)\n  g(p) rescue h(p)\nend\n", &v)?
+                .swallowed;
+            Ok(php.len() == 1
+                && php[0].kind == "silenced-error"
+                && nil.len() == 1
+                && nil[0].kind == "silenced-error"
+                && fallback.is_empty())
+        },
+    ),
+    (
+        "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::functions::BodyShape;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let facts = reg
+                .find_pack("src/a.c")
+                .ok_or_else(|| anyhow::anyhow!("no c pack"))?
+                .extract(
+                    "src/a.c",
+                    "static int *f(int a) { abort(); }\nint g(int fd) { (void)write(fd, \"x\", 1); (void)fd; return 1; }\n",
+                    &v,
+                )?;
+            Ok(facts.functions.len() == 2
+                && facts.functions[0].name == "f"
+                && matches!(facts.functions[0].shape, BodyShape::Stub(_))
+                && facts.swallowed.len() == 1
+                && facts.swallowed[0].kind == "discarded-result")
+        },
+    ),
+    (
         "unsafe-safety-comment: a `# Safety` rustdoc section documents an unsafe trait",
         || {
             let v = AssertVocabulary::default();

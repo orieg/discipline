@@ -81,6 +81,7 @@ fn describe(node: Node, src: &str, path: &str, spec: &FunctionSpec) -> Option<Fu
         .name_fields
         .iter()
         .find_map(|f| node.child_by_field_name(f))
+        .map(unwrap_declarator)
         .map(|n| text(n, src).trim().to_string())
         .filter(|n| !n.is_empty())
         .or_else(|| declarator_name(node, src))?;
@@ -99,6 +100,23 @@ fn describe(node: Node, src: &str, path: &str, spec: &FunctionSpec) -> Option<Fu
         shape,
         is_test: (spec.is_test)(node, src, path),
     })
+}
+
+/// C and C++ name a function through its declarator: `static int *f(int a)` is a
+/// `pointer_declarator` around a `function_declarator` around the identifier. Descend to
+/// the innermost declarator so the name is `f`, not `*f(int a)`.
+fn unwrap_declarator(node: Node) -> Node {
+    let mut n = node;
+    while n.kind().ends_with("_declarator") {
+        match n
+            .child_by_field_name("declarator")
+            .or_else(|| n.named_child(0))
+        {
+            Some(inner) => n = inner,
+            None => break,
+        }
+    }
+    n
 }
 
 /// `const f = () => {}` and `let g = function() {}`: the name is on the declarator.
@@ -294,7 +312,12 @@ pub fn classify_php(t: &str) -> Option<BodyShape> {
     if t.starts_with("throw ") && has_word(t, NOT_IMPLEMENTED_WORDS) {
         return Some(BodyShape::Stub(t.to_string()));
     }
-    trivial_return(t, &["null", "[]", "0", "''", "\"\"", "false", "true"])
+    const TRIVIAL: &[&str] = &["null", "[]", "0", "''", "\"\"", "false", "true"];
+    // An arrow function's body is a bare expression.
+    if TRIVIAL.contains(&t) {
+        return Some(BodyShape::Trivial(t.to_string()));
+    }
+    trivial_return(t, TRIVIAL)
 }
 
 pub fn classify_ruby(t: &str) -> Option<BodyShape> {
@@ -441,7 +464,11 @@ mod tests {
     feature = "lang-javascript",
     feature = "lang-go",
     feature = "lang-java",
-    feature = "lang-csharp"
+    feature = "lang-csharp",
+    feature = "lang-php",
+    feature = "lang-ruby",
+    feature = "lang-c",
+    feature = "lang-cpp"
 ))]
 mod pack_tests {
     use super::BodyShape;
@@ -555,5 +582,78 @@ mod pack_tests {
         assert_eq!(cs.len(), 2, "{cs:?}");
         assert!(matches!(cs[0].1, BodyShape::Stub(_)), "{cs:?}");
         assert!(matches!(cs[1].1, BodyShape::Trivial(_)));
+    }
+
+    #[test]
+    fn php_ruby_and_c_cpp_bodies() {
+        let got = shapes(
+            "src/Repo.php",
+            "<?php\nabstract class Repo {\n    abstract function find(int $id);\n    function save($e) { throw new \\RuntimeException('not implemented'); }\n    function all(): array { return []; }\n    function count(): int { return $this->n + 1; }\n}\nfunction testHelper() { return null; }\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "save".into(),
+                    stub("throw new \\RuntimeException('not implemented')"),
+                    false
+                ),
+                ("all".into(), BodyShape::Trivial("return []".into()), false),
+                ("count".into(), BodyShape::Substantive, false),
+                (
+                    "testHelper".into(),
+                    BodyShape::Trivial("return null".into()),
+                    true
+                ),
+            ]
+        );
+
+        let got = shapes(
+            "lib/repo.rb",
+            "class Repo\n  def find(id)\n    raise NotImplementedError\n  end\n  def all\n    []\n  end\n  def count\n    @n + 1\n  end\n  def self.build\n    new\n  end\n  def test_x\n    nil\n  end\nend\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                ("find".into(), stub("raise NotImplementedError"), false),
+                ("all".into(), BodyShape::Trivial("[]".into()), false),
+                ("count".into(), BodyShape::Substantive, false),
+                ("build".into(), BodyShape::Substantive, false),
+                ("test_x".into(), BodyShape::Trivial("nil".into()), true),
+            ]
+        );
+
+        // The name comes from inside the declarator chain, not `*g(int a)`.
+        let got = shapes(
+            "src/io.c",
+            "static int *g(int a) { return 0; }\nvoid h(void) {}\nint k(int a) { abort(); }\nint m(int a) { return a + 1; }\nvoid test_m(void) { assert(m(1) == 2); }\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                ("g".into(), BodyShape::Trivial("return 0".into()), false),
+                ("h".into(), BodyShape::Empty, false),
+                ("k".into(), stub("abort()"), false),
+                ("m".into(), BodyShape::Substantive, false),
+                ("test_m".into(), BodyShape::Substantive, true),
+            ]
+        );
+        let got = shapes(
+            "src/a.cpp",
+            "namespace n {\nclass A {\npublic:\n  virtual int a() = 0;\n  int b() { throw std::logic_error(\"not implemented\"); }\n  A() = default;\n  ~A() {}\n};\n}\nint A::c() { return 1 + 2; }\nTEST(S, N) { EXPECT_EQ(1, 1); }\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "b".into(),
+                    stub("throw std::logic_error(\"not implemented\")"),
+                    false
+                ),
+                ("~A".into(), BodyShape::Empty, false),
+                ("A::c".into(), BodyShape::Substantive, false),
+                ("TEST".into(), BodyShape::Substantive, true),
+            ]
+        );
     }
 }

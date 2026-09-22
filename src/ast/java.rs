@@ -654,6 +654,8 @@ pub const JAVA_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     discard_kinds: &[],
     discards: super::handlers::no_discard,
     call_value_kinds: &[],
+    silence_kinds: &[],
+    silences: super::handlers::no_discard,
 };
 
 pub const JAVA_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

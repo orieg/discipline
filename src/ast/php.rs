@@ -3,7 +3,8 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
-use super::{AssertVocabulary, EscapeHatchSite, LanguagePack, ParsedFileFacts, TestFn};
+use super::functions::{self, FunctionSpec};
+use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// PHP language pack implementing [`LanguagePack`].
 pub struct PhpPack;
@@ -11,6 +12,13 @@ pub struct PhpPack;
 impl LanguagePack for PhpPack {
     fn id(&self) -> &'static str {
         "php"
+    }
+
+    fn supplies(&self, fact: Fact) -> bool {
+        matches!(
+            fact,
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -43,9 +51,109 @@ impl LanguagePack for PhpPack {
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
+        extractor.facts.functions = functions::extract(root, src, path, &PHP_FUNCTIONS);
+        super::mocks::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &PHP_MOCKS,
+            &vocab.mock_setup_fns,
+            &vocab.mock_assert_fns,
+        );
+        {
+            let tests = &extractor.facts.tests;
+            let spans: Vec<(usize, usize)> = tests
+                .iter()
+                .map(|t| (t.line, t.end_line.max(t.line)))
+                .collect();
+            let whole_file = is_php_test_path(path)
+                || functions::test_path(path)
+                || functions::declared_test_path(path, &vocab.test_paths);
+            let is_test_line =
+                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            extractor.facts.swallowed =
+                super::handlers::extract(root, src, &PHP_HANDLERS, &is_test_line);
+        }
+        super::retries::mark(root, src, &mut extractor.facts.tests, &PHP_RETRIES);
+        if functions::declared_test_path(path, &vocab.test_paths) {
+            for f in &mut extractor.facts.functions {
+                f.is_test = true;
+            }
+        }
+        super::calls::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &PHP_MOCKS,
+            super::calls::SLEEP_VOCAB,
+            super::calls::sleeps,
+        );
+        super::calls::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &PHP_MOCKS,
+            super::calls::TRIVIAL_ASSERT_VOCAB,
+            super::calls::trivial_asserts,
+        );
+        extractor.facts.prose = super::prose::extract(
+            root,
+            src,
+            &["comment", "string", "encapsed_string", "heredoc", "nowdoc"],
+        );
         Ok(extractor.facts)
     }
 }
+
+fn php_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(src.as_bytes()).ok())
+        .unwrap_or("");
+    let mut cursor = node.walk();
+    let attributed = node.children(&mut cursor).any(|c| {
+        c.kind() == "attribute_list" && c.utf8_text(src.as_bytes()).unwrap_or("").contains("Test")
+    });
+    name.starts_with("test") || attributed || is_php_test_path(path) || functions::test_path(path)
+}
+
+pub const PHP_FUNCTIONS: FunctionSpec = FunctionSpec {
+    // An abstract or interface method has no `body` and is never described.
+    function_kinds: &["function_definition", "method_declaration"],
+    name_fields: &["name"],
+    body_fields: &["body"],
+    ignored_kinds: &["comment"],
+    skip: functions::skip_none,
+    is_test: php_fn_is_test,
+    classify: functions::classify_php,
+};
+
+pub const PHP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
+    call_kinds: &[
+        "function_call_expression",
+        "member_call_expression",
+        "scoped_call_expression",
+        "object_creation_expression",
+    ],
+    callee_fields: &["function", "name"],
+};
+
+pub const PHP_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
+    handler_kinds: &["catch_clause"],
+    body_fields: &["body"],
+    ignored_kinds: &["comment"],
+    trivial: &["return", "return null", "return false", "continue"],
+    discard_kinds: &[],
+    discards: super::handlers::no_discard,
+    call_value_kinds: &[],
+    // `@call()`: the error-control operator drops every diagnostic the call raises.
+    silence_kinds: &["error_suppression_expression"],
+    silences: super::handlers::php_silences,
+};
+
+pub const PHP_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
+    marker_kinds: &["attribute_list", "comment"],
+};
 
 /// Determines whether a path is conventionally a PHP test file.
 pub fn is_php_test_path(path: &str) -> bool {
@@ -127,7 +235,9 @@ impl<'a> PhpExtractor<'a> {
             return;
         }
 
-        if kind == "function_declaration" {
+        // tree-sitter-php names a top-level function `function_definition`; the older
+        // `function_declaration` kind is kept so a grammar bump cannot silently drop them.
+        if kind == "function_definition" || kind == "function_declaration" {
             self.visit_function(node);
             return;
         }

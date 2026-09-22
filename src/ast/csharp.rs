@@ -679,6 +679,8 @@ pub const CSHARP_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     discard_kinds: &[],
     discards: super::handlers::no_discard,
     call_value_kinds: &[],
+    silence_kinds: &[],
+    silences: super::handlers::no_discard,
 };
 
 pub const CSHARP_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

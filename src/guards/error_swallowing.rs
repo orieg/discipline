@@ -101,6 +101,10 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             }
             let (title, what) = match site.kind {
                 "discarded-result" => ("Result Discarded", "throws a fallible call's result away"),
+                "silenced-error" => (
+                    "Error Silenced",
+                    "replaces every error it raises with nothing",
+                ),
                 _ => (
                     "Empty Error Handler Added",
                     "catches an error and does nothing with it",

@@ -1030,6 +1030,8 @@ pub const RUST_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
         "await_expression",
         "try_expression",
     ],
+    silence_kinds: &[],
+    silences: super::handlers::no_discard,
 };
 
 pub const RUST_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

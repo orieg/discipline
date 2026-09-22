@@ -34,3 +34,49 @@ pub fn extract(root: Node, src: &str, kinds: &[&str]) -> Vec<ProseSpan> {
     }
     out
 }
+
+#[cfg(all(
+    test,
+    feature = "lang-php",
+    feature = "lang-ruby",
+    feature = "lang-c",
+    feature = "lang-cpp"
+))]
+mod pack_tests {
+    use crate::ast::{default_registry, AssertVocabulary, Fact};
+
+    fn spans(path: &str, src: &str) -> Vec<(usize, String)> {
+        let reg = default_registry();
+        let pack = reg.find_pack(path).unwrap();
+        assert!(pack.supplies(Fact::Prose));
+        pack.extract(path, src, &AssertVocabulary::default())
+            .unwrap()
+            .prose
+            .into_iter()
+            .map(|p| (p.line, p.text))
+            .collect()
+    }
+
+    #[test]
+    fn php_ruby_and_c_cpp_prose_is_comments_strings_and_heredocs() {
+        let php = spans(
+            "src/a.php",
+            "<?php\n// one\n$a = 'two';\n$b = \"th$x\";\n$c = <<<EOT\nfour\nEOT;\n# five\n",
+        );
+        let texts: Vec<&str> = php.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["// one", "'two'", "\"th$x\"", "<<<EOT\nfour\nEOT", "# five"]
+        );
+        let rb = spans("lib/a.rb", "# one\na = \"two\"\nb = <<~EOT\n  three\nEOT\n");
+        let texts: Vec<&str> = rb.iter().map(|(_, t)| t.as_str()).collect();
+        // A heredoc body spans from the line after the opener to its terminator.
+        assert_eq!(texts, vec!["# one", "\"two\"", "\n  three\nEOT"]);
+        let c = spans("src/a.c", "/* one */\nconst char *s = \"two\"; // three\n");
+        let texts: Vec<&str> = c.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(texts, vec!["/* one */", "\"two\"", "// three"]);
+        let cpp = spans("src/a.cpp", "const char *s = R\"(one)\" \"two\";\n");
+        let texts: Vec<&str> = cpp.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(texts, vec!["R\"(one)\"", "\"two\""]);
+    }
+}
