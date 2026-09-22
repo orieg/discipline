@@ -88,7 +88,7 @@ jobs:
           fail_on_warnings: true
 ```
 
-The floating `@v0` ref tracks the latest `v0.x.y` release, and moves only after that release has passed its smoke tests. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger). Pin `@v0.10.1` when a verdict must be reproducible from the workflow file alone.
+The floating `@v0` ref tracks the latest `v0.x.y` release, and moves only after that release has passed its smoke tests. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger). Pin `@v0.10.2` when a verdict must be reproducible from the workflow file alone.
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding an authorized override directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
 >
@@ -206,7 +206,7 @@ curl -fsSL https://orieg.github.io/discipline/install.sh | bash
 Custom destination directory or pinned release tag:
 
 ```bash
-bash install.sh --to ~/.local/bin --version v0.10.1
+bash install.sh --to ~/.local/bin --version v0.10.2
 ```
 
 ### Debian / Ubuntu (APT)

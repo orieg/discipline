@@ -973,7 +973,7 @@
         </p>
         <div class="code-block"><span class="code-comment"># .gitlab-ci.yml including the Discipline job template, pinned to a release</span>
 <span class="code-keyword">include:</span>
-  - <span class="code-prop">remote:</span> https://raw.githubusercontent.com/orieg/discipline/v0.10.1/templates/discipline.gitlab-ci.yml
+  - <span class="code-prop">remote:</span> https://raw.githubusercontent.com/orieg/discipline/v0.10.2/templates/discipline.gitlab-ci.yml
     <span class="code-prop">inputs:</span>
       <span class="code-prop">stage:</span> test
       <span class="code-prop">allow_failure:</span> false
@@ -1100,7 +1100,7 @@ docker run --rm \
         <div class="code-block"><span class="code-comment"># .pre-commit-config.yaml</span>
 <span class="code-prop">repos:</span>
   - <span class="code-prop">repo:</span> https://github.com/orieg/discipline
-    <span class="code-prop">rev:</span> v0.10.1
+    <span class="code-prop">rev:</span> v0.10.2
     <span class="code-prop">hooks:</span>
       - <span class="code-prop">id:</span> discipline         <span class="code-comment"># Compiles via cargo</span>
       <span class="code-comment"># - id: discipline-system   # Or uses binary on PATH</span></div>
@@ -1799,7 +1799,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       </div>
       <div class="install-card">
         <h4>GitLab CI/CD</h4>
-        <div class="install-snippet">include: - remote: https://raw.githubusercontent.com/orieg/discipline/v0.10.1/templates/discipline.gitlab-ci.yml</div>
+        <div class="install-snippet">include: - remote: https://raw.githubusercontent.com/orieg/discipline/v0.10.2/templates/discipline.gitlab-ci.yml</div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Job template with <code>spec: inputs</code> (GitLab 16.0+), pinned to a release.</p>
       </div>
       <div class="install-card">
