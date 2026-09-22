@@ -502,7 +502,7 @@ functions = ["self_test"]      # leaf function names that are test entry points 
 paths = ["scripts/fixtures/**"] # globs whose every line is test scope
 ```
 
-One declaration is honoured by every gate that separates test code from production code: the assertion gates collect a declared function as a test; `error-swallowing`, `stub-bodies` and `suppression-delta` treat its body (or the whole declared file) as test scope; `pii` does not report fixture strings inside it. Widening either list is reported by `config-integrity` as a weakening.
+One declaration is honoured by every gate that separates test code from production code: the assertion gates collect a declared function as a test; `error-swallowing`, `stub-bodies` and `suppression-delta` treat its body (or the whole declared file) as test scope; `pii` does not report fixture strings inside it. Widening either list is reported by `config-integrity` as a weakening, including the first change that sets it: that change carries `allow-gate-weakening: tests <reason>` (the subject is `tests`, not a gate id). Growing `assert_helper_fns` in the same change needs one more line per gate, named by its id (`allow-gate-weakening: assertion-reduction <reason>`, `allow-gate-weakening: vacuous-tests <reason>`); see `config-integrity` in [GATES.md](GATES.md).
 
 ## Trust Model
 
