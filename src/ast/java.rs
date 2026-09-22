@@ -17,7 +17,7 @@ impl LanguagePack for JavaPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
         )
     }
 
@@ -74,6 +74,16 @@ impl LanguagePack for JavaPack {
                 super::handlers::extract(root, src, &JAVA_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &JAVA_RETRIES);
+        extractor.facts.prose = super::prose::extract(
+            root,
+            src,
+            &[
+                "line_comment",
+                "block_comment",
+                "string_literal",
+                "text_block",
+            ],
+        );
         Ok(extractor.facts)
     }
 }

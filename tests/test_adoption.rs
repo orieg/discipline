@@ -27,6 +27,11 @@ severity = "warning"
 
 [gates.pii]
 severity = "note"
+
+# Under --whole-tree the harness's own AGENTS.md is an instruction-file finding; the
+# fixture pins one finding per severity, so the gate is off here.
+[gates.instruction-smuggling]
+enabled = false
 "#;
 
 /// The debt on `main` with a clean working branch (the brownfield case, reached

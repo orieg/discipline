@@ -322,6 +322,14 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "instruction-smuggling: a bidi override is classified, a leading BOM is not",
+        || {
+            use crate::guards::instruction_smuggling::invisible_classes;
+            Ok(invisible_classes("a\u{202E}b", false) == vec!["bidirectional-control"]
+                && invisible_classes("\u{FEFF}# title", true).is_empty())
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;

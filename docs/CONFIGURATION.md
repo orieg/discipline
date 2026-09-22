@@ -172,6 +172,9 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.ignored-tests.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.ignored-tests.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.ignored-tests.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.instruction-smuggling.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.instruction-smuggling.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.instruction-smuggling.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.issue-link.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.issue-link.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.issue-link.pattern` | string | *(unset)* | Custom regex pattern required in PR title or body |
@@ -420,6 +423,7 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 | `allow-toolchain-weakening:` / `discipline:allow(toolchain-config)` / `allow(toolchain-config)` | `toolchain-config` | Option key path (`compilerOptions.strict`), its last segment, or the configuration file path |
 | `allow-stub:` / `discipline:allow(stub-bodies)` / `allow(stub-bodies)` | `stub-bodies` | Function name, or the file path |
 | `allow-swallow:` / `discipline:allow(error-swallowing)` / `allow(error-swallowing)` | `error-swallowing` | File path, or `path:line` of the handler |
+| `allow-agent-instructions:` / `discipline:allow(instruction-smuggling)` / `allow(instruction-smuggling)` | `instruction-smuggling` | File path, or `path:line` |
 | `allow-regression:` / `discipline:allow(bench-regression)` / `allow(bench-regression)` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
 | `allow-command:` / `discipline:allow(command)` / `allow(command)` | `command` | Subcommand or command line invocation, plus non-empty rationale |
 | `allow-dependency:` / `discipline:allow(dependency-delta)` / `allow(dependency-delta)` | `dependency-delta` | Dependency package name or manifest path |

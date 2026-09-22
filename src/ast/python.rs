@@ -21,7 +21,7 @@ impl LanguagePack for PythonPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
         )
     }
 
@@ -83,6 +83,7 @@ impl LanguagePack for PythonPack {
                 super::handlers::extract(root, src, &PYTHON_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &PYTHON_RETRIES);
+        extractor.facts.prose = super::prose::extract(root, src, &["comment", "string"]);
         Ok(extractor.facts)
     }
 }

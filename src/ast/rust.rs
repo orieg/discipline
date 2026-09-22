@@ -24,6 +24,7 @@ impl LanguagePack for RustPack {
                 | Fact::UnsafeSites
                 | Fact::Functions
                 | Fact::Handlers
+                | Fact::Prose
         )
     }
 
@@ -86,6 +87,16 @@ impl LanguagePack for RustPack {
             cx.facts.swallowed = super::handlers::extract(root, src, &RUST_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut cx.facts.tests, &RUST_RETRIES);
+        cx.facts.prose = super::prose::extract(
+            root,
+            src,
+            &[
+                "line_comment",
+                "block_comment",
+                "string_literal",
+                "raw_string_literal",
+            ],
+        );
         Ok(cx.facts)
     }
 }

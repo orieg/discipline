@@ -8,6 +8,7 @@ pub mod command;
 pub mod dependency;
 pub mod error_swallowing;
 pub mod hygiene;
+pub mod instruction_smuggling;
 pub mod integrity;
 pub mod issue_link;
 pub mod lockfile;
@@ -335,6 +336,7 @@ pub fn run_checks(
             "toolchain-config" => toolchain_config::toolchain_config(ctx),
             "stub-bodies" => stub_bodies::stub_bodies(ctx),
             "error-swallowing" => error_swallowing::error_swallowing(ctx),
+            "instruction-smuggling" => instruction_smuggling::instruction_smuggling(ctx),
             "golden-output" => integrity::golden_output(ctx),
             "bench-regression" => perf::bench_regression(ctx),
             "command" => command::evaluate_command(ctx),
@@ -425,6 +427,8 @@ pub fn run_checks(
             "version-lockstep"
         } else if note.contains("allow-scope") {
             "scope-confinement"
+        } else if note.contains("allow-agent-instructions") {
+            "instruction-smuggling"
         } else if note.contains("allow-swallow") {
             "error-swallowing"
         } else if note.contains("allow-stub") {
@@ -459,6 +463,7 @@ pub fn run_checks(
                         | "toolchain-config"
                         | "stub-bodies"
                         | "error-swallowing"
+                        | "instruction-smuggling"
                         | "golden-output"
                         | "bench-regression"
                         | "command"

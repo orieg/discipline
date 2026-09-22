@@ -23,6 +23,7 @@ pub mod javascript;
 pub mod mocks;
 #[cfg(feature = "lang-php")]
 pub mod php;
+pub mod prose;
 #[cfg(feature = "lang-python")]
 pub mod python;
 pub mod retries;
@@ -64,6 +65,7 @@ pub enum Fact {
     UnsafeSites,
     Functions,
     Handlers,
+    Prose,
 }
 
 /// Registry of active language packs.
@@ -266,6 +268,8 @@ pub struct ParsedFileFacts {
     pub functions: Vec<functions::FunctionFacts>,
     /// Error handlers that swallow, and discarded results, outside tests (`Fact::Handlers`).
     pub swallowed: Vec<handlers::SwallowSite>,
+    /// Comments, docstrings and string literals (`Fact::Prose`).
+    pub prose: Vec<prose::ProseSpan>,
     /// Number of compile-time assertions outside tests (e.g. `const _: () = assert!(...)`, `static_assert`).
     pub compile_time_asserts: usize,
     /// Line of the first compile-time assertion (if any).
@@ -288,6 +292,7 @@ impl Default for ParsedFileFacts {
             escape_hatches: Vec::new(),
             functions: Vec::new(),
             swallowed: Vec::new(),
+            prose: Vec::new(),
             compile_time_asserts: 0,
             compile_time_assert_line: None,
             compile_time_test: Some(TestFn {

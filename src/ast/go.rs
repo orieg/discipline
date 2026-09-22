@@ -17,7 +17,7 @@ impl LanguagePack for GoPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
         )
     }
 
@@ -74,6 +74,15 @@ impl LanguagePack for GoPack {
                 super::handlers::extract(root, src, &GO_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &GO_RETRIES);
+        extractor.facts.prose = super::prose::extract(
+            root,
+            src,
+            &[
+                "comment",
+                "interpreted_string_literal",
+                "raw_string_literal",
+            ],
+        );
         Ok(extractor.facts)
     }
 }

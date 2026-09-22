@@ -115,6 +115,7 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 | [`config-integrity`](docs/GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
 | [`stub-bodies`](docs/GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C# | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
 | [`error-swallowing`](docs/GATES.md#error-swallowing) | agent-guard | Rust, Python, JS/TS, Go, Java, C# | no new empty error handler or discarded Result outside tests |
+| [`instruction-smuggling`](docs/GATES.md#instruction-smuggling) | agent-guard | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C# and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
 | [`toolchain-config`](docs/GATES.md#toolchain-config) | integrity | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](docs/GATES.md#scope-confinement) | agent-guard | any | changes stay inside authorized paths |
 | [`suppression-delta`](docs/GATES.md#suppression-delta) | agent-guard | per pack | newly added linter / compiler suppression annotations |

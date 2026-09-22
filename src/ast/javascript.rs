@@ -17,7 +17,7 @@ impl LanguagePack for JavaScriptPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
         )
     }
 
@@ -80,6 +80,8 @@ impl LanguagePack for JavaScriptPack {
                 super::handlers::extract(root, src, &JS_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &JS_RETRIES);
+        extractor.facts.prose =
+            super::prose::extract(root, src, &["comment", "string", "template_string"]);
         Ok(extractor.facts)
     }
 }

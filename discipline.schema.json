@@ -1283,6 +1283,14 @@
           ],
           "description": "tests must not be newly #[ignore]d or skipped without directive"
         },
+        "instruction-smuggling": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose"
+        },
         "issue-link": {
           "allOf": [
             {

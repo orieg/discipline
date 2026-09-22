@@ -1135,8 +1135,8 @@ discipline self-test</div>
 
     <div class="gate-search-wrapper">
 <!-- generated:gate-search -->
-      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 34 gates by id, category, language, or rule..." aria-label="Search active gates">
-      <span id="gate-count" class="gate-count">Showing 34 of 34 gates</span>
+      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 35 gates by id, category, language, or rule..." aria-label="Search active gates">
+      <span id="gate-count" class="gate-count">Showing 35 of 35 gates</span>
 <!-- /generated -->
     </div>
 
@@ -1250,6 +1250,13 @@ discipline self-test</div>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, Go, Java, C#</span></td>
             <td>no new empty error handler or discarded Result outside tests</td>
+          </tr>
+          <tr>
+            <td class="gate-id">instruction-smuggling</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C# and prose files (phrases)</span></td>
+            <td>no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose</td>
           </tr>
           <tr>
             <td class="gate-id">toolchain-config</td>

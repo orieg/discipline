@@ -17,7 +17,7 @@ impl LanguagePack for CSharpPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
         )
     }
 
@@ -77,6 +77,16 @@ impl LanguagePack for CSharpPack {
                 super::handlers::extract(root, src, &CSHARP_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &CSHARP_RETRIES);
+        extractor.facts.prose = super::prose::extract(
+            root,
+            src,
+            &[
+                "comment",
+                "string_literal",
+                "verbatim_string_literal",
+                "raw_string_literal",
+            ],
+        );
         Ok(extractor.facts)
     }
 }
