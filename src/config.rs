@@ -565,6 +565,12 @@ pub struct AssertionGate {
     pub assert_helper_fns: Vec<String>,
     /// Minimum assertions required per test method (default: None).
     pub min_assertions_per_test: Option<usize>,
+    /// Callee fragments that construct or program a test double, beyond the built-in
+    /// vocabulary (`Mock(`, `jest.fn`, `when(`, `.Setup(`, ...).
+    pub mock_setup_fns: Vec<String>,
+    /// Callee fragments that assert on a double's interactions, beyond the built-in
+    /// vocabulary (`assert_called_with`, `toHaveBeenCalled`, `verify(`, ...).
+    pub mock_assert_fns: Vec<String>,
 }
 
 impl Default for AssertionGate {
@@ -576,6 +582,8 @@ impl Default for AssertionGate {
             extra_assert_macros: Vec::new(),
             assert_helper_fns: Vec::new(),
             min_assertions_per_test: None,
+            mock_setup_fns: Vec::new(),
+            mock_assert_fns: Vec::new(),
         }
     }
 }

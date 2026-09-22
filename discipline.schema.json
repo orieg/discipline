@@ -54,6 +54,14 @@
           "description": "Minimum assertions required per test method",
           "type": "integer"
         },
+        "mock_assert_fns": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Callee fragments that assert on a test double's interactions, beyond the built-in vocabulary"
+        },
+        "mock_setup_fns": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Callee fragments that construct or program a test double, beyond the built-in vocabulary"
+        },
         "severity": {
           "$ref": "#/$defs/Severity"
         }

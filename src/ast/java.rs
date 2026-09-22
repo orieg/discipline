@@ -52,6 +52,14 @@ impl LanguagePack for JavaPack {
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         extractor.facts.functions = functions::extract(root, src, path, &JAVA_FUNCTIONS);
+        super::mocks::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &JAVA_MOCKS,
+            &vocab.mock_setup_fns,
+            &vocab.mock_assert_fns,
+        );
         Ok(extractor.facts)
     }
 }
@@ -581,6 +589,11 @@ pub const JAVA_FUNCTIONS: FunctionSpec = FunctionSpec {
     skip: functions::skip_none,
     is_test: java_fn_is_test,
     classify: functions::classify_jvm,
+};
+
+pub const JAVA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
+    call_kinds: &["method_invocation", "object_creation_expression"],
+    callee_fields: &["name"],
 };
 
 #[cfg(test)]

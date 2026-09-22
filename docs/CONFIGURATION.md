@@ -73,6 +73,8 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.assertion-reduction.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.assertion-reduction.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |
 | `gates.assertion-reduction.min_assertions_per_test` | integer | *(unset)* | Minimum assertions required per test method |
+| `gates.assertion-reduction.mock_assert_fns` | list | `[]` | Callee fragments that assert on a test double's interactions, beyond the built-in vocabulary |
+| `gates.assertion-reduction.mock_setup_fns` | list | `[]` | Callee fragments that construct or program a test double, beyond the built-in vocabulary |
 | `gates.assertion-reduction.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.bench-regression.advisory_pct` | number | `0.1` | Advisory review percentage (default: 0.1%) |
 | `gates.bench-regression.allow_cross_host` | boolean | `false` | Allow benchmark comparison across mismatched host/runner provenance |
@@ -284,6 +286,8 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.vacuous-tests.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.vacuous-tests.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |
 | `gates.vacuous-tests.min_assertions_per_test` | integer | *(unset)* | Minimum assertions required per test method |
+| `gates.vacuous-tests.mock_assert_fns` | list | `[]` | Callee fragments that assert on a test double's interactions, beyond the built-in vocabulary |
+| `gates.vacuous-tests.mock_setup_fns` | list | `[]` | Callee fragments that construct or program a test double, beyond the built-in vocabulary |
 | `gates.vacuous-tests.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.version-lockstep.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.version-lockstep.exempt_paths` | list | `[]` | File path globs exempted from this gate |

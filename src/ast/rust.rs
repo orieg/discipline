@@ -64,6 +64,14 @@ impl LanguagePack for RustPack {
         cx.resolve_same_file_helpers();
         cx.facts.build_compile_time_test();
         cx.facts.functions = functions::extract(root, src, path, &RUST_FUNCTIONS);
+        super::mocks::count(
+            root,
+            src,
+            &mut cx.facts.tests,
+            &RUST_MOCKS,
+            &vocab.mock_setup_fns,
+            &vocab.mock_assert_fns,
+        );
         Ok(cx.facts)
     }
 }
@@ -362,6 +370,8 @@ impl<'a> Extractor<'a> {
             conditional_ignore,
             fatal_asserts: 0,
             should_panic,
+            mock_setups: 0,
+            mock_asserts: 0,
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")
@@ -922,6 +932,11 @@ pub const RUST_FUNCTIONS: FunctionSpec = FunctionSpec {
     skip: rust_fn_skip,
     is_test: rust_fn_is_test,
     classify: functions::classify_rust,
+};
+
+pub const RUST_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
+    call_kinds: &["call_expression", "macro_invocation"],
+    callee_fields: &["function", "macro"],
 };
 
 #[cfg(test)]

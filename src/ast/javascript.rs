@@ -58,6 +58,14 @@ impl LanguagePack for JavaScriptPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.facts.functions = functions::extract(root, src, path, &JS_FUNCTIONS);
+        super::mocks::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &JS_MOCKS,
+            &vocab.mock_setup_fns,
+            &vocab.mock_assert_fns,
+        );
         Ok(extractor.facts)
     }
 }
@@ -560,6 +568,11 @@ pub const JS_FUNCTIONS: FunctionSpec = FunctionSpec {
     skip: js_fn_skip,
     is_test: js_fn_is_test,
     classify: functions::classify_javascript,
+};
+
+pub const JS_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
+    call_kinds: &["call_expression"],
+    callee_fields: &["function"],
 };
 
 #[cfg(test)]

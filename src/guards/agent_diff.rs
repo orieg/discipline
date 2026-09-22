@@ -46,6 +46,16 @@ pub(crate) fn assert_vocabulary(config: &crate::config::DisciplineConfig) -> Ass
         ]
         .concat(),
         safety_placeholders: gates.unsafe_safety_comment.placeholders.clone(),
+        mock_setup_fns: [
+            &gates.assertion_reduction.mock_setup_fns[..],
+            &gates.vacuous_tests.mock_setup_fns[..],
+        ]
+        .concat(),
+        mock_assert_fns: [
+            &gates.assertion_reduction.mock_assert_fns[..],
+            &gates.vacuous_tests.mock_assert_fns[..],
+        ]
+        .concat(),
     }
 }
 
@@ -622,7 +632,12 @@ pub fn evaluate_assertion_reduction(
         let total_drop = h_eff < b_eff;
         let strong_drop = h.strong_asserts < b.strong_asserts;
         let fatal_drop = h.fatal_asserts < b.fatal_asserts;
-        if !(total_drop || strong_drop || fatal_drop) {
+        // More doubles in the test, and no stronger assertion on what the code produced:
+        // the shape of an integration failure sidestepped by mocking it away.
+        let mock_growth = h.mock_setups > b.mock_setups
+            && h.strong_asserts <= b.strong_asserts
+            && h_eff.saturating_sub(h.mock_asserts) <= b_eff.saturating_sub(b.mock_asserts);
+        if !(total_drop || strong_drop || fatal_drop || mock_growth) {
             continue;
         }
 
@@ -659,6 +674,24 @@ pub fn evaluate_assertion_reduction(
             format!("Test `{}`", h.name)
         };
         let directive_name = if p.forced { leaf_name(b) } else { leaf_name(h) };
+
+        if !total_drop && !strong_drop && !fatal_drop && mock_growth {
+            out.push(
+                crate::config::Severity::Warning,
+                "Mocking Grew Without Stronger Assertions",
+                Some(p.path),
+                Some(h.line),
+                format!(
+                    "{test_label}: test doubles rose from {} to {} while assertions on real output did not grow (equality / pattern assertions: {} -> {}).",
+                    b.mock_setups, h.mock_setups, b.strong_asserts, h.strong_asserts
+                ),
+                &format!(
+                    "Assert on what the code produces alongside the new doubles, or justify the change in the PR body: `allow-assertion-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
+            continue;
+        }
 
         if !total_drop && !strong_drop && fatal_drop {
             out.push(
@@ -731,6 +764,26 @@ pub fn evaluate_vacuous_tests(
     out.examined = added.len();
 
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
+        // Every assertion is on a double's interactions: the test checks that the mock
+        // was called, and nothing about what the code produced.
+        if a.test.mock_asserts > 0
+            && a.test.mock_asserts >= a.test.effective_asserts()
+            && a.test.strong_asserts == 0
+            && !a.test.should_panic
+        {
+            out.push(
+                crate::config::Severity::Warning,
+                "Test Asserts Only On Mocks",
+                Some(a.path),
+                Some(a.test.line),
+                format!(
+                    "New test `{}` makes {} assertion(s), all on test-double interactions; it does not check what the code produces.",
+                    a.test.name, a.test.mock_asserts
+                ),
+                "Assert on the result or the observable effect as well; interaction checks alone pass whatever the code returns.",
+            );
+            continue;
+        }
         if a.test.is_vacuous() {
             let why = if a.test.total_asserts == 0 {
                 "contains no assertion".to_string()

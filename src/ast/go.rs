@@ -52,6 +52,14 @@ impl LanguagePack for GoPack {
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         extractor.facts.functions = functions::extract(root, src, path, &GO_FUNCTIONS);
+        super::mocks::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &GO_MOCKS,
+            &vocab.mock_setup_fns,
+            &vocab.mock_assert_fns,
+        );
         Ok(extractor.facts)
     }
 }
@@ -492,6 +500,11 @@ pub const GO_FUNCTIONS: FunctionSpec = FunctionSpec {
     skip: functions::skip_none,
     is_test: go_fn_is_test,
     classify: functions::classify_go,
+};
+
+pub const GO_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
+    call_kinds: &["call_expression"],
+    callee_fields: &["function"],
 };
 
 #[cfg(test)]

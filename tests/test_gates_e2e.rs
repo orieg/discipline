@@ -2194,6 +2194,106 @@ fn stub_bodies_reports_added_stubs_and_gutted_bodies_across_languages() {
     );
 }
 
+// ---- mock infiltration -----------------------------------------------------
+
+#[test]
+fn a_test_that_asserts_only_on_mocks_and_a_test_that_mocks_its_way_past_a_failure() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tests/test_svc.py",
+        "from svc import run\n\ndef test_run():\n    assert run(RealRepo()) == 3\n",
+    );
+    repo.commit("test: real");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // A new test whose only assertions are interaction checks, and an existing test that
+    // gains a double while its assertion on the result goes away.
+    repo.write(
+        "tests/test_svc.py",
+        "from unittest.mock import Mock\nfrom svc import run\n\n\
+         def test_run():\n    repo = Mock()\n    run(repo)\n    assert repo.save.called\n\n\
+         def test_saves():\n    repo = Mock()\n    run(repo)\n    repo.save.assert_called_once_with(3)\n    repo.flush.assert_called_once()\n",
+    );
+    repo.commit("test: mock the repo");
+    let run = repo.check(&[]);
+    let vacuous: Vec<String> = run.titles("vacuous-tests");
+    assert_eq!(
+        vacuous,
+        vec!["Test Asserts Only On Mocks"],
+        "{:?}",
+        run.violations("vacuous-tests")
+    );
+    assert_eq!(run.violations("vacuous-tests")[0]["severity"], "warning");
+    let reduction = run.titles("assertion-reduction");
+    assert_eq!(
+        reduction,
+        vec!["Assertion Reduction In Existing Test"],
+        "{reduction:?}"
+    );
+
+    // Same doubles, but the result is still asserted: the growth rule stays silent, and
+    // a new test that checks the result as well as the interaction is not mock-only.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tests/test_svc.py",
+        "from svc import run\n\ndef test_run():\n    assert run(RealRepo()) == 3\n",
+    );
+    repo.commit("test: real");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "tests/test_svc.py",
+        "from unittest.mock import Mock\nfrom svc import run\n\n\
+         def test_run():\n    repo = Mock()\n    assert run(repo) == 3\n\n\
+         def test_saves():\n    repo = Mock()\n    assert run(repo) == 3\n    repo.save.assert_called_once_with(3)\n",
+    );
+    repo.commit("test: mock the repo, keep the result");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("vacuous-tests").is_empty(),
+        "{:?}",
+        run.violations("vacuous-tests")
+    );
+    assert_eq!(
+        run.titles("assertion-reduction"),
+        vec!["Mocking Grew Without Stronger Assertions"],
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+    assert_eq!(
+        run.violations("assertion-reduction")[0]["severity"],
+        "warning"
+    );
+    assert_eq!(run.code, 0, "warnings do not block by default");
+
+    // The existing directive lifts the growth finding.
+    repo.commit("test: explain\n\nallow-assertion-drop: test_run the repository is exercised by the integration suite");
+    assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
+
+    // Doubles added together with a stronger assertion on the result: not a weakening.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tests/test_svc.py",
+        "from svc import run\n\ndef test_run():\n    assert run(RealRepo())\n",
+    );
+    repo.commit("test: real");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "tests/test_svc.py",
+        "from unittest.mock import Mock\nfrom svc import run\n\n\
+         def test_run():\n    repo = Mock()\n    assert run(repo) == 3\n",
+    );
+    repo.commit("test: tighten with a double");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+}
+
 // ---- override policy -------------------------------------------------------
 
 /// A change that disables two gates and excuses both from its commit body.

@@ -61,6 +61,14 @@ impl LanguagePack for PythonPack {
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         extractor.facts.functions = functions::extract(root, src, path, &PYTHON_FUNCTIONS);
+        super::mocks::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &PYTHON_MOCKS,
+            &vocab.mock_setup_fns,
+            &vocab.mock_assert_fns,
+        );
         Ok(extractor.facts)
     }
 }
@@ -868,6 +876,11 @@ pub const PYTHON_FUNCTIONS: FunctionSpec = FunctionSpec {
     skip: python_fn_skip,
     is_test: python_fn_is_test,
     classify: functions::classify_python,
+};
+
+pub const PYTHON_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
+    call_kinds: &["call"],
+    callee_fields: &["function"],
 };
 
 #[cfg(test)]

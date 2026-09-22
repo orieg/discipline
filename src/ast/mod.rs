@@ -19,6 +19,7 @@ pub mod golden;
 pub mod java;
 #[cfg(feature = "lang-javascript")]
 pub mod javascript;
+pub mod mocks;
 #[cfg(feature = "lang-php")]
 pub mod php;
 #[cfg(feature = "lang-python")]
@@ -196,6 +197,10 @@ pub struct TestFn {
     /// Fatal assertions that abort execution on failure (e.g. `require.*`, `ASSERT_*`).
     pub fatal_asserts: usize,
     pub should_panic: bool,
+    /// Test doubles constructed or programmed in the body (`Mock()`, `jest.fn()`, `when(`).
+    pub mock_setups: usize,
+    /// Assertions on a double's interactions (`assert_called_with`, `toHaveBeenCalled`).
+    pub mock_asserts: usize,
 }
 
 impl TestFn {
@@ -288,6 +293,8 @@ impl Default for ParsedFileFacts {
                 conditional_ignore: None,
                 fatal_asserts: 0,
                 should_panic: false,
+                mock_setups: 0,
+                mock_asserts: 0,
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -311,6 +318,8 @@ impl ParsedFileFacts {
             conditional_ignore: None,
             fatal_asserts: 0,
             should_panic: false,
+            mock_setups: 0,
+            mock_asserts: 0,
         });
     }
 }
@@ -349,6 +358,10 @@ pub struct AssertVocabulary {
     pub extra_macros: Vec<String>,
     pub helper_fns: Vec<String>,
     pub safety_placeholders: Vec<String>,
+    /// Callee fragments that construct or program a test double, beyond the built-in list.
+    pub mock_setup_fns: Vec<String>,
+    /// Callee fragments that assert on a double's interactions, beyond the built-in list.
+    pub mock_assert_fns: Vec<String>,
 }
 
 /// Top-level helper to analyze Rust code directly.
@@ -399,6 +412,8 @@ mod tests {
                     tautologies: 0,
                     ignored: false,
                     should_panic: false,
+                    mock_setups: 0,
+                    mock_asserts: 0,
                     ..Default::default()
                 });
             }

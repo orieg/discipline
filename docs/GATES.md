@@ -152,6 +152,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Assertion weakening (e.g. `assert_eq!(a, b)` -> `assert!(a == b)` or `assert!(a.is_some())`).
   - Replacing strong matchers with truthiness checks (e.g. `expect(x).toEqual(y)` -> `expect(x).toBeTruthy()`).
   - Replacing assertions with tautologies (`assert!(true)`, `assert_eq!(x, x)`).
+  - `Mocking Grew Without Stronger Assertions` (warning): an existing test gains test doubles (`Mock()`, `jest.fn`, `when(`, `.Setup(`, ...; `mock_setup_fns` extends the vocabulary) while its equality / pattern assertions and its assertions on real output do not grow. That is the shape of an integration failure mocked away. Doubles added together with a stronger assertion on the result are not reported.
   - Deleting compile-time invariant assertions outside tests (e.g. `const _: () = assert!(...);`, `static_assertions::*`, `const_assert!`, C/C++ `static_assert`).
 - **Compile-Time Invariant Protection:**
   In addition to test functions, `assertion-reduction` tracks compile-time assertions outside test functions (struct sizes, field alignments, type layout invariants, and C/C++ `static_assert`). Deleting or removing compile-time guards triggers an assertion reduction violation on `Test compile-time-assertions`:
@@ -200,6 +201,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Verbatim tautologies: `assert_eq!(x, x)`, `assert_eq!(1, 1)`, `assert!(true)`.
   - Constant expression tautologies: `assert!(1 == 1)`, `assert!(1 + 1 > 0)`, `assert_ne!(1, 2)`.
   - Empty PHPT expectation sections.
+  - `Test Asserts Only On Mocks` (warning): a new test whose every assertion is on a double's interactions (`assert_called_with`, `toHaveBeenCalled`, `verify(`, `.Received(`, ...; `mock_assert_fns` extends the vocabulary) and none on what the code produces. Such a test passes whatever the code returns. Mock usage is read from the call nodes inside each test body (`src/ast/mocks.rs`), for Rust, Python, JS/TS, Go, Java and C#.
 - **Failing diff example (rejected):**
   ```python
   # Newly added test without non-tautological assertion — rejected by vacuous-tests:

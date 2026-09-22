@@ -55,6 +55,14 @@ impl LanguagePack for CSharpPack {
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         extractor.facts.functions = functions::extract(root, src, path, &CSHARP_FUNCTIONS);
+        super::mocks::count(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &CSHARP_MOCKS,
+            &vocab.mock_setup_fns,
+            &vocab.mock_assert_fns,
+        );
         Ok(extractor.facts)
     }
 }
@@ -606,6 +614,11 @@ pub const CSHARP_FUNCTIONS: FunctionSpec = FunctionSpec {
     skip: csharp_fn_skip,
     is_test: csharp_fn_is_test,
     classify: functions::classify_jvm,
+};
+
+pub const CSHARP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
+    call_kinds: &["invocation_expression", "object_creation_expression"],
+    callee_fields: &["function"],
 };
 
 #[cfg(test)]

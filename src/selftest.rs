@@ -298,6 +298,21 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "mocks: an interaction check counts as a mock assertion, an equality check does not",
+        || {
+            let v = AssertVocabulary::default();
+            let mocked = analyze(
+                "#[test]\nfn t() { let mut m = MockRepo::new(); m.expect_find().returning(|_| 1); run(&m); m.checkpoint(); }",
+                &v,
+            )?;
+            let plain = analyze("#[test]\nfn t() { assert_eq!(run(&Real), 1); }", &v)?;
+            Ok(mocked.tests[0].mock_setups == 1
+                && mocked.tests[0].mock_asserts == 1
+                && plain.tests[0].mock_setups == 0
+                && plain.tests[0].mock_asserts == 0)
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;

@@ -174,7 +174,9 @@ pub fn generate_schema() -> Value {
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "extra_assert_macros": { "$ref": "#/$defs/StringListOrReset", "description": "Additional macro names treated as assertions" },
                     "assert_helper_fns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional function names treated as assertions" },
-                    "min_assertions_per_test": { "type": "integer", "description": "Minimum assertions required per test method" }
+                    "min_assertions_per_test": { "type": "integer", "description": "Minimum assertions required per test method" },
+                    "mock_setup_fns": { "$ref": "#/$defs/StringListOrReset", "description": "Callee fragments that construct or program a test double, beyond the built-in vocabulary" },
+                    "mock_assert_fns": { "$ref": "#/$defs/StringListOrReset", "description": "Callee fragments that assert on a test double's interactions, beyond the built-in vocabulary" }
                 }
             },
             "DeletionGate": {

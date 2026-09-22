@@ -87,6 +87,8 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("extra_secret_patterns", Direction::Shrunk),
     ("required_suites", Direction::Shrunk),
     ("commands", Direction::Shrunk),
+    ("mock_setup_fns", Direction::Shrunk),
+    ("mock_assert_fns", Direction::Shrunk),
     ("rules", Direction::Shrunk),
     ("groups", Direction::Shrunk),
     // Numbers.
