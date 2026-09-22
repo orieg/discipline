@@ -15,7 +15,10 @@ impl LanguagePack for GoPack {
     }
 
     fn supplies(&self, fact: Fact) -> bool {
-        matches!(fact, Fact::Tests | Fact::EscapeHatches | Fact::Functions)
+        matches!(
+            fact,
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -60,6 +63,17 @@ impl LanguagePack for GoPack {
             &vocab.mock_setup_fns,
             &vocab.mock_assert_fns,
         );
+        {
+            let tests = &extractor.facts.tests;
+            let spans: Vec<(usize, usize)> = tests
+                .iter()
+                .map(|t| (t.line, t.end_line.max(t.line)))
+                .collect();
+            let is_test_line = |l: usize| spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            extractor.facts.swallowed =
+                super::handlers::extract(root, src, &GO_HANDLERS, &is_test_line);
+        }
+        super::retries::mark(root, src, &mut extractor.facts.tests, &GO_RETRIES);
         Ok(extractor.facts)
     }
 }
@@ -505,6 +519,19 @@ pub const GO_FUNCTIONS: FunctionSpec = FunctionSpec {
 pub const GO_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression"],
     callee_fields: &["function"],
+};
+
+pub const GO_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
+    handler_kinds: &[],
+    body_fields: &[],
+    ignored_kinds: &["comment"],
+    trivial: &[],
+    discard_kinds: &["assignment_statement", "short_var_declaration"],
+    discards: super::handlers::go_discards,
+};
+
+pub const GO_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
+    marker_kinds: &["call_expression"],
 };
 
 #[cfg(test)]

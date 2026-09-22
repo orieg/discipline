@@ -15,7 +15,10 @@ impl LanguagePack for JavaScriptPack {
     }
 
     fn supplies(&self, fact: Fact) -> bool {
-        matches!(fact, Fact::Tests | Fact::EscapeHatches | Fact::Functions)
+        matches!(
+            fact,
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -66,6 +69,17 @@ impl LanguagePack for JavaScriptPack {
             &vocab.mock_setup_fns,
             &vocab.mock_assert_fns,
         );
+        {
+            let tests = &extractor.facts.tests;
+            let spans: Vec<(usize, usize)> = tests
+                .iter()
+                .map(|t| (t.line, t.end_line.max(t.line)))
+                .collect();
+            let is_test_line = |l: usize| spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            extractor.facts.swallowed =
+                super::handlers::extract(root, src, &JS_HANDLERS, &is_test_line);
+        }
+        super::retries::mark(root, src, &mut extractor.facts.tests, &JS_RETRIES);
         Ok(extractor.facts)
     }
 }
@@ -573,6 +587,25 @@ pub const JS_FUNCTIONS: FunctionSpec = FunctionSpec {
 pub const JS_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression"],
     callee_fields: &["function"],
+};
+
+pub const JS_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
+    handler_kinds: &["catch_clause"],
+    body_fields: &["body", "statement_block"],
+    ignored_kinds: &["comment"],
+    trivial: &[
+        "return",
+        "return null",
+        "return undefined",
+        "return false",
+        "continue",
+    ],
+    discard_kinds: &[],
+    discards: super::handlers::no_discard,
+};
+
+pub const JS_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
+    marker_kinds: &["call_expression", "decorator"],
 };
 
 #[cfg(test)]

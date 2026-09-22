@@ -910,6 +910,49 @@ pub fn evaluate_ignored_tests(
         );
     }
 
+    // A test made green by running it again. A retry marker does not skip the test, but
+    // it lets a failure through as often as the marker allows.
+    let newly_retried = pairs
+        .iter()
+        .filter(|p| p.head.retries.is_some() && p.base.retries.is_none())
+        .map(|p| (p.path, p.head))
+        .chain(
+            added
+                .iter()
+                .filter(|a| a.test.retries.is_some())
+                .map(|a| (a.path, a.test)),
+        );
+    for (path, test) in newly_retried {
+        if exempt.matches(path) {
+            continue;
+        }
+        if let Some(record) =
+            tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
+        {
+            out.overrides.push(record);
+            continue;
+        }
+        let marker = test.retries.as_deref().unwrap_or("");
+        out.push(
+            if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            },
+            "Test Retries On Failure",
+            Some(path),
+            Some(test.line),
+            format!(
+                "Test `{}` carries a retry marker (`{marker}`); a failure passes on a later attempt.",
+                test.name
+            ),
+            &format!(
+                "Fix the cause of the flakiness, or justify the retry on its own line in the PR body or a commit message: `allow-ignore: {} <reason>`.",
+                leaf_name(test)
+            ),
+        );
+    }
+
     let newly_cond_ignored = pairs
         .iter()
         .filter(|p| {

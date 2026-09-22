@@ -160,6 +160,9 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.dependency-delta.manifests` | list | *(9 entries)* | Manifest file globs to inspect |
 | `gates.dependency-delta.require_git_pins` | boolean | `true` | Whether git dependencies must specify an immutable commit or tag pin (default: true) |
 | `gates.dependency-delta.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.error-swallowing.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.error-swallowing.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.error-swallowing.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.golden-output.allow_updates` | boolean | *(per entry)* | Permit snapshot updates without error |
 | `gates.golden-output.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.golden-output.exempt_paths` | list | `[]` | File path globs exempted from this gate |
@@ -416,6 +419,7 @@ Directives must begin on their own line. Mentions mid-sentence, inside markdown 
 | `allow-golden-update:` / `discipline:allow(golden-output)` / `allow(golden-output)` | `golden-output` | Snapshot/fixture file path or directory prefix |
 | `allow-toolchain-weakening:` / `discipline:allow(toolchain-config)` / `allow(toolchain-config)` | `toolchain-config` | Option key path (`compilerOptions.strict`), its last segment, or the configuration file path |
 | `allow-stub:` / `discipline:allow(stub-bodies)` / `allow(stub-bodies)` | `stub-bodies` | Function name, or the file path |
+| `allow-swallow:` / `discipline:allow(error-swallowing)` / `allow(error-swallowing)` | `error-swallowing` | File path, or `path:line` of the handler |
 | `allow-regression:` / `discipline:allow(bench-regression)` / `allow(bench-regression)` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
 | `allow-command:` / `discipline:allow(command)` / `allow(command)` | `command` | Subcommand or command line invocation, plus non-empty rationale |
 | `allow-dependency:` / `discipline:allow(dependency-delta)` / `allow(dependency-delta)` | `dependency-delta` | Dependency package name or manifest path |

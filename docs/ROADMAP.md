@@ -50,6 +50,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | [`issue-link`](GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`config-integrity`](GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
 | [`stub-bodies`](GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C# | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
+| [`error-swallowing`](GATES.md#error-swallowing) | agent-guard | Rust, Python, JS/TS, Go, Java, C# | no new empty error handler or discarded Result outside tests |
 | [`toolchain-config`](GATES.md#toolchain-config) | integrity | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](GATES.md#scope-confinement) | agent-guard | any | changes stay inside authorized paths |
 | [`suppression-delta`](GATES.md#suppression-delta) | agent-guard | per pack | newly added linter / compiler suppression annotations |
@@ -151,8 +152,8 @@ Candidate work from a review of discipline as a safety net against autonomous co
 
 - **`stub-bodies`.** **Shipped** for Rust, Python, JS/TS, Go, Java and C# (`src/ast/functions.rs`, one walker and classifier with per-language tables; `src/guards/stub_bodies.rs`): an added function whose whole body is a stub marker, and an existing substantive body replaced by a stub, an empty body or a bare constant return. Abstract, overload, Protocol, interface and test members are excluded. Open: PHP, Ruby and C/C++ function facts (their files are named as not analysed); a stub padded with a second statement.
 - **Mock infiltration.** **Shipped** (`src/ast/mocks.rs`): each test carries `mock_setups` and `mock_asserts`, counted from the call nodes inside its body against a shared vocabulary that `mock_setup_fns` / `mock_assert_fns` extend. `vacuous-tests` reports a new test whose every assertion is on a double's interactions; `assertion-reduction` reports an existing test whose doubles rose while its assertions on real output did not. Both at warning. Rust, Python, JS/TS, Go, Java, C#.
-- **Error swallowing.** Net new empty `catch {}`, `except: pass`, discarded `Result` in non-test code.
-- **Retry annotations.** `jest.retryTimes`, `@pytest.mark.flaky`, `@RetryingTest`, CI retry wrappers; reported through `ignored-tests`.
+- **Error swallowing.** **Shipped** as the `error-swallowing` gate (`src/ast/handlers.rs`): a new empty handler (`except: pass`, `catch (e) {}`, bare return) or a discarded result (`let _ = f()`, `f().ok()`, Go `_ = err`, `x, _ := f()`) outside tests, base against head per file. Rust, Python, JS/TS, Go, Java, C#. Open: a handler that logs and swallows.
+- **Retry annotations.** **Shipped** through `ignored-tests` (`src/ast/retries.rs`): a test that gains a retry / flaky marker, or arrives with one, is `Test Retries On Failure`; a file-level `jest.retryTimes` marks every test in the file. CI-level retry wrappers stay with `ci-integrity` / `toolchain-config` (nextest `retries`, pytest `--reruns`).
 
 **Tier 3: governance.**
 
@@ -161,7 +162,7 @@ Candidate work from a review of discipline as a safety net against autonomous co
 - **Registry verification of new dependencies: declined.** A lookup of package existence and first-publish date needs a network path beyond the forge API, which `AGENTS.md` §3.3 forbids, and it would send internal package names to public registries. Lockfile integrity (Tier 1) is the offline control; existence and advisory checks stay with the `command` presets. Reopen only with a design that keeps private names on the runner.
 
 - **Go / no-go gate:** each item meets the gate contract in `AGENTS.md` §3.4: positive and negative unit controls, an end-to-end case through the binary, a `self-test` case, and a named test that kills a mutated detector. A Tier 2 item additionally names every pack that does not supply its fact.
-- **Status:** Tier 0 shipped, with three named remainders (GitLab `include:` / `rules:` in `ci-integrity`, GitLab approvals in `require_approval`, forge-side `doctor` checks in CI); Tier 1 shipped (`toolchain-config`, lockfile integrity, `golden-output`, `test-floor`, `suppression-delta` on AST facts; the named remainders are `clippy.toml`, added snapshot files, the other lockfile formats, and `test-budget`'s line patterns); Tier 2 partly shipped (`stub-bodies`, mock infiltration; error swallowing and retry annotations are open); Tier 3 is a candidate.
+- **Status:** Tier 0 shipped, with three named remainders (GitLab `include:` / `rules:` in `ci-integrity`, GitLab approvals in `require_approval`, forge-side `doctor` checks in CI); Tier 1 shipped (`toolchain-config`, lockfile integrity, `golden-output`, `test-floor`, `suppression-delta` on AST facts; the named remainders are `clippy.toml`, added snapshot files, the other lockfile formats, and `test-budget`'s line patterns); Tier 2 shipped (`stub-bodies`, mock infiltration, `error-swallowing`, retry annotations; PHP, Ruby and C/C++ function and handler facts are the named remainder); Tier 3 is a candidate.
 
 ---
 
@@ -171,6 +172,7 @@ Default enablement and severity are part of the compatibility contract (`docs/AR
 
 | Release | Gate | Old default | New default | Direction | Reason | Restore previous behaviour |
 |---|---|---|---|---|---|---|
+| unreleased | `error-swallowing` | (new gate) | on, `error` | stricter | A new empty error handler or discarded fallible result outside tests is reported, base against head per file. Rust, Python, JS/TS, Go, Java, C#; other packs name their files as not analysed. | `[gates.error-swallowing]` `enabled = false` |
 | unreleased | `stub-bodies` | (new gate) | on, `error` | stricter | An added function whose whole body is `todo!()` / `raise NotImplementedError` / a not-implemented `throw`, or an existing body replaced by a stub, an empty body or a bare constant return, is reported. Rust, Python, JS/TS, Go, Java, C#; other packs name their files as not analysed. | `[gates.stub-bodies]` `enabled = false` |
 | unreleased | `toolchain-config` | (new gate) | on, `error` | stricter | A change cannot loosen the toolchain configuration it is judged by: same design as `config-integrity`, one rule table over tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit. A configuration written as code is reported at `warning` as not analysed. | `[gates.toolchain-config]` `enabled = false` |
 | v0.7.0 | `ci-skip-set` | (new gate) | on, `error` | stricter | Checks a rollup job's skip set against the filter outputs it observed. Inert (reported as not evaluated) until a workflow passes `DISCIPLINE_CI_CONTEXT`. | `[gates.ci-skip-set]` `enabled = false` |
@@ -189,6 +191,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | `ignored-tests` | A test that gains a retry / flaky marker (`@pytest.mark.flaky`, `jest.retryTimes`, `@RetryingTest`, ...) is reported as `Test Retries On Failure`. | stricter | `allow-ignore: <test> <reason>`. |
 | unreleased | `vacuous-tests`, `assertion-reduction` | Mock usage is read from test bodies. A new test asserting only on a double's interactions is reported (`Test Asserts Only On Mocks`, warning); an existing test whose doubles rose without a stronger assertion on real output is reported (`Mocking Grew Without Stronger Assertions`, warning). New options `mock_setup_fns` / `mock_assert_fns` on both gates. | stricter | `allow-assertion-drop: <test> <reason>` for the delta; assert on the result for the vacuity class. |
 | unreleased | `suppression-delta` | Sites come from the language packs and are a base-versus-head delta per file: a moved suppression, or one inside a string, is no longer reported; Java `@SuppressWarnings`, `@ts-nocheck` and `//lint:ignore` now are; Ruby and PHP suppressions are read for the first time. Files whose head side does not parse are named as not analysed. | reclassified | None; findings that were false positives disappear, and a few new ones appear in Java, PHP and Ruby. |
 | unreleased | `test-floor` | The static count is of tests that run: an unconditionally ignored / skipped test is no longer counted, on the base or the head side. Counts can drop. | stricter | Re-baseline `min_tests` / constant floors; the gate notes state how many tests were left out. |

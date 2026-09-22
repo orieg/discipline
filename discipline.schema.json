@@ -1259,6 +1259,14 @@
           ],
           "description": "manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification"
         },
+        "error-swallowing": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "no new empty error handler or discarded Result outside tests"
+        },
         "golden-output": {
           "allOf": [
             {

@@ -15,7 +15,10 @@ impl LanguagePack for CSharpPack {
     }
 
     fn supplies(&self, fact: Fact) -> bool {
-        matches!(fact, Fact::Tests | Fact::EscapeHatches | Fact::Functions)
+        matches!(
+            fact,
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -63,6 +66,17 @@ impl LanguagePack for CSharpPack {
             &vocab.mock_setup_fns,
             &vocab.mock_assert_fns,
         );
+        {
+            let tests = &extractor.facts.tests;
+            let spans: Vec<(usize, usize)> = tests
+                .iter()
+                .map(|t| (t.line, t.end_line.max(t.line)))
+                .collect();
+            let is_test_line = |l: usize| spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            extractor.facts.swallowed =
+                super::handlers::extract(root, src, &CSHARP_HANDLERS, &is_test_line);
+        }
+        super::retries::mark(root, src, &mut extractor.facts.tests, &CSHARP_RETRIES);
         Ok(extractor.facts)
     }
 }
@@ -619,6 +633,19 @@ pub const CSHARP_FUNCTIONS: FunctionSpec = FunctionSpec {
 pub const CSHARP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["invocation_expression", "object_creation_expression"],
     callee_fields: &["function"],
+};
+
+pub const CSHARP_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
+    handler_kinds: &["catch_clause"],
+    body_fields: &["body", "block"],
+    ignored_kinds: &["comment"],
+    trivial: &["return", "return null", "return false", "continue"],
+    discard_kinds: &[],
+    discards: super::handlers::no_discard,
+};
+
+pub const CSHARP_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
+    marker_kinds: &["attribute_list"],
 };
 
 #[cfg(test)]

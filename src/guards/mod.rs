@@ -6,6 +6,7 @@ pub mod ci_skip_set;
 pub mod claim_registry;
 pub mod command;
 pub mod dependency;
+pub mod error_swallowing;
 pub mod hygiene;
 pub mod integrity;
 pub mod issue_link;
@@ -333,6 +334,7 @@ pub fn run_checks(
             "config-integrity" => integrity::config_integrity(ctx),
             "toolchain-config" => toolchain_config::toolchain_config(ctx),
             "stub-bodies" => stub_bodies::stub_bodies(ctx),
+            "error-swallowing" => error_swallowing::error_swallowing(ctx),
             "golden-output" => integrity::golden_output(ctx),
             "bench-regression" => perf::bench_regression(ctx),
             "command" => command::evaluate_command(ctx),
@@ -423,6 +425,8 @@ pub fn run_checks(
             "version-lockstep"
         } else if note.contains("allow-scope") {
             "scope-confinement"
+        } else if note.contains("allow-swallow") {
+            "error-swallowing"
         } else if note.contains("allow-stub") {
             "stub-bodies"
         } else if note.contains("allow-toolchain-weakening") {
@@ -454,6 +458,7 @@ pub fn run_checks(
                         | "config-integrity"
                         | "toolchain-config"
                         | "stub-bodies"
+                        | "error-swallowing"
                         | "golden-output"
                         | "bench-regression"
                         | "command"

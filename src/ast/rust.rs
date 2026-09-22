@@ -19,7 +19,11 @@ impl LanguagePack for RustPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::UnsafeSites | Fact::Functions
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::UnsafeSites
+                | Fact::Functions
+                | Fact::Handlers
         )
     }
 
@@ -72,6 +76,16 @@ impl LanguagePack for RustPack {
             &vocab.mock_setup_fns,
             &vocab.mock_assert_fns,
         );
+        {
+            let tests = &cx.facts.tests;
+            let spans: Vec<(usize, usize)> = tests
+                .iter()
+                .map(|t| (t.line, t.end_line.max(t.line)))
+                .collect();
+            let is_test_line = |l: usize| spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            cx.facts.swallowed = super::handlers::extract(root, src, &RUST_HANDLERS, &is_test_line);
+        }
+        super::retries::mark(root, src, &mut cx.facts.tests, &RUST_RETRIES);
         Ok(cx.facts)
     }
 }
@@ -372,6 +386,7 @@ impl<'a> Extractor<'a> {
             should_panic,
             mock_setups: 0,
             mock_asserts: 0,
+            retries: None,
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")
@@ -937,6 +952,19 @@ pub const RUST_FUNCTIONS: FunctionSpec = FunctionSpec {
 pub const RUST_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression", "macro_invocation"],
     callee_fields: &["function", "macro"],
+};
+
+pub const RUST_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
+    handler_kinds: &[],
+    body_fields: &[],
+    ignored_kinds: &["line_comment", "block_comment"],
+    trivial: &[],
+    discard_kinds: &["let_declaration", "expression_statement"],
+    discards: super::handlers::rust_discards,
+};
+
+pub const RUST_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
+    marker_kinds: &["attribute_item"],
 };
 
 #[cfg(test)]

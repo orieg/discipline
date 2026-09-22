@@ -313,6 +313,15 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: a discarded Result is a site, a bound one is not",
+        || {
+            let v = AssertVocabulary::default();
+            let dropped = analyze("fn f() { let _ = tx.commit(); }", &v)?.swallowed;
+            let bound = analyze("fn f() -> Result<(), E> { let r = tx.commit(); r }", &v)?.swallowed;
+            Ok(dropped.len() == 1 && bound.is_empty())
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;

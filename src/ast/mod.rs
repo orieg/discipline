@@ -15,6 +15,7 @@ pub mod functions;
 pub mod r#go;
 #[cfg(feature = "lang-golden")]
 pub mod golden;
+pub mod handlers;
 #[cfg(feature = "lang-java")]
 pub mod java;
 #[cfg(feature = "lang-javascript")]
@@ -24,6 +25,7 @@ pub mod mocks;
 pub mod php;
 #[cfg(feature = "lang-python")]
 pub mod python;
+pub mod retries;
 #[cfg(feature = "lang-ruby")]
 pub mod ruby;
 #[cfg(feature = "lang-rust")]
@@ -61,6 +63,7 @@ pub enum Fact {
     EscapeHatches,
     UnsafeSites,
     Functions,
+    Handlers,
 }
 
 /// Registry of active language packs.
@@ -201,6 +204,8 @@ pub struct TestFn {
     pub mock_setups: usize,
     /// Assertions on a double's interactions (`assert_called_with`, `toHaveBeenCalled`).
     pub mock_asserts: usize,
+    /// A retry / flaky marker on the test (`@pytest.mark.flaky`, `jest.retryTimes`).
+    pub retries: Option<String>,
 }
 
 impl TestFn {
@@ -259,6 +264,8 @@ pub struct ParsedFileFacts {
     pub escape_hatches: Vec<EscapeHatchSite>,
     /// Every function with a body, and what the body amounts to (`Fact::Functions`).
     pub functions: Vec<functions::FunctionFacts>,
+    /// Error handlers that swallow, and discarded results, outside tests (`Fact::Handlers`).
+    pub swallowed: Vec<handlers::SwallowSite>,
     /// Number of compile-time assertions outside tests (e.g. `const _: () = assert!(...)`, `static_assert`).
     pub compile_time_asserts: usize,
     /// Line of the first compile-time assertion (if any).
@@ -280,6 +287,7 @@ impl Default for ParsedFileFacts {
             unsafe_sites: Vec::new(),
             escape_hatches: Vec::new(),
             functions: Vec::new(),
+            swallowed: Vec::new(),
             compile_time_asserts: 0,
             compile_time_assert_line: None,
             compile_time_test: Some(TestFn {
@@ -295,6 +303,7 @@ impl Default for ParsedFileFacts {
                 should_panic: false,
                 mock_setups: 0,
                 mock_asserts: 0,
+                retries: None,
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -320,6 +329,7 @@ impl ParsedFileFacts {
             should_panic: false,
             mock_setups: 0,
             mock_asserts: 0,
+            retries: None,
         });
     }
 }
@@ -414,6 +424,7 @@ mod tests {
                     should_panic: false,
                     mock_setups: 0,
                     mock_asserts: 0,
+                    retries: None,
                     ..Default::default()
                 });
             }

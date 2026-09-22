@@ -15,7 +15,10 @@ impl LanguagePack for JavaPack {
     }
 
     fn supplies(&self, fact: Fact) -> bool {
-        matches!(fact, Fact::Tests | Fact::EscapeHatches | Fact::Functions)
+        matches!(
+            fact,
+            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -60,6 +63,17 @@ impl LanguagePack for JavaPack {
             &vocab.mock_setup_fns,
             &vocab.mock_assert_fns,
         );
+        {
+            let tests = &extractor.facts.tests;
+            let spans: Vec<(usize, usize)> = tests
+                .iter()
+                .map(|t| (t.line, t.end_line.max(t.line)))
+                .collect();
+            let is_test_line = |l: usize| spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            extractor.facts.swallowed =
+                super::handlers::extract(root, src, &JAVA_HANDLERS, &is_test_line);
+        }
+        super::retries::mark(root, src, &mut extractor.facts.tests, &JAVA_RETRIES);
         Ok(extractor.facts)
     }
 }
@@ -594,6 +608,19 @@ pub const JAVA_FUNCTIONS: FunctionSpec = FunctionSpec {
 pub const JAVA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["method_invocation", "object_creation_expression"],
     callee_fields: &["name"],
+};
+
+pub const JAVA_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
+    handler_kinds: &["catch_clause"],
+    body_fields: &["body", "block"],
+    ignored_kinds: &["line_comment", "block_comment"],
+    trivial: &["return", "return null", "return false", "continue"],
+    discard_kinds: &[],
+    discards: super::handlers::no_discard,
+};
+
+pub const JAVA_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
+    marker_kinds: &["annotation", "marker_annotation"],
 };
 
 #[cfg(test)]

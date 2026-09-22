@@ -2294,6 +2294,136 @@ fn a_test_that_asserts_only_on_mocks_and_a_test_that_mocks_its_way_past_a_failur
     );
 }
 
+// ---- error-swallowing and retries ------------------------------------------
+
+#[test]
+fn error_swallowing_is_a_delta_outside_tests_across_languages() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "pkg/io.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except FileNotFoundError:\n        pass\n",
+    );
+    repo.write(
+        "src/db.rs",
+        "pub fn save(tx: Tx) -> Result<(), E> {\n    tx.commit()\n}\n",
+    );
+    repo.write("web/api.ts", "export async function get() {\n  try { return await fetch('/x'); } catch (e) { throw e; }\n}\n");
+    repo.commit("feat: handlers");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: the existing empty handler moves, a handler that re-raises is
+    // added, and a test file gains an empty except.
+    repo.write(
+        "pkg/io.py",
+        "def head(p):\n    return p[:1]\n\n\ndef load(p):\n    try:\n        return open(p).read()\n    except FileNotFoundError:\n        pass\n    except OSError as e:\n        log.error(e)\n        raise\n",
+    );
+    repo.write(
+        "tests/test_io.py",
+        "def test_load():\n    try:\n        load('x')\n    except Exception:\n        pass\n",
+    );
+    repo.commit("refactor: tidy");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("error-swallowing").is_empty(),
+        "{:?}",
+        quiet.violations("error-swallowing")
+    );
+    assert_eq!(quiet.outcome("error-swallowing")["examined"], 1);
+
+    // One new swallow per language.
+    repo.write(
+        "src/db.rs",
+        "pub fn save(tx: Tx) -> Result<(), E> {\n    tx.commit().ok();\n    Ok(())\n}\n",
+    );
+    repo.write(
+        "web/api.ts",
+        "export async function get() {\n  try { return await fetch('/x'); } catch (e) {}\n}\n",
+    );
+    repo.write(
+        "pkg/io.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except FileNotFoundError:\n        pass\n    except OSError:\n        return None\n",
+    );
+    repo.commit("fix: quiet the failures");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut got: Vec<(String, String)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["title"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "pkg/io.py".to_string(),
+                "Empty Error Handler Added".to_string()
+            ),
+            ("src/db.rs".to_string(), "Result Discarded".to_string()),
+            (
+                "web/api.ts".to_string(),
+                "Empty Error Handler Added".to_string()
+            ),
+        ]
+    );
+
+    // A path lifts its file; an inline marker lifts its line.
+    repo.write("web/api.ts", "export async function get() {\n  try { return await fetch('/x'); } catch (e) {} // discipline:allow(error-swallowing): best effort\n}\n");
+    repo.commit("fix: explain\n\nallow-swallow: src/db.rs commit failure is retried by the caller");
+    let lifted = repo.check(&[]);
+    assert_eq!(
+        lifted.violations("error-swallowing").len(),
+        1,
+        "{:?}",
+        lifted.violations("error-swallowing")
+    );
+    assert_eq!(
+        lifted.violations("error-swallowing")[0]["file"],
+        "pkg/io.py"
+    );
+    assert_eq!(lifted.outcome("error-swallowing")["inline_exemptions"], 1);
+}
+
+#[test]
+fn a_test_that_gains_a_retry_marker_is_reported_through_ignored_tests() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/test_a.py", "def test_a():\n    assert f() == 1\n");
+    repo.commit("test: a");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "tests/test_a.py",
+        "import pytest\n\n@pytest.mark.flaky(reruns=3)\ndef test_a():\n    assert f() == 1\n\n@pytest.mark.flaky(reruns=2)\ndef test_b():\n    assert g() == 2\n",
+    );
+    repo.commit("test: retry");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("ignored-tests"),
+        vec!["Test Retries On Failure", "Test Retries On Failure"]
+    );
+    repo.commit("test: explain\n\nallow-ignore: test_a upstream service rate-limits the fixture, tracked in #77\nallow-ignore: test_b same rate limit, tracked in #77");
+    let lifted = repo.check(&[]);
+    assert!(
+        lifted.titles("ignored-tests").is_empty(),
+        "{:?}",
+        lifted.violations("ignored-tests")
+    );
+    assert_eq!(lifted.code, 0);
+
+    // A file-level jest.retryTimes marks every test in the file.
+    let repo = Repo::new();
+    repo.write("src/a.test.ts", "jest.retryTimes(3);\ntest('a', () => { expect(f()).toBe(1); });\ntest('b', () => { expect(g()).toBe(2); });\n");
+    repo.commit("test: retry everything");
+    assert_eq!(repo.check(&[]).violations("ignored-tests").len(), 2);
+}
+
 // ---- override policy -------------------------------------------------------
 
 /// A change that disables two gates and excuses both from its commit body.
@@ -2915,7 +3045,7 @@ fn override_record_audit_trail_and_step_outputs() {
         .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
     assert!(run
         .stdout
-        .contains("gates:  20 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"));
+        .contains("gates:  21 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"));
     assert!(run.stdout.contains("overrides: 1"));
 
     // Check GITHUB_OUTPUT contents
@@ -2926,14 +3056,14 @@ fn override_record_audit_trail_and_step_outputs() {
         "{step_output}"
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
-    assert!(step_output.contains("passed_gates=20"), "{step_output}");
+    assert!(step_output.contains("passed_gates=21"), "{step_output}");
     assert!(step_output.contains("examined_items=19"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 20 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"
+            "**Summary:** 21 passed, 0 failed, 12 disabled, 1 not evaluated (19 items examined)"
         ),
         "{step_summary}"
     );

@@ -30,6 +30,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`config-integrity`](#config-integrity) | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
 | [`stub-bodies`](#stub-bodies) | agent-guard | **shipped** | Rust, Python, JS/TS, Go, Java, C# | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
+| [`error-swallowing`](#error-swallowing) | agent-guard | **shipped** | Rust, Python, JS/TS, Go, Java, C# | no new empty error handler or discarded Result outside tests |
 | [`toolchain-config`](#toolchain-config) | integrity | **shipped** | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](#scope-confinement) | agent-guard | **shipped** | any | changes stay inside authorized paths |
 | [`suppression-delta`](#suppression-delta) | agent-guard | **shipped** | per pack | newly added linter / compiler suppression annotations |
@@ -109,6 +110,7 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `agent-scratch` | on, `error` | High: a tracked path matching agent state directories. | False block: a deliberately committed directory of the same name, exempted by path. Miss: private agent state in history. | The path set is narrow and the committed state is not reversible once pushed. |
 | `shell-secrets` | on, `error` (token rules) / `warning` (heuristic rules) | High for structured tokens; heuristic for argv and pipe patterns. | False block: a token-shaped test fixture, exempted by path. Miss: a live credential in history. | The split already downgrades the heuristic rules at finding level. |
 | `config-integrity` | on, `error` | High: base and head configuration are diffed structurally. | False block: an intended loosening needs `allow-gate-weakening:`. Miss: a change lowering its own bar (F9). | The gate protects every other gate; it cannot be advisory. |
+| `error-swallowing` | on, `error` | High: the handler body is read from the syntax tree; base and head are compared per file as a multiset, so a moved handler is not new. | False block: a deliberate best-effort handler needs `allow-swallow:` or an inline marker. Miss: a handler that logs and swallows, a discarded result the language does not mark (`_`). | An empty `catch` or a discarded `Result` is how a failure an agent cannot fix stops surfacing. |
 | `stub-bodies` | on, `error` | High: the body is read from the syntax tree and is the whole body; base and head are compared per function. | False block: a deliberate placeholder needs `allow-stub:`. Miss: a stub that carries one extra statement, or a body that special-cases the inputs its tests use. | An added `todo!()` or a body replaced by `return null` is the change no other gate sees. |
 | `toolchain-config` | on, `error` | High for a data file: base and head are diffed structurally against a per-tool rule table. A configuration written as code is reported at `warning` as changed, not analysed. | False block: an intended loosening needs `allow-toolchain-weakening:`. Miss: a lint or type bar lowered in the same change that would have failed it. | Same stakes as `ci-integrity` dropping `-D warnings`, one file over. |
 | `ci-integrity` | on, `error` | High for `continue-on-error`, `\|\| true` and unpinned actions in modified workflows (`diff_only = true`). | False block: an intended pattern needs `allow-ci-weakening:`. Miss: a rollup that reports green while a job is skipped. | Only modified workflows are scanned by default, so pre-existing patterns do not block adoption. |
@@ -238,6 +240,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Python: `@pytest.mark.skip`, `@pytest.mark.skipif`, `@pytest.mark.xfail`, `@unittest.skip`, `@unittest.skipIf`.
   - JavaScript / TypeScript: `it.skip`, `test.skip`, `xit`, `xtest`, `describe.skip`, `xdescribe`, `it.todo`.
   - PHPT: newly added `--SKIPIF--` or `--XFAIL--` sections.
+  - `Test Retries On Failure`: a test that gains a retry / flaky marker, or arrives with one (`@pytest.mark.flaky`, `@flaky`, `jest.retryTimes` at file level, `this.retries(`, vitest `{ retry: n }`, `@RetryingTest`, `[Retry(`, `flaky_test`, RSpec `retry:`; `src/ast/retries.rs`). A retry does not skip the test; it lets a failure through as often as the marker allows. Lifted by `allow-ignore: <test> <reason>`. Rust, Python, JS/TS, Go, Java, C#.
   - Java: `@Disabled`, `@Ignore`, `@Test(enabled = false)` (including class-level annotations propagating to all methods).
   - Go: `t.Skip`, `t.Skipf`, `t.SkipNow`.
   - PHP: `$this->markTestSkipped()`, `$this->markTestIncomplete()`, `->skip()`, `#[Requires*]`, `@group skip`, `@skip` (including class docblock propagation).
@@ -256,6 +259,33 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Commented-out test functions in languages other than Rust (the Rust pack reports them here).
 - **Lifting directive:** `allow-ignore: <test-name> <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `approved_predicates`.
+
+#### `error-swallowing`
+- **Rule:** A change must not add an error handler that drops the error, or a statement that throws a `Result` away, outside tests. Sites come from the language packs (`Fact::Handlers`, `src/ast/handlers.rs`) and are a base-versus-head delta per file: a handler that moved is not new.
+- **Languages:** Python (`except ...:` whose body is `pass`, `...`, bare `return` / `return None` / `continue`), JS/TS, Java and C# (`catch` with an empty block or a bare `return` / `return null`), Rust (`let _ = fallible(...)`, `fallible(...).ok();`), Go (`_ = err`, `x, _ := f()`). PHP, Ruby and C/C++ packs do not supply handler facts; their changed files are named in the notes.
+- **What it catches:**
+  - `Empty Error Handler Added`: a new handler that does nothing with the error (a comment inside the block does not count as doing something).
+  - `Result Discarded`: a new statement that drops a fallible call's result.
+- **Failing diff (rejected):**
+  ```diff
+    try:
+        return open(p).read()
+  + except OSError:
+  +     return None
+  ```
+- **Passing commit / PR body (accepted):**
+  ```text
+  allow-swallow: pkg/io.py a missing cache file is the normal first run
+  ```
+  or, on the line, `# discipline:allow(error-swallowing): <reason>`.
+- **What it does NOT catch:**
+  - A handler that logs, or does anything at all, and then swallows: only an empty or bare-return body is reported.
+  - A discarded result the language does not mark (`_`): `fallible()` as a bare Rust statement is a compiler warning, not a site here.
+  - Handlers inside test functions.
+  - A pre-existing handler, including one that moved to another line.
+- **Lifting directive:** `allow-swallow: <path-or-path:line> <reason>`, or `discipline:allow(error-swallowing)` on the handler's first line.
+- **Default:** on, `error`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `stub-bodies`
 - **Rule:** An added function is not a stub, and an existing body is not replaced by one. Each language pack supplying function facts (`Fact::Functions`) reports every function with a body and what the body amounts to: a **stub** (the whole body is a not-implemented marker), **empty**, **trivial** (one bare constant return) or **substantive**. Functions pair by name and order between the base and head side.

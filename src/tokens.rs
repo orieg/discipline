@@ -156,6 +156,13 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_doc: "Function name, or the file path",
     },
     DirectiveSpec {
+        canonical: "allow-swallow",
+        deprecated: None,
+        gate: "error-swallowing",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "File path, or `path:line` of the handler",
+    },
+    DirectiveSpec {
         canonical: "allow-golden-update",
         deprecated: None,
         gate: "golden-output",
@@ -298,15 +305,16 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     },
 ];
 
-/// The 36 named directives recognized by discipline (26 canonical + 10 deprecated aliases).
+/// The 37 named directives recognized by discipline (27 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 26 Canonical
+    // 27 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
     "allow-gate-weakening",
     "allow-toolchain-weakening",
     "allow-stub",
+    "allow-swallow",
     "allow-golden-update",
     "allow-regression",
     "allow-command",
@@ -370,6 +378,11 @@ pub const ALLOW_STUB: &[&str] = &[
     "allow-stub",
     "discipline:allow(stub-bodies)",
     "allow(stub-bodies)",
+];
+pub const ALLOW_SWALLOW: &[&str] = &[
+    "allow-swallow",
+    "discipline:allow(error-swallowing)",
+    "allow(error-swallowing)",
 ];
 pub const ALLOW_GOLDEN_UPDATE: &[&str] = &[
     "allow-golden-update",
@@ -504,6 +517,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-golden-update" => ALLOW_GOLDEN_UPDATE,
         "allow-toolchain-weakening" => ALLOW_TOOLCHAIN_WEAKENING,
         "allow-stub" => ALLOW_STUB,
+        "allow-swallow" => ALLOW_SWALLOW,
         "allow-regression" => ALLOW_REGRESSION,
         "allow-command" => ALLOW_COMMAND,
         "allow-dependency" => ALLOW_DEPENDENCY,
@@ -544,6 +558,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-gate-weakening",
     "allow-toolchain-weakening",
     "allow-stub",
+    "allow-swallow",
     "allow-golden-update",
     "allow-regression",
     "allow-command",
@@ -588,6 +603,8 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow(toolchain-config)",
     "discipline:allow(stub-bodies)",
     "allow(stub-bodies)",
+    "discipline:allow(error-swallowing)",
+    "allow(error-swallowing)",
     "discipline:allow(golden-output)",
     "allow(golden-output)",
     "discipline:allow(bench-regression)",
