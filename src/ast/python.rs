@@ -78,11 +78,21 @@ impl LanguagePack for PythonPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            let is_test_line = |l: usize| spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            // A file in a test directory, or one the repository declares as test scope, is
+            // test code line for line.
+            let whole_file = super::functions::test_path(path)
+                || super::functions::declared_test_path(path, &vocab.test_paths);
+            let is_test_line =
+                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
             extractor.facts.swallowed =
                 super::handlers::extract(root, src, &PYTHON_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &PYTHON_RETRIES);
+        if super::functions::declared_test_path(path, &vocab.test_paths) {
+            for f in &mut extractor.facts.functions {
+                f.is_test = true;
+            }
+        }
         super::calls::count(
             root,
             src,
@@ -539,6 +549,9 @@ impl<'a> PythonExtractor<'a> {
         if decorators.is_some_and(|decs| decs.iter().any(|d| self.is_non_test_decorator(*d))) {
             return false;
         }
+        if self.vocab.test_functions.iter().any(|f| f == fn_name) {
+            return true;
+        }
         match self.class_stack.last() {
             Some(&collected) => (collected || self.is_test_path) && fn_name.starts_with("test"),
             None => {
@@ -873,17 +886,78 @@ fn python_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
             }
         }
     }
+    let fn_name = node
+        .child_by_field_name("name")
+        .map(t)
+        .unwrap_or("")
+        .to_string();
     let mut cur = node.parent();
     while let Some(p) = cur {
         if p.kind() == "class_definition" {
             if let Some(sup) = p.child_by_field_name("superclasses") {
                 let s = t(sup);
-                if s.contains("Protocol") || s.contains("TypedDict") || s.contains("NamedTuple") {
+                if s.contains("Protocol")
+                    || s.contains("TypedDict")
+                    || s.contains("NamedTuple")
+                    || s.contains("ABC")
+                {
                     return true;
                 }
             }
+            // A base class whose method a same-file subclass overrides: the stub is the
+            // abstract contract, not an unimplemented function.
+            let class_name = p.child_by_field_name("name").map(t).unwrap_or("");
+            if !class_name.is_empty() && overridden_in_subclass(p, class_name, &fn_name, src) {
+                return true;
+            }
         }
         cur = p.parent();
+    }
+    false
+}
+
+fn overridden_in_subclass(
+    class: tree_sitter::Node,
+    class_name: &str,
+    method: &str,
+    src: &str,
+) -> bool {
+    let mut root = class;
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let t = |n: tree_sitter::Node| n.utf8_text(src.as_bytes()).unwrap_or("");
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "class_definition" && n != class {
+            let derives = n
+                .child_by_field_name("superclasses")
+                .map(t)
+                .is_some_and(|s| {
+                    s.split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .any(|x| x == class_name)
+                });
+            if derives {
+                if let Some(body) = n.child_by_field_name("body") {
+                    let mut c = body.walk();
+                    let has = body.children(&mut c).any(|m| {
+                        let def = if m.kind() == "decorated_definition" {
+                            m.child_by_field_name("definition").unwrap_or(m)
+                        } else {
+                            m
+                        };
+                        def.kind() == "function_definition"
+                            && def.child_by_field_name("name").map(t) == Some(method)
+                    });
+                    if has {
+                        return true;
+                    }
+                }
+            }
+        }
+        let mut c = n.walk();
+        let kids: Vec<_> = n.children(&mut c).collect();
+        stack.extend(kids);
     }
     false
 }
@@ -922,6 +996,7 @@ pub const PYTHON_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     trivial: &["pass", "...", "return", "return None", "continue"],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
+    call_value_kinds: &[],
 };
 
 pub const PYTHON_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

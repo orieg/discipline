@@ -56,6 +56,8 @@ pub(crate) fn assert_vocabulary(config: &crate::config::DisciplineConfig) -> Ass
             &gates.vacuous_tests.mock_assert_fns[..],
         ]
         .concat(),
+        test_functions: config.tests.functions.clone(),
+        test_paths: config.tests.paths.clone(),
     }
 }
 

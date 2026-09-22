@@ -9,7 +9,7 @@
 //! merely moved is not new. `unsafe` sites are left to `unsafe-safety-comment` and
 //! `unsafe-budget`.
 
-use crate::ast::{default_registry, AssertVocabulary, EscapeHatchSite};
+use crate::ast::{default_registry, EscapeHatchSite};
 use crate::guards::{line_allows, Context, GateOutcome};
 use crate::tokens::ALLOW_SUPPRESSION;
 use anyhow::Result;
@@ -146,7 +146,7 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
         .unwrap_or_else(|_| GlobSetBuilder::new().build().unwrap());
 
     let registry = default_registry();
-    let vocab = AssertVocabulary::default();
+    let vocab = super::agent_diff::assert_vocabulary(ctx.config);
     // (path, site, pattern name)
     let mut detected: Vec<(String, Site, String)> = Vec::new();
 

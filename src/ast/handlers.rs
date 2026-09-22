@@ -30,6 +30,9 @@ pub struct HandlerSpec {
     pub discard_kinds: &'static [&'static str],
     /// Whether a statement's text discards a result.
     pub discards: fn(&str) -> bool,
+    /// For a binding statement, the node kinds of a right-hand side that is a call; a
+    /// binding of anything else (a tuple, an identifier) is not a discarded result.
+    pub call_value_kinds: &'static [&'static str],
 }
 
 fn text<'a>(node: Node, src: &'a str) -> &'a str {
@@ -99,7 +102,7 @@ pub fn extract(
                     after.is_empty() || spec.trivial.contains(&after.trim_end_matches(';').trim())
                 }
             };
-            if swallows {
+            if swallows && !expects_the_error(node, src) {
                 out.push(SwallowSite {
                     line,
                     kind: "empty-handler",
@@ -108,7 +111,10 @@ pub fn extract(
             }
         } else if spec.discard_kinds.contains(&node.kind()) && !is_test_line(line) {
             let t = text(node, src);
-            if (spec.discards)(t) {
+            let binding_of_call = node.child_by_field_name("value").is_none_or(|v| {
+                spec.call_value_kinds.is_empty() || spec.call_value_kinds.contains(&v.kind())
+            });
+            if binding_of_call && (spec.discards)(t) {
                 out.push(SwallowSite {
                     line,
                     kind: "discarded-result",
@@ -123,6 +129,42 @@ pub fn extract(
         }
     }
     out
+}
+
+/// The expect-this-to-raise idiom: the handler is the passing path and the code around it
+/// fails when nothing was raised. Either the `try` has an `else` that raises or fails, or
+/// the handler is `continue` / `pass` and the statement after the `try` records a failure.
+fn expects_the_error(handler: Node, src: &str) -> bool {
+    let Some(try_stmt) = handler.parent() else {
+        return false;
+    };
+    let fails = |t: &str| {
+        let t = t.trim();
+        t.starts_with("raise")
+            || t.starts_with("assert")
+            || t.starts_with("throw")
+            || t.contains(".fail(")
+            || t.contains("failures.append(")
+            || t.contains("errors.append(")
+            || t.contains("fail(")
+    };
+    let mut cursor = try_stmt.walk();
+    let has_failing_else = try_stmt
+        .children(&mut cursor)
+        .any(|c| c.kind() == "else_clause" && fails(text(c, src).trim_start_matches("else:")));
+    if has_failing_else {
+        return true;
+    }
+    let body = text(handler, src);
+    let handler_only_skips = body
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .all(|l| l.is_empty() || l == "continue" || l == "pass" || l == "...");
+    handler_only_skips
+        && try_stmt
+            .next_named_sibling()
+            .is_some_and(|next| fails(text(next, src)))
 }
 
 pub fn no_discard(_: &str) -> bool {

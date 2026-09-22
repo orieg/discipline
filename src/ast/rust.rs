@@ -83,10 +83,20 @@ impl LanguagePack for RustPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            let is_test_line = |l: usize| spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            // A file in a test directory, or one the repository declares as test scope, is
+            // test code line for line.
+            let whole_file = super::functions::test_path(path)
+                || super::functions::declared_test_path(path, &vocab.test_paths);
+            let is_test_line =
+                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
             cx.facts.swallowed = super::handlers::extract(root, src, &RUST_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut cx.facts.tests, &RUST_RETRIES);
+        if super::functions::declared_test_path(path, &vocab.test_paths) {
+            for f in &mut cx.facts.functions {
+                f.is_test = true;
+            }
+        }
         super::calls::count(
             root,
             src,
@@ -150,15 +160,24 @@ impl<'a> Extractor<'a> {
     fn collect_comments(&mut self, node: Node) {
         if matches!(node.kind(), "line_comment" | "block_comment") {
             let text = self.text(node);
+            // A line comment's end position sits at column 0 of the next row; that row is
+            // not part of the comment, or a run walk pairs each row with the comment above.
+            let end = node.end_position();
+            let end_row = if end.column == 0 && end.row > node.start_position().row {
+                end.row - 1
+            } else {
+                end.row
+            };
             self.comments.push(Comment {
                 start_row: node.start_position().row,
-                end_row: node.end_position().row,
+                end_row,
                 start_byte: node.start_byte(),
                 end_byte: node.end_byte(),
-                has_safety: has_valid_safety_comment_with_placeholders(
-                    text,
-                    &self.vocab.safety_placeholders,
-                ),
+                has_safety: is_safety_doc_section(text)
+                    || has_valid_safety_comment_with_placeholders(
+                        text,
+                        &self.vocab.safety_placeholders,
+                    ),
             });
             return;
         }
@@ -329,7 +348,10 @@ impl<'a> Extractor<'a> {
         mods: &[String],
         direct_calls: &mut Vec<String>,
     ) -> Option<TestFn> {
-        let mut is_test = false;
+        let mut is_test = node
+            .child_by_field_name("name")
+            .map(|n| self.text(n))
+            .is_some_and(|name| self.vocab.test_functions.iter().any(|f| f == name));
         let mut ignored = false;
         let mut conditional_ignore = None;
         let mut should_panic = false;
@@ -919,6 +941,18 @@ fn split_top_level(s: &str) -> Vec<&str> {
     parts
 }
 
+/// A rustdoc comment carrying a `# Safety` section: the convention for `unsafe trait` and
+/// `unsafe fn` that clippy's `missing_safety_doc` checks.
+fn is_safety_doc_section(comment: &str) -> bool {
+    let c = comment.trim_start();
+    (c.starts_with("///") || c.starts_with("//!") || c.starts_with("/**"))
+        && c.lines().any(|l| {
+            l.trim_start_matches(['/', '!', '*', ' '])
+                .trim()
+                .eq_ignore_ascii_case("# safety")
+        })
+}
+
 /// A `#[test]`-like attribute precedes the function.
 fn rust_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
     if functions::test_path(path) {
@@ -990,6 +1024,12 @@ pub const RUST_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     trivial: &[],
     discard_kinds: &["let_declaration", "expression_statement"],
     discards: super::handlers::rust_discards,
+    call_value_kinds: &[
+        "call_expression",
+        "macro_invocation",
+        "await_expression",
+        "try_expression",
+    ],
 };
 
 pub const RUST_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

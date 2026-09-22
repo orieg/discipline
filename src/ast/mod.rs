@@ -386,6 +386,10 @@ pub struct AssertVocabulary {
     pub mock_setup_fns: Vec<String>,
     /// Callee fragments that assert on a double's interactions, beyond the built-in list.
     pub mock_assert_fns: Vec<String>,
+    /// Function names that are test entry points wherever they appear (`[tests].functions`).
+    pub test_functions: Vec<String>,
+    /// Path globs whose every line is test scope (`[tests].paths`).
+    pub test_paths: Vec<String>,
 }
 
 /// Top-level helper to analyze Rust code directly.

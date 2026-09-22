@@ -3,7 +3,7 @@
 //! Enforces an unsafe code count ratchet: the total number of `unsafe` blocks
 //! and functions cannot increase without an explicit justification directive.
 
-use crate::ast::{default_registry, AssertVocabulary};
+use crate::ast::default_registry;
 use crate::gitctx::ChangeKind;
 use crate::guards::{Context, GateOutcome};
 use crate::tokens::ALLOW_UNSAFE;
@@ -37,7 +37,7 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
         .unwrap_or_else(|_| GlobSetBuilder::new().build().unwrap());
 
     let registry = default_registry();
-    let vocab = AssertVocabulary::default();
+    let vocab = super::agent_diff::assert_vocabulary(ctx.config);
 
     let mut base_unsafe_count = 0;
     let mut head_unsafe_count = 0;

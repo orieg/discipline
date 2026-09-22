@@ -288,7 +288,7 @@ fn find_test_floor_override(ctx: &Context) -> Option<crate::tokens::OverrideReco
     }
     if let Ok(changed) = ctx.git.changed_files() {
         let registry = crate::ast::default_registry();
-        let v = crate::ast::AssertVocabulary::default();
+        let v = crate::guards::agent_diff::assert_vocabulary(ctx.config);
 
         for cf in &changed {
             if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, &cf.path) {
@@ -358,12 +358,12 @@ impl AstTestCount {
         path: &str,
         content: Option<String>,
         registry: &crate::ast::LanguageRegistry,
+        v: &crate::ast::AssertVocabulary,
     ) {
-        let v = crate::ast::AssertVocabulary::default();
         let facts = content.and_then(|c| {
             registry
                 .find_pack(path)
-                .and_then(|pack| pack.extract(path, &c, &v).ok())
+                .and_then(|pack| pack.extract(path, &c, v).ok())
         });
         match facts {
             Some(facts) => {
@@ -415,6 +415,7 @@ pub fn count_workspace_ast_tests(
     filter: &crate::guards::PathFilter,
 ) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
+    let v = crate::guards::agent_diff::assert_vocabulary(ctx.config);
     let mut count = AstTestCount::default();
     for path in ctx.git.tracked_files()? {
         if filter.matches(&path) || !registry.is_supported(&path) {
@@ -425,7 +426,7 @@ pub fn count_workspace_ast_tests(
         if !full.exists() {
             continue;
         }
-        count.add(&path, std::fs::read_to_string(&full).ok(), &registry);
+        count.add(&path, std::fs::read_to_string(&full).ok(), &registry, &v);
     }
     Ok(count)
 }
@@ -436,12 +437,18 @@ pub fn count_base_workspace_ast_tests(
     filter: &crate::guards::PathFilter,
 ) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
+    let v = crate::guards::agent_diff::assert_vocabulary(ctx.config);
     let mut count = AstTestCount::default();
     for path in ctx.git.base_tracked_files()? {
         if filter.matches(&path) || !registry.is_supported(&path) {
             continue;
         }
-        count.add(&path, ctx.git.base_content(&path).ok().flatten(), &registry);
+        count.add(
+            &path,
+            ctx.git.base_content(&path).ok().flatten(),
+            &registry,
+            &v,
+        );
     }
     Ok(count)
 }

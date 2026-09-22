@@ -16,7 +16,7 @@
 //! read by the next agent, and echoing the text would deliver the injection.
 
 use super::{Context, GateOutcome, PathFilter};
-use crate::ast::{default_registry, AssertVocabulary, Fact};
+use crate::ast::{default_registry, Fact};
 use crate::config::{GateSettings, Severity};
 use crate::gitctx::ChangeKind;
 use crate::tokens;
@@ -197,7 +197,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
     let mut out = GateOutcome::new(GATE);
     let exempt = PathFilter::new(&settings.exempt_paths)?;
     let registry = default_registry();
-    let vocab = AssertVocabulary::default();
+    let vocab = super::agent_diff::assert_vocabulary(ctx.config);
     let lift = |subject: &str| ctx.find_override(GATE, tokens::ALLOW_SMUGGLING, subject);
 
     for file in ctx.git.changed_files()? {

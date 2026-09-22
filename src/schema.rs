@@ -94,6 +94,15 @@ pub fn generate_schema() -> Value {
                     }
                 }
             },
+            "tests": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "What the repository counts as test code beyond each language's conventions; read by every gate that separates test code from production code",
+                "properties": {
+                    "functions": { "$ref": "#/$defs/StringListOrReset", "description": "Function names (leaf) that are test entry points wherever they appear, e.g. a script's self_test (default: [])" },
+                    "paths": { "$ref": "#/$defs/StringListOrReset", "description": "Path globs whose every line is test scope (default: [])" }
+                }
+            },
             "directives": {
                 "type": "object",
                 "additionalProperties": false,

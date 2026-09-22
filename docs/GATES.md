@@ -287,8 +287,10 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   or, on the line, `# discipline:allow(error-swallowing): <reason>`.
 - **What it does NOT catch:**
   - A handler that logs, or does anything at all, and then swallows: only an empty or bare-return body is reported.
+  - The expect-this-to-raise idiom: a `try` whose `else:` raises or fails, or whose handler is `pass` / `continue` and whose next statement records a failure, is an assertion and is not reported.
+  - A binding of something that is not a call (`let _ = (a, b);`): only `let _ = <call>` and `<call>.ok();` are discarded results.
+  - Handlers inside test functions, in Cargo's `tests/`, `benches/` and `examples/` directories, in test directories of the other languages, and in functions or paths declared under `[tests]`.
   - A discarded result the language does not mark (`_`): `fallible()` as a bare Rust statement is a compiler warning, not a site here.
-  - Handlers inside test functions.
   - A pre-existing handler, including one that moved to another line.
 - **Lifting directive:** `allow-swallow: <path-or-path:line> <reason>`, or `discipline:allow(error-swallowing)` on the handler's first line.
 - **Default:** on, `error`.
@@ -340,7 +342,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - An added empty or constant-returning function (`fn noop() {}`, `return null`): a no-op is a legitimate shape for a new function; only a marker that says "not implemented" is reported when added.
   - A stub padded with a second statement (a log line, an assignment), or a body that special-cases the inputs its tests use: mutation presets of the `command` gate are the control for that class.
-  - Test functions, `#[cfg(test)]` modules, abstract and overload members, Protocol / interface declarations, `.pyi` stubs.
+  - Test functions, `#[cfg(test)]` modules, abstract and overload members, Protocol / interface declarations, `.pyi` stubs, classes deriving from `abc.ABC`, and a base-class method that a subclass in the same file overrides (the stub is the contract, not an unimplemented function). Files and functions declared under `[tests]`.
   - A body changed for the worse while staying substantive.
 - **Lifting directive:** `allow-stub: <function-name-or-path> <reason>`. A file path lifts every finding in that file.
 - **Default:** on, `error`.
@@ -370,6 +372,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   let val = unsafe { *ptr };
   ```
 - **What it does NOT catch:**
+  - An `unsafe trait` or `unsafe fn` whose rustdoc carries a `# Safety` section (the convention clippy's `missing_safety_doc` checks): that is accepted as the justification. A contract stated in rustdoc without the heading is not (decided: the heading is what readers and tools look for).
   - Flawed or mathematically invalid justifications (static AST cannot verify human semantic correctness beyond placeholder rejection).
   - `unsafe` hidden inside macro invocations outside tree-sitter Rust AST parsing.
 - **Lifting directive:** Requires providing a substantive `// SAFETY:` comment naming invariants, or `exempt_paths`.
@@ -470,6 +473,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ### Phase 2: Complete AST Parser (blocked on grammar stabilization)
   ```
 - **What it does NOT catch:**
+  - Past intervals between events (`the N-hour gap between the run and the fix`, `a gap of N days`, `N minutes between each attempt`): a duration describing history is not an estimate.
   - Operational TTLs, cache expiration, retention, and timeouts (`timeout: 30s`, `retention: 7 days`). <!-- discipline:allow(time-estimates) -->
   - Terms of art: metric names ("one-minute load average", "1-min average", "`load1`"), derived operational wrap windows ("~6.06 days active window", wrap window, bitfield, epoch).
   - Benchmark measurements ("ran in 4.2 seconds").
@@ -636,6 +640,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Changing or removing what a gate runs or checks against (`command`, `test_command`, `preset`, `count_pattern`, `ratio_baseline`, ...).
   - `[meta] mode = "advisory"` introduced by the change. It is reported under the subject `meta` and **not honoured** for that run: the exit code stays enforcing until the setting is on the base side.
   - `[directives]`: `allow_hidden` switched on, `sources` gaining `commits`, `fail_on_overrides` or `require_approval` switched off, `max_overrides` raised or removed, `allowed_override_actors` grown.
+  - `[tests]`: `functions` or `paths` grown (more code counted as test scope is less code the production-code gates see).
   - Growth of the grandfathering baseline file.
 - **Self-protection:** the gate runs whenever the **base** configuration enables it, whatever the head configuration or `--disable` says, and reports at the stricter of the base and head severity. Every gate option has a declared loosening direction in `src/guards/integrity.rs::KEY_DIRECTIONS`; a unit test fails when an option is added without one.
 - **What it does NOT catch:**

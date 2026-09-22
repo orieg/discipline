@@ -14,7 +14,7 @@
 
 use super::{Context, GateOutcome, PathFilter};
 use crate::ast::functions::{BodyShape, FunctionFacts};
-use crate::ast::{default_registry, AssertVocabulary, Fact};
+use crate::ast::{default_registry, Fact};
 use crate::config::GateSettings;
 use crate::gitctx::ChangeKind;
 use crate::tokens;
@@ -91,7 +91,7 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
     let mut out = GateOutcome::new(GATE);
     let exempt = PathFilter::new(&settings.exempt_paths)?;
     let registry = default_registry();
-    let vocab = AssertVocabulary::default();
+    let vocab = super::agent_diff::assert_vocabulary(ctx.config);
     let mut unsupported: Vec<String> = Vec::new();
 
     for file in ctx.git.changed_files()? {

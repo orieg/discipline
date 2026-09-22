@@ -72,11 +72,21 @@ impl LanguagePack for CSharpPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            let is_test_line = |l: usize| spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            // A file in a test directory, or one the repository declares as test scope, is
+            // test code line for line.
+            let whole_file = super::functions::test_path(path)
+                || super::functions::declared_test_path(path, &vocab.test_paths);
+            let is_test_line =
+                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
             extractor.facts.swallowed =
                 super::handlers::extract(root, src, &CSHARP_HANDLERS, &is_test_line);
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &CSHARP_RETRIES);
+        if super::functions::declared_test_path(path, &vocab.test_paths) {
+            for f in &mut extractor.facts.functions {
+                f.is_test = true;
+            }
+        }
         super::calls::count(
             root,
             src,
@@ -668,6 +678,7 @@ pub const CSHARP_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     trivial: &["return", "return null", "return false", "continue"],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
+    call_value_kinds: &[],
 };
 
 pub const CSHARP_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

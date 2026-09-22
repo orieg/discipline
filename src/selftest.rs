@@ -366,6 +366,24 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: a tuple binding is not a discarded call, a call is",
+        || {
+            let v = AssertVocabulary::default();
+            let tuple = analyze("fn f(a: u8, b: u8) { let _ = (a, b); }", &v)?.swallowed;
+            let call = analyze("fn f() { let _ = std::fs::remove_file(\"x\"); }", &v)?.swallowed;
+            Ok(tuple.is_empty() && call.len() == 1)
+        },
+    ),
+    (
+        "unsafe-safety-comment: a `# Safety` rustdoc section documents an unsafe trait",
+        || {
+            let v = AssertVocabulary::default();
+            let documented = analyze("/// # Safety\n/// Rules.\npub unsafe trait T {}", &v)?;
+            let bare = analyze("/// Rules.\npub unsafe trait T {}", &v)?;
+            Ok(documented.unsafe_sites[0].documented && !bare.unsafe_sites[0].documented)
+        },
+    ),
+    (
         "ci-integrity: advisory is read from the flag, not from a comment",
         || {
             use crate::guards::ci_integrity::run_is_advisory;

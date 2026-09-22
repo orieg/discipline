@@ -316,6 +316,8 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `meta.mode` | string | `"enforcing"` | Operating mode: 'enforcing' exits non-zero on violations; 'advisory' runs all checks and emits reports but exits 0. |
 | `meta.name` | string | *(required)* | Repository or project name |
 | `meta.version` | integer | `1` | Configuration schema version (must be 1) |
+| `tests.functions` | list | `[]` | Function names (leaf) that are test entry points wherever they appear, e.g. a script's self_test (default: []) |
+| `tests.paths` | list | `[]` | Path globs whose every line is test scope (default: []) |
 <!-- /generated -->
 
 ---
@@ -474,6 +476,18 @@ planned for 2 weeks docs-lint: allow
 Every report records the exact count of lines exempted by inline markers.
 
 ---
+
+## Declared test scope (`[tests]`)
+
+Each language pack knows its conventions for test code (`#[test]`, pytest collection, `it(` callbacks, `tests/` directories). A repository can widen that:
+
+```toml
+[tests]
+functions = ["self_test"]      # leaf function names that are test entry points wherever they appear
+paths = ["scripts/fixtures/**"] # globs whose every line is test scope
+```
+
+One declaration is honoured by every gate that separates test code from production code: the assertion gates collect a declared function as a test; `error-swallowing`, `stub-bodies` and `suppression-delta` treat its body (or the whole declared file) as test scope; `pii` does not report fixture strings inside it. Widening either list is reported by `config-integrity` as a weakening.
 
 ## Trust Model
 

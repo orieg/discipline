@@ -375,7 +375,21 @@ pub struct DisciplineConfig {
     #[serde(default)]
     pub directives: DirectivesConfig,
     #[serde(default)]
+    pub tests: TestsConfig,
+    #[serde(default)]
     pub gates: Gates,
+}
+
+/// What the repository counts as test code beyond what each language's conventions say.
+/// Read by every gate that separates test code from production code.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestsConfig {
+    /// Function names (leaf) that are test entry points wherever they appear, e.g. a
+    /// script's `self_test`.
+    pub functions: Vec<String>,
+    /// Path globs whose every line is test scope.
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1651,6 +1665,7 @@ impl DisciplineConfig {
                 mode: RunMode::Enforcing,
             },
             directives: DirectivesConfig::default(),
+            tests: TestsConfig::default(),
             gates: Gates::default(),
         }
     }
@@ -1733,6 +1748,13 @@ impl DisciplineConfig {
             if let Some(table) = value.as_table_mut() {
                 if let Ok(def_dir) = Value::try_from(DirectivesConfig::default()) {
                     table.insert("directives".to_string(), def_dir);
+                }
+            }
+        }
+        if value.get("tests").is_none() {
+            if let Some(table) = value.as_table_mut() {
+                if let Ok(def) = Value::try_from(TestsConfig::default()) {
+                    table.insert("tests".to_string(), def);
                 }
             }
         }

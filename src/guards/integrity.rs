@@ -511,6 +511,20 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
         dir_note("`require_approval` changed from true to false".to_string());
     }
 
+    // [tests]: widening what counts as test code narrows what the production-code gates see.
+    for (key, b, h) in [
+        ("functions", &base.tests.functions, &head.tests.functions),
+        ("paths", &base.tests.paths, &head.tests.paths),
+    ] {
+        let gained = h.iter().filter(|x| !b.contains(x)).count();
+        if gained > 0 {
+            found.push(Weakening {
+                gate: "tests".to_string(),
+                what: format!("`{key}` gained {gained} entr(y/ies)"),
+            });
+        }
+    }
+
     // [meta]: advisory mode exits 0 whatever the gates found.
     if base.meta.mode == RunMode::Enforcing && head.meta.mode == RunMode::Advisory {
         found.push(Weakening {

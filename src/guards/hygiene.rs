@@ -329,7 +329,7 @@ fn has_exemption_cue(clause: &str, line: &str, _matched: &str) -> bool {
 
     // 4. Historical durations / ages / production stability / historical narration / commit ordering
     let hist_re = Regex::new(
-        r"(?i)\b(?:\d+[- ](?:years?|months?|days?|hours?|mins?)[- ]old|(?:a|an)\s+(?:years?|months?|days?)[- ]old|\d+\s+(?:years?|months?|days?|weeks?|months?)\s+ago|a\s+day\s+ago|shipped\s+a\s+day|for\s+(?:the\s+past|the\s+last|about|over|~)?\s*\d+\s*(?:years?|months?)|stable\s+for\s+\d+|compatibility\s+for\s+(?:over\s+)?\d+|history\s+spans\s+\d+|survived\s+\d+\s+years|undetected\s+for\s+[~]?\d+\s+years|invariants?|unchecked\s+for\s+\d+|written\s+\d+\s+years\s+ago|issue\s+was\s+resolved|production\s+history\s+spans|commit\s+ordering|(?:minutes?|hours?|days?|weeks?)\s+later|(?:minutes?|hours?|days?|weeks?)\s+earlier)\b",
+        r"(?i)\b(?:\d+[- ](?:years?|months?|days?|hours?|mins?)[- ]old|(?:a|an)\s+(?:years?|months?|days?)[- ]old|\d+\s+(?:years?|months?|days?|weeks?|months?)\s+ago|a\s+day\s+ago|shipped\s+a\s+day|for\s+(?:the\s+past|the\s+last|about|over|~)?\s*\d+\s*(?:years?|months?)|stable\s+for\s+\d+|compatibility\s+for\s+(?:over\s+)?\d+|history\s+spans\s+\d+|survived\s+\d+\s+years|undetected\s+for\s+[~]?\d+\s+years|invariants?|unchecked\s+for\s+\d+|written\s+\d+\s+years\s+ago|issue\s+was\s+resolved|production\s+history\s+spans|commit\s+ordering|(?:minutes?|hours?|days?|weeks?)\s+later|(?:minutes?|hours?|days?|weeks?)\s+earlier|\d+[- ]?(?:minutes?|hours?|days?|weeks?|months?)[- ]gap\s+between|gap\s+of\s+\d+\s+(?:minutes?|hours?|days?|weeks?|months?)|\d+\s+(?:minutes?|hours?|days?|weeks?|months?)\s+between\s+(?:the|two|each|its))\b",
     )
     .unwrap();
     if hist_re.is_match(clause)
@@ -969,17 +969,60 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
         l == c || l == "discipline.toml"
     };
 
+    // Lines inside a function the repository declares as a test entry point, or in a file
+    // it declares as test scope, hold fixtures by definition and are not leaks.
+    let declared = &ctx.config.tests;
+    let registry = crate::ast::default_registry();
+    let vocab = crate::ast::AssertVocabulary {
+        test_functions: declared.functions.clone(),
+        test_paths: declared.paths.clone(),
+        ..Default::default()
+    };
+    let declared_test_spans = |path: &str, text: &str| -> (bool, Vec<(usize, usize)>) {
+        if declared.functions.is_empty() && declared.paths.is_empty() {
+            return (false, Vec::new());
+        }
+        if crate::ast::functions::declared_test_path(path, &declared.paths) {
+            return (true, Vec::new());
+        }
+        let spans = registry
+            .find_pack(path)
+            .and_then(|pack| pack.extract(path, text, &vocab).ok())
+            .map(|facts| {
+                facts
+                    .tests
+                    .iter()
+                    .filter(|t| {
+                        let leaf = t.name.rsplit("::").next().unwrap_or(&t.name);
+                        declared.functions.iter().any(|f| f == leaf)
+                    })
+                    .map(|t| (t.line, t.end_line.max(t.line)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        (false, spans)
+    };
     let scan = |label: &str,
                 text: &str,
                 added_lines: Option<&std::collections::BTreeSet<usize>>,
                 out: &mut GateOutcome| {
         let active_cfg = is_active_config(label);
+        let (whole_file_is_test, test_spans) = declared_test_spans(label, text);
+        if whole_file_is_test {
+            return;
+        }
         for (idx, line) in text.lines().enumerate() {
             let line_num = idx + 1;
             if let Some(lines) = added_lines {
                 if !lines.contains(&line_num) {
                     continue;
                 }
+            }
+            if test_spans
+                .iter()
+                .any(|(a, b)| *a <= line_num && line_num <= *b)
+            {
+                continue;
             }
             let hit = rules.iter().find_map(|rule| {
                 if active_cfg && rule.label == "denylisted hostname" {

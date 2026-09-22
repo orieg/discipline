@@ -2772,6 +2772,177 @@ fn sleeps_trivial_assertions_and_injected_pr_bodies_are_reported() {
     assert!(msg.contains("commit:"), "{msg}");
 }
 
+// ---- consumer replay: false positives -------------------------------------
+
+#[test]
+fn a_declared_test_entry_point_is_test_scope_for_every_gate() {
+    // A script's `self_test()` holds fixture strings, an expect-to-raise handler and
+    // helper-only assertions. Without the declaration three gates read it as production.
+    // The address is assembled here so this source file does not carry it.
+    let script = format!(
+        "import re\n\n\ndef check(text):\n    return re.search(r\"{a}\\.{b}\", text) is None\n\n\n\
+         def self_test():\n    host = \"{a}.{b}.4.7\"\n    assert not check(host)\n    try:\n        int(\"x\")\n    except ValueError:\n        pass\n\n\n\
+         def main():\n    return 0\n",
+        a = "192",
+        b = "168"
+    );
+    let script: &str = &script;
+    let repo = Repo::new();
+    repo.write("scripts/check_hosts.py", script);
+    repo.commit("feat: hosts check");
+    let before = repo.check(&[]);
+    assert!(
+        !before.titles("pii").is_empty(),
+        "pii should fire without the declaration"
+    );
+    assert!(
+        !before.titles("error-swallowing").is_empty(),
+        "error-swallowing should fire without the declaration"
+    );
+
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[tests]\nfunctions = [\"self_test\"]\n"),
+    );
+    repo.write("scripts/check_hosts.py", script);
+    repo.commit("feat: hosts check");
+    let after = repo.check(&[]);
+    assert!(
+        after.titles("pii").is_empty(),
+        "{:?}",
+        after.violations("pii")
+    );
+    assert!(
+        after.titles("error-swallowing").is_empty(),
+        "{:?}",
+        after.violations("error-swallowing")
+    );
+    assert!(
+        after.titles("vacuous-tests").is_empty(),
+        "{:?}",
+        after.violations("vacuous-tests")
+    );
+
+    // A declared test path makes a whole file test scope; a stub inside it is not reported.
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[tests]\npaths = [\"fixtures/**\"]\n"),
+    );
+    repo.write("fixtures/fake.py", "def load():\n    raise NotImplementedError\n\ntry:\n    load()\nexcept Exception:\n    pass\n");
+    repo.commit("test: fixture");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("stub-bodies").is_empty() && run.titles("error-swallowing").is_empty(),
+        "{:?}",
+        run.json()["outcomes"]
+    );
+
+    // Widening the declaration is a weakening config-integrity reports.
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[tests]\nfunctions = [\"self_test\"]\n"),
+    );
+    repo.commit("chore: declare");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+    assert!(run.violations("config-integrity")[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("[tests] `functions` gained 1"));
+}
+
+#[test]
+fn error_swallowing_spares_expect_to_raise_tuple_bindings_and_cargo_test_dirs() {
+    let repo = Repo::new();
+    repo.write(
+        "pkg/validate.py",
+        "def check(cases):\n    try:\n        parse(cases[0])\n    except ValueError:\n        pass\n    else:\n        raise AssertionError(\"a bad input did not raise\")\n    failures = []\n    for bad in cases:\n        try:\n            bad()\n        except ValueError:\n            continue\n        failures.append(\"did not raise\")\n    return failures\n\n\ndef load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n",
+    );
+    repo.write("crates/x/src/strmap.rs", "pub fn f(word: u8, alloc: u8) {\n    let _ = (word, alloc);\n    let _ = std::fs::remove_file(\"x\");\n}\n");
+    repo.write(
+        "crates/x/tests/unwind.rs",
+        "use std::panic::catch_unwind;\nfn drive() { let _ = catch_unwind(|| panic!()); }\n",
+    );
+    repo.commit("feat: validation");
+    let run = repo.check(&[]);
+    let mut rows: Vec<(String, u64)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    rows.sort();
+    // Only the genuinely empty handler and the genuinely discarded call remain.
+    assert_eq!(
+        rows,
+        vec![
+            ("crates/x/src/strmap.rs".to_string(), 3),
+            ("pkg/validate.py".to_string(), 21)
+        ],
+        "{:?}",
+        run.violations("error-swallowing")
+    );
+}
+
+#[test]
+fn unsafe_trait_with_a_safety_doc_section_abc_stubs_and_past_intervals_are_not_findings() {
+    let repo = Repo::new();
+    repo.write(
+        "src/occ.rs",
+        "/// An engine the scheduler drives.\n///\n/// # Safety\n///\n/// 1. Implementors must not hold the lock across `step`.\npub(crate) unsafe trait OlcEngine: Send {}\n\n/// No contract here.\npub unsafe trait Bare {}\n",
+    );
+    repo.write(
+        "scripts/bump_version.py",
+        "from abc import ABC, abstractmethod\n\nclass Base:\n    def get_versions(self):\n        raise NotImplementedError\n\nclass Cargo(Base):\n    def get_versions(self):\n        return [1]\n\nclass Abstract(ABC):\n    def set_version(self, v):\n        raise NotImplementedError\n\nclass Orphan:\n    def run(self):\n        raise NotImplementedError\n",
+    );
+    repo.write(
+        "docs/history.md",
+        "# History\n\nThe 6-hour gap between the sanity-gate run and #347 was a queue stall.\n",
+    );
+    repo.commit("feat: engine");
+    let run = repo.check(&[]);
+    let unsafe_lines: Vec<u64> = run
+        .violations("unsafe-safety-comment")
+        .iter()
+        .map(|v| v["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        unsafe_lines,
+        vec![9],
+        "{:?}",
+        run.violations("unsafe-safety-comment")
+    );
+    let stub_lines: Vec<u64> = run
+        .violations("stub-bodies")
+        .iter()
+        .map(|v| v["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(stub_lines, vec![16], "{:?}", run.violations("stub-bodies"));
+    assert!(
+        run.titles("time-estimates").is_empty(),
+        "{:?}",
+        run.violations("time-estimates")
+    );
+
+    // A forward-looking duration still fails.
+    repo.write(
+        "docs/history.md",
+        "# History\n\nThe fix ships in 6 hours.\n",
+    );
+    repo.commit("docs: plan");
+    assert!(!repo.check(&[]).titles("time-estimates").is_empty());
+}
+
 // ---- override policy -------------------------------------------------------
 
 /// A change that disables two gates and excuses both from its commit body.

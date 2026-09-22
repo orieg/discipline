@@ -331,10 +331,24 @@ pub fn test_none(_: Node, _: &str, _: &str) -> bool {
     false
 }
 
-/// A path under a test directory or with a test suffix.
+/// Whether `path` matches one of the repository's declared test-scope globs.
+pub fn declared_test_path(path: &str, globs: &[String]) -> bool {
+    globs.iter().any(|g| {
+        globset::Glob::new(g)
+            .map(|g| g.compile_matcher().is_match(path))
+            .unwrap_or(false)
+    })
+}
+
+/// A path under a test directory or with a test suffix. Cargo's `benches/` and
+/// `examples/` are compiled as their own crates and are not shipped code.
 pub fn test_path(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
     p.contains("/tests/")
+        || p.contains("/benches/")
+        || p.contains("/examples/")
+        || p.starts_with("benches/")
+        || p.starts_with("examples/")
         || p.contains("/test/")
         || p.starts_with("tests/")
         || p.starts_with("test/")
