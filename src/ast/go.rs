@@ -236,6 +236,13 @@ impl<'a> GoExtractor<'a> {
                 let mut helper_fn = TestFn::default();
                 let mut dummy_calls = Vec::new();
                 self.scan_block(body, &mut helper_fn, func_name, &mut dummy_calls);
+                helper_fn.total_asserts += super::count_failure_exits(
+                    body,
+                    self.src,
+                    &["call_expression"],
+                    &["panic("],
+                    &["func_literal"],
+                );
                 let facts = super::HelperFacts {
                     total_asserts: helper_fn.total_asserts,
                     strong_asserts: helper_fn.strong_asserts,
@@ -508,6 +515,9 @@ impl<'a> GoExtractor<'a> {
                         test.strong_asserts += h.strong_asserts;
                         test.tautologies += h.tautologies;
                         test.fatal_asserts += h.fatal_asserts;
+                        if h.total_asserts > h.tautologies {
+                            test.helper_checks += 1;
+                        }
                     }
                 }
             }
@@ -569,6 +579,7 @@ pub const GO_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
     trivial: &[],
     discard_kinds: &["assignment_statement", "short_var_declaration"],
     discards: super::handlers::go_discards,
+    classify_discard: None,
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,

@@ -372,6 +372,13 @@ impl<'a> JavaExtractor<'a> {
                 let mut helper_fn = TestFn::default();
                 let mut dummy_calls = Vec::new();
                 self.scan_method_body(body, &mut helper_fn, &mut dummy_calls);
+                helper_fn.total_asserts += super::count_failure_exits(
+                    body,
+                    self.src,
+                    &["throw_statement"],
+                    &[],
+                    &["lambda_expression", "class_body"],
+                );
                 let facts = super::HelperFacts {
                     total_asserts: helper_fn.total_asserts,
                     strong_asserts: helper_fn.strong_asserts,
@@ -601,6 +608,9 @@ impl<'a> JavaExtractor<'a> {
                         test.strong_asserts += h.strong_asserts;
                         test.tautologies += h.tautologies;
                         test.fatal_asserts += h.fatal_asserts;
+                        if h.total_asserts > h.tautologies {
+                            test.helper_checks += 1;
+                        }
                     }
                 }
             }
@@ -659,6 +669,7 @@ pub const JAVA_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     trivial: &["return", "return null", "return false", "continue"],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
+    classify_discard: None,
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,

@@ -30,6 +30,9 @@ pub struct HandlerSpec {
     pub discard_kinds: &'static [&'static str],
     /// Whether a statement's text discards a result.
     pub discards: fn(&str) -> bool,
+    /// Sorts a discarding statement by what it discards: `Some(kind)` is the site's kind,
+    /// `None` is not a discarded result. Unset: every discard is `discarded-result`.
+    pub classify_discard: Option<fn(Node, &str) -> Option<&'static str>>,
     /// For a binding statement, the node kinds of a right-hand side that is a call; a
     /// binding of anything else (a tuple, an identifier) is not a discarded result.
     pub call_value_kinds: &'static [&'static str],
@@ -204,10 +207,16 @@ pub fn extract(
             let binding_of_call = node.child_by_field_name("value").is_none_or(|v| {
                 spec.call_value_kinds.is_empty() || spec.call_value_kinds.contains(&v.kind())
             });
-            if binding_of_call && (spec.discards)(t) {
+            let kind = if binding_of_call && (spec.discards)(t) {
+                spec.classify_discard
+                    .map_or(Some("discarded-result"), |classify| classify(node, src))
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
                 out.push(SwallowSite {
                     line,
-                    kind: "discarded-result",
+                    kind,
                     snippet: first_line(t),
                 });
             }
@@ -313,6 +322,155 @@ pub fn rust_discards(t: &str) -> bool {
         return rest.contains('(') && !rest.starts_with("std::mem::") && !rest.starts_with("mem::");
     }
     t.ends_with(".ok()") && !t.starts_with("let ") && !t.contains("=")
+}
+
+/// Rust callees whose result is a `Result` (or an `Option` standing for a failure) by
+/// convention: throwing it away hides an error. Matched on the method or function name.
+const RUST_FALLIBLE_CALLEES: &[&str] = &[
+    "send",
+    "recv",
+    "send_to",
+    "recv_from",
+    "join",
+    "write",
+    "write_all",
+    "write_fmt",
+    "flush",
+    "sync_all",
+    "sync_data",
+    "lock",
+    "read",
+    "read_exact",
+    "read_to_string",
+    "read_to_end",
+    "read_line",
+    "read_dir",
+    "seek",
+    "set_len",
+    "set_permissions",
+    "remove_file",
+    "remove_dir",
+    "remove_dir_all",
+    "create_dir",
+    "create_dir_all",
+    "rename",
+    "copy",
+    "hard_link",
+    "shutdown",
+    "connect",
+    "bind",
+    "accept",
+    "parse",
+    "kill",
+    "wait",
+    "spawn",
+    "commit",
+    "rollback",
+    "execute",
+    "persist",
+    "close",
+    "set_nonblocking",
+    "set_read_timeout",
+    "set_write_timeout",
+    "set_var",
+    "set_current_dir",
+    "from_str",
+    "from_utf8",
+    "blocking_send",
+    "blocking_recv",
+    "send_timeout",
+    "recv_timeout",
+];
+
+/// Rust callees that return a plain value (a reference, an entry, the value itself):
+/// binding it to `_` discards nothing fallible.
+const RUST_INFALLIBLE_CALLEES: &[&str] = &[
+    "get_or_init",
+    "get_or_insert",
+    "get_or_insert_with",
+    "get_mut_or_init",
+    "entry",
+    "or_insert",
+    "or_insert_with",
+    "or_insert_with_key",
+    "or_default",
+    "unwrap_or",
+    "unwrap_or_default",
+    "unwrap_or_else",
+    "clone",
+    "to_owned",
+    "to_string",
+    "into",
+    "as_ref",
+    "as_mut",
+    "borrow",
+    "borrow_mut",
+    "len",
+    "is_empty",
+    "hash",
+    "black_box",
+    "type_name",
+    "size_of",
+    "drop",
+    "forget",
+    "Box::leak",
+    "leak",
+];
+
+/// The callee name of a call, method call or macro: `a.b.c(..)` is `c`, `x::y::<T>(..)` is
+/// `y`, `writeln!(..)` is `writeln!`.
+fn rust_callee(value: Node, src: &str) -> Option<String> {
+    match value.kind() {
+        "call_expression" => {
+            let f = value.child_by_field_name("function")?;
+            let name = match f.kind() {
+                "field_expression" => text(f.child_by_field_name("field")?, src),
+                "generic_function" => text(f.child_by_field_name("function")?, src),
+                _ => text(f, src),
+            };
+            let name = name.split("::<").next().unwrap_or(name);
+            Some(name.rsplit("::").next().unwrap_or(name).to_string())
+        }
+        "macro_invocation" => {
+            let m = text(value.child_by_field_name("macro")?, src);
+            Some(format!("{}!", m.rsplit("::").next().unwrap_or(m)))
+        }
+        "await_expression" => rust_callee(value.named_child(0)?, src),
+        _ => None,
+    }
+}
+
+/// Rust: sorts `let _ = <call>;` by its callee name, since the grammar carries no types.
+/// A known-fallible callee (`send`, `sync_all`, `try_*`, `*_checked`, `write!`) is a
+/// `discarded-result`; a known accessor (`get_or_init`, `entry`) is nothing; any other
+/// callee is a `discarded-value`, which the gate reports at `warning`. `f().ok();` and
+/// `let _ = f()?;` keep their reading: `.ok()` exists only to drop an error, and `?` has
+/// already propagated it.
+pub fn rust_discard_class(node: Node, src: &str) -> Option<&'static str> {
+    let Some(value) = node.child_by_field_name("value") else {
+        return Some("discarded-result");
+    };
+    if value.kind() == "try_expression" {
+        return Some("discarded-value");
+    }
+    let Some(name) = rust_callee(value, src) else {
+        return Some("discarded-value");
+    };
+    let name = name.as_str();
+    if matches!(name, "write!" | "writeln!") {
+        return Some("discarded-result");
+    }
+    if RUST_INFALLIBLE_CALLEES.contains(&name) {
+        return None;
+    }
+    if RUST_FALLIBLE_CALLEES.contains(&name)
+        || name.starts_with("try_")
+        || name.starts_with("checked_")
+        || name.ends_with("_checked")
+    {
+        return Some("discarded-result");
+    }
+    Some("discarded-value")
 }
 
 /// Go: `_ = err`, `_, _ = f()`, `x, _ := f()` where the dropped value is the error.
@@ -433,6 +591,29 @@ mod pack_tests {
             "package a\nfunc F() {\n    n, _ := w.Write(b)\n    _ = err\n    n, err := w.Write(b)\n    _ = n\n}\n",
         );
         assert_eq!(go, vec![(3, "discarded-result"), (4, "discarded-result")]);
+    }
+
+    #[test]
+    fn rust_discards_are_sorted_by_callee_name() {
+        // expanse #997: `get_or_init` returns `&Shards`; nothing fallible is discarded.
+        let rs = sites(
+            "src/alloc.rs",
+            "fn f(&self, w: &mut W) {\n    let _ = self.shards.get_or_init(|| {\n        build()\n    });\n    let _ = file.sync_all();\n    let _ = tx.send(());\n    let _ = writeln!(w, \"x\");\n    let _ = self.lookup(k);\n    let _ = map.entry(k).or_default();\n    let _ = n.checked_add(1);\n    let _ = h.try_reserve(8);\n    let _ = fs::remove_file(p);\n    let _ = std::fs::read_to_string::<&str>(p);\n    let _ = fetch().await;\n}\n",
+        );
+        assert_eq!(
+            rs,
+            vec![
+                (5, "discarded-result"),
+                (6, "discarded-result"),
+                (7, "discarded-result"),
+                (8, "discarded-value"),
+                (10, "discarded-result"),
+                (11, "discarded-result"),
+                (12, "discarded-result"),
+                (13, "discarded-result"),
+                (14, "discarded-value"),
+            ]
+        );
     }
 
     #[test]

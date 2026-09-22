@@ -223,6 +223,10 @@ pub struct TestFn {
     pub sleeps: usize,
     /// Assertions that hold for nearly any value (`is not None`, `toBeDefined`, `is_ok()`).
     pub trivial_asserts: usize,
+    /// Calls to same-file helpers whose body has a failure path (an assertion, or a
+    /// `raise` / `throw` / `panic!` on a failure branch). `assertion-reduction` reads a
+    /// drop that coincides with more of these as checks moved into helpers.
+    pub helper_checks: usize,
 }
 
 impl TestFn {
@@ -243,6 +247,39 @@ pub struct HelperFacts {
     pub strong_asserts: usize,
     pub tautologies: usize,
     pub fatal_asserts: usize,
+}
+
+/// Failure exits in a helper body: nodes of one of `kinds` whose text starts with one of
+/// `prefixes` (an empty prefix list accepts any text; a prefix ending in a space also
+/// matches the bare keyword). Bodies of nested functions
+/// (`nested`) are skipped: defining a closure runs none of its statements.
+pub fn count_failure_exits(
+    node: tree_sitter::Node,
+    src: &[u8],
+    kinds: &[&str],
+    prefixes: &[&str],
+    nested: &[&str],
+) -> usize {
+    let mut n = 0;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if nested.contains(&child.kind()) {
+            continue;
+        }
+        if kinds.contains(&child.kind()) {
+            let t = child.utf8_text(src).unwrap_or("");
+            if prefixes.is_empty()
+                || prefixes
+                    .iter()
+                    .any(|p| t.starts_with(p) || t == p.trim_end())
+            {
+                n += 1;
+                continue;
+            }
+        }
+        n += count_failure_exits(child, src, kinds, prefixes, nested);
+    }
+    n
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,6 +366,7 @@ impl Default for ParsedFileFacts {
                 retries: None,
                 sleeps: 0,
                 trivial_asserts: 0,
+                helper_checks: 0,
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -357,6 +395,7 @@ impl ParsedFileFacts {
             retries: None,
             sleeps: 0,
             trivial_asserts: 0,
+            helper_checks: 0,
         });
     }
 }
@@ -494,6 +533,53 @@ mod tests {
         assert!(!is_unsupported_source("tests/001.phpt"));
         assert!(!is_unsupported_source("docs/plan.md"));
         assert!(!is_unsupported_source("Makefile"));
+    }
+
+    /// A same-file helper that fails by raising, throwing or panicking on a mismatch is a
+    /// check at each call; a helper with no failure exit is not.
+    #[test]
+    fn a_failing_helper_is_a_check_in_every_pack_that_resolves_helpers() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "tests/check.rs",
+                "fn check(a: u32, b: u32) {\n    if a != b {\n        panic!(\"mismatch\");\n    }\n}\nfn noop(_a: u32) {}\n#[test]\nfn t() {\n    check(1, 1);\n    noop(2);\n}\n",
+            ),
+            (
+                "pkg/a_test.go",
+                "package a\nimport \"testing\"\nfunc check(a, b int) {\n\tif a != b {\n\t\tpanic(\"mismatch\")\n\t}\n}\nfunc noop(a int) {}\nfunc TestT(t *testing.T) {\n\tcheck(1, 1)\n\tnoop(2)\n}\n",
+            ),
+            (
+                "src/test/java/ATest.java",
+                "class ATest {\n  void check(int a, int b) {\n    if (a != b) { throw new IllegalStateException(\"mismatch\"); }\n  }\n  void noop(int a) {}\n  @Test\n  void t() {\n    check(1, 1);\n    noop(2);\n  }\n}\n",
+            ),
+            (
+                "tests/ATest.cs",
+                "public class ATest {\n  void Check(int a, int b) {\n    if (a != b) { throw new System.Exception(\"mismatch\"); }\n  }\n  void Noop(int a) {}\n  [Fact]\n  public void T() {\n    Check(1, 1);\n    Noop(2);\n  }\n}\n",
+            ),
+            (
+                "src/test/kotlin/ATest.kt",
+                "class ATest {\n    private fun check(a: Int, b: Int) {\n        if (a != b) throw IllegalStateException(\"mismatch\")\n    }\n    private fun noop(a: Int) {}\n    @Test\n    fun t() {\n        check(1, 1)\n        noop(2)\n    }\n}\n",
+            ),
+            (
+                "test/a_test.rb",
+                "class ATest < Minitest::Test\n  def check(a, b)\n    raise ArgumentError, \"mismatch\" if a != b\n  end\n\n  def noop(a)\n  end\n\n  def test_t\n    check(1, 1)\n    noop(2)\n  end\nend\n",
+            ),
+            (
+                "tests/test_a.py",
+                "def check(a, b):\n    if a != b:\n        raise ValueError(\"mismatch\")\n\ndef noop(a):\n    pass\n\ndef test_t():\n    check(1, 1)\n    noop(2)\n",
+            ),
+        ];
+        let reg = default_registry();
+        let vocab = AssertVocabulary::default();
+        for (path, src) in cases {
+            let Some(pack) = reg.find_pack(path) else {
+                continue;
+            };
+            let facts = pack.extract(path, src, &vocab).expect(path);
+            assert_eq!(facts.tests.len(), 1, "{path}");
+            let t = &facts.tests[0];
+            assert_eq!((t.total_asserts, t.helper_checks), (1, 1), "{path}: {t:?}");
+        }
     }
 
     #[test]

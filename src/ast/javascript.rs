@@ -642,6 +642,7 @@ pub const JS_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
     ],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
+    classify_discard: None,
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,

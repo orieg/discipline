@@ -472,6 +472,17 @@ impl<'a> KotlinExtractor<'a> {
                 let mut helper_fn = TestFn::default();
                 let mut dummy_calls = Vec::new();
                 self.scan_node(body, &mut helper_fn, &mut dummy_calls);
+                helper_fn.total_asserts += super::count_failure_exits(
+                    body,
+                    self.src,
+                    &["throw_expression"],
+                    &[],
+                    &[
+                        "lambda_literal",
+                        "anonymous_function",
+                        "function_declaration",
+                    ],
+                );
                 self.helpers.insert(
                     name.to_string(),
                     super::HelperFacts {
@@ -684,6 +695,9 @@ impl<'a> KotlinExtractor<'a> {
                         test.strong_asserts += h.strong_asserts;
                         test.tautologies += h.tautologies;
                         test.fatal_asserts += h.fatal_asserts;
+                        if h.total_asserts > h.tautologies {
+                            test.helper_checks += 1;
+                        }
                     }
                 }
             }
@@ -742,6 +756,7 @@ pub const KOTLIN_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     ],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
+    classify_discard: None,
     call_value_kinds: &[],
     // `runCatching { }.getOrNull()` / `.getOrDefault(x)` replace the failure with a value.
     silence_kinds: &["call_expression"],

@@ -250,6 +250,7 @@ pub const C_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpe
     // `(void)call()` throws the result away; `(void)x` of a variable is not a call.
     discard_kinds: &["cast_expression"],
     discards: super::handlers::c_discards,
+    classify_discard: None,
     call_value_kinds: &["call_expression"],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
@@ -352,6 +353,9 @@ impl<'a> CCppExtractor<'a> {
                         test.strong_asserts += h.strong_asserts;
                         test.tautologies += h.tautologies;
                         test.fatal_asserts += h.fatal_asserts;
+                        if h.total_asserts > h.tautologies {
+                            test.helper_checks += 1;
+                        }
                     }
                 }
             }

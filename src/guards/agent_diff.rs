@@ -631,8 +631,20 @@ pub fn evaluate_assertion_reduction(
         let (b, h) = (p.base, p.head);
         let b_eff = b.effective_asserts();
         let h_eff = h.effective_asserts();
-        let total_drop = h_eff < b_eff;
-        let strong_drop = h.strong_asserts < b.strong_asserts;
+        let mut total_drop = h_eff < b_eff;
+        let mut strong_drop = h.strong_asserts < b.strong_asserts;
+        // Checks moved into same-file helpers that fail (assert, raise, throw, panic): one
+        // `raise` in a helper's loop stands for many inline assertions, so the count drops
+        // while the test calls more failing helpers than before. Deleting a helper call
+        // lowers `helper_checks` and is still a drop.
+        if (total_drop || strong_drop) && h.helper_checks > b.helper_checks {
+            out.notes.push(format!(
+                "`{}` in `{}`: assertions {} -> {} read as moved into same-file helpers that fail ({} -> {} calls)",
+                h.name, p.path, b_eff, h_eff, b.helper_checks, h.helper_checks
+            ));
+            total_drop = false;
+            strong_drop = false;
+        }
         let fatal_drop = h.fatal_asserts < b.fatal_asserts;
         // More doubles in the test, and no stronger assertion on what the code produced:
         // the shape of an integration failure sidestepped by mocking it away.

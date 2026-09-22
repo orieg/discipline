@@ -609,6 +609,17 @@ impl<'a> PythonExtractor<'a> {
                     }
                 }
             }
+            // A dispatch table: `steps = [("label", check_blocks), ...]` then
+            // `for _, fn in steps: fn()`. A function named as an element of a
+            // list, tuple or set runs through the loop; an unknown name resolves
+            // to nothing.
+            "identifier"
+                if node
+                    .parent()
+                    .is_some_and(|p| matches!(p.kind(), "list" | "tuple" | "set")) =>
+            {
+                calls.push(self.text(node).to_string());
+            }
             _ => {}
         }
         let mut cursor = node.walk();
@@ -637,6 +648,9 @@ impl<'a> PythonExtractor<'a> {
                 test.strong_asserts += h.strong_asserts;
                 test.tautologies += h.tautologies;
                 test.fatal_asserts += h.fatal_asserts;
+                if h.total_asserts > h.tautologies {
+                    test.helper_checks += 1;
+                }
             }
         }
     }
@@ -1008,6 +1022,7 @@ pub const PYTHON_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     trivial: &["pass", "...", "return", "return None", "continue"],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
+    classify_discard: None,
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
@@ -1433,6 +1448,19 @@ def test_cluster():
         assert_eq!(t.name, "test_cluster");
         assert_eq!(t.total_asserts, 3, "two raising helpers + one assert");
         assert!(!t.is_vacuous());
+    }
+
+    #[test]
+    fn helpers_in_a_dispatch_table_are_resolved() {
+        // expanse #1028: `self_test()` runs a table of `(label, helper)` pairs.
+        let src = "def check_blocks():\n    if blocks() != 3:\n        raise ValueError(\"blocks\")\n\ndef check_rounds():\n    assert rounds() == 8\n\ndef self_test():\n    steps = [\n        (\"blocks\", check_blocks),\n        (\"rounds\", check_rounds),\n    ]\n    for label, fn in steps:\n        fn()\n    return 0\n";
+        let vocab = AssertVocabulary {
+            test_functions: vec!["self_test".into()],
+            ..Default::default()
+        };
+        let facts = PythonPack.extract("scripts/s.py", src, &vocab).unwrap();
+        let t = &facts.tests[0];
+        assert_eq!((t.total_asserts, t.helper_checks), (2, 2), "{t:?}");
     }
 
     #[test]

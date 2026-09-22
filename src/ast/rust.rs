@@ -248,6 +248,13 @@ impl<'a> Extractor<'a> {
                             is_fallible_return,
                             &mut dummy_calls,
                         );
+                        helper_test.total_asserts += super::count_failure_exits(
+                            body,
+                            self.src,
+                            &["macro_invocation"],
+                            RUST_FAILURE_EXITS,
+                            &["function_item", "closure_expression"],
+                        );
                     }
                     let facts = HelperFacts {
                         total_asserts: helper_test.total_asserts,
@@ -341,6 +348,9 @@ impl<'a> Extractor<'a> {
                         test.strong_asserts += h.strong_asserts;
                         test.tautologies += h.tautologies;
                         test.fatal_asserts += h.fatal_asserts;
+                        if h.total_asserts > h.tautologies {
+                            test.helper_checks += 1;
+                        }
                     }
                 }
             }
@@ -443,6 +453,7 @@ impl<'a> Extractor<'a> {
             retries: None,
             sleeps: 0,
             trivial_asserts: 0,
+            helper_checks: 0,
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")
@@ -1032,6 +1043,7 @@ pub const RUST_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     trivial: &[],
     discard_kinds: &["let_declaration", "expression_statement"],
     discards: super::handlers::rust_discards,
+    classify_discard: Some(super::handlers::rust_discard_class),
     call_value_kinds: &[
         "call_expression",
         "macro_invocation",
@@ -1070,6 +1082,10 @@ pub const RS_BUDGETS: super::budgets::BudgetSpec = super::budgets::BudgetSpec {
     integer_kinds: &["integer_literal"],
     token_tree_kinds: &["token_tree"],
 };
+
+/// Macros that end a same-file helper on a failure path: a helper that panics on a
+/// mismatch is a check, the way a Python helper that raises is.
+const RUST_FAILURE_EXITS: &[&str] = &["panic!", "std::panic!", "core::panic!", "unreachable!"];
 
 pub const RS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     if_kinds: &["if_expression"],

@@ -146,6 +146,7 @@ pub const PHP_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerS
     trivial: &["return", "return null", "return false", "continue"],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
+    classify_discard: None,
     call_value_kinds: &[],
     // `@call()`: the error-control operator drops every diagnostic the call raises.
     silence_kinds: &["error_suppression_expression"],

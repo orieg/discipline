@@ -101,6 +101,10 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             }
             let (title, what) = match site.kind {
                 "discarded-result" => ("Result Discarded", "throws a fallible call's result away"),
+                "discarded-value" => (
+                    "Value Discarded",
+                    "throws a call's value away; the callee is not on the known-fallible list, so this is reported at `warning` at most",
+                ),
                 "logging-handler" => (
                     "Empty Error Handler Added",
                     "catches an error, logs it, and does nothing else with it: the failure is recorded and dropped",
@@ -114,8 +118,17 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                     "catches an error and does nothing with it",
                 ),
             };
+            // Rust has no types in the syntax tree: a callee off the known-fallible list
+            // may return a plain value, so it never blocks on its own.
+            let severity = if site.kind == "discarded-value"
+                && settings.severity() == crate::config::Severity::Error
+            {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            };
             out.push(
-                ctx.overridable(settings.severity()),
+                ctx.overridable(severity),
                 title,
                 Some(&file.path),
                 Some(site.line),

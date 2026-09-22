@@ -152,6 +152,7 @@ pub const RUBY_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     ],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
+    classify_discard: None,
     call_value_kinds: &[],
     // `call rescue nil`: the modifier form, when its handler is a constant.
     silence_kinds: &["rescue_modifier"],
@@ -254,6 +255,13 @@ impl<'a> RubyExtractor<'a> {
                         let mut helper_fn = TestFn::default();
                         let mut dummy_calls = Vec::new();
                         self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
+                        helper_fn.total_asserts += super::count_failure_exits(
+                            body,
+                            self.src,
+                            &["call", "identifier"],
+                            &["raise ", "raise(", "fail "],
+                            &["block", "do_block", "lambda", "method", "singleton_method"],
+                        );
                         let facts = super::HelperFacts {
                             total_asserts: helper_fn.total_asserts,
                             strong_asserts: helper_fn.strong_asserts,
@@ -520,6 +528,9 @@ impl<'a> RubyExtractor<'a> {
                         test.strong_asserts += h.strong_asserts;
                         test.tautologies += h.tautologies;
                         test.fatal_asserts += h.fatal_asserts;
+                        if h.total_asserts > h.tautologies {
+                            test.helper_checks += 1;
+                        }
                     }
                 }
             }

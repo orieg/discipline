@@ -11081,3 +11081,153 @@ fn provenance_tags_a_change_cannot_delete_the_entry_for_a_figure_it_republishes(
         "{v:?}"
     );
 }
+
+#[test]
+fn error_swallowing_sorts_rust_discards_by_callee() {
+    // expanse #997: `get_or_init` returns `&Shards`; the binding exists for a cfg-gated use.
+    let repo = Repo::new();
+    repo.write(
+        "crates/expanse/src/alloc.rs",
+        "impl Alloc {\n    pub fn warm(&self) {\n        let _ = self.shards.get_or_init(|| {\n            Shards::new()\n        });\n    }\n}\n",
+    );
+    repo.commit("feat: warm shards");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("error-swallowing").is_empty(),
+        "{:?}",
+        quiet.violations("error-swallowing")
+    );
+
+    // Known-fallible callees in production code still block.
+    repo.write(
+        "crates/expanse/src/io.rs",
+        "pub fn close(file: File, tx: Sender<()>, w: &mut W) {\n    let _ = file.sync_all();\n    let _ = tx.send(());\n    let _ = writeln!(w, \"x\");\n    let _ = self.lookup(k);\n}\n",
+    );
+    repo.commit("feat: close");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let found: Vec<(String, String)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["title"].as_str().unwrap().to_string(),
+                v["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let pair = |t: &str, s: &str| (t.to_string(), s.to_string());
+    assert_eq!(
+        found,
+        vec![
+            pair("Result Discarded", "error"),
+            pair("Result Discarded", "error"),
+            pair("Result Discarded", "error"),
+            pair("Value Discarded", "warning"),
+        ]
+    );
+}
+
+/// expanse #1028: a `self_test()`'s assertions moved into module-level helpers that raise.
+const SELF_TEST_INLINE: &str = "def self_test() -> int:\n    row = load()\n    assert row[\"a\"] == 1\n    assert row[\"b\"] == 2\n    assert row[\"c\"] == 3\n    assert row[\"role\"] == \"writer\"\n    return 0\n";
+const SELF_TEST_HELPERS: &str = "class ScheduleMismatch(RuntimeError): ...\n\n\ndef check_schedule(data: dict, asked: dict) -> None:\n    \"\"\"Refuses a row disagreeing with what was asked for. Raises, never `assert`.\"\"\"\n    for key, want in asked.items():\n        got = data.get(key)\n        if got != want:\n            raise ScheduleMismatch(f\"schedule mismatch: {key} is {got!r}, asked for {want!r}\")\n\n\ndef check_role(data: dict, role: str) -> None:\n    if data.get(\"role\") != role:\n        raise ScheduleMismatch(role)\n\n\ndef self_test() -> int:\n    row = load()\n    check_schedule(row, {\"a\": 1, \"b\": 2, \"c\": 3})\n    check_role(row, \"writer\")\n    return 0\n";
+
+#[test]
+fn assertion_reduction_reads_checks_moved_into_raising_helpers_as_a_refactor() {
+    let config = format!("{CONFIG_HEAD}[tests]\nfunctions = [\"self_test\"]\n");
+    let repo = repo_with_base_config(&config);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("scripts/replay.py", SELF_TEST_INLINE);
+    repo.commit("feat: self test");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("scripts/replay.py", SELF_TEST_HELPERS);
+    repo.commit("refactor: checks raise");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+    assert!(
+        notes_of(&run, "assertion-reduction")
+            .iter()
+            .any(|n| n.contains("moved into same-file helpers that fail (0 -> 2 calls)")),
+        "{:?}",
+        notes_of(&run, "assertion-reduction")
+    );
+
+    // Deleting a check without replacement is still a drop.
+    let repo = repo_with_base_config(&config);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("scripts/replay.py", SELF_TEST_HELPERS);
+    repo.commit("feat: self test");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "scripts/replay.py",
+        &SELF_TEST_HELPERS.replace(
+            "    check_schedule(row, {\"a\": 1, \"b\": 2, \"c\": 3})\n",
+            "",
+        ),
+    );
+    repo.commit("refactor: fewer checks");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("assertion-reduction"),
+        vec!["Assertion Reduction In Existing Test"],
+        "{}",
+        run.stdout
+    );
+
+    // Same helper calls, an inline assertion deleted: the helpers explain nothing.
+    let with_inline =
+        SELF_TEST_HELPERS.replace("    return 0\n", "    assert row[\"ok\"]\n    return 0\n");
+    let repo = repo_with_base_config(&config);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("scripts/replay.py", &with_inline);
+    repo.commit("feat: self test");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("scripts/replay.py", SELF_TEST_HELPERS);
+    repo.commit("refactor: drop inline check");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("assertion-reduction"),
+        vec!["Assertion Reduction In Existing Test"],
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn assertion_reduction_resolves_helpers_run_from_a_dispatch_table() {
+    // expanse #1028 as merged: `self_test()` runs a table of `(label, helper)` pairs.
+    const HELPERS: &str = "def check_blocks():\n    assert blocks() == 3\n    assert rows() == 4\n\n\ndef check_rounds():\n    if rounds() != 8:\n        raise ValueError(\"rounds\")\n\n\n";
+    let table = |entries: &str| {
+        format!("{HELPERS}def self_test():\n    steps = [\n{entries}    ]\n    for label, fn in steps:\n        fn()\n    return 0\n")
+    };
+    let both = table("        (\"blocks\", check_blocks),\n        (\"rounds\", check_rounds),\n");
+    let config = format!("{CONFIG_HEAD}[tests]\nfunctions = [\"self_test\"]\n");
+    let inline = "def self_test():\n    assert blocks() == 3\n    assert rows() == 4\n    assert rounds() == 8\n    return 0\n";
+    for (base, head, blocked) in [
+        (inline.to_string(), both.clone(), false),
+        (
+            both.clone(),
+            table("        (\"blocks\", check_blocks),\n"),
+            true,
+        ),
+    ] {
+        let repo = repo_with_base_config(&config);
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("scripts/s.py", &base);
+        repo.commit("feat: self test");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("scripts/s.py", &head);
+        repo.commit("refactor: table");
+        let run = repo.check(&[]);
+        assert_eq!(
+            !run.titles("assertion-reduction").is_empty(),
+            blocked,
+            "{}",
+            run.stdout
+        );
+    }
+}

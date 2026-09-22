@@ -375,6 +375,54 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: a Rust discard is sorted by callee, an accessor is not a site",
+        || {
+            let v = AssertVocabulary::default();
+            let kinds = |src: &str| -> Result<Vec<&'static str>> {
+                Ok(analyze(src, &v)?.swallowed.iter().map(|s| s.kind).collect())
+            };
+            Ok(kinds("fn f(&self) { let _ = self.shards.get_or_init(|| build()); }")?.is_empty()
+                && kinds("fn f() { let _ = file.sync_all(); }")? == ["discarded-result"]
+                && kinds("fn f() { let _ = writeln!(w, \"x\"); }")? == ["discarded-result"]
+                && kinds("fn f() { let _ = self.lookup(k); }")? == ["discarded-value"])
+        },
+    ),
+    (
+        "assertion-reduction: checks moved into a raising helper (called or in a dispatch table) are a refactor, a deleted call is a drop",
+        || {
+            use crate::guards::agent_diff::{evaluate_assertion_reduction, TestPair};
+            let v = AssertVocabulary {
+                test_functions: vec!["self_test".into()],
+                ..Default::default()
+            };
+            let py = crate::ast::default_registry();
+            let Some(pack) = py.find_pack("s.py") else {
+                return Ok(true);
+            };
+            let inline = "def self_test():\n    assert a == 1\n    assert b == 2\n    assert c == 3\n";
+            let moved = "def check(d, want):\n    for k, w in want.items():\n        if d.get(k) != w:\n            raise ValueError(k)\n\ndef self_test():\n    check(d, want)\n";
+            let deleted = "def check(d, want):\n    for k, w in want.items():\n        if d.get(k) != w:\n            raise ValueError(k)\n\ndef self_test():\n    pass\n";
+            let t = |src: &str| -> Result<crate::ast::TestFn> {
+                Ok(pack.extract("s.py", src, &v)?.tests.remove(0))
+            };
+            let (inline, moved, deleted) = (t(inline)?, t(moved)?, t(deleted)?);
+            let settings = crate::config::AssertionGate::default();
+            let run = |b, h| {
+                evaluate_assertion_reduction(
+                    &[TestPair { path: "s.py", base: b, head: h, forced: false }],
+                    &[],
+                    &settings,
+                    &[],
+                    false,
+                )
+            };
+            let table = t("def check(d, want):\n    for k, w in want.items():\n        if d.get(k) != w:\n            raise ValueError(k)\n\ndef self_test():\n    for _, fn in [(\"check\", check)]:\n        fn()\n")?;
+            Ok(run(&inline, &moved)?.violations.is_empty()
+                && run(&moved, &deleted)?.violations.len() == 1
+                && table.helper_checks == 1)
+        },
+    ),
+    (
         "error-swallowing: PHP `@call()` and Ruby `call rescue nil` are silenced errors, a fallback is not",
         || {
             use crate::ast::default_registry;

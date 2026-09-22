@@ -257,6 +257,13 @@ impl<'a> CSharpExtractor<'a> {
                             }
                         }
                     }
+                    helper_fn.total_asserts += super::count_failure_exits(
+                        child,
+                        self.src,
+                        &["throw_statement", "throw_expression"],
+                        &[],
+                        &["lambda_expression", "local_function_statement"],
+                    );
                     let facts = super::HelperFacts {
                         total_asserts: helper_fn.total_asserts,
                         strong_asserts: helper_fn.strong_asserts,
@@ -465,6 +472,9 @@ impl<'a> CSharpExtractor<'a> {
                         test.strong_asserts += h.strong_asserts;
                         test.tautologies += h.tautologies;
                         test.fatal_asserts += h.fatal_asserts;
+                        if h.total_asserts > h.tautologies {
+                            test.helper_checks += 1;
+                        }
                     }
                 }
             }
@@ -684,6 +694,7 @@ pub const CSHARP_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     trivial: &["return", "return null", "return false", "continue"],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
+    classify_discard: None,
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
