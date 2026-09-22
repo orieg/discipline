@@ -840,7 +840,7 @@
         <p>Fail-Closed Gates</p>
       </div>
       <div class="stat-item">
-        <h3>10</h3>
+        <h3>11</h3>
         <p>AST Language Packs</p>
       </div>
       <div class="stat-item">
@@ -866,7 +866,7 @@
         <div>
           <div class="card-icon-box">&#x1f333;</div>
           <h3>Tree-Sitter AST Diff Inspection</h3>
-          <p>Unlike fragile regex checks that trigger on comments or log messages, Discipline parses the complete AST of changed functions against the merge base. It accurately counts executable assertions and distinguishes real invariants from dead code.</p>
+          <p>Unlike fragile regex checks that trigger on comments or log messages, Discipline parses the complete AST of changed functions against the merge base. It counts executable assertions and distinguishes real invariants from dead code: an assertion under <code>if false</code> or after a <code>return</code> counts for nothing, and a property-test budget inside a string or comment is not a budget. Eleven packs: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin.</p>
         </div>
         <div class="card-tags">
           <span class="card-tag">tree-sitter-rust</span>
@@ -879,7 +879,7 @@
         <div>
           <div class="card-icon-box">&#x1f916;</div>
           <h3>AI Coding Agent Guardrails</h3>
-          <p>Flags silent test erosion: assertion count reductions (e.g. <code>assert_eq!</code> &rarr; <code>assert!</code>), test suppression and retries (<code>#[ignore]</code>, <code>@pytest.mark.flaky</code>, <code>it.skip</code>), tautological or mock-only tests (<code>assert!(true)</code>, <code>toHaveBeenCalled</code> alone), stealth test deletions, stub bodies (<code>todo!()</code>, <code>raise NotImplementedError</code>), swallowed errors (<code>except: pass</code>, <code>let _ = fallible()</code>), hard-coded sleeps and not-null-only assertions, and injection text in comments, PR descriptions or agent instruction files.</p>
+          <p>Flags silent test erosion: assertion count reductions (e.g. <code>assert_eq!</code> &rarr; <code>assert!</code>), test suppression and retries (<code>#[ignore]</code>, <code>@pytest.mark.flaky</code>, <code>it.skip</code>), tautological or mock-only tests (<code>assert!(true)</code>, <code>toHaveBeenCalled</code> alone), stealth test deletions, stub bodies even when padded with a log line (<code>todo!()</code>, <code>raise NotImplementedError</code>), swallowed errors (<code>except: pass</code>, a handler that only logs, <code>let _ = fallible()</code>, <code>rescue nil</code>, PHP <code>@call()</code>), a snapshot added for a test that already existed, a repointed lockfile entry, hard-coded sleeps and not-null-only assertions, and injection text in comments, PR descriptions or agent instruction files.</p>
         </div>
         <div class="card-tags">
           <span class="card-tag">Claude Code</span>
@@ -1421,7 +1421,7 @@ discipline self-test</div>
     <div style="margin-top: 2rem;">
       <h3 style="font-size: 1.15rem; color: var(--heading); margin-bottom: 0.5rem;">Audit-Trailed Override Directives</h3>
       <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 0.75rem;">
-        Legitimate deletions or changes are authorized through explicit, scoped directives in the PR description or commit message. Every applied override is recorded in the report; <code>directives.max_overrides</code> caps them per change, and <code>directives.require_approval</code> makes them count only once the forge shows an approving review of the head commit by a listed reviewer other than the author. <code>policy_from: base</code> judges a change by the base branch's <code>discipline.toml</code>, so a policy edit takes effect once it has merged.
+        Legitimate deletions or changes are authorized through explicit, scoped directives in the PR description or commit message; on a push to the default branch, the merged pull request's body is read through the forge (<code>merged-pr-body</code>), because a squash or rebase merge drops it from the commit message. Every applied override is recorded in the report; <code>directives.max_overrides</code> caps them per change, and <code>directives.require_approval</code> makes them count only once the forge shows an approving review of the head commit by a listed reviewer other than the author. <code>policy_from: base</code> judges a change by the base branch's <code>discipline.toml</code>, so a policy edit takes effect once it has merged.
       </p>
       <div class="directive-card">
         removes: tests/legacy/ replaced by proptest property suite<br>
@@ -1431,7 +1431,8 @@ discipline self-test</div>
         allow-stub: validate schema lands with the next migration<br>
         allow-toolchain-weakening: strict migrating the legacy tree file by file<br>
         allow-agent-instructions: AGENTS.md the new rule was reviewed in #90<br>
-        allow-build-hook: prepare husky installs the commit hooks
+        allow-build-hook: prepare husky installs the commit hooks<br>
+allow-gate-weakening: ci-integrity the discipline step runs on pull_request only; merged-pr-body covers pushes
       </div>
     </div>
 

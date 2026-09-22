@@ -19,15 +19,17 @@ Autonomous coding agents operating in iterate-until-green loops optimize for pas
 - Stealthily deleting tests, fixtures, or benchmarks that stand in the way of a green build.
 - Dropping `// SAFETY:` justifications from `unsafe` blocks.
 - Shipping the signature and leaving `todo!()`, `raise NotImplementedError` or `return null` as the body.
-- Wrapping a failure in an empty `catch {}` / `except: pass`, or discarding a `Result`.
+- Wrapping a failure in an empty `catch {}` / `except: pass`, logging it and moving on, `@`-silencing a PHP call, `rescue nil`, `runCatching { }.getOrNull()`, or discarding a `Result`.
+- Keeping the assertion but moving it under `if false` or after a `return`, or padding a `todo!()` with a log line so the body no longer looks empty.
 - Swapping the real dependency for a mock and asserting only that the mock was called.
-- Regenerating snapshots, adding retries, or loosening `tsconfig.json`, `ruff.toml`, `[lints]` and coverage floors instead of fixing the cause.
+- Regenerating snapshots, adding a snapshot for a test that already existed, adding retries, or loosening `tsconfig.json`, `ruff.toml`, `clippy.toml`, `[lints]` and coverage floors — or swapping what they `extends` — instead of fixing the cause.
+- Repointing a lockfile entry at another host or dropping its integrity hash, or trading `npm ci` / `--frozen-lockfile` for an install that rewrites the lock.
 - Editing the gate configuration (`discipline.toml`), the CI workflow, or the agent's own instruction files (`AGENTS.md`, `.cursorrules`) to disable failing checks.
 - Carrying text aimed at the next agent: an injection in a comment, a PR description or a commit message, or a bidirectional override that hides what a parser reads.
 - Running a command on every install from where CI checks do not look: a `package.json` `postinstall`, a `build.rs`, or a repointed registry in `.npmrc` / `pip.conf`.
 - Introducing unverified calendar estimates or leaking developer workstation paths and LAN IPs.
 
-Discipline inspects the **diff** against the merge base using `tree-sitter` AST parsing and fail-closed verification rigors. It rejects erosion patterns before they reach review, and it guards its own trust boundary: a change cannot switch its run to advisory, disable the gate that judges its configuration, or (with `directives.require_approval`) excuse itself without a review by someone else.
+Discipline inspects the **diff** against the merge base using `tree-sitter` AST parsing and fail-closed verification rigors. It rejects erosion patterns before they reach review, and it guards its own trust boundary: a change cannot switch its run to advisory, disable the gate that judges its configuration, narrow the CI step that runs the gate without a recorded reason, or (with `directives.require_approval`) excuse itself without a review by someone else. On a push to the default branch, the waivers reviewed on the merged pull request still count: `merged-pr-body` reads that pull request's body through the forge, because a squash or rebase merge drops it from the commit message.
 
 ## Quickstart
 
@@ -137,7 +139,7 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 
 ## Gates
 
-`discipline gates` prints this table with each gate's effective state. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md). Gates ship on unless their rule is a repository policy (`issue-link`, `commit-provenance`, `provenance-tags`, `scope-confinement`, `pr-checklist`, the verification presets); `docs/ROADMAP.md` records every default change per release.
+Eleven tree-sitter language packs (Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C / C++, C#, Ruby, Kotlin) supply the AST facts; the language table in [`docs/GATES.md`](docs/GATES.md) lists what each pack reads. `discipline gates` prints this table with each gate's effective state. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md). Gates ship on unless their rule is a repository policy (`issue-link`, `commit-provenance`, `provenance-tags`, `scope-confinement`, `pr-checklist`, the verification presets); `docs/ROADMAP.md` records every default change per release.
 
 <!-- generated:gates -->
 | Gate | Suite | Languages | Rule Description |
