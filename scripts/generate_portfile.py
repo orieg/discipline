@@ -77,6 +77,10 @@ destroot {{
     xinstall -d ${{destroot}}${{prefix}}/share/man/man1 ${{destroot}}${{prefix}}/share/man/man5
     xinstall -m 0644 ${{worksrcpath}}/man/man1/discipline.1 ${{destroot}}${{prefix}}/share/man/man1/
     xinstall -m 0644 ${{worksrcpath}}/man/man5/discipline.toml.5 ${{destroot}}${{prefix}}/share/man/man5/
+    xinstall -d ${{destroot}}${{prefix}}/share/zsh/site-functions ${{destroot}}${{prefix}}/share/bash-completion/completions ${{destroot}}${{prefix}}/share/fish/vendor_completions.d
+    xinstall -m 0644 ${{worksrcpath}}/completions/_discipline ${{destroot}}${{prefix}}/share/zsh/site-functions/
+    xinstall -m 0644 ${{worksrcpath}}/completions/discipline.bash ${{destroot}}${{prefix}}/share/bash-completion/completions/discipline
+    xinstall -m 0644 ${{worksrcpath}}/completions/discipline.fish ${{destroot}}${{prefix}}/share/fish/vendor_completions.d/
 }}
 
 cargo.crates \\

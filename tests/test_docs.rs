@@ -419,3 +419,28 @@ fn closed_stdout_pipe_does_not_panic() {
     assert!(!stderr.contains("panicked"), "{stderr}");
     assert_eq!(out.status.signal(), Some(libc::SIGPIPE), "{:?}", out.status);
 }
+
+/// The committed completion scripts are exactly what `discipline completions <shell>`
+/// emits, so a packaged install and a hand-generated one behave the same.
+#[test]
+fn committed_completion_scripts_match_the_binary() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (shell, file) in [
+        ("zsh", "_discipline"),
+        ("bash", "discipline.bash"),
+        ("fish", "discipline.fish"),
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+            .args(["completions", shell])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{shell}");
+        let committed = std::fs::read_to_string(root.join("completions").join(file))
+            .unwrap_or_else(|e| panic!("completions/{file}: {e}"));
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            committed,
+            "completions/{file} is stale: run `discipline docs --write`"
+        );
+    }
+}

@@ -1,0 +1,532 @@
+#compdef discipline
+
+autoload -U is-at-least
+
+_discipline() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_discipline_commands" \
+"*::: :->discipline" \
+&& ret=0
+    case $state in
+    (discipline)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
+'*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
+'*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \
+'-s+[Which check suite to run]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
+'--suite=[Which check suite to run]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
+'-b+[Base branch or commit to measure the change against (auto-detected in CI if omitted)]:BASE:_default' \
+'--base=[Base branch or commit to measure the change against (auto-detected in CI if omitted)]:BASE:_default' \
+'(--commit-range --staged)--commit=[Specific commit to inspect (compares against parent commit <sha>~1)]:COMMIT:_default' \
+'(--commit --staged)--commit-range=[Commit range to inspect (<before>..<after> or <before>...<after>)]:COMMIT_RANGE:_default' \
+'--pr-body-file=[File holding the PR body or commit message (override directives, hygiene scanning). Falls back to the PR_BODY environment variable]:PR_BODY_FILE:_files' \
+'--commit-msg-file=[File holding the PR body or commit message (override directives, hygiene scanning). Falls back to the PR_BODY environment variable]:PR_BODY_FILE:_files' \
+'--pr-title=[PR title for PR-level hygiene checks (e.g. issue-link). Falls back to the PR_TITLE environment variable]:PR_TITLE:_default' \
+'--policy-from=[Which side'\''s discipline.toml judges the change. \`base\` reads it from the base ref, so a policy edit takes effect once merged; \`config-integrity\` still reports it]:POLICY_FROM:((head\:"The configuration in the working tree (the change'\''s own copy)"
+base\:"The configuration on the base ref"))' \
+'--actor=[Actor executing the check (for actor-aware override authorization). Falls back to DISCIPLINE_ACTOR, GITHUB_ACTOR, GITEA_ACTOR, FORGEJO_ACTOR, GITLAB_USER_LOGIN]:ACTOR:_default' \
+'*--directive-sources=[Comma-separated list of allowed directive sources (pr-body, commits)]:DIRECTIVE_SOURCES:_default' \
+'-f+[Output format]:FORMAT:(terminal github-summary json junit sarif gitlab agent-prompt)' \
+'--format=[Output format]:FORMAT:(terminal github-summary json junit sarif gitlab agent-prompt)' \
+'--json-out=[Also write the JSON report to this path, whatever --format is]:JSON_OUT:_files' \
+'-o+[Write the formatted report to this path]:OUTPUT_FILE:_files' \
+'--output-file=[Write the formatted report to this path]:OUTPUT_FILE:_files' \
+'--report-gitlab=[Write GitLab Code Quality JSON report to this path]:REPORT_GITLAB:_files' \
+'--report-junit=[Write JUnit XML report to this path]:REPORT_JUNIT:_files' \
+'--report-sarif=[Write SARIF report to this path]:REPORT_SARIF:_files' \
+'--bench-provenance=[Expected host or runner provenance tag for benchmark artifacts]:BENCH_PROVENANCE:_default' \
+'--bench-base-file=[In-job base benchmark result file for bench-regression dual-mode]:BENCH_BASE_FILE:_files' \
+'--bench-head-file=[In-job head benchmark result file for bench-regression dual-mode]:BENCH_HEAD_FILE:_files' \
+'--baseline-file=[Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)]:BASELINE_FILE:_files' \
+'(--commit --commit-range)--staged[Inspect the index against HEAD instead (pre-commit hook mode)]' \
+'--fail-on-warnings[Treat warnings as failures]' \
+'--fail-on-overrides[Treat applied overrides as failures (requires human sign-off)]' \
+'--advisory[Advisory mode\: run all checks and emit reports, but exit code 0 even if violations occur]' \
+'--trust-workspace[Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)]' \
+'-q[Suppress output on success (only print output when violations are found)]' \
+'--quiet[Suppress output on success (only print output when violations are found)]' \
+'--allow-cross-host-bench[Allow benchmark comparison across mismatched host/runner provenance tags]' \
+'--no-baseline[Ignore grandfathering baseline even if present]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(diff)
+_arguments "${_arguments_options[@]}" : \
+'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
+'*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
+'*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \
+'-s+[Which check suite to run]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
+'--suite=[Which check suite to run]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
+'-b+[Base branch or commit ref to compare against (defaults to HEAD for uncommitted changes)]:BASE:_default' \
+'--base=[Base branch or commit ref to compare against (defaults to HEAD for uncommitted changes)]:BASE:_default' \
+'-f+[Output format]:FORMAT:(terminal github-summary json junit sarif gitlab agent-prompt)' \
+'--format=[Output format]:FORMAT:(terminal github-summary json junit sarif gitlab agent-prompt)' \
+'--json-out=[Also write the JSON report to this path, whatever --format is]:JSON_OUT:_files' \
+'-o+[Write the formatted report to this path]:OUTPUT_FILE:_files' \
+'--output-file=[Write the formatted report to this path]:OUTPUT_FILE:_files' \
+'--report-gitlab=[Write GitLab Code Quality JSON report to this path]:REPORT_GITLAB:_files' \
+'--report-junit=[Write JUnit XML report to this path]:REPORT_JUNIT:_files' \
+'--report-sarif=[Write SARIF report to this path]:REPORT_SARIF:_files' \
+'--baseline-file=[Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)]:BASELINE_FILE:_files' \
+'--no-baseline[Ignore grandfathering baseline even if present]' \
+'--trust-workspace[Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)]' \
+'--advisory[Advisory mode\: run checks and emit reports, but exit 0 even if violations are found]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(baseline)
+_arguments "${_arguments_options[@]}" : \
+'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
+'*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
+'*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \
+'--baseline-file=[Path to grandfathering baseline file (defaults to discipline-baseline.toml)]:BASELINE_FILE:_files' \
+'-b+[Base branch or commit ref to compare against]:BASE:_default' \
+'--base=[Base branch or commit ref to compare against]:BASE:_default' \
+'-s+[Specific suite to run\: all, agent-guard, hygiene, integrity ...]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
+'--suite=[Specific suite to run\: all, agent-guard, hygiene, integrity ...]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
+'--write[Record current findings to the baseline file]' \
+'(-b --base)--whole-tree[Record every pre-existing finding in the tree, not just the diff. Use when adopting discipline on an existing repository; conflicts with --base]' \
+'--all-severities[Also record warnings and notes. By default only findings that would block under the current configuration are recorded\: \`error\`, plus \`warning\` under --fail-on-warnings]' \
+'--fail-on-warnings[Treat warnings as blocking when choosing what to record (same switch as \`check --fail-on-warnings\`)]' \
+'--trust-workspace[Trust the workspace and disable libgit2 repository owner validation]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+'-n+[Name of the project (defaults to current directory name)]:NAME:_default' \
+'--name=[Name of the project (defaults to current directory name)]:NAME:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(gates)
+_arguments "${_arguments_options[@]}" : \
+'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
+'*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
+'*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(schema)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(self-test)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':shell -- Target shell for completion script:(bash elvish fish powershell zsh)' \
+&& ret=0
+;;
+(docs)
+_arguments "${_arguments_options[@]}" : \
+'(--write)--check[Check that reference documentation is up to date with sources]' \
+'(--check)--write[Regenerate and write reference documentation across the repository]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(install-hooks)
+_arguments "${_arguments_options[@]}" : \
+'-f[Overwrite existing pre-commit hook if present]' \
+'--force[Overwrite existing pre-commit hook if present]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(bench)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_discipline__subcmd__bench_commands" \
+"*::: :->bench" \
+&& ret=0
+
+    case $state in
+    (bench)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-bench-command-$line[1]:"
+        case $line[1] in
+            (derive)
+_arguments "${_arguments_options[@]}" : \
+'--baseline=[Merge the derived platform entry into this ratio baseline file (created if absent)]:BASELINE:_files' \
+'--ceiling-pct=[Derived cell floors above this percentage are reported but not gated]:CEILING_PCT:_default' \
+'--allow-mixed-commits[Accept runs of different commits (recorded in the baseline); only when the differences cannot move a number]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::runs -- `discipline-bench-ratio/v1` run files of the same code (at least two):_files' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_discipline__subcmd__bench__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-bench-help-command-$line[1]:"
+        case $line[1] in
+            (derive)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'--branch=[Branch whose protection is checked (default\: the repository'\''s default branch)]:BRANCH:_default' \
+'--repo=[Repository path on the forge, e.g. OWNER/NAME (default\: from the CI environment or the \`origin\` remote; set DISCIPLINE_FORGE for a self-hosted forge)]:REPO:_default' \
+'-f+[Output format]:FORMAT:(text json)' \
+'--format=[Output format]:FORMAT:(text json)' \
+'--local-only[Check only local files; skip the platform API]' \
+'--strict[Treat warnings as failures]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_discipline__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-help-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(diff)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(baseline)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(gates)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(schema)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(self-test)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(docs)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install-hooks)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(bench)
+_arguments "${_arguments_options[@]}" : \
+":: :_discipline__subcmd__help__subcmd__bench_commands" \
+"*::: :->bench" \
+&& ret=0
+
+    case $state in
+    (bench)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-help-bench-command-$line[1]:"
+        case $line[1] in
+            (derive)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_discipline_commands] )) ||
+_discipline_commands() {
+    local commands; commands=(
+'check:Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check' \
+'diff:Shorthand for checking uncommitted or working tree changes against HEAD' \
+'baseline:Record or manage grandfathered finding baselines' \
+'init:Write a discipline.toml with every available gate at its default' \
+'gates:List every gate\: id, suite, availability, and effective state' \
+'schema:Print the JSON Schema for discipline.toml' \
+'self-test:Run the embedded negative / positive controls against this binary' \
+'completions:Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish)' \
+'docs:Generate or check reference docs and schemas against sources of truth' \
+'install-hooks:Install pre-commit hook in the local git repository' \
+'bench:Benchmark tooling for the bench-regression gate' \
+'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'discipline commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__baseline_commands] )) ||
+_discipline__subcmd__baseline_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline baseline commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__bench_commands] )) ||
+_discipline__subcmd__bench_commands() {
+    local commands; commands=(
+'derive:Derive paired-ratio noise floors and baseline ratios from repeated same-commit runs' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'discipline bench commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__bench__subcmd__derive_commands] )) ||
+_discipline__subcmd__bench__subcmd__derive_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline bench derive commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__bench__subcmd__help_commands] )) ||
+_discipline__subcmd__bench__subcmd__help_commands() {
+    local commands; commands=(
+'derive:Derive paired-ratio noise floors and baseline ratios from repeated same-commit runs' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'discipline bench help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__bench__subcmd__help__subcmd__derive_commands] )) ||
+_discipline__subcmd__bench__subcmd__help__subcmd__derive_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline bench help derive commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__bench__subcmd__help__subcmd__help_commands] )) ||
+_discipline__subcmd__bench__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline bench help help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__check_commands] )) ||
+_discipline__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline check commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__completions_commands] )) ||
+_discipline__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline completions commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__diff_commands] )) ||
+_discipline__subcmd__diff_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline diff commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__docs_commands] )) ||
+_discipline__subcmd__docs_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline docs commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__doctor_commands] )) ||
+_discipline__subcmd__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline doctor commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__gates_commands] )) ||
+_discipline__subcmd__gates_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline gates commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help_commands] )) ||
+_discipline__subcmd__help_commands() {
+    local commands; commands=(
+'check:Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check' \
+'diff:Shorthand for checking uncommitted or working tree changes against HEAD' \
+'baseline:Record or manage grandfathered finding baselines' \
+'init:Write a discipline.toml with every available gate at its default' \
+'gates:List every gate\: id, suite, availability, and effective state' \
+'schema:Print the JSON Schema for discipline.toml' \
+'self-test:Run the embedded negative / positive controls against this binary' \
+'completions:Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish)' \
+'docs:Generate or check reference docs and schemas against sources of truth' \
+'install-hooks:Install pre-commit hook in the local git repository' \
+'bench:Benchmark tooling for the bench-regression gate' \
+'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'discipline help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__baseline_commands] )) ||
+_discipline__subcmd__help__subcmd__baseline_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help baseline commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__bench_commands] )) ||
+_discipline__subcmd__help__subcmd__bench_commands() {
+    local commands; commands=(
+'derive:Derive paired-ratio noise floors and baseline ratios from repeated same-commit runs' \
+    )
+    _describe -t commands 'discipline help bench commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__bench__subcmd__derive_commands] )) ||
+_discipline__subcmd__help__subcmd__bench__subcmd__derive_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help bench derive commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__check_commands] )) ||
+_discipline__subcmd__help__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help check commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__completions_commands] )) ||
+_discipline__subcmd__help__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help completions commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__diff_commands] )) ||
+_discipline__subcmd__help__subcmd__diff_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help diff commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__docs_commands] )) ||
+_discipline__subcmd__help__subcmd__docs_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help docs commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__doctor_commands] )) ||
+_discipline__subcmd__help__subcmd__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help doctor commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__gates_commands] )) ||
+_discipline__subcmd__help__subcmd__gates_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help gates commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__help_commands] )) ||
+_discipline__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__init_commands] )) ||
+_discipline__subcmd__help__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help init commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__install-hooks_commands] )) ||
+_discipline__subcmd__help__subcmd__install-hooks_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help install-hooks commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__schema_commands] )) ||
+_discipline__subcmd__help__subcmd__schema_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help schema commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__self-test_commands] )) ||
+_discipline__subcmd__help__subcmd__self-test_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help self-test commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__init_commands] )) ||
+_discipline__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline init commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__install-hooks_commands] )) ||
+_discipline__subcmd__install-hooks_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline install-hooks commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__schema_commands] )) ||
+_discipline__subcmd__schema_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline schema commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__self-test_commands] )) ||
+_discipline__subcmd__self-test_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline self-test commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_discipline" ]; then
+    _discipline "$@"
+else
+    compdef _discipline discipline
+fi

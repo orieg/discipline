@@ -36,6 +36,11 @@ fi
 if [ -f "man/man5/discipline.toml.5" ]; then
   cp "man/man5/discipline.toml.5" "${TOPDIR}/SOURCES/discipline.toml.5"
 fi
+for f in _discipline discipline.bash discipline.fish; do
+  if [ -f "completions/${f}" ]; then
+    cp "completions/${f}" "${TOPDIR}/SOURCES/${f}"
+  fi
+done
 
 SPEC_FILE="${TOPDIR}/SPECS/discipline.spec"
 cat <<EOF > "${SPEC_FILE}"
@@ -66,11 +71,17 @@ if [ -f %{_sourcedir}/discipline.toml.5 ]; then
     mkdir -p %{buildroot}%{_mandir}/man5
     install -m 644 %{_sourcedir}/discipline.toml.5 %{buildroot}%{_mandir}/man5/discipline.toml.5
 fi
+install -D -m 644 %{_sourcedir}/discipline.bash %{buildroot}%{_datadir}/bash-completion/completions/discipline
+install -D -m 644 %{_sourcedir}/_discipline %{buildroot}%{_datadir}/zsh/site-functions/_discipline
+install -D -m 644 %{_sourcedir}/discipline.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/discipline.fish
 
 %files
 /usr/bin/discipline
 %{_mandir}/man1/discipline.1*
 %{_mandir}/man5/discipline.toml.5*
+%{_datadir}/bash-completion/completions/discipline
+%{_datadir}/zsh/site-functions/_discipline
+%{_datadir}/fish/vendor_completions.d/discipline.fish
 
 %changelog
 EOF

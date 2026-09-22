@@ -50,6 +50,16 @@ if [ -f "man/man5/discipline.toml.5" ]; then
   gzip -9cn "man/man5/discipline.toml.5" > "${STAGE}/usr/share/man/man5/discipline.toml.5.gz"
   chmod 644 "${STAGE}/usr/share/man/man5/discipline.toml.5.gz"
 fi
+# Shell completions, at the paths bash-completion, zsh (Debian's vendor dir) and fish load.
+if [ -f "completions/discipline.bash" ]; then
+  install -D -m 644 "completions/discipline.bash" "${STAGE}/usr/share/bash-completion/completions/discipline"
+fi
+if [ -f "completions/_discipline" ]; then
+  install -D -m 644 "completions/_discipline" "${STAGE}/usr/share/zsh/vendor-completions/_discipline"
+fi
+if [ -f "completions/discipline.fish" ]; then
+  install -D -m 644 "completions/discipline.fish" "${STAGE}/usr/share/fish/vendor_completions.d/discipline.fish"
+fi
 
 cat <<EOF > "${STAGE}/DEBIAN/control"
 Package: discipline

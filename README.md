@@ -260,6 +260,27 @@ Direct `.rpm` package downloads and repodata manifests: [Discipline RPM Reposito
   cargo install --git https://github.com/orieg/discipline
   ```
 
+### Shell Completions
+
+The APT, RPM, Homebrew and MacPorts packages install completions for bash, zsh and fish; nothing to do. A release tarball carries the same scripts under `completions/`, and any binary can regenerate them with `discipline completions <shell>`. For a tarball, `install.sh` or `cargo install` setup, put the script where the shell loads it:
+
+```bash
+# bash (bash-completion loads this directory)
+discipline completions bash > ~/.local/share/bash-completion/completions/discipline
+```
+
+```bash
+# zsh: a directory on $fpath, before `compinit` runs (add `fpath+=~/.zfunc` to ~/.zshrc if it is new)
+mkdir -p ~/.zfunc && discipline completions zsh > ~/.zfunc/_discipline
+```
+
+```bash
+# fish
+discipline completions fish > ~/.config/fish/completions/discipline.fish
+```
+
+PowerShell and Elvish are generated the same way (`discipline completions powershell`, `discipline completions elvish`). The script describes the subcommands and flags of the binary that produced it: regenerate it after every upgrade, and clear zsh's cache (`rm -f ~/.zcompdump*`) when a new subcommand does not complete.
+
 ### Binary Verification & Provenance
 
 Each release publishes pre-compiled binaries with SHA-256 checksums and SLSA Build Level 2 attestations:

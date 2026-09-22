@@ -85,6 +85,7 @@ class Discipline < Formula
     bin.install "discipline"
     man1.install "man/man1/discipline.1" if File.exist?("man/man1/discipline.1")
     man5.install "man/man5/discipline.toml.5" if File.exist?("man/man5/discipline.toml.5")
+    generate_completions_from_executable(bin/"discipline", "completions")
   end
 
   test do

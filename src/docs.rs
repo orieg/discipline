@@ -785,6 +785,42 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         }
     }
 
+    // 3b. Shell completion scripts under completions/: committed like the man pages so
+    // every packaging path installs them from files without executing the binary.
+    for (shell, file) in [
+        (clap_complete::Shell::Zsh, "_discipline"),
+        (clap_complete::Shell::Bash, "discipline.bash"),
+        (clap_complete::Shell::Fish, "discipline.fish"),
+    ] {
+        let dir = root.join("completions");
+        let path = dir.join(file);
+        let mut buf: Vec<u8> = Vec::new();
+        clap_complete::generate(
+            shell,
+            &mut <crate::cli::Cli as clap::CommandFactory>::command(),
+            "discipline",
+            &mut buf,
+        );
+        let generated = String::from_utf8(buf).context("completion script is not UTF-8")?;
+        let existing = if path.exists() {
+            std::fs::read_to_string(&path)?
+        } else {
+            String::new()
+        };
+        if existing != generated {
+            has_diffs = true;
+            eprintln!("{}", unified_diff(&path, &existing, &generated));
+            if write {
+                if !dir.exists() {
+                    std::fs::create_dir_all(&dir)?;
+                }
+                std::fs::write(&path, &generated)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+                println!("Updated {}", path.display());
+            }
+        }
+    }
+
     // 4. Process the generated gate list in man/man5/discipline.toml.5
     let man5_path = root.join("man/man5/discipline.toml.5");
     if man5_path.exists() {
