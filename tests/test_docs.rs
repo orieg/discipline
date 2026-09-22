@@ -201,6 +201,67 @@ fn test_check_links_script_fails_on_broken_anchor() {
     );
 }
 
+fn check_links_on(readme: &str) -> std::process::Output {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let script_src = std::fs::read_to_string("tests/action/check-links.py").unwrap();
+    let action_dir = temp_dir.path().join("tests/action");
+    std::fs::create_dir_all(&action_dir).unwrap();
+    let script_path = action_dir.join("check-links.py");
+    std::fs::write(&script_path, script_src).unwrap();
+    std::fs::write(temp_dir.path().join("Cargo.toml"), "version = \"0.0.0\"\n").unwrap();
+    std::fs::write(temp_dir.path().join("README.md"), readme).unwrap();
+    std::process::Command::new("python3")
+        .arg(&script_path)
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run check-links.py")
+}
+
+#[test]
+fn test_check_links_script_fails_on_runs_on_image() {
+    let output = check_links_on(
+        "# Title\n\n```yaml\njobs:\n  gate:\n    runs-on: docker://ghcr.io/example/image:v1\n    steps:\n      - run: true\n```\n",
+    );
+    assert!(
+        !output.status.success(),
+        "check-links.py must fail on runs-on: docker://"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("README.md:6: `runs-on:` names an image"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn test_check_links_script_fails_on_git_clone_in_job() {
+    let output = check_links_on(
+        "# Title\n\n```yaml\njobs:\n  gate:\n    runs-on: ubuntu-latest\n    steps:\n      - run: git clone https://example.invalid/repo.git .\n```\n",
+    );
+    assert!(
+        !output.status.success(),
+        "check-links.py must fail on git clone in a job"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("README.md:8: `git clone` in a workflow job"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn test_check_links_script_accepts_git_clone_outside_a_job() {
+    // A shell recipe outside a workflow's `steps:` (a local inner loop) is not a job.
+    let output = check_links_on(
+        "# Title\n\n```bash\ngit clone https://example.invalid/repo.git\n```\n\n```yaml\njobs:\n  gate:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n```\n",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Every property key the JSON Schema exposes, collected by walking the raw
 /// schema JSON (independently of the renderer under test).
 fn all_schema_property_names() -> std::collections::BTreeSet<String> {

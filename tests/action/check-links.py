@@ -250,12 +250,65 @@ def check_container_tags():
     return True
 
 
+def check_ci_recipes():
+    """Reject two workflow-recipe defects that make a gate never run or never fail.
+
+    `runs-on: docker://image` matches no runner label on act_runner or
+    forgejo-runner (the job queues forever); a `git clone` inside a job's
+    steps lands on the default branch, so a pull-request gate compares the
+    base with itself and passes every change. The correct recipe is the one
+    executed by tests/action/test-container-recipe.sh.
+    """
+    print("Checking CI recipes in documentation and templates...")
+    check_files = [ROOT / "README.md", ROOT / "AGENTS.md"]
+    for sub in ("docs", "templates"):
+        d = ROOT / sub
+        if d.exists():
+            check_files.extend(p for p in d.rglob("*") if p.is_file()
+                               and p.suffix in {".md", ".html", ".yml", ".yaml"})
+    runs_on_image = re.compile(r"runs-on:\s*docker://")
+    steps_key = re.compile(r"^\s*steps:\s*$")
+    fence = re.compile(r"^\s*```")
+    violations = []
+    for fpath in sorted(check_files):
+        if not fpath.is_file():
+            continue
+        rel_path = fpath.relative_to(ROOT)
+        in_workflow_block = False
+        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+            for lno, line in enumerate(f, 1):
+                if runs_on_image.search(line):
+                    violations.append(
+                        f"{rel_path}:{lno}: `runs-on:` names an image; it must name a runner label "
+                        f"(put the image under `container: image:`)"
+                    )
+                if fpath.suffix in {".yml", ".yaml"}:
+                    in_workflow_block = in_workflow_block or bool(steps_key.match(line))
+                elif fence.match(line):
+                    in_workflow_block = False
+                elif steps_key.match(line):
+                    in_workflow_block = True
+                if in_workflow_block and "git clone" in line:
+                    violations.append(
+                        f"{rel_path}:{lno}: `git clone` in a workflow job lands on the default branch; "
+                        f"fetch the pull request head (see the container recipe in docs/CONFIGURATION.md)"
+                    )
+    if violations:
+        print(f"FAILED: Found {len(violations)} CI recipe defect(s):", file=sys.stderr)
+        for v in violations:
+            print(f"  {v}", file=sys.stderr)
+        return False
+    print("OK: No CI recipe names an image as a runner label or clones the default branch in a job.")
+    return True
+
+
 def main():
     prd_ok = check_no_prd_references()
     links_ok = check_markdown_links()
     tags_ok = check_container_tags()
+    recipes_ok = check_ci_recipes()
 
-    if not (prd_ok and links_ok and tags_ok):
+    if not (prd_ok and links_ok and tags_ok and recipes_ok):
         sys.exit(1)
     print("All link, reference, and tag checks passed successfully.")
     sys.exit(0)

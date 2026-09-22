@@ -430,6 +430,16 @@ jobs:
           # act exits 0 when it matched no job; require proof the jobs ran.
           grep -q 'report matches expectation: pass' act.log
           grep -q 'report matches expectation: fail' act.log
+      # The job-container recipe documented in docs/CONFIGURATION.md, extracted
+      # verbatim and run under act against the image built from this binary:
+      # the job must schedule, land on the pull request head, pass a clean
+      # change and reject a bad one by name.
+      - name: Build the container image from this run's binary
+        run: |
+          mkdir -p bin-amd64 && cp .ci-bin/discipline bin-amd64/discipline
+          docker build -f Dockerfile.release --build-arg TARGETARCH=amd64 -t discipline:test .
+      - name: Run the documented container recipe under act
+        run: tests/action/test-container-recipe.sh discipline:test
 
   # The local pre-commit path, through the pre-commit framework.
   pre-commit:

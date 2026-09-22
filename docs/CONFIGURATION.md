@@ -688,13 +688,18 @@ docker run --rm -v "$PWD":/workspace ghcr.io/orieg/discipline:latest check --bas
 ```
 
 #### Container Runner Environments (Environments Forbidding `uses:`)
-The minimal container image contains only the static binary and git; it does **not** include a Node.js runtime.
+The container image holds the static binary, `git` and `sh`; it has no Node.js and no `bash`. `actions/checkout` is a JavaScript action, so on GitHub Actions, Gitea Actions (`act_runner`) and Forgejo Actions it cannot run inside this image. A job that runs in the image checks out with `git` itself.
 
-In GitHub Actions, Gitea Actions (`act_runner`), and Forgejo Actions, `actions/checkout` requires Node.js. As a result, `actions/checkout` cannot run inside a job container using `runs-on: docker://ghcr.io/orieg/discipline:v0`.
+Two things a job container recipe must get right:
+
+- `runs-on` names a **label** the runner registered (`ubuntu-latest`, `docker`, ...), never an image. `docker://image` is the value a label maps to when the runner is registered (`python:docker://python:3.12-bookworm`); written under `runs-on`, it matches no label and the job queues forever. On a required check, every pull request then waits on it. The image goes under `container: image:`.
+- The checkout must land on the **pull request's own commit**. `git clone` lands on the default branch, so a check against that branch compares it with itself, examines none of the change, and passes every pull request. Fetch `refs/pull/<n>/head` (served by GitHub, Gitea and Forgejo) and check out the head commit the event names, then verify the two agree.
+
+The job also has to hand the binary what the composite action would: the base branch, the pull request title and body (override directives, PR-body hygiene) and the actor for `allowed_override_actors`. The actor is the pull request's **author**, which the server sets, not the login that triggered the run: on an `edited` event the trigger is whoever changed the description, and an allow-listed editor must not be able to approve their own override.
 
 **Recommended CI Integration Patterns:**
 
-1. **Host runner using composite action (Standard):**
+1. **Host runner using composite action (Standard):** the runner label maps to an image with Node.js (the default `act_runner` and `forgejo-runner` images, and every GitHub-hosted runner), so `actions/checkout` runs and the action fetches the binary:
    ```yaml
    jobs:
      discipline:
@@ -706,17 +711,55 @@ In GitHub Actions, Gitea Actions (`act_runner`), and Forgejo Actions, `actions/c
          - uses: orieg/discipline@v0
    ```
 
-2. **Container-only runner or environments forbidding `uses:` (`git clone` pattern):**
-   When running in strict container execution environments or CI setups that forbid `uses:` actions, run directly inside the container and clone the repository:
+2. **Job container, no `uses:` (Gitea Actions, Forgejo Actions, GitHub Actions):**
+   The job runs inside the pinned image on a registered label and performs its own checkout. Pin the image by tag **and** digest: when a reference carries both, the digest is what runs and the tag is only a comment, so the tag must name the release the digest is. A line reading `:latest@sha256:...` runs whatever the digest was when it was written, not the latest release, and reports nothing. Never pair a digest with `latest`. Read the digest of a release with `docker buildx imagetools inspect ghcr.io/orieg/discipline:v0.9.0`.
+   <!-- snippet: gitea-container-recipe (executed in CI by tests/action/test-container-recipe.sh) -->
    ```yaml
+   name: CI Sentinel
+
+   on:
+     pull_request:
+       types: [opened, synchronize, reopened, edited]
+
    jobs:
      discipline:
-       runs-on: docker://ghcr.io/orieg/discipline:v0
+       runs-on: ubuntu-latest # a label the runner registers, never an image
+       container:
+         image: ghcr.io/orieg/discipline:v0.9.0@sha256:<digest of that release>
+       defaults:
+         run:
+           shell: sh # the image has no bash
        steps:
-         - run: |
-             git clone --depth 50 "${REPO_URL}" .
-             discipline check --base main
+         - name: Check out the pull request's own commit
+           env:
+             SERVER_URL: ${{ github.server_url }}
+             REPOSITORY: ${{ github.repository }}
+             TOKEN: ${{ github.token }} # read access for a private repository
+             PR_NUMBER: ${{ github.event.pull_request.number }}
+             HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+             BASE_REF: ${{ github.event.pull_request.base.ref }}
+           run: |
+             set -eu
+             git init -q .
+             git remote add origin "${SERVER_URL}/${REPOSITORY}.git"
+             auth="$(printf 'x-access-token:%s' "${TOKEN}" | base64 | tr -d '\n')"
+             git -c "http.extraHeader=Authorization: Basic ${auth}" fetch -q --no-tags origin \
+               "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}" \
+               "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+             git checkout -q "${HEAD_SHA}"
+             echo "checked out $(git rev-parse HEAD); base ${BASE_REF} is $(git rev-parse "origin/${BASE_REF}")"
+             [ "$(git rev-parse HEAD)" = "${HEAD_SHA}" ] || { echo "HEAD is not the pull request head"; exit 1; }
+         - name: Run discipline
+           env:
+             DISCIPLINE_BASE_REF: origin/${{ github.event.pull_request.base.ref }}
+             DISCIPLINE_ACTOR: ${{ github.event.pull_request.user.login }} # the author, not the trigger
+             PR_TITLE: ${{ github.event.pull_request.title }}
+             PR_BODY: ${{ github.event.pull_request.body }}
+           run: discipline check --fail-on-warnings
    ```
+   The checkout step prints the commit it landed on next to the base branch's commit; on a pull request they differ. Its last line fails the job if the checkout is not the event's head commit, so a runner that serves the wrong ref cannot pass silently. `github.token` is the job's own read token on all three forges; on a public repository the header is harmless. `directives.require_approval` still applies on top of the actor: an override then also needs an approving review of the head commit by someone other than the author (see [Trust Model](#trust-model)).
+
+   This recipe is executed in this repository's CI under nektos/act (the engine inside `act_runner`) on every change: the fenced block above is extracted verbatim, the image placeholder is filled with the image built in that run, and the job must schedule, land on the pull request head, pass a clean change and reject a change that trips known gates (`tests/action/test-container-recipe.sh`).
 
 3. **GitLab CI (`.gitlab-ci.yml`):**
    ```yaml
