@@ -114,7 +114,6 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("allow_cross_host", Direction::LooserWhenTrue),
     ("allow_wildcards", Direction::LooserWhenTrue),
     ("allow_increase", Direction::LooserWhenTrue),
-    ("allow_updates", Direction::LooserWhenTrue),
     // Booleans where `false` switches a check off.
     ("require_scope", Direction::LooserWhenFalse),
     ("scan_pr_body", Direction::LooserWhenFalse),
@@ -785,6 +784,41 @@ mod tests {
             walk(table, &mut names);
         }
         names
+    }
+
+    #[test]
+    fn schema_and_config_structs_name_the_same_gate_options() {
+        // The schema is what an editor validates against; the struct is what loads.
+        // A key in one and not the other passes validation and then fails to load, or
+        // loads and is never offered.
+        let schema = crate::schema::generate_schema();
+        let gates_schema = schema["properties"]["gates"]["properties"]
+            .as_object()
+            .unwrap();
+        let defaults = Value::try_from(DisciplineConfig::default_for_repo("t").gates).unwrap();
+        let mut drift = Vec::new();
+        for (gate, table) in defaults.as_table().unwrap() {
+            let def_ref = gates_schema[gate]["allOf"][0]["$ref"].as_str().unwrap();
+            let def_name = def_ref.rsplit('/').next().unwrap();
+            let props = schema["$defs"][def_name]["properties"].as_object().unwrap();
+            for key in table.as_table().unwrap().keys() {
+                if !props.contains_key(key) {
+                    drift.push(format!("{gate}.{key} loads but is not in the schema"));
+                }
+            }
+            for key in props.keys() {
+                let toml =
+                    format!("[meta]\nversion = 1\nname = \"t\"\n[gates.{gate}]\n{key} = 0\n");
+                let err = DisciplineConfig::from_toml_str(&toml)
+                    .err()
+                    .map(|e| format!("{e:#}"))
+                    .unwrap_or_default();
+                if err.contains("unknown field") {
+                    drift.push(format!("{gate}.{key} is in the schema but does not load"));
+                }
+            }
+        }
+        assert!(drift.is_empty(), "{drift:#?}");
     }
 
     #[test]

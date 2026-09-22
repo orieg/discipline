@@ -169,7 +169,6 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.error-swallowing.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.error-swallowing.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.error-swallowing.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.golden-output.allow_updates` | boolean | *(per entry)* | Permit snapshot updates without error |
 | `gates.golden-output.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.golden-output.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.golden-output.paths` | list | *(8 entries)* | Committed golden/snapshot globs whose edits require a directive |
@@ -214,6 +213,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.pii.home_paths` | boolean | `true` | Check for leaked home directory paths |
 | `gates.pii.hostname_denylist` | list | `[]` | Whole-token, case-insensitive hostnames that must not appear |
 | `gates.pii.lan_ips` | boolean | `true` | Check for leaked private LAN IPs |
+| `gates.pii.redact_lan_ips` | boolean | `false` | Mask a matched LAN IP in the report instead of echoing it (default: false) |
 | `gates.pii.scan_pr_body` | boolean | `true` | Whether to scan PR description text |
 | `gates.pii.secrets` | boolean | `true` | Check for leaked private keys and high-entropy API tokens |
 | `gates.pii.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |

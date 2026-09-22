@@ -227,6 +227,7 @@ pub fn generate_schema() -> Value {
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "home_paths": { "type": "boolean", "description": "Check for leaked home directory paths" },
                     "lan_ips": { "type": "boolean", "description": "Check for leaked private LAN IPs" },
+                    "redact_lan_ips": { "type": "boolean", "description": "Mask a matched LAN IP in the report instead of echoing it (default: false)" },
                     "secrets": { "type": "boolean", "description": "Check for leaked private keys and high-entropy API tokens" },
                     "allowed_users": { "$ref": "#/$defs/StringListOrReset", "description": "Username tokens permitted inside home-directory paths" },
                     "hostname_denylist": { "$ref": "#/$defs/StringListOrReset", "description": "Whole-token, case-insensitive hostnames that must not appear" },
@@ -254,8 +255,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "paths": { "$ref": "#/$defs/StringListOrReset", "description": "Committed golden/snapshot globs whose edits require a directive" },
-                    "allow_updates": { "type": "boolean", "description": "Permit snapshot updates without error" }
+                    "paths": { "$ref": "#/$defs/StringListOrReset", "description": "Committed golden/snapshot globs whose edits require a directive" }
                 }
             },
             "BenchRegressionGate": {

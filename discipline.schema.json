@@ -477,10 +477,6 @@
     "GoldenGate": {
       "additionalProperties": false,
       "properties": {
-        "allow_updates": {
-          "description": "Permit snapshot updates without error",
-          "type": "boolean"
-        },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"
@@ -701,6 +697,10 @@
         },
         "lan_ips": {
           "description": "Check for leaked private LAN IPs",
+          "type": "boolean"
+        },
+        "redact_lan_ips": {
+          "description": "Mask a matched LAN IP in the report instead of echoing it (default: false)",
           "type": "boolean"
         },
         "scan_pr_body": {
