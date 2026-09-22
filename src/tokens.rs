@@ -18,7 +18,12 @@ use serde::{Deserialize, Serialize};
 pub enum OverrideSource {
     PrBody,
     Commit(String),
-    Inline { file: String, line: usize },
+    Inline {
+        file: String,
+        line: usize,
+    },
+    /// The body of the merged pull request a pushed commit arrived through.
+    MergedPrBody(u64),
 }
 
 impl std::fmt::Display for OverrideSource {
@@ -26,6 +31,7 @@ impl std::fmt::Display for OverrideSource {
         match self {
             OverrideSource::PrBody => write!(f, "PR body"),
             OverrideSource::Commit(sha) => write!(f, "commit {sha}"),
+            OverrideSource::MergedPrBody(n) => write!(f, "merged pull request #{n} body"),
             OverrideSource::Inline { file, line } => write!(f, "inline {file}:{line}"),
         }
     }
@@ -873,9 +879,30 @@ pub fn extract_directives(
 }
 
 /// Extracts active valid directives taking into account both global policy and per-gate settings.
+/// A merged pull request's body, read for a pushed commit (`merged-pr-body`).
+#[derive(Debug, Clone)]
+pub struct MergedBody {
+    pub number: u64,
+    pub author: String,
+    pub body: String,
+}
+
 pub fn extract_directives_for_config(
     pr_body: Option<&str>,
     commits: &[(String, String)],
+    config: &crate::config::DisciplineConfig,
+) -> (Vec<ParsedDirective>, Vec<String>) {
+    extract_directives_with_merged(pr_body, commits, &[], config)
+}
+
+/// As [`extract_directives_for_config`], plus the bodies of the merged pull requests the
+/// pushed commits arrived through. A merged body is trusted like a PR body (hidden
+/// directives, scoped subjects), and, when `allowed_override_actors` is set, only when
+/// its author is listed.
+pub fn extract_directives_with_merged(
+    pr_body: Option<&str>,
+    commits: &[(String, String)],
+    merged: &[MergedBody],
     config: &crate::config::DisciplineConfig,
 ) -> (Vec<ParsedDirective>, Vec<String>) {
     let policy = &config.directives;
@@ -884,6 +911,7 @@ pub fn extract_directives_for_config(
 
     let pr_body_allowed = policy.sources.iter().any(|s| s == "pr-body");
     let commits_allowed = policy.sources.iter().any(|s| s == "commits");
+    let merged_allowed = policy.sources.iter().any(|s| s == "merged-pr-body");
 
     let is_hidden_allowed = |d: &ParsedDirective| -> bool {
         if policy.allow_hidden {
@@ -933,6 +961,49 @@ pub fn extract_directives_for_config(
                 "commit-message directives are disabled by policy; ignored directive from commit {oid}"
             ));
         }
+    }
+
+    for m in merged {
+        let parsed = parse_directives(&m.body, OverrideSource::MergedPrBody(m.number));
+        if !merged_allowed {
+            if !parsed.is_empty() {
+                notes.push(format!(
+                    "merged pull request #{} body directives are disabled by policy; ignored",
+                    m.number
+                ));
+            }
+            continue;
+        }
+        let author_ok = policy.allowed_override_actors.is_empty()
+            || policy
+                .allowed_override_actors
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(&m.author));
+        if !author_ok {
+            if !parsed.is_empty() {
+                notes.push(format!(
+                    "directives in merged pull request #{} ignored: its author is not in `allowed_override_actors`",
+                    m.number
+                ));
+            }
+            continue;
+        }
+        let mut n = 0;
+        for d in parsed {
+            if d.hidden && !is_hidden_allowed(&d) {
+                notes.push(format!(
+                    "hidden directive `{}: {}` in merged pull request #{} ignored (directives.allow_hidden is false)",
+                    d.directive, d.reason, m.number
+                ));
+            } else {
+                n += 1;
+                active.push(d);
+            }
+        }
+        notes.push(format!(
+            "{n} directive(s) read from merged pull request #{} (author {})",
+            m.number, m.author
+        ));
     }
 
     (active, notes)

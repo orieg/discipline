@@ -669,6 +669,114 @@ pub fn issue_is_open(
     }
 }
 
+/// The merged pull request a commit arrived through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergedPull {
+    pub number: u64,
+    pub author: String,
+    pub body: String,
+    /// The pull request's head commit, for `require_approval`.
+    pub head_sha: String,
+}
+
+/// The merged pull request (or merge request) that carried `sha`, if the forge knows one.
+///
+/// GitHub lists every pull request a commit belongs to (`commits/{sha}/pulls`); the
+/// merged one is taken, and a commit in several merged pull requests is refused rather
+/// than guessed. Gitea and Forgejo answer with the one merged pull request
+/// (`commits/{sha}/pull`, 404 when none). GitLab lists the merge requests
+/// (`repository/commits/:sha/merge_requests`), filtered to `state == "merged"`.
+/// `Ok(None)` is a direct push: no merged pull request carried the commit.
+pub fn merged_pull_for_commit(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    sha: &str,
+) -> Result<Option<MergedPull>, String> {
+    let str_of = |v: &serde_json::Value, keys: &[&str]| -> String {
+        let mut cur = v;
+        for k in keys {
+            match cur.get(k) {
+                Some(n) => cur = n,
+                None => return String::new(),
+            }
+        }
+        cur.as_str().unwrap_or_default().to_string()
+    };
+    match forge.kind {
+        ForgeKind::GitHub => {
+            let path = format!("repos/{}/commits/{sha}/pulls", forge.repo);
+            let Some(list) = api.get(forge, &path)? else {
+                return Ok(None);
+            };
+            let list = list
+                .as_array()
+                .ok_or_else(|| format!("pull requests of commit {sha} are not a list"))?;
+            let merged: Vec<&serde_json::Value> = list
+                .iter()
+                .filter(|pr| pr.get("merged_at").is_some_and(|m| !m.is_null()))
+                .collect();
+            match merged.as_slice() {
+                [] => Ok(None),
+                [pr] => Ok(Some(MergedPull {
+                    number: pr.get("number").and_then(|n| n.as_u64()).unwrap_or(0),
+                    author: str_of(pr, &["user", "login"]),
+                    body: str_of(pr, &["body"]),
+                    head_sha: str_of(pr, &["head", "sha"]),
+                })),
+                many => Err(format!(
+                    "commit {sha} belongs to {} merged pull requests; refusing to pick one",
+                    many.len()
+                )),
+            }
+        }
+        ForgeKind::Gitea | ForgeKind::Forgejo => {
+            let path = format!("repos/{}/commits/{sha}/pull", forge.repo);
+            let Some(pr) = api.get(forge, &path)? else {
+                return Ok(None);
+            };
+            let merged = pr.get("merged").and_then(|m| m.as_bool()).unwrap_or(false);
+            if !merged {
+                return Ok(None);
+            }
+            Ok(Some(MergedPull {
+                number: pr.get("number").and_then(|n| n.as_u64()).unwrap_or(0),
+                author: str_of(&pr, &["user", "login"]),
+                body: str_of(&pr, &["body"]),
+                head_sha: str_of(&pr, &["head", "sha"]),
+            }))
+        }
+        ForgeKind::GitLab => {
+            let path = format!(
+                "projects/{}/repository/commits/{sha}/merge_requests",
+                gitlab_project_id(&forge.repo)
+            );
+            let Some(list) = api.get(forge, &path)? else {
+                return Ok(None);
+            };
+            let list = list
+                .as_array()
+                .ok_or_else(|| format!("merge requests of commit {sha} are not a list"))?;
+            let merged: Vec<&serde_json::Value> = list
+                .iter()
+                .filter(|mr| mr.get("state").and_then(|s| s.as_str()) == Some("merged"))
+                .collect();
+            match merged.as_slice() {
+                [] => Ok(None),
+                [mr] => Ok(Some(MergedPull {
+                    number: mr.get("iid").and_then(|n| n.as_u64()).unwrap_or(0),
+                    author: str_of(mr, &["author", "username"]),
+                    body: str_of(mr, &["description"]),
+                    head_sha: str_of(mr, &["sha"]),
+                })),
+                many => Err(format!(
+                    "commit {sha} belongs to {} merged merge requests; refusing to pick one",
+                    many.len()
+                )),
+            }
+        }
+    }
+}
+
 /// The most reviews one request returns; a full page means there may be more.
 const REVIEWS_PAGE: usize = 100;
 
@@ -1128,6 +1236,93 @@ mod tests {
         assert_eq!(
             ssh_hostname(&text, "fallback").as_deref(),
             Some("fallback.example")
+        );
+    }
+
+    #[test]
+    fn merged_pull_lookup_per_forge_and_the_direct_push_case() {
+        use super::{merged_pull_for_commit, CannedApi, MergedPull};
+        let f = |kind: ForgeKind, url: &str| Forge {
+            kind,
+            url: url.into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "github:repos/o/r/commits/aaa/pulls".into(),
+            serde_json::json!([
+                {"number": 3, "merged_at": null, "user": {"login": "x"}, "body": "no", "head": {"sha": "h3"}},
+                {"number": 12, "merged_at": "2026-09-21T00:00:00Z", "user": {"login": "agent"}, "body": "allow-agent-instructions: AGENTS.md ok", "head": {"sha": "h12"}}
+            ]),
+        );
+        api.responses.insert(
+            "github:repos/o/r/commits/bbb/pulls".into(),
+            serde_json::json!([]),
+        );
+        api.responses.insert(
+            "github:repos/o/r/commits/ccc/pulls".into(),
+            serde_json::json!([
+                {"number": 1, "merged_at": "2026-09-21T00:00:00Z", "user": {"login": "a"}, "body": "", "head": {"sha": "1"}},
+                {"number": 2, "merged_at": "2026-09-21T00:00:00Z", "user": {"login": "b"}, "body": "", "head": {"sha": "2"}}
+            ]),
+        );
+        api.responses.insert(
+            "gitea:repos/o/r/commits/aaa/pull".into(),
+            serde_json::json!({"number": 5, "merged": true, "user": {"login": "agent"}, "body": "removes: x reason", "head": {"sha": "h5"}}),
+        );
+        api.responses.insert(
+            "gitea:repos/o/r/commits/ddd/pull".into(),
+            serde_json::json!({"number": 6, "merged": false, "user": {"login": "agent"}, "body": "", "head": {"sha": "h6"}}),
+        );
+        api.responses.insert(
+            "gitea:repos/o/r/commits/bbb/pull".into(),
+            serde_json::Value::Null,
+        );
+        api.responses.insert(
+            "gitlab:projects/o%2Fr/repository/commits/aaa/merge_requests".into(),
+            serde_json::json!([
+                {"iid": 9, "state": "closed", "author": {"username": "x"}, "description": "", "sha": "s9"},
+                {"iid": 8, "state": "merged", "author": {"username": "agent"}, "description": "allow-ignore: t reason", "sha": "s8"}
+            ]),
+        );
+        api.responses.insert(
+            "github:repos/o/r/commits/eee/pulls".into(),
+            serde_json::json!({"__error": "HTTP 401 from api.github.com"}),
+        );
+
+        let gh = f(ForgeKind::GitHub, "https://github.com");
+        assert_eq!(
+            merged_pull_for_commit(&api, &gh, "aaa").unwrap(),
+            Some(MergedPull {
+                number: 12,
+                author: "agent".into(),
+                body: "allow-agent-instructions: AGENTS.md ok".into(),
+                head_sha: "h12".into()
+            })
+        );
+        assert_eq!(merged_pull_for_commit(&api, &gh, "bbb").unwrap(), None);
+        assert!(merged_pull_for_commit(&api, &gh, "ccc")
+            .unwrap_err()
+            .contains("2 merged pull requests"));
+        assert!(merged_pull_for_commit(&api, &gh, "eee")
+            .unwrap_err()
+            .contains("401"));
+
+        let gt = f(ForgeKind::Gitea, "https://gitea.example");
+        assert_eq!(
+            merged_pull_for_commit(&api, &gt, "aaa")
+                .unwrap()
+                .map(|p| p.number),
+            Some(5)
+        );
+        assert_eq!(merged_pull_for_commit(&api, &gt, "ddd").unwrap(), None);
+        assert_eq!(merged_pull_for_commit(&api, &gt, "bbb").unwrap(), None);
+
+        let gl = f(ForgeKind::GitLab, "https://gitlab.com");
+        let mr = merged_pull_for_commit(&api, &gl, "aaa").unwrap().unwrap();
+        assert_eq!(
+            (mr.number, mr.author.as_str(), mr.head_sha.as_str()),
+            (8, "agent", "s8")
         );
     }
 }

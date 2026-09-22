@@ -110,7 +110,11 @@ pub fn generate_schema() -> Value {
                 "properties": {
                     "sources": {
                         "$ref": "#/$defs/StringListOrReset",
-                        "description": "Allowed directive sources: pr-body, commits (default: [\"pr-body\", \"commits\"])"
+                        "description": "Allowed directive sources: pr-body, commits, merged-pr-body (default: [\"pr-body\", \"commits\", \"merged-pr-body\"]). merged-pr-body reads, on a push event, the body of the merged pull request each pushed commit arrived through"
+                    },
+                    "degrade_offline": {
+                        "type": "boolean",
+                        "description": "On a push event, continue with a named note when the merged-pr-body lookup fails, the finding it might have lifted standing, instead of stopping with exit 2 (default: true; set false to make the review record a hard requirement)"
                     },
                     "allow_hidden": {
                         "type": "boolean",

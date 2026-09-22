@@ -58,7 +58,7 @@ inputs:
     required: false
     default: ${{ github.event.pull_request.user.login || github.actor }}
   directive_sources:
-    description: 'Comma-separated list of allowed directive sources (pr-body, commits).'
+    description: 'Comma-separated list of allowed directive sources (pr-body, commits, merged-pr-body). merged-pr-body reads, on a push event, the body of the merged pull request each pushed commit arrived through.'
     required: false
     default: ''
   pr_body:

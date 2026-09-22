@@ -1515,7 +1515,7 @@ discipline self-test</div>
     <tr>
       <td class="gate-id">directive_sources</td>
       <td><em>(none)</em></td>
-      <td>Comma-separated list of allowed directive sources (pr-body, commits).</td>
+      <td>Comma-separated list of allowed directive sources (pr-body, commits, merged-pr-body). merged-pr-body reads, on a push event, the body of the merged pull request each pushed commit arrived through.</td>
     </tr>
     <tr>
       <td class="gate-id">pr_body</td>

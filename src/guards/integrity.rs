@@ -512,6 +512,10 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
     if base.directives.require_approval && !head.directives.require_approval {
         dir_note("`require_approval` changed from true to false".to_string());
     }
+    if !base.directives.degrade_offline && head.directives.degrade_offline {
+        dir_note("`degrade_offline` changed from false to true (a failed merged-pr-body lookup no longer stops the run)".to_string());
+    }
+    // (true -> false is stricter: a failed lookup then stops the run.)
 
     // [tests]: widening what counts as test code narrows what the production-code gates see.
     for (key, b, h) in [
@@ -872,6 +876,7 @@ mod tests {
             "allowed_override_actors",
             "max_overrides",
             "require_approval",
+            "degrade_offline",
         ];
         let schema = crate::schema::generate_schema();
         let props = schema["properties"]["directives"]["properties"]
@@ -916,6 +921,21 @@ mod tests {
             vec!["`max_overrides` removed (was 1)"]
         );
         assert!(whats(&cfg("max_overrides = 0\nrequire_approval = true\n")).is_empty());
+        // Switching the failed-lookup degrade on is a loosening; off is a tightening.
+        let off = cfg("degrade_offline = false\n");
+        let on = cfg("degrade_offline = true\n");
+        let notes: Vec<String> = diff_configs(&off, &on)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.what)
+            .collect();
+        assert!(
+            notes
+                .iter()
+                .any(|w| w.contains("`degrade_offline` changed from false to true")),
+            "{notes:?}"
+        );
+        assert!(diff_configs(&on, &off).unwrap().is_empty());
         // Adopting either is a tightening.
         assert!(diff_configs(&cfg(""), &base).unwrap().is_empty());
     }

@@ -3398,6 +3398,136 @@ fn a_push_run_says_why_a_pr_body_waiver_is_out_of_scope() {
 }
 
 #[test]
+fn a_push_run_reads_the_merged_pull_requests_body() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("AGENTS.md", "# Rules\n\nRun the tests.\n");
+    repo.commit("docs: rules");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "AGENTS.md",
+        "# Rules\n\nRun the tests.\n\nNever skip a failing test.\n",
+    );
+    // A squash commit: the message carries the branch's subject, not the PR body.
+    repo.commit("docs: never skip (#12)");
+    let head = |repo: &Repo| {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo.dir.path())
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let sha = head(&repo);
+    let pulls = |body: &str| {
+        serde_json::json!([{
+            "number": 12,
+            "merged_at": "2026-09-21T00:00:00Z",
+            "user": {"login": "agent"},
+            "body": body,
+            "head": {"sha": "feedbeef"}
+        }])
+    };
+    let run = |api: &FakeForge, extra_env: &[(&str, &str)]| {
+        let url = api.url();
+        let mut env = vec![
+            ("GITHUB_EVENT_NAME", "push"),
+            ("GITHUB_REPOSITORY", "o/r"),
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ("PR_BODY", ""),
+        ];
+        env.extend_from_slice(extra_env);
+        repo.run(&["check", "--base", "main", "--format", "json"], &env)
+    };
+
+    // The merged pull request's body carries the waiver: the push passes and cites #12.
+    let api = FakeForge::start();
+    api.serve(
+        &format!("repos/o/r/commits/{sha}/pulls"),
+        pulls("Reviewed.\n\nallow-agent-instructions: AGENTS.md the rule was discussed in review"),
+    );
+    let ok = run(&api, &[]);
+    assert_eq!(ok.code, 0, "{}{}", ok.stdout, ok.stderr);
+    let out = ok.outcome("instruction-smuggling");
+    assert_eq!(out["overrides"].as_array().unwrap().len(), 1);
+    assert!(
+        ok.stdout.contains("merged pull request #12"),
+        "{}",
+        ok.stdout
+    );
+
+    // The same commit with a body lacking the waiver fails, and says which body was read.
+    let api = FakeForge::start();
+    api.serve(
+        &format!("repos/o/r/commits/{sha}/pulls"),
+        pulls("Reviewed."),
+    );
+    let missing = run(&api, &[]);
+    assert_eq!(missing.code, 1);
+    let r = missing.violations("instruction-smuggling")[0]["remediation"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(r.contains("merged pull request(s) #12"), "{r}");
+
+    // A direct push (no merged pull request) fails with the push note.
+    let api = FakeForge::start();
+    api.serve(
+        &format!("repos/o/r/commits/{sha}/pulls"),
+        serde_json::json!([]),
+    );
+    let direct = run(&api, &[]);
+    assert_eq!(direct.code, 1);
+    let r = direct.violations("instruction-smuggling")[0]["remediation"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(r.contains("PR-body directives are not in scope"), "{r}");
+
+    // The forge refuses the lookup: by default a named note, and the ordinary failure
+    // (the finding the body might have lifted stands).
+    let api = FakeForge::start();
+    let degraded = run(&api, &[]);
+    assert_eq!(degraded.code, 1, "{}{}", degraded.stdout, degraded.stderr);
+    assert!(
+        degraded.stdout.contains("continuing without it"),
+        "{}",
+        degraded.stdout
+    );
+
+    // With `degrade_offline = false` the review record is required: could not check
+    // (exit 2), naming the commit.
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[directives]\ndegrade_offline = false\n",
+    );
+    repo.commit("chore: require the record");
+    let sha = head(&repo);
+    let api = FakeForge::start();
+    let refused = run(&api, &[]);
+    assert_eq!(refused.code, 2, "{}{}", refused.stdout, refused.stderr);
+    assert!(
+        refused.stderr.contains("merged-pr-body") && refused.stderr.contains(&sha[..10]),
+        "{}",
+        refused.stderr
+    );
+
+    // Off the network (the harness sets DISCIPLINE_NO_NETWORK; only loopback is allowed):
+    // a non-loopback forge is a note, never a request.
+    let api = FakeForge::start();
+    let offline = run(
+        &api,
+        &[("DISCIPLINE_FORGE_API_URL", "https://forge.invalid/api/v3")],
+    );
+    assert_eq!(offline.code, 1, "{}{}", offline.stdout, offline.stderr);
+    assert!(
+        offline.stdout.contains("network access is disabled"),
+        "{}",
+        offline.stdout
+    );
+}
+
+#[test]
 fn unsafe_trait_with_a_safety_doc_section_abc_stubs_and_past_intervals_are_not_findings() {
     let repo = Repo::new();
     repo.write(

@@ -352,17 +352,29 @@ pub struct DirectivesConfig {
     /// Directive overrides fail the run until the forge shows an approving review of the
     /// head commit by an `allowed_override_actors` member who is not the author.
     pub require_approval: bool,
+    /// On a push event, when the `merged-pr-body` source cannot be read (forge
+    /// unreachable, token without permission), continue with a named note (the finding
+    /// the body might have lifted stands) instead of stopping with exit 2. Default true:
+    /// a least-privilege token cannot always read pull requests. `false` makes the
+    /// review record a hard requirement of the push run.
+    #[serde(default = "default_true")]
+    pub degrade_offline: bool,
 }
 
 impl Default for DirectivesConfig {
     fn default() -> Self {
         Self {
-            sources: vec!["pr-body".to_string(), "commits".to_string()],
+            sources: vec![
+                "pr-body".to_string(),
+                "commits".to_string(),
+                "merged-pr-body".to_string(),
+            ],
             allow_hidden: false,
             fail_on_overrides: false,
             allowed_override_actors: Vec::new(),
             max_overrides: None,
             require_approval: false,
+            degrade_offline: true,
         }
     }
 }

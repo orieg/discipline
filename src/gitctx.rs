@@ -789,6 +789,15 @@ impl GitCtx {
     }
 
     /// Commits between the base and `HEAD` as `(short_oid, message)` (empty when staged).
+    /// The full object id of a commit named by an abbreviated id or any revision.
+    pub fn full_oid(&self, rev: &str) -> Result<String> {
+        let obj = self
+            .repo
+            .revparse_single(rev)
+            .with_context(|| format!("cannot resolve `{rev}`"))?;
+        Ok(obj.peel_to_commit()?.id().to_string())
+    }
+
     pub fn commits(&self) -> Result<Vec<(String, String)>> {
         let (Some(base), false) = (self.base, self.staged) else {
             return Ok(Vec::new());

@@ -75,7 +75,10 @@ fn schema_is_strict() {
 #[test]
 fn directives_config_defaults_and_overrides() {
     let base = DisciplineConfig::default_for_repo("t");
-    assert_eq!(base.directives.sources, vec!["pr-body", "commits"]);
+    assert_eq!(
+        base.directives.sources,
+        vec!["pr-body", "commits", "merged-pr-body"]
+    );
     assert!(!base.directives.allow_hidden);
     assert!(!base.directives.fail_on_overrides);
 
@@ -258,7 +261,7 @@ name = "my-test-proj"
 # description = "Brief description of the project"
 
 # [directives]
-# sources = ["pr-body", "commits"]
+# sources = ["pr-body", "commits", "merged-pr-body"]
 # allow_hidden = false
 # fail_on_overrides = false
 

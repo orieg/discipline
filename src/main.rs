@@ -228,6 +228,119 @@ fn is_gitlab_ci() -> bool {
         .unwrap_or(false)
 }
 
+/// What the `merged-pr-body` lookup produced for this run.
+#[derive(Default)]
+struct MergedPulls {
+    bodies: Vec<discipline::tokens::MergedBody>,
+    pulls: Vec<discipline::forge::MergedPull>,
+    notes: Vec<String>,
+}
+
+/// Most pushed commits looked up per run; a larger push is not a merged pull request.
+const MERGED_LOOKUP_CAP: usize = 20;
+
+/// On a push event, resolve each pushed commit's merged pull request through the forge.
+///
+/// Read only when the run is a push event in CI, no pull-request body is in hand, and
+/// `merged-pr-body` is an allowed source. A direct push (no merged pull request) is an
+/// empty result. A lookup the forge refuses or cannot serve is a named note by default
+/// (`directives.degrade_offline`), or an error (exit 2) when that is false; `DISCIPLINE_NO_NETWORK` and an
+/// unidentifiable forge are notes: they are the operator's own choice, not a failure.
+fn merged_pull_bodies(
+    args: &CheckArgs,
+    config: &discipline::config::DisciplineConfig,
+    git: &discipline::gitctx::GitCtx,
+    commits: &[(String, String)],
+    has_pr_body: bool,
+) -> Result<MergedPulls> {
+    let mut out = MergedPulls::default();
+    let source_on = config
+        .directives
+        .sources
+        .iter()
+        .any(|s| s == "merged-pr-body");
+    if args.staged
+        || has_pr_body
+        || !source_on
+        || commits.is_empty()
+        || !discipline::gitctx::is_push_event_environment()
+    {
+        return Ok(out);
+    }
+    let forge = match discipline::forge::detect_for(git) {
+        Ok(f) => f,
+        Err(e) => {
+            out.notes.push(format!(
+                "merged-pr-body: not read, cannot identify the forge: {e}"
+            ));
+            return Ok(out);
+        }
+    };
+    if commits.len() > MERGED_LOOKUP_CAP {
+        out.notes.push(format!(
+            "merged-pr-body: not read, the push carries {} commits (more than {MERGED_LOOKUP_CAP}); directives come from commit messages only",
+            commits.len()
+        ));
+        return Ok(out);
+    }
+    let api = discipline::forge::HttpApi::from_env();
+    for (short, _) in commits {
+        // The commit list carries abbreviated ids; the forge is asked by the full one.
+        let full = git.full_oid(short)?;
+        let oid = &full;
+        match discipline::forge::merged_pull_for_commit(&api, &forge, oid) {
+            Ok(Some(pull)) => {
+                if out.pulls.iter().any(|p| p.number == pull.number) {
+                    continue;
+                }
+                out.notes.push(format!(
+                    "merged-pr-body: commit {} arrived through merged pull request #{} (author {})",
+                    &oid[..oid.len().min(10)],
+                    pull.number,
+                    pull.author
+                ));
+                out.bodies.push(discipline::tokens::MergedBody {
+                    number: pull.number,
+                    author: pull.author.clone(),
+                    body: pull.body.clone(),
+                });
+                out.pulls.push(pull);
+            }
+            Ok(None) => out.notes.push(format!(
+                "merged-pr-body: commit {} arrived through no merged pull request (direct push); its message is the only directive source",
+                &oid[..oid.len().min(10)]
+            )),
+            // The client refuses non-loopback hosts under DISCIPLINE_NO_NETWORK: the
+            // operator's choice, reported as a note, not a failed lookup.
+            Err(e) if e.contains("DISCIPLINE_NO_NETWORK") => {
+                out.notes.push(format!(
+                    "merged-pr-body: not read, network access is disabled (DISCIPLINE_NO_NETWORK): {e}"
+                ));
+                return Ok(out);
+            }
+            Err(e) => {
+                let what = format!(
+                    "merged-pr-body: cannot resolve the merged pull request of commit {} on {} ({e})",
+                    &oid[..oid.len().min(10)],
+                    forge.kind.label()
+                );
+                if config.directives.degrade_offline {
+                    out.notes.push(format!(
+                        "{what}; continuing without it (`directives.degrade_offline`)"
+                    ));
+                } else {
+                    anyhow::bail!(
+                        "{what}. The pull request's body may carry the directives this push needs; \
+                         give the run a token that can read pull requests, or set \
+                         `directives.degrade_offline = true` (the default) to continue with a note."
+                    );
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn detect_pr_body_from_ci() -> Option<String> {
     for var in &[
         "FORGEJO_EVENT_PATH",
@@ -502,11 +615,23 @@ fn check(args: CheckArgs) -> Result<bool> {
     };
 
     let commits = git.commits()?;
-    let (directives, directive_notes) = discipline::tokens::extract_directives_for_config(
+    // `merged-pr-body`: on a push event with no pull request body, the body of the merged
+    // pull request each pushed commit arrived through is the review record that approved
+    // its directives. A squash or rebase merge drops it from the commit message.
+    let merged = match merged_pull_bodies(&args, &config, &git, &commits, raw_pr_body.is_some()) {
+        Ok(m) => m,
+        Err(err) => {
+            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
+            return Err(err);
+        }
+    };
+    let (directives, mut directive_notes) = discipline::tokens::extract_directives_with_merged(
         raw_pr_body.as_deref(),
         &commits,
+        &merged.bodies,
         &config,
     );
+    directive_notes.extend(merged.notes.iter().cloned());
 
     let had_pr_body = raw_pr_body.is_some();
     let pr_body = if had_pr_body {
@@ -585,11 +710,26 @@ fn check(args: CheckArgs) -> Result<bool> {
     // PR-body directive would send a maintainer to edit a body this run never reads;
     // say so, and name the sources a push does read.
     if is_push_or_commit && !had_pr_body {
-        let push_note = "this run is a push (or a commit range), so PR-body directives are not in scope: \
-                         only the pushed commits' messages are read. A squash or rebase merge drops the \
-                         pull request's body, and a merge commit's default message does not carry it. \
-                         Put the directive in a commit message, restrict the step to pull_request, or \
-                         enable the `merged-pr-body` directive source.";
+        let push_note = if merged.bodies.is_empty() {
+            "this run is a push (or a commit range), so PR-body directives are not in scope: \
+             only the pushed commits' messages are read. A squash or rebase merge drops the \
+             pull request's body, and a merge commit's default message does not carry it. \
+             Put the directive in a commit message, restrict the step to pull_request, or \
+             keep the `merged-pr-body` directive source enabled with a forge token."
+                .to_string()
+        } else {
+            format!(
+                "this run is a push; the body of merged pull request(s) {} was read \
+                 (`merged-pr-body`) and carried no directive that lifts this finding.",
+                merged
+                    .bodies
+                    .iter()
+                    .map(|m| format!("#{}", m.number))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let push_note = push_note.as_str();
         for outcome in &mut summary.outcomes {
             let mut affected = false;
             for v in &mut outcome.violations {
@@ -611,7 +751,14 @@ fn check(args: CheckArgs) -> Result<bool> {
     }
 
     // Run-level override limits: a budget, and an approval read from the forge.
-    let pull = detect_pull_context_from_ci();
+    let pull = detect_pull_context_from_ci().or_else(|| match merged.pulls.as_slice() {
+        [one] => Some(discipline::override_policy::PullContext {
+            number: one.number,
+            author: one.author.clone(),
+            head_sha: one.head_sha.clone(),
+        }),
+        _ => None,
+    });
     match discipline::override_policy::judge(
         &config.directives,
         summary.directive_overrides(),
@@ -751,7 +898,7 @@ name = "{project_name}"
 # description = "Brief description of the project"
 
 # [directives]
-# sources = ["pr-body", "commits"]
+# sources = ["pr-body", "commits", "merged-pr-body"]
 # allow_hidden = false
 # fail_on_overrides = false
 

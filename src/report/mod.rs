@@ -124,6 +124,8 @@ fn render_terminal_to_writer<W: Write>(
                     crate::tokens::OverrideSource::Commit(oid) => format!("commit {oid}"),
                     crate::tokens::OverrideSource::Inline { file, line } =>
                         format!("{file}:{line}"),
+                    crate::tokens::OverrideSource::MergedPrBody(n) =>
+                        format!("merged pull request #{n} body"),
                 }
             )?;
         }
@@ -345,6 +347,9 @@ pub fn render_step_summary_to_writer(
                 crate::tokens::OverrideSource::Commit(oid) => format!("commit `{oid}`"),
                 crate::tokens::OverrideSource::Inline { file, line } => {
                     format!("`{file}:{line}`")
+                }
+                crate::tokens::OverrideSource::MergedPrBody(n) => {
+                    format!("merged pull request #{n} body")
                 }
             };
             writeln!(
