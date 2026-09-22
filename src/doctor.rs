@@ -1268,6 +1268,13 @@ pub fn gitea_protection(
             p.deletion_blocked = true;
             p.pull_request_required = flag("enable_push") == Some(false);
             p.signatures_required = flag("require_signed_commits") == Some(true);
+            // Review rules. Gitea and Forgejo request reviews from CODEOWNERS on their
+            // own; `block_on_official_review_requests` is what makes those requests
+            // blocking, so it stands for a code-owner review requirement.
+            // `dismiss_stale_approvals` is the last-push rule.
+            p.required_approvals = r.get("required_approvals").and_then(|v| v.as_u64());
+            p.code_owner_review |= flag("block_on_official_review_requests") == Some(true);
+            p.dismiss_stale_reviews |= flag("dismiss_stale_approvals") == Some(true);
             // Gitea: `block_admin_merge_override`; Forgejo: `apply_to_admins`.
             let admins_bound = flag("block_admin_merge_override")
                 .or_else(|| flag("apply_to_admins"))
@@ -1312,7 +1319,13 @@ pub fn gitea_protection(
             } else {
                 p.hidden.insert("force-push");
             }
-            p.hidden.extend(["up-to-date", "bypass"]);
+            p.required_approvals = summary.get("required_approvals").and_then(|v| v.as_u64());
+            p.hidden.extend([
+                "up-to-date",
+                "bypass",
+                "code-owner-review",
+                "last-push-approval",
+            ]);
             p.bypass = Some(Vec::new());
             Ok(p)
         }
@@ -1631,6 +1644,12 @@ pub fn protection_findings(
                 Status::Pass,
                 "code owners must approve changes to the paths they own",
             )
+        } else if p.hidden.contains("code-owner-review") {
+            Finding::new(
+                "code-owner-review",
+                Status::Info,
+                "whether code owners must approve is not visible to this token",
+            )
         } else {
             Finding::new(
                 "code-owner-review",
@@ -1650,6 +1669,12 @@ pub fn protection_findings(
                 "last-push-approval",
                 Status::Pass,
                 "a push dismisses earlier approvals",
+            )
+        } else if p.hidden.contains("last-push-approval") {
+            Finding::new(
+                "last-push-approval",
+                Status::Info,
+                "whether a push dismisses earlier approvals is not visible to this token",
             )
         } else {
             Finding::new(
@@ -2547,6 +2572,36 @@ jobs:
     }
 
     #[test]
+    fn gitea_review_rules_are_read_from_the_branch_protection() {
+        let mut api = CannedApi::default();
+        let mut rule = forgejo_rule();
+        rule[0]["required_approvals"] = serde_json::json!(1);
+        rule[0]["dismiss_stale_approvals"] = serde_json::json!(true);
+        rule[0]["block_on_official_review_requests"] = serde_json::json!(true);
+        api.responses
+            .insert("gitea:repos/o/r/branch_protections".into(), rule.clone());
+        let jobs = analyse_workflows(&wf(WF), false).jobs;
+        let p = gitea_protection(&api, &forge(ForgeKind::Gitea), "main").unwrap();
+        let f = protection_findings(ForgeKind::Gitea, &p, &jobs);
+        let get = |id: &str| f.iter().find(|x| x.id == id).unwrap().status;
+        assert_eq!(get("review"), Status::Pass);
+        assert_eq!(get("code-owner-review"), Status::Pass);
+        assert_eq!(get("last-push-approval"), Status::Pass);
+        // The rule without them: each is a warning, not a guess.
+        rule[0]["required_approvals"] = serde_json::json!(0);
+        rule[0]["dismiss_stale_approvals"] = serde_json::json!(false);
+        rule[0]["block_on_official_review_requests"] = serde_json::json!(false);
+        api.responses
+            .insert("gitea:repos/o/r/branch_protections".into(), rule);
+        let p = gitea_protection(&api, &forge(ForgeKind::Gitea), "main").unwrap();
+        let f = protection_findings(ForgeKind::Gitea, &p, &jobs);
+        let get = |id: &str| f.iter().find(|x| x.id == id).unwrap().status;
+        assert_eq!(get("review"), Status::Warn);
+        assert_eq!(get("code-owner-review"), Status::Warn);
+        assert_eq!(get("last-push-approval"), Status::Warn);
+    }
+
+    #[test]
     fn gitea_without_admin_token_falls_back_to_the_branch_summary() {
         let mut api = CannedApi::default();
         api.responses.insert(
@@ -2567,6 +2622,12 @@ jobs:
         assert_eq!(get("required-check").status, Status::Pass);
         for id in ["force-push", "up-to-date", "bypass"] {
             assert_eq!(get(id).status, Status::Warn, "{id}");
+            assert!(get(id).summary.contains("not visible"), "{id}");
+        }
+        // The summary carries the approval count; the review rules stay unseen.
+        assert_eq!(get("review").status, Status::Pass);
+        for id in ["code-owner-review", "last-push-approval"] {
+            assert_eq!(get(id).status, Status::Info, "{id}");
             assert!(get(id).summary.contains("not visible"), "{id}");
         }
         // A `*` rule does not cover a branch with a `/` in it.
