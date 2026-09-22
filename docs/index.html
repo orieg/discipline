@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Discipline — Universal CI/CD Diff Sentinel & AI Coding Agent Gatekeeper</title>
-  <meta name="description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Traverses AST diffs via tree-sitter to reject assertion weakening, vacuous tests, unannotated unsafe, and test erosion.">
+  <meta name="description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Traverses AST diffs via tree-sitter to reject assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, loosened toolchain configuration, and prompt injection in comments.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Discipline — Universal CI/CD Diff Sentinel & AI Coding Agent Gatekeeper">
-  <meta property="og:description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Prevents assertion weakening, vacuous tests, unannotated unsafe, and algorithmic regressions.">
+  <meta property="og:description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Prevents assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, loosened toolchain configuration, and prompt injection in comments.">
   <meta property="og:url" content="https://orieg.github.io/discipline/">
   <meta property="og:site_name" content="Discipline">
   <meta name="twitter:card" content="summary_large_image">
@@ -824,7 +824,7 @@
 
     <h1>Universal CI/CD Diff Sentinel &<br><span>AI Coding Agent Gatekeeper</span></h1>
     <p class="hero-sub">
-      Traverses AST diffs via tree-sitter over merge-base git graphs. Rejects assertion weakening, vacuous tests, unannotated <code>unsafe</code>, test suppression, and algorithmic regressions across pull requests and merge requests.
+      Traverses AST diffs via tree-sitter over merge-base git graphs. Rejects assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, test suppression, loosened toolchain configuration, and text aimed at the next agent, across pull requests and merge requests. And it guards its own trust boundary: a change cannot switch its run to advisory or excuse itself without review.
     </p>
 
     <div class="hero-actions">
@@ -836,8 +836,8 @@
     <!-- Stat Bar -->
     <div class="stat-bar">
       <div class="stat-item">
-        <h3>30</h3>
-        <p>Active Fail-Closed Gates</p>
+        <h3>36</h3>
+        <p>Fail-Closed Gates</p>
       </div>
       <div class="stat-item">
         <h3>10</h3>
@@ -849,7 +849,7 @@
       </div>
       <div class="stat-item">
         <h3>0</h3>
-        <p>External Network Calls</p>
+        <p>Network Calls by Default</p>
       </div>
     </div>
   </header>
@@ -879,7 +879,7 @@
         <div>
           <div class="card-icon-box">&#x1f916;</div>
           <h3>AI Coding Agent Guardrails</h3>
-          <p>Flags silent test erosion: assertion count reductions (e.g. <code>assert_eq!</code> &rarr; <code>assert!</code>), test suppression (<code>#[ignore]</code>, <code>@pytest.mark.skip</code>, <code>it.skip</code>), tautological vacuous tests (<code>assert!(true)</code>), and stealth test deletions.</p>
+          <p>Flags silent test erosion: assertion count reductions (e.g. <code>assert_eq!</code> &rarr; <code>assert!</code>), test suppression and retries (<code>#[ignore]</code>, <code>@pytest.mark.flaky</code>, <code>it.skip</code>), tautological or mock-only tests (<code>assert!(true)</code>, <code>toHaveBeenCalled</code> alone), stealth test deletions, stub bodies (<code>todo!()</code>, <code>raise NotImplementedError</code>), swallowed errors (<code>except: pass</code>, <code>let _ = fallible()</code>), and injection text in comments or agent instruction files.</p>
         </div>
         <div class="card-tags">
           <span class="card-tag">Claude Code</span>
@@ -892,7 +892,7 @@
         <div>
           <div class="card-icon-box">&#x1f512;</div>
           <h3>Fail-Closed Engineering</h3>
-          <p>If git history cannot be resolved, a clone is shallow, or a configuration file is malformed, Discipline exits with code <code>2</code>. It never yields a false-positive pass on broken pipelines or empty diff outputs.</p>
+          <p>If git history cannot be resolved, a clone is shallow, or a configuration file is malformed, Discipline exits with code <code>2</code>. It never yields a false-positive pass on broken pipelines or empty diff outputs. The trust boundary is guarded too: a change cannot switch its own run to advisory, disable <code>config-integrity</code>, loosen <code>tsconfig.json</code> / <code>ruff.toml</code> / <code>[lints]</code> / coverage floors, or mask the CI step, without a scoped directive.</p>
         </div>
         <div class="card-tags">
           <span class="card-tag">exit 0: pass</span>
@@ -1414,13 +1414,16 @@ discipline self-test</div>
     <div style="margin-top: 2rem;">
       <h3 style="font-size: 1.15rem; color: var(--heading); margin-bottom: 0.5rem;">Audit-Trailed Override Directives</h3>
       <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 0.75rem;">
-        Legitimate deletions or changes are authorized through explicit, scoped directives in the PR description or commit message:
+        Legitimate deletions or changes are authorized through explicit, scoped directives in the PR description or commit message. Every applied override is recorded in the report; <code>directives.max_overrides</code> caps them per change, and <code>directives.require_approval</code> makes them count only once the forge shows an approving review of the head commit by a listed reviewer other than the author. <code>policy_from: base</code> judges a change by the base branch's <code>discipline.toml</code>, so a policy edit takes effect once it has merged.
       </p>
       <div class="directive-card">
         removes: tests/legacy/ replaced by proptest property suite<br>
         allow-assertion-drop: test_allocator single large allocation split into benchmark<br>
         allow-ignore: test_darwin_kqueue requires macos runner environment<br>
-        allow-golden-update: tests/snapshots/v2.snap updated for new serializer format
+        allow-golden-update: tests/snapshots/v2.snap updated for new serializer format<br>
+        allow-stub: validate schema lands with the next migration<br>
+        allow-toolchain-weakening: strict migrating the legacy tree file by file<br>
+        allow-agent-instructions: AGENTS.md the new rule was reviewed in #90
       </div>
     </div>
 
@@ -1672,7 +1675,7 @@ discipline self-test</div>
         <circle cx="103" cy="333" r="3" class="arch-dot-blue"/>
         <text x="115" y="337" class="arch-bullet">// SAFETY: justification invariants</text>
         <circle cx="103" cy="355" r="3" class="arch-dot-blue"/>
-        <text x="115" y="359" class="arch-bullet">Newly skipped / #[ignore]d test sentinel</text>
+        <text x="115" y="359" class="arch-bullet">Skips, retries, stubs, mocks &amp; swallowed errors</text>
 
         <!-- 3B. Hygiene & Policy Sweeps -->
         <rect x="440" y="214" width="340" height="176" rx="8" class="arch-box arch-box-card"/>
@@ -1686,7 +1689,7 @@ discipline self-test</div>
         <circle cx="463" cy="333" r="3" class="arch-dot-purple"/>
         <text x="475" y="337" class="arch-bullet">Agent scratch state deny (.claude/, *.tmp)</text>
         <circle cx="463" cy="355" r="3" class="arch-dot-purple"/>
-        <text x="475" y="359" class="arch-bullet">Dependency delta &amp; discipline.toml integrity</text>
+        <text x="475" y="359" class="arch-bullet">Lockfile, toolchain, CI &amp; discipline.toml integrity</text>
 
         <!-- Connector: AST & Hygiene -> Evaluator -->
         <path class="arch-line" d="M 250 390 L 250 412 L 610 412 L 610 390"/>

@@ -18,10 +18,15 @@ Autonomous coding agents operating in iterate-until-green loops optimize for pas
 - Marking failing or flaky tests `#[ignore]` / `@pytest.mark.skip` / `it.skip`.
 - Stealthily deleting tests, fixtures, or benchmarks that stand in the way of a green build.
 - Dropping `// SAFETY:` justifications from `unsafe` blocks.
-- Editing the gate configuration (`discipline.toml`) to disable failing checks.
+- Shipping the signature and leaving `todo!()`, `raise NotImplementedError` or `return null` as the body.
+- Wrapping a failure in an empty `catch {}` / `except: pass`, or discarding a `Result`.
+- Swapping the real dependency for a mock and asserting only that the mock was called.
+- Regenerating snapshots, adding retries, or loosening `tsconfig.json`, `ruff.toml`, `[lints]` and coverage floors instead of fixing the cause.
+- Editing the gate configuration (`discipline.toml`), the CI workflow, or the agent's own instruction files (`AGENTS.md`, `.cursorrules`) to disable failing checks.
+- Carrying text aimed at the next agent: an injection in a comment, or a bidirectional override that hides what a parser reads.
 - Introducing unverified calendar estimates or leaking developer workstation paths and LAN IPs.
 
-Discipline inspects the **diff** against the merge base using `tree-sitter` AST parsing and fail-closed verification rigors. It rejects erosion patterns before they reach review.
+Discipline inspects the **diff** against the merge base using `tree-sitter` AST parsing and fail-closed verification rigors. It rejects erosion patterns before they reach review, and it guards its own trust boundary: a change cannot switch its run to advisory, disable the gate that judges its configuration, or (with `directives.require_approval`) excuse itself without a review by someone else.
 
 ## Quickstart
 
@@ -96,7 +101,7 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 
 ## Gates
 
-`discipline gates` prints this table with each gate's effective state. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md).
+`discipline gates` prints this table with each gate's effective state. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md). Gates ship on unless their rule is a repository policy (`issue-link`, `commit-provenance`, `provenance-tags`, `scope-confinement`, `pr-checklist`, the verification presets); `docs/ROADMAP.md` records every default change per release.
 
 <!-- generated:gates -->
 | Gate | Suite | Languages | Rule Description |
