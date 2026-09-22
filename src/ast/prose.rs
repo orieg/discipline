@@ -40,7 +40,8 @@ pub fn extract(root: Node, src: &str, kinds: &[&str]) -> Vec<ProseSpan> {
     feature = "lang-php",
     feature = "lang-ruby",
     feature = "lang-c",
-    feature = "lang-cpp"
+    feature = "lang-cpp",
+    feature = "lang-kotlin"
 ))]
 mod pack_tests {
     use crate::ast::{default_registry, AssertVocabulary, Fact};
@@ -78,5 +79,18 @@ mod pack_tests {
         let cpp = spans("src/a.cpp", "const char *s = R\"(one)\" \"two\";\n");
         let texts: Vec<&str> = cpp.iter().map(|(_, t)| t.as_str()).collect();
         assert_eq!(texts, vec!["R\"(one)\"", "\"two\""]);
+    }
+
+    #[test]
+    fn kotlin_prose_is_comments_and_both_string_forms() {
+        let kt = spans(
+            "src/main/kotlin/A.kt",
+            "// one\n/* two */\nval s = \"th$x\"\nval r = \"\"\"four\"\"\"\n",
+        );
+        let texts: Vec<&str> = kt.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["// one", "/* two */", "\"th$x\"", "\"\"\"four\"\"\""]
+        );
     }
 }

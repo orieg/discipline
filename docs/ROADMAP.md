@@ -41,9 +41,9 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | Gate | Suite | Languages | Rule Description |
 |---|---|---|---|
 | [`agents-md`](GATES.md#agents-md) | agent-guard | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
-| [`assertion-reduction`](GATES.md#assertion-reduction) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | assertion count / strength must not drop in an existing test |
-| [`vacuous-tests`](GATES.md#vacuous-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | new tests must carry a non-tautological assertion |
-| [`ignored-tests`](GATES.md#ignored-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby | tests must not be newly #[ignore]d or skipped without directive |
+| [`assertion-reduction`](GATES.md#assertion-reduction) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin | assertion count / strength must not drop in an existing test |
+| [`vacuous-tests`](GATES.md#vacuous-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin | new tests must carry a non-tautological assertion |
+| [`ignored-tests`](GATES.md#ignored-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin | tests must not be newly #[ignore]d or skipped without directive |
 | [`unsafe-safety-comment`](GATES.md#unsafe-safety-comment) | agent-guard | Rust | unsafe blocks / impls carry a // SAFETY: comment |
 | [`deletion-rationale`](GATES.md#deletion-rationale) | agent-guard | any | deleted files and removed tests need a scoped removes: rationale |
 | [`time-estimates`](GATES.md#time-estimates) | hygiene | any | no calendar / duration estimates in markdown or the PR body |
@@ -53,9 +53,9 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | [`issue-link`](GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`commit-provenance`](GATES.md#commit-provenance) | hygiene | any | commits carry the required trailers; an agent-produced commit carries a review by someone else |
 | [`config-integrity`](GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
-| [`stub-bodies`](GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++ | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
-| [`error-swallowing`](GATES.md#error-swallowing) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++ | no new empty error handler or discarded Result outside tests |
-| [`instruction-smuggling`](GATES.md#instruction-smuggling) | agent-guard | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++ and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
+| [`stub-bodies`](GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
+| [`error-swallowing`](GATES.md#error-swallowing) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin | no new empty error handler or discarded Result outside tests |
+| [`instruction-smuggling`](GATES.md#instruction-smuggling) | agent-guard | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
 | [`build-hooks`](GATES.md#build-hooks) | integrity | package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env* | install and build hooks that gain network or shell access, and package-manager configuration edits, need a token |
 | [`toolchain-config`](GATES.md#toolchain-config) | integrity | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](GATES.md#scope-confinement) | agent-guard | any | changes stay inside authorized paths |
@@ -128,7 +128,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 ### Phase 7: Language Packs II
 - **Deliverables:** Java / Kotlin pack (JUnit 5, AssertJ, Hamcrest); C / C++ pack (GoogleTest, Catch2); Go pack (`testing.T`, `testify`); PHP AST pack (PHPUnit, Pest).
 - **Go / no-go gate:** 100% discriminating test coverage per language pack.
-- **Status:** In progress (Java, Go, PHP, and C / C++ packs shipped; Kotlin planned).
+- **Status:** Complete (Java, Kotlin, Go, PHP, and C / C++ packs shipped).
 
 ### Phase 8: Agent-Evasion Hardening
 Candidate work from a review of discipline as a safety net against autonomous coding agents. The review's central finding: the detectors are strong, and the trust boundary around them is the cheaper target. A change that can switch its own run to advisory, or grant itself every override, does not need to beat an AST gate. Tiers are ordered; within a tier, items are independent.
@@ -211,7 +211,7 @@ Acceptance for Step 0 as a whole: the consumer's 100-PR replay with its config, 
 | Item | From | Work | Ships when |
 |---|---|---|---|
 | Function, handler and prose facts for PHP, Ruby and C/C++ | **Shipped** (`PHP_FUNCTIONS` / `RUBY_FUNCTIONS` / `C_FUNCTIONS` and the matching handler, mock, retry and prose specs; PHP `@` and Ruby `rescue nil` are `Error Silenced`, C/C++ `(void)call()` is `Result Discarded`). Tier 2, Tier 3 | Fill `FunctionSpec`, `HandlerSpec`, mock/call kinds and prose kinds in `src/ast/php.rs`, `ruby.rs`, `c_cpp.rs`; classifiers exist in `functions.rs` (`classify_php`, `classify_ruby`, `classify_c`); set `supplies()` for `Functions`, `Handlers`, `Prose` | `stub-bodies`, `error-swallowing` and `instruction-smuggling` report no "supplies no facts" note on a `.php`, `.rb`, `.c` / `.cpp` change, and the pack tests mirror the six existing ones |
-| Kotlin pack | Phase 7 | New `src/ast/kotlin.rs` behind `lang-kotlin`: `@Test` / `@ParameterizedTest`, JUnit / AssertJ / Kotest matchers, `@Disabled` / `@Ignore`, `@Suppress`, plus the four new facts | The four-point contract per language holds, `docs/GATES.md` language table no longer lists Kotlin as planned, `UNSUPPORTED_SOURCE_EXTS` drops `kt` / `kts` |
+| Kotlin pack | **Shipped** (`src/ast/kotlin.rs` behind the default `lang-kotlin` feature, grammar `tree-sitter-kotlin-ng`). Phase 7 | New `src/ast/kotlin.rs` behind `lang-kotlin`: `@Test` / `@ParameterizedTest`, JUnit / AssertJ / Kotest matchers, `@Disabled` / `@Ignore`, `@Suppress`, plus the four new facts | The four-point contract per language holds, `docs/GATES.md` language table no longer lists Kotlin as planned, `UNSUPPORTED_SOURCE_EXTS` drops `kt` / `kts` |
 
 **Step 2: precision of existing detectors** (Tier 1 and Tier 2 corrections; independent of Step 1)
 
@@ -275,6 +275,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | language packs | New Kotlin pack (`.kt`, `.kts`) behind the default `lang-kotlin` feature: JUnit / TestNG / Kotest tests, assertions, skips, `@Suppress`, and function, handler and prose facts. Previously those files were named in a note as not analysed. | stricter | Build without `lang-kotlin`, or exempt the paths under the gate's `exempt_paths`. |
 | unreleased | `stub-bodies`, `error-swallowing`, `instruction-smuggling` | The PHP, Ruby, C and C++ packs supply function, handler and prose facts: a stub body, an empty `catch` / `rescue`, PHP `@call()` and Ruby `call rescue nil` (new title `Error Silenced`), C/C++ `(void)call()`, and instruction-like text in comments and strings of those languages are reported. Previously those files were named in a note as not analysed. A top-level PHP `function` is now read as a test when its name starts with `test` (the pack matched an old grammar kind and missed them). | stricter | Exempt a path under the gate's `exempt_paths`, or record the site with the gate's directive. |
 | unreleased | action | The `actor` input defaults to the pull request author (`github.event.pull_request.user.login`), falling back to `github.actor` off a pull request. Previously it was the triggering login, so on an `edited` event an allow-listed editor of someone else's pull request waived `fail_on_overrides` for an override they could have written themselves. | reclassified | Pass `actor:` explicitly to keep judging the triggering login. |
 | unreleased | documentation | The job-container recipe in `docs/CONFIGURATION.md` (Gitea / Forgejo, no `uses:`) was wrong in two ways: it named a `docker://` image under `runs-on`, which matches no runner label, so the job never ran; `git clone` landed on the default branch, so a job that did run compared the base with itself and passed every pull request. The recipe now runs on a registered label with `container: image:` pinned by tag and digest, fetches `refs/pull/<n>/head`, verifies the checkout against the event's head commit, and passes the base, title, body and the pull request author as the actor. It is executed in CI. | stricter | A repository that copied the old recipe has a gate that never ran or never failed: replace the job with the current recipe and re-run it on an open pull request. |

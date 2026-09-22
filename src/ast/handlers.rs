@@ -207,6 +207,14 @@ pub fn ruby_silences(t: &str) -> bool {
     matches!(handler, "nil" | "false" | "[]" | "{}" | "0" | "''" | "\"\"")
 }
 
+/// Kotlin: `runCatching { ... }.getOrNull()` and `.getOrDefault(x)` turn a failure into a
+/// value with nothing done about it; `.getOrElse { ... }` and `.onFailure { ... }` handle it.
+pub fn kotlin_silences(t: &str) -> bool {
+    let t = t.trim();
+    (t.starts_with("runCatching") || t.starts_with("kotlin.runCatching"))
+        && (t.ends_with(".getOrNull()") || t.contains(".getOrDefault("))
+}
+
 /// C / C++: `(void)call()` throws a result away by casting it, the same statement as
 /// Rust's `let _ = call()`; `(void)x` of a variable silences an unused warning and is not
 /// a call (the pack's `call_value_kinds` keep it out).
@@ -259,6 +267,14 @@ mod tests {
         assert!(ruby_silences("File.read(p) rescue nil"));
         assert!(ruby_silences("x = load rescue {}"));
         assert!(!ruby_silences("x = load rescue fallback(p)"));
+        assert!(kotlin_silences("runCatching { read(p) }.getOrNull()"));
+        assert!(kotlin_silences(
+            "runCatching { read(p) }.getOrDefault(\"\")"
+        ));
+        assert!(!kotlin_silences(
+            "runCatching { read(p) }.getOrElse { log(it); throw it }"
+        ));
+        assert!(!kotlin_silences("runCatching { read(p) }"));
         assert!(c_discards("(void)write(fd, b, n)"));
         assert!(!c_discards("write(fd, b, n)"));
     }
@@ -274,7 +290,8 @@ mod tests {
     feature = "lang-php",
     feature = "lang-ruby",
     feature = "lang-c",
-    feature = "lang-cpp"
+    feature = "lang-cpp",
+    feature = "lang-kotlin"
 ))]
 mod pack_tests {
     use crate::ast::{default_registry, AssertVocabulary, Fact};
@@ -382,5 +399,28 @@ mod pack_tests {
             "int c(void) {\n  (void)write(1, \"x\", 1);\n  (void)unused;\n  return 1;\n}\n",
         );
         assert_eq!(c, vec![(2, "discarded-result")]);
+    }
+
+    #[test]
+    fn kotlin_catch_blocks_and_run_catching() {
+        let kt = sites(
+            "src/main/kotlin/Loader.kt",
+            "fun peek(p: String): String? {\n    try { g() } catch (e: Exception) { }\n    try { g() } catch (e: E) { null }\n    try { g() } catch (e: E) { /* later */ }\n    try { g() } catch (e: IOException) { log(e); throw e }\n    val x = runCatching { read(p) }.getOrNull()\n    val y = runCatching { read(p) }.getOrDefault(\"\")\n    val z = runCatching { read(p) }.getOrElse { log(it); throw it }\n    return x\n}\n",
+        );
+        assert_eq!(
+            kt,
+            vec![
+                (2, "empty-handler"),
+                (3, "empty-handler"),
+                (4, "empty-handler"),
+                (6, "silenced-error"),
+                (7, "silenced-error")
+            ]
+        );
+        let test = sites(
+            "src/test/kotlin/LoaderTest.kt",
+            "class LoaderTest {\n    @Test\n    fun t() {\n        try { g() } catch (e: Exception) { }\n        runCatching { g() }.getOrNull()\n    }\n}\n",
+        );
+        assert!(test.is_empty(), "{test:?}");
     }
 }

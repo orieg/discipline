@@ -21,6 +21,8 @@ pub mod handlers;
 pub mod java;
 #[cfg(feature = "lang-javascript")]
 pub mod javascript;
+#[cfg(feature = "lang-kotlin")]
+pub mod kotlin;
 pub mod mocks;
 #[cfg(feature = "lang-php")]
 pub mod php;
@@ -126,6 +128,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(csharp::CSharpPack));
     #[cfg(feature = "lang-ruby")]
     reg.register(Box::new(ruby::RubyPack));
+    #[cfg(feature = "lang-kotlin")]
+    reg.register(Box::new(kotlin::KotlinPack));
     reg
 }
 
@@ -143,6 +147,7 @@ pub enum Language {
     Cpp,
     CSharp,
     Ruby,
+    Kotlin,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
@@ -165,6 +170,7 @@ pub fn language_for(path: &str) -> Option<Language> {
         "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Language::Cpp),
         "cs" => Some(Language::CSharp),
         "rb" | "rake" | "gemspec" => Some(Language::Ruby),
+        "kt" | "kts" => Some(Language::Kotlin),
         _ => None,
     }
 }
@@ -474,7 +480,8 @@ mod tests {
         assert!(!is_unsupported_source("src/a.cpp"));
         assert!(!is_unsupported_source("src/a.cs"));
         assert!(!is_unsupported_source("src/a.rb"));
-        assert!(is_unsupported_source("service.kt"));
+        assert!(!is_unsupported_source("service.kt"));
+        assert!(!is_unsupported_source("build.gradle.kts"));
         assert!(is_unsupported_source("service.swift"));
         assert!(!is_unsupported_source("src/a.rs"));
         assert!(!is_unsupported_source("tests/001.phpt"));
@@ -579,18 +586,18 @@ mod tests {
     #[test]
     fn unsupported_source_respects_active_registry() {
         let mut reg = default_registry();
-        assert!(is_unsupported_source_in("main.kt", &reg));
+        assert!(is_unsupported_source_in("main.scala", &reg));
 
-        struct KotlinDummy;
-        impl LanguagePack for KotlinDummy {
+        struct ScalaDummy;
+        impl LanguagePack for ScalaDummy {
             fn id(&self) -> &'static str {
-                "kotlin"
+                "scala"
             }
             fn name(&self) -> &'static str {
-                "Kotlin"
+                "Scala"
             }
             fn matches(&self, path: &str) -> bool {
-                extension(path) == Some("kt")
+                extension(path) == Some("scala")
             }
             fn extract(
                 &self,
@@ -602,7 +609,7 @@ mod tests {
             }
         }
 
-        reg.register(Box::new(KotlinDummy));
-        assert!(!is_unsupported_source_in("main.kt", &reg));
+        reg.register(Box::new(ScalaDummy));
+        assert!(!is_unsupported_source_in("main.scala", &reg));
     }
 }

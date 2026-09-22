@@ -1037,6 +1037,24 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 2)
         },
     ),
+    #[cfg(feature = "lang-kotlin")]
+    (
+        "kotlin: JUnit and Kotest extraction catches assertions, vacuous tests, and skips",
+        || {
+            use crate::ast::LanguagePack;
+            let pack = crate::ast::kotlin::KotlinPack;
+            let vocab = AssertVocabulary::default();
+            let src = "class CalcTest {\n    @Test\n    fun one() {\n        assertEquals(1, 2)\n    }\n    @Test\n    fun two() {\n        assertTrue(true)\n    }\n    @Disabled\n    @Test\n    fun three() {\n        assertEquals(1, 2)\n    }\n}\nclass S : StringSpec({\n    \"adds\" { (1 + 1) shouldBe 2 }\n    \"!off\" { 1 shouldBe 2 }\n})\n";
+            let facts = pack.extract("src/test/kotlin/CalcTest.kt", src, &vocab)?;
+            Ok(facts.tests.len() == 5
+                && facts.tests[0].strong_asserts == 1
+                && !facts.tests[0].is_vacuous()
+                && facts.tests[1].is_vacuous()
+                && facts.tests[2].ignored
+                && facts.tests[3].strong_asserts == 1
+                && facts.tests[4].ignored)
+        },
+    ),
     #[cfg(feature = "lang-ruby")]
     (
         "ruby: Minitest extraction catches assertions, vacuous tests, and skip",

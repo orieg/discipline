@@ -71,6 +71,8 @@ pub const SETUP_VOCAB: &[&str] = &[
     "given(",
     "mockStatic(",
     "mockk(",
+    "mockk<",
+    "spyk(",
     "every {",
     // C#
     "new Mock<",

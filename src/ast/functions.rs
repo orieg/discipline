@@ -92,6 +92,18 @@ fn describe(node: Node, src: &str, path: &str, spec: &FunctionSpec) -> Option<Fu
             found
         })
     })?;
+    // Kotlin wraps a block body in `function_body`; an expression body is the
+    // `function_body`'s own child. Judge the block itself when there is one.
+    let body = match body.named_child(0) {
+        Some(inner)
+            if body.kind() == "function_body"
+                && body.named_child_count() == 1
+                && inner.kind() == "block" =>
+        {
+            inner
+        }
+        _ => body,
+    };
     let shape = classify_body(body, src, spec);
     Some(FunctionFacts {
         name,
@@ -307,6 +319,41 @@ pub fn classify_jvm(t: &str) -> Option<BodyShape> {
     )
 }
 
+pub fn classify_kotlin(t: &str) -> Option<BodyShape> {
+    let t = strip_semicolon(t);
+    if t.starts_with("TODO(") || t == "TODO" {
+        return Some(BodyShape::Stub(t.to_string()));
+    }
+    if t.starts_with("throw ")
+        && (t.contains("NotImplementedError")
+            || t.contains("UnsupportedOperationException")
+            || has_word(t, NOT_IMPLEMENTED_WORDS))
+    {
+        return Some(BodyShape::Stub(t.to_string()));
+    }
+    const TRIVIAL: &[&str] = &[
+        "null",
+        "Unit",
+        "0",
+        "0L",
+        "0.0",
+        "false",
+        "true",
+        "\"\"",
+        "emptyList()",
+        "emptyMap()",
+        "emptySet()",
+        "listOf()",
+        "mapOf()",
+        "setOf()",
+    ];
+    // An expression body (`fun f() = null`) is a bare expression.
+    if TRIVIAL.contains(&t) {
+        return Some(BodyShape::Trivial(t.to_string()));
+    }
+    trivial_return(t, TRIVIAL)
+}
+
 pub fn classify_php(t: &str) -> Option<BodyShape> {
     let t = strip_semicolon(t);
     if t.starts_with("throw ") && has_word(t, NOT_IMPLEMENTED_WORDS) {
@@ -468,7 +515,8 @@ mod tests {
     feature = "lang-php",
     feature = "lang-ruby",
     feature = "lang-c",
-    feature = "lang-cpp"
+    feature = "lang-cpp",
+    feature = "lang-kotlin"
 ))]
 mod pack_tests {
     use super::BodyShape;
@@ -655,5 +703,29 @@ mod pack_tests {
                 ("TEST".into(), BodyShape::Substantive, true),
             ]
         );
+    }
+
+    #[test]
+    fn kotlin_expression_and_block_bodies() {
+        let got = shapes(
+            "src/main/kotlin/Repo.kt",
+            "class Repo {\n    fun find(id: Int): Item = TODO(\"later\")\n    fun none() = null\n    fun count(): Int {\n        return n + 1\n    }\n    fun empty() {\n    }\n    abstract fun z()\n    fun gone(): Int {\n        TODO()\n    }\n    fun bail(): Int {\n        throw NotImplementedError()\n    }\n}\n",
+        );
+        assert_eq!(
+            got,
+            vec![
+                ("find".into(), stub("TODO(\"later\")"), false),
+                ("none".into(), BodyShape::Trivial("null".into()), false),
+                ("count".into(), BodyShape::Substantive, false),
+                ("empty".into(), BodyShape::Empty, false),
+                ("gone".into(), stub("TODO()"), false),
+                ("bail".into(), stub("throw NotImplementedError()"), false),
+            ]
+        );
+        let got = shapes(
+            "src/test/kotlin/RepoTest.kt",
+            "class RepoTest {\n    @Test\n    fun finds() {\n        assertEquals(1, 1)\n    }\n}\n",
+        );
+        assert_eq!(got, vec![("finds".into(), BodyShape::Substantive, true)]);
     }
 }
