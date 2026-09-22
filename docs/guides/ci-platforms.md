@@ -66,6 +66,101 @@ When evaluating Discipline on high-velocity repositories with legacy technical d
 
 ---
 
+### Rollup skip-set wiring (`ci-skip-set`)
+
+A rollup job that accepts `skipped` as passing cannot tell "skipped because the change did not touch it" from "skipped because change detection emitted all-false". `ci-skip-set` checks the skip set against the data the rollup saw. The rollup supplies it; nothing is fetched.
+
+```yaml
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust-src: ${{ steps.filter.outputs.rust-src }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@<sha> # v4
+      - id: filter
+        uses: dorny/paths-filter@<sha> # v3
+        with:
+          filters: |
+            rust-src: ['src/**', 'Cargo.*']
+            docs: ['docs/**']
+
+  test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.rust-src == 'true'
+    runs-on: ubuntu-latest
+    steps: [ ... ]
+
+  docs-lint:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    steps: [ ... ]
+
+  ci-gate:
+    needs: [detect-changes, test, docs-lint]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@<sha> # v4
+        with:
+          fetch-depth: 0
+      - uses: orieg/discipline@v0
+        with:
+          suite: integrity
+          # The rollup's own view of its dependencies: results and outputs.
+          ci_context: ${{ toJson(needs) }}
+```
+
+```toml
+[gates.ci-skip-set]
+workflow = ".github/workflows/ci.yml"   # default: the running workflow
+change_job = "detect-changes"           # must have concluded `success`
+unconditional_jobs = ["ci-gate"]        # may never be `skipped`
+```
+
+What the gate asserts from that context: the change-detection job succeeded; every job in `unconditional_jobs` ran; and for every job in the rollup's `needs`, `skipped` holds exactly when its `if:` evaluates false under the observed outputs and results. The evaluator models `needs.<job>.result`, `needs.<job>.outputs.<key>`, the status functions `always()`, `success()`, `failure()` and `cancelled()`, comparisons (`==`, `!=`), `&&`, `||`, `!` and parentheses, with or without the `${{ }}` wrapper. An `if:` term outside that set is a finding, never a guess; a job whose `if:` mixes literal text and `${{ }}` is one too. `toJson(needs)` carries only the jobs the rollup names in `needs`, so a conditional job the rollup does not depend on is outside the check: add it to `needs`.
+
+### Benchmark job wiring (`bench-regression`)
+
+Measure the merge base and the head in the same job on the same runner, hand both files to the gate, and require a regression override to cite the run it rests on.
+
+```yaml
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@<sha> # v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@<sha> # stable
+      - run: cargo install iai-callgrind-runner --locked
+      - name: Measure the merge base
+        run: |
+          git worktree add ../base "$(git merge-base origin/main HEAD)"
+          (cd ../base && cargo bench --bench compare -- --output-format=json > "$RUNNER_TEMP/base.json")
+      - name: Measure the head
+        run: cargo bench --bench compare -- --output-format=json > "$RUNNER_TEMP/head.json"
+      - uses: orieg/discipline@v0
+        env:
+          DISCIPLINE_BENCH_BASE_FILE: ${{ runner.temp }}/base.json
+          DISCIPLINE_BENCH_HEAD_FILE: ${{ runner.temp }}/head.json
+          DISCIPLINE_BENCH_PROVENANCE: ${{ runner.os }}-${{ runner.arch }}
+        with:
+          suite: bench
+```
+
+```toml
+[gates.bench-regression]
+severity = "error"
+tolerance_pct = 2.0
+require_sourced_override = true
+citation_source_paths = ["src/**", "benches/**"]
+citation_measurement_jobs = [{ job = "bench", guard = "Measure the head" }]
+```
+
+The two files are compared arm by arm; iai-callgrind's instruction counts are deterministic, so the comparison is exact, and a wall-clock harness (Criterion, pytest-benchmark, Google Benchmark) is compared by interval instead. A regression needs `allow-regression: <arm> <reason>` naming every regressed arm. With `require_sourced_override`, the reason must also cite a CI run URL or a committed artifact path, and **every** citation in the reason is checked for freshness, not the first: a cited run must have a conclusion that carries a measurement (`cancelled`, `timed_out`, `action_required`, `startup_failure`, `stale` and `skipped` do not); a run that concluded `failure` counts only when every job in `citation_measurement_jobs` reached its `guard` step with every earlier step green (a regression trips the guard on numbers it measured; a crashed benchmark leaves none); the cited run's head must be reachable from the head under review; a cited data artifact must be tracked and must not have been committed before the branch's newest change under `citation_source_paths`. A citation the run cannot decide (no token, rate limited, a non-GitHub URL) is named and leaves the gate armed.
+
 ## 2. GitLab CI/CD
 
 Discipline integrates with GitLab CI/CD via a shared component template or a standalone container job. It produces native GitLab Code Quality reports that render directly inside Merge Request diff views.
