@@ -25,6 +25,9 @@ flowchart TD
     P4 --> P6["Phase 6: Production dogfooding & legacy script retirement"]
     P5 --> P6
     P4 --> P8["Phase 8: Agent-evasion hardening"]
+    P8 --> P9["Phase 9: Review follow-ups"]
+    P9 --> P10["Phase 10: Remainder remediation"]
+    P7 --> P10
     P7 --> P8
 ```
 
@@ -182,6 +185,65 @@ Items from an external written review of Phase 8 (2026-09-21), each checked agai
 - **Registry lookup, revisited.** An opt-in `dependency-delta.verify_registry` (default off) that asks crates.io, npm and PyPI whether a newly added direct dependency exists and when it was first published is implementable on the forge client (`src/forge.rs`: TLS, redirect pinning, body cap, `DISCIPLINE_NO_NETWORK`, exit 2 when unreachable). It stays declined until three things are settled: `AGENTS.md` §3.3 must be amended in the same PR; the names it sends are the change's new dependencies, which for a private monorepo means internal package names reaching a public registry, so a `private_prefixes` skip list is a precondition, not an option; and the lookup runs on every check of every PR that adds a dependency, so rate limits and outages become CI failures (exit 2), which the fail-closed contract requires. Lockfile integrity remains the offline control. Reopen when a consumer asks for it with those three answered.
 - **Go / no-go gate:** as Phase 8.
 - **Status:** shipped (`build-hooks`; sleeps, trivial assertions and change-description scanning in existing gates).
+
+### Phase 10: Remainder Remediation
+Every item Phases 7 to 9 left named as open, in one ordered plan. Each row is the whole remaining work for that item; a row ships when its gate criterion holds and the AGENTS.md §3.4 contract is met (unit controls, e2e through the binary, self-test case, a named test that kills a mutated detector). Rows in one step are independent of each other; a step depends on the step before it only where stated.
+
+**Step 0: false positives from the first consumer replay** (before anything else: each is a v0.8.0 finding a real repository's CI had already judged correct, checked against the code on 2026-09-21; a gate that blocks correct changes is held at `warning` by that consumer until these ship)
+
+| Item | Verified against the code | Work | Ships when |
+|---|---|---|---|
+| A consumer cannot declare its own test entry points | Yes: the pytest-collection rule makes a script's `self_test()` production code, and `error-swallowing`, `pii` and the assertion gates all read that boundary; today's workaround is `assert_helper_fns` | One declaration, `[languages.<lang>] test_functions = [...]` and a gate-independent `test_paths`, honoured by every gate that separates test code from production code (`TestFn` collection, `handlers::extract`'s `is_test_line`, `pii`'s scope) | One setting removes the three families of findings from the consumer's replay; three gate-local options are not added |
+| `error-swallowing`: expect-this-to-raise | Yes: `try` / `except: pass` / `else: raise` and `except: continue` followed by a recorded failure are empty handlers to `handlers.rs` | A `try` whose `else:` raises, or whose fall-through records a failure, is an assertion, not a swallow: read the sibling `else` clause and the statement after the `try` | The quoted snippets are silent; a bare `except: pass` in a library module still fails |
+| `error-swallowing`: a tuple binding is not a call | Yes: `rust_discards` accepts any `let _ =` whose right side contains `(`, so `let _ = (word, alloc);` is reported as a discarded result | Report `let _ =` only when the right side is a call expression (AST node, not text) | The tuple is silent; `let _ = file.sync_all();` still fails |
+| `error-swallowing`: Cargo `tests/`, `benches/`, `examples/` are test scope | Yes: test scope is the `TestFn` spans only, so a helper in `crates/x/tests/*.rs` is production code | `is_test_line` also true for every line of a file under those directories (and the other packs' equivalents via `functions::test_path`) | `let _ = catch_unwind(...)` in an integration test is silent |
+| `unsafe-safety-comment`: `unsafe trait` documented by rustdoc | Yes: an `unsafe trait` is an unsafe site requiring `// SAFETY:`; a doc comment with a `# Safety` section (the convention clippy's `missing_safety_doc` checks) is not accepted | Accept a preceding doc comment containing a `# Safety` heading for `unsafe trait` and `unsafe fn`; decide and document whether a contract stated without the heading counts (recommendation: no) | The quoted `OlcEngine` trait is silent |
+| `stub-bodies`: abstract base-class methods | Yes: the skip covers `@abstractmethod` and `Protocol` / `TypedDict` / `NamedTuple` bases, not `abc.ABC` nor a method overridden by a subclass in the same file | Skip a stub in a class deriving from `ABC` / `ABCMeta`, and one whose name a same-file subclass overrides | `bump_version.py`'s base-class pair is silent |
+| `time-estimates`: past-interval phrasing | Yes: "N units later" is exempt, "the N-unit gap between" two past events is not | Extend the terms-of-art list with the past-interval forms (`N-unit gap between`, `N units between`, past-tense equivalents) | The quoted README line is silent; a forward-looking "ships in N units" still fails |
+| `--whole-tree` records delta-only rules | Yes: a whole-tree baseline diffs against an empty tree, so `New Direct Dependency Added`, `Agent Instructions Changed` and `Test Arrives Ignored` fire for every file, and symlinked `CLAUDE.md` / `GEMINI.md` are recorded separately | In whole-tree mode, gates whose rule describes a delta report nothing (each `GateOutcome` names itself delta-only); a symlink resolves to its target once | The consumer's baseline records no delta-only rule |
+| `provenance-tags`: what satisfies a ratio, and `diff_only` | Policy disagreement, not a defect: the consumer's paragraph-scoped rule accepts an interval, a results artifact reference, or a `superseded` / `unsourced` / `provisional` marker, and exempts deterministic units | `ratio_satisfied_by = ["interval", "artifact:<glob>", "marker:<word>"]` and `deterministic_units`, default unchanged; `diff_only` as on the other hygiene gates | With a config expressing the consumer's rule, the gate agrees with its script on every tracked Markdown line |
+| Wiring recipes | Documentation | A complete `ci-skip-set` rollup job (`DISCIPLINE_CI_CONTEXT` from `toJson(needs)` plus path-filter outputs, and the `if:` forms modelled) and a `bench-regression` job (merge base and head measured with iai-callgrind, `require_sourced_override`, which citation-freshness rules are enforced) in `docs/guides/ci-platforms.md` | The consumer retires its two remaining scripts against the recipes |
+
+Acceptance for Step 0 as a whole: the consumer's 100-PR replay with its config, the test-entry declaration and `error-swallowing` at `error` blocks only on `instruction-smuggling` `AGENTS.md` edits, its three true positives and its two deliberate `|| true` lines.
+
+**Step 1: parity of the new facts across packs** (the Tier 2 remainder; every later step benefits)
+
+| Item | From | Work | Ships when |
+|---|---|---|---|
+| Function, handler and prose facts for PHP, Ruby and C/C++ | Tier 2, Tier 3 | Fill `FunctionSpec`, `HandlerSpec`, mock/call kinds and prose kinds in `src/ast/php.rs`, `ruby.rs`, `c_cpp.rs`; classifiers exist in `functions.rs` (`classify_php`, `classify_ruby`, `classify_c`); set `supplies()` for `Functions`, `Handlers`, `Prose` | `stub-bodies`, `error-swallowing` and `instruction-smuggling` report no "supplies no facts" note on a `.php`, `.rb`, `.c` / `.cpp` change, and the pack tests mirror the six existing ones |
+| Kotlin pack | Phase 7 | New `src/ast/kotlin.rs` behind `lang-kotlin`: `@Test` / `@ParameterizedTest`, JUnit / AssertJ / Kotest matchers, `@Disabled` / `@Ignore`, `@Suppress`, plus the four new facts | The four-point contract per language holds, `docs/GATES.md` language table no longer lists Kotlin as planned, `UNSUPPORTED_SOURCE_EXTS` drops `kt` / `kts` |
+
+**Step 2: precision of existing detectors** (Tier 1 and Tier 2 corrections; independent of Step 1)
+
+| Item | From | Work | Ships when |
+|---|---|---|---|
+| `test-budget` on AST facts | Tier 1 | Replace the line patterns in `src/guards/test_budget.rs` with pack facts: a `Fact::Budgets` (proptest `cases`, quickcheck `tests`, hypothesis `max_examples`, fast-check `numRuns`) read from call and attribute nodes | The `min_tests = 40` fixture class cannot recur (a budget inside a string or comment is not a budget); existing e2e cases pass unchanged |
+| Unreachable assertions | Tier 1 | In each pack's assertion walk, do not count an assertion under a constant-false condition or after an unconditional `return` / `panic!` / `pytest.skip()` at the same block level; reuse the Rust constant-expression check | `assert_eq!` inside `if false {}` and after `return` counts 0; a self-test case pins each |
+| Padded stubs | Tier 2 | `BodyShape::Stub` also when a body is a stub marker plus statements that cannot affect the result (logging, a bare assignment, `println!`), judged per language | `fn f() { log::warn!("todo"); todo!() }` is a stub; `fn f() { init(); todo!() }` is not |
+| Logging swallow | Tier 2 | In `handlers.rs`, a handler whose statements are all logging calls (`log.`, `logger.`, `console.error`, `eprintln!`, `warn!`) and no re-raise, return of the error, or state change is `Empty Error Handler Added` with a "logs and swallows" message | The e2e negative control keeps a handler that logs **and** re-raises silent |
+
+**Step 3: coverage of files and forges** (Tier 0 and Tier 1 remainders)
+
+| Item | From | Work | Ships when |
+|---|---|---|---|
+| Other lockfile formats | Tier 1 | `parse_lock` for `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `composer.lock`, `Gemfile.lock`, Yarn 2+ (`__metadata:`); `go.sum` stays exempt | Each format has a source-swap and a dropped-hash test; the "not analysed" note is gone for them |
+| Frozen-install flags in CI | Tier 1 | Extend the `ci-integrity` `--locked` rule to `npm ci` → `npm install`, `--frozen-lockfile`, `--immutable`, `--require-hashes`, `uv sync --locked` / `--frozen`, `poetry install --no-update` | A dropped flag or a softened install command is `Cargo Flag Dropped`-class finding under its own title |
+| Added snapshot files | Tier 1 | In `golden-output`, an added snapshot whose name maps to a test that already existed on the base side (Jest `__snapshots__/<file>.snap` keyed by test title, insta `<module>__<test>.snap`, pytest-snapshot `<test>.ambr`) is reported; a snapshot for a new test is not | Two e2e cases per framework: new test + new snapshot silent, existing test + new snapshot reported |
+| GitLab `include:` and `rules:` | Tier 0 | `ci_gitlab.rs` follows `include: local:` files in the same tree (never `project:` / `remote:`, which are named as not read) and reports a `rules:` / `only:` / `except:` change on a verification job as `Verification Job Narrowed` | A local include that adds `allow_failure` is reported; a remote include is a note |
+| `clippy.toml` | Tier 1 | Per-key direction table for the threshold keys (`too-many-arguments-threshold`, `cognitive-complexity-threshold`, `type-complexity-threshold`, ... all `Cap`); `allowed-*` lists `Grown`; `disallowed-*` lists `Shrunk` | Raising a threshold or growing an allow list is `Toolchain Configuration Weakened` |
+| `toolchain-config` inheritance | Tier 1 | Report a changed `extends` / `plugins` / `presets` entry as `Toolchain Configuration Changed (not analysed)` at warning, the same way a configuration written as code is | An `extends` swap is never silent |
+
+**Step 4: forge-side enforcement** (Tier 0 remainders; needs a token that can read branch protection and pull-request reviews)
+
+| Item | From | Work | Ships when |
+|---|---|---|---|
+| Forge-side `doctor` in CI | Tier 0 | A `doctor` job in `ci.yml` with a fine-grained token (read: administration, pull requests) stored as a repository secret, `--strict`, on `main` pushes only | The job is in `ci-gate`'s `needs` and the asserted job count; `required-check`, `review`, `code-owner-review`, `last-push-approval` are Pass on this repository |
+| GitLab approvals in `require_approval` | Tier 0 | `pull_approvers` for `ForgeKind::GitLab`: `projects/{id}/merge_requests/{iid}/approval_state`, matched on the head SHA of the approval rule | The `FakeForge` e2e has a GitLab variant; an approval of an earlier SHA is refused |
+
+**Declined, and stays declined unless the stated condition changes:** registry verification of new dependencies (Phase 9 note: needs a `private_prefixes` contract, accepts registry outages as CI failures, and an amendment to `AGENTS.md` §3.3); in-binary mutation analysis (the `command` gate's presets are the control); in-binary commit-signature verification (cryptography dependency and a trusted keyring; `doctor` reads the branch rule).
+
+- **Go / no-go gate:** as Phase 8; additionally, Step 1 ships all three packs together or names in `docs/GATES.md` which fact each pack still lacks.
+- **Status:** planned. Order: Step 0 first (correctness for a live consumer), then Step 1 (it widens what every later step covers), Steps 2 and 3 in parallel, Step 4 when the token exists.
 
 ---
 

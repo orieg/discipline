@@ -23,7 +23,8 @@ Autonomous coding agents operating in iterate-until-green loops optimize for pas
 - Swapping the real dependency for a mock and asserting only that the mock was called.
 - Regenerating snapshots, adding retries, or loosening `tsconfig.json`, `ruff.toml`, `[lints]` and coverage floors instead of fixing the cause.
 - Editing the gate configuration (`discipline.toml`), the CI workflow, or the agent's own instruction files (`AGENTS.md`, `.cursorrules`) to disable failing checks.
-- Carrying text aimed at the next agent: an injection in a comment, or a bidirectional override that hides what a parser reads.
+- Carrying text aimed at the next agent: an injection in a comment, a PR description or a commit message, or a bidirectional override that hides what a parser reads.
+- Running a command on every install from where CI checks do not look: a `package.json` `postinstall`, a `build.rs`, or a repointed registry in `.npmrc` / `pip.conf`.
 - Introducing unverified calendar estimates or leaking developer workstation paths and LAN IPs.
 
 Discipline inspects the **diff** against the merge base using `tree-sitter` AST parsing and fail-closed verification rigors. It rejects erosion patterns before they reach review, and it guards its own trust boundary: a change cannot switch its run to advisory, disable the gate that judges its configuration, or (with `directives.require_approval`) excuse itself without a review by someone else.
