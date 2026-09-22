@@ -223,6 +223,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
       result = compute_values()
       assert result == [10, 20, 30]
   ```
+- **Unreachable assertions:** an assertion the test runner never reaches counts 0 in every pack: one inside an `if` whose condition is a constant false (`if false`, `if (0)`, `if False:`), or one after an unconditional terminator at the same block level (`return`, `panic!()`, `pytest.fail()`, `throw`, `os.Exit()`; `src/ast/reach.rs`). The `else` branch of a constant-false `if`, and an assertion after a `return` inside a nested `if`, are live. A skip call (`t.Skip()`, `pytest.skip()`, Minitest `skip`) is deliberately not a terminator: the test is reported by `ignored-tests`, and counting its body as dead would report the same test twice and take it out of `allow-ignore`'s reach. This applies to `assertion-reduction` and `vacuous-tests` alike: moving an existing assertion under `if false` is a reduction, and a new test whose only assertion follows a `return` is vacuous.
 - **What it does NOT catch:**
   - Semantic non-assertions that involve external function calls (e.g. `assert!(check_validity())` where `check_validity()` returns `true` unconditionally).
   - Tests whose assertions occur in deeply nested helper callbacks not tracked by static analysis.
@@ -782,7 +783,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `manifests`, `allow_wildcards`, `require_git_pins`, `deny_file`, `allow_dependencies`, `deny_dependencies`.
 
 #### `test-budget`
-- **Rule:** Universal property-test and fuzz effort ratchet across languages and CI workflows. Property-testing iterations, shrink limits, fuzzing durations, fuzz targets, and seed corpus directories cannot be lowered without an explicit scoped directive.
+- **Rule:** Universal property-test and fuzz effort ratchet across languages and CI workflows. Property-testing iterations, shrink limits, fuzzing durations, fuzz targets, and seed corpus directories cannot be lowered without an explicit scoped directive. In Rust, Python and JS/TS the budgets come from the language pack (`Fact::Budgets`, `src/ast/budgets.rs`): a named integer in a configuration position (a struct field, a builder-method argument, a keyword argument, an object pair, or a `key: N` pair inside a macro's token tree such as `proptest! { #![proptest_config(ProptestConfig { cases: 1000, .. })] }`). The same word in a string, a comment or an unrelated assignment (`min_tests = 40`) is not a budget. Workflows and shell scripts are read by line.
 - **Languages:** Rust, Python, JS/TS, Go, any workflow/script.
 - **What it catches:**
   - Reductions in Rust `proptest` (`cases`, `max_shrink_iters`) and `quickcheck` (`tests`, `gen_size`).
@@ -802,6 +803,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   allow-test-shrink: proptest cases trimmed for faster local iteration in dev branch
   ```
 - **What it does NOT catch:**
+  - A budget the pack cannot place: a value computed at runtime, read from an environment variable, or held in a `const` (`cases: CASES`); only integer literals in a configuration position count.
   - Increases or additions of property-testing iterations or new fuzz targets (ratchet permits tightening).
   - Reductions explicitly excused by scoped directive `allow-test-shrink: <target/metric> <reason>`.
 - **Lifting directive:** `allow-test-shrink: <target-or-metric> <reason>`.

@@ -44,6 +44,7 @@ impl LanguagePack for CPack {
 
         let (has_errors, first_line, error_count) = collect_error_nodes_info(root);
         let mut extractor = CCppExtractor {
+            dead: super::reach::dead_ranges(root, src, &C_REACH),
             src: src.as_bytes(),
             vocab,
             is_test_path: is_c_cpp_test_path(path),
@@ -103,6 +104,7 @@ impl LanguagePack for CppPack {
 
         let (has_errors, first_line, error_count) = collect_error_nodes_info(root);
         let mut extractor = CCppExtractor {
+            dead: super::reach::dead_ranges(root, src, &C_REACH),
             src: src.as_bytes(),
             vocab,
             is_test_path: is_c_cpp_test_path(path),
@@ -286,6 +288,8 @@ pub fn is_c_cpp_test_path(path: &str) -> bool {
 }
 
 struct CCppExtractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
@@ -684,6 +688,9 @@ impl<'a> CCppExtractor<'a> {
         test_fn: &mut TestFn,
         calls: &mut Vec<String>,
     ) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         let kind = node.kind();
 
         if kind == "static_assert_declaration" {
@@ -1010,6 +1017,13 @@ impl<'a> CCppExtractor<'a> {
         txt == "false" || txt == "0" || node.kind() == "false"
     }
 }
+
+pub const C_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if_statement"],
+    block_kinds: &["compound_statement"],
+    ignored_kinds: &["comment"],
+    terminators: &["return", "abort()", "exit(", "_exit(", "throw"],
+};
 
 #[cfg(test)]
 mod tests {

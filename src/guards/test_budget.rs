@@ -66,162 +66,31 @@ pub fn parse_duration_or_count(s: &str) -> Option<u64> {
     }
 }
 
-/// Extracts Rust property test metrics (proptest & quickcheck).
-pub fn extract_rust_budgets(content: &str, path: &str) -> Vec<BudgetMetric> {
-    let mut metrics = Vec::new();
-
-    // Regex for proptest cases: `cases: 1000` or `ProptestConfig::with_cases(1000)`
-    let re_proptest_cases = Regex::new(r"(?:cases\s*:\s*|with_cases\s*\(\s*)(\d+)").unwrap();
-    // Regex for proptest max_shrink_iters: `max_shrink_iters: 1000`
-    let re_shrink = Regex::new(r"max_shrink_iters\s*:\s*(\d+)").unwrap();
-    // Regex for quickcheck tests: `.tests(1000)` or a bare `tests = 1000`. The word
-    // boundary keeps `min_tests = 40` (a test-floor setting) out of it.
-    let re_qc_tests = Regex::new(r"(?:\.tests\s*\(\s*|\btests\s*=\s*)(\d+)").unwrap();
-    // Regex for quickcheck gen_size: `.gen_size(1000)`
-    let re_qc_gen = Regex::new(r"\.gen_size\s*\(\s*(\d+)").unwrap();
-
-    for (idx, line) in content.lines().enumerate() {
-        let line_num = idx + 1;
-        let line_str = line.trim();
-
-        // Skip comments
-        if line_str.starts_with("//") || line_str.starts_with("/*") || line_str.starts_with('*') {
-            continue;
-        }
-
-        if let Some(caps) = re_proptest_cases.captures(line) {
-            if let Some(m) = caps.get(1) {
-                if let Ok(val) = m.as_str().parse::<u64>() {
-                    metrics.push(BudgetMetric {
-                        subject: "proptest cases".to_string(),
-                        value: val,
-                        raw: m.as_str().to_string(),
-                        path: path.to_string(),
-                        line: line_num,
-                    });
-                }
-            }
-        }
-
-        if let Some(caps) = re_shrink.captures(line) {
-            if let Some(m) = caps.get(1) {
-                if let Ok(val) = m.as_str().parse::<u64>() {
-                    metrics.push(BudgetMetric {
-                        subject: "proptest max_shrink_iters".to_string(),
-                        value: val,
-                        raw: m.as_str().to_string(),
-                        path: path.to_string(),
-                        line: line_num,
-                    });
-                }
-            }
-        }
-
-        if let Some(caps) = re_qc_tests.captures(line) {
-            if let Some(m) = caps.get(1) {
-                if let Ok(val) = m.as_str().parse::<u64>() {
-                    metrics.push(BudgetMetric {
-                        subject: "quickcheck tests".to_string(),
-                        value: val,
-                        raw: m.as_str().to_string(),
-                        path: path.to_string(),
-                        line: line_num,
-                    });
-                }
-            }
-        }
-
-        if let Some(caps) = re_qc_gen.captures(line) {
-            if let Some(m) = caps.get(1) {
-                if let Ok(val) = m.as_str().parse::<u64>() {
-                    metrics.push(BudgetMetric {
-                        subject: "quickcheck gen_size".to_string(),
-                        value: val,
-                        raw: m.as_str().to_string(),
-                        path: path.to_string(),
-                        line: line_num,
-                    });
-                }
-            }
-        }
+/// Budgets a language pack reads from the syntax tree (`Fact::Budgets`): a named
+/// integer in a configuration position. The same word in a string or a comment, or an
+/// unrelated assignment (`min_tests = 40`), is not one.
+pub fn extract_ast_budgets(content: &str, path: &str) -> Vec<BudgetMetric> {
+    let reg = crate::ast::default_registry();
+    let Some(pack) = reg.find_pack(path) else {
+        return Vec::new();
+    };
+    if !pack.supplies(crate::ast::Fact::Budgets) {
+        return Vec::new();
     }
-
-    metrics
-}
-
-/// Extracts Python Hypothesis settings (`max_examples`, `deadline`).
-pub fn extract_python_budgets(content: &str, path: &str) -> Vec<BudgetMetric> {
-    let mut metrics = Vec::new();
-    let re_max_examples = Regex::new(r"max_examples\s*=\s*(\d+)").unwrap();
-    let re_deadline = Regex::new(r"deadline\s*=\s*(\d+)").unwrap();
-
-    for (idx, line) in content.lines().enumerate() {
-        let line_num = idx + 1;
-        let line_str = line.trim();
-        if line_str.starts_with('#') {
-            continue;
-        }
-
-        if let Some(caps) = re_max_examples.captures(line) {
-            if let Some(m) = caps.get(1) {
-                if let Ok(val) = m.as_str().parse::<u64>() {
-                    metrics.push(BudgetMetric {
-                        subject: "hypothesis max_examples".to_string(),
-                        value: val,
-                        raw: m.as_str().to_string(),
-                        path: path.to_string(),
-                        line: line_num,
-                    });
-                }
-            }
-        }
-
-        if let Some(caps) = re_deadline.captures(line) {
-            if let Some(m) = caps.get(1) {
-                if let Ok(val) = m.as_str().parse::<u64>() {
-                    metrics.push(BudgetMetric {
-                        subject: "hypothesis deadline".to_string(),
-                        value: val,
-                        raw: m.as_str().to_string(),
-                        path: path.to_string(),
-                        line: line_num,
-                    });
-                }
-            }
-        }
-    }
-
-    metrics
-}
-
-/// Extracts JavaScript / TypeScript fast-check settings (`numRuns`).
-pub fn extract_js_budgets(content: &str, path: &str) -> Vec<BudgetMetric> {
-    let mut metrics = Vec::new();
-    let re_num_runs = Regex::new(r"numRuns\s*:\s*(\d+)").unwrap();
-
-    for (idx, line) in content.lines().enumerate() {
-        let line_num = idx + 1;
-        let line_str = line.trim();
-        if line_str.starts_with("//") || line_str.starts_with("/*") || line_str.starts_with('*') {
-            continue;
-        }
-
-        if let Some(caps) = re_num_runs.captures(line) {
-            if let Some(m) = caps.get(1) {
-                if let Ok(val) = m.as_str().parse::<u64>() {
-                    metrics.push(BudgetMetric {
-                        subject: "fast-check numRuns".to_string(),
-                        value: val,
-                        raw: m.as_str().to_string(),
-                        path: path.to_string(),
-                        line: line_num,
-                    });
-                }
-            }
-        }
-    }
-
-    metrics
+    let Ok(facts) = pack.extract(path, content, &crate::ast::AssertVocabulary::default()) else {
+        return Vec::new();
+    };
+    facts
+        .budgets
+        .into_iter()
+        .map(|b| BudgetMetric {
+            subject: b.subject.to_string(),
+            value: b.value,
+            raw: b.value.to_string(),
+            path: path.to_string(),
+            line: b.line,
+        })
+        .collect()
 }
 
 /// Extracts workflow and script flags (`PROPTEST_CASES`, `-max_total_time`, `-runs`, `-fuzztime`).
@@ -319,9 +188,9 @@ pub fn extract_budgets_for_file(content: &str, path: &str) -> Vec<BudgetMetric> 
     let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
     match ext {
-        "rs" => extract_rust_budgets(content, path),
-        "py" | "pyi" => extract_python_budgets(content, path),
-        "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" => extract_js_budgets(content, path),
+        "rs" | "py" | "pyi" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" => {
+            extract_ast_budgets(content, path)
+        }
         "sh" | "bash" | "yml" | "yaml" => extract_script_and_workflow_budgets(content, path),
         _ if file_name == ".gitlab-ci.yml" || path.contains(".github/workflows/") => {
             extract_script_and_workflow_budgets(content, path)
@@ -582,73 +451,56 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_rust_budgets() {
-        let sample = r#"
-            let config = ProptestConfig {
-                cases: 5000,
-                max_shrink_iters: 2000,
-                ..Default::default()
-            };
-            let config2 = ProptestConfig::with_cases(1000);
-            QuickCheck::new().tests(250).gen_size(50).quickcheck(test_fn as fn(u32) -> bool);
-        "#;
-        let metrics = extract_rust_budgets(sample, "tests/property.rs");
-        assert_eq!(metrics.len(), 5);
-
-        let cases = metrics
+    fn rust_budgets_come_from_the_tree_not_from_lines() {
+        let sample = "fn setup() {\n    let config = ProptestConfig {\n        cases: 5000,\n        max_shrink_iters: 2000,\n        ..Default::default()\n    };\n    let config2 = ProptestConfig::with_cases(1000);\n    QuickCheck::new().tests(250).gen_size(50).quickcheck(test_fn as fn(u32) -> bool);\n}\nproptest! {\n    #![proptest_config(ProptestConfig { cases: 400, .. ProptestConfig::default() })]\n    fn p(x in any::<u32>()) { prop_assert!(x >= 0); }\n}\n";
+        let metrics = extract_budgets_for_file(sample, "tests/property.rs");
+        let rows: Vec<(&str, u64)> = metrics
             .iter()
-            .find(|m| m.subject == "proptest cases" && m.value == 5000);
-        assert!(cases.is_some());
+            .map(|m| (m.subject.as_str(), m.value))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("proptest cases", 5000),
+                ("proptest max_shrink_iters", 2000),
+                ("proptest cases", 1000),
+                ("quickcheck tests", 250),
+                ("quickcheck gen_size", 50),
+                ("proptest cases", 400),
+            ]
+        );
 
-        let shrink = metrics
-            .iter()
-            .find(|m| m.subject == "proptest max_shrink_iters");
-        assert_eq!(shrink.unwrap().value, 2000);
-
-        let qc_tests = metrics.iter().find(|m| m.subject == "quickcheck tests");
-        assert_eq!(qc_tests.unwrap().value, 250);
-
-        let qc_gen = metrics.iter().find(|m| m.subject == "quickcheck gen_size");
-        assert_eq!(qc_gen.unwrap().value, 50);
-
-        // A test-floor setting quoted in a fixture is not a quickcheck budget.
-        let floor = extract_rust_budgets("let cfg = \"min_tests = 40\";\n", "tests/e2e.rs");
-        assert!(floor.is_empty(), "{floor:?}");
-        let bare = extract_rust_budgets("tests = 300\n", "tests/qc.rs");
-        assert_eq!(bare.len(), 1);
+        // A test-floor setting quoted in a fixture, a comment, and a bare assignment are
+        // not budgets: the line patterns this replaced read all three.
+        let none = extract_budgets_for_file(
+            "fn f() {\n    let cfg = \"min_tests = 40\";\n    // cases: 9 once\n    let tests = 300;\n}\n",
+            "tests/e2e.rs",
+        );
+        assert!(none.is_empty(), "{none:?}");
     }
 
     #[test]
-    fn test_extract_python_budgets() {
-        let sample = r#"
-            @settings(max_examples=2000, deadline=500)
-            def test_property():
-                pass
-        "#;
-        let metrics = extract_python_budgets(sample, "tests/test_hypo.py");
-        assert_eq!(metrics.len(), 2);
-
-        let examples = metrics
-            .iter()
-            .find(|m| m.subject == "hypothesis max_examples");
-        assert_eq!(examples.unwrap().value, 2000);
-
-        let deadline = metrics.iter().find(|m| m.subject == "hypothesis deadline");
-        assert_eq!(deadline.unwrap().value, 500);
-    }
-
-    #[test]
-    fn test_extract_js_budgets() {
-        let sample = r#"
-            fc.assert(
-                fc.property(fc.integer(), (n) => n === n),
-                { numRuns: 1000 }
-            );
-        "#;
-        let metrics = extract_js_budgets(sample, "tests/fc.test.ts");
-        assert_eq!(metrics.len(), 1);
-        assert_eq!(metrics[0].subject, "fast-check numRuns");
-        assert_eq!(metrics[0].value, 1000);
+    fn python_and_javascript_budgets_come_from_the_tree() {
+        let py = extract_budgets_for_file(
+            "@settings(max_examples=2000, deadline=500)\ndef test_property():\n    note = 'max_examples=1'\n",
+            "tests/test_hypo.py",
+        );
+        let rows: Vec<(&str, u64)> = py.iter().map(|m| (m.subject.as_str(), m.value)).collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("hypothesis max_examples", 2000),
+                ("hypothesis deadline", 500)
+            ]
+        );
+        let js = extract_budgets_for_file(
+            "fc.assert(\n  fc.property(fc.integer(), (n) => n === n),\n  { numRuns: 1000 }\n);\n// numRuns: 7\n",
+            "tests/fc.test.ts",
+        );
+        assert_eq!(js.len(), 1, "{js:?}");
+        assert_eq!(js[0].subject, "fast-check numRuns");
+        assert_eq!(js[0].value, 1000);
+        assert_eq!(js[0].line, 3);
     }
 
     #[test]

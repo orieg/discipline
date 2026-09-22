@@ -40,6 +40,7 @@ impl LanguagePack for JavaPack {
         let root = tree.root_node();
 
         let mut extractor = JavaExtractor {
+            dead: super::reach::dead_ranges(root, src, &JAVA_REACH),
             src: src.as_bytes(),
             vocab,
             is_test_path: is_java_test_path(path),
@@ -134,6 +135,8 @@ pub fn is_java_test_path(path: &str) -> bool {
 }
 
 struct JavaExtractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
@@ -420,6 +423,9 @@ impl<'a> JavaExtractor<'a> {
         test_fn: &mut TestFn,
         direct_calls: &mut Vec<String>,
     ) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         match node.kind() {
             "assert_statement" => {
                 test_fn.total_asserts += 1;
@@ -660,6 +666,13 @@ pub const JAVA_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
 
 pub const JAVA_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
     marker_kinds: &["annotation", "marker_annotation"],
+};
+
+pub const JAVA_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if_statement"],
+    block_kinds: &["block"],
+    ignored_kinds: &["line_comment", "block_comment"],
+    terminators: &["return", "throw"],
 };
 
 #[cfg(test)]

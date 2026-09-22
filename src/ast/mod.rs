@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 
+pub mod budgets;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
 pub mod c_cpp;
 pub mod calls;
@@ -29,6 +30,7 @@ pub mod php;
 pub mod prose;
 #[cfg(feature = "lang-python")]
 pub mod python;
+pub mod reach;
 pub mod retries;
 #[cfg(feature = "lang-ruby")]
 pub mod ruby;
@@ -69,6 +71,8 @@ pub enum Fact {
     Functions,
     Handlers,
     Prose,
+    /// Testing-effort budgets (proptest `cases`, Hypothesis `max_examples`, ...).
+    Budgets,
 }
 
 /// Registry of active language packs.
@@ -281,6 +285,8 @@ pub struct ParsedFileFacts {
     pub swallowed: Vec<handlers::SwallowSite>,
     /// Comments, docstrings and string literals (`Fact::Prose`).
     pub prose: Vec<prose::ProseSpan>,
+    /// Testing-effort budgets in configuration positions (`Fact::Budgets`).
+    pub budgets: Vec<budgets::BudgetSite>,
     /// Number of compile-time assertions outside tests (e.g. `const _: () = assert!(...)`, `static_assert`).
     pub compile_time_asserts: usize,
     /// Line of the first compile-time assertion (if any).
@@ -304,6 +310,7 @@ impl Default for ParsedFileFacts {
             functions: Vec::new(),
             swallowed: Vec::new(),
             prose: Vec::new(),
+            budgets: Vec::new(),
             compile_time_asserts: 0,
             compile_time_assert_line: None,
             compile_time_test: Some(TestFn {

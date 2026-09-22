@@ -40,6 +40,7 @@ impl LanguagePack for PhpPack {
         let root = tree.root_node();
 
         let mut extractor = PhpExtractor {
+            dead: super::reach::dead_ranges(root, src, &PHP_REACH),
             src: src.as_bytes(),
             vocab,
             is_test_path: is_php_test_path(path),
@@ -168,6 +169,8 @@ pub fn is_php_test_path(path: &str) -> bool {
 }
 
 struct PhpExtractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
@@ -445,6 +448,9 @@ impl<'a> PhpExtractor<'a> {
     }
 
     fn scan_block(&self, node: Node, test_fn: &mut TestFn) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         let kind = node.kind();
 
         if kind == "member_call_expression"
@@ -591,6 +597,13 @@ impl<'a> PhpExtractor<'a> {
         }
     }
 }
+
+pub const PHP_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if_statement"],
+    block_kinds: &["compound_statement"],
+    ignored_kinds: &["comment"],
+    terminators: &["return", "throw", "exit(", "die("],
+};
 
 #[cfg(test)]
 mod tests {

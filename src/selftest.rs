@@ -422,6 +422,24 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "vacuous-tests: an assertion under `if false` counts 0, one under a real condition counts",
+        || {
+            let v = AssertVocabulary::default();
+            let dead = analyze("#[test] fn t() { if false { assert_eq!(f(), 1); } }", &v)?.tests;
+            let live = analyze("#[test] fn t() { if g() { assert_eq!(f(), 1); } }", &v)?.tests;
+            Ok(dead[0].total_asserts == 0 && live[0].total_asserts == 1)
+        },
+    ),
+    (
+        "vacuous-tests: an assertion after an unconditional `return` counts 0",
+        || {
+            let v = AssertVocabulary::default();
+            let dead = analyze("#[test] fn t() { return; assert_eq!(f(), 1); }", &v)?.tests;
+            let live = analyze("#[test] fn t() { if g() { return; } assert_eq!(f(), 1); }", &v)?.tests;
+            Ok(dead[0].total_asserts == 0 && live[0].total_asserts == 1)
+        },
+    ),
+    (
         "stub-bodies: a stub padded with a log line is a stub, one preceded by a call is not",
         || {
             use crate::ast::functions::BodyShape;
@@ -1344,15 +1362,13 @@ allow-git = [
     (
         "test-budget: proptest, quickcheck, hypothesis, and fast-check budget reductions are detected",
         || {
-            use crate::guards::test_budget::{
-                extract_js_budgets, extract_python_budgets, extract_rust_budgets,
-            };
+            use crate::guards::test_budget::extract_budgets_for_file;
 
             // 1. Rust proptest and quickcheck reduction
-            let base_rs = "let c = ProptestConfig { cases: 5000, max_shrink_iters: 2000, ..Default::default() };\nQuickCheck::new().tests(500);";
-            let head_rs = "let c = ProptestConfig { cases: 500, max_shrink_iters: 200, ..Default::default() };\nQuickCheck::new().tests(50);";
-            let base_rust = extract_rust_budgets(base_rs, "tests/prop.rs");
-            let head_rust = extract_rust_budgets(head_rs, "tests/prop.rs");
+            let base_rs = "fn f() { let c = ProptestConfig { cases: 5000, max_shrink_iters: 2000, ..Default::default() };\nQuickCheck::new().tests(500); }";
+            let head_rs = "fn f() { let c = ProptestConfig { cases: 500, max_shrink_iters: 200, ..Default::default() };\nQuickCheck::new().tests(50); }";
+            let base_rust = extract_budgets_for_file(base_rs, "tests/prop.rs");
+            let head_rust = extract_budgets_for_file(head_rs, "tests/prop.rs");
 
             let cases_drop = base_rust.iter().find(|m| m.subject == "proptest cases").unwrap().value
                 > head_rust.iter().find(|m| m.subject == "proptest cases").unwrap().value;
@@ -1364,8 +1380,8 @@ allow-git = [
             // 2. Python Hypothesis reduction
             let base_py = "@settings(max_examples=1000, deadline=500)\ndef test_h(): pass";
             let head_py = "@settings(max_examples=100, deadline=50)\ndef test_h(): pass";
-            let base_python = extract_python_budgets(base_py, "test_h.py");
-            let head_python = extract_python_budgets(head_py, "test_h.py");
+            let base_python = extract_budgets_for_file(base_py, "test_h.py");
+            let head_python = extract_budgets_for_file(head_py, "test_h.py");
 
             let hypo_examples_drop = base_python.iter().find(|m| m.subject == "hypothesis max_examples").unwrap().value
                 > head_python.iter().find(|m| m.subject == "hypothesis max_examples").unwrap().value;
@@ -1375,12 +1391,27 @@ allow-git = [
             // 3. JS fast-check reduction
             let base_js = "fc.assert(prop, { numRuns: 1000 });";
             let head_js = "fc.assert(prop, { numRuns: 100 });";
-            let base_fc = extract_js_budgets(base_js, "test.js");
-            let head_fc = extract_js_budgets(head_js, "test.js");
+            let base_fc = extract_budgets_for_file(base_js, "test.js");
+            let head_fc = extract_budgets_for_file(head_js, "test.js");
 
             let fc_drop = base_fc[0].value > head_fc[0].value;
 
             Ok(cases_drop && shrink_drop && qc_drop && hypo_examples_drop && hypo_deadline_drop && fc_drop)
+        },
+    ),
+    (
+        "test-budget: a budget in a string or a comment is not a budget, one in a config position is",
+        || {
+            use crate::guards::test_budget::extract_budgets_for_file;
+            let quoted = extract_budgets_for_file(
+                "fn f() { let s = \"cases: 10\"; // max_shrink_iters: 5\n let min_tests = 40; }",
+                "tests/e2e.rs",
+            );
+            let real = extract_budgets_for_file(
+                "fn f() { let c = ProptestConfig::with_cases(10); }",
+                "tests/prop.rs",
+            );
+            Ok(quoted.is_empty() && real.len() == 1 && real[0].value == 10)
         },
     ),
     (

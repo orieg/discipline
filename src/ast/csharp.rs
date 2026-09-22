@@ -41,6 +41,7 @@ impl LanguagePack for CSharpPack {
 
         let (has_errors, first_line, error_count) = super::collect_error_nodes_info(root);
         let mut extractor = CSharpExtractor {
+            dead: super::reach::dead_ranges(root, src, &CS_REACH),
             src: src.as_bytes(),
             vocab,
             is_test_path: is_csharp_test_path(path),
@@ -134,6 +135,8 @@ pub fn is_csharp_test_path(path: &str) -> bool {
 }
 
 struct CSharpExtractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
@@ -402,6 +405,9 @@ impl<'a> CSharpExtractor<'a> {
         test_fn: &mut TestFn,
         direct_calls: &mut Vec<String>,
     ) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         let kind = node.kind();
 
         if kind == "invocation_expression" {
@@ -685,6 +691,13 @@ pub const CSHARP_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
 
 pub const CSHARP_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
     marker_kinds: &["attribute_list"],
+};
+
+pub const CS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if_statement"],
+    block_kinds: &["block"],
+    ignored_kinds: &["comment"],
+    terminators: &["return", "throw"],
 };
 
 #[cfg(test)]

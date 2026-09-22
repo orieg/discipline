@@ -50,6 +50,7 @@ impl LanguagePack for KotlinPack {
         let root = tree.root_node();
 
         let mut extractor = KotlinExtractor {
+            dead: super::reach::dead_ranges(root, src, &KOTLIN_REACH),
             src: src.as_bytes(),
             vocab,
             is_test_path: is_kotlin_test_path(path),
@@ -180,6 +181,8 @@ const GENERIC_LAMBDA_ASSERTS: &[&str] = &[
 ];
 
 struct KotlinExtractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
@@ -538,6 +541,9 @@ impl<'a> KotlinExtractor<'a> {
     }
 
     fn scan_node(&self, node: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         match node.kind() {
             "call_expression" => self.inspect_call(node, test_fn, direct_calls),
             "infix_expression" => {
@@ -744,6 +750,13 @@ pub const KOTLIN_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
 
 pub const KOTLIN_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
     marker_kinds: &["annotation"],
+};
+
+pub const KOTLIN_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if_expression"],
+    block_kinds: &["block"],
+    ignored_kinds: &["line_comment", "block_comment"],
+    terminators: &["return", "throw"],
 };
 
 #[cfg(test)]

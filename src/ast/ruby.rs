@@ -42,6 +42,7 @@ impl LanguagePack for RubyPack {
         let root = tree.root_node();
 
         let mut extractor = RubyExtractor {
+            dead: super::reach::dead_ranges(root, src, &RUBY_REACH),
             src: src.as_bytes(),
             vocab,
             is_test_path: is_ruby_test_path(path),
@@ -176,6 +177,8 @@ pub fn is_ruby_test_path(path: &str) -> bool {
 }
 
 struct RubyExtractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
@@ -437,6 +440,9 @@ impl<'a> RubyExtractor<'a> {
         test_fn: &mut TestFn,
         direct_calls: &mut Vec<String>,
     ) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         let kind = node.kind();
         if kind == "identifier" {
             let name = self.text(node);
@@ -635,6 +641,13 @@ impl<'a> RubyExtractor<'a> {
             .collect()
     }
 }
+
+pub const RUBY_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if"],
+    block_kinds: &["then", "body_statement", "block_body"],
+    ignored_kinds: &["comment"],
+    terminators: &["return", "raise", "next", "break"],
+};
 
 #[cfg(test)]
 mod tests {

@@ -40,6 +40,7 @@ impl LanguagePack for GoPack {
         let root = tree.root_node();
 
         let mut extractor = GoExtractor {
+            dead: super::reach::dead_ranges(root, src, &GO_REACH),
             src: src.as_bytes(),
             vocab,
             is_test_path: is_go_test_path(path),
@@ -141,6 +142,8 @@ pub fn is_go_test_path(path: &str) -> bool {
 }
 
 struct GoExtractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
@@ -317,6 +320,9 @@ impl<'a> GoExtractor<'a> {
         parent_name: &str,
         direct_calls: &mut Vec<String>,
     ) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         match node.kind() {
             "call_expression" => {
                 self.inspect_call(node, test_fn, parent_name, direct_calls);
@@ -570,6 +576,14 @@ pub const GO_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
 
 pub const GO_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
     marker_kinds: &["call_expression"],
+};
+
+pub const GO_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if_statement"],
+    // A Go block holds its statements in a `statement_list`.
+    block_kinds: &["statement_list"],
+    ignored_kinds: &["comment"],
+    terminators: &["return", "panic(", "t.FailNow()", "os.Exit("],
 };
 
 #[cfg(test)]

@@ -17,7 +17,12 @@ impl LanguagePack for JavaScriptPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::Budgets
         )
     }
 
@@ -50,6 +55,7 @@ impl LanguagePack for JavaScriptPack {
         let root = tree.root_node();
 
         let mut extractor = JsExtractor {
+            dead: super::reach::dead_ranges(root, src, &JS_REACH),
             src: src.as_bytes(),
             vocab,
             facts: ParsedFileFacts {
@@ -108,6 +114,7 @@ impl LanguagePack for JavaScriptPack {
         );
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "template_string"]);
+        extractor.facts.budgets = super::budgets::extract(root, src, &JS_BUDGETS);
         Ok(extractor.facts)
     }
 }
@@ -210,6 +217,8 @@ fn is_expect_chain_node(mut node: Node, src: &[u8]) -> bool {
 }
 
 struct JsExtractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     facts: ParsedFileFacts,
@@ -390,6 +399,9 @@ impl<'a> JsExtractor<'a> {
     }
 
     fn scan_test_body(&self, body_or_fn: Node, test: &mut TestFn) {
+        if super::reach::is_dead(&self.dead, body_or_fn.start_byte()) {
+            return;
+        }
         match body_or_fn.kind() {
             "arrow_function" | "function_expression" | "function" => {
                 if let Some(body) = body_or_fn.child_by_field_name("body") {
@@ -637,6 +649,28 @@ pub const JS_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
 
 pub const JS_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
     marker_kinds: &["call_expression", "decorator"],
+};
+
+pub const JS_BUDGETS: super::budgets::BudgetSpec = super::budgets::BudgetSpec {
+    key_values: &[super::budgets::KeyValueShape {
+        kind: "pair",
+        key_field: "key",
+        value_field: "value",
+    }],
+    keys: &[("numRuns", "fast-check numRuns")],
+    call_kind: "call_expression",
+    callee_field: "function",
+    arguments_field: "arguments",
+    methods: &[],
+    integer_kinds: &["number"],
+    token_tree_kinds: &[],
+};
+
+pub const JS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if_statement"],
+    block_kinds: &["statement_block"],
+    ignored_kinds: &["comment"],
+    terminators: &["return", "throw"],
 };
 
 #[cfg(test)]

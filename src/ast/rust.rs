@@ -25,6 +25,7 @@ impl LanguagePack for RustPack {
                 | Fact::Functions
                 | Fact::Handlers
                 | Fact::Prose
+                | Fact::Budgets
         )
     }
 
@@ -47,6 +48,7 @@ impl LanguagePack for RustPack {
         let root = tree.root_node();
 
         let mut cx = Extractor {
+            dead: super::reach::dead_ranges(root, src, &RS_REACH),
             src: src.as_bytes(),
             lines: src.lines().collect(),
             line_starts: std::iter::once(0)
@@ -123,6 +125,7 @@ impl LanguagePack for RustPack {
                 "raw_string_literal",
             ],
         );
+        cx.facts.budgets = super::budgets::extract(root, src, &RS_BUDGETS);
         Ok(cx.facts)
     }
 }
@@ -138,6 +141,8 @@ struct Comment {
 }
 
 struct Extractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     lines: Vec<&'a str>,
     /// Byte offset of each line start (robust to CRLF, unlike summing `lines`).
@@ -459,6 +464,9 @@ impl<'a> Extractor<'a> {
         is_fallible_return: bool,
         direct_calls: &mut Vec<String>,
     ) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         match node.kind() {
             "function_item" => {
                 // Do not recurse into nested function items.
@@ -1036,6 +1044,46 @@ pub const RUST_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
 
 pub const RUST_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
     marker_kinds: &["attribute_item"],
+};
+
+pub const RS_BUDGETS: super::budgets::BudgetSpec = super::budgets::BudgetSpec {
+    key_values: &[super::budgets::KeyValueShape {
+        kind: "field_initializer",
+        key_field: "field",
+        value_field: "value",
+    }],
+    keys: &[
+        ("cases", "proptest cases"),
+        ("max_shrink_iters", "proptest max_shrink_iters"),
+        ("tests", "quickcheck tests"),
+        ("gen_size", "quickcheck gen_size"),
+    ],
+    call_kind: "call_expression",
+    callee_field: "function",
+    arguments_field: "arguments",
+    methods: &[
+        ("with_cases", "proptest cases"),
+        ("tests", "quickcheck tests"),
+        ("gen_size", "quickcheck gen_size"),
+        ("max_shrink_iters", "proptest max_shrink_iters"),
+    ],
+    integer_kinds: &["integer_literal"],
+    token_tree_kinds: &["token_tree"],
+};
+
+pub const RS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if_expression"],
+    block_kinds: &["block"],
+    ignored_kinds: &["line_comment", "block_comment"],
+    terminators: &[
+        "return",
+        "panic!(",
+        "unreachable!(",
+        "todo!(",
+        "unimplemented!(",
+        "std::process::exit(",
+        "process::exit(",
+    ],
 };
 
 #[cfg(test)]

@@ -3270,6 +3270,79 @@ fn padded_stubs_and_logging_handlers_are_findings() {
 }
 
 #[test]
+fn unreachable_assertions_do_not_count() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn parses() {\n    let n = parse(\"3\");\n    assert_eq!(n, 3);\n}\n",
+    );
+    repo.write(
+        "tests/test_b.py",
+        "def test_loads():\n    assert load('x') == 'x'\n",
+    );
+    repo.commit("test: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: assertions under real conditions and in the live branch.
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn parses() {\n    let n = parse(\"3\");\n    if n > 0 {\n        assert_eq!(n, 3);\n    }\n}\n#[test]\nfn else_branch() {\n    if false {\n    } else {\n        assert_eq!(parse(\"4\"), 4);\n    }\n}\n",
+    );
+    repo.commit("test: guard");
+    let quiet = repo.check(&[]);
+    for gate in ["assertion-reduction", "vacuous-tests"] {
+        assert!(
+            quiet.titles(gate).is_empty(),
+            "{gate}: {:?}",
+            quiet.violations(gate)
+        );
+    }
+
+    // The existing assertions move under `if false` / after a `fail`; a new test's only
+    // assertion sits after `return`.
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn parses() {\n    let n = parse(\"3\");\n    if false {\n        assert_eq!(n, 3);\n    }\n}\n#[test]\nfn else_branch() {\n    if false {\n    } else {\n        assert_eq!(parse(\"4\"), 4);\n    }\n}\n#[test]\nfn later() {\n    return;\n    assert_eq!(parse(\"5\"), 5);\n}\n",
+    );
+    repo.write(
+        "tests/test_b.py",
+        "def test_loads():\n    pytest.fail('flaky')\n    assert load('x') == 'x'\n",
+    );
+    repo.commit("test: quiet");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut reduced: Vec<String> = run
+        .violations("assertion-reduction")
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_string())
+        .collect();
+    reduced.sort();
+    assert_eq!(
+        reduced,
+        vec!["tests/a.rs".to_string(), "tests/test_b.py".to_string()],
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+    let vacuous: Vec<(String, u64)> = run
+        .violations("vacuous-tests")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        vacuous,
+        vec![("tests/a.rs".to_string(), 16)],
+        "{:?}",
+        run.violations("vacuous-tests")
+    );
+}
+
+#[test]
 fn unsafe_trait_with_a_safety_doc_section_abc_stubs_and_past_intervals_are_not_findings() {
     let repo = Repo::new();
     repo.write(

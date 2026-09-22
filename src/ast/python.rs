@@ -21,7 +21,12 @@ impl LanguagePack for PythonPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::Budgets
         )
     }
 
@@ -44,6 +49,7 @@ impl LanguagePack for PythonPack {
         let root = tree.root_node();
 
         let mut extractor = PythonExtractor {
+            dead: super::reach::dead_ranges(root, src, &PY_REACH),
             src: src.as_bytes(),
             vocab,
             is_test_path: is_python_test_path(path),
@@ -111,6 +117,7 @@ impl LanguagePack for PythonPack {
         );
         super::calls::count_python_assert_statements(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string"]);
+        extractor.facts.budgets = super::budgets::extract(root, src, &PY_BUDGETS);
         Ok(extractor.facts)
     }
 }
@@ -128,6 +135,8 @@ pub fn is_python_test_path(path: &str) -> bool {
 }
 
 struct PythonExtractor<'a> {
+    /// Byte ranges no execution reaches (`super::reach`).
+    dead: super::reach::DeadRanges,
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
@@ -658,6 +667,9 @@ impl<'a> PythonExtractor<'a> {
     }
 
     fn visit_body_node(&self, node: Node, test: &mut TestFn, mode: BodyMode) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         match node.kind() {
             "function_definition" | "decorated_definition" | "class_definition" | "lambda"
                 if mode == BodyMode::Helper => {}
@@ -1003,6 +1015,40 @@ pub const PYTHON_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
 
 pub const PYTHON_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
     marker_kinds: &["decorator", "call"],
+};
+
+pub const PY_BUDGETS: super::budgets::BudgetSpec = super::budgets::BudgetSpec {
+    key_values: &[super::budgets::KeyValueShape {
+        kind: "keyword_argument",
+        key_field: "name",
+        value_field: "value",
+    }],
+    keys: &[
+        ("max_examples", "hypothesis max_examples"),
+        ("deadline", "hypothesis deadline"),
+    ],
+    call_kind: "call",
+    callee_field: "function",
+    arguments_field: "arguments",
+    methods: &[],
+    integer_kinds: &["integer"],
+    token_tree_kinds: &[],
+};
+
+pub const PY_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
+    if_kinds: &["if_statement"],
+    block_kinds: &["block"],
+    ignored_kinds: &["comment"],
+    terminators: &[
+        "return",
+        "raise",
+        "pytest.fail(",
+        "pytest.xfail(",
+        "sys.exit(",
+        "self.fail(",
+        "continue",
+        "break",
+    ],
 };
 
 #[cfg(test)]
