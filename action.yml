@@ -54,9 +54,9 @@ inputs:
     required: false
     default: 'head'
   actor:
-    description: 'Actor executing the check (defaults to github.actor or forge equivalent; used for allowed_override_actors).'
+    description: 'Login judged against allowed_override_actors. Default: the pull request author (github.event.pull_request.user.login), which the server sets; otherwise github.actor or the forge equivalent. The triggering login is not used on a pull request, since whoever edits the description must not be able to authorize their own override.'
     required: false
-    default: ${{ github.actor }}
+    default: ${{ github.event.pull_request.user.login || github.actor }}
   directive_sources:
     description: 'Comma-separated list of allowed directive sources (pr-body, commits).'
     required: false
@@ -276,7 +276,7 @@ runs:
         DISCIPLINE_FAIL_ON_OVERRIDES: ${{ inputs.fail_on_overrides == 'true' && 'true' || 'false' }}
         DISCIPLINE_ADVISORY: ${{ inputs.advisory == 'true' && 'true' || 'false' }}
         DISCIPLINE_POLICY_FROM: ${{ inputs.policy_from || 'head' }}
-        DISCIPLINE_ACTOR: ${{ inputs.actor || github.actor }}
+        DISCIPLINE_ACTOR: ${{ inputs.actor || github.event.pull_request.user.login || github.actor }}
         DISCIPLINE_DIRECTIVE_SOURCES: ${{ inputs.directive_sources }}
         DISCIPLINE_BASELINE: ${{ inputs.baseline_file }}
         DISCIPLINE_NO_BASELINE: ${{ inputs.no_baseline == 'true' && 'true' || 'false' }}

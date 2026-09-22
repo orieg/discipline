@@ -342,7 +342,7 @@ The composite action (`action.yml`) runs identically in GitHub Actions, Gitea Ac
 | `fail_on_overrides` | `false` | Treat applied overrides as failures (requires human sign-off). |
 | `advisory` | `false` | Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur. |
 | `policy_from` | `head` | Which side's discipline.toml judges the change: 'head' (the change's own copy) or 'base' (the base ref's, so a policy edit takes effect once merged; config-integrity still reports it). |
-| `actor` | `${{ github.actor }}` | Actor executing the check (defaults to github.actor or forge equivalent; used for allowed_override_actors). |
+| `actor` | `${{ github.event.pull_request.user.login || github.actor }}` | Login judged against allowed_override_actors. Default: the pull request author (github.event.pull_request.user.login), which the server sets; otherwise github.actor or the forge equivalent. The triggering login is not used on a pull request, since whoever edits the description must not be able to authorize their own override. |
 | `directive_sources` | *(none)* | Comma-separated list of allowed directive sources (pr-body, commits). |
 | `pr_body` | `${{ github.event.pull_request.body }}` | PR description: carries override directives and is itself scanned by hygiene gates. |
 | `pr_title` | `${{ github.event.pull_request.title }}` | PR title: checked by hygiene gates (e.g. issue-link). |

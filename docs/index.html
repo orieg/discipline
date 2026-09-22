@@ -1509,8 +1509,8 @@ discipline self-test</div>
     </tr>
     <tr>
       <td class="gate-id">actor</td>
-      <td><code>${{ github.actor }}</code></td>
-      <td>Actor executing the check (defaults to github.actor or forge equivalent; used for allowed_override_actors).</td>
+      <td><code>${{ github.event.pull_request.user.login || github.actor }}</code></td>
+      <td>Login judged against allowed_override_actors. Default: the pull request author (github.event.pull_request.user.login), which the server sets; otherwise github.actor or the forge equivalent. The triggering login is not used on a pull request, since whoever edits the description must not be able to authorize their own override.</td>
     </tr>
     <tr>
       <td class="gate-id">directive_sources</td>
