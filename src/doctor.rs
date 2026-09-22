@@ -141,6 +141,10 @@ pub struct DisciplineJob {
     /// Jobs that depend on it but would be skipped, or pass, when it fails. A skipped
     /// required check counts as passed, so requiring one of these enforces nothing.
     pub weak_rollups: Vec<String>,
+    /// Which branches a `push` event runs this job on: `None` when the workflow has no
+    /// push trigger or the job / step is restricted to pull requests, `Some(vec![])` for
+    /// every branch, `Some(branches)` for a filtered list (globs as written).
+    pub push_branches: Option<Vec<String>>,
     /// Display names of the workflow (`name:` and the file name), which Gitea and Forgejo
     /// put in front of the job name in status contexts.
     pub workflow_names: Vec<String>,
@@ -305,6 +309,56 @@ fn nonblocking_reason(job: &serde_yaml::Value, self_action: bool) -> Option<Stri
 }
 
 /// `on:` of a workflow as a map from event name to its configuration.
+/// Whether an `if:` keeps a job or step off push events.
+fn restricted_to_pull_requests(v: Option<&serde_yaml::Value>) -> bool {
+    v.and_then(|i| i.as_str()).is_some_and(|i| {
+        let l = i.to_ascii_lowercase();
+        l.contains("pull_request") && !l.contains("push")
+    })
+}
+
+/// The branches a `push` event runs this discipline job on (see `DisciplineJob`).
+fn push_branches(
+    events: &BTreeMap<String, serde_yaml::Value>,
+    job: &serde_yaml::Value,
+    self_action: bool,
+) -> Option<Vec<String>> {
+    let cfg = events.get("push")?;
+    if restricted_to_pull_requests(job.get("if")) {
+        return None;
+    }
+    let steps = job.get("steps").and_then(|s| s.as_sequence())?;
+    let discipline_steps_run_on_push = steps
+        .iter()
+        .filter(|st| step_runs_discipline(st, self_action))
+        .any(|st| !restricted_to_pull_requests(st.get("if")));
+    if !discipline_steps_run_on_push {
+        return None;
+    }
+    let branches = cfg
+        .get("branches")
+        .and_then(|b| b.as_sequence())
+        .map(|b| {
+            b.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(branches)
+}
+
+/// Whether a push-trigger branch list (globs as written) covers `branch`.
+pub fn push_covers(branches: &[String], branch: &str) -> bool {
+    branches.is_empty()
+        || branches.iter().any(|g| {
+            g == branch
+                || globset::Glob::new(g)
+                    .ok()
+                    .map(|g| g.compile_matcher().is_match(branch))
+                    .unwrap_or(false)
+        })
+}
+
 fn triggers(wf: &serde_yaml::Value) -> BTreeMap<String, serde_yaml::Value> {
     // YAML 1.1 reads a bare `on` key as boolean true.
     let on = wf
@@ -437,6 +491,7 @@ pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> Local
             facts.jobs.push(DisciplineJob {
                 workflow: path.clone(),
                 job_id: id.clone(),
+                push_branches: push_branches(&events, job, self_action),
                 context: job_context(id, job),
                 rollups,
                 weak_rollups,
@@ -717,6 +772,7 @@ pub fn analyse_gitlab_ci(content: &str) -> LocalFacts {
                 facts.jobs.push(DisciplineJob {
                     workflow: path.clone(),
                     job_id: "discipline".into(),
+                    push_branches: None,
                     context: "discipline".into(),
                     rollups: Vec::new(),
                     weak_rollups: Vec::new(),
@@ -767,6 +823,7 @@ pub fn analyse_gitlab_ci(content: &str) -> LocalFacts {
                 facts.jobs.push(DisciplineJob {
                     workflow: path.clone(),
                     job_id: id.to_string(),
+                    push_branches: None,
                     context: id.to_string(),
                     rollups: Vec::new(),
                     weak_rollups: Vec::new(),
@@ -906,6 +963,59 @@ fn get(api: &dyn ForgeApi, forge: &Forge, path: &str) -> Result<serde_json::Valu
 }
 
 /// The repository's default branch.
+/// Which merge methods the repository allows; `None` when the API does not say.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MergeMethods {
+    pub squash: Option<bool>,
+    pub rebase: Option<bool>,
+}
+
+impl MergeMethods {
+    /// A squash or rebase merge builds the commit message without the pull request's body.
+    pub fn drops_pr_body(&self) -> Option<bool> {
+        match (self.squash, self.rebase) {
+            (Some(true), _) | (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        }
+    }
+}
+
+/// Read the allowed merge methods from the repository (GitHub `allow_squash_merge` /
+/// `allow_rebase_merge`; Gitea and Forgejo `allow_squash_merge` / `allow_rebase` /
+/// `allow_rebase_explicit`; GitLab `squash_option` and `merge_method`).
+pub fn merge_methods(api: &dyn ForgeApi, forge: &Forge) -> Result<MergeMethods, String> {
+    let path = match forge.kind {
+        ForgeKind::GitLab => format!("projects/{}", gitlab_project_id(&forge.repo)),
+        _ => format!("repos/{}", forge.repo),
+    };
+    let repo = get(api, forge, &path)?;
+    let flag = |k: &str| repo.get(k).and_then(|v| v.as_bool());
+    Ok(match forge.kind {
+        ForgeKind::GitHub => MergeMethods {
+            squash: flag("allow_squash_merge"),
+            rebase: flag("allow_rebase_merge"),
+        },
+        ForgeKind::Gitea | ForgeKind::Forgejo => MergeMethods {
+            squash: flag("allow_squash_merge"),
+            rebase: match (flag("allow_rebase"), flag("allow_rebase_explicit")) {
+                (None, None) => None,
+                (a, b) => Some(a.unwrap_or(false) || b.unwrap_or(false)),
+            },
+        },
+        ForgeKind::GitLab => MergeMethods {
+            squash: repo
+                .get("squash_option")
+                .and_then(|v| v.as_str())
+                .map(|o| o != "never"),
+            rebase: repo
+                .get("merge_method")
+                .and_then(|v| v.as_str())
+                .map(|m| m == "rebase_merge" || m == "ff"),
+        },
+    })
+}
+
 pub fn default_branch(api: &dyn ForgeApi, forge: &Forge) -> Result<String, String> {
     let path = match forge.kind {
         ForgeKind::GitLab => format!("projects/{}", gitlab_project_id(&forge.repo)),
@@ -1644,6 +1754,14 @@ pub fn run(input: &DoctorInput) -> Report {
         analyse_workflows(&files, self_action)
     };
     let mut findings = local.findings.clone();
+    // Whether the push run can read a merged pull request's body (`merged-pr-body` in
+    // `directives.sources`, on by default): then a squash or rebase merge is a token
+    // question, not a lost review record.
+    let merged_source_on = read(root, "discipline.toml")
+        .and_then(|c| crate::config::DisciplineConfig::from_toml_str(&c).ok())
+        .map(|cfg| cfg.directives.sources.iter().any(|s| s == "merged-pr-body"))
+        // No file: the built-in default keeps the source on.
+        .unwrap_or(true);
 
     let mut targets = vec!["discipline.toml".to_string()];
     if root.join("discipline-baseline.toml").exists() {
@@ -1687,6 +1805,31 @@ pub fn run(input: &DoctorInput) -> Report {
     let mut gitea_version: Option<String> = None;
     let mut repository = None;
     let mut branch = input.branch.clone();
+    if input.local_only {
+        let on_push: Vec<String> = local
+            .jobs
+            .iter()
+            .filter(|j| j.push_branches.is_some())
+            .map(|j| format!("{} job `{}`", j.workflow, j.job_id))
+            .collect();
+        if !on_push.is_empty() {
+            findings.push(if merged_source_on {
+                Finding::new(
+                    "push-trigger",
+                    Status::Info,
+                    format!("{} run(s) discipline on push events; the merge method was not checked (--local-only), and `merged-pr-body` is enabled, so a merged pull request's body reaches the push run when its token can read pull requests", on_push.join(", ")),
+                )
+                .fix("Give the push run a token that can read pull requests (a `contents: read` token cannot on a private repository), or restrict the discipline step to pull_request.")
+            } else {
+                Finding::new(
+                    "push-trigger",
+                    Status::Warn,
+                    format!("{} run(s) discipline on push events; whether the merge method drops pull-request bodies was not checked (--local-only), and `merged-pr-body` is not in `directives.sources`", on_push.join(", ")),
+                )
+                .fix("If squash or rebase merges are allowed, restrict the discipline step to pull_request, put `merged-pr-body` back in `directives.sources` with a token that can read pull requests, or put directives in commit messages.")
+            });
+        }
+    }
     if !input.local_only {
         match &input.forge {
             Err(e) => {
@@ -1721,6 +1864,56 @@ pub fn run(input: &DoctorInput) -> Report {
                     }
                 }
                 if let Some(b) = &branch {
+                    let on_push: Vec<&DisciplineJob> = local
+                        .jobs
+                        .iter()
+                        .filter(|j| {
+                            j.push_branches
+                                .as_deref()
+                                .is_some_and(|br| push_covers(br, b))
+                        })
+                        .collect();
+                    if !on_push.is_empty() {
+                        let jobs: Vec<String> = on_push
+                            .iter()
+                            .map(|j| format!("{} job `{}`", j.workflow, j.job_id))
+                            .collect();
+                        let jobs = jobs.join(", ");
+                        let fix = "Restrict the discipline step to pull_request, or keep the `merged-pr-body` directive source with a token that can read pull requests, or put every directive in a commit message as well.";
+                        findings.push(match merge_methods(input.api, forge) {
+                            Ok(m) => match m.drops_pr_body() {
+                                Some(true) if merged_source_on => Finding::new(
+                                    "push-trigger",
+                                    Status::Info,
+                                    format!("{jobs} run(s) discipline on push to `{b}`; the repository allows squash or rebase merges, which drop a pull request's body from the merge commit, and `merged-pr-body` is enabled: the push run reads the merged pull request's body when its token can read pull requests"),
+                                )
+                                .fix("Give the push run a token that can read pull requests (a `contents: read` token cannot on a private repository), or restrict the discipline step to pull_request."),
+                                Some(true) => Finding::new(
+                                    "push-trigger",
+                                    Status::Warn,
+                                    format!("{jobs} run(s) discipline on push to `{b}`, and the repository allows squash or rebase merges: a waiver written in a pull request's body is not in the merge commit, so the push run fails on changes the pull request had passed; `merged-pr-body` is not in `directives.sources`"),
+                                )
+                                .fix(fix),
+                                Some(false) => Finding::new(
+                                    "push-trigger",
+                                    Status::Pass,
+                                    format!("{jobs} run(s) discipline on push to `{b}`; only merge commits are allowed, so the pull request's body reaches the push run through the merge commit message"),
+                                ),
+                                None => Finding::new(
+                                    "push-trigger",
+                                    Status::Unknown,
+                                    format!("{jobs} run(s) discipline on push to `{b}`; the repository does not say which merge methods it allows"),
+                                )
+                                .fix(fix),
+                            },
+                            Err(e) => Finding::new(
+                                "push-trigger",
+                                Status::Unknown,
+                                format!("{jobs} run(s) discipline on push to `{b}`; could not read the repository's merge methods: {e}"),
+                            )
+                            .fix(access_hint(forge.kind, &e)),
+                        });
+                    }
                     let protection = match forge.kind {
                         ForgeKind::GitHub => github_protection(input.api, forge, b),
                         ForgeKind::Gitea | ForgeKind::Forgejo => {
@@ -1881,6 +2074,97 @@ jobs:
         assert_eq!(status("workflows"), Status::Pass);
         assert_eq!(status("trigger"), Status::Pass);
         assert_eq!(status("token"), Status::Pass);
+    }
+
+    #[test]
+    fn push_triggers_are_read_per_job_and_step() {
+        let wf = |extra_job_if: &str, step_if: &str, on: &str| {
+            format!(
+                "on:\n{on}jobs:\n  gate:\n{extra_job_if}    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n{step_if}        uses: orieg/discipline@v0\n"
+            )
+        };
+        let facts =
+            |src: String| analyse_workflows(&[(".github/workflows/ci.yml".into(), src)], false);
+        // Push to main only.
+        let f = facts(wf(
+            "",
+            "      - name: gate\n",
+            "  pull_request:\n  push:\n    branches: [main]\n",
+        ));
+        assert_eq!(f.jobs[0].push_branches, Some(vec!["main".to_string()]));
+        // Every branch.
+        let f = facts(wf("", "      - name: gate\n", "  push:\n"));
+        assert_eq!(f.jobs[0].push_branches, Some(vec![]));
+        // No push trigger.
+        let f = facts(wf("", "      - name: gate\n", "  pull_request:\n"));
+        assert_eq!(f.jobs[0].push_branches, None);
+        // The job, or the discipline step, is restricted to pull requests.
+        let f = facts(wf(
+            "    if: github.event_name == 'pull_request'\n",
+            "      - name: gate\n",
+            "  push:\n",
+        ));
+        assert_eq!(f.jobs[0].push_branches, None);
+        let f = facts(wf(
+            "",
+            "      - name: gate\n        if: github.event_name == 'pull_request'\n",
+            "  push:\n",
+        ));
+        assert_eq!(f.jobs[0].push_branches, None);
+        assert!(push_covers(&[], "main"));
+        assert!(push_covers(&["release/*".into()], "release/1.0"));
+        assert!(!push_covers(&["develop".into()], "main"));
+    }
+
+    #[test]
+    fn merge_methods_per_forge() {
+        use crate::forge::CannedApi;
+        let f = |kind: ForgeKind| Forge {
+            kind,
+            url: "https://x".into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "github:repos/o/r".into(),
+            serde_json::json!({"allow_squash_merge": true, "allow_rebase_merge": false}),
+        );
+        api.responses.insert(
+            "gitea:repos/o/r".into(),
+            serde_json::json!({"allow_squash_merge": false, "allow_rebase": false, "allow_rebase_explicit": false}),
+        );
+        api.responses.insert(
+            "gitlab:projects/o%2Fr".into(),
+            serde_json::json!({"squash_option": "never", "merge_method": "rebase_merge"}),
+        );
+        api.responses.insert(
+            "forgejo:repos/o/r".into(),
+            serde_json::json!({"default_branch": "main"}),
+        );
+        assert_eq!(
+            merge_methods(&api, &f(ForgeKind::GitHub))
+                .unwrap()
+                .drops_pr_body(),
+            Some(true)
+        );
+        assert_eq!(
+            merge_methods(&api, &f(ForgeKind::Gitea))
+                .unwrap()
+                .drops_pr_body(),
+            Some(false)
+        );
+        assert_eq!(
+            merge_methods(&api, &f(ForgeKind::GitLab))
+                .unwrap()
+                .drops_pr_body(),
+            Some(true)
+        );
+        assert_eq!(
+            merge_methods(&api, &f(ForgeKind::Forgejo))
+                .unwrap()
+                .drops_pr_body(),
+            None
+        );
     }
 
     #[test]

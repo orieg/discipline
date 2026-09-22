@@ -417,3 +417,99 @@ fn a_gitea_below_1_26_turns_the_token_warning_into_information() {
         run.stdout
     );
 }
+
+#[test]
+fn doctor_reports_a_push_trigger_when_squash_or_rebase_merges_drop_the_pr_body() {
+    let repo = Repo::new();
+    let wf = WORKFLOW.replace(
+        "on:\n  pull_request:\n",
+        "on:\n  push:\n    branches: [main]\n  pull_request:\n",
+    );
+    repo.commit_base_files(
+        &[
+            (".github/workflows/ci.yml", wf.as_str()),
+            (".github/CODEOWNERS", CODEOWNERS),
+            ("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n"),
+        ],
+        "base",
+    );
+    let run_with = |repo_json: serde_json::Value| {
+        let api = github_api(GOOD_RULES);
+        api.serve("repos/o/r", repo_json);
+        let url = api.url();
+        repo.run(
+            &["doctor", "--repo", "o/r", "--format", "json"],
+            &[
+                ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+                ("GH_TOKEN", "gh-tok-1"),
+            ],
+        )
+    };
+    // Squash merges allowed, `merged-pr-body` on by default: information, naming the token
+    // the push run needs.
+    let run = run_with(
+        serde_json::json!({"default_branch": "main", "allow_squash_merge": true, "allow_rebase_merge": false}),
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let st = statuses(&run.stdout);
+    assert!(
+        st.contains(&("push-trigger".into(), "info".into())),
+        "{st:?}"
+    );
+    assert!(
+        run.stdout.contains("token that can read pull requests"),
+        "{}",
+        run.stdout
+    );
+    // Merge commits only: the body reaches the push run; pass.
+    let run = run_with(
+        serde_json::json!({"default_branch": "main", "allow_squash_merge": false, "allow_rebase_merge": false}),
+    );
+    let st = statuses(&run.stdout);
+    assert!(
+        st.contains(&("push-trigger".into(), "pass".into())),
+        "{st:?}"
+    );
+    // Local only with the source on: information.
+    let local = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    let st = statuses(&local.stdout);
+    assert!(
+        st.contains(&("push-trigger".into(), "info".into())),
+        "{st:?}"
+    );
+    // With the source disabled the review record is lost on a squash merge: warn, on the
+    // forge and locally.
+    repo.commit_base_files(
+        &[("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n[directives]\nsources = [\"pr-body\", \"commits\"]\n")],
+        "chore: no merged-pr-body",
+    );
+    let run = run_with(
+        serde_json::json!({"default_branch": "main", "allow_squash_merge": true, "allow_rebase_merge": false}),
+    );
+    let st = statuses(&run.stdout);
+    assert!(
+        st.contains(&("push-trigger".into(), "warn".into())),
+        "{st:?}"
+    );
+    assert!(run.stdout.contains("merged-pr-body"), "{}", run.stdout);
+    let local = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    let st = statuses(&local.stdout);
+    assert!(
+        st.contains(&("push-trigger".into(), "warn".into())),
+        "{st:?}"
+    );
+    // The healthy fixture (pull_request only) carries no such finding.
+    let quiet = protected_repo();
+    let api = github_api(GOOD_RULES);
+    let url = api.url();
+    let run = quiet.run(
+        &["doctor", "--repo", "o/r", "--format", "json"],
+        &[
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ("GH_TOKEN", "t"),
+        ],
+    );
+    assert!(!statuses(&run.stdout)
+        .iter()
+        .any(|(id, _)| id == "push-trigger"));
+}
