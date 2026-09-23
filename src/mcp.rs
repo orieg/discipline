@@ -96,21 +96,9 @@ fn tools() -> Value {
     ])
 }
 
-/// The gate a query names: an exact id, else the longest id in `[brackets]`, else
-/// the longest id the text contains.
+/// The gate a query names (shared with `discipline explain`).
 pub fn gate_for(query: &str) -> Option<&'static crate::config::GateInfo> {
-    let q = query.trim();
-    let gates = crate::config::GATES;
-    if let Some(g) = gates.iter().find(|g| g.id == q) {
-        return Some(g);
-    }
-    let longest = |pred: &dyn Fn(&str) -> bool| {
-        gates
-            .iter()
-            .filter(|g| pred(g.id))
-            .max_by_key(|g| g.id.len())
-    };
-    longest(&|id| q.contains(&format!("[{id}]"))).or_else(|| longest(&|id| q.contains(id)))
+    crate::explain::gate_for(query)
 }
 
 fn explain(query: &str) -> (String, bool) {

@@ -148,7 +148,7 @@ May also be specified with the \fBDISCIPLINE_ACTOR\fR environment variable.
 .RE
 .TP
 \fB\-\-directive\-sources\fR \fI<DIRECTIVE_SOURCES>\fR
-Comma\-separated list of allowed directive sources (pr\-body, commits)
+Comma\-separated list of allowed directive sources (pr\-body, commits, merged\-pr\-body)
 .RS
 May also be specified with the \fBDISCIPLINE_DIRECTIVE_SOURCES\fR environment variable. 
 .RE
@@ -675,6 +675,48 @@ aider: Aider (`.aider.conf.yml`, lint\-cmd)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS "discipline explain"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Explain a gate: what it checks, its state here, and the directive that lifts a finding
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline explain\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIQUERY\fR> 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
+Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
+.RE
+.TP
+\fB\-\-config\-override\fR \fI<CONFIG_OVERRIDE>\fR
+Inline TOML merged over the file (tables merge, lists append, scalars replace)
+.RS
+May also be specified with the \fBDISCIPLINE_CONFIG_OVERRIDE\fR environment variable. 
+.RE
+.TP
+\fB\-\-enable\fR \fI<ENABLE>\fR
+Gate ids to force on (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_ENABLE\fR environment variable. 
+.RE
+.TP
+\fB\-\-disable\fR \fI<DISABLE>\fR
+Gate ids to force off (comma separated)
+.RS
+May also be specified with the \fBDISCIPLINE_DISABLE\fR environment variable. 
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIQUERY\fR>
+A gate id (`assertion\-reduction`) or a finding line naming `[gate\-id]`
 .SS "discipline mcp"
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '

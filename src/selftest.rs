@@ -375,6 +375,17 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "explain: every gate resolves; a gate with a directive names it",
+        || {
+            use crate::explain::{gate_for, render};
+            let all = crate::config::GATES
+                .iter()
+                .all(|g| gate_for(g.id).is_some_and(|h| h.id == g.id));
+            let ar = gate_for("[assertion-reduction]").map(|g| render(g, None)).unwrap_or_default();
+            Ok(all && ar.contains("`allow-assertion-drop: <subject> <reason>`"))
+        },
+    ),
+    (
         "mcp: three read-only tools, notifications unanswered, explanations carry no waiver",
         || {
             struct NoChild;

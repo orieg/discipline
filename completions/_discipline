@@ -47,7 +47,7 @@ _arguments "${_arguments_options[@]}" : \
 '--policy-from=[Which side'\''s discipline.toml judges the change. \`base\` reads it from the base ref, so a policy edit takes effect once merged; \`config-integrity\` still reports it]:POLICY_FROM:((head\:"The configuration in the working tree (the change'\''s own copy)"
 base\:"The configuration on the base ref"))' \
 '--actor=[Actor executing the check (for actor-aware override authorization). Falls back to DISCIPLINE_ACTOR, GITHUB_ACTOR, GITEA_ACTOR, FORGEJO_ACTOR, GITLAB_USER_LOGIN]:ACTOR:_default' \
-'*--directive-sources=[Comma-separated list of allowed directive sources (pr-body, commits)]:DIRECTIVE_SOURCES:_default' \
+'*--directive-sources=[Comma-separated list of allowed directive sources (pr-body, commits, merged-pr-body)]:DIRECTIVE_SOURCES:_default' \
 '-f+[Output format]:FORMAT:(terminal github-summary json junit sarif gitlab agent-prompt)' \
 '--format=[Output format]:FORMAT:(terminal github-summary json junit sarif gitlab agent-prompt)' \
 '--json-out=[Also write the JSON report to this path, whatever --format is]:JSON_OUT:_files' \
@@ -244,6 +244,18 @@ esac
     ;;
 esac
 ;;
+(explain)
+_arguments "${_arguments_options[@]}" : \
+'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
+'*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
+'*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':query -- A gate id (`assertion-reduction`) or a finding line naming `\[gate-id\]`:_default' \
+&& ret=0
+;;
 (mcp)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -390,6 +402,10 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(explain)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (mcp)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -445,6 +461,7 @@ _discipline_commands() {
 'docs:Generate or check reference docs and schemas against sources of truth' \
 'install-hooks:Install pre-commit hook in the local git repository' \
 'hook:Run the gates inside a coding agent'\''s edit loop (Claude Code, Codex, Cursor, Aider)' \
+'explain:Explain a gate\: what it checks, its state here, and the directive that lifts a finding' \
 'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
@@ -513,6 +530,11 @@ _discipline__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'discipline doctor commands' commands "$@"
 }
+(( $+functions[_discipline__subcmd__explain_commands] )) ||
+_discipline__subcmd__explain_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline explain commands' commands "$@"
+}
 (( $+functions[_discipline__subcmd__gates_commands] )) ||
 _discipline__subcmd__gates_commands() {
     local commands; commands=()
@@ -532,6 +554,7 @@ _discipline__subcmd__help_commands() {
 'docs:Generate or check reference docs and schemas against sources of truth' \
 'install-hooks:Install pre-commit hook in the local git repository' \
 'hook:Run the gates inside a coding agent'\''s edit loop (Claude Code, Codex, Cursor, Aider)' \
+'explain:Explain a gate\: what it checks, its state here, and the directive that lifts a finding' \
 'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
@@ -580,6 +603,11 @@ _discipline__subcmd__help__subcmd__docs_commands() {
 _discipline__subcmd__help__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'discipline help doctor commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__explain_commands] )) ||
+_discipline__subcmd__help__subcmd__explain_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help explain commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__help__subcmd__gates_commands] )) ||
 _discipline__subcmd__help__subcmd__gates_commands() {

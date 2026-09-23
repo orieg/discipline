@@ -101,6 +101,7 @@ fn run_command(command: Commands) -> Result<bool> {
         Commands::Docs(args) => docs(args),
         Commands::InstallHooks(args) => install_hooks(args),
         Commands::Hook(args) => hook(args),
+        Commands::Explain(args) => explain(args),
         Commands::Mcp => {
             let stdin = std::io::stdin();
             discipline::mcp::serve(
@@ -1211,6 +1212,32 @@ fn gates(args: &ConfigArgs) -> Result<bool> {
             g.summary
         );
     }
+    Ok(true)
+}
+
+fn explain(args: discipline::cli::ExplainArgs) -> Result<bool> {
+    let Some(g) = discipline::explain::gate_for(&args.query) else {
+        let near = discipline::explain::suggestions(&args.query);
+        if near.is_empty() {
+            bail!(
+                "no gate matches `{}`; `discipline gates` lists every gate id",
+                args.query
+            );
+        }
+        bail!(
+            "no gate matches `{}`; did you mean: {}",
+            args.query,
+            near.join(", ")
+        );
+    };
+    let repo = discipline::gitctx::discover_repository(".").ok();
+    let repo_root = repo.as_ref().and_then(|r| r.workdir());
+    let (config, _) = load_config(&args.config, repo_root, None, None)?;
+    let state = config
+        .gates
+        .settings(g.id)
+        .map(|s| (s.enabled(), s.severity()));
+    print!("{}", discipline::explain::render(g, state));
     Ok(true)
 }
 

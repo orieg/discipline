@@ -35,6 +35,8 @@ pub enum Commands {
     InstallHooks(InstallHooksArgs),
     /// Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider)
     Hook(HookArgs),
+    /// Explain a gate: what it checks, its state here, and the directive that lifts a finding
+    Explain(ExplainArgs),
     /// Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding)
     Mcp,
     /// Benchmark tooling for the bench-regression gate
@@ -89,6 +91,7 @@ impl Commands {
             Commands::InstallHooks(_) => "install-hooks",
             Commands::Hook(_) => "hook",
             Commands::Mcp => "mcp",
+            Commands::Explain(_) => "explain",
             Commands::Bench(_) => "bench",
             Commands::Doctor(_) => "doctor",
         }
@@ -107,6 +110,15 @@ pub struct InstallHooksArgs {
     /// Overwrite existing pre-commit hook if present
     #[arg(short, long)]
     pub force: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ExplainArgs {
+    /// A gate id (`assertion-reduction`) or a finding line naming `[gate-id]`
+    pub query: String,
+
+    #[command(flatten)]
+    pub config: ConfigArgs,
 }
 
 #[derive(Args, Debug)]
@@ -242,7 +254,7 @@ pub struct CheckArgs {
     #[arg(long, env = "DISCIPLINE_ACTOR")]
     pub actor: Option<String>,
 
-    /// Comma-separated list of allowed directive sources (pr-body, commits)
+    /// Comma-separated list of allowed directive sources (pr-body, commits, merged-pr-body)
     #[arg(long, env = "DISCIPLINE_DIRECTIVE_SOURCES", value_delimiter = ',')]
     pub directive_sources: Vec<String>,
 

@@ -399,6 +399,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `completions` | Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish) |
 | `install-hooks` | Install pre-commit hook in the local git repository |
 | `hook` | Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider) |
+| `explain` | Explain a gate: what it checks, its state here, and the directive that lifts a finding |
 | `mcp` | Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding) |
 | `bench` | Benchmark tooling for the bench-regression gate |
 | `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
@@ -698,6 +699,15 @@ discipline hook install --agent claude-code   # or: codex, cursor, aider
 | Aider | `.aider.conf.yml` | `lint-cmd` after each edit (`auto-lint: true`) | exit 1, the report on stdout |
 
 The report is the `agent-prompt` format: each finding with its location and the repair, never the directive that would waive it. A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. A Claude Code or Codex `Stop` event that this hook already continued (`stop_hook_active`) is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. `discipline` must be on the agent's `PATH`.
+
+### Explaining a Gate
+
+```bash
+discipline explain assertion-reduction
+discipline explain "error [error-swallowing] Result Discarded"   # a finding line works too
+```
+
+Prints what the gate checks, its languages, its state under this repository's configuration, the directive that lifts a finding (with the subject it takes) and the reference link. An unknown query exits 2 and suggests gate ids that share a word with it. This is the human-facing explanation: the agent-facing surfaces (`agent-prompt`, `discipline hook run`, `discipline mcp`'s `explain_finding`) leave the directive out.
 
 ### MCP Server
 

@@ -290,8 +290,8 @@ The agent-facing surfaces never print waiver syntax: `agent-prompt` already omit
 | Item | Status | Work | Ships when |
 |---|---|---|---|
 | `discipline replay --last N` | Open | The consumer's replay harness built in: rebuild each merged pull request on a base carrying the configuration under test, run the gates with that pull request's body (through the forge read path when a token is present, commit messages only otherwise, said in the output), and print blocked / passed and per-gate counts. Reading pull-request bodies is a forge read: listed in `AGENTS.md` §3.3 with the other three | Run against the consumer with its configuration, it reproduces the consumer harness's 100-PR table (blocked count and per-gate errors) |
-| `discipline explain <gate-id>` | Open | The rule, what it catches and misses, the default severity, and the directive and inline marker that lift it, from the same source as `docs/GATES.md`; a finding's id or title resolves to its gate | Every gate id resolves; the text matches the generated docs (`docs --check`) |
-| `check --help` lists `merged-pr-body` | Open | The `--directive-sources` help still names only `pr-body, commits` | The help text lists all three sources |
+| `discipline explain <gate-id>` | **Shipped** (`src/explain.rs`; a finding line resolves too) | The rule, what it catches and misses, the default severity, and the directive and inline marker that lift it, from the same source as `docs/GATES.md`; a finding's id or title resolves to its gate | Every gate id resolves; the text matches the generated docs (`docs --check`) |
+| `check --help` lists `merged-pr-body` | **Shipped** | The `--directive-sources` help still names only `pr-body, commits` | The help text lists all three sources |
 
 A `--fix` suggestion (restore a deleted assertion from the base side, a `// SAFETY:` stub) waits until `explain` ships: it edits test files and needs its own design.
 
@@ -359,6 +359,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | CLI | New `discipline explain <gate-id\|finding line>`: the gate's rule, languages, state under this configuration, lifting directive and reference link. | additive | None. |
 | unreleased | CLI | New `discipline mcp`: an MCP server over stdio with three read-only tools (`check_diff`, `list_gates`, `explain_finding`) whose output carries no waiver syntax. | additive | None. |
 | unreleased | CLI | New `discipline hook run --agent <claude-code\|codex\|cursor\|aider>` answers an agent's hook with the `agent-prompt` findings in that agent's contract; `discipline hook install --agent <name>` writes the agent's configuration only where none exists. | additive | None. |
 | v0.10.2 | `error-swallowing` (Rust) | `let _ = <call>` is sorted by callee name: a known-fallible callee (`try_*`, `checked_*`, `*_checked`, `send`, `recv`, `sync_all`, `flush`, `lock`, `write!` / `writeln!`, ...) is `Result Discarded` as before; a known accessor (`get_or_init`, `entry`, `or_insert*`, `unwrap_or*`, ...) is no longer reported; any other callee is the new `Value Discarded`, at `warning` when the gate is at `error`. | looser | None; a discard whose fallible callee is not on the known-fallible list, which blocked before, now warns. |

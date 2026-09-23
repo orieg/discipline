@@ -37,6 +37,9 @@ _discipline() {
             discipline,doctor)
                 cmd="discipline__subcmd__doctor"
                 ;;
+            discipline,explain)
+                cmd="discipline__subcmd__explain"
+                ;;
             discipline,gates)
                 cmd="discipline__subcmd__gates"
                 ;;
@@ -93,6 +96,9 @@ _discipline() {
                 ;;
             discipline__subcmd__help,doctor)
                 cmd="discipline__subcmd__help__subcmd__doctor"
+                ;;
+            discipline__subcmd__help,explain)
+                cmd="discipline__subcmd__help__subcmd__explain"
                 ;;
             discipline__subcmd__help,gates)
                 cmd="discipline__subcmd__help__subcmd__gates"
@@ -152,7 +158,7 @@ _discipline() {
 
     case "${cmd}" in
         discipline)
-            opts="-h -V --help --version check diff baseline init gates schema self-test completions docs install-hooks hook mcp bench doctor help"
+            opts="-h -V --help --version check diff baseline init gates schema self-test completions docs install-hooks hook explain mcp bench doctor help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -571,6 +577,40 @@ _discipline() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        discipline__subcmd__explain)
+            opts="-c -h --config --config-override --enable --disable --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --config)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -c)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-override)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --enable)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --disable)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         discipline__subcmd__gates)
             opts="-c -h --config --config-override --enable --disable --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
@@ -606,7 +646,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__help)
-            opts="check diff baseline init gates schema self-test completions docs install-hooks hook mcp bench doctor help"
+            opts="check diff baseline init gates schema self-test completions docs install-hooks hook explain mcp bench doctor help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -718,6 +758,20 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__help__subcmd__doctor)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        discipline__subcmd__help__subcmd__explain)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

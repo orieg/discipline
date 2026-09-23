@@ -168,3 +168,55 @@ fn install_writes_the_agent_config_once_and_leaves_an_existing_file_alone() {
         "model: x\n"
     );
 }
+
+#[test]
+fn explain_names_the_rule_the_state_here_and_the_directive() {
+    let repo = Repo::new();
+    let run = repo.run(&["explain", "assertion-reduction"], &[]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stdout.contains("assertion count / strength"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("Here:        on, error"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("`allow-assertion-drop: <subject> <reason>`"),
+        "{}",
+        run.stdout
+    );
+
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nenabled = false\n",
+    );
+    let off = repo.run(
+        &["explain", "error [assertion-reduction] Assertion Reduction"],
+        &[],
+    );
+    assert!(off.stdout.contains("Here:        off"), "{}", off.stdout);
+
+    let unknown = repo.run(&["explain", "swallow"], &[]);
+    assert_eq!(unknown.code, 2);
+    assert!(
+        unknown.stderr.contains("error-swallowing"),
+        "{}",
+        unknown.stderr
+    );
+}
+
+#[test]
+fn check_help_lists_every_directive_source() {
+    let repo = Repo::new();
+    let help = repo.run(&["check", "--help"], &[]);
+    assert!(
+        help.stdout.contains("pr-body, commits, merged-pr-body"),
+        "{}",
+        help.stdout
+    );
+}
