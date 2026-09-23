@@ -28,6 +28,7 @@ flowchart TD
     P8 --> P9["Phase 9: Review follow-ups"]
     P9 --> P10["Phase 10: Remainder remediation"]
     P7 --> P10
+    P10 --> P11["Phase 11: Coverage parity (JS/PHP helpers, discard sorting, Swift, Scala, Objective-C)"]
     P7 --> P8
 ```
 
@@ -258,6 +259,36 @@ Acceptance for Step 0 as a whole: the consumer's 100-PR replay with its config, 
 - **Go / no-go gate:** as Phase 8; additionally, Step 1 ships all three packs together or names in `docs/GATES.md` which fact each pack still lacks.
 - **Status:** shipped in v0.10.0 (Steps 0-5), with one row partial: the forge-side `doctor` step runs in CI but not under `--strict`, which needs a second reviewer account (the branch rules now block deletion and require pull requests). Order followed: Step 0 (correctness for a live consumer), Step 1 (it widened what every later step covers), Step 2, Step 5 (a second consumer-replay correctness item, ahead of coverage work), Step 3, Step 4.
 
+### Phase 11: Coverage Parity
+The language and pack-parity gaps left after v0.10.2, and the two live checks still outstanding. Each row ships when its gate criterion holds and the AGENTS.md §3.4 contract is met (unit controls, e2e through the binary, self-test case, a named test that kills a mutated detector).
+
+**Step 0: live checks** (no code; evidence recorded in Outstanding Checks)
+
+| Item | Status | Work | Ships when |
+|---|---|---|---|
+| Consumer replay of the `merged-pr-body` push event | **Done** (RUN 2026-09-22) | Replay the consumer's squash merge of its #1071 as a push (base `020ec7a4`, head `a8eb5e30`, `GITHUB_EVENT_NAME=push`, a token that reads pull requests) with a build of `main` after #153; control with `DISCIPLINE_NO_NETWORK=1` | Forge reachable: `errors: 0`, one override, the `Agent Instructions Changed` finding on `AGENTS.md` lifted by the directive read from merged pull request #1071, every gate noting the pull request. Offline: `errors: 1` (the same finding), each gate noting `merged-pr-body: not read`. Both held. |
+| Gitea Actions on a production server | Open | A private Gitea instance already runs the job-container recipe (`container: image:` pinned by tag and digest, `refs/pull/<n>/head` checkout) on `pull_request` and `push`. Record: the Gitea and `act_runner` versions; a clean pull-request run; an inverted canary (a pull request seeding a known violation) whose report names the expected gate ids; a push run to the default branch whose notes read the merged pull request through `commits/{sha}/pull`; `discipline doctor` against that instance's API | The five records exist and are summarised in Outstanding Checks without naming the instance or repository |
+
+**Step 1: pack parity** (independent rows; the missing capability in a pack that already exists)
+
+| Item | Status | Work | Ships when |
+|---|---|---|---|
+| Same-file helper resolution in JS / TS and PHP | Open | `resolve_same_file_helpers` in `javascript.rs` and `php.rs`, one level, cycle-safe, as the other eight packs: a module function or method whose body asserts or throws counts at each call from a test; `helper_checks` counted | A JS test calling a local `expectValid()` and a PHPUnit test calling `$this->checkRow()` are not vacuous and a helper refactor is silent; removing the call is still a drop |
+| Discards sorted by callee in Go and C / C++ | Open | The `classify_discard` hook `handlers.rs` added for Rust, for Go `x, _ := f()` / `_ = f()` and C / C++ `(void)call()`: a known-fallible callee list (Go `Write`, `Close`, `Sync`, `Flush`, `Scan`, `Encode`, `os.*`, `io.Copy`, ...; C `write`, `fclose`, `fsync`, `close`, `pthread_*`, ...), known-infallible accessors not reported, anything else `Value Discarded` at `warning` | Each pack has a fixture of a fallible discard (still `error`), an accessor (silent) and an unknown callee (`warning`) |
+| Dispatch-table resolution beyond Python | Open | A same-file function named as an element of an array or list literal in a test body resolves as a call: JS / TS (`[checkA, checkB].forEach(f => f())`), Rust (`for f in [check_a, check_b] { f() }`), Go (`[]func(){checkA, checkB}`), Java / Kotlin / C# method references (`this::checkA`, `::checkA`, delegates), Ruby (`%i[check_a]` / `method(:check_a)`) where the grammar exposes the name | A table refactor is silent and a removed entry is a drop, per pack |
+
+**Step 2: new language packs** (each needs a tree-sitter grammar crate whose licence is inside `deny.toml` and whose ABI matches the bundled `tree-sitter`; a pack whose grammar fails either is not started)
+
+| Item | Status | Work | Ships when |
+|---|---|---|---|
+| Swift pack | Open | `src/ast/swift.rs` behind `lang-swift`: XCTest `func test*()` in `XCTestCase` subclasses and Swift Testing `@Test`; `XCTAssert*` / `#expect` / `#require` (strong: `XCTAssertEqual`, `#expect(a == b)`); `XCTSkip` / `.disabled` traits; handlers (`catch {}`, `try?` as a silenced error); functions; prose; same-file helpers | The four-point contract holds; `docs/GATES.md` language table lists Swift; `UNSUPPORTED_SOURCE_EXTS` drops `swift` |
+| Scala pack | Open | `src/ast/scala.rs` behind `lang-scala`: ScalaTest (`test("...")`, `"x" should "y" in`), MUnit, specs2; `assert` / `assertEquals` / `shouldBe` matchers; `ignore` / `.ignore`; handlers (`catch { case _ => }`, `Try(...).getOrElse`); functions; prose; same-file helpers | As Swift, for `scala` |
+| Objective-C pack | Open | `src/ast/objc.rs` behind `lang-objc` for `.m` and `.mm` (the C / C++ pack's facts for the C part): XCTest `- (void)test*` in `XCTestCase` subclasses; `XCTAssert*`; `@catch {}`; `(void)` discards; functions; prose. `.mm` parses as Objective-C, and the Objective-C++ constructs the grammar cannot read are named in the notes | As Swift, for `m` and `mm` |
+
+- **Go / no-go gate:** as Phase 10; a new pack ships only with all four facts (tests, handlers, functions, prose) or names in `docs/GATES.md` which fact it lacks; a consumer replay of the last 100 pull requests shows no new blocking finding that is a false positive.
+- **Order:** Step 0 (evidence only), Step 1 (it corrects false positives in packs consumers use today), then Step 2 in the order listed (Swift, Scala, Objective-C). Rows within a step are independent.
+- **Status:** Step 0 row 1 done; everything else open.
+
 ---
 
 ## Default Changes (Compatibility Ledger)
@@ -366,13 +397,13 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 - **No external review:** The architecture and test coverage were established through internal pairing and rigorous self-tests. External review by independent systems engineers is an outstanding verification check.
 - **Runner environment testing:**
   - GitHub Actions: verified on hosted Linux and macOS runners in CI.
-  - Gitea Actions: tested via `act` runner images; testing on a physical production Gitea server is outstanding.
+  - Gitea Actions: tested via `act` runner images; a private production Gitea instance runs the job-container recipe on `pull_request` and `push`, and the evidence Phase 11 Step 0 lists (versions, a clean run, an inverted canary, a push run reading the merged pull request, `doctor` against its API) is outstanding.
   - Forgejo Actions: verified under local and CI runner environments; testing against enterprise Forgejo clusters is outstanding.
   - GitLab CI: reusable component template linted and schema-validated; live GitLab runner execution is outstanding.
   - Argo Workflows: template linted; live Kubernetes cluster DAG execution is outstanding.
 - **Macro opacity:** Tests generated dynamically inside complex macro bodies (`proptest! { ... }`, `quickcheck! { ... }`) are invisible to tree-sitter AST fact extractors without compilation expansion. Use `extra_assert_macros` and `assert_helper_fns` to configure macro vocabulary.
 - **Grammar lag:** Source syntax newer than the bundled tree-sitter grammars is treated as a parse error, failing closed by design. Use `exempt_paths` until grammars are updated.
-- **Consumer replay of the push-event fix:** the `merged-pr-body` source (v0.10.0) has its fixture through a loopback forge and unit coverage of the GitLab, Gitea and Forgejo lookups; the replay of the consumer's own squash merge as a push event (base `020ec7a4`, head `a8eb5e30`, citing its #1071) needs that repository's checkout and a token and has not been run here.
+- **Consumer replay of the push-event fix:** run 2026-09-22 (Phase 11 Step 0): the consumer's squash merge of its #1071 replayed as a push (base `020ec7a4`, head `a8eb5e30`) passes with the waiver read from merged pull request #1071, and fails on the same finding with `DISCIPLINE_NO_NETWORK=1`, each gate naming why the body was not read.
 - **Forge-side `doctor` under `--strict`:** the CI step runs with the workflow's read token. The default branch's rules now block deletion and require pull requests (`deletion`, `pull-request`, `last-push-approval` Pass; RUN 2026-09-22); the remaining Warns are `review` and `code-owner-review`, which need a required approving review by a second account — a solo-maintained repository cannot satisfy them without blocking its own merges — and `bypass`, whose list is shown to admin tokens only. `--strict` stays off until a second reviewer exists.
 - **Self-granted overrides:** A directive in the PR body or a commit body is written by the author of the change it excuses. `max_overrides`, `require_approval` and `--policy-from base` bound that, and all three are opt-in: a repository that sets none of them accepts every well-formed directive. Policy refusals appear in the terminal, step-summary and JSON reports; the JUnit, SARIF and GitLab reports carry gate findings only, so read the exit code.
 - **What no static gate closes:** An implementation that special-cases the inputs its tests use, or a wrong change accompanied by plausible tests, passes every diff-based gate. The mutation presets of the `command` gate are the control for that class.
