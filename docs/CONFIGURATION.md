@@ -410,6 +410,166 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
 <!-- /generated -->
 
+### Options
+
+Every option of every subcommand, generated from the binary's own definitions (`discipline <subcommand> --help` and `man discipline` show the same):
+
+<!-- generated:cli-options -->
+
+**`discipline check`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
+| `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
+| `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
+| `-s`, `--suite` |  | `all` | Which check suite to run |
+| `-b`, `--base` | `DISCIPLINE_BASE_REF` |  | Base branch or commit to measure the change against (auto-detected in CI if omitted) |
+| `--commit` |  |  | Specific commit to inspect (compares against parent commit &lt;sha&gt;~1) |
+| `--commit-range` |  |  | Commit range to inspect (&lt;before&gt;..&lt;after&gt; or &lt;before&gt;...&lt;after&gt;) |
+| `--staged` |  |  | Inspect the index against HEAD instead (pre-commit hook mode) |
+| `--pr-body-file` |  |  | File holding the PR body or commit message (override directives, hygiene scanning). Falls back to the PR_BODY environment variable |
+| `--pr-title` | `PR_TITLE` |  | PR title for PR-level hygiene checks (e.g. issue-link). Falls back to the PR_TITLE environment variable |
+| `--fail-on-warnings` | `DISCIPLINE_FAIL_ON_WARNINGS` |  | Treat warnings as failures |
+| `--fail-on-overrides` | `DISCIPLINE_FAIL_ON_OVERRIDES` |  | Treat applied overrides as failures (requires human sign-off) |
+| `--advisory` | `DISCIPLINE_ADVISORY` |  | Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur |
+| `--comment` | `DISCIPLINE_COMMENT` |  | Post the report as one pull-request comment, edited on every run (needs a token that can write comments; off by default) |
+| `--policy-from` | `DISCIPLINE_POLICY_FROM` | `head` | Which side's discipline.toml judges the change. `base` reads it from the base ref, so a policy edit takes effect once merged; `config-integrity` still reports it |
+| `--actor` | `DISCIPLINE_ACTOR` |  | Actor executing the check (for actor-aware override authorization). Falls back to DISCIPLINE_ACTOR, GITHUB_ACTOR, GITEA_ACTOR, FORGEJO_ACTOR, GITLAB_USER_LOGIN |
+| `--directive-sources` | `DISCIPLINE_DIRECTIVE_SOURCES` |  | Comma-separated list of allowed directive sources (pr-body, commits, merged-pr-body) |
+| `--trust-workspace` |  |  | Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1) |
+| `-q`, `--quiet` |  |  | Suppress output on success (only print output when violations are found) |
+| `-f`, `--format` |  | `terminal` | Output format |
+| `--json-out` |  |  | Also write the JSON report to this path, whatever --format is |
+| `-o`, `--output-file` |  |  | Write the formatted report to this path |
+| `--report-gitlab` | `DISCIPLINE_REPORT_GITLAB` |  | Write GitLab Code Quality JSON report to this path |
+| `--report-junit` | `DISCIPLINE_REPORT_JUNIT` |  | Write JUnit XML report to this path |
+| `--report-sarif` | `DISCIPLINE_REPORT_SARIF` |  | Write SARIF report to this path |
+| `--bench-provenance` | `DISCIPLINE_BENCH_PROVENANCE` |  | Expected host or runner provenance tag for benchmark artifacts |
+| `--allow-cross-host-bench` | `DISCIPLINE_ALLOW_CROSS_HOST_BENCH` |  | Allow benchmark comparison across mismatched host/runner provenance tags |
+| `--bench-base-file` | `DISCIPLINE_BENCH_BASE_FILE` |  | In-job base benchmark result file for bench-regression dual-mode |
+| `--bench-head-file` | `DISCIPLINE_BENCH_HEAD_FILE` |  | In-job head benchmark result file for bench-regression dual-mode |
+| `--baseline-file` |  |  | Path to grandfathering baseline file (defaults to discipline-baseline.toml if present) |
+| `--no-baseline` |  |  | Ignore grandfathering baseline even if present |
+
+**`discipline diff`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
+| `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
+| `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
+| `-s`, `--suite` |  | `all` | Which check suite to run |
+| `-b`, `--base` |  |  | Base branch or commit ref to compare against (defaults to HEAD for uncommitted changes) |
+| `-f`, `--format` |  | `terminal` | Output format |
+| `--json-out` |  |  | Also write the JSON report to this path, whatever --format is |
+| `-o`, `--output-file` |  |  | Write the formatted report to this path |
+| `--report-gitlab` | `DISCIPLINE_REPORT_GITLAB` |  | Write GitLab Code Quality JSON report to this path |
+| `--report-junit` | `DISCIPLINE_REPORT_JUNIT` |  | Write JUnit XML report to this path |
+| `--report-sarif` | `DISCIPLINE_REPORT_SARIF` |  | Write SARIF report to this path |
+| `--baseline-file` |  |  | Path to grandfathering baseline file (defaults to discipline-baseline.toml if present) |
+| `--no-baseline` |  |  | Ignore grandfathering baseline even if present |
+| `--trust-workspace` |  |  | Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1) |
+| `--advisory` | `DISCIPLINE_ADVISORY` |  | Advisory mode: run checks and emit reports, but exit 0 even if violations are found |
+
+**`discipline baseline`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
+| `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
+| `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
+| `--write` |  |  | Record current findings to the baseline file |
+| `--baseline-file` |  | `discipline-baseline.toml` | Path to grandfathering baseline file (defaults to discipline-baseline.toml) |
+| `-b`, `--base` | `DISCIPLINE_BASE_REF` |  | Base branch or commit ref to compare against |
+| `-s`, `--suite` |  | `all` | Specific suite to run: all, agent-guard, hygiene, integrity ... |
+| `--whole-tree` |  |  | Record every pre-existing finding in the tree, not just the diff. Use when adopting discipline on an existing repository; conflicts with --base |
+| `--all-severities` |  |  | Also record warnings and notes. By default only findings that would block under the current configuration are recorded: `error`, plus `warning` under --fail-on-warnings |
+| `--fail-on-warnings` | `DISCIPLINE_FAIL_ON_WARNINGS` |  | Treat warnings as blocking when choosing what to record (same switch as `check --fail-on-warnings`) |
+| `--trust-workspace` |  |  | Trust the workspace and disable libgit2 repository owner validation |
+
+**`discipline init`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `-n`, `--name` |  |  | Name of the project (defaults to current directory name) |
+
+**`discipline gates`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
+| `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
+| `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
+
+**`discipline completions`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `<SHELL>` |  |  | Target shell for completion script |
+
+**`discipline install-hooks`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `-f`, `--force` |  |  | Overwrite existing pre-commit hook if present |
+
+**`discipline hook run`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `--agent` |  |  | The agent whose hook contract to answer in |
+| `-b`, `--base` |  |  | Base to measure the change against (default: the merge base with origin's default branch, else main / master) |
+
+**`discipline hook install`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `--agent` |  |  | The agent to configure |
+
+**`discipline explain`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `<QUERY>` |  |  | A gate id (`assertion-reduction`) or a finding line naming `[gate-id]` |
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
+| `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
+| `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
+
+**`discipline replay`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `--last` |  |  | Number of first-parent commits (merged changes) to replay, newest first |
+| `--ref` |  |  | Branch whose history is replayed (default: origin's default branch, else main / master) |
+| `-c`, `--config` |  |  | Configuration under test (default: discipline.toml in the working tree) |
+| `--json` |  |  | Print the summary as JSON |
+
+**`discipline bench derive`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `<RUNS>` |  |  | `discipline-bench-ratio/v1` run files of the same code (at least two) |
+| `--baseline` |  |  | Merge the derived platform entry into this ratio baseline file (created if absent) |
+| `--allow-mixed-commits` |  |  | Accept runs of different commits (recorded in the baseline); only when the differences cannot move a number |
+| `--ceiling-pct` |  | `50` | Derived cell floors above this percentage are reported but not gated |
+
+**`discipline doctor`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `--branch` |  |  | Branch whose protection is checked (default: the repository's default branch) |
+| `--repo` |  |  | Repository path on the forge, e.g. OWNER/NAME (default: from the CI environment or the `origin` remote; set DISCIPLINE_FORGE for a self-hosted forge) |
+| `--local-only` |  |  | Check only local files; skip the platform API |
+| `--strict` |  |  | Treat warnings as failures |
+| `-f`, `--format` |  | `text` | Output format |
+<!-- /generated -->
+
 ### Exit Codes
 
 | Code | Status | Meaning |
@@ -801,7 +961,7 @@ Run discipline as a VS Code task and its findings land in the **Problems** panel
 ```
 <!-- /vscode-problem-matcher -->
 
-`discipline diff` checks the working tree against `HEAD`; use `discipline check --base main` to check the whole branch. `NO_COLOR` keeps the output plain, which the pattern needs. A finding with no file (a gate-wide finding) stays in the terminal only.
+`discipline diff` checks the working tree against `HEAD`; use `discipline check --base main` to check the whole branch. `NO_COLOR` keeps the output plain, which the pattern needs. A finding with no line (a whole-file or gate-wide finding, such as a missing `AGENTS.md`) points at the file's first line or stays in the terminal.
 
 ### Keeping Pins Current with Renovate
 
@@ -1023,11 +1183,11 @@ Discipline produces multi-target reports from a single execution run:
 | Format | Option / Artifact | Destination & Use Case |
 |---|---|---|
 | **Human Terminal (stdout)** | Default stdout | ANSI-colored terminal summary with per-gate examined counts, notes, and file/line locations. |
-| **Machine JSON Report** | `--report <path>` | Full JSON outcome with detailed violation records, notes, examined tallies, and applied overrides. |
-| **GitHub Step Summary** | `GITHUB_STEP_SUMMARY` | Formatted Markdown table appended to GitHub Actions run summaries. |
-| **GitLab Code Quality** | `gl-codequality.json` | JSON format rendered directly in GitLab Merge Request diff widgets. |
-| **SARIF** | `--sarif <path>` | OASIS SARIF v2.1.0 report for GitHub Code Scanning, VS Code, and security dashboards. |
-| **JUnit XML** | `--junit <path>` | Standard test results XML for CI test summary dashboards and flaky test tracking. |
+| **Machine JSON Report** | `--format json` (stdout) or `--json-out <path>` | Full JSON outcome with detailed violation records, notes, examined tallies, and applied overrides. |
+| **GitHub Step Summary** | `--format github-summary` (the action appends it to `GITHUB_STEP_SUMMARY`) | Formatted Markdown table appended to GitHub Actions run summaries. |
+| **GitLab Code Quality** | `--report-gitlab <path>` (written to `gl-codequality.json` by default in GitLab CI) | JSON format rendered directly in GitLab Merge Request diff widgets. |
+| **SARIF** | `--report-sarif <path>` | OASIS SARIF v2.1.0 report for GitHub Code Scanning, VS Code, and security dashboards. |
+| **JUnit XML** | `--report-junit <path>` (written to `junit.xml` by default in GitLab CI) | Standard test results XML for CI test summary dashboards and flaky test tracking. |
 
 ---
 

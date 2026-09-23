@@ -222,7 +222,7 @@ A consumer who runs Discipline with zero configuration, or who configures only s
 | `src/config.rs` | Gate registry (`GATES`), schema definition, layered configuration resolution |
 | `src/gitctx.rs` | Git interaction via `libgit2`: base ref detection, merge-base computation, blob streaming, index inspection |
 | `src/tokens.rs` | Line-anchored override directive parser and validation |
-| `src/ast.rs` | Tree-sitter dispatch and language-specific fact extraction |
+| `src/ast/` | Tree-sitter dispatch (`mod.rs`: registry, `Fact`, shared helper and dispatch-table resolution) and one module per language pack (`rust.rs`, `python.rs`, `javascript.rs`, `java.rs`, `kotlin.rs`, `go.rs`, `php.rs`, `c_cpp.rs`, `csharp.rs`, `ruby.rs`, `swift.rs`, `scala.rs`, `objc.rs`, `golden.rs`), plus the facts every pack shares: `functions.rs` (stubs), `handlers.rs` (swallowed errors), `prose.rs`, `reach.rs` (unreachable code), `mocks.rs`, `calls.rs`, `retries.rs`, `budgets.rs` |
 | `src/guards/agent_diff.rs` | Semantic diff inspection across base vs. head AST facts |
 | `src/guards/hygiene.rs` | Repository sweeps: `time-estimates`, `pii`, `agent-scratch`, `agents-md` |
 | `src/guards/integrity.rs` | Structural integrity gates: `config-integrity`, `golden-output` |
@@ -232,6 +232,17 @@ A consumer who runs Discipline with zero configuration, or who configures only s
 | `src/docs.rs` | Automated reference docs generator and schema validation sentinel |
 | `src/selftest.rs` | Embedded positive and negative controls compiled into binary |
 | `src/style.rs` | Zero-dependency ANSI terminal styling |
+| `src/forge.rs` | The in-process HTTPS client for forge REST APIs (reads, and the one write: `check --comment`), with the path, https, redirect and `DISCIPLINE_NO_NETWORK` checks |
+| `src/doctor.rs` | `discipline doctor`: workflow, CODEOWNERS and branch-protection checks |
+| `src/override_policy.rs` | `max_overrides` and `require_approval`: whether a run's directive overrides stand |
+| `src/baseline.rs` | Grandfathering baseline read / write and fingerprints |
+| `src/hook.rs` | `discipline hook run` / `install`: the agent-facing check (base policy, no directives) translated into each agent's hook contract |
+| `src/mcp.rs` | `discipline mcp`: the MCP server over stdio (read-only tools) |
+| `src/explain.rs` | `discipline explain`: a gate's rule, state and lifting directive |
+| `src/replay.rs` | `discipline replay`: rebuild merged changes in a throwaway repository and check each |
+| `src/comment.rs` | `check --comment`: the one pull-request comment, found by marker and edited in place |
+
+**Agent-facing surfaces.** The hook, the MCP server and the `agent-prompt` format share one design rule: they tell an agent how to repair a finding and leave out the directive that would waive it, and the check they run is judged by the base ref's configuration and reads no directive, so the change being judged cannot switch off or excuse its own check. Hiding the waiver syntax is a convenience (an agent can run `discipline explain`); the base-side policy and the CI configuration (`policy_from: base`, PR-body directives, `fail_on_overrides`, `require_approval`) are the control.
 
 ---
 

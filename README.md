@@ -41,12 +41,26 @@ Install the binary and inspect your working tree before pushing:
 # Install static binary
 curl -fsSL https://orieg.github.io/discipline/install.sh | bash
 
+# Write a starter discipline.toml (gates run at their defaults without one)
+discipline init
+
 # Inspect uncommitted changes against HEAD across all gates
 discipline diff
 
 # Or inspect current branch diff against origin/main
 discipline check
+
+# Tell your coding agent while it edits (claude-code, codex, cursor, aider)
+discipline hook install --agent claude-code
+
+# What would discipline have blocked in your last 50 merged changes?
+discipline replay --last 50
+
+# What a gate checks and how its finding is lifted
+discipline explain assertion-reduction
 ```
+
+The agent hook blocks an edit that weakens a test and hands the agent the repair; the [tutorial](docs/tutorials/getting-started.md) walks through it in a sandbox, and [Agent Hooks](docs/CONFIGURATION.md#agent-hooks) covers every agent and the [MCP server](docs/CONFIGURATION.md#mcp-server).
 
 ### 2. Adopting on an Existing Repository (Brownfield)
 
@@ -57,7 +71,10 @@ Adopting Discipline on an existing repository never requires resolving all histo
 discipline baseline --write
 
 # Step 2: Commit baseline file and enable Discipline
-git add discipline-baseline.toml && git commit -m "chore: baseline existing discipline debt"
+git add discipline-baseline.toml
+git commit -m "chore: baseline existing discipline debt" \
+  -m "allow-gate-weakening: baseline initial grandfathered baseline"
+# (a new baseline is a config-integrity weakening: the directive line records why)
 
 # All future diffs and pull requests are now strictly guarded against new regressions!
 ```
@@ -134,12 +151,19 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 - [Forgejo & Gitea Actions Guide](docs/guides/ci-platforms.md#3-forgejo--gitea-actions)
 - [Argo Workflows GitOps Template](docs/CONFIGURATION.md#argo-workflows)
 - [pre-commit & Local Git Hooks](docs/CONFIGURATION.md#pre-commit-hook)
-- [Agent Hooks (Claude Code, Codex, Cursor, Aider)](docs/CONFIGURATION.md#agent-hooks)
-- [MCP Server (`discipline mcp`)](docs/CONFIGURATION.md#mcp-server)
-- [Previewing Adoption (`discipline replay`)](docs/CONFIGURATION.md#previewing-adoption-discipline-replay)
 - [Pull-Request Comments (`--comment`)](docs/CONFIGURATION.md#pull-request-comments)
 - [Docker Container Run](docs/CONFIGURATION.md#docker-container)
 - [CLI Reference & Local Inner Loop](docs/CONFIGURATION.md#standalone-cli)
+
+Coding-agent integration:
+- [Agent Hooks (Claude Code, Codex, Cursor, Aider)](docs/CONFIGURATION.md#agent-hooks)
+- [MCP Server (`discipline mcp`)](docs/CONFIGURATION.md#mcp-server)
+
+Adoption and editor tooling:
+- [Previewing Adoption (`discipline replay`)](docs/CONFIGURATION.md#previewing-adoption-discipline-replay)
+- [Explaining a Gate (`discipline explain`)](docs/CONFIGURATION.md#explaining-a-gate)
+- [VS Code Problems Panel](docs/CONFIGURATION.md#vs-code-problems-panel)
+- [Keeping Pins Current with Renovate](docs/CONFIGURATION.md#keeping-pins-current-with-renovate)
 
 ## Gates
 
@@ -300,11 +324,13 @@ gh attestation verify discipline-x86_64-unknown-linux-musl.tar.gz --repo orieg/d
 ## Documentation
 
 - [Interactive Documentation Site](https://orieg.github.io/discipline/)
-- [Sandbox Quickstart Tutorial](docs/tutorials/getting-started.md) — Hands-on walkthrough triggering and resolving an AST violation
-- [Gate Specifications & Enforcement Rules](docs/GATES.md) — Normative rules, before/after diffs, and what gates do not catch
-- [Configuration Reference](docs/CONFIGURATION.md) — 5-layer hierarchy, schema, action inputs/outputs, and platform guides
-- [Engine Architecture & Sentinel Design](docs/ARCHITECTURE.md) — Fail-closed contracts (F1–F12), AST diff engine, and CI pipelines
-- [Roadmap & Milestone Tracking](docs/ROADMAP.md) — Delivery phases, dependency graph, and planned gates
+- **Tutorial:** [Sandbox Quickstart](docs/tutorials/getting-started.md) — trigger and fix an assertion weakening, then hand it to a coding agent's hook
+- **How-to:** [CI Platform Guide](docs/guides/ci-platforms.md) — GitHub, GitLab, Forgejo / Gitea, Argo and the other templates, rollup and benchmark wiring
+- **Reference:** [Gate Specifications](docs/GATES.md) — rules, before/after diffs, and what each gate does not catch
+- **Reference:** [Configuration & CLI](docs/CONFIGURATION.md) — configuration layers, schema, every CLI option, action inputs and outputs, integrations
+- **Reference:** man pages — `man discipline`, `man discipline.toml` (in `man/`, installed by the packages)
+- **Explanation:** [Engine Architecture](docs/ARCHITECTURE.md) — fail-closed contracts (F1–F12), AST diff engine, CI pipelines
+- **Explanation:** [Roadmap & Compatibility Ledger](docs/ROADMAP.md) — delivery phases and every behaviour change per release
 
 ## Development
 

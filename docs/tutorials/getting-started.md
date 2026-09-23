@@ -73,10 +73,11 @@ fn test_addition() {
 EOF
 ```
 
-Commit this baseline code to the `main` branch:
+Add a one-line agent guide (discipline's `agents-md` gate expects every repository to have one), then commit this baseline to the `main` branch:
 
 ```bash
-git add test_calculator.rs
+echo "# Agent guide" > AGENTS.md
+git add test_calculator.rs AGENTS.md
 git commit -m "feat: initial calculator implementation and tests"
 ```
 
@@ -115,16 +116,18 @@ Run Discipline against the `main` merge base:
 discipline check --base main
 ```
 
-Discipline uses tree-sitter AST diff traversal to inspect syntactic modifications. Because assertions in `test_addition` dropped from two `assert_eq!` nodes to one tautological `assert!`, Discipline fails closed with exit code `1`:
+Discipline reads both versions of the test with a tree-sitter parser. The two `assert_eq!` calls are gone and `assert!(true)` cannot fail, so the test's effective assertions dropped from 2 to 0, and Discipline fails with exit code `1`. The report ends with (the full output also lists every gate):
 
 ```text
-[ERROR] assertion-reduction: assertion count or strength dropped in test_addition
-   File: test_calculator.rs:6
-   Remediation: preserve existing assertions or supply a scoped override directive
+error [assertion-reduction] Assertion Reduction In Existing Test [test_calculator.rs:6]
+   Test `test_addition`: effective assertions dropped from 2 to 0.
+   Remediation: Restore the assertions, or justify the drop on its own line in the PR body or a commit message: `allow-assertion-drop: test_addition <reason>`.
    Doc: https://orieg.github.io/discipline/gates/#assertion-reduction
 
-Summary: 1 errors, 0 warnings, 0 overrides
+errors: 1  warnings: 0  overrides: 0
 Status: FAILED
+
+Tip: fix what this change introduced. Findings in code it did not touch (existing debt when adopting Discipline) can be recorded with 'discipline baseline --write'.
 ```
 
 ---
@@ -157,13 +160,55 @@ discipline check --base main
 Discipline reports success:
 
 ```text
-Summary: 0 errors, 0 warnings, 0 overrides
+errors: 0  warnings: 0  overrides: 0
 Status: PASS
 ```
 
 ---
 
-## Step 7: Clean Up
+## Step 7: Let Your Coding Agent Hear It
+
+CI catches the weakening after the fact. An agent can be told while it is still editing. Install the hook for Claude Code (or `codex`, `cursor`, `aider`):
+
+```bash
+discipline hook install --agent claude-code
+```
+
+This writes `.claude/settings.json`, which runs `discipline hook run --agent claude-code` after every edit and before the agent stops. Weaken the test again, then run the hook the way Claude Code does, with its event on stdin:
+
+```bash
+cat << 'EOF' > test_calculator.rs
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[test]
+fn test_addition() {
+    assert!(true);
+}
+EOF
+echo '{"hook_event_name":"PostToolUse","tool_name":"Edit"}' | discipline hook run --agent claude-code
+echo "exit: $?"
+```
+
+The hook exits `2`, which blocks the edit, and prints on stderr what the agent reads:
+
+```text
+Discipline gatekeeper detected violations in your changes. Please fix each issue:
+
+### Issue 1 [assertion-reduction]: Assertion Reduction In Existing Test
+- Location: test_calculator.rs:6
+- Problem: Test `test_addition`: effective assertions dropped from 2 to 0.
+- Repair: Restore the assertions that were removed or weakened to match or exceed the original assertion count.
+
+exit: 2
+```
+
+The agent is told how to repair the test, not how to waive the finding, and the check is judged by `main`'s configuration: editing `discipline.toml` in the branch does not switch it off. The [Agent Hooks](../CONFIGURATION.md#agent-hooks) reference covers the other agents and the MCP server.
+
+---
+
+## Step 8: Clean Up
 
 Remove the temporary sandbox directory when done:
 
@@ -177,5 +222,5 @@ rm -rf /tmp/discipline-sandbox
 ## Next Steps
 
 - **Configuration:** Learn how to customize gate rules, severities, and exemptions in [`docs/CONFIGURATION.md`](../CONFIGURATION.md).
-- **Gate Catalog:** Explore normative specifications for all 30 gates in [`docs/GATES.md`](../GATES.md).
+- **Gate Catalog:** Explore the specification of every gate in [`docs/GATES.md`](../GATES.md).
 - **CI Integration:** Integrate Discipline into GitHub Actions, GitLab CI/CD, Forgejo, or Argo Workflows using the [CI/CD Platform Integration Guide](../guides/ci-platforms.md).

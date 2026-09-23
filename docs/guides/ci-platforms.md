@@ -193,7 +193,7 @@ discipline:gate:
   before_script:
     - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME --depth=100 || true
   script:
-    - discipline check --output-format gitlab-codequality > gl-codequality.json
+    - discipline check --report-gitlab gl-codequality.json --report-junit junit.xml
   artifacts:
     reports:
       codequality: gl-codequality.json

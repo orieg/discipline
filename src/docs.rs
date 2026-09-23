@@ -500,6 +500,67 @@ pub fn render_cli_markdown() -> String {
     out
 }
 
+/// Render the options of every visible subcommand (and nested subcommand) from clap:
+/// one table per command with the flag, its environment variable, default and help.
+pub fn render_cli_options_markdown() -> String {
+    fn cell(s: &str) -> String {
+        s.replace('|', "\\|")
+            .replace('\n', " ")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+    fn walk(cmd: &clap::Command, path: &str, out: &mut String) {
+        for sub in cmd.get_subcommands() {
+            if sub.is_hide_set() || sub.get_name() == "help" {
+                continue;
+            }
+            let full = format!("{path} {}", sub.get_name());
+            let args: Vec<&clap::Arg> = sub
+                .get_arguments()
+                .filter(|a| !a.is_hide_set() && !matches!(a.get_id().as_str(), "help" | "version"))
+                .collect();
+            if !args.is_empty() {
+                out.push_str(&format!(
+                    "\n**`{}`**\n\n| Option | Env | Default | Description |\n|---|---|---|---|\n",
+                    full.trim()
+                ));
+                for a in args {
+                    let name = match (a.get_short(), a.get_long()) {
+                        (Some(s), Some(l)) => format!("`-{s}`, `--{l}`"),
+                        (None, Some(l)) => format!("`--{l}`"),
+                        (Some(s), None) => format!("`-{s}`"),
+                        (None, None) => format!("`<{}>`", a.get_id().as_str().to_uppercase()),
+                    };
+                    let env = a
+                        .get_env()
+                        .map(|e| format!("`{}`", e.to_string_lossy()))
+                        .unwrap_or_default();
+                    let defaults: Vec<String> = a
+                        .get_default_values()
+                        .iter()
+                        .map(|v| v.to_string_lossy().to_string())
+                        .collect();
+                    let default = if defaults.is_empty() {
+                        String::new()
+                    } else {
+                        format!("`{}`", defaults.join(","))
+                    };
+                    let help = a.get_help().map(|h| h.to_string()).unwrap_or_default();
+                    out.push_str(&format!(
+                        "| {name} | {env} | {default} | {} |\n",
+                        cell(&help)
+                    ));
+                }
+            }
+            walk(sub, &full, out);
+        }
+    }
+    let cmd = crate::cli::Cli::command();
+    let mut out = String::new();
+    walk(&cmd, "discipline", &mut out);
+    out
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -600,6 +661,7 @@ pub fn update_generated_regions(
                 "gate-search" => render_gate_search_html(gates),
                 "config-schema" | "schema" => render_config_schema_markdown(),
                 "cli" => render_cli_markdown(),
+                "cli-options" => render_cli_options_markdown(),
                 other => bail!(
                     "unknown generated marker target '{}' in {}",
                     other,
@@ -987,6 +1049,28 @@ pub fn update_roff_region(original: &str, name: &str, content: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cli_options_reference_covers_every_subcommand_and_option() {
+        let md = render_cli_options_markdown();
+        for heading in [
+            "**`discipline check`**",
+            "**`discipline hook run`**",
+            "**`discipline hook install`**",
+            "**`discipline replay`**",
+            "**`discipline explain`**",
+        ] {
+            assert!(md.contains(heading), "missing {heading}");
+        }
+        assert!(
+            md.contains("`--comment` | `DISCIPLINE_COMMENT`"),
+            "check --comment and its env"
+        );
+        assert!(md.contains("`--policy-from`"));
+        assert!(!md.contains("**`discipline help`**"));
+        // `<sha>`-style help text is escaped so a Markdown table shows it.
+        assert!(!md.contains("<sha>") && md.contains("&lt;sha&gt;"));
+    }
 
     #[test]
     fn man1_documents_every_visible_command_in_one_page() {

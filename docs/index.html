@@ -794,6 +794,8 @@
     <li><a href="#gates">Gate Reference</a></li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#install">Install</a></li>
+    <li><a href="tutorials/getting-started/">Tutorial</a></li>
+    <li><a href="https://github.com/orieg/discipline/blob/main/docs/CONFIGURATION.md">Docs</a></li>
     <li><a href="apt/">APT</a></li>
     <li><a href="rpm/">RPM</a></li>
   </ul>
@@ -840,11 +842,11 @@
         <p>Fail-Closed Gates</p>
       </div>
       <div class="stat-item">
-        <h3>11</h3>
+        <h3>14</h3>
         <p>AST Language Packs</p>
       </div>
       <div class="stat-item">
-        <h3>7</h3>
+        <h3>9</h3>
         <p>Supported CI Integrations</p>
       </div>
       <div class="stat-item">
@@ -866,7 +868,7 @@
         <div>
           <div class="card-icon-box">&#x1f333;</div>
           <h3>Tree-Sitter AST Diff Inspection</h3>
-          <p>Unlike fragile regex checks that trigger on comments or log messages, Discipline parses the complete AST of changed functions against the merge base. It counts executable assertions and distinguishes real invariants from dead code: an assertion under <code>if false</code> or after a <code>return</code> counts for nothing, and a property-test budget inside a string or comment is not a budget. Eleven packs: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin.</p>
+          <p>Unlike fragile regex checks that trigger on comments or log messages, Discipline parses the complete AST of changed functions against the merge base. It counts executable assertions and distinguishes real invariants from dead code: an assertion under <code>if false</code> or after a <code>return</code> counts for nothing, and a property-test budget inside a string or comment is not a budget. Fourteen packs: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C.</p>
         </div>
         <div class="card-tags">
           <span class="card-tag">tree-sitter-rust</span>
@@ -883,8 +885,10 @@
         </div>
         <div class="card-tags">
           <span class="card-tag">Claude Code</span>
-          <span class="card-tag">Gemini CLI</span>
-          <span class="card-tag">Codex / Copilot</span>
+          <span class="card-tag">Codex CLI</span>
+          <span class="card-tag">Cursor</span>
+          <span class="card-tag">Aider</span>
+          <span class="card-tag">MCP</span>
         </div>
       </div>
 
@@ -933,6 +937,7 @@
         <button class="platform-btn" data-target="pane-docker">Container (Docker)</button>
         <button class="platform-btn" data-target="pane-precommit">pre-commit</button>
         <button class="platform-btn" data-target="pane-cli">Standalone CLI</button>
+        <button class="platform-btn" data-target="pane-agents">Coding Agents</button>
       </nav>
 
       <!-- GitHub Actions -->
@@ -1121,7 +1126,34 @@ discipline check --staged
 discipline gates
 
 <span class="code-comment"># Run embedded verification controls</span>
-discipline self-test</div>
+discipline self-test
+
+<span class="code-comment"># What a gate checks, and what your last 50 merged changes would have hit</span>
+discipline explain assertion-reduction
+discipline replay --last 50</div>
+      </div>
+
+      <!-- Coding agents -->
+      <div class="platform-pane" id="pane-agents">
+        <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Tell the agent while it edits: the hook blocks an edit that weakens a test and hands the agent the repair, judged by the default branch's configuration so the change cannot switch its own check off.
+        </p>
+        <div class="code-block"><span class="code-comment"># Claude Code, Codex CLI, Cursor or Aider: writes the agent's hook file</span>
+discipline hook install --agent claude-code
+
+<span class="code-comment"># Any MCP client: register the server (tools: check_diff, list_gates, explain_finding)</span>
+claude mcp add discipline -- discipline mcp
+
+<span class="code-comment"># What the agent reads after an edit that weakens a test (exit 2)</span>
+### Issue 1 [assertion-reduction]: Assertion Reduction In Existing Test
+- Location: tests/cart.rs:6
+- Problem: Test `adds`: effective assertions dropped from 2 to 0.
+- Repair: Restore the assertions that were removed or weakened ...</div>
+        <p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          Every agent's contract, the MCP registration for each client, and what a change cannot do to its check:
+          <a href="https://github.com/orieg/discipline/blob/main/docs/CONFIGURATION.md#agent-hooks">Agent Hooks</a> and
+          <a href="https://github.com/orieg/discipline/blob/main/docs/CONFIGURATION.md#mcp-server">MCP Server</a>.
+        </p>
       </div>
     </div>
   </section>
@@ -1686,7 +1718,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
         <rect x="80" y="214" width="340" height="176" rx="8" class="arch-box arch-box-card"/>
         <rect x="95" y="228" width="180" height="22" rx="4" class="arch-badge-blue"/>
         <text x="185" y="243" class="arch-badge-text-blue" text-anchor="middle">Tree-Sitter AST Diff Engine</text>
-        <text x="95" y="268" class="arch-meta">10 language packs behind shared fact model</text>
+        <text x="95" y="268" class="arch-meta">14 language packs behind shared fact model</text>
         <circle cx="103" cy="289" r="3" class="arch-dot-blue"/>
         <text x="115" y="293" class="arch-bullet">Assertion count &amp; strength ratchets</text>
         <circle cx="103" cy="311" r="3" class="arch-dot-blue"/>
