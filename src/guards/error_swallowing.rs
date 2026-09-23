@@ -118,7 +118,7 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                     "catches an error and does nothing with it",
                 ),
             };
-            // Rust has no types in the syntax tree: a callee off the known-fallible list
+            // The syntax tree carries no types: a callee off a pack's known-fallible list
             // may return a plain value, so it never blocks on its own.
             let severity = if site.kind == "discarded-value"
                 && settings.severity() == crate::config::Severity::Error

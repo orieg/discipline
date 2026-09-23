@@ -11280,3 +11280,42 @@ fn js_and_php_checks_moved_into_same_file_helpers_are_a_refactor() {
         );
     }
 }
+
+#[test]
+fn go_and_c_discards_are_sorted_by_callee() {
+    let repo = Repo::new();
+    repo.write(
+        "pkg/store/store.go",
+        "package store\n\nfunc Save(w W, c C, x any, s string) {\n\tn, _ := w.Write(b)\n\tv, _ := c.Load(k)\n\tt, _ := x.(string)\n\tm, _ := lookup(k)\n\t_, _, _, _ = n, v, t, m\n}\n",
+    );
+    repo.write(
+        "src/io.c",
+        "void flush_all(int fd, FILE *fp) {\n    (void)fclose(fp);\n    (void)snprintf(buf, 8, \"x\");\n}\n",
+    );
+    repo.commit("feat: io");
+    let run = repo.check(&[]);
+    let mut found: Vec<(String, String, u64)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["severity"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    found.sort();
+    let row = |f: &str, s: &str, l: u64| (f.to_string(), s.to_string(), l);
+    assert_eq!(
+        found,
+        vec![
+            row("pkg/store/store.go", "error", 4),
+            row("pkg/store/store.go", "warning", 7),
+            row("src/io.c", "error", 2),
+            row("src/io.c", "warning", 3),
+        ],
+        "{}",
+        run.stdout
+    );
+}

@@ -473,6 +473,232 @@ pub fn rust_discard_class(node: Node, src: &str) -> Option<&'static str> {
     Some("discarded-value")
 }
 
+/// Go callees whose dropped last value is an `error` by convention.
+const GO_FALLIBLE_CALLEES: &[&str] = &[
+    "Write",
+    "WriteString",
+    "WriteByte",
+    "WriteRune",
+    "WriteTo",
+    "ReadFrom",
+    "Read",
+    "ReadAll",
+    "ReadFile",
+    "WriteFile",
+    "ReadString",
+    "ReadBytes",
+    "ReadLine",
+    "Close",
+    "Sync",
+    "Flush",
+    "Seek",
+    "Truncate",
+    "Copy",
+    "CopyN",
+    "Encode",
+    "Decode",
+    "Marshal",
+    "MarshalIndent",
+    "Unmarshal",
+    "Atoi",
+    "ParseInt",
+    "ParseUint",
+    "ParseFloat",
+    "ParseBool",
+    "Parse",
+    "ParseDuration",
+    "Open",
+    "OpenFile",
+    "Create",
+    "Remove",
+    "RemoveAll",
+    "Mkdir",
+    "MkdirAll",
+    "MkdirTemp",
+    "CreateTemp",
+    "Rename",
+    "Stat",
+    "Lstat",
+    "Chmod",
+    "Chown",
+    "Chdir",
+    "Setenv",
+    "Unsetenv",
+    "Exec",
+    "ExecContext",
+    "Query",
+    "QueryContext",
+    "Scan",
+    "Dial",
+    "DialContext",
+    "Listen",
+    "Accept",
+    "Do",
+    "NewRequest",
+    "NewRequestWithContext",
+    "Fprintf",
+    "Fprintln",
+    "Fprint",
+    "Shutdown",
+    "Serve",
+    "ListenAndServe",
+    "Wait",
+    "Run",
+    "Start",
+    "Output",
+    "CombinedOutput",
+    "Commit",
+    "Rollback",
+    "Begin",
+    "BeginTx",
+    "Ping",
+    "Prepare",
+    "Getwd",
+    "Hostname",
+    "Executable",
+    "Glob",
+    "Abs",
+    "Rel",
+    "EvalSymlinks",
+    "Walk",
+    "WalkDir",
+];
+
+/// Go callees whose second value is an ok flag or a count, not an error.
+const GO_OK_CALLEES: &[&str] = &[
+    "Load",
+    "LoadOrStore",
+    "LoadAndDelete",
+    "LookupEnv",
+    "Lookup",
+    "Cut",
+    "CutPrefix",
+    "CutSuffix",
+    "Swap",
+    "CompareAndSwap",
+    "Caller",
+    "FromContext",
+];
+
+/// C / C++ callees whose result reports a failure (`-1`, non-zero, `EOF`).
+const C_FALLIBLE_CALLEES: &[&str] = &[
+    "write",
+    "read",
+    "pread",
+    "pwrite",
+    "close",
+    "fclose",
+    "fflush",
+    "fsync",
+    "fdatasync",
+    "fwrite",
+    "fread",
+    "fputs",
+    "fputc",
+    "fprintf",
+    "fscanf",
+    "remove",
+    "unlink",
+    "rename",
+    "mkdir",
+    "rmdir",
+    "chdir",
+    "chmod",
+    "chown",
+    "setvbuf",
+    "pthread_mutex_lock",
+    "pthread_mutex_unlock",
+    "pthread_join",
+    "pthread_create",
+    "pthread_cond_wait",
+    "pthread_cond_signal",
+    "pthread_cond_broadcast",
+    "sem_wait",
+    "sem_post",
+    "dup2",
+    "pipe",
+    "setsid",
+    "setuid",
+    "setgid",
+    "seteuid",
+    "setegid",
+    "truncate",
+    "ftruncate",
+    "lseek",
+    "fseek",
+    "system",
+    "posix_memalign",
+    "munmap",
+    "mprotect",
+    "madvise",
+    "sigaction",
+    "kill",
+    "waitpid",
+    "nanosleep",
+    "clock_gettime",
+    "send",
+    "recv",
+    "sendto",
+    "recvfrom",
+    "connect",
+    "bind",
+    "listen",
+    "accept",
+    "shutdown",
+    "setsockopt",
+    "getsockopt",
+];
+
+/// `Some("discarded-result")` for a known-fallible name, `None` for a known value-only
+/// name, else `Some("discarded-value")` (reported at `warning`).
+fn sort_by_callee(name: &str, fallible: &[&str], value_only: &[&str]) -> Option<&'static str> {
+    if value_only.contains(&name) {
+        None
+    } else if fallible.contains(&name) {
+        Some("discarded-result")
+    } else {
+        Some("discarded-value")
+    }
+}
+
+/// Go: sorts a discard by what it drops. `_ = err` drops an error. `x, _ := f()` drops
+/// `f`'s last value, sorted by `f`'s name. A type assertion, map index or channel
+/// receive (`v, _ := x.(T)`, `m[k]`, `<-ch`) drops an ok flag and is not reported.
+pub fn go_discard_class(node: Node, src: &str) -> Option<&'static str> {
+    let right = node.child_by_field_name("right")?;
+    let value = if right.kind() == "expression_list" {
+        right.named_child(0)?
+    } else {
+        right
+    };
+    match value.kind() {
+        "call_expression" => {
+            let f = value.child_by_field_name("function")?;
+            let name = match f.kind() {
+                "selector_expression" => text(f.child_by_field_name("field")?, src),
+                _ => text(f, src),
+            };
+            sort_by_callee(name, GO_FALLIBLE_CALLEES, GO_OK_CALLEES)
+        }
+        "identifier" => Some("discarded-result"),
+        _ => None,
+    }
+}
+
+/// C / C++: sorts `(void)call()` by the callee's name; a known-fallible system call is
+/// `discarded-result`, any other callee `discarded-value`.
+pub fn c_discard_class(node: Node, src: &str) -> Option<&'static str> {
+    let value = node.child_by_field_name("value")?;
+    let f = value.child_by_field_name("function")?;
+    let name = match f.kind() {
+        "field_expression" => text(f.child_by_field_name("field")?, src),
+        "template_function" => text(f.child_by_field_name("name")?, src),
+        _ => text(f, src),
+    };
+    let name = name.rsplit("::").next().unwrap_or(name);
+    sort_by_callee(name, C_FALLIBLE_CALLEES, &[])
+}
+
 /// Go: `_ = err`, `_, _ = f()`, `x, _ := f()` where the dropped value is the error.
 pub fn go_discards(t: &str) -> bool {
     let t = t.trim();
@@ -612,6 +838,35 @@ mod pack_tests {
                 (12, "discarded-result"),
                 (13, "discarded-result"),
                 (14, "discarded-value"),
+            ]
+        );
+    }
+
+    #[test]
+    fn go_and_c_discards_are_sorted_by_callee_name() {
+        let go = sites(
+            "pkg/a.go",
+            "package a\nfunc F() {\n\tn, _ := w.Write(b)\n\tv, _ := cache.Load(k)\n\ts, _ := x.(string)\n\tm, _ := lookup(k)\n\ti, _ := strconv.Atoi(s)\n\t_ = err\n}\n",
+        );
+        assert_eq!(
+            go,
+            vec![
+                (3, "discarded-result"),
+                (6, "discarded-value"),
+                (7, "discarded-result"),
+                (8, "discarded-result"),
+            ]
+        );
+        let c = sites(
+            "src/a.c",
+            "void f(int fd) {\n    (void)write(fd, b, n);\n    (void)snprintf(buf, 8, \"x\");\n    (void)fclose(fp);\n    (void)x;\n}\n",
+        );
+        assert_eq!(
+            c,
+            vec![
+                (2, "discarded-result"),
+                (3, "discarded-value"),
+                (4, "discarded-result")
             ]
         );
     }

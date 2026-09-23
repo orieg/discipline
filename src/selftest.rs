@@ -375,6 +375,26 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: Go and C/C++ discards are sorted by callee, an ok flag is not a site",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let kinds = |path: &str, src: &str| -> Result<Vec<&'static str>> {
+                let Some(pack) = reg.find_pack(path) else {
+                    return Ok(vec!["skipped"]);
+                };
+                Ok(pack.extract(path, src, &v)?.swallowed.iter().map(|s| s.kind).collect())
+            };
+            let go = kinds(
+                "pkg/a.go",
+                "package a\nfunc F() {\n\tn, _ := w.Close()\n\tv, _ := m.Load(k)\n\tt, _ := x.(int)\n}\n",
+            )?;
+            let c = kinds("src/a.c", "void f(void) {\n    (void)fsync(fd);\n    (void)g();\n}\n")?;
+            Ok((go == ["discarded-result"] || go == ["skipped"])
+                && (c == ["discarded-result", "discarded-value"] || c == ["skipped"]))
+        },
+    ),
+    (
         "javascript, php: a same-file helper that asserts or throws is a check at each call",
         || {
             let reg = crate::ast::default_registry();

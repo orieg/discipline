@@ -579,7 +579,7 @@ pub const GO_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
     trivial: &[],
     discard_kinds: &["assignment_statement", "short_var_declaration"],
     discards: super::handlers::go_discards,
-    classify_discard: None,
+    classify_discard: Some(super::handlers::go_discard_class),
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,

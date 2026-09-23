@@ -250,7 +250,7 @@ pub const C_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpe
     // `(void)call()` throws the result away; `(void)x` of a variable is not a call.
     discard_kinds: &["cast_expression"],
     discards: super::handlers::c_discards,
-    classify_discard: None,
+    classify_discard: Some(super::handlers::c_discard_class),
     call_value_kinds: &["call_expression"],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
