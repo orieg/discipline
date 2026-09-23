@@ -2600,6 +2600,38 @@ smoke_cost::set_contains
         },
     ),
     (
+        "archive-contents: the content scan finds sourcesContent in a .map and in an inline base64 map",
+        || {
+            use crate::guards::archive_contents::read_archive;
+            use crate::guards::archive_formats::fixtures;
+            use base64::Engine as _;
+
+            let leaking = r#"{"version":3,"sources":["../src/cli.ts"],"sourcesContent":["let x = 1;\n"],"mappings":"AAAA"}"#;
+            let plain = r#"{"version":3,"sources":["../src/cli.ts"],"mappings":"AAAA"}"#;
+            let inline = format!(
+                "run();\n//# sourceMappingURL=data:application/json;base64,{}\n",
+                base64::engine::general_purpose::STANDARD.encode(leaking)
+            );
+            let tgz = fixtures::gzip(&fixtures::tar(&[
+                ("package/dist/cli.js.map", leaking.as_bytes()),
+                ("package/dist/inline.js", inline.as_bytes()),
+                ("package/dist/plain.js.map", plain.as_bytes()),
+            ]));
+            let path = std::env::temp_dir().join(format!("discipline_selftest_scan_{}.tgz", std::process::id()));
+            std::fs::write(&path, tgz)?;
+            let scanned = read_archive(&path, 1, Some(1 << 20));
+            let capped = read_archive(&path, 1, Some(16));
+            std::fs::remove_file(&path)?;
+            let scan = scanned?.scan.unwrap_or_default();
+            let leaks: Vec<(&str, bool)> = scan.leaks.iter().map(|l| (l.entry.as_str(), l.inline)).collect();
+            let found = leaks == [("dist/cli.js.map", false), ("dist/inline.js", true)]
+                && scan.maps_without_source == ["dist/plain.js.map"];
+            let capped = capped?.scan.unwrap_or_default();
+            let cap_named = capped.leaks.is_empty() && capped.oversized.len() == 3;
+            Ok(found && cap_named)
+        },
+    ),
+    (
         "manifest-sync: extracts declared paths and reconciles bidirectional diffs",
         || {
             let manifest_xml = r#"

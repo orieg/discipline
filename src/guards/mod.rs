@@ -25,6 +25,7 @@ pub mod provenance_tags;
 pub mod sanitizers;
 pub mod scope_confinement;
 pub mod shell_secrets;
+pub mod source_maps;
 pub mod stub_bodies;
 pub mod suppression_delta;
 pub mod test_budget;

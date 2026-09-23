@@ -1390,7 +1390,15 @@ pub struct ArchiveContentsGate {
     pub required_paths: Vec<String>,
     pub forbidden_patterns: Vec<String>,
     pub strip_components: usize,
+    /// Read each entry's bytes and report source maps that embed the original
+    /// source (`sourcesContent`), inline or as `.map` entries.
+    pub scan_contents: bool,
+    /// Entries larger than this are not scanned; they are named in a note.
+    pub max_entry_bytes: u64,
 }
+
+/// Default `max_entry_bytes`: 16 MiB.
+pub const ARCHIVE_MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 
 impl Default for ArchiveContentsGate {
     fn default() -> Self {
@@ -1402,6 +1410,8 @@ impl Default for ArchiveContentsGate {
             required_paths: Vec::new(),
             forbidden_patterns: Vec::new(),
             strip_components: 0,
+            scan_contents: false,
+            max_entry_bytes: ARCHIVE_MAX_ENTRY_BYTES,
         }
     }
 }

@@ -968,8 +968,17 @@ To port the other way, adopting the static basis instead, run `discipline check`
   - Missing `required_paths` in the archive (e.g. `config.m4`, `example_ext.h`, `LICENSE`, `README.md`).
   - Forbidden entries matching `forbidden_patterns` regexes (e.g. `.git*`, `tools/**`, `tests/**`, private keys, local dev artifacts).
   - Supports `strip_components = 1` for archives rooted in a versioned directory (e.g. `Judy-2.6.0/config.m4`).
+  - With `scan_contents = true`: `Source Leaked In Archive` for a source map that embeds the original source (below).
+- **Content scan** (`scan_contents = true`, off by default; `max_entry_bytes`, default 16 MiB). Each entry of at most `max_entry_bytes` is read:
+  - An entry ending `.map` is parsed as JSON. A source map (a `mappings`, `sources` or `sections` key; index maps are followed into each section; a leading `)]}'` line and a BOM are skipped) whose `sourcesContent` holds at least one non-empty string is **`Source Leaked In Archive`** at the gate's severity. A source map with no `sourcesContent`, or only `null` / empty entries, is **`Source Map Shipped`** at `warning`. A `.map` that is not a JSON source map (a linker map, say) is named in a note.
+  - Any other entry with no NUL byte in its first 8000 bytes is searched for `sourceMappingURL` comments (`//# `, `//@ `, `/*# ... */`). A `data:` URL is base64- or percent-decoded and parsed by the same rule, so an inline map with `sourcesContent` is `Source Leaked In Archive` too. A reference to a separate file is resolved against the entry's directory; when that file is not in the archive, a note names both (the leak, if any, is in a file that did not ship). Absolute URLs are not followed.
+  - A finding names the entry, how many files it embeds and the first five `sources` paths (home-directory user names replaced by `~`); it never quotes the embedded source.
+  - Not scanned, and named in a note rather than passed silently: entries larger than `max_entry_bytes`, zip entries this reader cannot decode (a bzip2-compressed entry, for one), and binary entries (their names are still checked by `forbidden_patterns`). Lowering `max_entry_bytes` or switching `scan_contents` off is reported by `config-integrity` as a weakening.
+  - Debug-symbol entries (`.pdb`, `.dSYM/`, `.debug`) and `.d.ts.map` files are matched by name through `forbidden_patterns`, not by content.
 - **Failing archive example (rejected):**
   Archive containing `Judy-2.6.0/tools/check.sh` when `forbidden_patterns = ["^tools/"]`.
+
+  With `scan_contents = true`, an npm tarball holding `package/dist/cli.js.map` whose `sourcesContent` embeds `../src/cli.ts`, or a `package/dist/cli.js` ending in `//# sourceMappingURL=data:application/json;base64,...` that decodes to such a map.
 - **Passing PR description (accepted):**
   ```text
   allow-archive-leak: ^tools/ temporary packaging tool bundled for triage
@@ -977,8 +986,8 @@ To port the other way, adopting the static basis instead, run `discipline check`
 - **What it does NOT catch:**
   - Files not packaged into the archive.
   - Entries of nested archives (see above), and anything inside the formats listed as not analysed.
-- **Lifting directive:** `allow-archive-leak: <pattern> <reason>` in PR description or commit message.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `archive_path`, `required_paths`, `forbidden_patterns`, `strip_components`.
+- **Lifting directive:** `allow-archive-leak: <pattern> <reason>` in PR description or commit message; for a content-scan finding, the subject is the entry path (`allow-archive-leak: package/dist/cli.js.map <reason>`).
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `archive_path`, `required_paths`, `forbidden_patterns`, `strip_components`, `scan_contents`, `max_entry_bytes`.
 
 #### `manifest-sync`
 - **Rule:** Reconciles git-tracked files in declared directories against file lists in packaging manifests (e.g., PECL `package.xml`, Ruby `gemspec`, Python `MANIFEST.in`, Debian `debian/install`, etc.). Bidirectional diffing detects both unmanifested git files (`+`) and ghost manifest entries (`-`).

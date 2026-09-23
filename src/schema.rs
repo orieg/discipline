@@ -503,7 +503,9 @@ pub fn generate_schema() -> Value {
                     "archive_path": { "type": "string", "description": "Glob pattern matching the built archive file" },
                     "required_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Files required to exist inside the archive" },
                     "forbidden_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns forbidden inside the archive" },
-                    "strip_components": { "type": "integer", "description": "Leading directory components to strip from archive paths" }
+                    "strip_components": { "type": "integer", "description": "Leading directory components to strip from archive paths" },
+                    "scan_contents": { "type": "boolean", "description": "Read each entry and report source maps whose sourcesContent embeds the original source, as .map entries or inline base64 sourceMappingURL comments" },
+                    "max_entry_bytes": { "type": "integer", "minimum": 1, "description": "Entries larger than this many bytes are not scanned and are named in a note (default 16 MiB)" }
                 }
             },
             "ManifestSyncGate": {

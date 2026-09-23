@@ -18,9 +18,18 @@
           "$ref": "#/$defs/StringListOrReset",
           "description": "Regex patterns forbidden inside the archive"
         },
+        "max_entry_bytes": {
+          "description": "Entries larger than this many bytes are not scanned and are named in a note (default 16 MiB)",
+          "minimum": 1,
+          "type": "integer"
+        },
         "required_paths": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Files required to exist inside the archive"
+        },
+        "scan_contents": {
+          "description": "Read each entry and report source maps whose sourcesContent embeds the original source, as .map entries or inline base64 sourceMappingURL comments",
+          "type": "boolean"
         },
         "severity": {
           "$ref": "#/$defs/Severity"

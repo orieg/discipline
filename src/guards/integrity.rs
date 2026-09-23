@@ -107,6 +107,8 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("min_count", Direction::Floor),
     ("min_tests", Direction::Floor),
     ("min_assertions_per_test", Direction::Floor),
+    // A lower cap leaves more archive entries unscanned.
+    ("max_entry_bytes", Direction::Floor),
     ("max_unsafe", Direction::Cap),
     ("max_increase", Direction::Cap),
     // Booleans where `true` relaxes the gate.
@@ -138,6 +140,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("forbid_continue_on_error", Direction::LooserWhenFalse),
     ("forbid_or_true", Direction::LooserWhenFalse),
     ("canary", Direction::LooserWhenFalse),
+    ("scan_contents", Direction::LooserWhenFalse),
     // What the gate runs or checks against.
     ("superseded_registry", Direction::Evidence),
     ("ratio_baseline", Direction::Evidence),

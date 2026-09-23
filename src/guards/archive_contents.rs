@@ -3,11 +3,15 @@
 //! Validates built distribution archives before publishing, asserting that
 //! required files exist and developer tooling / private artifacts do not leak.
 
-use crate::guards::{archive_formats, Context, GateOutcome};
+use crate::config::Severity;
+use crate::guards::archive_formats::{self, EntryData};
+use crate::guards::source_maps::{self, MapRef, MapVerdict};
+use crate::guards::{Context, GateOutcome};
 use crate::tokens;
 use anyhow::{bail, Context as _, Result};
 use globset::GlobBuilder;
 use regex::Regex;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub const GATE: &str = "archive-contents";
@@ -57,8 +61,18 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
         .display()
         .to_string();
 
-    let entries =
-        read_archive_entries(archive_path, settings.strip_components).with_context(|| {
+    let scan_limit = if settings.scan_contents {
+        if settings.max_entry_bytes == 0 {
+            bail!(
+                "archive-contents `max_entry_bytes` must be at least 1 when `scan_contents` is on"
+            );
+        }
+        Some(settings.max_entry_bytes)
+    } else {
+        None
+    };
+    let ArchiveRead { entries, scan } =
+        read_archive(archive_path, settings.strip_components, scan_limit).with_context(|| {
             format!(
                 "archive `{}` could not be read (corrupt, truncated, or a format archive-contents does not analyse)",
                 rel_archive_display
@@ -158,7 +172,161 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
         );
     }
 
+    if let Some(scan) = scan {
+        report_scan(ctx, &rel_archive_display, &entries, scan, &mut out);
+    }
+
     Ok(out)
+}
+
+/// How many entries a finding or note lists before summarising the rest.
+const LISTED: usize = 20;
+
+fn listing(items: &[String]) -> String {
+    let mut out = items
+        .iter()
+        .take(LISTED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if items.len() > LISTED {
+        out.push_str(&format!(" (+{} more)", items.len() - LISTED));
+    }
+    out
+}
+
+/// Turns the content scan into findings and notes.
+fn report_scan(
+    ctx: &Context,
+    archive: &str,
+    entries: &[String],
+    scan: ScanReport,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.archive_contents;
+
+    let mut leaks = Vec::new();
+    for leak in &scan.leaks {
+        if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_ARCHIVE_LEAK, &leak.entry) {
+            out.overrides.push(ov);
+            continue;
+        }
+        let shown = leak.sources.join(", ");
+        let more = leak.files.saturating_sub(leak.sources.len());
+        let more = if more > 0 {
+            format!(" (+{more} more)")
+        } else {
+            String::new()
+        };
+        let how = if leak.inline {
+            "inline source map (sourceMappingURL data URL)"
+        } else {
+            "source map"
+        };
+        leaks.push(format!(
+            "  - {}: {how} embeds {} original file(s) in `sourcesContent`: {shown}{more}",
+            leak.entry, leak.files
+        ));
+    }
+    if !leaks.is_empty() {
+        let total = leaks.len();
+        let mut lines: Vec<String> = leaks.into_iter().take(LISTED).collect();
+        if total > LISTED {
+            lines.push(format!("  - (+{} more entries)", total - LISTED));
+        }
+        out.push(
+            ctx.overridable(settings.severity),
+            "Source Leaked In Archive",
+            Some(archive),
+            None,
+            format!(
+                "archive `{archive}` ships original source in {total} entr{}:\n{}",
+                if total == 1 { "y" } else { "ies" },
+                lines.join("\n")
+            ),
+            "build the release without `sourcesContent` (or without source maps), or justify with `allow-archive-leak: <entry> <reason>`",
+        );
+    }
+
+    let mut shipped = Vec::new();
+    for entry in &scan.maps_without_source {
+        if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_ARCHIVE_LEAK, entry) {
+            out.overrides.push(ov);
+        } else {
+            shipped.push(entry.clone());
+        }
+    }
+    if !shipped.is_empty() {
+        let severity = if settings.severity == Severity::Note {
+            Severity::Note
+        } else {
+            Severity::Warning
+        };
+        out.push(
+            severity,
+            "Source Map Shipped",
+            Some(archive),
+            None,
+            format!(
+                "archive `{archive}` ships {} source map(s) without embedded source: {}",
+                shipped.len(),
+                listing(&shipped)
+            ),
+            "leave source maps out of the published package unless they are meant to ship",
+        );
+    }
+
+    if !scan.oversized.is_empty() {
+        out.notes.push(format!(
+            "not scanned: {} entr{} larger than max_entry_bytes ({} bytes): {}",
+            scan.oversized.len(),
+            if scan.oversized.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            settings.max_entry_bytes,
+            listing(&scan.oversized)
+        ));
+    }
+    if !scan.undecodable.is_empty() {
+        out.notes.push(format!(
+            "not scanned: {} entr{} whose bytes this reader cannot decode: {}",
+            scan.undecodable.len(),
+            if scan.undecodable.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            listing(&scan.undecodable)
+        ));
+    }
+    if !scan.not_maps.is_empty() {
+        out.notes.push(format!(
+            "`.map` entr{} that are not JSON source maps, not checked for sourcesContent: {}",
+            if scan.not_maps.len() == 1 { "y" } else { "ies" },
+            listing(&scan.not_maps)
+        ));
+    }
+    if !scan.bad_inline.is_empty() {
+        out.notes.push(format!(
+            "inline sourceMappingURL data that is not a decodable source map: {}",
+            listing(&scan.bad_inline)
+        ));
+    }
+    let present: std::collections::HashSet<&str> = entries.iter().map(String::as_str).collect();
+    let missing: Vec<String> = scan
+        .external_refs
+        .iter()
+        .filter(|(_, target)| !present.contains(target.as_str()))
+        .map(|(entry, target)| format!("{entry} -> {target}"))
+        .collect();
+    if !missing.is_empty() {
+        out.notes.push(format!(
+            "sourceMappingURL names a map that is not in the archive: {}",
+            listing(&missing)
+        ));
+    }
 }
 
 /// Discovers archive files matching `pattern` relative to `root`.
@@ -223,12 +391,144 @@ fn find_archives_recursive(
 
 /// Reads relative paths from an archive, stripping `strip_components` leading directory elements.
 pub fn read_archive_entries(archive_path: &Path, strip_components: usize) -> Result<Vec<String>> {
+    Ok(read_archive(archive_path, strip_components, None)?.entries)
+}
+
+/// An archive's entry names and, when asked for, what the content scan found.
+pub struct ArchiveRead {
+    pub entries: Vec<String>,
+    pub scan: Option<ScanReport>,
+}
+
+/// A source map that embeds original source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Leak {
+    pub entry: String,
+    /// The map is a `sourceMappingURL` data URL inside `entry`, not a `.map` file.
+    pub inline: bool,
+    pub files: usize,
+    pub sources: Vec<String>,
+}
+
+/// What the content scan found and what it could not read. Entry names are the
+/// stripped names the forbidden patterns see.
+#[derive(Debug, Default)]
+pub struct ScanReport {
+    pub leaks: Vec<Leak>,
+    pub maps_without_source: Vec<String>,
+    pub oversized: Vec<String>,
+    pub undecodable: Vec<String>,
+    pub not_maps: Vec<String>,
+    pub bad_inline: Vec<String>,
+    /// (entry, the archive path its external `sourceMappingURL` resolves to).
+    pub external_refs: Vec<(String, String)>,
+}
+
+/// Reads an archive's entry names (stripped) and, with `scan_limit`, scans every
+/// entry of at most that many bytes for source maps.
+pub fn read_archive(
+    archive_path: &Path,
+    strip_components: usize,
+    scan_limit: Option<u64>,
+) -> Result<ArchiveRead> {
     let mut raw_paths = Vec::new();
+    let mut scan = scan_limit.map(|_| ScanReport::default());
     archive_formats::walk(archive_path, &mut |entry| {
+        if let (Some(report), Some(limit), Some(name)) = (
+            scan.as_mut(),
+            scan_limit,
+            strip_entry(&entry.name, strip_components),
+        ) {
+            if !entry.is_dir {
+                match entry.data {
+                    EntryData::Bytes(reader) => {
+                        scan_entry(&name, entry.size, reader, limit, report)?;
+                    }
+                    EntryData::Undecodable(why) => {
+                        report.undecodable.push(format!("{name} ({why})"));
+                    }
+                    EntryData::Expanded => {}
+                }
+            }
+        }
         raw_paths.push(entry.name);
         Ok(())
     })?;
-    Ok(strip_entries(raw_paths, strip_components))
+    Ok(ArchiveRead {
+        entries: strip_entries(raw_paths, strip_components),
+        scan,
+    })
+}
+
+/// Bytes sniffed for a NUL to tell a binary entry from text.
+const BINARY_SNIFF: usize = 8000;
+
+fn scan_entry(
+    name: &str,
+    declared: u64,
+    reader: &mut dyn Read,
+    limit: u64,
+    report: &mut ScanReport,
+) -> Result<()> {
+    if declared > limit {
+        report.oversized.push(name.to_string());
+        return Ok(());
+    }
+    let mut bytes = Vec::new();
+    Read::take(&mut *reader, limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("reading entry `{name}`"))?;
+    if bytes.len() as u64 > limit {
+        report.oversized.push(name.to_string());
+        return Ok(());
+    }
+    let binary = bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0);
+    if name.to_ascii_lowercase().ends_with(".map") {
+        if binary {
+            report.not_maps.push(format!("{name} (binary)"));
+            return Ok(());
+        }
+        match source_maps::analyse_map(&bytes) {
+            MapVerdict::EmbedsSource { files, sources } => report.leaks.push(Leak {
+                entry: name.to_string(),
+                inline: false,
+                files,
+                sources,
+            }),
+            MapVerdict::NoSourceContent => report.maps_without_source.push(name.to_string()),
+            MapVerdict::NotASourceMap(why) => report.not_maps.push(format!("{name} ({why})")),
+        }
+        return Ok(());
+    }
+    if binary {
+        return Ok(());
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    for map_ref in source_maps::map_refs(&text) {
+        match map_ref {
+            MapRef::Inline(map) => match source_maps::analyse_map(&map) {
+                MapVerdict::EmbedsSource { files, sources } => report.leaks.push(Leak {
+                    entry: name.to_string(),
+                    inline: true,
+                    files,
+                    sources,
+                }),
+                MapVerdict::NoSourceContent => {
+                    report.maps_without_source.push(format!("{name} (inline)"))
+                }
+                MapVerdict::NotASourceMap(why) => {
+                    report.bad_inline.push(format!("{name} ({why})"));
+                }
+            },
+            MapRef::InlineUndecodable(why) => report.bad_inline.push(format!("{name} ({why})")),
+            MapRef::External(url) => {
+                if let Some(target) = source_maps::resolve_external(name, &url) {
+                    report.external_refs.push((name.to_string(), target));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Normalises raw entry names (`./` and empty components dropped), strips
@@ -315,5 +615,133 @@ mod tests {
         let entries = read_archive_entries(&zip_path, 1).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0], "example_ext.h");
+    }
+
+    use crate::guards::archive_formats::fixtures;
+    use base64::Engine as _;
+
+    const LEAKING_MAP: &str = r#"{"version":3,"file":"cli.js","sources":["../src/cli.ts"],"sourcesContent":["export const secret = 1;\n"],"mappings":"AAAA"}"#;
+    const PLAIN_MAP: &str =
+        r#"{"version":3,"file":"cli.js","sources":["../src/cli.ts"],"mappings":"AAAA"}"#;
+
+    fn npm_tgz(dir: &tempfile::TempDir, files: &[(&str, &[u8])]) -> std::path::PathBuf {
+        let path = dir.path().join("pkg-1.0.0.tgz");
+        std::fs::write(&path, fixtures::gzip(&fixtures::tar(files))).unwrap();
+        path
+    }
+
+    fn inline_js(map: &str) -> Vec<u8> {
+        format!(
+            "console.log(1);\n//# sourceMappingURL=data:application/json;charset=utf-8;base64,{}\n",
+            base64::engine::general_purpose::STANDARD.encode(map)
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn the_scan_reports_map_and_inline_leaks_and_maps_without_source() {
+        let dir = tempdir().unwrap();
+        let inline = inline_js(LEAKING_MAP);
+        let inline_plain = inline_js(PLAIN_MAP);
+        let path = npm_tgz(
+            &dir,
+            &[
+                ("package/package.json", b"{}"),
+                (
+                    "package/dist/cli.js",
+                    b"x();\n//# sourceMappingURL=cli.js.map\n",
+                ),
+                ("package/dist/cli.js.map", LEAKING_MAP.as_bytes()),
+                ("package/dist/inline.js", &inline),
+                ("package/dist/plain.js.map", PLAIN_MAP.as_bytes()),
+                ("package/dist/plain-inline.js", &inline_plain),
+                ("package/dist/linker.map", b"Memory map\n.text 0x0\n"),
+                (
+                    "package/dist/logo.png",
+                    b"\x89PNG\r\n\x1a\n\0\0sourceMappingURL",
+                ),
+            ],
+        );
+        let read = read_archive(&path, 1, Some(1 << 20)).unwrap();
+        let scan = read.scan.unwrap();
+        assert_eq!(
+            scan.leaks,
+            vec![
+                Leak {
+                    entry: "dist/cli.js.map".into(),
+                    inline: false,
+                    files: 1,
+                    sources: vec!["../src/cli.ts".into()]
+                },
+                Leak {
+                    entry: "dist/inline.js".into(),
+                    inline: true,
+                    files: 1,
+                    sources: vec!["../src/cli.ts".into()]
+                },
+            ]
+        );
+        assert_eq!(
+            scan.maps_without_source,
+            vec!["dist/plain.js.map", "dist/plain-inline.js (inline)"]
+        );
+        assert_eq!(scan.not_maps.len(), 1);
+        assert!(scan.not_maps[0].starts_with("dist/linker.map"));
+        assert_eq!(
+            scan.external_refs,
+            vec![("dist/cli.js".to_string(), "dist/cli.js.map".to_string())]
+        );
+        assert!(scan.oversized.is_empty() && scan.bad_inline.is_empty());
+    }
+
+    #[test]
+    fn the_scan_is_off_unless_asked_for() {
+        let dir = tempdir().unwrap();
+        let path = npm_tgz(&dir, &[("package/dist/cli.js.map", LEAKING_MAP.as_bytes())]);
+        let read = read_archive(&path, 1, None).unwrap();
+        assert!(read.scan.is_none());
+        assert_eq!(read.entries, vec!["dist/cli.js.map"]);
+    }
+
+    #[test]
+    fn an_entry_over_the_size_cap_is_named_not_scanned_and_not_passed() {
+        let dir = tempdir().unwrap();
+        let path = npm_tgz(&dir, &[("package/dist/cli.js.map", LEAKING_MAP.as_bytes())]);
+        let small = LEAKING_MAP.len() as u64 - 1;
+        let scan = read_archive(&path, 1, Some(small)).unwrap().scan.unwrap();
+        assert!(scan.leaks.is_empty());
+        assert_eq!(scan.oversized, vec!["dist/cli.js.map"]);
+        // At exactly its size the entry is read and the leak is found.
+        let exact = LEAKING_MAP.len() as u64;
+        let scan = read_archive(&path, 1, Some(exact)).unwrap().scan.unwrap();
+        assert_eq!(scan.leaks.len(), 1);
+        assert!(scan.oversized.is_empty());
+    }
+
+    #[test]
+    fn a_zip_entry_this_reader_cannot_decode_is_named_not_scanned() {
+        // A zip entry whose compression this reader lacks: named in a note, not passed.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("pkg.zip");
+        let f = File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(f);
+        let stored =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("dist/cli.js.map", stored).unwrap();
+        zip.write_all(LEAKING_MAP.as_bytes()).unwrap();
+        zip.finish().unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        // Local and central headers both carry the method at a fixed offset; mark it
+        // as bzip2 (12), which this reader does not decode.
+        for sig in [&b"PK\x03\x04"[..], &b"PK\x01\x02"[..]] {
+            let at = bytes.windows(4).position(|w| w == sig).unwrap();
+            let offset = if sig == b"PK\x03\x04" { 8 } else { 10 };
+            bytes[at + offset] = 12;
+        }
+        std::fs::write(&path, bytes).unwrap();
+        let scan = read_archive(&path, 0, Some(1 << 20)).unwrap().scan.unwrap();
+        assert!(scan.leaks.is_empty());
+        assert_eq!(scan.undecodable.len(), 1, "{:?}", scan.undecodable);
+        assert!(scan.undecodable[0].starts_with("dist/cli.js.map"));
     }
 }

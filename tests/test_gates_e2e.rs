@@ -9055,6 +9055,174 @@ forbidden_patterns = ["(^|/)tools/"]
     assert!(run.stderr.contains("refusing to guess"), "{}", run.stderr);
 }
 
+#[test]
+fn archive_contents_scan_blocks_an_npm_tarball_that_ships_its_source() {
+    use base64::Engine as _;
+    use discipline::guards::archive_formats::fixtures;
+
+    let repo = Repo::new();
+    let config = r#"
+[meta]
+version = 1
+name = "test-repo"
+
+[gates.archive-contents]
+enabled = true
+archive_path = "dist/*.tgz"
+scan_contents = true
+"#;
+    repo.commit_base(
+        "discipline.toml",
+        config,
+        "base: configure archive-contents",
+    );
+    let tgz = repo.path().join("dist/example-cli-1.0.0.tgz");
+    std::fs::create_dir_all(tgz.parent().unwrap()).unwrap();
+    let pack = |files: &[(&str, &[u8])]| {
+        std::fs::write(&tgz, fixtures::gzip(&fixtures::tar(files))).unwrap();
+    };
+    // The original source line must never be echoed into a report.
+    let leaking_map = r#"{"version":3,"file":"cli.js","sources":["../src/cli.ts","../src/config.ts"],"sourcesContent":["const SECRET_SOURCE_LINE = 1;\n","export {};\n"],"mappings":"AAAA"}"#;
+    let plain_map =
+        r#"{"version":3,"file":"cli.js","sources":["../src/cli.ts"],"mappings":"AAAA"}"#;
+    let manifest: (&str, &[u8]) = ("package/package.json", br#"{"name":"example-cli"}"#);
+    let referencing: &[u8] = b"#!/usr/bin/env node\nrun();\n//# sourceMappingURL=cli.js.map\n";
+
+    // Clean: no map, no reference.
+    pack(&[manifest, ("package/dist/cli.js", b"run();\n")]);
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("archive-contents");
+    assert_eq!(outcome["examined"].as_u64().unwrap(), 2);
+    assert!(outcome["violations"].as_array().unwrap().is_empty());
+
+    // A .map entry with sourcesContent: blocked, naming the entry and the sources.
+    pack(&[
+        manifest,
+        ("package/dist/cli.js", referencing),
+        ("package/dist/cli.js.map", leaking_map.as_bytes()),
+    ]);
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("archive-contents");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["title"], "Source Leaked In Archive");
+    assert_eq!(violations[0]["severity"], "error");
+    let message = violations[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("package/dist/cli.js.map")
+            && message.contains("2 original file(s)")
+            && message.contains("../src/cli.ts, ../src/config.ts"),
+        "{message}"
+    );
+    assert!(!run.stdout.contains("SECRET_SOURCE_LINE"), "{}", run.stdout);
+
+    // The same map inline, base64 in a sourceMappingURL comment: blocked.
+    let inline = format!(
+        "run();\n//# sourceMappingURL=data:application/json;charset=utf-8;base64,{}\n",
+        base64::engine::general_purpose::STANDARD.encode(leaking_map)
+    );
+    pack(&[manifest, ("package/dist/cli.js", inline.as_bytes())]);
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("archive-contents");
+    assert_eq!(violations[0]["title"], "Source Leaked In Archive");
+    let message = violations[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("package/dist/cli.js: inline source map"),
+        "{message}"
+    );
+    assert!(!run.stdout.contains("SECRET_SOURCE_LINE"));
+
+    // A .map without sourcesContent: a warning, not a failure.
+    pack(&[
+        manifest,
+        ("package/dist/cli.js", referencing),
+        ("package/dist/cli.js.map", plain_map.as_bytes()),
+    ]);
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("archive-contents");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["title"], "Source Map Shipped");
+    assert_eq!(violations[0]["severity"], "warning");
+
+    // A reference to a map that is not packed: a note, not a finding.
+    pack(&[manifest, ("package/dist/cli.js", referencing)]);
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("archive-contents");
+    assert!(outcome["violations"].as_array().unwrap().is_empty());
+    let notes = outcome["notes"].to_string();
+    assert!(
+        notes.contains("package/dist/cli.js -> package/dist/cli.js.map"),
+        "{notes}"
+    );
+
+    // An entry above max_entry_bytes is named as not scanned, never passed silently.
+    pack(&[
+        manifest,
+        ("package/dist/cli.js", referencing),
+        ("package/dist/cli.js.map", leaking_map.as_bytes()),
+    ]);
+    let lowered = [
+        "--config-override",
+        "[gates.archive-contents]\nmax_entry_bytes = 64",
+    ];
+    // Lowering the cap is itself a weakening config-integrity reports.
+    let run = repo.check(&lowered);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+    let run = repo.check_with_pr(
+        &lowered,
+        "allow-gate-weakening: archive-contents measuring the size cap",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.violations("archive-contents").is_empty());
+    let notes = run.outcome("archive-contents")["notes"].to_string();
+    assert!(
+        notes.contains("not scanned") && notes.contains("package/dist/cli.js.map"),
+        "{notes}"
+    );
+
+    // The directive lifts one leaking entry.
+    let run = repo.check_with_pr(
+        &[],
+        "allow-archive-leak: package/dist/cli.js.map the map is published for the hosted debugger",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.outcome("archive-contents")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // The scan is opt-in: without it, the same archive passes on names alone, and
+    // switching it off is a weakening.
+    let off = [
+        "--config-override",
+        "[gates.archive-contents]\nscan_contents = false",
+    ];
+    let run = repo.check(&off);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(run.violations("archive-contents").is_empty());
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+    let run = repo.check_with_pr(
+        &off,
+        "allow-gate-weakening: archive-contents names-only check for this release",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.violations("archive-contents").is_empty());
+}
+
 // ---- manifest-sync ---------------------------------------------------------
 
 #[test]

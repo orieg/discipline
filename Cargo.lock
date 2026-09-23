@@ -276,6 +276,7 @@ name = "discipline"
 version = "0.10.2"
 dependencies = [
  "anyhow",
+ "base64",
  "bzip2-rs",
  "clap",
  "clap_complete",

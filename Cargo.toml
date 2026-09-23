@@ -51,6 +51,9 @@ bzip2-rs = { version = "0.1.2", default-features = false }
 lzma-rs = { version = "0.3", default-features = false }
 ruzstd = { version = "0.9", default-features = false, features = ["std"] }
 fancy-regex = "0.19.2"
+# Inline `sourceMappingURL=data:...;base64,` maps (archive-contents content scan).
+# Already in the tree through ureq.
+base64 = "0.23"
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [features]
