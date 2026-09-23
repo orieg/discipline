@@ -1300,6 +1300,119 @@ Subsequent runs automatically detect `discipline-baseline.toml` if present:
 
 Discipline natively supports polyglot monorepos and multi-tier architectures using path scoping, vocabulary extension, and command gate presets.
 
+### Release Gate: No Source in the Published Package (`archive-contents`)
+
+A release job can check the exact file it is about to publish and stop the publish when [`archive-contents`](GATES.md#archive-contents) fails. The pattern, on a tag push:
+
+1. Build and **pack to a file** (`npm pack --pack-destination release`, not `npm pack --dry-run --json`), so the check reads the bytes that get uploaded.
+2. Run `discipline check` with the gate forced on and its settings supplied inline (`DISCIPLINE_CONFIG_OVERRIDE`), measured against the tagged commit itself (`--base HEAD`), so the change-based gates see no change and only the package is judged.
+3. Publish that file, in a step or job that runs only when the check passed.
+
+The snippets below are read by `tests/test_release_recipe.rs`, which runs their discipline command and configuration through the binary against a leaking and a clean npm tarball. For another ecosystem, change the pack command, `archive_path` and `preset`:
+
+| Ecosystem | Pack to a file | `archive_path` | `preset` |
+|---|---|---|---|
+| npm | `npm pack --pack-destination release` | `release/*.tgz` | `no-source-npm` |
+| Python | `python -m build --wheel --outdir release` | `release/*.whl` | `no-source-python` |
+| Rust | `cargo package` | `target/package/*.crate` | `no-source-rust` |
+| .NET | `dotnet pack -o release` | `release/*.nupkg` | `no-source-dotnet` |
+| JVM | `mvn package` | `target/*.jar` | `no-source-jvm` |
+| Go binaries | your release archive (`goreleaser`, `tar`) | `dist/*.tar.gz` | `no-source-go` |
+
+`preset = "no-source"` takes the union of the binary-ecosystem lists and turns the content scan on; the ecosystem presets leave `scan_contents` to you, so the snippets set it.
+
+GitHub Actions (the `publish` step runs only when the discipline step succeeded):
+
+<!-- release-recipe-github -->
+```yaml
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm ci && npm run build
+      - run: mkdir -p release && npm pack --pack-destination release
+      - name: Check the packed tarball
+        uses: orieg/discipline@v0
+        with:
+          suite: integrity
+          base_ref: HEAD
+          enable: archive-contents
+          config_override: |
+            [gates.archive-contents]
+            archive_path = "release/*.tgz"
+            preset = "no-source-npm"
+            scan_contents = true
+      - name: Publish
+        run: npm publish release/*.tgz
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+<!-- /release-recipe-github -->
+
+GitLab CI/CD (three jobs; `publish` needs `check-package`, so a failed check stops it):
+
+<!-- release-recipe-gitlab -->
+```yaml
+stages: [package, verify, publish]
+
+package:
+  stage: package
+  image: node:22
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - npm ci
+    - npm run build
+    - mkdir -p release && npm pack --pack-destination release
+  artifacts:
+    paths: [release/]
+
+check-package:
+  stage: verify
+  image:
+    name: ghcr.io/orieg/discipline:v0
+    entrypoint: [""]
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs: [package]
+  variables:
+    DISCIPLINE_ENABLE: archive-contents
+    DISCIPLINE_CONFIG_OVERRIDE: |
+      [gates.archive-contents]
+      archive_path = "release/*.tgz"
+      preset = "no-source-npm"
+      scan_contents = true
+  script:
+    - discipline check --suite integrity --base HEAD
+
+publish:
+  stage: publish
+  image: node:22
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs: [package, check-package]
+  script:
+    - npm config set //registry.npmjs.org/:_authToken "${NPM_TOKEN}"
+    - npm publish release/*.tgz
+```
+<!-- /release-recipe-gitlab -->
+
+With `--base HEAD` there is no commit range and no pull request, so no directive is read from either. A finding the release is meant to carry is lifted by passing `allow-archive-leak: <entry> <reason>` explicitly: the action's `pr_body` input, or `PR_BODY` / `--pr-body-file` on the CLI. The test runs that too.
+
 ### Rollup Skip-Set Check (`ci-skip-set`)
 
 A path-filtered matrix makes its rollup job count `skipped` as passing. The [`ci-skip-set`](GATES.md#ci-skip-set) gate checks that every skip matches the job's own `if:` under the filter outputs the rollup observed, so an all-false filter evaluation cannot render as a green rollup over a run that verified nothing.

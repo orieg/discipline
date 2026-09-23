@@ -1008,6 +1008,7 @@ To port the other way, adopting the static basis instead, run `discipline check`
 - **What it does NOT catch:**
   - Files not packaged into the archive.
   - Entries of nested archives (see above), and anything inside the formats listed as not analysed.
+- **Release recipe:** a tag-push job that packs to a file, runs this gate on it and publishes only on a pass, for GitHub Actions and GitLab CI: [Release Gate: No Source in the Published Package](CONFIGURATION.md#release-gate-no-source-in-the-published-package-archive-contents).
 - **Lifting directive:** `allow-archive-leak: <pattern> <reason>` in PR description or commit message; for a content-scan finding, the subject is the entry path (`allow-archive-leak: package/dist/cli.js.map <reason>`).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `archive_path`, `required_paths`, `forbidden_patterns`, `strip_components`, `scan_contents`, `max_entry_bytes`, `preset`.
 
