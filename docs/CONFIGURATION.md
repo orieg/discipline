@@ -56,7 +56,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `directives.require_approval` | boolean | `false` | PR-body / commit-body overrides fail the run until the forge shows an approving review of the head commit by an allowed_override_actors member other than the author (default: false) |
 | `directives.sources` | list | `["pr-body","commits","merged-pr-body"]` | Allowed directive sources: pr-body, commits, merged-pr-body (default: ["pr-body", "commits", "merged-pr-body"]). merged-pr-body reads, on a push event, the body of the merged pull request each pushed commit arrived through |
 | `gates.agent-scratch.enabled` | boolean | `true` | Whether this gate is active |
-| `gates.agent-scratch.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.agent-scratch.exempt_paths` | list | *(3 entries)* | File path globs exempted from this gate |
 | `gates.agent-scratch.paths` | list | *(7 entries)* | Directory and file globs that must never be tracked |
 | `gates.agent-scratch.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.agents-md.enabled` | boolean | `true` | Whether this gate is active |
@@ -692,7 +692,25 @@ Run the gates inside a coding agent's edit loop, so an agent that weakens a test
 discipline hook install --agent claude-code   # or: codex, cursor, aider
 ```
 
-`hook install` writes the agent's configuration at the repository root when that file does not exist, and changes nothing when it does: it prints the snippet to merge instead (exit 1). Each configuration runs `discipline hook run --agent <name>`, which checks the change so far (committed on the branch and uncommitted, against the merge base with `origin`'s default branch, else `main` / `master`; `--base` or `DISCIPLINE_BASE_REF` overrides it) and answers in that agent's hook contract:
+`hook install` writes the agent's configuration at the repository root when that file does not exist (exit 0). When the file already runs discipline for that agent it says so and changes nothing (exit 0). When the file exists without the hook it changes nothing and prints the snippet to merge (exit 1); for Claude Code, merge the two `hooks` entries into the existing `hooks` object, appending to an event's array if the file already has one:
+
+```json
+{
+  "permissions": { "allow": ["Bash(cargo test:*)"] },
+  "hooks": {
+    "PostToolUse": [
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "./scripts/lint.sh" }] },
+      { "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "discipline hook run --agent claude-code" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "discipline hook run --agent claude-code" }] }
+    ]
+  }
+}
+```
+
+The hook file is project configuration: commit it so every contributor's agent runs the same check. `agent-scratch` does not report the files `hook install` writes (`.claude/settings.json`, `.cursor/hooks.json`, `.aider.conf.yml` are in its default `exempt_paths`); `instruction-smuggling` does report a change to them, because it changes what the agent is made to do, so the pull request that adds the hook carries `allow-agent-instructions: <file> <reason>`. Each configuration runs `discipline hook run --agent <name>`, which checks the change so far (committed on the branch and uncommitted, against the merge base with `origin`'s default branch, else `main` / `master`; `--base` or `DISCIPLINE_BASE_REF` overrides it) and answers in that agent's hook contract:
 
 | Agent | File | Runs on | A finding |
 |---|---|---|---|
@@ -701,7 +719,20 @@ discipline hook install --agent claude-code   # or: codex, cursor, aider
 | Cursor | `.cursor/hooks.json` | `stop` (`loop_limit: 3`) | `{"followup_message": <report>}` on stdout, sent as the next message |
 | Aider | `.aider.conf.yml` | `lint-cmd` after each edit (`auto-lint: true`) | exit 1, the report on stdout |
 
-The report is the `agent-prompt` format: each finding with its location and the repair, never the directive that would waive it. A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. A Claude Code or Codex `Stop` event that this hook already continued (`stop_hook_active`) is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. `discipline` must be on the agent's `PATH`.
+The report is the `agent-prompt` format: each finding with its location and the repair, never the directive that would waive it. For a weakened test, a Claude Code agent reads on stderr, with exit 2:
+
+```text
+Discipline gatekeeper detected violations in your changes. Please fix each issue:
+
+### Issue 1 [assertion-reduction]: Assertion Reduction In Existing Test
+- Location: tests/a.rs:2
+- Problem: Test `adds`: effective assertions dropped from 2 to 0.
+- Repair: Restore the assertions that were removed or weakened ...
+```
+
+**What a change cannot do to the check that judges it.** The hook (and `discipline mcp`) judges the change by the base ref's `discipline.toml` (`--policy-from base`), so an agent that edits the configuration does not switch its own gates off, and it reads no directive (a waiver in a commit message does not lift a finding here; the reviewed PR body lifts it in CI). Leaving waiver syntax out of the report is a convenience, not the control: an agent can run `discipline explain` like anyone else. The control is CI with `policy_from: base`, directives read from the PR body only, and `fail_on_overrides` or `require_approval` (see [High-Assurance Agent Guard Configuration](#high-assurance-agent-guard-configuration)). Findings a repository already has, such as a missing `AGENTS.md`, appear in every hook report too; record them with `discipline baseline --write` before installing the hook.
+
+A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. A Claude Code or Codex `Stop` event that this hook already continued (`stop_hook_active`) is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. `discipline` must be on the agent's `PATH`.
 
 ### Pull-Request Comments
 
@@ -791,17 +822,28 @@ Prints what the gate checks, its languages, its state under this repository's co
 
 ### MCP Server
 
-`discipline mcp` serves the gates to any MCP-capable agent over stdio (newline-delimited JSON-RPC; no socket, no network). Register it with the agent's MCP configuration, for example:
+`discipline mcp` serves the gates to any MCP-capable agent over stdio (newline-delimited JSON-RPC; no socket, no network). Register it with the agent's MCP configuration:
+
+| Client | Registration |
+|---|---|
+| Claude Code | `claude mcp add discipline -- discipline mcp`, or a project `.mcp.json` with the JSON below |
+| Cursor | `.cursor/mcp.json` with the JSON below |
+| Codex CLI | `config.toml` in the Codex home directory: `[mcp_servers.discipline]` with `command = "discipline"` and `args = ["mcp"]` |
+| Any other client | its server list, command `discipline`, argument `mcp` |
 
 ```json
 { "mcpServers": { "discipline": { "command": "discipline", "args": ["mcp"] } } }
 ```
 
+The server checks the repository it is started in: a client that starts servers outside the project gets `could_not_check` ("not inside a git repository"), never a pass.
+
+**Hooks or MCP.** A hook pushes the findings to the agent after every edit and before it stops, whether or not the agent asks; MCP lets the agent ask when it chooses. The hook is the enforcement; MCP is a tool the agent can use to check before it commits. Use the hook, and add MCP where the agent should be able to ask.
+
 | Tool | Arguments | Returns |
 |---|---|---|
-| `check_diff` | `base` (optional), `staged` (optional) | The `agent-prompt` report for the change so far (committed and uncommitted, against the merge base with the default branch unless `base` or `staged` says otherwise); `structuredContent.status` is `pass`, `findings` or `could_not_check` (the last also `isError`) |
+| `check_diff` | none | The `agent-prompt` report for the change so far (committed and uncommitted, against the merge base with the default branch, under the default branch's configuration, reading no directive); `structuredContent.status` is `pass`, `findings` or `could_not_check` (the last also `isError`). The agent cannot choose the base: naming `HEAD` would judge a committed change by its own configuration |
 | `list_gates` | none | The `discipline gates` table under the repository's configuration |
-| `explain_finding` | `query`: a gate id or a finding line naming `[gate-id]` | The gate's suite, what it checks, its languages and its reference link |
+| `explain_finding` | `query`: a gate id or a finding line naming `[gate-id]` | The gate's suite, what it checks, its languages and its reference link; an unknown query suggests gate ids |
 
 Every tool is read-only (`readOnlyHint`): none writes a file, a directive or a baseline, and no output carries waiver syntax, so an agent is told how to repair a finding, never how to excuse it. The server runs in the directory the agent starts it in; `discipline` must be on the agent's `PATH`.
 

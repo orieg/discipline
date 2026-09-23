@@ -220,3 +220,72 @@ fn check_help_lists_every_directive_source() {
         help.stdout
     );
 }
+
+/// A change cannot switch off the checks that judge it: the agent-facing check reads
+/// the base ref's configuration and no directive.
+#[test]
+fn an_agent_cannot_silence_its_own_hook() {
+    // 1. Disabling the gate in the working tree's discipline.toml.
+    let repo = Repo::new();
+    weakened(&repo);
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nenabled = false\n",
+    );
+    let run = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(
+        run.code, 2,
+        "the change's own config lifted the finding: {}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("[assertion-reduction]"),
+        "{}",
+        run.stderr
+    );
+
+    // 2. A waiver in a commit message.
+    let repo = Repo::new();
+    weakened(&repo);
+    repo.git(&["add", "-A"]);
+    repo.git(&[
+        "-c",
+        "user.email=t@example.invalid",
+        "-c",
+        "user.name=t",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "test: simplify",
+        "-m",
+        "allow-assertion-drop: adds the second check moved elsewhere",
+    ]);
+    let run = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(
+        run.code, 2,
+        "a commit-message waiver lifted the finding: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn the_shared_hook_file_is_not_scratch_state() {
+    let repo = Repo::new();
+    let install = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(install.code, 0, "{}", install.stderr);
+    repo.commit("chore: agent hook");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("agent-scratch").is_empty(),
+        "{:?}",
+        run.violations("agent-scratch")
+    );
+    // Still an agent-control change a reviewer sees.
+    assert!(
+        !run.titles("instruction-smuggling").is_empty(),
+        "{}",
+        run.stdout
+    );
+}

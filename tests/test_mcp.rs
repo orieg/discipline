@@ -114,3 +114,30 @@ fn a_clean_change_passes_and_a_broken_config_is_an_error_not_a_pass() {
         "could_not_check"
     );
 }
+
+#[test]
+fn check_diff_ignores_an_agent_chosen_base_and_the_changes_own_config() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    let x = 1;\n    let _ = x + 1;\n}\n\n#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+    );
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nenabled = false\n",
+    );
+    repo.commit("test: simplify");
+    let replies = session(
+        &repo,
+        &[call(
+            1,
+            "check_diff",
+            json!({"base": "HEAD", "staged": true}),
+        )],
+    );
+    assert_eq!(
+        replies[0]["result"]["structuredContent"]["status"], "findings",
+        "{}",
+        replies[0]
+    );
+}

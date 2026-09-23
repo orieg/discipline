@@ -784,7 +784,17 @@ impl Default for ScratchGate {
         Self {
             enabled: true,
             severity: Severity::Error,
-            exempt_paths: Vec::new(),
+            // The shared hook configuration `discipline hook install` writes is project
+            // configuration, not scratch state. A change to it is still an agent-control
+            // change that `instruction-smuggling` reports.
+            exempt_paths: [
+                ".claude/settings.json",
+                ".cursor/hooks.json",
+                ".aider.conf.yml",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
             paths: [
                 ".claude/**",
                 ".gemini/**",

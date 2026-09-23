@@ -76,7 +76,7 @@ pub fn translate(agent: Agent, check_code: i32, report: &str, detail: &str) -> H
         1 => report.to_string(),
         _ => format!(
             "discipline could not check this change, so it is not known to be safe. Fix the cause and continue:\n{}\n",
-            detail.trim()
+            crate::report::scrub_override_directives(detail.trim())
         ),
     };
     match agent {
@@ -177,13 +177,21 @@ pub enum CheckSide {
 }
 
 /// Runs this binary's `check --format agent-prompt` in `dir` and returns its exit
-/// code, report and stderr. A PR body in the environment is not passed on: an
-/// agent-facing check reads the change, not a waiver.
+/// code, report and stderr.
+///
+/// An agent-facing check cannot be talked out of a finding by the change it judges:
+/// the base ref's configuration decides (`--policy-from base`), so an agent that edits
+/// `discipline.toml` does not switch its own gates off, and no directive is read (the
+/// only source left is a PR body, and none is passed), so a waiver in a commit message
+/// does not lift a finding here. CI, which reads the reviewed PR body, still can.
 pub fn run_check(dir: &Path, side: &CheckSide) -> Result<(i32, String, String)> {
     let exe = std::env::current_exe().context("cannot locate the discipline binary")?;
     let mut cmd = std::process::Command::new(exe);
     cmd.current_dir(dir)
         .args(["check", "--format", "agent-prompt", "--quiet"])
+        .args(["--policy-from", "base", "--directive-sources", "pr-body"])
+        .env_remove("DISCIPLINE_POLICY_FROM")
+        .env_remove("DISCIPLINE_DIRECTIVE_SOURCES")
         .env_remove("PR_BODY")
         .env_remove("PR_TITLE")
         .env_remove("DISCIPLINE_COMMENT");

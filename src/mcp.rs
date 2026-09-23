@@ -61,15 +61,8 @@ fn tools() -> Value {
         {
             "name": "check_diff",
             "title": "Check the change",
-            "description": "Run discipline's gates on the change so far and return each finding with its location and the repair. By default the working tree (committed on the branch and uncommitted) is measured against the merge base with the default branch. Call it before committing; fix every finding it reports.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "base": { "type": "string", "description": "Branch or commit to measure the change against (default: the merge base with origin's default branch, else main / master)." },
-                    "staged": { "type": "boolean", "description": "Check only the staged changes against HEAD." }
-                },
-                "additionalProperties": false
-            },
+            "description": "Run discipline's gates on the change so far and return each finding with its location and the repair. The working tree (committed on the branch and uncommitted) is measured against the merge base with the default branch, under the default branch's configuration. Call it before committing; fix every finding it reports.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
             "annotations": read_only
         },
         {
@@ -114,10 +107,18 @@ fn explain(query: &str) -> (String, bool) {
             ),
             false,
         ),
-        None => (
-            format!("No discipline gate matches `{query}`. `list_gates` lists every gate id."),
-            true,
-        ),
+        None => {
+            let near = crate::explain::suggestions(query);
+            let hint = if near.is_empty() {
+                String::new()
+            } else {
+                format!(" Did you mean: {}?", near.join(", "))
+            };
+            (
+                format!("No discipline gate matches `{query}`.{hint} `list_gates` lists every gate id."),
+                true,
+            )
+        }
     }
 }
 
@@ -136,15 +137,17 @@ fn call_tool(runner: &dyn Runner, params: &Value) -> Result<Value, (i64, String)
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     match name {
         "check_diff" => {
-            let side = if args.get("staged").and_then(Value::as_bool) == Some(true) {
-                CheckSide::Staged
-            } else if let Some(b) = args.get("base").and_then(Value::as_str) {
-                CheckSide::Base(b.to_string())
-            } else {
-                CheckSide::Default
-            };
-            Ok(match runner.check(&side) {
-                Ok((0, report, _)) => text_result(report, false, Some(json!({ "status": "pass" }))),
+            // No argument chooses what is compared: an agent that could name `HEAD` as the
+            // base would judge its committed change by its own configuration.
+            Ok(match runner.check(&CheckSide::Default) {
+                Ok((0, report, _)) => {
+                    let text = if report.trim().is_empty() {
+                        "No discipline findings in this change.".to_string()
+                    } else {
+                        report
+                    };
+                    text_result(text, false, Some(json!({ "status": "pass" })))
+                }
                 Ok((1, report, _)) => {
                     text_result(report, false, Some(json!({ "status": "findings" })))
                 }
