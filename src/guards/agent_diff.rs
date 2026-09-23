@@ -495,13 +495,6 @@ pub(crate) fn leaf_name(test: &TestFn) -> &str {
     s.rsplit(" > ").next().unwrap_or(s)
 }
 
-fn analyzed_files(files: &[FileFacts], exempt: &PathFilter) -> usize {
-    files
-        .iter()
-        .filter(|f| f.head.is_some() && !exempt.matches(&f.file.path))
-        .count()
-}
-
 pub(crate) fn report_parse_errors(
     files: &[FileFacts],
     severity: crate::config::Severity,
@@ -1080,11 +1073,42 @@ pub fn evaluate_unsafe_safety_comment(
     const GATE: &str = "unsafe-safety-comment";
     let exempt = exempt_filter(settings)?;
     let mut out = GateOutcome::new(GATE);
-    out.examined = analyzed_files(files, &exempt);
+    // Only a pack that reads unsafe sites examines a file for this gate. A file in a
+    // language with its own explicit unsafe construct (Go's `unsafe` package, C#
+    // `unsafe` blocks, Swift's `Unsafe*Pointer`) that no pack reads is named, never
+    // counted as examined; a language without one has nothing here to miss.
+    let registry = default_registry();
+    let reads_unsafe = |path: &str| {
+        registry
+            .find_pack(path)
+            .is_some_and(|p| p.supplies(crate::ast::Fact::UnsafeSites))
+    };
+    let mut unread: Vec<&str> = Vec::new();
+    for ff in files {
+        if ff.head.is_none() || exempt.matches(&ff.file.path) {
+            continue;
+        }
+        if reads_unsafe(&ff.file.path) {
+            out.examined += 1;
+        } else if matches!(
+            crate::ast::extension(&ff.file.path),
+            Some("go" | "cs" | "swift")
+        ) {
+            unread.push(&ff.file.path);
+        }
+    }
+    if !unread.is_empty() {
+        let sample: Vec<&str> = unread.iter().take(3).copied().collect();
+        out.notes.push(format!(
+            "{} changed file(s) are in a language with unsafe code this gate does not read (Go, C#, Swift) and were NOT analysed for it (e.g. {})",
+            unread.len(),
+            sample.join(", ")
+        ));
+    }
 
     for ff in files {
         let Some(head) = &ff.head else { continue };
-        if exempt.matches(&ff.file.path) {
+        if exempt.matches(&ff.file.path) || !reads_unsafe(&ff.file.path) {
             continue;
         }
         let undocumented =

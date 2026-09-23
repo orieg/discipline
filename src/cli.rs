@@ -18,7 +18,7 @@ pub enum Commands {
     Diff(DiffArgs),
     /// Record or manage grandfathered finding baselines
     Baseline(BaselineArgs),
-    /// Write a discipline.toml with every available gate at its default
+    /// Write a minimal discipline.toml: gates run at their built-in defaults; commented examples show what to change
     Init(InitArgs),
     /// List every gate: id, suite, availability, and effective state
     Gates(GatesArgs),

@@ -350,7 +350,7 @@ impl GitCtx {
             }
         } else {
             let head = head.ok_or_else(|| {
-                anyhow!("repository has no commits; use --staged for the first commit")
+                anyhow!("repository has no commits; check the first commit with `discipline check --staged`")
             })?;
             let mut candidates = vec![base_ref.to_string()];
             if let Some(stripped) = base_ref.strip_prefix("origin/") {

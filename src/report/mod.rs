@@ -214,7 +214,7 @@ fn render_terminal_to_writer<W: Write>(
             writeln!(
                 w,
                 "\n{}",
-                style::cyan("Tip: Adopting Discipline on an existing repository? Run 'discipline baseline --write' to grandfather existing debt into discipline-baseline.toml.")
+                style::cyan("Tip: fix what this change introduced. Findings in code it did not touch (existing debt when adopting Discipline) can be recorded with 'discipline baseline --write'.")
             )?;
         }
     }

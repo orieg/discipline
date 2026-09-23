@@ -372,7 +372,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 
 #### `unsafe-safety-comment`
 - **Rule:** Every `unsafe` block, `unsafe fn`, or `unsafe impl` on an added line must be preceded by a load-bearing `// SAFETY:` comment. Deleting a `// SAFETY:` comment above an existing block is also blocked.
-- **Languages:** Rust.
+- **Languages:** Rust. Its `examined` count is the Rust files it read. A changed file in another language with its own unsafe construct (Go's `unsafe` package, C# `unsafe` blocks, Swift's `Unsafe*Pointer`) is named in the gate's notes as not analysed; a language without one (Python, JS / TS, ...) has nothing for this gate to miss and is not named.
 - **What it catches:**
   - Unsafe blocks or impls without preceding `// SAFETY:` comments.
   - Deletion of an existing `// SAFETY:` comment above an untouched `unsafe` block.

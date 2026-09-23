@@ -87,6 +87,21 @@ fn replay_reports_what_the_configuration_would_have_blocked() {
         "{}",
         text.stdout
     );
+    assert!(
+        text.stdout
+            .contains("directives read from the pull request body for 0 of 2 changes"),
+        "{}",
+        text.stdout
+    );
+    assert!(text.stderr.contains("replay 2/2:"), "{}", text.stderr);
+
+    // Asking for more changes than the history holds says so.
+    let short = repo.run(&["replay", "--last", "9", "--ref", "main"], &[]);
+    assert!(
+        short.stderr.contains("fewer than the 9 asked for"),
+        "{}",
+        short.stderr
+    );
 }
 
 #[test]

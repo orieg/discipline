@@ -1,8 +1,9 @@
 //! Code the test runner never reaches: the body of an `if` whose condition is a constant
 //! false, and the statements after an unconditional terminator (`return`, `panic!`,
 //! `pytest.fail()`, `throw`) at the same block level. A skip call (`t.Skip`,
-//! `pytest.skip`) is not a terminator: the test is reported as ignored, and its body
-//! stays what it is.
+//! `pytest.skip`) or a thrown skip exception (`throw XCTSkip(...)`, `raise
+//! unittest.SkipTest`) is not a terminator: the test is reported as ignored, and its
+//! body stays what it is.
 //!
 //! An assertion there counts as an assertion to a line count and fails nothing. Each
 //! pack's assertion walk skips nodes that start inside a dead range.
@@ -41,8 +42,22 @@ pub fn is_constant_false(condition: &str) -> bool {
 
 /// Whether a statement's text starts with a terminator head as a whole word: `return`
 /// and `return x`, not `returned = 1`.
+/// Exceptions a test framework raises to skip a test (`throw XCTSkip(...)`, `raise
+/// unittest.SkipTest`, TestNG's `SkipException`, JUnit's `TestAbortedException`). A
+/// statement throwing one is a skip, not a terminator.
+const SKIP_EXCEPTIONS: &[&str] = &[
+    "XCTSkip",
+    "SkipTest",
+    "SkipException",
+    "skip.Exception",
+    "TestAbortedException",
+];
+
 fn terminates(t: &str, spec: &ReachSpec) -> bool {
     let t = t.trim();
+    if SKIP_EXCEPTIONS.iter().any(|s| t.contains(s)) {
+        return false;
+    }
     spec.terminators.iter().any(|h| {
         t.starts_with(h)
             && t[h.len()..]

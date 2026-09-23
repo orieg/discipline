@@ -108,6 +108,15 @@ impl Summary {
             "\n{} changes: {} passed, {} blocked, {} could not be checked\n",
             self.cases, self.passed, self.blocked, self.could_not_check
         ));
+        let from_body = self
+            .cases_detail
+            .iter()
+            .filter(|c| c.directives_from == "pull request body")
+            .count();
+        out.push_str(&format!(
+            "directives read from the pull request body for {from_body} of {} changes; the rest used the commit message only\n",
+            self.cases
+        ));
         for (g, changes) in &self.errors_by_gate {
             out.push_str(&format!(
                 "  error    {g:<24} {} change(s): {}\n",
@@ -288,7 +297,15 @@ pub fn run(opts: &Options) -> Result<Summary> {
     let exe = std::env::current_exe().context("cannot locate the discipline binary")?;
 
     let mut cases = Vec::new();
-    for c in commits_to_replay(&src, tip, opts.last)? {
+    let commits = commits_to_replay(&src, tip, opts.last)?;
+    if commits.len() < opts.last {
+        eprintln!(
+            "replay: {} change(s) before the root commit, fewer than the {} asked for (the root commit has no parent to compare with)",
+            commits.len(),
+            opts.last
+        );
+    }
+    for c in commits {
         let parent = c.parent(0)?;
         let subject = c.summary().ok().flatten().unwrap_or("").to_string();
         let sig = git2::Signature::now("discipline replay", "replay@discipline.invalid")?;
@@ -359,6 +376,13 @@ pub fn run(opts: &Options) -> Result<Summary> {
         let code = out.status.code().unwrap_or(2);
         let (verdict, blocking, warning) =
             read_verdict(code, &String::from_utf8_lossy(&out.stdout));
+        eprintln!(
+            "replay {}/{}: {} {}",
+            cases.len() + 1,
+            opts.last,
+            &c.id().to_string()[..10],
+            verdict
+        );
         cases.push(Case {
             sha: c.id().to_string(),
             pr: pr.or_else(|| pr_from_subject(&subject)),

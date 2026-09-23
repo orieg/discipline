@@ -614,6 +614,18 @@ mod tests {
     }
 
     #[test]
+    fn a_thrown_skip_is_reported_as_ignored_not_as_vacuous() {
+        let src = "final class ATests: XCTestCase {\n  func testLater() throws {\n    throw XCTSkip(\"later\")\n    XCTAssertEqual(a, 1)\n  }\n}\n";
+        let f = facts("Tests/ATests.swift", src);
+        let t = &f.tests[0];
+        assert!(t.ignored);
+        assert_eq!(
+            t.total_asserts, 1,
+            "the assertion after a skip is not dead code: {t:?}"
+        );
+    }
+
+    #[test]
     fn swift_testing_expect_require_and_the_disabled_trait() {
         let src = "import Testing\n\n@Suite struct Parser {\n    @Test func parses() throws {\n        let v = try #require(parse(\"1\"))\n        #expect(v == 1)\n        #expect(true)\n    }\n\n    @Test(.disabled(\"flaky\")) func later() {\n        #expect(v == v)\n    }\n}\n\n@Test func free() { #expect(add(1, 1) == 2) }\n";
         let f = facts("Sources/App/ParserSpec.swift", src);

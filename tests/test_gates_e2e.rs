@@ -11813,3 +11813,35 @@ fn objective_c_source_files_are_analysed_by_the_objc_pack() {
     assert_eq!(run.titles("error-swallowing").len(), 2, "{}", run.stdout);
     assert_eq!(run.titles("stub-bodies").len(), 1, "{}", run.stdout);
 }
+
+#[test]
+fn unsafe_safety_comment_counts_only_what_it_reads_and_names_unsafe_capable_languages() {
+    let repo = Repo::new();
+    repo.write("src/extra.rs", "pub fn f() -> u8 {\n    1\n}\n");
+    repo.write(
+        "pkg/ptr.go",
+        "package pkg\n\nimport \"unsafe\"\n\nvar _ = unsafe.Sizeof(0)\n",
+    );
+    repo.write(
+        "Sources/Buf.swift",
+        "func f(p: UnsafeMutablePointer<UInt8>) {}\n",
+    );
+    repo.write("tools/gen.py", "def f():\n    return 1\n");
+    repo.commit("feat: several languages");
+    let run = repo.check(&[]);
+    let out = run.outcome("unsafe-safety-comment");
+    assert_eq!(out["examined"], 1, "only the Rust file is read: {out}");
+    let notes = out["notes"].to_string();
+    assert!(
+        notes.contains("2 changed file(s)") && notes.contains("NOT analysed"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("pkg/ptr.go") && notes.contains("Sources/Buf.swift"),
+        "{notes}"
+    );
+    assert!(
+        !notes.contains("gen.py"),
+        "a language without unsafe code is not named: {notes}"
+    );
+}

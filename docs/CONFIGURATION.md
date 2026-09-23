@@ -396,7 +396,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `check` | Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check |
 | `diff` | Shorthand for checking uncommitted or working tree changes against HEAD |
 | `baseline` | Record or manage grandfathered finding baselines |
-| `init` | Write a discipline.toml with every available gate at its default |
+| `init` | Write a minimal discipline.toml: gates run at their built-in defaults; commented examples show what to change |
 | `gates` | List every gate: id, suite, availability, and effective state |
 | `schema` | Print the JSON Schema for discipline.toml |
 | `self-test` | Run the embedded negative / positive controls against this binary |
