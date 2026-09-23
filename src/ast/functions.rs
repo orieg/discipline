@@ -403,6 +403,25 @@ pub fn classify_php(t: &str) -> Option<BodyShape> {
     trivial_return(t, TRIVIAL)
 }
 
+pub fn classify_swift(t: &str) -> Option<BodyShape> {
+    let t = strip_semicolon(t);
+    // `fatalError()` / `preconditionFailure()` with nothing to say, or saying so.
+    for head in ["fatalError(", "preconditionFailure("] {
+        if let Some(rest) = t.strip_prefix(head) {
+            if rest.trim() == ")" || has_word(t, NOT_IMPLEMENTED_WORDS) {
+                return Some(BodyShape::Stub(t.to_string()));
+            }
+        }
+    }
+    const TRIVIAL: &[&str] = &[
+        "nil", "0", "0.0", "false", "true", "\"\"", "[]", "[:]", "()",
+    ];
+    if TRIVIAL.contains(&t) {
+        return Some(BodyShape::Trivial(t.to_string()));
+    }
+    trivial_return(t, TRIVIAL)
+}
+
 pub fn classify_ruby(t: &str) -> Option<BodyShape> {
     let t = t.trim();
     if t.starts_with("raise NotImplementedError") || t == "raise NotImplementedError" {

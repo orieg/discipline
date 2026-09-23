@@ -699,6 +699,27 @@ pub fn c_discard_class(node: Node, src: &str) -> Option<&'static str> {
     sort_by_callee(name, C_FALLIBLE_CALLEES, &[])
 }
 
+/// Swift: `try?` turns a thrown error into `nil`.
+pub fn swift_discards(t: &str) -> bool {
+    t.trim_start().starts_with("try?")
+}
+
+/// Swift: a `try?` whose value is thrown away, as a statement of its own or bound to
+/// `_`, drops the error; `let v = try? f()` keeps a value the code goes on to handle.
+pub fn swift_discard_class(node: Node, src: &str) -> Option<&'static str> {
+    let parent = node.parent()?;
+    match parent.kind() {
+        "statements" => Some("discarded-result"),
+        "assignment" => {
+            let target = parent
+                .child_by_field_name("target")
+                .map(|t| text(t, src).trim());
+            (target == Some("_")).then_some("discarded-result")
+        }
+        _ => None,
+    }
+}
+
 /// Go: `_ = err`, `_, _ = f()`, `x, _ := f()` where the dropped value is the error.
 pub fn go_discards(t: &str) -> bool {
     let t = t.trim();

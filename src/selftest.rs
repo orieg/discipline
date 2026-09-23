@@ -394,6 +394,28 @@ const CASES: &[Case] = &[
                 && (c == ["discarded-result", "discarded-value"] || c == ["skipped"]))
         },
     ),
+    #[cfg(feature = "lang-swift")]
+    (
+        "swift: XCTest and Swift Testing tests, a vacuous one, a skip and a discarded try?",
+        || {
+            use crate::ast::LanguagePack;
+            let pack = crate::ast::swift::SwiftPack;
+            let v = AssertVocabulary::default();
+            let f = pack.extract(
+                "Tests/ATests.swift",
+                "final class ATests: XCTestCase {\n  func testA() { XCTAssertEqual(f(), 1) }\n  func testB() {}\n  func testC() throws { throw XCTSkip(\"x\") }\n}\n@Test func d() { #expect(g() == 2) }\n",
+                &v,
+            )?;
+            let prod = pack.extract("Sources/A.swift", "func h() { try? save() }\n", &v)?;
+            let names: Vec<&str> = f.tests.iter().map(|t| t.name.as_str()).collect();
+            Ok(names == ["ATests.testA", "ATests.testB", "ATests.testC", "d"]
+                && f.tests[0].strong_asserts == 1
+                && f.tests[1].is_vacuous()
+                && f.tests[2].ignored
+                && f.tests[3].strong_asserts == 1
+                && prod.swallowed.iter().any(|s| s.kind == "discarded-result"))
+        },
+    ),
     (
         "dispatch tables: helpers named in an array a test loops over resolve like calls",
         || {
