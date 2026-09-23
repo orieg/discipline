@@ -730,6 +730,46 @@ Replays the last N first-parent commits of a branch (default: `origin`'s default
 
 The directives each change carried are read from the body of the pull request it was merged through, by the same forge lookup as the `merged-pr-body` source (a token that can read pull requests: `GITHUB_TOKEN`, `GITEA_TOKEN`, ...). Without one, or with `DISCIPLINE_NO_NETWORK=1`, only the commit message is read, and each case says so (`directives_from`). `--json` prints the per-change verdicts and the per-gate counts (`errors_by_gate` names the changes each gate blocked). The command exits 0 when the replay ran, whatever it found; 2 when it could not run.
 
+### VS Code Problems Panel
+
+Run discipline as a VS Code task and its findings land in the **Problems** panel, each with its file, line and gate. Add this to `.vscode/tasks.json`:
+
+<!-- vscode-problem-matcher -->
+```json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "discipline",
+      "type": "shell",
+      "command": "discipline diff",
+      "options": { "env": { "NO_COLOR": "1" } },
+      "problemMatcher": {
+        "owner": "discipline",
+        "source": "discipline",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^(error|warning|note) \\[([a-z0-9-]+)\\] .+ \\[(.+?)(?::(\\d+))?\\]$",
+            "severity": 1,
+            "code": 2,
+            "file": 3,
+            "line": 4
+          },
+          {
+            "regexp": "^   (.+)$",
+            "message": 1
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+<!-- /vscode-problem-matcher -->
+
+`discipline diff` checks the working tree against `HEAD`; use `discipline check --base main` to check the whole branch. `NO_COLOR` keeps the output plain, which the pattern needs. A finding with no file (a gate-wide finding) stays in the terminal only.
+
 ### Explaining a Gate
 
 ```bash

@@ -316,8 +316,8 @@ A `--fix` suggestion (restore a deleted assertion from the base side, a `// SAFE
 | Item | Status | Work | Ships when |
 |---|---|---|---|
 | GitHub Marketplace listing | Open | Publish the action (`action.yml` branding, the release as the listing's version) | The listing resolves and installs the tagged release |
-| pre-commit.ci | Open | A hook that installs inside pre-commit.ci's offline sandbox (a prebuilt binary hook, since building from source needs the network) | A pre-commit.ci run on a sample repository executes the hook |
-| Editor and bot integrations | Open | A VS Code problem matcher for the terminal report; a Renovate preset that keeps the action, image tag and digest in lockstep | Each has a sample and a test reading its output |
+| pre-commit.ci | **Declined** | The published hook runs `discipline check --staged`; pre-commit.ci runs hooks on a checkout of the pull request where nothing is staged, so the hook would check an empty change and pass every pull request. A useful hook needs the pull request's base, which pre-commit.ci's clone is not known to provide, and a prebuilt-binary install (a PyPI wheel) because building the Rust crate there is heavy. The action and the container already gate every pull request, and the local pre-commit hook works | Reopen when a sandbox repository shows pre-commit.ci exposing the base commit, and a PyPI project with trusted publishing exists |
+| Editor and bot integrations | **Partial**: VS Code shipped (a documented `tasks.json` problem matcher, `docs/CONFIGURATION.md`, tested against the binary's output by `tests/test_editor_integrations.rs`); the Renovate preset is open | A VS Code problem matcher for the terminal report; a Renovate preset that keeps the action, image tag and digest in lockstep | Each has a sample and a test reading its output |
 
 **In parallel: a public benchmark** (independent of every step)
 
