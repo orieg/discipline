@@ -28,7 +28,7 @@ flowchart TD
     P8 --> P9["Phase 9: Review follow-ups"]
     P9 --> P10["Phase 10: Remainder remediation"]
     P7 --> P10
-    P10 --> P11["Phase 11: Coverage parity (JS/PHP helpers, discard sorting, Swift, Scala, Objective-C)"]
+    P10 --> P11["Phase 11: Agent reach (hooks, MCP, PR comments, replay) and coverage parity (Swift, Scala, Objective-C)"]
     P7 --> P8
 ```
 
@@ -259,8 +259,8 @@ Acceptance for Step 0 as a whole: the consumer's 100-PR replay with its config, 
 - **Go / no-go gate:** as Phase 8; additionally, Step 1 ships all three packs together or names in `docs/GATES.md` which fact each pack still lacks.
 - **Status:** shipped in v0.10.0 (Steps 0-5), with one row partial: the forge-side `doctor` step runs in CI but not under `--strict`, which needs a second reviewer account (the branch rules now block deletion and require pull requests). Order followed: Step 0 (correctness for a live consumer), Step 1 (it widened what every later step covers), Step 2, Step 5 (a second consumer-replay correctness item, ahead of coverage work), Step 3, Step 4.
 
-### Phase 11: Coverage Parity
-The language and pack-parity gaps left after v0.10.2, and the two live checks still outstanding. Each row ships when its gate criterion holds and the AGENTS.md §3.4 contract is met (unit controls, e2e through the binary, self-test case, a named test that kills a mutated detector).
+### Phase 11: Agent Reach and Coverage Parity
+What most widens adoption after v0.10.2: findings reaching an agent inside its edit loop and a reviewer on every forge, a one-command preview for a new repository, then the pack-parity and language gaps and the two live checks. The detection catalogue is not extended here. Each row ships when its gate criterion holds and the AGENTS.md §3.4 contract is met (unit controls, e2e through the binary, self-test case, a named test that kills a mutated detector).
 
 **Step 0: live checks** (no code; evidence recorded in Outstanding Checks)
 
@@ -269,7 +269,33 @@ The language and pack-parity gaps left after v0.10.2, and the two live checks st
 | Consumer replay of the `merged-pr-body` push event | **Done** (RUN 2026-09-22) | Replay the consumer's squash merge of its #1071 as a push (base `020ec7a4`, head `a8eb5e30`, `GITHUB_EVENT_NAME=push`, a token that reads pull requests) with a build of `main` after #153; control with `DISCIPLINE_NO_NETWORK=1` | Forge reachable: `errors: 0`, one override, the `Agent Instructions Changed` finding on `AGENTS.md` lifted by the directive read from merged pull request #1071, every gate noting the pull request. Offline: `errors: 1` (the same finding), each gate noting `merged-pr-body: not read`. Both held. |
 | Gitea Actions on a production server | Open | A private Gitea instance already runs the job-container recipe (`container: image:` pinned by tag and digest, `refs/pull/<n>/head` checkout) on `pull_request` and `push`. Record: the Gitea and `act_runner` versions; a clean pull-request run; an inverted canary (a pull request seeding a known violation) whose report names the expected gate ids; a push run to the default branch whose notes read the merged pull request through `commits/{sha}/pull`; `discipline doctor` against that instance's API | The five records exist and are summarised in Outstanding Checks without naming the instance or repository |
 
-**Step 1: pack parity** (independent rows; the missing capability in a pack that already exists)
+**Step 1: the agent loop** (uses output the binary already produces; `diff` and `check --staged` are the fast path)
+
+| Item | Status | Work | Ships when |
+|---|---|---|---|
+| Agent hook recipes | Open | `discipline hook install --agent <claude-code\|cursor\|codex\|aider>` writes the agent's hook configuration, and `docs/guides/` documents each by hand: Claude Code `PostToolUse` (after `Edit` / `Write`) and `Stop` hooks running `discipline diff --format agent-prompt`, exit 2 feeding the repair text back to the agent; the equivalents the other agents expose. The installer refuses to overwrite an existing hook and prints what it would add | An e2e test drives the installed hook command on a working tree whose edit weakens an assertion and gets the blocking exit and the repair text; a clean edit passes |
+| `discipline mcp` | Open | An MCP server over stdio in the binary (no listening socket, no network): `check_diff` (working tree or staged, the `agent-prompt` findings as structured content), `list_gates`, `explain_finding`. Read-only: no tool writes a file or a directive | A stdio e2e test lists the tools and runs each; no tool's output contains a directive token (the `agent-prompt` self-test extended to the MCP output) |
+
+The agent-facing surfaces never print waiver syntax: `agent-prompt` already omits directive tokens, so an agent learns to repair, not to excuse. Human output (`explain`, the terminal report) keeps it.
+
+**Step 2: pull-request comments** (the reviewer-visible surface on Gitea and Forgejo, which have no code-scanning UI)
+
+| Item | Status | Work | Ships when |
+|---|---|---|---|
+| Decide the write path | Open | Posting is a forge write, which `AGENTS.md` §3.3 does not allow (three opt-in reads). Either amend §3.3 in the same PR (opt-in, a token that can write comments, exit 2 when the forge is unreachable, `DISCIPLINE_NO_NETWORK` honoured) or post from `action.yml` through the forge API without the binary | The decision and its reason are in `docs/ARCHITECTURE.md` |
+| One updating comment | Open | GitHub, Gitea, Forgejo and GitLab: one comment per pull request, found by a hidden marker and edited on each run; findings, lifted overrides and notes, no waiver syntax for findings an agent authored | A second run edits the comment and adds none; a pull request from a fork, whose token cannot write, gets a named note, not a failure |
+
+**Step 3: adoption in one command**
+
+| Item | Status | Work | Ships when |
+|---|---|---|---|
+| `discipline replay --last N` | Open | The consumer's replay harness built in: rebuild each merged pull request on a base carrying the configuration under test, run the gates with that pull request's body (through the forge read path when a token is present, commit messages only otherwise, said in the output), and print blocked / passed and per-gate counts. Reading pull-request bodies is a forge read: listed in `AGENTS.md` §3.3 with the other three | Run against the consumer with its configuration, it reproduces the consumer harness's 100-PR table (blocked count and per-gate errors) |
+| `discipline explain <gate-id>` | Open | The rule, what it catches and misses, the default severity, and the directive and inline marker that lift it, from the same source as `docs/GATES.md`; a finding's id or title resolves to its gate | Every gate id resolves; the text matches the generated docs (`docs --check`) |
+| `check --help` lists `merged-pr-body` | Open | The `--directive-sources` help still names only `pr-body, commits` | The help text lists all three sources |
+
+A `--fix` suggestion (restore a deleted assertion from the base side, a `// SAFETY:` stub) waits until `explain` ships: it edits test files and needs its own design.
+
+**Step 4: pack parity** (independent rows; the missing capability in a pack that already exists)
 
 | Item | Status | Work | Ships when |
 |---|---|---|---|
@@ -277,7 +303,7 @@ The language and pack-parity gaps left after v0.10.2, and the two live checks st
 | Discards sorted by callee in Go and C / C++ | Open | The `classify_discard` hook `handlers.rs` added for Rust, for Go `x, _ := f()` / `_ = f()` and C / C++ `(void)call()`: a known-fallible callee list (Go `Write`, `Close`, `Sync`, `Flush`, `Scan`, `Encode`, `os.*`, `io.Copy`, ...; C `write`, `fclose`, `fsync`, `close`, `pthread_*`, ...), known-infallible accessors not reported, anything else `Value Discarded` at `warning` | Each pack has a fixture of a fallible discard (still `error`), an accessor (silent) and an unknown callee (`warning`) |
 | Dispatch-table resolution beyond Python | Open | A same-file function named as an element of an array or list literal in a test body resolves as a call: JS / TS (`[checkA, checkB].forEach(f => f())`), Rust (`for f in [check_a, check_b] { f() }`), Go (`[]func(){checkA, checkB}`), Java / Kotlin / C# method references (`this::checkA`, `::checkA`, delegates), Ruby (`%i[check_a]` / `method(:check_a)`) where the grammar exposes the name | A table refactor is silent and a removed entry is a drop, per pack |
 
-**Step 2: new language packs** (each needs a tree-sitter grammar crate whose licence is inside `deny.toml` and whose ABI matches the bundled `tree-sitter`; a pack whose grammar fails either is not started)
+**Step 5: new language packs** (Swift first: the most agent-heavy of the three; each needs a tree-sitter grammar crate whose licence is inside `deny.toml` and whose ABI matches the bundled `tree-sitter`; a pack whose grammar fails either is not started)
 
 | Item | Status | Work | Ships when |
 |---|---|---|---|
@@ -285,8 +311,22 @@ The language and pack-parity gaps left after v0.10.2, and the two live checks st
 | Scala pack | Open | `src/ast/scala.rs` behind `lang-scala`: ScalaTest (`test("...")`, `"x" should "y" in`), MUnit, specs2; `assert` / `assertEquals` / `shouldBe` matchers; `ignore` / `.ignore`; handlers (`catch { case _ => }`, `Try(...).getOrElse`); functions; prose; same-file helpers | As Swift, for `scala` |
 | Objective-C pack | Open | `src/ast/objc.rs` behind `lang-objc` for `.m` and `.mm` (the C / C++ pack's facts for the C part): XCTest `- (void)test*` in `XCTestCase` subclasses; `XCTAssert*`; `@catch {}`; `(void)` discards; functions; prose. `.mm` parses as Objective-C, and the Objective-C++ constructs the grammar cannot read are named in the notes | As Swift, for `m` and `mm` |
 
+**Step 6: distribution**
+
+| Item | Status | Work | Ships when |
+|---|---|---|---|
+| GitHub Marketplace listing | Open | Publish the action (`action.yml` branding, the release as the listing's version) | The listing resolves and installs the tagged release |
+| pre-commit.ci | Open | A hook that installs inside pre-commit.ci's offline sandbox (a prebuilt binary hook, since building from source needs the network) | A pre-commit.ci run on a sample repository executes the hook |
+| Editor and bot integrations | Open | A VS Code problem matcher for the terminal report; a Renovate preset that keeps the action, image tag and digest in lockstep | Each has a sample and a test reading its output |
+
+**In parallel: a public benchmark** (independent of every step)
+
+| Item | Status | Work | Ships when |
+|---|---|---|---|
+| Precision on agent-produced pull requests | Open | A pre-registered study on public repositories only: how a pull request is labelled agent-produced (co-author trailers, bot accounts) and how a finding is adjudicated a false positive (human review, blind to the gate) are fixed before any data is read; per-gate precision with Wilson intervals; bounds and the detectable effect computed in committed, unit-tested code before any data is collected | Every published number resolves to a committed artifact; a gate's precision is claimed only where the interval's lower bound clears the stated floor |
+
 - **Go / no-go gate:** as Phase 10; a new pack ships only with all four facts (tests, handlers, functions, prose) or names in `docs/GATES.md` which fact it lacks; a consumer replay of the last 100 pull requests shows no new blocking finding that is a false positive.
-- **Order:** Step 0 (evidence only), Step 1 (it corrects false positives in packs consumers use today), then Step 2 in the order listed (Swift, Scala, Objective-C). Rows within a step are independent.
+- **Order:** Step 0 (evidence only); Step 1, then Step 2 (the widest reach for the least new code; Step 2 needs its write-path decision first); Step 3; Step 4 (false positives in packs consumers use today); Step 5 (Swift, then Scala, then Objective-C); Step 6. The benchmark runs in parallel. Rows within a step are independent.
 - **Status:** Step 0 row 1 done; everything else open.
 
 ---
