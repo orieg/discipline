@@ -236,6 +236,7 @@ pub const C_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 pub const C_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     // C has no `catch_clause`; the kind never matches there.
     handler_kinds: &["catch_clause"],
+    arm_of: &[],
     body_fields: &["body"],
     ignored_kinds: &["comment"],
     trivial: &[

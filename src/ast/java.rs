@@ -665,6 +665,7 @@ pub const JAVA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 
 pub const JAVA_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     handler_kinds: &["catch_clause"],
+    arm_of: &[],
     body_fields: &["body", "block"],
     ignored_kinds: &["line_comment", "block_comment"],
     trivial: &["return", "return null", "return false", "continue"],

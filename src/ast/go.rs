@@ -576,6 +576,7 @@ pub const GO_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 
 pub const GO_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     handler_kinds: &[],
+    arm_of: &[],
     body_fields: &[],
     ignored_kinds: &["comment"],
     trivial: &[],

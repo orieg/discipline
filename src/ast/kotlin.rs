@@ -744,6 +744,7 @@ pub const KOTLIN_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 
 pub const KOTLIN_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     handler_kinds: &["catch_block"],
+    arm_of: &[],
     body_fields: &["block"],
     ignored_kinds: &["line_comment", "block_comment"],
     // `try { } catch (e: E) { null }`: the try is an expression and `null` is its value.

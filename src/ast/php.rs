@@ -143,6 +143,7 @@ pub const PHP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 
 pub const PHP_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     handler_kinds: &["catch_clause"],
+    arm_of: &[],
     body_fields: &["body"],
     ignored_kinds: &["comment"],
     trivial: &["return", "return null", "return false", "continue"],

@@ -394,6 +394,32 @@ const CASES: &[Case] = &[
                 && (c == ["discarded-result", "discarded-value"] || c == ["skipped"]))
         },
     ),
+    #[cfg(feature = "lang-scala")]
+    (
+        "scala: FunSuite and FlatSpec tests, a skip, an empty catch arm and a ??? stub",
+        || {
+            use crate::ast::LanguagePack;
+            let pack = crate::ast::scala::ScalaPack;
+            let v = AssertVocabulary::default();
+            let t = pack.extract(
+                "src/test/scala/ASuite.scala",
+                "class ASuite extends AnyFunSuite {\n  test(\"a\") { assertEquals(f(), 1) }\n  test(\"b\") { }\n  ignore(\"c\") { assert(g() == 2) }\n  \"A\" should \"d\" in { assert(h() == 3) }\n}\n",
+                &v,
+            )?;
+            let p = pack.extract(
+                "src/main/scala/A.scala",
+                "object A {\n  def f(): Unit = { try { g() } catch { case _: Exception => } }\n  def s(): Int = ???\n}\n",
+                &v,
+            )?;
+            Ok(t.tests.len() == 4
+                && t.tests[0].strong_asserts == 1
+                && t.tests[1].is_vacuous()
+                && t.tests[2].ignored
+                && t.tests[3].strong_asserts == 1
+                && p.swallowed.len() == 1
+                && p.functions.iter().any(|x| x.name == "s" && matches!(x.shape, crate::ast::functions::BodyShape::Stub(_))))
+        },
+    ),
     #[cfg(feature = "lang-swift")]
     (
         "swift: XCTest and Swift Testing tests, a vacuous one, a skip and a discarded try?",

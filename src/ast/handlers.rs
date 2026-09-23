@@ -19,6 +19,10 @@ pub struct SwallowSite {
 pub struct HandlerSpec {
     /// Node kinds that are an error handler with a body (`catch_clause`, `except_clause`).
     pub handler_kinds: &'static [&'static str],
+    /// When not empty, `handler_kinds` are the arms of a handler (Scala's `case` in a
+    /// `catch`): an arm counts only when its parent or grandparent is one of these
+    /// kinds, and an arm with no body at all is empty.
+    pub arm_of: &'static [&'static str],
     /// Field or child kind holding the handler body.
     pub body_fields: &'static [&'static str],
     /// Node kinds ignored when counting statements.
@@ -168,7 +172,18 @@ pub fn extract(
         let line = node.start_position().row + 1;
         // Ruby's `rescue` keyword token has the same kind as the `rescue` clause; only
         // the named node is a handler.
-        if node.is_named() && spec.handler_kinds.contains(&node.kind()) && !is_test_line(line) {
+        let in_arm_parent = || {
+            spec.arm_of.is_empty() || {
+                let p = node.parent();
+                let in_arm = |n: Option<Node>| n.is_some_and(|n| spec.arm_of.contains(&n.kind()));
+                in_arm(p) || in_arm(p.and_then(|p| p.parent()))
+            }
+        };
+        if node.is_named()
+            && spec.handler_kinds.contains(&node.kind())
+            && in_arm_parent()
+            && !is_test_line(line)
+        {
             let body = spec.body_fields.iter().find_map(|f| {
                 node.child_by_field_name(f).or_else(|| {
                     let mut cursor = node.walk();
@@ -178,6 +193,8 @@ pub fn extract(
             });
             let swallows = match body {
                 Some(b) => body_swallows(b, src, spec),
+                // An arm with nothing after `=>` handles nothing.
+                None if !spec.arm_of.is_empty() => Some("empty-handler"),
                 // A handler with no body node at all (`except: pass` on one line in some
                 // grammars) is judged by its own text.
                 None => {
@@ -697,6 +714,14 @@ pub fn c_discard_class(node: Node, src: &str) -> Option<&'static str> {
     };
     let name = name.rsplit("::").next().unwrap_or(name);
     sort_by_callee(name, C_FALLIBLE_CALLEES, &[])
+}
+
+/// Scala: `Try(f).getOrElse(x)` and `Try(f).toOption` replace every failure with a value;
+/// `.recover { ... }` and a `match` on the `Try` handle it.
+pub fn scala_silences(t: &str) -> bool {
+    let t = t.trim();
+    (t.starts_with("Try(") || t.starts_with("Try {") || t.starts_with("scala.util.Try("))
+        && (t.ends_with(".toOption") || t.contains(".getOrElse("))
 }
 
 /// Swift: `try?` turns a thrown error into `nil`.

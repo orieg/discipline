@@ -36,6 +36,8 @@ pub mod retries;
 pub mod ruby;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
+#[cfg(feature = "lang-scala")]
+pub mod scala;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
 
@@ -138,6 +140,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(kotlin::KotlinPack));
     #[cfg(feature = "lang-swift")]
     reg.register(Box::new(swift::SwiftPack));
+    #[cfg(feature = "lang-scala")]
+    reg.register(Box::new(scala::ScalaPack));
     reg
 }
 
@@ -157,6 +161,7 @@ pub enum Language {
     Ruby,
     Kotlin,
     Swift,
+    Scala,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
@@ -181,6 +186,7 @@ pub fn language_for(path: &str) -> Option<Language> {
         "rb" | "rake" | "gemspec" => Some(Language::Ruby),
         "kt" | "kts" => Some(Language::Kotlin),
         "swift" => Some(Language::Swift),
+        "scala" | "sc" => Some(Language::Scala),
         _ => None,
     }
 }
@@ -578,7 +584,9 @@ mod tests {
         assert!(!is_unsupported_source("service.kt"));
         assert!(!is_unsupported_source("build.gradle.kts"));
         assert!(!is_unsupported_source("service.swift"));
-        assert!(is_unsupported_source("service.scala"));
+        assert!(!is_unsupported_source("service.scala"));
+        assert!(is_unsupported_source("service.m"));
+        assert!(is_unsupported_source("service.mm"));
         assert!(!is_unsupported_source("src/a.rs"));
         assert!(!is_unsupported_source("tests/001.phpt"));
         assert!(!is_unsupported_source("docs/plan.md"));
@@ -778,18 +786,18 @@ mod tests {
     #[test]
     fn unsupported_source_respects_active_registry() {
         let mut reg = default_registry();
-        assert!(is_unsupported_source_in("main.scala", &reg));
+        assert!(is_unsupported_source_in("main.m", &reg));
 
-        struct ScalaDummy;
-        impl LanguagePack for ScalaDummy {
+        struct ObjcDummy;
+        impl LanguagePack for ObjcDummy {
             fn id(&self) -> &'static str {
-                "scala"
+                "objc"
             }
             fn name(&self) -> &'static str {
-                "Scala"
+                "Objective-C"
             }
             fn matches(&self, path: &str) -> bool {
-                extension(path) == Some("scala")
+                extension(path) == Some("m")
             }
             fn extract(
                 &self,
@@ -801,7 +809,7 @@ mod tests {
             }
         }
 
-        reg.register(Box::new(ScalaDummy));
-        assert!(!is_unsupported_source_in("main.scala", &reg));
+        reg.register(Box::new(ObjcDummy));
+        assert!(!is_unsupported_source_in("main.m", &reg));
     }
 }

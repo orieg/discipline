@@ -78,7 +78,7 @@ fn adding_assertions_is_not_a_reduction() {
 fn unanalysed_languages_are_named_not_silently_passed() {
     let repo = Repo::new();
     repo.write("tools/check.m", "void testNothing(void) {}\n");
-    repo.write("src/App.scala", "class App {}\n");
+    repo.write("src/App.mm", "@implementation App\n@end\n");
     repo.commit("feat: tooling");
     let run = repo.check(&[]);
     assert_eq!(
@@ -121,10 +121,10 @@ fn unanalysed_languages_are_named_not_silently_passed() {
 #[test]
 fn unsupported_source_files_group_by_extension() {
     let repo = Repo::new();
-    repo.write("ext/judy.scala", "class Foo {}\n");
+    repo.write("ext/foo.m", "@implementation Foo\n@end\n");
     repo.write("ext/judy.mm", "@implementation Bar\n@end\n");
     repo.write("ext/judy.m", "@implementation Baz\n@end\n");
-    repo.commit("feat: scala and objective-c");
+    repo.commit("feat: objective-c");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0);
     for gate in [
@@ -136,7 +136,7 @@ fn unsupported_source_files_group_by_extension() {
         let notes = run.outcome(gate)["notes"].to_string();
         assert!(
             notes.contains("3 changed source file(s)")
-                && notes.contains("1 .m, 1 .mm, 1 .scala")
+                && notes.contains("2 .m, 1 .mm")
                 && notes.contains("NOT analysed"),
             "gate {gate} should format extension breakdown: {notes}"
         );
@@ -11419,6 +11419,61 @@ fn swift_source_files_are_analysed_by_the_swift_pack() {
     repo.write(
         "Sources/Cart/Store.swift",
         "func save(_ s: Store) throws {\n    do { try s.write() } catch { }\n    try? s.flush()\n}\n\nfunc load(_ s: Store) -> Int {\n    fatalError(\"not implemented\")\n}\n",
+    );
+    repo.commit("refactor: cart");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(run.titles("assertion-reduction").len(), 1, "{}", run.stdout);
+    assert_eq!(run.titles("vacuous-tests").len(), 1, "{}", run.stdout);
+    assert_eq!(run.titles("ignored-tests").len(), 1, "{}", run.stdout);
+    assert_eq!(run.titles("error-swallowing").len(), 2, "{}", run.stdout);
+    assert_eq!(run.titles("stub-bodies").len(), 1, "{}", run.stdout);
+}
+
+#[test]
+fn scala_source_files_are_analysed_by_the_scala_pack() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/test/scala/CartSuite.scala",
+        "class CartSuite extends AnyFunSuite {\n  test(\"total\") {\n    assertEquals(cart.total, 3)\n    assertEquals(cart.count, 2)\n  }\n  test(\"checkout\") { assert(cart.checkout() == Done) }\n}\n",
+    );
+    repo.write(
+        "src/main/scala/Store.scala",
+        "object Store {\n  def save(s: Store): Unit = { s.write() }\n  def load(s: Store): Int = s.count()\n}\n",
+    );
+    repo.commit("feat: cart");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    repo.write(
+        "src/test/scala/CartSuite.scala",
+        "class CartSuite extends AnyFunSuite {\n  test(\"total\") {\n    assertEquals(cart.total, 3)\n    assertEquals(cart.count, 2)\n  }\n  test(\"checkout\") { assert(cart.checkout() == Done) }\n  test(\"empty\") { assertEquals(Cart().total, 0) }\n}\n",
+    );
+    repo.commit("test: empty cart");
+    let quiet = repo.check(&[]);
+    for gate in [
+        "assertion-reduction",
+        "vacuous-tests",
+        "ignored-tests",
+        "error-swallowing",
+        "stub-bodies",
+    ] {
+        assert!(quiet.titles(gate).is_empty(), "{gate}: {}", quiet.stdout);
+        assert!(
+            !quiet.outcome(gate)["notes"]
+                .to_string()
+                .contains("NOT analysed"),
+            "{gate}"
+        );
+    }
+
+    repo.write(
+        "src/test/scala/CartSuite.scala",
+        "class CartSuite extends AnyFunSuite {\n  test(\"total\") {\n    assert(cart.total > 0)\n  }\n  ignore(\"checkout\") { assert(cart.checkout() == Done) }\n  test(\"empty\") { assertEquals(Cart().total, 0) }\n  test(\"nothing\") { }\n}\n",
+    );
+    repo.write(
+        "src/main/scala/Store.scala",
+        "object Store {\n  def save(s: Store): Unit = {\n    try { s.write() } catch { case _: Exception => }\n    val n = Try(s.flush()).getOrElse(0)\n  }\n  def load(s: Store): Int = ???\n}\n",
     );
     repo.commit("refactor: cart");
     let run = repo.check(&[]);

@@ -138,6 +138,7 @@ pub const RUBY_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 pub const RUBY_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     // A `rescue` with no body has no `body` field and is judged by its own text.
     handler_kinds: &["rescue"],
+    arm_of: &[],
     body_fields: &["body"],
     ignored_kinds: &["comment"],
     trivial: &[

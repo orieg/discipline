@@ -757,6 +757,7 @@ pub const JS_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 
 pub const JS_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     handler_kinds: &["catch_clause"],
+    arm_of: &[],
     body_fields: &["body", "statement_block"],
     ignored_kinds: &["comment"],
     trivial: &[

@@ -1039,6 +1039,7 @@ pub const RUST_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 
 pub const RUST_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     handler_kinds: &[],
+    arm_of: &[],
     body_fields: &[],
     ignored_kinds: &["line_comment", "block_comment"],
     trivial: &[],

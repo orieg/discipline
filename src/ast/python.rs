@@ -1017,6 +1017,7 @@ pub const PYTHON_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 
 pub const PYTHON_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     handler_kinds: &["except_clause"],
+    arm_of: &[],
     body_fields: &["block"],
     ignored_kinds: &["comment"],
     trivial: &["pass", "...", "return", "return None", "continue"],

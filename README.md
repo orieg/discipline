@@ -143,15 +143,15 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 
 ## Gates
 
-Twelve tree-sitter language packs (Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C / C++, C#, Ruby, Kotlin, Swift) supply the AST facts; the language table in [`docs/GATES.md`](docs/GATES.md) lists what each pack reads. `discipline gates` prints this table with each gate's effective state. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md). Gates ship on unless their rule is a repository policy (`issue-link`, `commit-provenance`, `provenance-tags`, `scope-confinement`, `pr-checklist`, the verification presets); `docs/ROADMAP.md` records every default change per release.
+Thirteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C / C++, C#, Ruby, Kotlin, Swift, Scala) supply the AST facts; the language table in [`docs/GATES.md`](docs/GATES.md) lists what each pack reads. `discipline gates` prints this table with each gate's effective state. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md). Gates ship on unless their rule is a repository policy (`issue-link`, `commit-provenance`, `provenance-tags`, `scope-confinement`, `pr-checklist`, the verification presets); `docs/ROADMAP.md` records every default change per release.
 
 <!-- generated:gates -->
 | Gate | Suite | Languages | Rule Description |
 |---|---|---|---|
 | [`agents-md`](docs/GATES.md#agents-md) | agent-guard | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
-| [`assertion-reduction`](docs/GATES.md#assertion-reduction) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift | assertion count / strength must not drop in an existing test |
-| [`vacuous-tests`](docs/GATES.md#vacuous-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift | new tests must carry a non-tautological assertion |
-| [`ignored-tests`](docs/GATES.md#ignored-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift | tests must not be newly #[ignore]d or skipped without directive |
+| [`assertion-reduction`](docs/GATES.md#assertion-reduction) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala | assertion count / strength must not drop in an existing test |
+| [`vacuous-tests`](docs/GATES.md#vacuous-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala | new tests must carry a non-tautological assertion |
+| [`ignored-tests`](docs/GATES.md#ignored-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala | tests must not be newly #[ignore]d or skipped without directive |
 | [`unsafe-safety-comment`](docs/GATES.md#unsafe-safety-comment) | agent-guard | Rust | unsafe blocks / impls carry a // SAFETY: comment |
 | [`deletion-rationale`](docs/GATES.md#deletion-rationale) | agent-guard | any | deleted files and removed tests need a scoped removes: rationale |
 | [`time-estimates`](docs/GATES.md#time-estimates) | hygiene | any | no calendar / duration estimates in markdown or the PR body |
@@ -161,9 +161,9 @@ Twelve tree-sitter language packs (Rust, Python, JavaScript / TypeScript, PHPT, 
 | [`issue-link`](docs/GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`commit-provenance`](docs/GATES.md#commit-provenance) | hygiene | any | commits carry the required trailers; an agent-produced commit carries a review by someone else |
 | [`config-integrity`](docs/GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
-| [`stub-bodies`](docs/GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
-| [`error-swallowing`](docs/GATES.md#error-swallowing) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift | no new empty error handler or discarded Result outside tests |
-| [`instruction-smuggling`](docs/GATES.md#instruction-smuggling) | agent-guard | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
+| [`stub-bodies`](docs/GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
+| [`error-swallowing`](docs/GATES.md#error-swallowing) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala | no new empty error handler or discarded Result outside tests |
+| [`instruction-smuggling`](docs/GATES.md#instruction-smuggling) | agent-guard | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
 | [`build-hooks`](docs/GATES.md#build-hooks) | integrity | package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env* | install and build hooks that gain network or shell access, and package-manager configuration edits, need a token |
 | [`toolchain-config`](docs/GATES.md#toolchain-config) | integrity | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](docs/GATES.md#scope-confinement) | agent-guard | any | changes stay inside authorized paths |

@@ -691,6 +691,7 @@ pub const CSHARP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 
 pub const CSHARP_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     handler_kinds: &["catch_clause"],
+    arm_of: &[],
     body_fields: &["body", "block"],
     ignored_kinds: &["comment"],
     trivial: &["return", "return null", "return false", "continue"],

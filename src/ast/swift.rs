@@ -548,6 +548,7 @@ pub const SWIFT_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
 
 pub const SWIFT_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpec {
     handler_kinds: &["catch_block"],
+    arm_of: &[],
     body_fields: &["statements"],
     ignored_kinds: &["comment", "multiline_comment"],
     trivial: &["return", "return nil", "return false", "continue", "break"],

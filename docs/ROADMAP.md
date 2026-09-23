@@ -42,9 +42,9 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | Gate | Suite | Languages | Rule Description |
 |---|---|---|---|
 | [`agents-md`](GATES.md#agents-md) | agent-guard | any | AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it |
-| [`assertion-reduction`](GATES.md#assertion-reduction) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift | assertion count / strength must not drop in an existing test |
-| [`vacuous-tests`](GATES.md#vacuous-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift | new tests must carry a non-tautological assertion |
-| [`ignored-tests`](GATES.md#ignored-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift | tests must not be newly #[ignore]d or skipped without directive |
+| [`assertion-reduction`](GATES.md#assertion-reduction) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala | assertion count / strength must not drop in an existing test |
+| [`vacuous-tests`](GATES.md#vacuous-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala | new tests must carry a non-tautological assertion |
+| [`ignored-tests`](GATES.md#ignored-tests) | agent-guard | Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala | tests must not be newly #[ignore]d or skipped without directive |
 | [`unsafe-safety-comment`](GATES.md#unsafe-safety-comment) | agent-guard | Rust | unsafe blocks / impls carry a // SAFETY: comment |
 | [`deletion-rationale`](GATES.md#deletion-rationale) | agent-guard | any | deleted files and removed tests need a scoped removes: rationale |
 | [`time-estimates`](GATES.md#time-estimates) | hygiene | any | no calendar / duration estimates in markdown or the PR body |
@@ -54,9 +54,9 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | [`issue-link`](GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`commit-provenance`](GATES.md#commit-provenance) | hygiene | any | commits carry the required trailers; an agent-produced commit carries a review by someone else |
 | [`config-integrity`](GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
-| [`stub-bodies`](GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
-| [`error-swallowing`](GATES.md#error-swallowing) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift | no new empty error handler or discarded Result outside tests |
-| [`instruction-smuggling`](GATES.md#instruction-smuggling) | agent-guard | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
+| [`stub-bodies`](GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
+| [`error-swallowing`](GATES.md#error-swallowing) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala | no new empty error handler or discarded Result outside tests |
+| [`instruction-smuggling`](GATES.md#instruction-smuggling) | agent-guard | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
 | [`build-hooks`](GATES.md#build-hooks) | integrity | package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env* | install and build hooks that gain network or shell access, and package-manager configuration edits, need a token |
 | [`toolchain-config`](GATES.md#toolchain-config) | integrity | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
 | [`scope-confinement`](GATES.md#scope-confinement) | agent-guard | any | changes stay inside authorized paths |
@@ -308,7 +308,7 @@ A `--fix` suggestion (restore a deleted assertion from the base side, a `// SAFE
 | Item | Status | Work | Ships when |
 |---|---|---|---|
 | Swift pack | **Shipped** (`src/ast/swift.rs` behind the default `lang-swift` feature, grammar `tree-sitter-swift`; tests, handlers, functions, prose; no unsafe facts) | `src/ast/swift.rs` behind `lang-swift`: XCTest `func test*()` in `XCTestCase` subclasses and Swift Testing `@Test`; `XCTAssert*` / `#expect` / `#require` (strong: `XCTAssertEqual`, `#expect(a == b)`); `XCTSkip` / `.disabled` traits; handlers (`catch {}`, `try?` as a silenced error); functions; prose; same-file helpers | The four-point contract holds; `docs/GATES.md` language table lists Swift; `UNSUPPORTED_SOURCE_EXTS` drops `swift` |
-| Scala pack | Open | `src/ast/scala.rs` behind `lang-scala`: ScalaTest (`test("...")`, `"x" should "y" in`), MUnit, specs2; `assert` / `assertEquals` / `shouldBe` matchers; `ignore` / `.ignore`; handlers (`catch { case _ => }`, `Try(...).getOrElse`); functions; prose; same-file helpers | As Swift, for `scala` |
+| Scala pack | **Shipped** (`src/ast/scala.rs` behind the default `lang-scala` feature, grammar `tree-sitter-scala`; tests, handlers (per `catch` arm), functions, prose; no unsafe facts) | `src/ast/scala.rs` behind `lang-scala`: ScalaTest (`test("...")`, `"x" should "y" in`), MUnit, specs2; `assert` / `assertEquals` / `shouldBe` matchers; `ignore` / `.ignore`; handlers (`catch { case _ => }`, `Try(...).getOrElse`); functions; prose; same-file helpers | As Swift, for `scala` |
 | Objective-C pack | Open | `src/ast/objc.rs` behind `lang-objc` for `.m` and `.mm` (the C / C++ pack's facts for the C part): XCTest `- (void)test*` in `XCTestCase` subclasses; `XCTAssert*`; `@catch {}`; `(void)` discards; functions; prose. `.mm` parses as Objective-C, and the Objective-C++ constructs the grammar cannot read are named in the notes | As Swift, for `m` and `mm` |
 
 **Step 6: distribution**
@@ -359,6 +359,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | Scala | New language pack: `.scala` / `.sc` files are analysed by the assertion, test, stub, error-swallowing, suppression and prose gates instead of being named as not analysed. | stricter | As Swift: a repository with Scala code can receive findings it did not before. |
 | unreleased | Swift | New language pack: `.swift` files are analysed by the assertion, test, stub, error-swallowing, suppression and prose gates instead of being named as not analysed. | stricter | A repository with Swift code can receive findings it did not before; run `discipline replay` or `discipline baseline` before upgrading a gating pipeline. |
 | unreleased | `assertion-reduction`, `vacuous-tests` (Rust, JS / TS, Go, Java, Kotlin, C#, Ruby) | A same-file helper named in a dispatch table the test runs (array or slice literal, initializer, method or callable reference, symbol array) resolves like a direct call, as Python's already did. | looser | None; removing an entry from the table is still a drop. |
 | unreleased | `error-swallowing` (Go, C / C++) | Discards are sorted by callee name as in Rust: a known-fallible callee stays `Result Discarded`; a Go callee whose second value is an ok flag, and a type assertion, map index or channel receive, are no longer reported; any other callee is the new `Value Discarded` at `warning`. | looser | None; a discard of an unlisted fallible callee that blocked now warns. |

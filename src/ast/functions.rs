@@ -422,6 +422,26 @@ pub fn classify_swift(t: &str) -> Option<BodyShape> {
     trivial_return(t, TRIVIAL)
 }
 
+pub fn classify_scala(t: &str) -> Option<BodyShape> {
+    let t = strip_semicolon(t);
+    if t == "???" {
+        return Some(BodyShape::Stub(t.to_string()));
+    }
+    if t.starts_with("throw ")
+        && (t.contains("NotImplementedError") || has_word(t, NOT_IMPLEMENTED_WORDS))
+    {
+        return Some(BodyShape::Stub(t.to_string()));
+    }
+    const TRIVIAL: &[&str] = &[
+        "null", "None", "()", "0", "0L", "0.0", "false", "true", "\"\"", "Nil", "List()", "Map()",
+        "Set()", "Seq()", "Vector()",
+    ];
+    if TRIVIAL.contains(&t) {
+        return Some(BodyShape::Trivial(t.to_string()));
+    }
+    trivial_return(t, TRIVIAL)
+}
+
 pub fn classify_ruby(t: &str) -> Option<BodyShape> {
     let t = t.trim();
     if t.starts_with("raise NotImplementedError") || t == "raise NotImplementedError" {
