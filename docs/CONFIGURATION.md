@@ -67,6 +67,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.archive-contents.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.archive-contents.forbidden_patterns` | list | `[]` | Regex patterns forbidden inside the archive |
 | `gates.archive-contents.max_entry_bytes` | integer | `16777216` | Entries larger than this many bytes are not scanned and are named in a note (default 16 MiB) |
+| `gates.archive-contents.preset` | string | *(unset)* | Named forbidden_patterns list merged with forbidden_patterns; no-source also turns scan_contents on |
 | `gates.archive-contents.required_paths` | list | `[]` | Files required to exist inside the archive |
 | `gates.archive-contents.scan_contents` | boolean | `false` | Read each entry and report source maps whose sourcesContent embeds the original source, as .map entries or inline base64 sourceMappingURL comments |
 | `gates.archive-contents.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |

@@ -505,7 +505,8 @@ pub fn generate_schema() -> Value {
                     "forbidden_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns forbidden inside the archive" },
                     "strip_components": { "type": "integer", "description": "Leading directory components to strip from archive paths" },
                     "scan_contents": { "type": "boolean", "description": "Read each entry and report source maps whose sourcesContent embeds the original source, as .map entries or inline base64 sourceMappingURL comments" },
-                    "max_entry_bytes": { "type": "integer", "minimum": 1, "description": "Entries larger than this many bytes are not scanned and are named in a note (default 16 MiB)" }
+                    "max_entry_bytes": { "type": "integer", "minimum": 1, "description": "Entries larger than this many bytes are not scanned and are named in a note (default 16 MiB)" },
+                    "preset": { "type": "string", "enum": ["no-source", "no-source-npm", "no-source-python", "no-source-jvm", "no-source-dotnet", "no-source-rust", "no-source-go"], "description": "Named forbidden_patterns list merged with forbidden_patterns; no-source also turns scan_contents on" }
                 }
             },
             "ManifestSyncGate": {

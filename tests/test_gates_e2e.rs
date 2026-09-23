@@ -9223,6 +9223,139 @@ scan_contents = true
     assert!(run.violations("archive-contents").is_empty());
 }
 
+#[test]
+fn archive_contents_no_source_presets_forbid_source_by_ecosystem() {
+    use discipline::guards::archive_formats::fixtures;
+
+    let repo = Repo::new();
+    let config = r#"
+[meta]
+version = 1
+name = "test-repo"
+
+[gates.archive-contents]
+enabled = true
+archive_path = "dist/*"
+preset = "no-source-npm"
+"#;
+    repo.commit_base(
+        "discipline.toml",
+        config,
+        "base: configure archive-contents",
+    );
+    let dist = repo.path().join("dist");
+    let place = |name: &str, bytes: Vec<u8>| {
+        let _ = std::fs::remove_dir_all(&dist);
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join(name), bytes).unwrap();
+    };
+    let preset = |name: &str| format!("[gates.archive-contents]\npreset = \"{name}\"");
+    let lift_preset_change = "allow-gate-weakening: archive-contents testing each preset";
+
+    // npm: built JavaScript and type declarations pass.
+    let clean_npm = fixtures::gzip(&fixtures::tar(&[
+        ("package/package.json", b"{}"),
+        ("package/dist/index.js", b"module.exports = 1;\n"),
+        (
+            "package/dist/index.d.ts",
+            b"export declare const x: number;\n",
+        ),
+    ]));
+    place("example-1.0.0.tgz", clean_npm);
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+
+    // npm: TypeScript source, src/ and a declaration map are named with the preset.
+    place(
+        "example-1.0.0.tgz",
+        fixtures::gzip(&fixtures::tar(&[
+            ("package/package.json", b"{}"),
+            ("package/dist/index.js", b"module.exports = 1;\n"),
+            (
+                "package/dist/index.d.ts",
+                b"export declare const x: number;\n",
+            ),
+            ("package/dist/index.d.ts.map", b"{}"),
+            ("package/src/index.ts", b"export const x = 1;\n"),
+        ])),
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("archive-contents");
+    assert_eq!(violations[0]["title"], "Forbidden Entry Found in Archive");
+    let message = violations[0]["message"].as_str().unwrap();
+    for needle in [
+        "package/src/index.ts (matches pattern `(^|/)src/` from preset `no-source-npm`",
+        "package/src/index.ts (matches pattern `\\.(ts|tsx|mts|cts)$` from preset `no-source-npm`",
+        "package/dist/index.d.ts.map (matches pattern `\\.map$` from preset `no-source-npm`",
+    ] {
+        assert!(message.contains(needle), "{needle}\n{message}");
+    }
+    assert!(
+        !message.contains("package/dist/index.d.ts ("),
+        "declarations stay allowed: {message}"
+    );
+
+    // python: an sdist ships its source; a .env file does not belong.
+    let sdist = |extra: &[(&'static str, &'static [u8])]| {
+        let mut files: Vec<(&str, &[u8])> = vec![
+            ("example-1.0/pyproject.toml", b"[project]\n"),
+            ("example-1.0/src/example/__init__.py", b"x = 1\n"),
+        ];
+        files.extend_from_slice(extra);
+        fixtures::gzip(&fixtures::tar(&files))
+    };
+    place("example-1.0.tar.gz", sdist(&[]));
+    let python = preset("no-source-python");
+    let run = repo.check_with_pr(&["--config-override", &python], lift_preset_change);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    place(
+        "example-1.0.tar.gz",
+        sdist(&[("example-1.0/.env", b"TOKEN=x\n")]),
+    );
+    let run = repo.check_with_pr(&["--config-override", &python], lift_preset_change);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(run.violations("archive-contents")[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("example-1.0/.env"));
+
+    // no-source: the union, with the content scan on although scan_contents is not set.
+    let leaking_map =
+        br#"{"version":3,"sources":["../lib/core.ts"],"sourcesContent":["x"],"mappings":""}"#;
+    place(
+        "example-1.0.0.tgz",
+        fixtures::gzip(&fixtures::tar(&[
+            ("package/package.json", b"{}"),
+            ("package/dist/index.js.map", leaking_map),
+        ])),
+    );
+    let all = preset("no-source");
+    let run = repo.check_with_pr(&["--config-override", &all], lift_preset_change);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let mut titles = run.titles("archive-contents");
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec![
+            "Forbidden Entry Found in Archive",
+            "Source Leaked In Archive"
+        ]
+    );
+
+    // An unknown preset fails closed.
+    let run = repo.check_with_pr(
+        &["--config-override", &preset("no-sources")],
+        lift_preset_change,
+    );
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr.contains("no-sources") && run.stderr.contains("no-source-npm"),
+        "{}",
+        run.stderr
+    );
+}
+
 // ---- manifest-sync ---------------------------------------------------------
 
 #[test]

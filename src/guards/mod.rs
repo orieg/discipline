@@ -1,6 +1,7 @@
 pub mod agent_diff;
 pub mod archive_contents;
 pub mod archive_formats;
+pub mod archive_presets;
 pub mod build_hooks;
 pub mod ci_gitlab;
 pub mod ci_integrity;

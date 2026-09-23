@@ -5,10 +5,11 @@
 
 use crate::config::Severity;
 use crate::guards::archive_formats::{self, EntryData};
+use crate::guards::archive_presets;
 use crate::guards::source_maps::{self, MapRef, MapVerdict};
 use crate::guards::{Context, GateOutcome};
 use crate::tokens;
-use anyhow::{bail, Context as _, Result};
+use anyhow::{anyhow, bail, Context as _, Result};
 use globset::GlobBuilder;
 use regex::Regex;
 use std::io::Read;
@@ -61,7 +62,17 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
         .display()
         .to_string();
 
-    let scan_limit = if settings.scan_contents {
+    let preset = match settings.preset.as_deref() {
+        None => None,
+        Some(name) => Some(archive_presets::resolve(name).ok_or_else(|| {
+            anyhow!(
+                "unknown archive-contents preset `{name}`; known presets: {}",
+                archive_presets::PRESET_NAMES.join(", ")
+            )
+        })?),
+    };
+    let scan_contents = settings.scan_contents || preset.as_ref().is_some_and(|p| p.scan_contents);
+    let scan_limit = if scan_contents {
         if settings.max_entry_bytes == 0 {
             bail!(
                 "archive-contents `max_entry_bytes` must be at least 1 when `scan_contents` is on"
@@ -123,28 +134,20 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
     }
 
     // 2. Check forbidden patterns
-    let forbidden_regexes: Vec<(String, Regex)> = settings
-        .forbidden_patterns
-        .iter()
-        .map(|p| {
-            Regex::new(p)
-                .map(|r| (p.clone(), r))
-                .with_context(|| format!("invalid regex `{p}` in forbidden_patterns"))
-        })
-        .collect::<Result<_, _>>()?;
+    let rules = forbidden_rules(&settings.forbidden_patterns, preset.as_ref())?;
 
     let mut forbidden_violations = Vec::new();
     for entry in &entries {
-        for (pattern_str, re) in &forbidden_regexes {
-            if re.is_match(entry) {
+        for rule in &rules {
+            if rule.matches(entry) {
                 let allowed = ctx
                     .find_override(GATE, tokens::ALLOW_ARCHIVE_LEAK, entry)
-                    .or_else(|| ctx.find_override(GATE, tokens::ALLOW_ARCHIVE_LEAK, pattern_str));
+                    .or_else(|| ctx.find_override(GATE, tokens::ALLOW_ARCHIVE_LEAK, &rule.pattern));
 
                 if let Some(ov) = allowed {
                     out.overrides.push(ov);
                 } else {
-                    forbidden_violations.push((entry.clone(), pattern_str.clone()));
+                    forbidden_violations.push((entry.clone(), rule));
                 }
             }
         }
@@ -153,7 +156,13 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
     if !forbidden_violations.is_empty() {
         let details = forbidden_violations
             .iter()
-            .map(|(path, pat)| format!("  - {} (matches pattern `{}`)", path, pat))
+            .map(|(path, rule)| match rule.preset {
+                Some(preset) => format!(
+                    "  - {path} (matches pattern `{}` from preset `{preset}`: {})",
+                    rule.pattern, rule.what
+                ),
+                None => format!("  - {path} (matches pattern `{}`)", rule.pattern),
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -177,6 +186,59 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
     }
 
     Ok(out)
+}
+
+/// A forbidden-name rule: a configured pattern or one a preset supplies.
+pub struct ForbiddenRule {
+    pub pattern: String,
+    re: Regex,
+    except: Option<Regex>,
+    /// The preset that supplied the rule, if any.
+    pub preset: Option<&'static str>,
+    pub what: &'static str,
+}
+
+impl ForbiddenRule {
+    pub fn matches(&self, entry: &str) -> bool {
+        self.re.is_match(entry) && !self.except.as_ref().is_some_and(|e| e.is_match(entry))
+    }
+}
+
+/// The configured `forbidden_patterns`, then the preset's rules not already
+/// configured verbatim.
+pub fn forbidden_rules(
+    configured: &[String],
+    preset: Option<&archive_presets::ArchivePreset>,
+) -> Result<Vec<ForbiddenRule>> {
+    let mut rules = Vec::new();
+    for p in configured {
+        let re =
+            Regex::new(p).with_context(|| format!("invalid regex `{p}` in forbidden_patterns"))?;
+        rules.push(ForbiddenRule {
+            pattern: p.clone(),
+            re,
+            except: None,
+            preset: None,
+            what: "",
+        });
+    }
+    if let Some(preset) = preset {
+        for r in &preset.rules {
+            if configured.iter().any(|p| p == r.pattern) {
+                continue;
+            }
+            rules.push(ForbiddenRule {
+                pattern: r.pattern.to_string(),
+                re: Regex::new(r.pattern).expect("preset patterns are unit-tested"),
+                except: r
+                    .except
+                    .map(|e| Regex::new(e).expect("preset patterns are unit-tested")),
+                preset: Some(preset.name),
+                what: r.what,
+            });
+        }
+    }
+    Ok(rules)
 }
 
 /// How many entries a finding or note lists before summarising the rest.
@@ -743,5 +805,28 @@ mod tests {
         assert!(scan.leaks.is_empty());
         assert_eq!(scan.undecodable.len(), 1, "{:?}", scan.undecodable);
         assert!(scan.undecodable[0].starts_with("dist/cli.js.map"));
+    }
+
+    #[test]
+    fn preset_rules_follow_the_configured_patterns_without_duplicates() {
+        let npm = archive_presets::resolve("no-source-npm").unwrap();
+        let configured = vec![r"\.map$".to_string(), "^tools/".to_string()];
+        let rules = forbidden_rules(&configured, Some(&npm)).unwrap();
+        assert_eq!(rules[0].pattern, r"\.map$");
+        assert!(rules[0].preset.is_none());
+        assert_eq!(rules[1].pattern, "^tools/");
+        assert_eq!(rules.iter().filter(|r| r.pattern == r"\.map$").count(), 1);
+        assert_eq!(rules.len(), configured.len() + npm.rules.len() - 1);
+        assert!(rules[2..].iter().all(|r| r.preset == Some("no-source-npm")));
+
+        let ts = rules
+            .iter()
+            .find(|r| r.pattern == r"\.(ts|tsx|mts|cts)$")
+            .unwrap();
+        assert!(ts.matches("package/dist/index.ts"));
+        assert!(!ts.matches("package/dist/index.d.ts"));
+
+        assert!(forbidden_rules(&[], None).unwrap().is_empty());
+        assert!(forbidden_rules(&["(".to_string()], None).is_err());
     }
 }

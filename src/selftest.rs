@@ -2632,6 +2632,28 @@ smoke_cost::set_contains
         },
     ),
     (
+        "archive-contents: no-source presets forbid source by ecosystem and keep .d.ts",
+        || {
+            use crate::guards::archive_contents::forbidden_rules;
+            use crate::guards::archive_presets::resolve;
+
+            let forbids = |preset: &str, entry: &str| -> Result<bool> {
+                let preset = resolve(preset).ok_or_else(|| anyhow::anyhow!("no preset {preset}"))?;
+                Ok(forbidden_rules(&[], Some(&preset))?.iter().any(|r| r.matches(entry)))
+            };
+            let npm = forbids("no-source-npm", "package/src/index.ts")?
+                && forbids("no-source-npm", "package/dist/index.ts")?
+                && !forbids("no-source-npm", "package/dist/index.d.ts")?
+                && forbids("no-source-npm", "package/dist/index.d.ts.map")?;
+            let python = !forbids("no-source-python", "pkg-1.0/src/pkg/__init__.py")?
+                && forbids("no-source-python", "pkg-1.0/.env")?;
+            let dotnet = forbids("no-source-dotnet", "lib/net8.0/Example.pdb")?;
+            let all = resolve("no-source").is_some_and(|p| p.scan_contents)
+                && forbids("no-source", "com/example/App.java")?;
+            Ok(npm && python && dotnet && all && resolve("no-sources").is_none())
+        },
+    ),
+    (
         "manifest-sync: extracts declared paths and reconciles bidirectional diffs",
         || {
             let manifest_xml = r#"

@@ -974,7 +974,29 @@ To port the other way, adopting the static basis instead, run `discipline check`
   - Any other entry with no NUL byte in its first 8000 bytes is searched for `sourceMappingURL` comments (`//# `, `//@ `, `/*# ... */`). A `data:` URL is base64- or percent-decoded and parsed by the same rule, so an inline map with `sourcesContent` is `Source Leaked In Archive` too. A reference to a separate file is resolved against the entry's directory; when that file is not in the archive, a note names both (the leak, if any, is in a file that did not ship). Absolute URLs are not followed.
   - A finding names the entry, how many files it embeds and the first five `sources` paths (home-directory user names replaced by `~`); it never quotes the embedded source.
   - Not scanned, and named in a note rather than passed silently: entries larger than `max_entry_bytes`, zip entries this reader cannot decode (a bzip2-compressed entry, for one), and binary entries (their names are still checked by `forbidden_patterns`). Lowering `max_entry_bytes` or switching `scan_contents` off is reported by `config-integrity` as a weakening.
-  - Debug-symbol entries (`.pdb`, `.dSYM/`, `.debug`) and `.d.ts.map` files are matched by name through `forbidden_patterns`, not by content.
+  - Debug-symbol entries (`.pdb`, `.dSYM/`, `.debug`) and `.d.ts.map` files are matched by name through `forbidden_patterns` or a preset (below), not by content.
+- **Presets** (`preset = "<name>"`): a named list of forbidden-name rules added after the configured `forbidden_patterns` (a configured pattern identical to a preset rule is kept once). A finding names the rule's preset and what it is for; `allow-archive-leak:` lifts it by entry or by pattern like any other. An unknown name exits 2. Changing or removing `preset` is reported by `config-integrity`.
+
+  | Rule group | Patterns |
+  |---|---|
+  | common | `\.map$`, `(^\|/)\.env[^/]*$` (`.env`, `.env.local`, `.envrc`), `(^\|/)\.git(/\|$)`, `(^\|/)(test\|tests\|__tests__)/`, `(^\|/)(\.github\|\.gitlab\|\.gitea\|\.forgejo\|\.circleci\|\.buildkite)/`, `(^\|/)(\.gitlab-ci\.yml\|\.travis\.yml\|azure-pipelines\.yml\|Jenkinsfile)$`, `\.(pem\|key\|p12)$`, `(^\|/)id_(rsa\|dsa\|ecdsa\|ed25519)$`, `(^\|/)\.npmrc$`, `(^\|/)\.pypirc$` |
+  | source directory | `(^\|/)src/` |
+  | debug symbols | `\.dSYM(/\|$)`, `\.debug$` |
+  | npm | `\.(ts\|tsx\|mts\|cts)$`, except entries matching `\.d\.(ts\|mts\|cts)$` (type declarations ship; `.d.ts.map` is still caught by `\.map$`) |
+  | JVM | `\.(java\|kt\|scala)$` |
+  | .NET | `\.(cs\|fs)$`, `\.pdb$` |
+
+  | Preset | Groups | Content scan |
+  |---|---|---|
+  | `no-source-npm` | common, source directory, debug symbols, npm | as `scan_contents` |
+  | `no-source-jvm` | common, source directory, debug symbols, JVM | as `scan_contents` |
+  | `no-source-dotnet` | common, source directory, debug symbols, .NET | as `scan_contents` |
+  | `no-source-go` | common, debug symbols (Go release archives ship binaries; Go module zips, which are source, should not use it) | as `scan_contents` |
+  | `no-source-python` | common only: an sdist ships its source | as `scan_contents` |
+  | `no-source-rust` | common only: a `.crate` ships its source | as `scan_contents` |
+  | `no-source` | the union of the npm, JVM, .NET and Go presets | **on**, whatever `scan_contents` says |
+
+  The exception on the npm rule is structural: the regex crate has no look-around, so a preset rule carries a separate `except` pattern, and an entry matching it is not reported by that rule.
 - **Failing archive example (rejected):**
   Archive containing `Judy-2.6.0/tools/check.sh` when `forbidden_patterns = ["^tools/"]`.
 
@@ -987,7 +1009,7 @@ To port the other way, adopting the static basis instead, run `discipline check`
   - Files not packaged into the archive.
   - Entries of nested archives (see above), and anything inside the formats listed as not analysed.
 - **Lifting directive:** `allow-archive-leak: <pattern> <reason>` in PR description or commit message; for a content-scan finding, the subject is the entry path (`allow-archive-leak: package/dist/cli.js.map <reason>`).
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `archive_path`, `required_paths`, `forbidden_patterns`, `strip_components`, `scan_contents`, `max_entry_bytes`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `archive_path`, `required_paths`, `forbidden_patterns`, `strip_components`, `scan_contents`, `max_entry_bytes`, `preset`.
 
 #### `manifest-sync`
 - **Rule:** Reconciles git-tracked files in declared directories against file lists in packaging manifests (e.g., PECL `package.xml`, Ruby `gemspec`, Python `MANIFEST.in`, Debian `debian/install`, etc.). Bidirectional diffing detects both unmanifested git files (`+`) and ghost manifest entries (`-`).

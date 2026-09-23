@@ -23,6 +23,19 @@
           "minimum": 1,
           "type": "integer"
         },
+        "preset": {
+          "description": "Named forbidden_patterns list merged with forbidden_patterns; no-source also turns scan_contents on",
+          "enum": [
+            "no-source",
+            "no-source-npm",
+            "no-source-python",
+            "no-source-jvm",
+            "no-source-dotnet",
+            "no-source-rust",
+            "no-source-go"
+          ],
+          "type": "string"
+        },
         "required_paths": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Files required to exist inside the archive"

@@ -1395,6 +1395,9 @@ pub struct ArchiveContentsGate {
     pub scan_contents: bool,
     /// Entries larger than this are not scanned; they are named in a note.
     pub max_entry_bytes: u64,
+    /// A named `forbidden_patterns` list (`no-source`, `no-source-npm`, ...)
+    /// merged with the configured patterns.
+    pub preset: Option<String>,
 }
 
 /// Default `max_entry_bytes`: 16 MiB.
@@ -1412,6 +1415,7 @@ impl Default for ArchiveContentsGate {
             strip_components: 0,
             scan_contents: false,
             max_entry_bytes: ARCHIVE_MAX_ENTRY_BYTES,
+            preset: None,
         }
     }
 }
