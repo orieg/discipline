@@ -48,6 +48,8 @@ impl LanguagePack for PhpPack {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
             },
+            test_calls: Vec::new(),
+            helpers: std::collections::HashMap::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -176,7 +178,21 @@ struct PhpExtractor<'a> {
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
+    /// Same-file callees of each test (`Class::method` or `function`), in test order.
+    test_calls: Vec<Vec<String>>,
+    /// Non-test methods and functions a test may call.
+    helpers: std::collections::HashMap<String, super::HelperFacts>,
 }
+
+/// Closure nodes whose body runs only when called.
+const PHP_CLOSURE_KINDS: &[&str] = &[
+    "anonymous_function",
+    "anonymous_function_creation_expression",
+    "arrow_function",
+    "function_definition",
+    "method_declaration",
+    "class_declaration",
+];
 
 impl<'a> PhpExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
@@ -220,6 +236,106 @@ impl<'a> PhpExtractor<'a> {
 
     fn visit_root(&mut self, root: Node) {
         self.walk_top_level(root);
+        self.resolve_same_file_helpers();
+    }
+
+    /// Records a non-test method or function as a helper: its assertions and its
+    /// `throw`s are the failure paths a test inherits when it calls it.
+    fn record_helper(&mut self, key: String, node: Node) {
+        if self.helpers.contains_key(&key) {
+            return;
+        }
+        let mut h = TestFn::default();
+        if let Some(body) = node.child_by_field_name("body") {
+            self.scan_block(body, &mut h);
+            h.total_asserts += super::count_failure_exits(
+                body,
+                self.src,
+                &["throw_expression", "throw_statement"],
+                &[],
+                PHP_CLOSURE_KINDS,
+            );
+        }
+        self.helpers.insert(
+            key,
+            super::HelperFacts {
+                total_asserts: h.total_asserts,
+                strong_asserts: h.strong_asserts,
+                tautologies: h.tautologies,
+                fatal_asserts: h.fatal_asserts,
+            },
+        );
+    }
+
+    /// The same-file callees a test body runs: `$this->m()`, `self::m()`,
+    /// `static::m()` resolve to a method of `class_name`, `f()` to a function. A
+    /// closure assigned and not called runs nothing.
+    fn collect_calls(&self, node: Node, class_name: &str, calls: &mut Vec<String>) {
+        if PHP_CLOSURE_KINDS.contains(&node.kind())
+            && node
+                .parent()
+                .is_some_and(|p| p.kind() == "assignment_expression")
+        {
+            return;
+        }
+        match node.kind() {
+            "member_call_expression" => {
+                let on_this = node
+                    .child_by_field_name("object")
+                    .is_some_and(|o| self.text(o) == "$this");
+                if let (true, Some(n)) = (on_this, node.child_by_field_name("name")) {
+                    calls.push(format!("{class_name}::{}", self.text(n)));
+                }
+            }
+            "scoped_call_expression" => {
+                let scope = node
+                    .child_by_field_name("scope")
+                    .map(|s| self.text(s))
+                    .unwrap_or("");
+                if matches!(scope, "self" | "static") || scope == class_name {
+                    if let Some(n) = node.child_by_field_name("name") {
+                        calls.push(format!("{class_name}::{}", self.text(n)));
+                    }
+                }
+            }
+            "function_call_expression" => {
+                if let Some(f) = node.child_by_field_name("function") {
+                    if f.kind() == "name" {
+                        calls.push(self.text(f).to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_calls(child, class_name, calls);
+        }
+    }
+
+    /// Adds each called helper's failure paths to the test. One level: a helper's
+    /// own callees are not followed.
+    fn resolve_same_file_helpers(&mut self) {
+        for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
+            for call in calls {
+                let Some(h) = self.helpers.get(call) else {
+                    continue;
+                };
+                let leaf = call.rsplit("::").next().unwrap_or(call);
+                // A configured assertion helper was already counted at the call.
+                if self.vocab.helper_fns.iter().any(|n| n == leaf) {
+                    test.total_asserts = test.total_asserts.saturating_sub(1);
+                    test.strong_asserts = test.strong_asserts.saturating_sub(1);
+                }
+                test.total_asserts += h.total_asserts;
+                test.strong_asserts += h.strong_asserts;
+                test.tautologies += h.tautologies;
+                test.fatal_asserts += h.fatal_asserts;
+                if h.total_asserts > h.tautologies {
+                    test.helper_checks += 1;
+                }
+            }
+        }
     }
 
     fn walk_top_level(&mut self, node: Node) {
@@ -307,6 +423,7 @@ impl<'a> PhpExtractor<'a> {
         let name_is_test = method_name.starts_with("test");
 
         if !name_is_test && !annotated_as_test {
+            self.record_helper(format!("{class_name}::{method_name}"), node);
             return;
         }
 
@@ -330,11 +447,14 @@ impl<'a> PhpExtractor<'a> {
             ..Default::default()
         };
 
+        let mut calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
             self.scan_block(body, &mut test_fn);
+            self.collect_calls(body, class_name, &mut calls);
         }
 
         self.facts.tests.push(test_fn);
+        self.test_calls.push(calls);
     }
 
     fn visit_function(&mut self, node: Node) {
@@ -344,6 +464,9 @@ impl<'a> PhpExtractor<'a> {
         let (annotated_as_test, is_ignored) = self.check_doc_or_attrs_for_test(node);
         let name_is_test = func_name.starts_with("test");
 
+        // Any top-level function can be called from a test; in a test path it is also
+        // collected as a test itself, as before.
+        self.record_helper(func_name.to_string(), node);
         if !name_is_test && !annotated_as_test && !self.is_test_path {
             return;
         }
@@ -362,11 +485,14 @@ impl<'a> PhpExtractor<'a> {
             ..Default::default()
         };
 
+        let mut calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
             self.scan_block(body, &mut test_fn);
+            self.collect_calls(body, "", &mut calls);
         }
 
         self.facts.tests.push(test_fn);
+        self.test_calls.push(calls);
     }
 
     fn try_pest_test(&mut self, node: Node) {
@@ -415,19 +541,26 @@ impl<'a> PhpExtractor<'a> {
                     closure_or_fn = c;
                 }
             }
+            let mut calls = Vec::new();
             if let Some(body) = closure_or_fn.child_by_field_name("body") {
                 self.scan_block(body, &mut test_fn);
+                self.collect_calls(body, "", &mut calls);
             } else {
                 let mut cursor = closure_or_fn.walk();
                 for child in closure_or_fn.children(&mut cursor) {
                     if child.kind() == "compound_statement" {
                         self.scan_block(child, &mut test_fn);
+                        self.collect_calls(child, "", &mut calls);
                     }
                 }
             }
+            self.facts.tests.push(test_fn);
+            self.test_calls.push(calls);
+            return;
         }
 
         self.facts.tests.push(test_fn);
+        self.test_calls.push(Vec::new());
     }
 
     fn collect_arguments<'b>(&self, args_node: Node<'b>) -> Vec<Node<'b>> {
@@ -754,6 +887,55 @@ it('checks condition', function () {
         assert_eq!(facts.tests[1].name, "it: checks condition");
         assert_eq!(facts.tests[1].strong_asserts, 1);
         assert!(!facts.tests[1].is_vacuous());
+    }
+
+    #[test]
+    fn same_file_helpers_resolve_for_phpunit_and_pest() {
+        let src = r#"<?php
+class RowTest extends TestCase {
+    private function checkRow(array $r): void {
+        $this->assertSame(1, $r['id']);
+    }
+    private static function checkRole(array $r): void {
+        if ($r['role'] !== 'writer') { throw new RuntimeException('role'); }
+    }
+    public function testRow(): void {
+        $r = load();
+        $this->checkRow($r);
+        self::checkRole($r);
+    }
+    public function testDefinesButNeverRuns(): void {
+        $later = function () { $this->checkRow(load()); };
+    }
+}
+
+function expectValid(array $r): void {
+    if (!isset($r['id'])) { throw new InvalidArgumentException('id'); }
+}
+
+test('row is valid', function () {
+    expectValid(load());
+});
+"#;
+        let facts = PhpPack
+            .extract("tests/RowTest.php", src, &AssertVocabulary::default())
+            .unwrap();
+        let by = |n: &str| {
+            facts
+                .tests
+                .iter()
+                .find(|t| t.name == n)
+                .unwrap_or_else(|| panic!("{n}: {:?}", facts.tests))
+        };
+        let row = by("RowTest::testRow");
+        assert_eq!(
+            (row.total_asserts, row.strong_asserts, row.helper_checks),
+            (2, 1, 2),
+            "{row:?}"
+        );
+        assert!(by("RowTest::testDefinesButNeverRuns").is_vacuous());
+        let pest = by("test: row is valid");
+        assert_eq!((pest.total_asserts, pest.helper_checks), (1, 1), "{pest:?}");
     }
 
     #[test]

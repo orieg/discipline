@@ -375,6 +375,28 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "javascript, php: a same-file helper that asserts or throws is a check at each call",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let count = |path: &str, src: &str| -> Result<(usize, usize)> {
+                let Some(pack) = reg.find_pack(path) else {
+                    return Ok((1, 1));
+                };
+                let t = pack.extract(path, src, &v)?.tests.remove(0);
+                Ok((t.total_asserts, t.helper_checks))
+            };
+            Ok(count(
+                "test/a.test.js",
+                "function check(x) { if (x !== 1) { throw new Error('x'); } }\ntest('t', () => { check(f()); });\n",
+            )? == (1, 1)
+                && count(
+                    "tests/ATest.php",
+                    "<?php\nclass ATest extends TestCase {\n  private function check($x) { $this->assertSame(1, $x); }\n  public function testT() { $this->check(f()); }\n}\n",
+                )? == (1, 1))
+        },
+    ),
+    (
         "comment: change text cannot mention, inject HTML, break the table or forge the marker",
         || {
             use crate::comment::{cell, MARKER};

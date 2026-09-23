@@ -62,10 +62,12 @@ impl LanguagePack for JavaScriptPack {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
             },
+            test_calls: Vec::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
+        extractor.resolve_same_file_helpers(root);
         extractor.facts.functions = functions::extract(root, src, path, &JS_FUNCTIONS);
         super::mocks::count(
             root,
@@ -222,7 +224,20 @@ struct JsExtractor<'a> {
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     facts: ParsedFileFacts,
+    /// Same-file callees of each test, in `facts.tests` order.
+    test_calls: Vec<Vec<String>>,
 }
+
+/// Function nodes whose body runs only when called.
+const JS_FUNCTION_KINDS: &[&str] = &[
+    "arrow_function",
+    "function_expression",
+    "function",
+    "function_declaration",
+    "generator_function_declaration",
+    "method_definition",
+    "class_declaration",
+];
 
 impl<'a> JsExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
@@ -329,13 +344,18 @@ impl<'a> JsExtractor<'a> {
                         ..Default::default()
                     };
 
+                    let mut calls = Vec::new();
                     if let Some(args) = node.child_by_field_name("arguments") {
                         if let Some(callback) = Self::find_callback(args) {
                             self.scan_test_body(callback, &mut test_fn);
+                            if let Some(body) = callback.child_by_field_name("body") {
+                                self.collect_calls(body, &mut calls);
+                            }
                         }
                     }
 
                     self.facts.tests.push(test_fn);
+                    self.test_calls.push(calls);
                     return;
                 }
             }
@@ -344,6 +364,111 @@ impl<'a> JsExtractor<'a> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             self.visit_node(child, scope, parent_ignored);
+        }
+    }
+
+    /// The same-file callees a test body runs: `name(...)`. A function defined in the
+    /// body and not called there (`const f = () => helper()`) runs nothing.
+    fn collect_calls(&self, node: Node, calls: &mut Vec<String>) {
+        if JS_FUNCTION_KINDS.contains(&node.kind())
+            && node
+                .parent()
+                .is_some_and(|p| p.kind() == "variable_declarator")
+        {
+            return;
+        }
+        if node.kind() == "call_expression" {
+            if let Some(f) = node.child_by_field_name("function") {
+                if f.kind() == "identifier" {
+                    calls.push(self.text(f).to_string());
+                }
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_calls(child, calls);
+        }
+    }
+
+    /// Named functions in the file: `function f() {}` and `const f = () => {}`.
+    fn named_functions<'t>(&self, node: Node<'t>, out: &mut Vec<(String, Node<'t>)>) {
+        match node.kind() {
+            "function_declaration" | "generator_function_declaration" => {
+                if let Some(n) = node.child_by_field_name("name") {
+                    out.push((self.text(n).to_string(), node));
+                }
+            }
+            "variable_declarator" => {
+                if let (Some(n), Some(v)) = (
+                    node.child_by_field_name("name"),
+                    node.child_by_field_name("value"),
+                ) {
+                    if matches!(
+                        v.kind(),
+                        "arrow_function" | "function_expression" | "function"
+                    ) {
+                        out.push((self.text(n).to_string(), v));
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.named_functions(child, out);
+        }
+    }
+
+    /// Adds the failure paths of each same-file helper a test calls: its `expect` /
+    /// `assert` calls and its `throw` statements. One level: a helper's own callees
+    /// are not followed, so helpers calling each other cannot recurse.
+    fn resolve_same_file_helpers(&mut self, root: Node) {
+        let mut named = Vec::new();
+        self.named_functions(root, &mut named);
+        let mut helpers: std::collections::HashMap<String, super::HelperFacts> =
+            std::collections::HashMap::new();
+        for (name, func) in named {
+            if helpers.contains_key(&name) {
+                continue;
+            }
+            let mut h = TestFn::default();
+            self.scan_test_body(func, &mut h);
+            if let Some(body) = func.child_by_field_name("body") {
+                h.total_asserts += super::count_failure_exits(
+                    body,
+                    self.src,
+                    &["throw_statement"],
+                    &[],
+                    JS_FUNCTION_KINDS,
+                );
+            }
+            helpers.insert(
+                name,
+                super::HelperFacts {
+                    total_asserts: h.total_asserts,
+                    strong_asserts: h.strong_asserts,
+                    tautologies: h.tautologies,
+                    fatal_asserts: h.fatal_asserts,
+                },
+            );
+        }
+        for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
+            for call in calls {
+                let Some(h) = helpers.get(call) else {
+                    continue;
+                };
+                // A configured assertion helper was already counted at the call.
+                if self.vocab.helper_fns.iter().any(|n| n == call) {
+                    test.total_asserts = test.total_asserts.saturating_sub(1);
+                }
+                test.total_asserts += h.total_asserts;
+                test.strong_asserts += h.strong_asserts;
+                test.tautologies += h.tautologies;
+                test.fatal_asserts += h.fatal_asserts;
+                if h.total_asserts > h.tautologies {
+                    test.helper_checks += 1;
+                }
+            }
         }
     }
 
@@ -907,15 +1032,24 @@ test("weak matchers", () => {
     }
 
     #[test]
-    fn fixture_helpers_and_lambdas_require_configuration() {
+    fn fixture_same_file_helpers_resolve_and_a_defined_lambda_runs_nothing() {
+        // `assertValidUser` is a same-file helper: its `expect` counts once, for the
+        // direct call. `const check = (u) => assertValidUser(u)` defines a lambda the
+        // test never calls, so it adds nothing.
         let src = include_str!("../../tests/fixtures/javascript/helpers_and_lambdas.js");
-        let unconfigured_vocab = AssertVocabulary::default();
         let unconfigured = JavaScriptPack
-            .extract("test/helpers.test.js", src, &unconfigured_vocab)
+            .extract("test/helpers.test.js", src, &AssertVocabulary::default())
             .unwrap();
         assert_eq!(unconfigured.tests.len(), 1);
-        assert!(unconfigured.tests[0].is_vacuous());
+        let t = &unconfigured.tests[0];
+        assert_eq!(
+            (t.total_asserts, t.strong_asserts, t.helper_checks),
+            (1, 1, 1),
+            "{t:?}"
+        );
 
+        // Configuring the helper does not count the resolved call twice. (A configured
+        // name is also counted inside a lambda, as it was before resolution existed.)
         let configured_vocab = AssertVocabulary {
             helper_fns: vec!["assertValidUser".to_string()],
             ..Default::default()
@@ -924,8 +1058,24 @@ test("weak matchers", () => {
             .extract("test/helpers.test.js", src, &configured_vocab)
             .unwrap();
         assert_eq!(configured.tests.len(), 1);
-        assert!(configured.tests[0].total_asserts >= 1);
         assert!(!configured.tests[0].is_vacuous());
+        assert_eq!(configured.tests[0].helper_checks, 1);
+    }
+
+    #[test]
+    fn a_throwing_helper_counts_and_a_helper_only_in_a_lambda_does_not() {
+        let src = "function checkRow(r) {\n  if (r.id !== 1) { throw new Error('id'); }\n}\nconst noop = () => {};\n\ntest('checks the row', () => {\n  checkRow(load());\n  noop();\n});\n\ntest('defines but never runs', () => {\n  const later = () => checkRow(load());\n});\n";
+        let facts = JavaScriptPack
+            .extract("test/row.test.js", src, &AssertVocabulary::default())
+            .unwrap();
+        let by = |n: &str| facts.tests.iter().find(|t| t.name == n).unwrap();
+        let direct = by("checks the row");
+        assert_eq!(
+            (direct.total_asserts, direct.helper_checks),
+            (1, 1),
+            "{direct:?}"
+        );
+        assert!(by("defines but never runs").is_vacuous());
     }
 
     #[test]

@@ -11231,3 +11231,52 @@ fn assertion_reduction_resolves_helpers_run_from_a_dispatch_table() {
         );
     }
 }
+
+#[test]
+fn js_and_php_checks_moved_into_same_file_helpers_are_a_refactor() {
+    let cases: &[(&str, &str, &str, &str)] = &[
+        (
+            "test/user.test.js",
+            "test('user', () => {\n  const u = load();\n  expect(u.name).toBe('a');\n  expect(u.id).toBe(1);\n});\n",
+            "function checkUser(u) {\n  expect(u.name).toBe('a');\n  if (u.id !== 1) { throw new Error('id'); }\n}\n\ntest('user', () => {\n  const u = load();\n  checkUser(u);\n});\n",
+            "  checkUser(u);\n",
+        ),
+        (
+            "tests/UserTest.php",
+            "<?php\nclass UserTest extends TestCase {\n    public function testUser(): void {\n        $u = load();\n        $this->assertSame('a', $u['name']);\n        $this->assertSame(1, $u['id']);\n    }\n}\n",
+            "<?php\nclass UserTest extends TestCase {\n    private function checkUser(array $u): void {\n        $this->assertSame('a', $u['name']);\n        if ($u['id'] !== 1) { throw new RuntimeException('id'); }\n    }\n    public function testUser(): void {\n        $u = load();\n        $this->checkUser($u);\n    }\n}\n",
+            "        $this->checkUser($u);\n",
+        ),
+    ];
+    for (path, inline, helpers, call) in cases {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(path, inline);
+        repo.commit("test: inline checks");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write(path, helpers);
+        repo.commit("refactor: checks into a helper");
+        let run = repo.check(&[]);
+        assert!(
+            run.titles("assertion-reduction").is_empty() && run.titles("vacuous-tests").is_empty(),
+            "{path}: {}",
+            run.stdout
+        );
+
+        // Removing the helper call without replacement is still a drop.
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(path, helpers);
+        repo.commit("test: helper checks");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write(path, &helpers.replace(call, ""));
+        repo.commit("refactor: fewer checks");
+        let run = repo.check(&[]);
+        assert_eq!(
+            run.titles("assertion-reduction"),
+            vec!["Assertion Reduction In Existing Test"],
+            "{path}: {}",
+            run.stdout
+        );
+    }
+}
