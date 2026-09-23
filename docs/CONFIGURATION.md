@@ -761,7 +761,7 @@ Include the remote pipeline template directly:
 
 ```yaml
 include:
-  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.10.2/templates/discipline.gitlab-ci.yml'
+  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.11.0/templates/discipline.gitlab-ci.yml'
 ```
 
 Or configure a standalone job emitting native GitLab Code Quality diffs:
@@ -836,7 +836,7 @@ Use [`templates/argo-workflow-template.yaml`](https://github.com/orieg/disciplin
 ```yaml
 repos:
   - repo: https://github.com/orieg/discipline
-    rev: v0.10.2
+    rev: v0.11.0
     hooks:
       - id: discipline          # compiles via cargo
       # Or: - id: discipline-system # uses pre-installed binary on PATH
@@ -1025,7 +1025,7 @@ Every tool is read-only (`readOnlyHint`): none writes a file, a directive or a b
 Official multi-arch (`linux/amd64`, `linux/arm64`) minimal OCI container images are published to GitHub Container Registry:
 - `ghcr.io/orieg/discipline:latest`
 - `ghcr.io/orieg/discipline:v0`
-- `ghcr.io/orieg/discipline:v0.10.2`
+- `ghcr.io/orieg/discipline:v0.11.0`
 
 Images are built on Alpine Linux with the statically linked musl `discipline` binary and `git` on `PATH`.
 
@@ -1069,7 +1069,7 @@ The job also has to hand the binary what the composite action would: the base br
    ```
 
 2. **Job container, no `uses:` (Gitea Actions, Forgejo Actions, GitHub Actions):**
-   The job runs inside the pinned image on a registered label and performs its own checkout. Pin the image by tag **and** digest: when a reference carries both, the digest is what runs and the tag is only a comment, so the tag must name the release the digest is. A line reading `:latest@sha256:...` runs whatever the digest was when it was written, not the latest release, and reports nothing. Never pair a digest with `latest`. Read the digest of a release with `docker buildx imagetools inspect ghcr.io/orieg/discipline:v0.10.2`.
+   The job runs inside the pinned image on a registered label and performs its own checkout. Pin the image by tag **and** digest: when a reference carries both, the digest is what runs and the tag is only a comment, so the tag must name the release the digest is. A line reading `:latest@sha256:...` runs whatever the digest was when it was written, not the latest release, and reports nothing. Never pair a digest with `latest`. Read the digest of a release with `docker buildx imagetools inspect ghcr.io/orieg/discipline:v0.11.0`.
    <!-- snippet: gitea-container-recipe (executed in CI by tests/action/test-container-recipe.sh) -->
    ```yaml
    name: CI Sentinel
@@ -1082,7 +1082,7 @@ The job also has to hand the binary what the composite action would: the base br
      discipline:
        runs-on: ubuntu-latest # a label the runner registers, never an image
        container:
-         image: ghcr.io/orieg/discipline:v0.10.2@sha256:<digest of that release>
+         image: ghcr.io/orieg/discipline:v0.11.0@sha256:<digest of that release>
        defaults:
          run:
            shell: sh # the image has no bash

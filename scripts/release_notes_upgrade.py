@@ -30,7 +30,11 @@ def table_rows(text: str, heading: str) -> list[list[str]]:
     for line in lines[start + 1:]:
         if line.startswith("|"):
             in_table = True
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            # A `\|` inside a cell is a literal pipe (Markdown's escape), not a separator.
+            cells = [
+                c.strip().replace("\\|", "|")
+                for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))
+            ]
             if all(re.fullmatch(r":?-+:?", c) for c in cells):
                 continue
             rows.append(cells)
@@ -81,6 +85,7 @@ SAMPLE = """## Default Changes (Compatibility Ledger)
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
 | v1.2.0 | report | Counts changed. | reclassified | Read status. |
+| v1.2.0 | CLI | New `x --agent <a\\|b>`. | additive | None. |
 | v1.2.01 | other | Not this release. | looser | None. |
 """
 
@@ -90,6 +95,8 @@ def self_test() -> None:
     assert "## Upgrading to v1.2.0" in got, got
     assert "`g`: on, `error` → on, `warning` (looser)" in got, got
     assert "**report** (reclassified): Counts changed." in got, got
+    assert "**CLI** (additive): New `x --agent <a|b>`." in got, "an escaped pipe splits a cell"
+
     assert "`h`" not in got, "a row of another release leaked"
     assert "Not this release" not in got, "a prefix-matching version leaked"
     assert render(SAMPLE, "v9.9.9") == "", "no rows means no section"
