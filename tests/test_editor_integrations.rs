@@ -70,3 +70,76 @@ fn the_documented_vscode_problem_matcher_reads_real_findings() {
         "NO_COLOR must keep the output plain for the pattern"
     );
 }
+
+#[test]
+fn the_renovate_preset_groups_every_pin_and_reads_the_documented_gitlab_include() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let preset: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("renovate/discipline.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(preset["extends"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e == ":enablePreCommit"));
+
+    // Every place discipline is pinned is in the one group, and nothing else is.
+    let rule = &preset["packageRules"][0];
+    assert_eq!(rule["groupName"], "discipline");
+    assert_eq!(rule["pinDigests"], true);
+    let names = rule["matchPackageNames"].as_array().unwrap();
+    let matches = |dep: &str| {
+        names.iter().any(|n| {
+            let n = n.as_str().unwrap();
+            match n.strip_prefix('/').and_then(|r| r.strip_suffix('/')) {
+                Some(re) => regex::Regex::new(re).unwrap().is_match(dep),
+                None => n == dep,
+            }
+        })
+    };
+    for dep in [
+        "orieg/discipline",
+        "https://github.com/orieg/discipline",
+        "https://github.com/orieg/discipline.git",
+        "ghcr.io/orieg/discipline",
+    ] {
+        assert!(matches(dep), "{dep} is not in the discipline group");
+    }
+    for other in [
+        "orieg/other",
+        "actions/checkout",
+        "ghcr.io/orieg/disciplinex",
+    ] {
+        assert!(!matches(other), "{other} is in the discipline group");
+    }
+
+    // The GitLab include pattern finds the current release in the documented snippet.
+    let manager = &preset["customManagers"][0];
+    assert_eq!(manager["datasourceTemplate"], "github-tags");
+    let pattern = regex::Regex::new(manager["matchStrings"][0].as_str().unwrap()).unwrap();
+    let docs = std::fs::read_to_string(root.join("docs/CONFIGURATION.md")).unwrap();
+    let found: Vec<String> = pattern
+        .captures_iter(&docs)
+        .map(|c| c["currentValue"].to_string())
+        .collect();
+    assert!(!found.is_empty(), "no GitLab include in the docs");
+    let current = format!("v{}", env!("CARGO_PKG_VERSION"));
+    assert!(
+        found.iter().all(|v| *v == current),
+        "{found:?} vs {current}"
+    );
+    let files: Vec<&str> = manager["managerFilePatterns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().trim_matches('/'))
+        .collect();
+    let file_matches = |f: &str| {
+        files
+            .iter()
+            .any(|p| regex::Regex::new(p).unwrap().is_match(f))
+    };
+    assert!(file_matches(".gitlab-ci.yml") && file_matches("ci/.gitlab/discipline.yaml"));
+    assert!(!file_matches("README.md"));
+}

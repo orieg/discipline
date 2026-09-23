@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Keep every pin of orieg/discipline moving together: the action, the container image (tag and digest), the pre-commit rev and the GitLab CI include.",
+  "extends": [":enablePreCommit"],
+  "packageRules": [
+    {
+      "description": "One pull request per discipline release, for every place it is pinned.",
+      "matchPackageNames": ["/(^|/)orieg/discipline(\\.git)?$/", "ghcr.io/orieg/discipline"],
+      "groupName": "discipline",
+      "pinDigests": true
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The GitLab CI template included from a discipline release tag.",
+      "managerFilePatterns": ["/(^|/)\\.gitlab-ci\\.ya?ml$/", "/(^|/)\\.gitlab/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "https://raw\\.githubusercontent\\.com/orieg/discipline/(?<currentValue>v\\d+\\.\\d+\\.\\d+)/templates/"
+      ],
+      "depNameTemplate": "orieg/discipline",
+      "datasourceTemplate": "github-tags"
+    }
+  ]
+}

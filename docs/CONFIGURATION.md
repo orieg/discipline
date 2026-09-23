@@ -770,6 +770,16 @@ Run discipline as a VS Code task and its findings land in the **Problems** panel
 
 `discipline diff` checks the working tree against `HEAD`; use `discipline check --base main` to check the whole branch. `NO_COLOR` keeps the output plain, which the pattern needs. A finding with no file (a gate-wide finding) stays in the terminal only.
 
+### Keeping Pins Current with Renovate
+
+A repository pins discipline in up to four places: the action (`uses: orieg/discipline@v…`), the container image (`ghcr.io/orieg/discipline` by tag and digest, moved together), the pre-commit `rev:` and the GitLab CI `include:` URL. The preset in this repository moves all of them in one pull request per release. In the repository's `renovate.json`:
+
+```json
+{ "extends": ["github>orieg/discipline//renovate/discipline"] }
+```
+
+It groups every discipline dependency under one `discipline` update, pins image digests, turns on Renovate's `pre-commit` manager (off by default in Renovate; this enables it for every hook in the repository), and adds a regex manager for the GitLab `include: remote:` URL, which no built-in manager reads. Renovate's own `github-actions` manager already covers `.github`, `.gitea` and `.forgejo` workflows, including `container: image:` with a digest.
+
 ### Explaining a Gate
 
 ```bash
