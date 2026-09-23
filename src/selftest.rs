@@ -375,6 +375,39 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "mcp: three read-only tools, notifications unanswered, explanations carry no waiver",
+        || {
+            struct NoChild;
+            impl crate::mcp::Runner for NoChild {
+                fn check(&self, _: &crate::hook::CheckSide) -> Result<(i32, String, String)> {
+                    Ok((2, String::new(), "not run in self-test".into()))
+                }
+                fn gates(&self) -> Result<String> {
+                    Ok(String::new())
+                }
+            }
+            let list = crate::mcp::handle(&NoChild, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#);
+            let tools = list.as_ref().and_then(|l| l["result"]["tools"].as_array().cloned()).unwrap_or_default();
+            let quiet = crate::mcp::handle(&NoChild, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none();
+            let explain = crate::mcp::handle(
+                &NoChild,
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"explain_finding","arguments":{"query":"error-swallowing"}}}"#,
+            )
+            .map(|r| r.to_string())
+            .unwrap_or_default();
+            let broken = crate::mcp::handle(
+                &NoChild,
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"check_diff","arguments":{}}}"#,
+            );
+            Ok(tools.len() == 3
+                && tools.iter().all(|t| t["annotations"]["readOnlyHint"] == true)
+                && quiet
+                && explain.contains("error-swallowing")
+                && !explain.contains("allow-swallow")
+                && broken.is_some_and(|b| b["result"]["isError"] == true))
+        },
+    ),
+    (
         "hook: findings block in each agent's contract, and a check that cannot run blocks too",
         || {
             use crate::hook::{translate, Agent};

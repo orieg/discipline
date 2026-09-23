@@ -244,6 +244,12 @@ esac
     ;;
 esac
 ;;
+(mcp)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (bench)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -384,6 +390,10 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(mcp)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (bench)
 _arguments "${_arguments_options[@]}" : \
 ":: :_discipline__subcmd__help__subcmd__bench_commands" \
@@ -435,6 +445,7 @@ _discipline_commands() {
 'docs:Generate or check reference docs and schemas against sources of truth' \
 'install-hooks:Install pre-commit hook in the local git repository' \
 'hook:Run the gates inside a coding agent'\''s edit loop (Claude Code, Codex, Cursor, Aider)' \
+'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -521,6 +532,7 @@ _discipline__subcmd__help_commands() {
 'docs:Generate or check reference docs and schemas against sources of truth' \
 'install-hooks:Install pre-commit hook in the local git repository' \
 'hook:Run the gates inside a coding agent'\''s edit loop (Claude Code, Codex, Cursor, Aider)' \
+'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -607,6 +619,11 @@ _discipline__subcmd__help__subcmd__install-hooks_commands() {
     local commands; commands=()
     _describe -t commands 'discipline help install-hooks commands' commands "$@"
 }
+(( $+functions[_discipline__subcmd__help__subcmd__mcp_commands] )) ||
+_discipline__subcmd__help__subcmd__mcp_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help mcp commands' commands "$@"
+}
 (( $+functions[_discipline__subcmd__help__subcmd__schema_commands] )) ||
 _discipline__subcmd__help__subcmd__schema_commands() {
     local commands; commands=()
@@ -669,6 +686,11 @@ _discipline__subcmd__init_commands() {
 _discipline__subcmd__install-hooks_commands() {
     local commands; commands=()
     _describe -t commands 'discipline install-hooks commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__mcp_commands] )) ||
+_discipline__subcmd__mcp_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline mcp commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__schema_commands] )) ||
 _discipline__subcmd__schema_commands() {

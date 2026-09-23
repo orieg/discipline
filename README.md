@@ -135,6 +135,7 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 - [Argo Workflows GitOps Template](docs/CONFIGURATION.md#argo-workflows)
 - [pre-commit & Local Git Hooks](docs/CONFIGURATION.md#pre-commit-hook)
 - [Agent Hooks (Claude Code, Codex, Cursor, Aider)](docs/CONFIGURATION.md#agent-hooks)
+- [MCP Server (`discipline mcp`)](docs/CONFIGURATION.md#mcp-server)
 - [Docker Container Run](docs/CONFIGURATION.md#docker-container)
 - [CLI Reference & Local Inner Loop](docs/CONFIGURATION.md#standalone-cli)
 

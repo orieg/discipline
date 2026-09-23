@@ -35,6 +35,8 @@ pub enum Commands {
     InstallHooks(InstallHooksArgs),
     /// Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider)
     Hook(HookArgs),
+    /// Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding)
+    Mcp,
     /// Benchmark tooling for the bench-regression gate
     Bench(BenchArgs),
     /// Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check
@@ -86,6 +88,7 @@ impl Commands {
             Commands::Docs(_) => "docs",
             Commands::InstallHooks(_) => "install-hooks",
             Commands::Hook(_) => "hook",
+            Commands::Mcp => "mcp",
             Commands::Bench(_) => "bench",
             Commands::Doctor(_) => "doctor",
         }

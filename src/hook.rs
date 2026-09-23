@@ -160,22 +160,46 @@ pub fn run(agent: Agent, base: Option<String>, stdin: &str) -> Result<HookOutput
             .ok()
             .and_then(|r| default_base(&r)),
     };
+    let base = base.map(CheckSide::Base).unwrap_or(CheckSide::Default);
+    let (code, report, detail) = run_check(&dir, &base)?;
+    Ok(translate(agent, code, &report, &detail))
+}
+
+/// What an agent-facing check measures the change against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckSide {
+    /// `check`'s own resolution (`DISCIPLINE_BASE_REF`, else `main`).
+    Default,
+    /// The working tree against the merge base with this ref.
+    Base(String),
+    /// The index against `HEAD`.
+    Staged,
+}
+
+/// Runs this binary's `check --format agent-prompt` in `dir` and returns its exit
+/// code, report and stderr. A PR body in the environment is not passed on: an
+/// agent-facing check reads the change, not a waiver.
+pub fn run_check(dir: &Path, side: &CheckSide) -> Result<(i32, String, String)> {
     let exe = std::env::current_exe().context("cannot locate the discipline binary")?;
     let mut cmd = std::process::Command::new(exe);
-    cmd.current_dir(&dir)
+    cmd.current_dir(dir)
         .args(["check", "--format", "agent-prompt", "--quiet"])
         .env_remove("PR_BODY")
         .env_remove("PR_TITLE");
-    if let Some(b) = &base {
-        cmd.args(["--base", b]);
+    match side {
+        CheckSide::Default => {}
+        CheckSide::Base(b) => {
+            cmd.args(["--base", b]);
+        }
+        CheckSide::Staged => {
+            cmd.arg("--staged");
+        }
     }
     let out = cmd.output().context("cannot run discipline check")?;
-    let code = out.status.code().unwrap_or(2);
-    Ok(translate(
-        agent,
-        code,
-        &String::from_utf8_lossy(&out.stdout),
-        &String::from_utf8_lossy(&out.stderr),
+    Ok((
+        out.status.code().unwrap_or(2),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
     ))
 }
 

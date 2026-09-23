@@ -399,6 +399,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `completions` | Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish) |
 | `install-hooks` | Install pre-commit hook in the local git repository |
 | `hook` | Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider) |
+| `mcp` | Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding) |
 | `bench` | Benchmark tooling for the bench-regression gate |
 | `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
 <!-- /generated -->
@@ -697,6 +698,22 @@ discipline hook install --agent claude-code   # or: codex, cursor, aider
 | Aider | `.aider.conf.yml` | `lint-cmd` after each edit (`auto-lint: true`) | exit 1, the report on stdout |
 
 The report is the `agent-prompt` format: each finding with its location and the repair, never the directive that would waive it. A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. A Claude Code or Codex `Stop` event that this hook already continued (`stop_hook_active`) is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. `discipline` must be on the agent's `PATH`.
+
+### MCP Server
+
+`discipline mcp` serves the gates to any MCP-capable agent over stdio (newline-delimited JSON-RPC; no socket, no network). Register it with the agent's MCP configuration, for example:
+
+```json
+{ "mcpServers": { "discipline": { "command": "discipline", "args": ["mcp"] } } }
+```
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `check_diff` | `base` (optional), `staged` (optional) | The `agent-prompt` report for the change so far (committed and uncommitted, against the merge base with the default branch unless `base` or `staged` says otherwise); `structuredContent.status` is `pass`, `findings` or `could_not_check` (the last also `isError`) |
+| `list_gates` | none | The `discipline gates` table under the repository's configuration |
+| `explain_finding` | `query`: a gate id or a finding line naming `[gate-id]` | The gate's suite, what it checks, its languages and its reference link |
+
+Every tool is read-only (`readOnlyHint`): none writes a file, a directive or a baseline, and no output carries waiver syntax, so an agent is told how to repair a finding, never how to excuse it. The server runs in the directory the agent starts it in; `discipline` must be on the agent's `PATH`.
 
 ### Docker Container
 
