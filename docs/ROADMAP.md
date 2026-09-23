@@ -289,7 +289,7 @@ The agent-facing surfaces never print waiver syntax: `agent-prompt` already omit
 
 | Item | Status | Work | Ships when |
 |---|---|---|---|
-| `discipline replay --last N` | Open | The consumer's replay harness built in: rebuild each merged pull request on a base carrying the configuration under test, run the gates with that pull request's body (through the forge read path when a token is present, commit messages only otherwise, said in the output), and print blocked / passed and per-gate counts. Reading pull-request bodies is a forge read: listed in `AGENTS.md` §3.3 with the other three | Run against the consumer with its configuration, it reproduces the consumer harness's 100-PR table (blocked count and per-gate errors) |
+| `discipline replay --last N` | **Shipped** (`src/replay.rs`; RUN 2026-09-23 on the consumer at its harness's tip: 100 changes, 86 passed, 14 blocked, the same gates blocking the same changes as the harness) | The consumer's replay harness built in: rebuild each merged pull request on a base carrying the configuration under test, run the gates with that pull request's body (through the forge read path when a token is present, commit messages only otherwise, said in the output), and print blocked / passed and per-gate counts. Reading pull-request bodies is a forge read: listed in `AGENTS.md` §3.3 with the other three | Run against the consumer with its configuration, it reproduces the consumer harness's 100-PR table (blocked count and per-gate errors) |
 | `discipline explain <gate-id>` | **Shipped** (`src/explain.rs`; a finding line resolves too) | The rule, what it catches and misses, the default severity, and the directive and inline marker that lift it, from the same source as `docs/GATES.md`; a finding's id or title resolves to its gate | Every gate id resolves; the text matches the generated docs (`docs --check`) |
 | `check --help` lists `merged-pr-body` | **Shipped** | The `--directive-sources` help still names only `pr-body, commits` | The help text lists all three sources |
 
@@ -359,6 +359,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | CLI | New `discipline replay --last N`: replays the last N merged changes through a configuration in a throwaway repository and reports what it would have blocked, per change and per gate; pull-request bodies are read through the `merged-pr-body` lookup when a token allows. | additive | None. |
 | unreleased | CLI | New `discipline explain <gate-id\|finding line>`: the gate's rule, languages, state under this configuration, lifting directive and reference link. | additive | None. |
 | unreleased | CLI | New `discipline mcp`: an MCP server over stdio with three read-only tools (`check_diff`, `list_gates`, `explain_finding`) whose output carries no waiver syntax. | additive | None. |
 | unreleased | CLI | New `discipline hook run --agent <claude-code\|codex\|cursor\|aider>` answers an agent's hook with the `agent-prompt` findings in that agent's contract; `discipline hook install --agent <name>` writes the agent's configuration only where none exists. | additive | None. |

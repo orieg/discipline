@@ -400,6 +400,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `install-hooks` | Install pre-commit hook in the local git repository |
 | `hook` | Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider) |
 | `explain` | Explain a gate: what it checks, its state here, and the directive that lifts a finding |
+| `replay` | Replay the last N merged changes through a configuration: what it would have blocked |
 | `mcp` | Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding) |
 | `bench` | Benchmark tooling for the bench-regression gate |
 | `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
@@ -699,6 +700,17 @@ discipline hook install --agent claude-code   # or: codex, cursor, aider
 | Aider | `.aider.conf.yml` | `lint-cmd` after each edit (`auto-lint: true`) | exit 1, the report on stdout |
 
 The report is the `agent-prompt` format: each finding with its location and the repair, never the directive that would waive it. A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. A Claude Code or Codex `Stop` event that this hook already continued (`stop_hook_active`) is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. `discipline` must be on the agent's `PATH`.
+
+### Previewing Adoption: `discipline replay`
+
+```bash
+discipline replay --last 50                          # the working tree's discipline.toml
+discipline replay --last 100 --config candidate.toml --ref origin/main --json
+```
+
+Replays the last N first-parent commits of a branch (default: `origin`'s default branch, else `main` / `master`), one merged change each, through a configuration, and prints which would have been blocked and by which gate. Each change is rebuilt in a throwaway repository that borrows the source repository's objects: its parent with the configuration under test as the base, and the change on top with the same configuration (a change to `discipline.toml` itself is not replayed), then `discipline check` runs on it. Nothing is written to the source repository, and the throwaway repository is removed when the replay ends.
+
+The directives each change carried are read from the body of the pull request it was merged through, by the same forge lookup as the `merged-pr-body` source (a token that can read pull requests: `GITHUB_TOKEN`, `GITEA_TOKEN`, ...). Without one, or with `DISCIPLINE_NO_NETWORK=1`, only the commit message is read, and each case says so (`directives_from`). `--json` prints the per-change verdicts and the per-gate counts (`errors_by_gate` names the changes each gate blocked). The command exits 0 when the replay ran, whatever it found; 2 when it could not run.
 
 ### Explaining a Gate
 

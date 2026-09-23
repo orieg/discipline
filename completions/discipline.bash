@@ -58,6 +58,9 @@ _discipline() {
             discipline,mcp)
                 cmd="discipline__subcmd__mcp"
                 ;;
+            discipline,replay)
+                cmd="discipline__subcmd__replay"
+                ;;
             discipline,schema)
                 cmd="discipline__subcmd__schema"
                 ;;
@@ -118,6 +121,9 @@ _discipline() {
             discipline__subcmd__help,mcp)
                 cmd="discipline__subcmd__help__subcmd__mcp"
                 ;;
+            discipline__subcmd__help,replay)
+                cmd="discipline__subcmd__help__subcmd__replay"
+                ;;
             discipline__subcmd__help,schema)
                 cmd="discipline__subcmd__help__subcmd__schema"
                 ;;
@@ -158,7 +164,7 @@ _discipline() {
 
     case "${cmd}" in
         discipline)
-            opts="-h -V --help --version check diff baseline init gates schema self-test completions docs install-hooks hook explain mcp bench doctor help"
+            opts="-h -V --help --version check diff baseline init gates schema self-test completions docs install-hooks hook explain replay mcp bench doctor help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -646,7 +652,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__help)
-            opts="check diff baseline init gates schema self-test completions docs install-hooks hook explain mcp bench doctor help"
+            opts="check diff baseline init gates schema self-test completions docs install-hooks hook explain replay mcp bench doctor help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -897,6 +903,20 @@ _discipline() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        discipline__subcmd__help__subcmd__replay)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         discipline__subcmd__help__subcmd__schema)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -1082,6 +1102,36 @@ _discipline() {
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        discipline__subcmd__replay)
+            opts="-c -h --last --ref --config --json --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --last)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -c)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;

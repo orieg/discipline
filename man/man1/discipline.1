@@ -717,6 +717,33 @@ Print help
 .TP
 <\fIQUERY\fR>
 A gate id (`assertion\-reduction`) or a finding line naming `[gate\-id]`
+.SS "discipline replay"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Replay the last N merged changes through a configuration: what it would have blocked
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline replay\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-last\fR \fI<LAST>\fR
+Number of first\-parent commits (merged changes) to replay, newest first
+.TP
+\fB\-\-ref\fR \fI<REFERENCE>\fR
+Branch whose history is replayed (default: origin\*(Aqs default branch, else main / master)
+.TP
+\fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR
+Configuration under test (default: discipline.toml in the working tree)
+.TP
+\fB\-\-json\fR
+Print the summary as JSON
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS "discipline mcp"
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '

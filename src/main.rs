@@ -102,6 +102,19 @@ fn run_command(command: Commands) -> Result<bool> {
         Commands::InstallHooks(args) => install_hooks(args),
         Commands::Hook(args) => hook(args),
         Commands::Explain(args) => explain(args),
+        Commands::Replay(args) => {
+            let summary = discipline::replay::run(&discipline::replay::Options {
+                last: args.last,
+                reference: args.reference,
+                config: args.config,
+            })?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                print!("{}", summary.render());
+            }
+            Ok(true)
+        }
         Commands::Mcp => {
             let stdin = std::io::stdin();
             discipline::mcp::serve(

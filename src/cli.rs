@@ -37,6 +37,8 @@ pub enum Commands {
     Hook(HookArgs),
     /// Explain a gate: what it checks, its state here, and the directive that lifts a finding
     Explain(ExplainArgs),
+    /// Replay the last N merged changes through a configuration: what it would have blocked
+    Replay(ReplayArgs),
     /// Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding)
     Mcp,
     /// Benchmark tooling for the bench-regression gate
@@ -91,6 +93,7 @@ impl Commands {
             Commands::InstallHooks(_) => "install-hooks",
             Commands::Hook(_) => "hook",
             Commands::Mcp => "mcp",
+            Commands::Replay(_) => "replay",
             Commands::Explain(_) => "explain",
             Commands::Bench(_) => "bench",
             Commands::Doctor(_) => "doctor",
@@ -110,6 +113,25 @@ pub struct InstallHooksArgs {
     /// Overwrite existing pre-commit hook if present
     #[arg(short, long)]
     pub force: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ReplayArgs {
+    /// Number of first-parent commits (merged changes) to replay, newest first
+    #[arg(long)]
+    pub last: usize,
+
+    /// Branch whose history is replayed (default: origin's default branch, else main / master)
+    #[arg(long = "ref")]
+    pub reference: Option<String>,
+
+    /// Configuration under test (default: discipline.toml in the working tree)
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+
+    /// Print the summary as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]

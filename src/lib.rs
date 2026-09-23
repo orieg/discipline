@@ -13,6 +13,7 @@ pub mod guards;
 pub mod hook;
 pub mod mcp;
 pub mod override_policy;
+pub mod replay;
 pub mod report;
 pub mod schema;
 pub mod selftest;
