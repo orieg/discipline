@@ -375,6 +375,23 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "hook: findings block in each agent's contract, and a check that cannot run blocks too",
+        || {
+            use crate::hook::{translate, Agent};
+            let r = "### Issue 1 [assertion-reduction]: x\n";
+            let cc = translate(Agent::ClaudeCode, 1, r, "");
+            let cursor = translate(Agent::Cursor, 1, r, "");
+            Ok(cc.code == 2
+                && cc.stderr == r
+                && translate(Agent::Codex, 1, r, "").code == 2
+                && cursor.code == 0
+                && cursor.stdout.contains("followup_message")
+                && translate(Agent::Aider, 1, r, "").code == 1
+                && translate(Agent::ClaudeCode, 0, "", "").code == 0
+                && translate(Agent::ClaudeCode, 2, "", "boom").code == 2)
+        },
+    ),
+    (
         "error-swallowing: a Rust discard is sorted by callee, an accessor is not a site",
         || {
             let v = AssertVocabulary::default();

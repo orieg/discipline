@@ -100,6 +100,7 @@ fn run_command(command: Commands) -> Result<bool> {
         }
         Commands::Docs(args) => docs(args),
         Commands::InstallHooks(args) => install_hooks(args),
+        Commands::Hook(args) => hook(args),
         Commands::Bench(args) => discipline::guards::perf::paired_ratio::cli_bench(args),
         Commands::Doctor(args) => doctor(args),
     }
@@ -1202,6 +1203,56 @@ fn gates(args: &ConfigArgs) -> Result<bool> {
         );
     }
     Ok(true)
+}
+
+fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
+    use discipline::cli::HookCommand;
+    use discipline::hook::Installed;
+    use std::io::{IsTerminal, Read, Write};
+    match args.command {
+        HookCommand::Run(a) => {
+            let mut stdin = String::new();
+            // Only the agents that send a payload are read from: an inherited pipe that
+            // is never closed must not hang Aider's lint command.
+            if a.agent != discipline::hook::Agent::Aider && !std::io::stdin().is_terminal() {
+                std::io::stdin()
+                    .read_to_string(&mut stdin)
+                    .context("cannot read the hook payload on stdin")?;
+            }
+            let out = discipline::hook::run(a.agent, a.base, &stdin)?;
+            print!("{}", out.stdout);
+            eprint!("{}", out.stderr);
+            std::io::stdout()
+                .flush()
+                .context("cannot write the hook response")?;
+            std::process::exit(i32::from(out.code));
+        }
+        HookCommand::Install(a) => {
+            let root = discipline::hook::repo_root()?;
+            match discipline::hook::install(a.agent, &root)? {
+                Installed::Written(p) => {
+                    println!("{} wrote {}", style::green("ok:"), p.display());
+                    Ok(true)
+                }
+                Installed::AlreadyPresent(p) => {
+                    println!(
+                        "{} {} already runs discipline for {}",
+                        style::green("ok:"),
+                        p.display(),
+                        a.agent.id()
+                    );
+                    Ok(true)
+                }
+                Installed::Refused(p, snippet) => {
+                    println!(
+                        "{} exists and was not changed. Merge this into it:\n\n{snippet}",
+                        p.display()
+                    );
+                    Ok(false)
+                }
+            }
+        }
+    }
 }
 
 fn install_hooks(args: InstallHooksArgs) -> Result<bool> {

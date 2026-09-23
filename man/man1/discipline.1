@@ -593,6 +593,88 @@ Overwrite existing pre\-commit hook if present
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS "discipline hook"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Run the gates inside a coding agent\*(Aqs edit loop (Claude Code, Codex, Cursor, Aider)
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline hook\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline hook run"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Check the change so far and answer in the agent\*(Aqs hook contract (reads the hook payload on stdin)
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline hook run\fR <\fB\-\-agent\fR> [\fB\-b\fR|\fB\-\-base\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILES\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-agent\fR \fI<AGENT>\fR
+The agent whose hook contract to answer in
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+claude\-code: Claude Code (`.claude/settings.json`, PostToolUse + Stop)
+.IP \(bu 2
+codex: OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)
+.IP \(bu 2
+cursor: Cursor (`.cursor/hooks.json`, stop)
+.IP \(bu 2
+aider: Aider (`.aider.conf.yml`, lint\-cmd)
+.RE
+.TP
+\fB\-b\fR, \fB\-\-base\fR \fI<BASE>\fR
+Base to measure the change against (default: the merge base with origin\*(Aqs default branch, else main / master)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS "discipline hook install"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Write the agent\*(Aqs hook configuration at the repository root; an existing file is never rewritten
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-agent\fR \fI<AGENT>\fR
+The agent to configure
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+claude\-code: Claude Code (`.claude/settings.json`, PostToolUse + Stop)
+.IP \(bu 2
+codex: OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)
+.IP \(bu 2
+cursor: Cursor (`.cursor/hooks.json`, stop)
+.IP \(bu 2
+aider: Aider (`.aider.conf.yml`, lint\-cmd)
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS "discipline bench"
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '

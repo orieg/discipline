@@ -398,6 +398,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `self-test` | Run the embedded negative / positive controls against this binary |
 | `completions` | Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish) |
 | `install-hooks` | Install pre-commit hook in the local git repository |
+| `hook` | Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider) |
 | `bench` | Benchmark tooling for the bench-regression gate |
 | `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
 <!-- /generated -->
@@ -677,6 +678,25 @@ Or run staged inspection directly in git pre-commit hooks:
 ```bash
 discipline check --staged
 ```
+
+### Agent Hooks
+
+Run the gates inside a coding agent's edit loop, so an agent that weakens a test is told while it is still editing rather than when CI fails:
+
+```bash
+discipline hook install --agent claude-code   # or: codex, cursor, aider
+```
+
+`hook install` writes the agent's configuration at the repository root when that file does not exist, and changes nothing when it does: it prints the snippet to merge instead (exit 1). Each configuration runs `discipline hook run --agent <name>`, which checks the change so far (committed on the branch and uncommitted, against the merge base with `origin`'s default branch, else `main` / `master`; `--base` or `DISCIPLINE_BASE_REF` overrides it) and answers in that agent's hook contract:
+
+| Agent | File | Runs on | A finding |
+|---|---|---|---|
+| Claude Code | `.claude/settings.json` | `PostToolUse` (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`) and `Stop` | exit 2, the report on stderr, which the agent reads |
+| Codex CLI | `.codex/hooks.json` | `PostToolUse` (`apply_patch`, `Edit`, `Write`) and `Stop` | exit 2, the report on stderr |
+| Cursor | `.cursor/hooks.json` | `stop` (`loop_limit: 3`) | `{"followup_message": <report>}` on stdout, sent as the next message |
+| Aider | `.aider.conf.yml` | `lint-cmd` after each edit (`auto-lint: true`) | exit 1, the report on stdout |
+
+The report is the `agent-prompt` format: each finding with its location and the repair, never the directive that would waive it. A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. A Claude Code or Codex `Stop` event that this hook already continued (`stop_hook_active`) is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. `discipline` must be on the agent's `PATH`.
 
 ### Docker Container
 

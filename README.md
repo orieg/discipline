@@ -134,6 +134,7 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 - [Forgejo & Gitea Actions Guide](docs/guides/ci-platforms.md#3-forgejo--gitea-actions)
 - [Argo Workflows GitOps Template](docs/CONFIGURATION.md#argo-workflows)
 - [pre-commit & Local Git Hooks](docs/CONFIGURATION.md#pre-commit-hook)
+- [Agent Hooks (Claude Code, Codex, Cursor, Aider)](docs/CONFIGURATION.md#agent-hooks)
 - [Docker Container Run](docs/CONFIGURATION.md#docker-container)
 - [CLI Reference & Local Inner Loop](docs/CONFIGURATION.md#standalone-cli)
 

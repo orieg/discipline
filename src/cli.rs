@@ -33,6 +33,8 @@ pub enum Commands {
     Docs(DocsArgs),
     /// Install pre-commit hook in the local git repository
     InstallHooks(InstallHooksArgs),
+    /// Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider)
+    Hook(HookArgs),
     /// Benchmark tooling for the bench-regression gate
     Bench(BenchArgs),
     /// Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check
@@ -83,6 +85,7 @@ impl Commands {
             Commands::Completions(_) => "completions",
             Commands::Docs(_) => "docs",
             Commands::InstallHooks(_) => "install-hooks",
+            Commands::Hook(_) => "hook",
             Commands::Bench(_) => "bench",
             Commands::Doctor(_) => "doctor",
         }
@@ -101,6 +104,42 @@ pub struct InstallHooksArgs {
     /// Overwrite existing pre-commit hook if present
     #[arg(short, long)]
     pub force: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct HookArgs {
+    #[command(subcommand)]
+    pub command: HookCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HookCommand {
+    /// Check the change so far and answer in the agent's hook contract (reads the hook payload on stdin)
+    Run(HookRunArgs),
+    /// Write the agent's hook configuration at the repository root; an existing file is never rewritten
+    Install(HookInstallArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct HookRunArgs {
+    /// The agent whose hook contract to answer in
+    #[arg(long, value_enum)]
+    pub agent: crate::hook::Agent,
+
+    /// Base to measure the change against (default: the merge base with origin's default branch, else main / master)
+    #[arg(short, long)]
+    pub base: Option<String>,
+
+    /// Files an agent appends to the command (Aider's lint-cmd); ignored, the whole change is checked
+    #[arg(hide = true, trailing_var_arg = true)]
+    pub files: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct HookInstallArgs {
+    /// The agent to configure
+    #[arg(long, value_enum)]
+    pub agent: crate::hook::Agent,
 }
 
 #[derive(Args, Debug, Clone)]

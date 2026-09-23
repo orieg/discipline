@@ -175,6 +175,75 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(hook)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_discipline__subcmd__hook_commands" \
+"*::: :->hook" \
+&& ret=0
+
+    case $state in
+    (hook)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-hook-command-$line[1]:"
+        case $line[1] in
+            (run)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[The agent whose hook contract to answer in]:AGENT:((claude-code\:"Claude Code (\`.claude/settings.json\`, PostToolUse + Stop)"
+codex\:"OpenAI Codex CLI (\`.codex/hooks.json\`, PostToolUse + Stop)"
+cursor\:"Cursor (\`.cursor/hooks.json\`, stop)"
+aider\:"Aider (\`.aider.conf.yml\`, lint-cmd)"))' \
+'-b+[Base to measure the change against (default\: the merge base with origin'\''s default branch, else main / master)]:BASE:_default' \
+'--base=[Base to measure the change against (default\: the merge base with origin'\''s default branch, else main / master)]:BASE:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'*::files -- Files an agent appends to the command (Aider'\''s lint-cmd); ignored, the whole change is checked:_default' \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+'--agent=[The agent to configure]:AGENT:((claude-code\:"Claude Code (\`.claude/settings.json\`, PostToolUse + Stop)"
+codex\:"OpenAI Codex CLI (\`.codex/hooks.json\`, PostToolUse + Stop)"
+cursor\:"Cursor (\`.cursor/hooks.json\`, stop)"
+aider\:"Aider (\`.aider.conf.yml\`, lint-cmd)"))' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_discipline__subcmd__hook__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-hook-help-command-$line[1]:"
+        case $line[1] in
+            (run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (bench)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -291,6 +360,30 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(hook)
+_arguments "${_arguments_options[@]}" : \
+":: :_discipline__subcmd__help__subcmd__hook_commands" \
+"*::: :->hook" \
+&& ret=0
+
+    case $state in
+    (hook)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-help-hook-command-$line[1]:"
+        case $line[1] in
+            (run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (bench)
 _arguments "${_arguments_options[@]}" : \
 ":: :_discipline__subcmd__help__subcmd__bench_commands" \
@@ -341,6 +434,7 @@ _discipline_commands() {
 'completions:Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish)' \
 'docs:Generate or check reference docs and schemas against sources of truth' \
 'install-hooks:Install pre-commit hook in the local git repository' \
+'hook:Run the gates inside a coding agent'\''s edit loop (Claude Code, Codex, Cursor, Aider)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -426,6 +520,7 @@ _discipline__subcmd__help_commands() {
 'completions:Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish)' \
 'docs:Generate or check reference docs and schemas against sources of truth' \
 'install-hooks:Install pre-commit hook in the local git repository' \
+'hook:Run the gates inside a coding agent'\''s edit loop (Claude Code, Codex, Cursor, Aider)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -484,6 +579,24 @@ _discipline__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'discipline help help commands' commands "$@"
 }
+(( $+functions[_discipline__subcmd__help__subcmd__hook_commands] )) ||
+_discipline__subcmd__help__subcmd__hook_commands() {
+    local commands; commands=(
+'run:Check the change so far and answer in the agent'\''s hook contract (reads the hook payload on stdin)' \
+'install:Write the agent'\''s hook configuration at the repository root; an existing file is never rewritten' \
+    )
+    _describe -t commands 'discipline help hook commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__hook__subcmd__install_commands] )) ||
+_discipline__subcmd__help__subcmd__hook__subcmd__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help hook install commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__hook__subcmd__run_commands] )) ||
+_discipline__subcmd__help__subcmd__hook__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help hook run commands' commands "$@"
+}
 (( $+functions[_discipline__subcmd__help__subcmd__init_commands] )) ||
 _discipline__subcmd__help__subcmd__init_commands() {
     local commands; commands=()
@@ -503,6 +616,49 @@ _discipline__subcmd__help__subcmd__schema_commands() {
 _discipline__subcmd__help__subcmd__self-test_commands() {
     local commands; commands=()
     _describe -t commands 'discipline help self-test commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__hook_commands] )) ||
+_discipline__subcmd__hook_commands() {
+    local commands; commands=(
+'run:Check the change so far and answer in the agent'\''s hook contract (reads the hook payload on stdin)' \
+'install:Write the agent'\''s hook configuration at the repository root; an existing file is never rewritten' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'discipline hook commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__hook__subcmd__help_commands] )) ||
+_discipline__subcmd__hook__subcmd__help_commands() {
+    local commands; commands=(
+'run:Check the change so far and answer in the agent'\''s hook contract (reads the hook payload on stdin)' \
+'install:Write the agent'\''s hook configuration at the repository root; an existing file is never rewritten' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'discipline hook help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__hook__subcmd__help__subcmd__help_commands] )) ||
+_discipline__subcmd__hook__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline hook help help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__hook__subcmd__help__subcmd__install_commands] )) ||
+_discipline__subcmd__hook__subcmd__help__subcmd__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline hook help install commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__hook__subcmd__help__subcmd__run_commands] )) ||
+_discipline__subcmd__hook__subcmd__help__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline hook help run commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__hook__subcmd__install_commands] )) ||
+_discipline__subcmd__hook__subcmd__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline hook install commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__hook__subcmd__run_commands] )) ||
+_discipline__subcmd__hook__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline hook run commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__init_commands] )) ||
 _discipline__subcmd__init_commands() {

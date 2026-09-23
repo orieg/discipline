@@ -9,6 +9,7 @@ pub mod doctor;
 pub mod forge;
 pub mod gitctx;
 pub mod guards;
+pub mod hook;
 pub mod override_policy;
 pub mod report;
 pub mod schema;
