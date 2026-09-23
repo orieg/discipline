@@ -33,7 +33,7 @@ pub enum Commands {
     Docs(DocsArgs),
     /// Install pre-commit hook in the local git repository
     InstallHooks(InstallHooksArgs),
-    /// Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider)
+    /// Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code, OpenCode)
     Hook(HookArgs),
     /// Explain a gate: what it checks, its state here, and the directive that lifts a finding
     Explain(ExplainArgs),

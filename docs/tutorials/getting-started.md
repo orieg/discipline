@@ -168,7 +168,7 @@ Status: PASS
 
 ## Step 7: Let Your Coding Agent Hear It
 
-CI catches the weakening after the fact. An agent can be told while it is still editing. Install the hook for Claude Code (or `codex`, `cursor`, `aider`):
+CI catches the weakening after the fact. An agent can be told while it is still editing. Install the hook for Claude Code (or `codex`, `cursor`, `aider`, `copilot`, `agy`, `qwen`, `opencode`):
 
 ```bash
 discipline hook install --agent claude-code

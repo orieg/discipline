@@ -580,6 +580,25 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "instruction-smuggling: every hook file `hook install` writes is an agent-instruction file",
+        || {
+            use crate::guards::instruction_smuggling::is_instruction_file;
+            Ok([
+                ".claude/settings.json",
+                ".codex/hooks.json",
+                ".cursor/hooks.json",
+                ".aider.conf.yml",
+                ".github/hooks/discipline.json",
+                ".agents/hooks.json",
+                ".qwen/settings.json",
+                ".opencode/plugins/discipline.js",
+            ]
+            .iter()
+            .all(|f| is_instruction_file(f))
+                && !is_instruction_file(".github/workflows/ci.yml"))
+        },
+    ),
+    (
         "hook: findings block in each agent's contract, and a check that cannot run blocks too",
         || {
             use crate::hook::{translate, translate_event, Agent, Event};

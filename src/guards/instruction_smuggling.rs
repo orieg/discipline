@@ -36,12 +36,20 @@ pub const INSTRUCTION_FILES: &[&str] = &[
     ".aider.conf.yml",
     "copilot-instructions.md",
     "SKILL.md",
-    ".cursor/rules/",
+    "QWEN.md",
+    "opencode.json",
+    ".cursor/",
     ".claude/",
     ".codex/",
+    ".gemini/",
+    ".agents/",
+    ".qwen/",
+    ".opencode/",
     ".roo/",
     ".github/instructions/",
     ".github/prompts/",
+    // Agent hook configuration: a change can remove the hook that checks it.
+    ".github/hooks/",
 ];
 
 pub fn is_instruction_file(path: &str) -> bool {
@@ -201,7 +209,32 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
     let lift = |subject: &str| ctx.find_override(GATE, tokens::ALLOW_SMUGGLING, subject);
 
     for file in ctx.git.changed_files()? {
-        if file.kind == ChangeKind::Deleted || exempt.matches(&file.path) {
+        if exempt.matches(&file.path) {
+            continue;
+        }
+        // A deleted instruction file changes what the next agent is told, and a deleted
+        // hook file removes the check on the agent: both are reported like an edit.
+        if file.kind == ChangeKind::Deleted {
+            if is_instruction_file(&file.path) && !ctx.git.is_whole_tree() {
+                out.examined += 1;
+                if let Some(ov) =
+                    lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
+                {
+                    out.overrides.push(ov);
+                } else {
+                    out.push(
+                        ctx.overridable(settings.severity()),
+                        "Agent Instructions Changed",
+                        Some(&file.path),
+                        None,
+                        format!("`{}` instructs agents; this change deletes it.", file.path),
+                        &format!(
+                            "Review the removal, then record it: `allow-agent-instructions: {} <reason>`.",
+                            file.path
+                        ),
+                    );
+                }
+            }
             continue;
         }
         let Some(head) = ctx.git.head_content(&file.path)? else {
@@ -456,6 +489,21 @@ mod tests {
         assert!(is_instruction_file(".cursor/rules/style.mdc"));
         assert!(is_instruction_file(".github/copilot-instructions.md"));
         assert!(is_instruction_file("skills/review/SKILL.md"));
+        // The hook files `discipline hook install` writes, for every agent.
+        for hook in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".cursor/hooks.json",
+            ".aider.conf.yml",
+            ".github/hooks/discipline.json",
+            ".agents/hooks.json",
+            ".qwen/settings.json",
+            ".opencode/plugins/discipline.js",
+        ] {
+            assert!(is_instruction_file(hook), "{hook}");
+        }
+        assert!(is_instruction_file("QWEN.md") && is_instruction_file("opencode.json"));
+        assert!(!is_instruction_file(".github/workflows/ci.yml"));
         assert!(!is_instruction_file("README.md"));
         assert!(!is_instruction_file("docs/AGENTS.md.bak"));
     }

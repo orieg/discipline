@@ -411,3 +411,21 @@ fn install_writes_each_new_agents_file() {
         }
     }
 }
+
+#[test]
+fn a_change_that_removes_its_own_agent_hook_is_reported() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    let install = repo.run(&["hook", "install", "--agent", "copilot"], &[]);
+    assert_eq!(install.code, 0, "{}", install.stderr);
+    repo.commit("chore: agent hook");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.remove(".github/hooks/discipline.json");
+    repo.commit("chore: tidy");
+    let run = repo.check(&[]);
+    assert!(
+        !run.titles("instruction-smuggling").is_empty(),
+        "removing the Copilot hook went unreported: {}",
+        run.stdout
+    );
+}

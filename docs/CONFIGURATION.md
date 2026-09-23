@@ -403,7 +403,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `self-test` | Run the embedded negative / positive controls against this binary |
 | `completions` | Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish) |
 | `install-hooks` | Install pre-commit hook in the local git repository |
-| `hook` | Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider) |
+| `hook` | Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code, OpenCode) |
 | `explain` | Explain a gate: what it checks, its state here, and the directive that lifts a finding |
 | `replay` | Replay the last N merged changes through a configuration: what it would have blocked |
 | `mcp` | Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding) |

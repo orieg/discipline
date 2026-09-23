@@ -156,7 +156,7 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 - [CLI Reference & Local Inner Loop](docs/CONFIGURATION.md#standalone-cli)
 
 Coding-agent integration:
-- [Agent Hooks (Claude Code, Codex, Cursor, Aider)](docs/CONFIGURATION.md#agent-hooks)
+- [Agent Hooks (Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code, OpenCode)](docs/CONFIGURATION.md#agent-hooks)
 - [MCP Server (`discipline mcp`)](docs/CONFIGURATION.md#mcp-server)
 
 Adoption and editor tooling:
