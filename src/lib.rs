@@ -3,6 +3,7 @@
 pub mod ast;
 pub mod baseline;
 pub mod cli;
+pub mod comment;
 pub mod config;
 pub mod docs;
 pub mod doctor;

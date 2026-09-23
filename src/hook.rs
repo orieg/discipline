@@ -185,7 +185,8 @@ pub fn run_check(dir: &Path, side: &CheckSide) -> Result<(i32, String, String)> 
     cmd.current_dir(dir)
         .args(["check", "--format", "agent-prompt", "--quiet"])
         .env_remove("PR_BODY")
-        .env_remove("PR_TITLE");
+        .env_remove("PR_TITLE")
+        .env_remove("DISCIPLINE_COMMENT");
     match side {
         CheckSide::Default => {}
         CheckSide::Base(b) => {

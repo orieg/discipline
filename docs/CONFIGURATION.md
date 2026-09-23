@@ -347,6 +347,8 @@ The action runs on `pull_request`, `merge_group` and `push` events (the base is 
 | `fail_on_warnings` | `false` | Treat warnings as failures. |
 | `fail_on_overrides` | `false` | Treat applied overrides as failures (requires human sign-off). |
 | `advisory` | `false` | Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur. |
+| `comment` | `false` | Post the report as one pull-request comment, edited on every run. Needs `pull-requests: write` (GitHub) or a token that can comment; a fork's read-only token is reported, not failed. |
+| `token` | `${{ github.token }}` | Token used to post the comment. Passed to discipline only when `comment` is true. |
 | `policy_from` | `head` | Which side's discipline.toml judges the change: 'head' (the change's own copy) or 'base' (the base ref's, so a policy edit takes effect once merged; config-integrity still reports it). |
 | `actor` | `${{ github.event.pull_request.user.login || github.actor }}` | Login judged against allowed_override_actors. Default: the pull request author (github.event.pull_request.user.login), which the server sets; otherwise github.actor or the forge equivalent. The triggering login is not used on a pull request, since whoever edits the description must not be able to authorize their own override. |
 | `directive_sources` | *(none)* | Comma-separated list of allowed directive sources (pr-body, commits, merged-pr-body). merged-pr-body reads, on a push event, the body of the merged pull request each pushed commit arrived through. |
@@ -700,6 +702,22 @@ discipline hook install --agent claude-code   # or: codex, cursor, aider
 | Aider | `.aider.conf.yml` | `lint-cmd` after each edit (`auto-lint: true`) | exit 1, the report on stdout |
 
 The report is the `agent-prompt` format: each finding with its location and the repair, never the directive that would waive it. A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. A Claude Code or Codex `Stop` event that this hook already continued (`stop_hook_active`) is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. `discipline` must be on the agent's `PATH`.
+
+### Pull-Request Comments
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write        # GitHub: lets the token comment
+steps:
+  - uses: orieg/discipline@v0
+    with:
+      comment: true
+```
+
+`--comment` (`DISCIPLINE_COMMENT=1`, the action's `comment` input) posts the report as one comment on the pull request and edits that comment on every later run, so a pull request carries one report however often it is checked. It is the reviewer-visible surface on Gitea and Forgejo, which have no code-scanning view. The comment lists each finding with its repair, the overrides that lifted findings and any policy refusal; it never carries directive syntax (reviewers run `discipline explain <gate>`).
+
+The token comes from `DISCIPLINE_FORGE_TOKEN` or the forge's own variable (`GITHUB_TOKEN`, `GITEA_TOKEN`, `FORGEJO_TOKEN`, `GITLAB_TOKEN`); the action passes its `token` input only when `comment` is true. The pull request is read from the event payload (`GITHUB_EVENT_PATH` and the Gitea / Forgejo equivalents) or GitLab's `CI_MERGE_REQUEST_IID`; a run without one posts nothing. A token that cannot write, as on a pull request from a fork, is reported and the gates' verdict stands; a forge that cannot be identified or reached stops the run (exit 2). The check's status, not the comment, is the verdict.
 
 ### Previewing Adoption: `discipline replay`
 

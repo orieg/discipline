@@ -110,8 +110,12 @@ fn replay_reads_the_waiver_in_the_merged_pull_request_body() {
         &[
             ("GITHUB_REPOSITORY", "o/r"),
             ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            // A replay inside a CI job that comments must not comment on anything.
+            ("DISCIPLINE_COMMENT", "1"),
+            ("GITHUB_TOKEN", "t"),
         ],
     );
+    assert!(api.writes().is_empty(), "{:?}", api.writes());
     let case = &s["cases_detail"][1];
     assert_eq!(case["pr"], 12, "{s}");
     assert_eq!(case["directives_from"], "pull request body");

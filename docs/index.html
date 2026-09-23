@@ -1504,6 +1504,16 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       <td>Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur.</td>
     </tr>
     <tr>
+      <td class="gate-id">comment</td>
+      <td><code>false</code></td>
+      <td>Post the report as one pull-request comment, edited on every run. Needs `pull-requests: write` (GitHub) or a token that can comment; a fork's read-only token is reported, not failed.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">token</td>
+      <td><code>${{ github.token }}</code></td>
+      <td>Token used to post the comment. Passed to discipline only when `comment` is true.</td>
+    </tr>
+    <tr>
       <td class="gate-id">policy_from</td>
       <td><code>head</code></td>
       <td>Which side's discipline.toml judges the change: 'head' (the change's own copy) or 'base' (the base ref's, so a policy edit takes effect once merged; config-integrity still reports it).</td>

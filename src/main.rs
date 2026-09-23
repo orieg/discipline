@@ -83,6 +83,7 @@ fn run_command(command: Commands) -> Result<bool> {
             trust_workspace: args.trust_workspace,
             advisory: args.advisory,
             policy_from: discipline::cli::PolicyFrom::Head,
+            comment: false,
         }),
         Commands::Baseline(args) => baseline(args),
         Commands::Init(args) => init(args.name),
@@ -885,6 +886,10 @@ fn check(args: CheckArgs) -> Result<bool> {
         args.fail_on_warnings,
     )?;
 
+    if args.comment {
+        post_comment(&git, &summary, success)?;
+    }
+
     // A change that switches its own run to advisory does not get the exit 0 it asked for.
     let config_advisory = config.meta.mode == discipline::config::RunMode::Advisory;
     let advisory_refused =
@@ -905,6 +910,39 @@ fn check(args: CheckArgs) -> Result<bool> {
     } else {
         Ok(success)
     }
+}
+
+/// `--comment`: one pull-request comment, edited on every run. A run with no pull
+/// request posts nothing; a token that cannot write (a fork) is named, not fatal; a
+/// forge that cannot be identified or reached stops the run (exit 2).
+fn post_comment(
+    git: &GitCtx,
+    summary: &discipline::guards::CheckSummary,
+    success: bool,
+) -> Result<()> {
+    use discipline::comment::Posted;
+    let Some(pull) = detect_pull_context_from_ci() else {
+        eprintln!("comment: this run has no pull request in its event; nothing posted");
+        return Ok(());
+    };
+    let forge = discipline::forge::detect_for(git)
+        .map_err(|e| anyhow::anyhow!("--comment: cannot identify the forge: {e}"))?;
+    let api = discipline::forge::HttpApi::from_env();
+    let body = discipline::comment::render(summary, success);
+    match discipline::comment::upsert(&api, &api, &forge, pull.number, &body)
+        .map_err(|e| anyhow::anyhow!("--comment: {e}"))?
+    {
+        Posted::Created => eprintln!("comment: posted on #{}", pull.number),
+        Posted::Updated => eprintln!("comment: updated on #{}", pull.number),
+        Posted::Denied(e) => eprintln!(
+            "{}",
+            style::yellow(&format!(
+                "comment: not posted on #{}: {e}. A pull request from a fork runs with a token that cannot write; the check's status still carries the verdict",
+                pull.number
+            ))
+        ),
+    }
+    Ok(())
 }
 
 fn init(name: Option<String>) -> Result<bool> {

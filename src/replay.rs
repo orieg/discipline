@@ -346,6 +346,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
                     "PR_BODY"
                         | "PR_TITLE"
                         | "DISCIPLINE_BASE_REF"
+                        | "DISCIPLINE_COMMENT"
                         | "GITLAB_CI"
                         | "CI_PIPELINE_SOURCE"
                         | "CI_COMMIT_BEFORE_SHA"

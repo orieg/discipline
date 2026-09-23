@@ -282,8 +282,8 @@ The agent-facing surfaces never print waiver syntax: `agent-prompt` already omit
 
 | Item | Status | Work | Ships when |
 |---|---|---|---|
-| Decide the write path | Open | Posting is a forge write, which `AGENTS.md` §3.3 does not allow (three opt-in reads). Either amend §3.3 in the same PR (opt-in, a token that can write comments, exit 2 when the forge is unreachable, `DISCIPLINE_NO_NETWORK` honoured) or post from `action.yml` through the forge API without the binary | The decision and its reason are in `docs/ARCHITECTURE.md` |
-| One updating comment | Open | GitHub, Gitea, Forgejo and GitLab: one comment per pull request, found by a hidden marker and edited on each run; findings, lifted overrides and notes, no waiver syntax for findings an agent authored | A second run edits the comment and adds none; a pull request from a fork, whose token cannot write, gets a named note, not a failure |
+| Decide the write path | **Decided**: in the binary, opt-in (`AGENTS.md` §3.3, `docs/ARCHITECTURE.md` §7.3) | Posting is a forge write, which `AGENTS.md` §3.3 does not allow (three opt-in reads). Either amend §3.3 in the same PR (opt-in, a token that can write comments, exit 2 when the forge is unreachable, `DISCIPLINE_NO_NETWORK` honoured) or post from `action.yml` through the forge API without the binary | The decision and its reason are in `docs/ARCHITECTURE.md` |
+| One updating comment | **Shipped** (`check --comment`, `src/comment.rs`; GitHub, Gitea, Forgejo, GitLab) | GitHub, Gitea, Forgejo and GitLab: one comment per pull request, found by a hidden marker and edited on each run; findings, lifted overrides and notes, no waiver syntax for findings an agent authored | A second run edits the comment and adds none; a pull request from a fork, whose token cannot write, gets a named note, not a failure |
 
 **Step 3: adoption in one command**
 
@@ -359,6 +359,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | CLI, action | New `check --comment` (`DISCIPLINE_COMMENT`, action inputs `comment` and `token`): one pull-request comment with the report, edited on every run; the only forge write, off by default. | additive | None; set `comment: true` and grant the token `pull-requests: write` to use it. |
 | unreleased | CLI | New `discipline replay --last N`: replays the last N merged changes through a configuration in a throwaway repository and reports what it would have blocked, per change and per gate; pull-request bodies are read through the `merged-pr-body` lookup when a token allows. | additive | None. |
 | unreleased | CLI | New `discipline explain <gate-id\|finding line>`: the gate's rule, languages, state under this configuration, lifting directive and reference link. | additive | None. |
 | unreleased | CLI | New `discipline mcp`: an MCP server over stdio with three read-only tools (`check_diff`, `list_gates`, `explain_finding`) whose output carries no waiver syntax. | additive | None. |

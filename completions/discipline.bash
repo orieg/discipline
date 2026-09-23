@@ -310,7 +310,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__check)
-            opts="-c -s -b -q -f -o -h --config --config-override --enable --disable --suite --base --commit --commit-range --staged --commit-msg-file --pr-body-file --pr-title --fail-on-warnings --fail-on-overrides --advisory --policy-from --actor --directive-sources --trust-workspace --quiet --format --json-out --output-file --report-gitlab --report-junit --report-sarif --bench-provenance --allow-cross-host-bench --bench-base-file --bench-head-file --baseline-file --no-baseline --help"
+            opts="-c -s -b -q -f -o -h --config --config-override --enable --disable --suite --base --commit --commit-range --staged --commit-msg-file --pr-body-file --pr-title --fail-on-warnings --fail-on-overrides --advisory --comment --policy-from --actor --directive-sources --trust-workspace --quiet --format --json-out --output-file --report-gitlab --report-junit --report-sarif --bench-provenance --allow-cross-host-bench --bench-base-file --bench-head-file --baseline-file --no-baseline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

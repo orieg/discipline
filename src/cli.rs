@@ -261,6 +261,10 @@ pub struct CheckArgs {
     #[arg(long, env = "DISCIPLINE_ADVISORY")]
     pub advisory: bool,
 
+    /// Post the report as one pull-request comment, edited on every run (needs a token that can write comments; off by default)
+    #[arg(long, env = "DISCIPLINE_COMMENT")]
+    pub comment: bool,
+
     /// Which side's discipline.toml judges the change. `base` reads it from the base ref,
     /// so a policy edit takes effect once merged; `config-integrity` still reports it
     #[arg(

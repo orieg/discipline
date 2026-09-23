@@ -137,6 +137,7 @@ For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo,
 - [Agent Hooks (Claude Code, Codex, Cursor, Aider)](docs/CONFIGURATION.md#agent-hooks)
 - [MCP Server (`discipline mcp`)](docs/CONFIGURATION.md#mcp-server)
 - [Previewing Adoption (`discipline replay`)](docs/CONFIGURATION.md#previewing-adoption-discipline-replay)
+- [Pull-Request Comments (`--comment`)](docs/CONFIGURATION.md#pull-request-comments)
 - [Docker Container Run](docs/CONFIGURATION.md#docker-container)
 - [CLI Reference & Local Inner Loop](docs/CONFIGURATION.md#standalone-cli)
 

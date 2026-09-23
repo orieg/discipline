@@ -30,7 +30,7 @@ Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline check\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-commit\fR] [\fB\-\-commit\-range\fR] [\fB\-\-staged\fR] [\fB\-\-pr\-body\-file\fR] [\fB\-\-pr\-title\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-fail\-on\-overrides\fR] [\fB\-\-advisory\fR] [\fB\-\-policy\-from\fR] [\fB\-\-actor\fR] [\fB\-\-directive\-sources\fR] [\fB\-\-trust\-workspace\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-bench\-provenance\fR] [\fB\-\-allow\-cross\-host\-bench\fR] [\fB\-\-bench\-base\-file\fR] [\fB\-\-bench\-head\-file\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline check\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-commit\fR] [\fB\-\-commit\-range\fR] [\fB\-\-staged\fR] [\fB\-\-pr\-body\-file\fR] [\fB\-\-pr\-title\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-fail\-on\-overrides\fR] [\fB\-\-advisory\fR] [\fB\-\-comment\fR] [\fB\-\-policy\-from\fR] [\fB\-\-actor\fR] [\fB\-\-directive\-sources\fR] [\fB\-\-trust\-workspace\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-bench\-provenance\fR] [\fB\-\-allow\-cross\-host\-bench\fR] [\fB\-\-bench\-base\-file\fR] [\fB\-\-bench\-head\-file\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -123,6 +123,12 @@ May also be specified with the \fBDISCIPLINE_FAIL_ON_OVERRIDES\fR environment va
 Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur
 .RS
 May also be specified with the \fBDISCIPLINE_ADVISORY\fR environment variable. 
+.RE
+.TP
+\fB\-\-comment\fR
+Post the report as one pull\-request comment, edited on every run (needs a token that can write comments; off by default)
+.RS
+May also be specified with the \fBDISCIPLINE_COMMENT\fR environment variable. 
 .RE
 .TP
 \fB\-\-policy\-from\fR \fI<POLICY_FROM>\fR [default: head]

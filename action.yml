@@ -49,6 +49,14 @@ inputs:
     description: 'Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur.'
     required: false
     default: 'false'
+  comment:
+    description: "Post the report as one pull-request comment, edited on every run. Needs `pull-requests: write` (GitHub) or a token that can comment; a fork's read-only token is reported, not failed."
+    required: false
+    default: 'false'
+  token:
+    description: 'Token used to post the comment. Passed to discipline only when `comment` is true.'
+    required: false
+    default: ${{ github.token }}
   policy_from:
     description: "Which side's discipline.toml judges the change: 'head' (the change's own copy) or 'base' (the base ref's, so a policy edit takes effect once merged; config-integrity still reports it)."
     required: false
@@ -275,6 +283,8 @@ runs:
         DISCIPLINE_FAIL_ON_WARNINGS: ${{ inputs.fail_on_warnings == 'true' && 'true' || 'false' }}
         DISCIPLINE_FAIL_ON_OVERRIDES: ${{ inputs.fail_on_overrides == 'true' && 'true' || 'false' }}
         DISCIPLINE_ADVISORY: ${{ inputs.advisory == 'true' && 'true' || 'false' }}
+        DISCIPLINE_COMMENT: ${{ inputs.comment == 'true' && 'true' || 'false' }}
+        DISCIPLINE_FORGE_TOKEN: ${{ inputs.comment == 'true' && inputs.token || '' }}
         DISCIPLINE_POLICY_FROM: ${{ inputs.policy_from || 'head' }}
         DISCIPLINE_ACTOR: ${{ inputs.actor || github.event.pull_request.user.login || github.actor }}
         DISCIPLINE_DIRECTIVE_SOURCES: ${{ inputs.directive_sources }}

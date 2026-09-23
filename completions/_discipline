@@ -64,6 +64,7 @@ base\:"The configuration on the base ref"))' \
 '--fail-on-warnings[Treat warnings as failures]' \
 '--fail-on-overrides[Treat applied overrides as failures (requires human sign-off)]' \
 '--advisory[Advisory mode\: run all checks and emit reports, but exit code 0 even if violations occur]' \
+'--comment[Post the report as one pull-request comment, edited on every run (needs a token that can write comments; off by default)]' \
 '--trust-workspace[Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)]' \
 '-q[Suppress output on success (only print output when violations are found)]' \
 '--quiet[Suppress output on success (only print output when violations are found)]' \

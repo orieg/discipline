@@ -539,8 +539,41 @@ pub fn check_api_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-impl ForgeApi for HttpApi<'_> {
-    fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String> {
+/// A write to a forge's API (`discipline check --comment`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteMethod {
+    Post,
+    Patch,
+    Put,
+}
+
+/// Why a write did not land.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteError {
+    /// The forge refused it (HTTP 401 / 403 / 404): the token cannot write here, as on
+    /// a pull request from a fork.
+    Denied(String),
+    /// The forge could not be reached or answered with another failure.
+    Failed(String),
+}
+
+/// Write access to a forge's REST API. Only `discipline check --comment` writes.
+pub trait ForgeWrite {
+    /// Send `body` as JSON to `path` (relative to the API base) and return the answer.
+    fn send(
+        &self,
+        forge: &Forge,
+        method: WriteMethod,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, WriteError>;
+}
+
+impl HttpApi<'_> {
+    /// The API base, its host, and whether plain HTTP is allowed, after the checks
+    /// every request passes: a plain path, https (or loopback / an explicit opt-in),
+    /// and `DISCIPLINE_NO_NETWORK` honoured.
+    fn guard(&self, forge: &Forge, path: &str) -> Result<(String, String, bool), String> {
         check_api_path(path)?;
         let base = self.api_base(forge)?;
         let base_host = host_of(&base);
@@ -555,6 +588,85 @@ impl ForgeApi for HttpApi<'_> {
                 "network access is disabled (DISCIPLINE_NO_NETWORK); cannot reach {base_host}"
             ));
         }
+        Ok((base, base_host, insecure_ok))
+    }
+
+    fn agent(&self, insecure_ok: bool) -> ureq::Agent {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(API_TIMEOUT_SECS)))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .https_only(!insecure_ok)
+            .proxy(ureq::Proxy::try_from_env())
+            .user_agent(concat!("discipline/", env!("CARGO_PKG_VERSION")))
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .build(),
+            )
+            .build();
+        ureq::Agent::new_with_config(config)
+    }
+}
+
+impl ForgeWrite for HttpApi<'_> {
+    fn send(
+        &self,
+        forge: &Forge,
+        method: WriteMethod,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, WriteError> {
+        let (base, base_host, insecure_ok) = self.guard(forge, path).map_err(WriteError::Failed)?;
+        if self.token(forge.kind).is_none() {
+            return Err(WriteError::Denied(format!(
+                "no token to write to {base_host} (DISCIPLINE_FORGE_TOKEN or the forge's token variable)"
+            )));
+        }
+        let agent = self.agent(insecure_ok);
+        let url = format!("{base}/{path}");
+        let mut req = match method {
+            WriteMethod::Post => agent.post(&url),
+            WriteMethod::Patch => agent.patch(&url),
+            WriteMethod::Put => agent.put(&url),
+        };
+        for (k, v) in &self.headers(forge.kind) {
+            req = req.header(*k, v);
+        }
+        let mut resp = req
+            .header("Content-Type", "application/json")
+            .send(body.to_string().as_str())
+            .map_err(|e| WriteError::Failed(format!("request to {base_host} failed: {e}")))?;
+        let status = resp.status().as_u16();
+        // A write is never replayed against another location.
+        if (300..400).contains(&status) {
+            return Err(WriteError::Failed(format!(
+                "{base_host} redirected a write (HTTP {status}); not following"
+            )));
+        }
+        let text = resp
+            .body_mut()
+            .with_config()
+            .limit(MAX_BODY_BYTES)
+            .read_to_string()
+            .map_err(|e| {
+                WriteError::Failed(format!("reading the response from {base_host} failed: {e}"))
+            })?;
+        match status {
+            200..=299 => Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)),
+            401 | 403 | 404 => Err(WriteError::Denied(format!(
+                "{base_host} refused the write (HTTP {status})"
+            ))),
+            _ => Err(WriteError::Failed(format!(
+                "{base_host} answered HTTP {status}"
+            ))),
+        }
+    }
+}
+
+impl ForgeApi for HttpApi<'_> {
+    fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String> {
+        let (base, base_host, insecure_ok) = self.guard(forge, path)?;
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(API_TIMEOUT_SECS)))
             .max_redirects(0)

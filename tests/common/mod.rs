@@ -89,6 +89,7 @@ pub const ISOLATED_ENV_VARS: &[&str] = &[
     "DISCIPLINE_FAIL_ON_WARNINGS",
     "DISCIPLINE_FAIL_ON_OVERRIDES",
     "DISCIPLINE_ADVISORY",
+    "DISCIPLINE_COMMENT",
     "DISCIPLINE_POLICY_FROM",
     "DISCIPLINE_DIRECTIVE_SOURCES",
     "DISCIPLINE_HOSTNAME_DENYLIST",
@@ -357,6 +358,8 @@ type Routes = std::sync::Arc<
 >;
 /// Recorded requests: path and lower-cased headers.
 type Requests = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<(String, String)>)>>>;
+/// Recorded writes: method, path and body.
+type Writes = std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>;
 
 /// A forge REST API on a loopback port: canned responses by path, every request recorded.
 /// Unknown paths answer 403 with a rate-limit message, like an exhausted anonymous quota.
@@ -364,6 +367,7 @@ pub struct FakeForge {
     addr: std::net::SocketAddr,
     routes: Routes,
     requests: Requests,
+    writes: Writes,
 }
 
 impl FakeForge {
@@ -373,7 +377,8 @@ impl FakeForge {
         let addr = listener.local_addr().unwrap();
         let routes: Routes = Default::default();
         let requests: Requests = Default::default();
-        let (r, q) = (routes.clone(), requests.clone());
+        let writes: Writes = Default::default();
+        let (r, q, w) = (routes.clone(), requests.clone(), writes.clone());
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -382,6 +387,7 @@ impl FakeForge {
                 if reader.read_line(&mut line).is_err() {
                     continue;
                 }
+                let method = line.split_whitespace().next().unwrap_or("GET").to_string();
                 let target = line.split_whitespace().nth(1).unwrap_or("/").to_string();
                 let mut headers = Vec::new();
                 loop {
@@ -394,6 +400,20 @@ impl FakeForge {
                     }
                 }
                 let path = target.trim_start_matches('/').to_string();
+                let length: usize = headers
+                    .iter()
+                    .find(|(k, _)| k == "content-length")
+                    .and_then(|(_, v)| v.parse().ok())
+                    .unwrap_or(0);
+                if method != "GET" {
+                    let mut body = vec![0u8; length];
+                    let _ = std::io::Read::read_exact(&mut reader, &mut body);
+                    w.lock().unwrap().push((
+                        method.clone(),
+                        path.clone(),
+                        String::from_utf8_lossy(&body).into_owned(),
+                    ));
+                }
                 q.lock().unwrap().push((path.clone(), headers));
                 let (status, extra, body) = r.lock().unwrap().get(&path).cloned().unwrap_or((
                     403,
@@ -416,6 +436,7 @@ impl FakeForge {
             addr,
             routes,
             requests,
+            writes,
         }
     }
 
@@ -441,6 +462,11 @@ impl FakeForge {
                 body.to_string(),
             ),
         );
+    }
+
+    /// Writes received so far: method, path and body.
+    pub fn writes(&self) -> Vec<(String, String, String)> {
+        self.writes.lock().unwrap().clone()
     }
 
     /// Requests received so far: path and lower-cased headers.

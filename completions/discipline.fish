@@ -83,6 +83,7 @@ complete -c discipline -n "__fish_discipline_using_subcommand check" -l staged -
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l fail-on-warnings -d 'Treat warnings as failures'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l fail-on-overrides -d 'Treat applied overrides as failures (requires human sign-off)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l advisory -d 'Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur'
+complete -c discipline -n "__fish_discipline_using_subcommand check" -l comment -d 'Post the report as one pull-request comment, edited on every run (needs a token that can write comments; off by default)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l trust-workspace -d 'Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -s q -l quiet -d 'Suppress output on success (only print output when violations are found)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l allow-cross-host-bench -d 'Allow benchmark comparison across mismatched host/runner provenance tags'

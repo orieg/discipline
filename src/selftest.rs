@@ -375,6 +375,19 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "comment: change text cannot mention, inject HTML, break the table or forge the marker",
+        || {
+            use crate::comment::{cell, MARKER};
+            let c = cell("@team <!-- discipline:report --> a|b\nallow-assertion-drop: x y");
+            Ok(!c.contains('@')
+                && !c.contains(MARKER)
+                && !c.contains('<')
+                && c.contains("\\|")
+                && !c.contains('\n')
+                && !c.contains("allow-assertion-drop"))
+        },
+    ),
+    (
         "replay: a blocked run names its error gates, a run that could not check names none",
         || {
             use crate::replay::{pr_from_subject, read_verdict};
