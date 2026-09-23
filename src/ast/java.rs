@@ -363,6 +363,7 @@ impl<'a> JavaExtractor<'a> {
             let mut direct_calls = Vec::new();
             if let Some(body) = node.child_by_field_name("body") {
                 self.scan_method_body(body, &mut test_fn, &mut direct_calls);
+                super::dispatch_calls(body, self.src, &JAVA_DISPATCH, &mut direct_calls);
             }
 
             self.facts.tests.push(test_fn);
@@ -684,6 +685,13 @@ pub const JAVA_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["block"],
     ignored_kinds: &["line_comment", "block_comment"],
     terminators: &["return", "throw"],
+};
+
+/// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
+pub const JAVA_DISPATCH: super::DispatchSpec = super::DispatchSpec {
+    containers: &[],
+    names: &[],
+    references: &["method_reference"],
 };
 
 #[cfg(test)]

@@ -227,6 +227,7 @@ impl<'a> GoExtractor<'a> {
             let mut direct_calls = Vec::new();
             if let Some(body) = node.child_by_field_name("body") {
                 self.scan_block(body, &mut test_fn, func_name, &mut direct_calls);
+                super::dispatch_calls(body, self.src, &GO_DISPATCH, &mut direct_calls);
             }
 
             self.facts.tests.push(test_fn);
@@ -386,6 +387,7 @@ impl<'a> GoExtractor<'a> {
             if let Some(func_lit) = args.iter().find(|a| a.kind() == "func_literal") {
                 if let Some(sub_body) = func_lit.child_by_field_name("body") {
                     self.scan_block(sub_body, &mut sub_test, &sub_name, &mut sub_calls);
+                    super::dispatch_calls(sub_body, self.src, &GO_DISPATCH, &mut sub_calls);
                 }
             }
 
@@ -595,6 +597,13 @@ pub const GO_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["statement_list"],
     ignored_kinds: &["comment"],
     terminators: &["return", "panic(", "t.FailNow()", "os.Exit("],
+};
+
+/// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
+pub const GO_DISPATCH: super::DispatchSpec = super::DispatchSpec {
+    containers: &["literal_value"],
+    names: &["identifier"],
+    references: &[],
 };
 
 #[cfg(test)]

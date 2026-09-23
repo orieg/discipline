@@ -282,6 +282,49 @@ pub fn count_failure_exits(
     n
 }
 
+/// Where a pack's test bodies name functions they run through a dispatch table.
+pub struct DispatchSpec {
+    /// Array / list literal kinds (`[check_a, check_b]`, `%i[check_a]`).
+    pub containers: &'static [&'static str],
+    /// Name kinds that count when their parent or grandparent is a container.
+    pub names: &'static [&'static str],
+    /// Method-reference kinds (`this::checkA`, `::checkA`); the last name child counts.
+    pub references: &'static [&'static str],
+}
+
+/// Names a test body runs through a dispatch table: `for f in [check_a, check_b] { f() }`,
+/// `[checkA, checkB].forEach(f => f())`, `List.of(this::checkA)`. Each name is resolved
+/// like a direct call (an unknown name resolves to nothing).
+pub fn dispatch_calls(
+    node: tree_sitter::Node,
+    src: &[u8],
+    spec: &DispatchSpec,
+    out: &mut Vec<String>,
+) {
+    let text = |n: tree_sitter::Node| n.utf8_text(src).unwrap_or("").to_string();
+    let kind = node.kind();
+    if spec.references.contains(&kind) {
+        let mut cursor = node.walk();
+        let last = node.named_children(&mut cursor).last();
+        if let Some(name) = last {
+            out.push(text(name));
+        }
+        return;
+    }
+    if spec.names.contains(&kind) {
+        let in_container =
+            |n: Option<tree_sitter::Node>| n.is_some_and(|p| spec.containers.contains(&p.kind()));
+        let parent = node.parent();
+        if in_container(parent) || in_container(parent.and_then(|p| p.parent())) {
+            out.push(text(node).trim_start_matches(':').to_string());
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        dispatch_calls(child, src, spec, out);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsafeSite {
     pub line: usize,
@@ -579,6 +622,55 @@ mod tests {
             assert_eq!(facts.tests.len(), 1, "{path}");
             let t = &facts.tests[0];
             assert_eq!((t.total_asserts, t.helper_checks), (1, 1), "{path}: {t:?}");
+        }
+    }
+
+    /// Helpers named in a dispatch table and run in a loop resolve like direct calls.
+    #[test]
+    fn helpers_in_a_dispatch_table_resolve_in_every_pack_that_supports_it() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "tests/t.rs",
+                "fn check_a(x: u32) { if x != 1 { panic!(\"a\"); } }\nfn check_b(x: u32) { if x != 2 { panic!(\"b\"); } }\n#[test]\nfn t() {\n    for f in [check_a, check_b] { f(g()); }\n}\n",
+            ),
+            (
+                "test/t.test.js",
+                "function checkA(x) { if (x !== 1) { throw new Error('a'); } }\nfunction checkB(x) { expect(x).toBe(2); }\ntest('t', () => {\n  [checkA, checkB].forEach((f) => f(g()));\n});\n",
+            ),
+            (
+                "pkg/t_test.go",
+                "package a\nimport \"testing\"\nfunc checkA(x int) { if x != 1 { panic(\"a\") } }\nfunc checkB(x int) { if x != 2 { panic(\"b\") } }\nfunc TestT(t *testing.T) {\n\tfor _, f := range []func(int){checkA, checkB} { f(g()) }\n}\n",
+            ),
+            (
+                "src/test/java/TTest.java",
+                "class TTest {\n  void checkA() { if (g() != 1) { throw new IllegalStateException(); } }\n  void checkB() { if (g() != 2) { throw new IllegalStateException(); } }\n  @Test\n  void t() {\n    List.<Runnable>of(this::checkA, this::checkB).forEach(Runnable::run);\n  }\n}\n",
+            ),
+            (
+                "src/test/kotlin/TTest.kt",
+                "class TTest {\n    private fun checkA() { if (g() != 1) throw IllegalStateException() }\n    private fun checkB() { if (g() != 2) throw IllegalStateException() }\n    @Test\n    fun t() {\n        listOf(::checkA, ::checkB).forEach { it() }\n    }\n}\n",
+            ),
+            (
+                "tests/TTest.cs",
+                "public class TTest {\n  void CheckA() { if (G() != 1) { throw new System.Exception(); } }\n  void CheckB() { if (G() != 2) { throw new System.Exception(); } }\n  [Fact]\n  public void T() {\n    foreach (var f in new System.Action[] { CheckA, CheckB }) { f(); }\n  }\n}\n",
+            ),
+            (
+                "test/t_test.rb",
+                "class TTest < Minitest::Test\n  def check_a\n    raise 'a' if g != 1\n  end\n\n  def check_b\n    raise 'b' if g != 2\n  end\n\n  def test_t\n    %i[check_a check_b].each { |m| send(m) }\n  end\nend\n",
+            ),
+        ];
+        let reg = default_registry();
+        let vocab = AssertVocabulary::default();
+        for (path, src) in cases {
+            let Some(pack) = reg.find_pack(path) else {
+                continue;
+            };
+            let facts = pack.extract(path, src, &vocab).expect(path);
+            let t = facts
+                .tests
+                .iter()
+                .find(|t| t.name.ends_with('t') || t.name.ends_with("T"))
+                .unwrap_or_else(|| panic!("{path}: {:?}", facts.tests));
+            assert_eq!((t.total_asserts, t.helper_checks), (2, 2), "{path}: {t:?}");
         }
     }
 

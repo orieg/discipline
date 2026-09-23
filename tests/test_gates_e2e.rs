@@ -11319,3 +11319,56 @@ fn go_and_c_discards_are_sorted_by_callee() {
         run.stdout
     );
 }
+
+#[test]
+fn a_dispatch_table_of_helpers_in_rust_and_js_is_a_refactor_and_a_removed_entry_is_a_drop() {
+    let cases: &[(&str, &str, &str, &str)] = &[
+        (
+            "tests/order.rs",
+            "#[test]\nfn order() {\n    let o = load();\n    assert_eq!(o.id, 1);\n    assert_eq!(o.total, 2);\n}\n",
+            "fn check_id(o: &Order) { assert_eq!(o.id, 1); }\nfn check_total(o: &Order) { if o.total != 2 { panic!(\"total\"); } }\n\n#[test]\nfn order() {\n    let o = load();\n    for f in [check_id, check_total] {\n        f(&o);\n    }\n}\n",
+            "for f in [check_id, check_total]",
+        ),
+        (
+            "test/order.test.js",
+            "test('order', () => {\n  const o = load();\n  expect(o.id).toBe(1);\n  expect(o.total).toBe(2);\n});\n",
+            "function checkId(o) { expect(o.id).toBe(1); }\nfunction checkTotal(o) { if (o.total !== 2) { throw new Error('total'); } }\n\ntest('order', () => {\n  const o = load();\n  [checkId, checkTotal].forEach((f) => f(o));\n});\n",
+            "[checkId, checkTotal]",
+        ),
+    ];
+    for (path, inline, table, entries) in cases {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(path, inline);
+        repo.commit("test: inline checks");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write(path, table);
+        repo.commit("refactor: dispatch table");
+        let run = repo.check(&[]);
+        assert!(
+            run.titles("assertion-reduction").is_empty(),
+            "{path}: {}",
+            run.stdout
+        );
+
+        let fewer = if path.ends_with(".rs") {
+            table.replace(entries, "for f in [check_id]")
+        } else {
+            table.replace(entries, "[checkId]")
+        };
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(path, table);
+        repo.commit("test: table");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write(path, &fewer);
+        repo.commit("refactor: fewer entries");
+        let run = repo.check(&[]);
+        assert_eq!(
+            run.titles("assertion-reduction"),
+            vec!["Assertion Reduction In Existing Test"],
+            "{path}: {}",
+            run.stdout
+        );
+    }
+}

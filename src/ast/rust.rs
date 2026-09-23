@@ -464,6 +464,7 @@ impl<'a> Extractor<'a> {
             .unwrap_or(false);
         if let Some(body) = node.child_by_field_name("body") {
             self.count_asserts(body, &mut test, is_fallible_return, direct_calls);
+            super::dispatch_calls(body, self.src, &RS_DISPATCH, direct_calls);
         }
         Some(test)
     }
@@ -1100,6 +1101,13 @@ pub const RS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
         "std::process::exit(",
         "process::exit(",
     ],
+};
+
+/// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
+pub const RS_DISPATCH: super::DispatchSpec = super::DispatchSpec {
+    containers: &["array_expression"],
+    names: &["identifier"],
+    references: &[],
 };
 
 #[cfg(test)]

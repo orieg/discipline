@@ -393,12 +393,14 @@ impl<'a> CSharpExtractor<'a> {
         let mut direct_calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
             self.extract_assertions_in_body(body, &mut test_fn, &mut direct_calls);
+            super::dispatch_calls(body, self.src, &CS_DISPATCH, &mut direct_calls);
         } else {
             // Check for expression-bodied method (arrow_expression_clause)
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "arrow_expression_clause" {
                     self.extract_assertions_in_body(child, &mut test_fn, &mut direct_calls);
+                    super::dispatch_calls(child, self.src, &CS_DISPATCH, &mut direct_calls);
                 }
             }
         }
@@ -709,6 +711,13 @@ pub const CS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["block"],
     ignored_kinds: &["comment"],
     terminators: &["return", "throw"],
+};
+
+/// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
+pub const CS_DISPATCH: super::DispatchSpec = super::DispatchSpec {
+    containers: &["initializer_expression", "collection_expression"],
+    names: &["identifier"],
+    references: &[],
 };
 
 #[cfg(test)]

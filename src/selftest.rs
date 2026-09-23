@@ -395,6 +395,25 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "dispatch tables: helpers named in an array a test loops over resolve like calls",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let Some(pack) = reg.find_pack("tests/t.rs") else {
+                return Ok(true);
+            };
+            let t = pack
+                .extract(
+                    "tests/t.rs",
+                    "fn check_a() { assert_eq!(g(), 1); }\n#[test]\nfn t() { for f in [check_a] { f() } }\n",
+                    &v,
+                )?
+                .tests
+                .remove(0);
+            Ok(t.total_asserts == 1 && t.helper_checks == 1)
+        },
+    ),
+    (
         "javascript, php: a same-file helper that asserts or throws is a check at each call",
         || {
             let reg = crate::ast::default_registry();

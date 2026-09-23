@@ -333,6 +333,7 @@ impl<'a> RubyExtractor<'a> {
         let mut direct_calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
             self.extract_assertions_in_body(body, &mut test_fn, &mut direct_calls);
+            super::dispatch_calls(body, self.src, &RUBY_DISPATCH, &mut direct_calls);
         }
 
         Some((test_fn, direct_calls))
@@ -404,8 +405,10 @@ impl<'a> RubyExtractor<'a> {
         if let Some(b) = block {
             if let Some(body) = b.child_by_field_name("body") {
                 self.extract_assertions_in_body(body, &mut test_fn, &mut direct_calls);
+                super::dispatch_calls(body, self.src, &RUBY_DISPATCH, &mut direct_calls);
             } else {
                 self.extract_assertions_in_body(b, &mut test_fn, &mut direct_calls);
+                super::dispatch_calls(b, self.src, &RUBY_DISPATCH, &mut direct_calls);
             }
         }
 
@@ -658,6 +661,13 @@ pub const RUBY_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["then", "body_statement", "block_body"],
     ignored_kinds: &["comment"],
     terminators: &["return", "raise", "next", "break"],
+};
+
+/// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
+pub const RUBY_DISPATCH: super::DispatchSpec = super::DispatchSpec {
+    containers: &["symbol_array", "array"],
+    names: &["bare_symbol", "simple_symbol"],
+    references: &[],
 };
 
 #[cfg(test)]

@@ -350,6 +350,7 @@ impl<'a> JsExtractor<'a> {
                             self.scan_test_body(callback, &mut test_fn);
                             if let Some(body) = callback.child_by_field_name("body") {
                                 self.collect_calls(body, &mut calls);
+                                super::dispatch_calls(body, self.src, &JS_DISPATCH, &mut calls);
                             }
                         }
                     }
@@ -797,6 +798,13 @@ pub const JS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["statement_block"],
     ignored_kinds: &["comment"],
     terminators: &["return", "throw"],
+};
+
+/// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
+pub const JS_DISPATCH: super::DispatchSpec = super::DispatchSpec {
+    containers: &["array"],
+    names: &["identifier"],
+    references: &[],
 };
 
 #[cfg(test)]

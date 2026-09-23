@@ -390,6 +390,7 @@ impl<'a> KotlinExtractor<'a> {
             };
             let mut direct_calls = Vec::new();
             self.scan_node(body, &mut test_fn, &mut direct_calls);
+            super::dispatch_calls(body, self.src, &KOTLIN_DISPATCH, &mut direct_calls);
             self.facts.tests.push(test_fn);
             self.test_calls.push(direct_calls);
         }
@@ -464,6 +465,7 @@ impl<'a> KotlinExtractor<'a> {
             let mut direct_calls = Vec::new();
             if let Some(body) = Self::function_body(node) {
                 self.scan_node(body, &mut test_fn, &mut direct_calls);
+                super::dispatch_calls(body, self.src, &KOTLIN_DISPATCH, &mut direct_calls);
             }
             self.facts.tests.push(test_fn);
             self.test_calls.push(direct_calls);
@@ -772,6 +774,13 @@ pub const KOTLIN_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["block"],
     ignored_kinds: &["line_comment", "block_comment"],
     terminators: &["return", "throw"],
+};
+
+/// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
+pub const KOTLIN_DISPATCH: super::DispatchSpec = super::DispatchSpec {
+    containers: &[],
+    names: &[],
+    references: &["callable_reference"],
 };
 
 #[cfg(test)]
