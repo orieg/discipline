@@ -945,8 +945,23 @@ The gate counts the lines ending in `: test` (`: benchmark` lines and the `N tes
 To port the other way, adopting the static basis instead, run `discipline check` once with the gate enabled and no floor; the outcome's `examined` value is the static count to set as `min_tests`.
 
 #### `archive-contents`
-- **Rule:** Distribution archives (`.tar.gz`, `.tgz`, `.zip`, `.crate`, `.tar.bz2`, `.tar`) produced during packaging or release must contain all required files and zero forbidden developer artifacts, private files, or CI scripts.
+- **Rule:** Distribution archives produced during packaging or release must contain all required files and zero forbidden developer artifacts, private files, or CI scripts.
 - **Languages:** Any.
+- **Formats read** (the entry names; each one is built and read in `src/guards/archive_formats.rs`'s tests):
+
+  | Family | Extensions | What is read |
+  |---|---|---|
+  | zip | `.zip`, `.whl`, `.jar`, `.war`, `.ear`, `.aar`, `.apk`, `.nupkg`, `.snupkg`, `.vsix`, `.xpi`, `.ipa` | every entry |
+  | tar | `.tar`, `.tar.gz` / `.tgz` / `.crate`, `.tar.bz2` / `.tbz2`, `.tar.xz` / `.txz`, `.tar.zst` / `.tzst` | every entry; a pax global header (`git archive`) is not an entry |
+  | RubyGems | `.gem` | the gem's own members, then the entries of its `data.tar.gz` prefixed `data/` |
+  | Debian | `.deb`, `.udeb` | the entries of the `data.tar`, `data.tar.gz`, `.xz` or `.zst` member (GNU or BSD `ar`) |
+  | RPM | `.rpm` | the entries of the cpio (`newc`) payload, gzip-, xz- or zstd-compressed |
+  | FreeBSD | `.pkg` | read as the compressed tar its bytes say it is |
+
+  The format is decided by the **magic bytes**, not the extension alone. A name with no extension, or one the gate does not know, is read as whatever its bytes are. A name that promises one format while the bytes are another (a `.tar.gz` that is an HTML error page, a `.zip` holding a gzip stream) is refused with exit 2 naming both, never guessed at. Decoders are pure Rust (`flate2`, `bzip2-rs`, `lzma-rs`, `ruzstd`, `zip`, `tar`); a compressed stream is read to its end, so a corrupt trailer or checksum fails the run even after the last entry. A zstd window above 256 MiB (`zstd --long=29` and up) is refused.
+- **Not analysed (exit 2, naming the format):** Apple disk images (`.dmg`, by name or by their `koly` trailer), Windows Installer (`.msi`) and executables (`.exe`), macOS installer packages (`.pkg` holding a xar archive), AppImage, snap / squashfs, ISO images, 7-Zip, RAR, lzip, bare ELF / Mach-O / PE binaries, an RPM whose payload is a legacy raw LZMA stream or uses rpm's large-file cpio format, and a Debian package with no `data.tar` member. Point `archive_path` at one of these and the gate fails closed rather than passing an archive it could not open.
+- **Container images:** `docker save <image> -o image.tar` produces a tar the gate reads, but its entries are the image's manifest and layer blobs, and layers are nested archives the gate does not open. To check what an image ships, export its flattened filesystem instead: `docker export "$(docker create <image>)" -o rootfs.tar`, and point `archive_path` at `rootfs.tar`.
+- **Nested archives are not followed**, beyond the two members above that are part of the package format (a gem's `data.tar.gz`, a deb's `data.tar.*`): a `.jar` inside a `.war`, a `.whl` inside a `.zip` bundle, or a layer inside a `docker save` tar is reported as one entry, and its own entries are not read.
 - **What it catches:**
   - Missing distribution archives when required (fails closed with exit 2).
   - Ambiguous archive glob patterns matching multiple candidate archives (fails closed with exit 2).
@@ -961,7 +976,7 @@ To port the other way, adopting the static basis instead, run `discipline check`
   ```
 - **What it does NOT catch:**
   - Files not packaged into the archive.
-  - Dynamically generated files inside archives matching non-standard extensions outside supported formats.
+  - Entries of nested archives (see above), and anything inside the formats listed as not analysed.
 - **Lifting directive:** `allow-archive-leak: <pattern> <reason>` in PR description or commit message.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `archive_path`, `required_paths`, `forbidden_patterns`, `strip_components`.
 

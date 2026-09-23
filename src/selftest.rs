@@ -2565,6 +2565,41 @@ smoke_cost::set_contains
         },
     ),
     (
+        "archive-contents: reads wheel, deb, rpm and gem by magic bytes and refuses a disk image",
+        || {
+            use crate::guards::archive_contents::read_archive_entries;
+            use crate::guards::archive_formats::fixtures;
+
+            let dir = std::env::temp_dir().join(format!("discipline_selftest_formats_{}", std::process::id()));
+            std::fs::create_dir_all(&dir)?;
+            let files: &[(&str, &[u8])] = &[("pkg/tools/leak.sh", b"x")];
+            let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+                ("a-1.0-py3-none-any.whl", fixtures::zip(files), "pkg/tools/leak.sh"),
+                ("a_1.0_all.deb", fixtures::deb("data.tar.xz", &fixtures::xz(&fixtures::tar(files))), "pkg/tools/leak.sh"),
+                ("a-1.0-1.noarch.rpm", fixtures::rpm(&fixtures::zstd(&fixtures::cpio_newc(files))), "pkg/tools/leak.sh"),
+                ("a-1.0.gem", fixtures::gem(files), "data/pkg/tools/leak.sh"),
+                ("a-release", fixtures::gzip(&fixtures::tar(files)), "pkg/tools/leak.sh"),
+            ];
+            let mut all_read = true;
+            for (name, bytes, want) in cases {
+                let path = dir.join(name);
+                std::fs::write(&path, bytes)?;
+                all_read &= read_archive_entries(&path, 0).map(|e| e.iter().any(|n| n == want)).unwrap_or(false);
+            }
+            let dmg = dir.join("a.dmg");
+            std::fs::write(&dmg, b"anything")?;
+            let refused = read_archive_entries(&dmg, 0)
+                .map_err(|e| format!("{e:#}"))
+                .err()
+                .is_some_and(|e| e.contains("Apple disk image") && e.contains("not analysed"));
+            let mismatch = dir.join("a.tar.gz");
+            std::fs::write(&mismatch, fixtures::zip(files))?;
+            let not_guessed = read_archive_entries(&mismatch, 0).is_err();
+            std::fs::remove_dir_all(&dir)?;
+            Ok(all_read && refused && not_guessed)
+        },
+    ),
+    (
         "manifest-sync: extracts declared paths and reconciles bidirectional diffs",
         || {
             let manifest_xml = r#"

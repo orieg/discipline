@@ -8949,6 +8949,112 @@ strip_components = 1
     assert_eq!(run_no_archive.code, 2);
 }
 
+#[test]
+fn archive_contents_reads_every_package_format_by_magic_and_refuses_the_rest() {
+    use discipline::guards::archive_formats::fixtures;
+
+    let repo = Repo::new();
+    let config = r#"
+[meta]
+version = 1
+name = "test-repo"
+
+[gates.archive-contents]
+enabled = true
+archive_path = "dist/*"
+forbidden_patterns = ["(^|/)tools/"]
+"#;
+    repo.commit_base(
+        "discipline.toml",
+        config,
+        "base: configure archive-contents",
+    );
+    let dist = repo.path().join("dist");
+    let place = |name: &str, bytes: &[u8]| {
+        let _ = std::fs::remove_dir_all(&dist);
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join(name), bytes).unwrap();
+    };
+
+    let leaking: &[(&str, &[u8])] = &[("pkg/README", b"r"), ("pkg/tools/leak.sh", b"x")];
+    let clean: &[(&str, &[u8])] = &[("pkg/README", b"r"), ("pkg/bin/tool", b"x")];
+    type Builder = fn(&[(&str, &[u8])]) -> Vec<u8>;
+    let formats: &[(&str, Builder)] = &[
+        ("example-1.0-py3-none-any.whl", fixtures::zip),
+        ("example-1.0.jar", fixtures::zip),
+        ("Example.1.0.0.nupkg", fixtures::zip),
+        ("example.vsix", fixtures::zip),
+        ("example-1.0.tar.xz", |f| fixtures::xz(&fixtures::tar(f))),
+        ("example-1.0.tar.zst", |f| fixtures::zstd(&fixtures::tar(f))),
+        ("example-1.0.gem", fixtures::gem),
+        ("example_1.0_all.deb", |f| {
+            fixtures::deb("data.tar.xz", &fixtures::xz(&fixtures::tar(f)))
+        }),
+        ("example-1.0-1.noarch.rpm", |f| {
+            fixtures::rpm(&fixtures::zstd(&fixtures::cpio_newc(f)))
+        }),
+        // No extension: the gzip magic bytes decide.
+        ("example-release", |f| fixtures::gzip(&fixtures::tar(f))),
+    ];
+    for (name, make) in formats {
+        place(name, &make(leaking));
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 1, "{name}: {}{}", run.stdout, run.stderr);
+        let violations = run.violations("archive-contents");
+        assert_eq!(violations.len(), 1, "{name}: {violations:?}");
+        assert_eq!(violations[0]["title"], "Forbidden Entry Found in Archive");
+        assert!(
+            violations[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("tools/leak.sh"),
+            "{name}: {violations:?}"
+        );
+
+        place(name, &make(clean));
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 0, "{name}: {}{}", run.stdout, run.stderr);
+        assert!(
+            run.outcome("archive-contents")["examined"]
+                .as_u64()
+                .unwrap()
+                >= 2,
+            "{name}"
+        );
+    }
+
+    // Out of scope: exit 2, naming the format.
+    for (name, bytes, label) in [
+        ("Example.dmg", b"anything".to_vec(), "Apple disk image"),
+        ("Example.msi", b"anything".to_vec(), "Windows Installer"),
+        (
+            "Example.pkg",
+            b"xar!\x00\x1c\x00\x01".to_vec(),
+            "xar archive",
+        ),
+        (
+            "example-linux-amd64",
+            b"\x7fELF\x02\x01\x01".to_vec(),
+            "ELF binary",
+        ),
+    ] {
+        place(name, &bytes);
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 2, "{name}: {}{}", run.stdout, run.stderr);
+        assert!(
+            run.stderr.contains(label) && run.stderr.contains("not analysed"),
+            "{name}: {}",
+            run.stderr
+        );
+    }
+
+    // The name promises gzip, the bytes are a zip: exit 2, not a guess.
+    place("example-1.0.tar.gz", &fixtures::zip(clean));
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(run.stderr.contains("refusing to guess"), "{}", run.stderr);
+}
+
 // ---- manifest-sync ---------------------------------------------------------
 
 #[test]

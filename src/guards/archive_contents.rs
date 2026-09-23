@@ -3,12 +3,11 @@
 //! Validates built distribution archives before publishing, asserting that
 //! required files exist and developer tooling / private artifacts do not leak.
 
-use crate::guards::{Context, GateOutcome};
+use crate::guards::{archive_formats, Context, GateOutcome};
 use crate::tokens;
 use anyhow::{bail, Context as _, Result};
 use globset::GlobBuilder;
 use regex::Regex;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 
 pub const GATE: &str = "archive-contents";
@@ -61,7 +60,7 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
     let entries =
         read_archive_entries(archive_path, settings.strip_components).with_context(|| {
             format!(
-                "archive `{}` is corrupt, empty, or unreadable",
+                "archive `{}` could not be read (corrupt, truncated, or a format archive-contents does not analyse)",
                 rel_archive_display
             )
         })?;
@@ -224,90 +223,38 @@ fn find_archives_recursive(
 
 /// Reads relative paths from an archive, stripping `strip_components` leading directory elements.
 pub fn read_archive_entries(archive_path: &Path, strip_components: usize) -> Result<Vec<String>> {
-    let file = File::open(archive_path)?;
     let mut raw_paths = Vec::new();
+    archive_formats::walk(archive_path, &mut |entry| {
+        raw_paths.push(entry.name);
+        Ok(())
+    })?;
+    Ok(strip_entries(raw_paths, strip_components))
+}
 
-    let path_str = archive_path.to_string_lossy().to_lowercase();
-    if path_str.ends_with(".tar.gz") || path_str.ends_with(".tgz") || path_str.ends_with(".crate") {
-        let gz = flate2::read::GzDecoder::new(file);
-        let mut archive = tar::Archive::new(gz);
-        for entry in archive.entries()? {
-            let entry = entry?;
-            let path = entry.path()?;
-            raw_paths.push(path.to_string_lossy().replace('\\', "/"));
-        }
-    } else if path_str.ends_with(".tar.bz2") || path_str.ends_with(".tbz2") {
-        let bz = bzip2_rs::DecoderReader::new(file);
-        let mut archive = tar::Archive::new(bz);
-        for entry in archive.entries()? {
-            let entry = entry?;
-            let path = entry.path()?;
-            raw_paths.push(path.to_string_lossy().replace('\\', "/"));
-        }
-    } else if path_str.ends_with(".zip") {
-        let mut zip = zip::ZipArchive::new(file)?;
-        for i in 0..zip.len() {
-            let f = zip.by_index(i)?;
-            raw_paths.push(f.name().replace('\\', "/"));
-        }
-    } else if path_str.ends_with(".tar") {
-        let mut archive = tar::Archive::new(file);
-        for entry in archive.entries()? {
-            let entry = entry?;
-            let path = entry.path()?;
-            raw_paths.push(path.to_string_lossy().replace('\\', "/"));
-        }
-    } else {
-        // Generic fallback: try gzip tar first, then zip
-        if let Ok(file_clone) = File::open(archive_path) {
-            let gz = flate2::read::GzDecoder::new(file_clone);
-            let mut archive = tar::Archive::new(gz);
-            if let Ok(entries) = archive.entries() {
-                for entry in entries.flatten() {
-                    if let Ok(p) = entry.path() {
-                        raw_paths.push(p.to_string_lossy().replace('\\', "/"));
-                    }
-                }
-            }
-        }
-        if raw_paths.is_empty() {
-            if let Ok(file_clone) = File::open(archive_path) {
-                if let Ok(mut zip) = zip::ZipArchive::new(file_clone) {
-                    for i in 0..zip.len() {
-                        if let Ok(f) = zip.by_index(i) {
-                            raw_paths.push(f.name().replace('\\', "/"));
-                        }
-                    }
-                }
-            }
-        }
-        if raw_paths.is_empty() {
-            bail!(
-                "unrecognized or unreadable archive format for `{}`",
-                archive_path.display()
-            );
-        }
-    }
-
+/// Normalises raw entry names (`./` and empty components dropped), strips
+/// `strip_components` leading directories, and removes duplicates in order.
+fn strip_entries(raw_paths: Vec<String>, strip_components: usize) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
     let mut stripped_paths = Vec::new();
     for raw in raw_paths {
-        let clean = raw.trim_start_matches("./");
-        let parts: Vec<&str> = clean
-            .split('/')
-            .filter(|s| !s.is_empty() && *s != ".")
-            .collect();
-
-        if parts.len() <= strip_components {
-            continue;
-        }
-
-        let stripped = parts[strip_components..].join("/");
-        if !stripped.is_empty() && !stripped_paths.contains(&stripped) {
-            stripped_paths.push(stripped);
+        if let Some(stripped) = strip_entry(&raw, strip_components) {
+            if seen.insert(stripped.clone()) {
+                stripped_paths.push(stripped);
+            }
         }
     }
+    stripped_paths
+}
 
-    Ok(stripped_paths)
+fn strip_entry(raw: &str, strip_components: usize) -> Option<String> {
+    let parts: Vec<&str> = raw
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
+    if parts.len() <= strip_components {
+        return None;
+    }
+    Some(parts[strip_components..].join("/"))
 }
 
 #[cfg(test)]
@@ -315,6 +262,7 @@ mod tests {
     use super::*;
     use flate2::write::GzEncoder;
     use flate2::Compression;
+    use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
 
