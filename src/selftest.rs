@@ -394,6 +394,31 @@ const CASES: &[Case] = &[
                 && (c == ["discarded-result", "discarded-value"] || c == ["skipped"]))
         },
     ),
+    #[cfg(feature = "lang-objc")]
+    (
+        "objc: XCTest methods, a vacuous one, a skip, an error:nil and a stub",
+        || {
+            use crate::ast::LanguagePack;
+            let pack = crate::ast::objc::ObjcPack;
+            let v = AssertVocabulary::default();
+            let t = pack.extract(
+                "AppTests/ATests.m",
+                "@interface ATests : XCTestCase\n@end\n@implementation ATests\n- (void)testA { XCTAssertEqual(f(), 1); }\n- (void)testB { }\n- (void)testC { XCTSkipIf(YES); }\n@end\n",
+                &v,
+            )?;
+            let p = pack.extract(
+                "App/A.m",
+                "@implementation A\n- (void)save { [d writeToFile:p options:0 error:nil]; }\n- (void)load { [self doesNotRecognizeSelector:_cmd]; }\n@end\n",
+                &v,
+            )?;
+            Ok(t.tests.len() == 3
+                && t.tests[0].strong_asserts == 1
+                && t.tests[1].is_vacuous()
+                && t.tests[2].ignored
+                && p.swallowed.len() == 1
+                && p.functions.iter().any(|x| x.name == "load" && matches!(x.shape, crate::ast::functions::BodyShape::Stub(_))))
+        },
+    ),
     #[cfg(feature = "lang-scala")]
     (
         "scala: FunSuite and FlatSpec tests, a skip, an empty catch arm and a ??? stub",

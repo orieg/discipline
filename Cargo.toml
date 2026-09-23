@@ -36,6 +36,7 @@ tree-sitter-ruby = { version = "0.23", optional = true }
 tree-sitter-kotlin-ng = { version = "1.1", optional = true }
 tree-sitter-swift = { version = "0.7", optional = true }
 tree-sitter-scala = { version = "0.26", optional = true }
+tree-sitter-objc = { version = "3", optional = true }
 # No network features: discipline only reads the local object database, and
 # dropping `https` keeps openssl out of the static musl build.
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
@@ -64,6 +65,7 @@ default = [
     "lang-kotlin",
     "lang-swift",
     "lang-scala",
+    "lang-objc",
 ]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-golden = []
@@ -79,6 +81,7 @@ lang-ruby = ["dep:tree-sitter-ruby"]
 lang-kotlin = ["dep:tree-sitter-kotlin-ng"]
 lang-swift = ["dep:tree-sitter-swift"]
 lang-scala = ["dep:tree-sitter-scala"]
+lang-objc = ["dep:tree-sitter-objc"]
 
 [dev-dependencies]
 tempfile = "3.10"

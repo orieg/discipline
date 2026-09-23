@@ -25,6 +25,8 @@ pub mod javascript;
 #[cfg(feature = "lang-kotlin")]
 pub mod kotlin;
 pub mod mocks;
+#[cfg(feature = "lang-objc")]
+pub mod objc;
 #[cfg(feature = "lang-php")]
 pub mod php;
 pub mod prose;
@@ -142,6 +144,8 @@ pub fn default_registry() -> LanguageRegistry {
     reg.register(Box::new(swift::SwiftPack));
     #[cfg(feature = "lang-scala")]
     reg.register(Box::new(scala::ScalaPack));
+    #[cfg(feature = "lang-objc")]
+    reg.register(Box::new(objc::ObjcPack));
     reg
 }
 
@@ -162,6 +166,7 @@ pub enum Language {
     Kotlin,
     Swift,
     Scala,
+    ObjectiveC,
 }
 
 /// Source extensions discipline recognises but cannot analyse yet. A change
@@ -169,6 +174,8 @@ pub enum Language {
 pub const UNSUPPORTED_SOURCE_EXTS: &[&str] = &[
     "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "kt", "kts", "scala", "c", "h", "cc", "cpp",
     "cxx", "hpp", "hh", "cs", "rb", "swift", "php", "phpt", "m", "mm",
+    // Languages with no pack yet: named, never silently passed.
+    "dart", "lua", "ex", "exs", "hs", "zig", "erl", "clj", "fs", "jl", "nim",
 ];
 
 pub fn language_for(path: &str) -> Option<Language> {
@@ -187,6 +194,7 @@ pub fn language_for(path: &str) -> Option<Language> {
         "kt" | "kts" => Some(Language::Kotlin),
         "swift" => Some(Language::Swift),
         "scala" | "sc" => Some(Language::Scala),
+        "m" | "mm" => Some(Language::ObjectiveC),
         _ => None,
     }
 }
@@ -585,8 +593,10 @@ mod tests {
         assert!(!is_unsupported_source("build.gradle.kts"));
         assert!(!is_unsupported_source("service.swift"));
         assert!(!is_unsupported_source("service.scala"));
-        assert!(is_unsupported_source("service.m"));
-        assert!(is_unsupported_source("service.mm"));
+        assert!(!is_unsupported_source("service.m"));
+        assert!(!is_unsupported_source("service.mm"));
+        assert!(is_unsupported_source("lib/widget.dart"));
+        assert!(is_unsupported_source("src/app.lua"));
         assert!(!is_unsupported_source("src/a.rs"));
         assert!(!is_unsupported_source("tests/001.phpt"));
         assert!(!is_unsupported_source("docs/plan.md"));
@@ -786,18 +796,18 @@ mod tests {
     #[test]
     fn unsupported_source_respects_active_registry() {
         let mut reg = default_registry();
-        assert!(is_unsupported_source_in("main.m", &reg));
+        assert!(is_unsupported_source_in("main.dart", &reg));
 
-        struct ObjcDummy;
-        impl LanguagePack for ObjcDummy {
+        struct DartDummy;
+        impl LanguagePack for DartDummy {
             fn id(&self) -> &'static str {
-                "objc"
+                "dart"
             }
             fn name(&self) -> &'static str {
-                "Objective-C"
+                "Dart"
             }
             fn matches(&self, path: &str) -> bool {
-                extension(path) == Some("m")
+                extension(path) == Some("dart")
             }
             fn extract(
                 &self,
@@ -809,7 +819,7 @@ mod tests {
             }
         }
 
-        reg.register(Box::new(ObjcDummy));
-        assert!(!is_unsupported_source_in("main.m", &reg));
+        reg.register(Box::new(DartDummy));
+        assert!(!is_unsupported_source_in("main.dart", &reg));
     }
 }

@@ -77,8 +77,8 @@ fn adding_assertions_is_not_a_reduction() {
 #[test]
 fn unanalysed_languages_are_named_not_silently_passed() {
     let repo = Repo::new();
-    repo.write("tools/check.m", "void testNothing(void) {}\n");
-    repo.write("src/App.mm", "@implementation App\n@end\n");
+    repo.write("tools/check.dart", "void main() {}\n");
+    repo.write("src/app.lua", "return {}\n");
     repo.commit("feat: tooling");
     let run = repo.check(&[]);
     assert_eq!(
@@ -121,10 +121,10 @@ fn unanalysed_languages_are_named_not_silently_passed() {
 #[test]
 fn unsupported_source_files_group_by_extension() {
     let repo = Repo::new();
-    repo.write("ext/foo.m", "@implementation Foo\n@end\n");
-    repo.write("ext/judy.mm", "@implementation Bar\n@end\n");
-    repo.write("ext/judy.m", "@implementation Baz\n@end\n");
-    repo.commit("feat: objective-c");
+    repo.write("ext/foo.dart", "class Foo {}\n");
+    repo.write("ext/judy.lua", "return {}\n");
+    repo.write("ext/judy.dart", "class Baz {}\n");
+    repo.commit("feat: dart and lua");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0);
     for gate in [
@@ -136,7 +136,7 @@ fn unsupported_source_files_group_by_extension() {
         let notes = run.outcome(gate)["notes"].to_string();
         assert!(
             notes.contains("3 changed source file(s)")
-                && notes.contains("2 .m, 1 .mm")
+                && notes.contains("2 .dart, 1 .lua")
                 && notes.contains("NOT analysed"),
             "gate {gate} should format extension breakdown: {notes}"
         );
@@ -11474,6 +11474,61 @@ fn scala_source_files_are_analysed_by_the_scala_pack() {
     repo.write(
         "src/main/scala/Store.scala",
         "object Store {\n  def save(s: Store): Unit = {\n    try { s.write() } catch { case _: Exception => }\n    val n = Try(s.flush()).getOrElse(0)\n  }\n  def load(s: Store): Int = ???\n}\n",
+    );
+    repo.commit("refactor: cart");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(run.titles("assertion-reduction").len(), 1, "{}", run.stdout);
+    assert_eq!(run.titles("vacuous-tests").len(), 1, "{}", run.stdout);
+    assert_eq!(run.titles("ignored-tests").len(), 1, "{}", run.stdout);
+    assert_eq!(run.titles("error-swallowing").len(), 2, "{}", run.stdout);
+    assert_eq!(run.titles("stub-bodies").len(), 1, "{}", run.stdout);
+}
+
+#[test]
+fn objective_c_source_files_are_analysed_by_the_objc_pack() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "AppTests/CartTests.m",
+        "@interface CartTests : XCTestCase\n@end\n@implementation CartTests\n- (void)testTotal {\n    XCTAssertEqual(cart.total, 3);\n    XCTAssertEqual(cart.count, 2);\n}\n- (void)testCheckout {\n    XCTAssertEqualObjects([cart checkout], @\"done\");\n}\n@end\n",
+    );
+    repo.write(
+        "App/Store.m",
+        "@implementation Store\n- (void)save {\n    [self write];\n}\n- (NSInteger)load {\n    return [self count];\n}\n@end\n",
+    );
+    repo.commit("feat: cart");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    repo.write(
+        "AppTests/CartTests.m",
+        "@interface CartTests : XCTestCase\n@end\n@implementation CartTests\n- (void)testTotal {\n    XCTAssertEqual(cart.total, 3);\n    XCTAssertEqual(cart.count, 2);\n}\n- (void)testCheckout {\n    XCTAssertEqualObjects([cart checkout], @\"done\");\n}\n- (void)testEmpty {\n    XCTAssertEqual([Cart new].total, 0);\n}\n@end\n",
+    );
+    repo.commit("test: empty cart");
+    let quiet = repo.check(&[]);
+    for gate in [
+        "assertion-reduction",
+        "vacuous-tests",
+        "ignored-tests",
+        "error-swallowing",
+        "stub-bodies",
+    ] {
+        assert!(quiet.titles(gate).is_empty(), "{gate}: {}", quiet.stdout);
+        assert!(
+            !quiet.outcome(gate)["notes"]
+                .to_string()
+                .contains("NOT analysed"),
+            "{gate}"
+        );
+    }
+
+    repo.write(
+        "AppTests/CartTests.m",
+        "@interface CartTests : XCTestCase\n@end\n@implementation CartTests\n- (void)testTotal {\n    XCTAssertTrue(cart.total > 0);\n}\n- (void)testCheckout {\n    XCTSkipIf(YES);\n    XCTAssertEqualObjects([cart checkout], @\"done\");\n}\n- (void)testEmpty {\n    XCTAssertEqual([Cart new].total, 0);\n}\n- (void)testNothing {\n}\n@end\n",
+    );
+    repo.write(
+        "App/Store.m",
+        "@implementation Store\n- (void)save {\n    @try { [self write]; } @catch (NSException *e) { }\n    [data writeToFile:path options:0 error:nil];\n}\n- (void)load {\n    [self doesNotRecognizeSelector:_cmd];\n}\n@end\n",
     );
     repo.commit("refactor: cart");
     let run = repo.check(&[]);

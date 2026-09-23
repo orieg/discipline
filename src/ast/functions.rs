@@ -80,7 +80,15 @@ fn describe(node: Node, src: &str, path: &str, spec: &FunctionSpec) -> Option<Fu
     let name = spec
         .name_fields
         .iter()
-        .find_map(|f| node.child_by_field_name(f))
+        // A field, or failing that a child of that kind (an Objective-C method's selector
+        // is its first `identifier`).
+        .find_map(|f| {
+            node.child_by_field_name(f).or_else(|| {
+                let mut cursor = node.walk();
+                let found = node.named_children(&mut cursor).find(|c| c.kind() == *f);
+                found
+            })
+        })
         .map(unwrap_declarator)
         .map(|n| text(n, src).trim().to_string())
         .filter(|n| !n.is_empty())
@@ -440,6 +448,24 @@ pub fn classify_scala(t: &str) -> Option<BodyShape> {
         return Some(BodyShape::Trivial(t.to_string()));
     }
     trivial_return(t, TRIVIAL)
+}
+
+pub fn classify_objc(t: &str) -> Option<BodyShape> {
+    let t = strip_semicolon(t);
+    if t.contains("doesNotRecognizeSelector:")
+        || t == "abort()"
+        || (t.starts_with("@throw") && has_word(t, NOT_IMPLEMENTED_WORDS))
+        || ((t.starts_with("NSAssert(NO") || t.starts_with("NSAssert(0"))
+            && has_word(t, NOT_IMPLEMENTED_WORDS))
+    {
+        return Some(BodyShape::Stub(t.to_string()));
+    }
+    trivial_return(
+        t,
+        &[
+            "nil", "NO", "YES", "0", "NULL", "@\"\"", "@[]", "@{}", "false", "true",
+        ],
+    )
 }
 
 pub fn classify_ruby(t: &str) -> Option<BodyShape> {

@@ -119,13 +119,13 @@ listed in the configuration reference (see
 AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it (agent-guard; default: on, warning; languages: any)
 .TP
 .B [gates.assertion-reduction]
-assertion count / strength must not drop in an existing test (agent-guard; default: on, error; languages: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala)
+assertion count / strength must not drop in an existing test (agent-guard; default: on, error; languages: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective\-C)
 .TP
 .B [gates.vacuous-tests]
-new tests must carry a non\-tautological assertion (agent-guard; default: on, error; languages: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala)
+new tests must carry a non\-tautological assertion (agent-guard; default: on, error; languages: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective\-C)
 .TP
 .B [gates.ignored-tests]
-tests must not be newly #[ignore]d or skipped without directive (agent-guard; default: on, error; languages: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala)
+tests must not be newly #[ignore]d or skipped without directive (agent-guard; default: on, error; languages: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective\-C)
 .TP
 .B [gates.unsafe-safety-comment]
 unsafe blocks / impls carry a // SAFETY: comment (agent-guard; default: on, error; languages: Rust)
@@ -155,13 +155,13 @@ commits carry the required trailers; an agent\-produced commit carries a review 
 a change cannot weaken its own discipline.toml without a token (integrity; default: on, error; languages: any)
 .TP
 .B [gates.stub-bodies]
-added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null (agent-guard; default: on, error; languages: Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala)
+added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null (agent-guard; default: on, error; languages: Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective\-C)
 .TP
 .B [gates.error-swallowing]
-no new empty error handler or discarded Result outside tests (agent-guard; default: on, error; languages: Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala)
+no new empty error handler or discarded Result outside tests (agent-guard; default: on, error; languages: Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective\-C)
 .TP
 .B [gates.instruction-smuggling]
-no invisible Unicode, unreviewed agent\-instruction edits, or instruction\-like text in comments and prose (agent-guard; default: on, error; languages: any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala and prose files (phrases))
+no invisible Unicode, unreviewed agent\-instruction edits, or instruction\-like text in comments and prose (agent-guard; default: on, error; languages: any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective\-C and prose files (phrases))
 .TP
 .B [gates.build-hooks]
 install and build hooks that gain network or shell access, and package\-manager configuration edits, need a token (integrity; default: on, error; languages: package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env*)

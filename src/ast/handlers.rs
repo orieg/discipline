@@ -716,6 +716,39 @@ pub fn c_discard_class(node: Node, src: &str) -> Option<&'static str> {
     sort_by_callee(name, C_FALLIBLE_CALLEES, &[])
 }
 
+/// Objective-C: `(void)call()` as in C, or a message whose `error:` argument is `nil` /
+/// `NULL`, which throws the `NSError` away before it exists.
+pub fn objc_discards(t: &str) -> bool {
+    let t = t.trim();
+    t.starts_with("(void)") || objc_drops_error(t)
+}
+
+fn objc_drops_error(t: &str) -> bool {
+    let compact: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("error:nil]") || compact.contains("error:NULL]")
+}
+
+/// Objective-C: an `error:nil` message is a discarded result; `(void)` of a call is sorted
+/// by callee as in C, and `(void)` of a message is a discarded value.
+pub fn objc_discard_class(node: Node, src: &str) -> Option<&'static str> {
+    match node.kind() {
+        "message_expression" => {
+            // Only the message that carries the argument, not an enclosing one.
+            let own: String = text(node, src)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            (own.ends_with("error:nil]") || own.ends_with("error:NULL]"))
+                .then_some("discarded-result")
+        }
+        "cast_expression" => match node.child_by_field_name("value").map(|v| v.kind()) {
+            Some("message_expression") => Some("discarded-value"),
+            _ => c_discard_class(node, src),
+        },
+        _ => None,
+    }
+}
+
 /// Scala: `Try(f).getOrElse(x)` and `Try(f).toOption` replace every failure with a value;
 /// `.recover { ... }` and a `match` on the `Try` handle it.
 pub fn scala_silences(t: &str) -> bool {
