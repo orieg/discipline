@@ -1023,7 +1023,7 @@ _discipline() {
             fi
             case "${prev}" in
                 --agent)
-                    COMPREPLY=($(compgen -W "claude-code codex cursor aider" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "claude-code codex cursor aider copilot agy qwen opencode" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -1041,7 +1041,7 @@ _discipline() {
             fi
             case "${prev}" in
                 --agent)
-                    COMPREPLY=($(compgen -W "claude-code codex cursor aider" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "claude-code codex cursor aider copilot agy qwen opencode" -- "${cur}"))
                     return 0
                     ;;
                 --base)

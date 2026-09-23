@@ -50,7 +50,7 @@ discipline diff
 # Or inspect current branch diff against origin/main
 discipline check
 
-# Tell your coding agent while it edits (claude-code, codex, cursor, aider)
+# Tell your coding agent while it edits (claude-code, codex, cursor, aider, copilot, agy, qwen, opencode)
 discipline hook install --agent claude-code
 
 # What would discipline have blocked in your last 50 merged changes?

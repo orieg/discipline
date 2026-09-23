@@ -159,13 +159,21 @@ complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fi
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l agent -d 'The agent whose hook contract to answer in' -r -f -a "claude-code\t'Claude Code (`.claude/settings.json`, PostToolUse + Stop)'
 codex\t'OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)'
 cursor\t'Cursor (`.cursor/hooks.json`, stop)'
-aider\t'Aider (`.aider.conf.yml`, lint-cmd)'"
+aider\t'Aider (`.aider.conf.yml`, lint-cmd)'
+copilot\t'GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + agentStop)'
+agy\t'Antigravity CLI (`.agents/hooks.json`, Stop)'
+qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
+opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s b -l base -d 'Base to measure the change against (default: the merge base with origin\'s default branch, else main / master)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l agent -d 'The agent to configure' -r -f -a "claude-code\t'Claude Code (`.claude/settings.json`, PostToolUse + Stop)'
 codex\t'OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)'
 cursor\t'Cursor (`.cursor/hooks.json`, stop)'
-aider\t'Aider (`.aider.conf.yml`, lint-cmd)'"
+aider\t'Aider (`.aider.conf.yml`, lint-cmd)'
+copilot\t'GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + agentStop)'
+agy\t'Antigravity CLI (`.agents/hooks.json`, Stop)'
+qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
+opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "run" -d 'Check the change so far and answer in the agent\'s hook contract (reads the hook payload on stdin)'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "install" -d 'Write the agent\'s hook configuration at the repository root; an existing file is never rewritten'

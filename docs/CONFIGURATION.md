@@ -852,7 +852,7 @@ discipline check --staged
 Run the gates inside a coding agent's edit loop, so an agent that weakens a test is told while it is still editing rather than when CI fails:
 
 ```bash
-discipline hook install --agent claude-code   # or: codex, cursor, aider
+discipline hook install --agent claude-code   # or: codex, cursor, aider, copilot, agy, qwen, opencode
 ```
 
 `hook install` writes the agent's configuration at the repository root when that file does not exist (exit 0). When the file already runs discipline for that agent it says so and changes nothing (exit 0). When the file exists without the hook it changes nothing and prints the snippet to merge (exit 1); for Claude Code, merge the two `hooks` entries into the existing `hooks` object, appending to an event's array if the file already has one:
@@ -881,6 +881,12 @@ The hook file is project configuration: commit it so every contributor's agent r
 | Codex CLI | `.codex/hooks.json` | `PostToolUse` (`apply_patch`, `Edit`, `Write`) and `Stop` | exit 2, the report on stderr |
 | Cursor | `.cursor/hooks.json` | `stop` (`loop_limit: 3`) | `{"followup_message": <report>}` on stdout, sent as the next message |
 | Aider | `.aider.conf.yml` | `lint-cmd` after each edit (`auto-lint: true`) | exit 1, the report on stdout |
+| GitHub Copilot CLI | `.github/hooks/discipline.json` | `postToolUse` (`create`, `edit`, `str_replace_editor`) and `agentStop` | after an edit, exit 0 with `{"additionalContext": <report>}`, appended to the tool result the model reads; at the end of a turn, `{"decision": "block", "reason": <report>}`, which forces another turn |
+| Antigravity CLI (`agy`) | `.agents/hooks.json` | `Stop` only (a `PostToolUse` hook's output does not reach agy's model) | `{"decision": "continue", "reason": <report>}`, which re-enters the loop with the report as a system message |
+| Qwen Code | `.qwen/settings.json` | `PostToolUse` (`write_file`, `edit`) and `Stop` | exit 2, the report on stderr (Claude Code's contract) |
+| OpenCode | `.opencode/plugins/discipline.js` | a plugin on `tool.execute.after` for `edit`, `write`, `apply_patch` | the plugin appends the report to the tool's output; `hook run --agent opencode` exits 1 with the report on stdout |
+
+Loop guards at the end of a turn: Claude Code, Codex, Copilot CLI and Qwen Code send `stop_hook_active` on a turn a hook already continued, and the hook lets it through (Copilot CLI and Qwen Code also stop after eight continuations); Cursor's `loop_limit` is 3. agy documents no guard, so discipline counts consecutive blocks for each conversation in `<git dir>/discipline/agy-stop-<id>` (never tracked) and lets the stop through after three; a pass resets the count. OpenCode's plugin runs after edit tools only. The Copilot, agy, Qwen and OpenCode contracts are read from each tool's documentation (the module header of `src/hook.rs` cites the pages); the OpenCode plugin and the agy file have not been run against a live session of those tools.
 
 The report is the `agent-prompt` format: each finding with its location and the repair, never the directive that would waive it. For a weakened test, a Claude Code agent reads on stderr, with exit 2:
 
@@ -992,6 +998,10 @@ Prints what the gate checks, its languages, its state under this repository's co
 | Claude Code | `claude mcp add discipline -- discipline mcp`, or a project `.mcp.json` with the JSON below |
 | Cursor | `.cursor/mcp.json` with the JSON below |
 | Codex CLI | `config.toml` in the Codex home directory: `[mcp_servers.discipline]` with `command = "discipline"` and `args = ["mcp"]` |
+| GitHub Copilot CLI | `copilot mcp add discipline -- discipline mcp`, or `.github/mcp.json` with the JSON below plus `"type": "local"` |
+| Antigravity CLI (`agy`) | `.agents/mcp_config.json` with the JSON below |
+| Qwen Code | `qwen mcp add --scope project discipline discipline mcp`, or the `mcpServers` key in `.qwen/settings.json` |
+| OpenCode | `opencode.json`: `"mcp": { "discipline": { "type": "local", "command": ["discipline", "mcp"] } }` |
 | Any other client | its server list, command `discipline`, argument `mcp` |
 
 ```json

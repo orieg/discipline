@@ -195,7 +195,11 @@ _arguments "${_arguments_options[@]}" : \
 '--agent=[The agent whose hook contract to answer in]:AGENT:((claude-code\:"Claude Code (\`.claude/settings.json\`, PostToolUse + Stop)"
 codex\:"OpenAI Codex CLI (\`.codex/hooks.json\`, PostToolUse + Stop)"
 cursor\:"Cursor (\`.cursor/hooks.json\`, stop)"
-aider\:"Aider (\`.aider.conf.yml\`, lint-cmd)"))' \
+aider\:"Aider (\`.aider.conf.yml\`, lint-cmd)"
+copilot\:"GitHub Copilot CLI (\`.github/hooks/discipline.json\`, postToolUse + agentStop)"
+agy\:"Antigravity CLI (\`.agents/hooks.json\`, Stop)"
+qwen\:"Qwen Code (\`.qwen/settings.json\`, PostToolUse + Stop)"
+opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit tools)"))' \
 '-b+[Base to measure the change against (default\: the merge base with origin'\''s default branch, else main / master)]:BASE:_default' \
 '--base=[Base to measure the change against (default\: the merge base with origin'\''s default branch, else main / master)]:BASE:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -208,7 +212,11 @@ _arguments "${_arguments_options[@]}" : \
 '--agent=[The agent to configure]:AGENT:((claude-code\:"Claude Code (\`.claude/settings.json\`, PostToolUse + Stop)"
 codex\:"OpenAI Codex CLI (\`.codex/hooks.json\`, PostToolUse + Stop)"
 cursor\:"Cursor (\`.cursor/hooks.json\`, stop)"
-aider\:"Aider (\`.aider.conf.yml\`, lint-cmd)"))' \
+aider\:"Aider (\`.aider.conf.yml\`, lint-cmd)"
+copilot\:"GitHub Copilot CLI (\`.github/hooks/discipline.json\`, postToolUse + agentStop)"
+agy\:"Antigravity CLI (\`.agents/hooks.json\`, Stop)"
+qwen\:"Qwen Code (\`.qwen/settings.json\`, PostToolUse + Stop)"
+opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit tools)"))' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0

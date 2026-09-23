@@ -582,7 +582,7 @@ const CASES: &[Case] = &[
     (
         "hook: findings block in each agent's contract, and a check that cannot run blocks too",
         || {
-            use crate::hook::{translate, Agent};
+            use crate::hook::{translate, translate_event, Agent, Event};
             let r = "### Issue 1 [assertion-reduction]: x\n";
             let cc = translate(Agent::ClaudeCode, 1, r, "");
             let cursor = translate(Agent::Cursor, 1, r, "");
@@ -593,7 +593,11 @@ const CASES: &[Case] = &[
                 && cursor.stdout.contains("followup_message")
                 && translate(Agent::Aider, 1, r, "").code == 1
                 && translate(Agent::ClaudeCode, 0, "", "").code == 0
-                && translate(Agent::ClaudeCode, 2, "", "boom").code == 2)
+                && translate(Agent::ClaudeCode, 2, "", "boom").code == 2
+                && translate_event(Agent::Copilot, Event::Stop, 1, r, "").stdout.contains("\"block\"")
+                && translate_event(Agent::Copilot, Event::Edit, 1, r, "").stdout.contains("additionalContext")
+                && translate_event(Agent::Agy, Event::Stop, 1, r, "").stdout.contains("\"continue\"")
+                && translate(Agent::Qwen, 1, r, "").code == 2)
         },
     ),
     (

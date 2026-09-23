@@ -289,3 +289,125 @@ fn the_shared_hook_file_is_not_scratch_state() {
         run.stdout
     );
 }
+
+#[test]
+fn copilot_gets_additional_context_after_an_edit_and_a_block_at_stop() {
+    let repo = Repo::new();
+    weakened(&repo);
+    let edit = hook(
+        &repo,
+        &["hook", "run", "--agent", "copilot"],
+        r#"{"sessionId":"s","timestamp":1,"cwd":".","toolName":"edit","toolArgs":{}}"#,
+    );
+    assert_eq!(edit.code, 0, "{}", edit.stderr);
+    let v: serde_json::Value = serde_json::from_str(&edit.stdout).unwrap();
+    assert!(v["additionalContext"]
+        .as_str()
+        .unwrap()
+        .contains("[assertion-reduction]"));
+
+    let stop = hook(
+        &repo,
+        &["hook", "run", "--agent", "copilot"],
+        r#"{"sessionId":"s","timestamp":1,"cwd":".","stopReason":"end_turn","stop_hook_active":false}"#,
+    );
+    let v: serde_json::Value = serde_json::from_str(&stop.stdout).unwrap();
+    assert_eq!(v["decision"], "block");
+    assert!(v["reason"].as_str().unwrap().contains("Repair:"));
+
+    let again = hook(
+        &repo,
+        &["hook", "run", "--agent", "copilot"],
+        r#"{"stopReason":"end_turn","stop_hook_active":true}"#,
+    );
+    assert_eq!((again.code, again.stdout.as_str()), (0, ""));
+}
+
+#[test]
+fn agy_repairs_only_at_stop_and_lets_the_fourth_stop_through() {
+    let repo = Repo::new();
+    weakened(&repo);
+    // A tool event cannot reach agy's model: nothing is checked, `{}` returned.
+    let tool = hook(
+        &repo,
+        &["hook", "run", "--agent", "agy"],
+        r#"{"conversationId":"c1","toolCall":{"name":"write_to_file"},"stepIdx":3}"#,
+    );
+    assert_eq!((tool.code, tool.stdout.trim()), (0, "{}"));
+
+    let stop =
+        r#"{"conversationId":"c1","executionNum":1,"terminationReason":"done","fullyIdle":true}"#;
+    for _ in 0..3 {
+        let r = hook(&repo, &["hook", "run", "--agent", "agy"], stop);
+        let v: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+        assert_eq!(v["decision"], "continue", "{}", r.stdout);
+        assert!(v["reason"]
+            .as_str()
+            .unwrap()
+            .contains("[assertion-reduction]"));
+    }
+    // agy documents no loop guard: the fourth consecutive block is let through.
+    let fourth = hook(&repo, &["hook", "run", "--agent", "agy"], stop);
+    assert_eq!(fourth.stdout.trim(), "{}", "{}", fourth.stdout);
+    // The counter restarts: a later stop is judged again.
+    let later = hook(&repo, &["hook", "run", "--agent", "agy"], stop);
+    assert!(later.stdout.contains("continue"), "{}", later.stdout);
+}
+
+#[test]
+fn qwen_follows_claude_codes_contract_and_opencode_aiders() {
+    let repo = Repo::new();
+    weakened(&repo);
+    let qwen = hook(
+        &repo,
+        &["hook", "run", "--agent", "qwen"],
+        r#"{"hook_event_name":"PostToolUse","tool_name":"edit"}"#,
+    );
+    assert_eq!(qwen.code, 2);
+    assert!(
+        qwen.stderr.contains("[assertion-reduction]"),
+        "{}",
+        qwen.stderr
+    );
+    let qwen_loop = hook(
+        &repo,
+        &["hook", "run", "--agent", "qwen"],
+        r#"{"hook_event_name":"Stop","stop_hook_active":true}"#,
+    );
+    assert_eq!(qwen_loop.code, 0);
+
+    let opencode = hook(&repo, &["hook", "run", "--agent", "opencode"], "");
+    assert_eq!(opencode.code, 1);
+    assert!(
+        opencode.stdout.contains("[assertion-reduction]"),
+        "{}",
+        opencode.stdout
+    );
+}
+
+#[test]
+fn install_writes_each_new_agents_file() {
+    let repo = Repo::new();
+    for (agent, file, needle) in [
+        ("copilot", ".github/hooks/discipline.json", "\"agentStop\""),
+        ("agy", ".agents/hooks.json", "\"Stop\""),
+        ("qwen", ".qwen/settings.json", "\"PostToolUse\""),
+        (
+            "opencode",
+            ".opencode/plugins/discipline.js",
+            "tool.execute.after",
+        ),
+    ] {
+        let run = repo.run(&["hook", "install", "--agent", agent], &[]);
+        assert_eq!(run.code, 0, "{agent}: {}", run.stderr);
+        let text = std::fs::read_to_string(repo.file(file)).unwrap();
+        assert!(text.contains(needle), "{agent}: {text}");
+        assert!(
+            text.contains(&format!("discipline hook run --agent {agent}")),
+            "{agent}: {text}"
+        );
+        if file.ends_with(".json") {
+            serde_json::from_str::<serde_json::Value>(&text).unwrap();
+        }
+    }
+}

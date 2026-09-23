@@ -15,6 +15,22 @@
 //!   next user message. Cursor caps the loop with `loop_limit`.
 //! * Aider: `lint-cmd`; a non-zero exit sends stdout to the model. Aider appends
 //!   the edited filenames, which are ignored: the whole change is checked.
+//! * GitHub Copilot CLI: `postToolUse` / `agentStop` in `.github/hooks/*.json`. After
+//!   an edit, exit 0 with `{"additionalContext": ...}` on stdout is appended to the
+//!   tool result the model reads; at the end of a turn `{"decision": "block",
+//!   "reason": ...}` forces another turn (`stop_hook_active`, and the CLI's own cap of
+//!   eight continuations). Docs: docs.github.com/en/copilot/reference/hooks-reference.
+//! * Antigravity CLI (`agy`): `.agents/hooks.json`. Only `Stop` can reach the model:
+//!   `{"decision": "continue", "reason": ...}` re-enters the loop with the reason as a
+//!   system message. agy documents no loop guard, so this hook counts consecutive
+//!   blocks per conversation (under the git directory) and lets the third through.
+//!   Docs: antigravity.google/docs/hooks.
+//! * Qwen Code: `PostToolUse` / `Stop` in `.qwen/settings.json`, Claude Code's
+//!   contract (exit 2, stderr, `stop_hook_active`). Docs:
+//!   qwenlm.github.io/qwen-code-docs/en/users/features/hooks.
+//! * OpenCode: no command hook; `.opencode/plugins/discipline.js` runs this command
+//!   after an edit tool and appends a failure to the tool's output (exit 1, the report
+//!   on stdout, as for Aider). Docs: opencode.ai/docs/plugins.
 //!
 //! `discipline hook install --agent <name>` writes that agent's configuration
 //! only where none exists. An existing file is never rewritten: the snippet to
@@ -33,6 +49,14 @@ pub enum Agent {
     Cursor,
     /// Aider (`.aider.conf.yml`, lint-cmd)
     Aider,
+    /// GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + agentStop)
+    Copilot,
+    /// Antigravity CLI (`.agents/hooks.json`, Stop)
+    Agy,
+    /// Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)
+    Qwen,
+    /// OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)
+    Opencode,
 }
 
 impl Agent {
@@ -42,6 +66,10 @@ impl Agent {
             Agent::Codex => "codex",
             Agent::Cursor => "cursor",
             Agent::Aider => "aider",
+            Agent::Copilot => "copilot",
+            Agent::Agy => "agy",
+            Agent::Qwen => "qwen",
+            Agent::Opencode => "opencode",
         }
     }
 }
@@ -61,10 +89,28 @@ pub struct HookOutput {
 /// that could not check blocks like a finding does (fail-closed): the agent is told
 /// the check did not run, never that it passed.
 pub fn translate(agent: Agent, check_code: i32, report: &str, detail: &str) -> HookOutput {
+    translate_event(agent, Event::Edit, check_code, report, detail)
+}
+
+/// The agent event a hook call answers: after an edit, or at the end of a turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    Edit,
+    Stop,
+}
+
+/// As [`translate`], for an agent whose contract differs between events.
+pub fn translate_event(
+    agent: Agent,
+    event: Event,
+    check_code: i32,
+    report: &str,
+    detail: &str,
+) -> HookOutput {
     let message = match check_code {
         0 => {
             return HookOutput {
-                stdout: if agent == Agent::Cursor {
+                stdout: if matches!(agent, Agent::Cursor | Agent::Agy) {
                     "{}\n".to_string()
                 } else {
                     String::new()
@@ -80,17 +126,36 @@ pub fn translate(agent: Agent, check_code: i32, report: &str, detail: &str) -> H
         ),
     };
     match agent {
-        Agent::ClaudeCode | Agent::Codex => HookOutput {
+        Agent::ClaudeCode | Agent::Codex | Agent::Qwen => HookOutput {
             stdout: String::new(),
             stderr: message,
             code: 2,
+        },
+        Agent::Copilot => HookOutput {
+            stdout: format!(
+                "{}\n",
+                match event {
+                    Event::Edit => serde_json::json!({ "additionalContext": message }),
+                    Event::Stop => serde_json::json!({ "decision": "block", "reason": message }),
+                }
+            ),
+            stderr: String::new(),
+            code: 0,
+        },
+        Agent::Agy => HookOutput {
+            stdout: format!(
+                "{}\n",
+                serde_json::json!({ "decision": "continue", "reason": message })
+            ),
+            stderr: String::new(),
+            code: 0,
         },
         Agent::Cursor => HookOutput {
             stdout: format!("{}\n", serde_json::json!({ "followup_message": message })),
             stderr: String::new(),
             code: 0,
         },
-        Agent::Aider => HookOutput {
+        Agent::Aider | Agent::Opencode => HookOutput {
             stdout: message,
             stderr: String::new(),
             code: 1,
@@ -103,22 +168,45 @@ pub fn translate(agent: Agent, check_code: i32, report: &str, detail: &str) -> H
 pub struct Payload {
     pub cwd: Option<PathBuf>,
     pub stop_hook_active: bool,
+    /// The end of a turn: `hook_event_name: "Stop"` (Claude Code, Codex, Qwen Code),
+    /// a `stopReason` (Copilot CLI) or a `terminationReason` (agy).
+    pub stop: bool,
+    /// agy's conversation, for its loop guard.
+    pub conversation: Option<String>,
 }
 
 pub fn parse_payload(raw: &str) -> Payload {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
         return Payload::default();
     };
+    let event = v
+        .get("hook_event_name")
+        .or_else(|| v.get("hookEventName"))
+        .and_then(|e| e.as_str())
+        .unwrap_or("");
     Payload {
         cwd: v
             .get("cwd")
             .and_then(|c| c.as_str())
+            // agy names the workspace instead.
+            .or_else(|| {
+                v.get("workspacePaths")
+                    .and_then(|w| w.get(0))
+                    .and_then(|c| c.as_str())
+            })
             .filter(|c| !c.is_empty())
             .map(PathBuf::from),
         stop_hook_active: v
             .get("stop_hook_active")
             .and_then(|b| b.as_bool())
             .unwrap_or(false),
+        stop: matches!(event, "Stop" | "agentStop")
+            || v.get("stopReason").is_some()
+            || v.get("terminationReason").is_some(),
+        conversation: v
+            .get("conversationId")
+            .and_then(|c| c.as_str())
+            .map(str::to_string),
     }
 }
 
@@ -147,11 +235,21 @@ pub fn default_base(repo: &git2::Repository) -> Option<String> {
 /// Runs the check for the agent and returns what the hook emits.
 pub fn run(agent: Agent, base: Option<String>, stdin: &str) -> Result<HookOutput> {
     let payload = parse_payload(stdin);
+    let event = if payload.stop {
+        Event::Stop
+    } else {
+        Event::Edit
+    };
     if payload.stop_hook_active {
-        return Ok(translate(agent, 0, "", ""));
+        return Ok(translate_event(agent, event, 0, "", ""));
+    }
+    // agy reads nothing a hook returns after a tool call: only its Stop can repair.
+    if agent == Agent::Agy && event != Event::Stop {
+        return Ok(translate_event(agent, event, 0, "", ""));
     }
     let dir = payload
         .cwd
+        .clone()
         .filter(|d| d.is_dir())
         .unwrap_or_else(|| PathBuf::from("."));
     let base = match base {
@@ -162,7 +260,70 @@ pub fn run(agent: Agent, base: Option<String>, stdin: &str) -> Result<HookOutput
     };
     let base = base.map(CheckSide::Base).unwrap_or(CheckSide::Default);
     let (code, report, detail) = run_check(&dir, &base)?;
-    Ok(translate(agent, code, &report, &detail))
+    if agent == Agent::Agy {
+        return Ok(agy_guarded(
+            &dir,
+            payload.conversation.as_deref(),
+            code,
+            &report,
+            &detail,
+        ));
+    }
+    Ok(translate_event(agent, event, code, &report, &detail))
+}
+
+/// Consecutive `continue` answers agy gets for one conversation before its stop is let
+/// through (agy documents no loop guard of its own).
+pub const AGY_MAX_CONTINUATIONS: u32 = 3;
+
+/// agy's Stop answer with the loop guard: the count of consecutive blocks for the
+/// conversation lives in `<git dir>/discipline/agy-stop-<conversation>`, is reset by a
+/// pass, and at [`AGY_MAX_CONTINUATIONS`] the stop is let through and CI gates the
+/// change. With no conversation id or git directory, every stop is judged on its own.
+fn agy_guarded(
+    dir: &Path,
+    conversation: Option<&str>,
+    code: i32,
+    report: &str,
+    detail: &str,
+) -> HookOutput {
+    let counter = conversation
+        .map(|c| {
+            c.chars()
+                .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+                .collect::<String>()
+        })
+        .filter(|c| !c.is_empty())
+        .and_then(|c| {
+            crate::gitctx::discover_repository(dir)
+                .ok()
+                .map(|r| r.path().join("discipline").join(format!("agy-stop-{c}")))
+        });
+    let Some(counter) = counter else {
+        return translate_event(Agent::Agy, Event::Stop, code, report, detail);
+    };
+    if code == 0 {
+        let _removed = std::fs::remove_file(&counter);
+        return translate_event(Agent::Agy, Event::Stop, 0, "", "");
+    }
+    let n: u32 = std::fs::read_to_string(&counter)
+        .ok()
+        .and_then(|t| t.trim().parse().ok())
+        .unwrap_or(0);
+    if n >= AGY_MAX_CONTINUATIONS {
+        let _removed = std::fs::remove_file(&counter);
+        return translate_event(Agent::Agy, Event::Stop, 0, "", "");
+    }
+    let recorded = counter
+        .parent()
+        .map(std::fs::create_dir_all)
+        .unwrap_or(Ok(()))
+        .and_then(|()| std::fs::write(&counter, (n + 1).to_string()));
+    if recorded.is_err() {
+        // Without a counter there is no guard: judge this stop alone rather than loop.
+        return translate_event(Agent::Agy, Event::Stop, 0, "", "");
+    }
+    translate_event(Agent::Agy, Event::Stop, code, report, detail)
 }
 
 /// What an agent-facing check measures the change against.
@@ -264,7 +425,76 @@ pub fn config_for(agent: Agent) -> (&'static str, String) {
             ".aider.conf.yml",
             format!("lint-cmd:\n  - \"{cmd}\"\nauto-lint: true\n"),
         ),
+        Agent::Copilot => (
+            ".github/hooks/discipline.json",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "version": 1,
+                "hooks": {
+                    "postToolUse": [{
+                        "type": "command",
+                        "matcher": "create|edit|str_replace_editor",
+                        "bash": cmd,
+                        "timeoutSec": 120
+                    }],
+                    "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": 120 }]
+                }
+            }))
+            .unwrap_or_default()
+                + "\n",
+        ),
+        Agent::Agy => (
+            ".agents/hooks.json",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "discipline": {
+                    "Stop": [{
+                        "matcher": "",
+                        "hooks": [{ "type": "command", "command": cmd, "timeout": 120 }]
+                    }]
+                }
+            }))
+            .unwrap_or_default()
+                + "\n",
+        ),
+        Agent::Qwen => (
+            ".qwen/settings.json",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "hooks": {
+                    "PostToolUse": [{
+                        "matcher": "^(write_file|edit)$",
+                        "hooks": [{ "type": "command", "command": cmd, "timeout": 120 }]
+                    }],
+                    "Stop": [{
+                        "hooks": [{ "type": "command", "command": cmd, "timeout": 120 }]
+                    }]
+                }
+            }))
+            .unwrap_or_default()
+                + "\n",
+        ),
+        Agent::Opencode => (".opencode/plugins/discipline.js", opencode_plugin(&cmd)),
     }
+}
+
+/// The OpenCode plugin: after an edit tool, run the hook and append a failure to the
+/// tool's output, which is the text the model reads.
+fn opencode_plugin(cmd: &str) -> String {
+    format!(
+        "// Written by `discipline hook install --agent opencode`.
+// After an edit tool, runs the discipline check and, when it fails, appends the report
+// to the tool's output so the model reads it and repairs the change.
+const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
+
+export const Discipline = async ({{ $, directory }}) => ({{
+  \"tool.execute.after\": async (input, output) => {{
+    if (!EDIT_TOOLS.includes(input.tool)) return
+    const r = await $`{cmd}`.cwd(directory).nothrow().quiet()
+    if (r.exitCode !== 0) {{
+      output.output += \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
+    }}
+  }},
+}})
+"
+    )
 }
 
 /// What `install` did.
@@ -355,7 +585,8 @@ mod tests {
             parse_payload(r#"{"cwd":"/r","stop_hook_active":true,"x":1}"#),
             Payload {
                 cwd: Some(PathBuf::from("/r")),
-                stop_hook_active: true
+                stop_hook_active: true,
+                ..Default::default()
             }
         );
         assert_eq!(parse_payload(""), Payload::default());
