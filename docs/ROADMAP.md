@@ -370,6 +370,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | `instruction-smuggling` | New `instruction_files` key: globs of a repository's own agent-instruction files (a runtime prompt an MCP server loads), reported like `AGENTS.md` when edited or deleted. Removing an entry is a `config-integrity` weakening. | additive | None; empty unless configured. |
 | unreleased | `dependency-delta` | A `go.mod` requirement marked `// indirect` is no longer `New Direct Dependency Added`; bans, wildcards and source changes still apply to it. | looser | None. |
 | unreleased | `ignored-tests` | A Go `t.Skip` / `t.Skipf` / `t.SkipNow` inside an `if` (`if testing.Short() { ... }`) is a conditional skip, a note naming the condition, instead of `Test Arrives Ignored`; such a test now counts toward `test-floor`. `if true` stays unconditional. | looser | None. |
 | unreleased | `agent-scratch` | `.cursor/mcp.json` (Cursor's project MCP server list) joins the default `exempt_paths`. `instruction-smuggling` still reports a change to it. | looser | None. |

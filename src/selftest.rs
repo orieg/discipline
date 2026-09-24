@@ -759,6 +759,21 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "instruction-smuggling: `instruction_files` parses, defaults empty, and dropping an entry is a weakening",
+        || {
+            use crate::guards::integrity::{direction_of, Direction};
+            let declared: crate::config::DisciplineConfig = toml::from_str(
+                "[gates.instruction-smuggling]\ninstruction_files = [\"CONTEXT.md\"]\n",
+            )?;
+            Ok(declared.gates.instruction_smuggling.instruction_files == ["CONTEXT.md"]
+                && crate::config::Gates::default()
+                    .instruction_smuggling
+                    .instruction_files
+                    .is_empty()
+                && direction_of("instruction_files") == Some(Direction::Shrunk))
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;

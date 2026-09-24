@@ -207,6 +207,8 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
     let registry = default_registry();
     let vocab = super::agent_diff::assert_vocabulary(ctx.config);
     let lift = |subject: &str| ctx.find_override(GATE, tokens::ALLOW_SMUGGLING, subject);
+    let own_files = PathFilter::new(&settings.instruction_files)?;
+    let instructs = |p: &str| is_instruction_file(p) || own_files.matches(p);
     // A path `agent-scratch` reports as tracked scratch state (`.claude/*.lock`) is not
     // instructions: deleting it is that gate's remediation. Its hook files are exempt
     // there, so their deletion is still reported here.
@@ -223,10 +225,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         // A deleted instruction file changes what the next agent is told, and a deleted
         // hook file removes the check on the agent: both are reported like an edit.
         if file.kind == ChangeKind::Deleted {
-            if is_instruction_file(&file.path)
-                && !is_scratch(&file.path)
-                && !ctx.git.is_whole_tree()
-            {
+            if instructs(&file.path) && !is_scratch(&file.path) && !ctx.git.is_whole_tree() {
                 out.examined += 1;
                 if let Some(ov) =
                     lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
@@ -254,7 +253,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         out.examined += 1;
 
         // 2. Agent-instruction files. An edit is a change; a whole-tree run has none.
-        if is_instruction_file(&file.path) && !ctx.git.is_whole_tree() {
+        if instructs(&file.path) && !ctx.git.is_whole_tree() {
             if let Some(ov) =
                 lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
             {

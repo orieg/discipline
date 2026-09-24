@@ -69,6 +69,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("paths", Direction::Shrunk),
     ("include", Direction::Shrunk),
     ("extra_patterns", Direction::Shrunk),
+    ("instruction_files", Direction::Shrunk),
     ("hostname_denylist", Direction::Shrunk),
     ("superseded_json_paths", Direction::Shrunk),
     ("citation_source_paths", Direction::Shrunk),

@@ -23,7 +23,7 @@ pub fn generate_schema() -> Value {
             "toolchain-config" => "#/$defs/BasicGate",
             "stub-bodies" => "#/$defs/BasicGate",
             "error-swallowing" => "#/$defs/BasicGate",
-            "instruction-smuggling" => "#/$defs/BasicGate",
+            "instruction-smuggling" => "#/$defs/InstructionSmugglingGate",
             "build-hooks" => "#/$defs/BasicGate",
             "bench-regression" => "#/$defs/BenchRegressionGate",
             "unsafe-safety-comment" => "#/$defs/UnsafeSafetyCommentGate",
@@ -266,6 +266,16 @@ pub fn generate_schema() -> Value {
                     "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" },
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" },
                     "agent_config_refs": { "type": "boolean", "description": "When true, flags references to personal agent configuration directories and playbook docs" }
+                }
+            },
+            "InstructionSmugglingGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "instruction_files": { "$ref": "#/$defs/StringListOrReset", "description": "Globs of the repository's own agent-instruction files (a prompt an MCP server loads, a runtime context file), reported like AGENTS.md (default: [])" }
                 }
             },
             "ScratchGate": {

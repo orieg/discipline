@@ -536,6 +536,26 @@
       },
       "type": "object"
     },
+    "InstructionSmugglingGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "instruction_files": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Globs of the repository's own agent-instruction files (a prompt an MCP server loads, a runtime context file), reported like AGENTS.md (default: [])"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "IssueLinkGate": {
       "additionalProperties": false,
       "properties": {
@@ -1368,7 +1388,7 @@
         "instruction-smuggling": {
           "allOf": [
             {
-              "$ref": "#/$defs/BasicGate"
+              "$ref": "#/$defs/InstructionSmugglingGate"
             }
           ],
           "description": "no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose"

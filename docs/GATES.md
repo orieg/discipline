@@ -339,11 +339,12 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - An injection phrased outside the list: the phrase tier is a tripwire.
   - Text in a language whose pack supplies no prose spans (PHPT): comments there are not scanned; instruction files and invisible characters are still checked.
+  - A file that instructs agents only in this repository (an MCP server's `CONTEXT.md`, a prompt directory) until it is declared in `instruction_files`.
   - A pre-existing line; only added lines are read.
   - Directional marks that a right-to-left localisation table needs: exempt the path.
 - **Lifting directive:** `allow-agent-instructions: <path-or-path:line> <reason>`.
 - **Default:** on, `error`; the phrase and blob findings are reported at `warning`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `instruction_files` (globs of the repository's own agent-instruction files, such as a runtime prompt an MCP server loads: `instruction_files = ["CONTEXT.md", "prompts/**"]`; each is reported like `AGENTS.md`, and removing an entry is a `config-integrity` weakening).
 
 #### `stub-bodies`
 - **Rule:** An added function is not a stub, and an existing body is not replaced by one. Each language pack supplying function facts (`Fact::Functions`) reports every function with a body and what the body amounts to: a **stub** (the whole body is a not-implemented marker, or the marker preceded only by statements that cannot affect the result: a logging or printing line, an assignment whose right-hand side calls nothing), **empty**, **trivial** (one bare constant return) or **substantive** (`fn f() { init(); todo!() }` is substantive: the call before the marker may be the work). Functions pair by name and order between the base and head side.

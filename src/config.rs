@@ -471,7 +471,7 @@ pub struct Gates {
     pub toolchain_config: BasicGate,
     pub stub_bodies: BasicGate,
     pub error_swallowing: BasicGate,
-    pub instruction_smuggling: BasicGate,
+    pub instruction_smuggling: InstructionSmugglingGate,
     pub build_hooks: BasicGate,
     pub golden_output: GoldenGate,
     pub bench_regression: BenchRegressionGate,
@@ -497,6 +497,30 @@ pub struct Gates {
     pub sanitizers: SanitizersGate,
 }
 
+/// `instruction-smuggling`: the shared keys plus the repository's own agent-instruction
+/// files, beyond the built-in list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InstructionSmugglingGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Globs of files that instruct agents in this repository (a prompt an MCP server
+    /// loads, a runtime context file), reported like `AGENTS.md`.
+    pub instruction_files: Vec<String>,
+}
+
+impl Default for InstructionSmugglingGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            instruction_files: Vec::new(),
+        }
+    }
+}
+
 /// Settings every gate shares.
 pub trait GateSettings {
     fn enabled(&self) -> bool;
@@ -515,6 +539,7 @@ macro_rules! impl_gate_settings {
 }
 impl_gate_settings!(
     BasicGate,
+    InstructionSmugglingGate,
     AgentsMdGate,
     IgnoredTestsGate,
     UnsafeSafetyCommentGate,

@@ -186,6 +186,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.ignored-tests.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.instruction-smuggling.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.instruction-smuggling.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.instruction-smuggling.instruction_files` | list | `[]` | Globs of the repository's own agent-instruction files (a prompt an MCP server loads, a runtime context file), reported like AGENTS.md (default: []) |
 | `gates.instruction-smuggling.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.issue-link.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.issue-link.exempt_paths` | list | `[]` | File path globs exempted from this gate |

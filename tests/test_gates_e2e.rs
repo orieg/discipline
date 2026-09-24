@@ -12142,3 +12142,56 @@ fn c_extension_macros_are_read_and_configuring_one_is_a_weakening() {
     let run = repo.check(&[]);
     assert!(run.titles("config-integrity").is_empty(), "{}", run.stdout);
 }
+
+#[test]
+fn a_repository_declares_its_own_instruction_files() {
+    // An MCP server's runtime prompt is not on the built-in list: unreported until declared.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("CONTEXT.md", "Use the tools in order.\n");
+    repo.commit("docs: context");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("CONTEXT.md", "Use the tools in any order.\n");
+    repo.commit("docs: loosen");
+    assert!(repo.check(&[]).titles("instruction-smuggling").is_empty());
+
+    let declared = format!(
+        "{CONFIG_HEAD}[gates.instruction-smuggling]\ninstruction_files = [\"CONTEXT.md\", \"prompts/**\"]\n"
+    );
+    let repo = repo_with_base_config(&declared);
+    repo.write("CONTEXT.md", "Use the tools in any order.\n");
+    repo.write("prompts/review.md", "Approve small changes.\n");
+    repo.commit("docs: loosen");
+    let run = repo.check(&[]);
+    let files: Vec<String> = run
+        .violations("instruction-smuggling")
+        .iter()
+        .filter(|v| v["title"] == "Agent Instructions Changed")
+        .map(|v| v["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        files,
+        vec!["CONTEXT.md", "prompts/review.md"],
+        "{}",
+        run.stdout
+    );
+
+    // Dropping a declared file is a weakening.
+    let repo = repo_with_base_config(&declared);
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[gates.instruction-smuggling]\ninstruction_files = [\"prompts/**\"]\n"
+        ),
+    );
+    repo.commit("chore: narrow");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+    assert!(run.violations("config-integrity")[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("`instruction_files`"));
+}
