@@ -195,11 +195,7 @@ pub struct Weakening {
 /// The base-side configuration source. A `--config` pointing at a file the base does not
 /// have still compares against the base `discipline.toml`.
 fn base_config_source(ctx: &Context) -> Result<Option<String>> {
-    Ok(match ctx.git.base_content(ctx.config_path)? {
-        Some(s) => Some(s),
-        None if ctx.config_path != "discipline.toml" => ctx.git.base_content("discipline.toml")?,
-        None => None,
-    })
+    ctx.base_config_text()
 }
 
 /// Whether the base side runs this gate. The change under review cannot switch off the
@@ -249,8 +245,14 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
     // cannot demote the report of its own weakenings.
     let mut severity = settings.severity();
 
-    let base_src = base_config_source(ctx)?;
-    if let Some(base_src) = base_src {
+    // A configuration outside the repository is the operator's, not the change's: the
+    // change cannot have weakened it, so there is nothing of its own to compare.
+    if !crate::gitctx::config_in_tree(ctx.config_path) {
+        out.notes.push(format!(
+            "the configuration in force (`{}`) is outside the repository, so this change cannot edit it; no weakening compared",
+            ctx.config_path
+        ));
+    } else if let Some(base_src) = base_config_source(ctx)? {
         match DisciplineConfig::from_toml_str(&base_src) {
             Ok(base) => {
                 let head = ctx.head_config.unwrap_or(ctx.config);

@@ -12258,3 +12258,33 @@ fn a_loosened_assertion_bound_is_reported_and_a_tightened_one_is_not() {
     repo.commit("test: tighten");
     assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
 }
+
+#[test]
+fn a_configuration_outside_the_repository_is_read_and_not_compared() {
+    // A candidate configuration kept outside the repository (an adoption trial, a replay
+    // of someone else's project): git rejects its absolute path, which made
+    // config-integrity exit 2 before any gate ran.
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write("docs/notes.md", "# Notes\n");
+    repo.commit("docs: notes");
+    let outside = tempfile::tempdir().unwrap();
+    let cfg = outside.path().join("candidate.toml");
+    std::fs::write(
+        &cfg,
+        format!("{CONFIG_HEAD}[gates.pii]\nagent_config_refs = false\n"),
+    )
+    .unwrap();
+    let cfg = cfg.to_str().unwrap();
+    for extra in [&[][..], &["--policy-from", "base"][..]] {
+        let mut args = vec!["check", "--format", "json", "-c", cfg];
+        args.extend_from_slice(extra);
+        let run = repo.run(&args, &[]);
+        assert_eq!(run.code, 0, "{extra:?}: {}{}", run.stdout, run.stderr);
+        let notes = run.outcome("config-integrity")["notes"].to_string();
+        assert!(
+            notes.contains("outside the repository"),
+            "{extra:?}: {notes}"
+        );
+        assert!(run.titles("config-integrity").is_empty());
+    }
+}

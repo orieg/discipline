@@ -256,6 +256,24 @@ pub struct Context<'a> {
 pub const REPLAY_CASE_ENV: &str = "DISCIPLINE_REPLAY_CASE";
 
 impl Context<'_> {
+    /// The base side's configuration text: the file `--config` names when the base tree
+    /// has it, else the base `discipline.toml`. A `--config` outside the repository is in
+    /// no tree, so only the base `discipline.toml` is read.
+    pub fn base_config_text(&self) -> Result<Option<String>> {
+        let own = if crate::gitctx::config_in_tree(self.config_path) {
+            self.git.base_content(self.config_path)?
+        } else {
+            None
+        };
+        Ok(match own {
+            Some(s) => Some(s),
+            None if self.config_path != "discipline.toml" => {
+                self.git.base_content("discipline.toml")?
+            }
+            None => None,
+        })
+    }
+
     /// Under `discipline replay`, a file the configuration names that neither side of the
     /// replayed change has predates the configuration, so the part of a gate that reads it
     /// does not apply to that change. Outside replay (or when either side has the file) a

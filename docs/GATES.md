@@ -654,7 +654,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 ### Pillar 3: Integrity (`integrity`)
 
 #### `config-integrity`
-- **Rule:** A change cannot loosen its own `discipline.toml` configuration without an explicit override directive.
+- **Rule:** A change cannot loosen its own `discipline.toml` configuration without an explicit override directive. A `--config` outside the repository is the operator's file, not the change's: it is read, and `config-integrity` notes that it compares nothing for it.
 - **Adopting a setting is a weakening.** Setting `[tests] functions` or `paths` for the first time, adding a name to `assert_helper_fns`, or adding a macro to `[languages.c] macros` / `function_macros` (subject `languages`), widens what the gates accept, so the change that does it is reported even when the setting is new in this release. It carries one `allow-gate-weakening: <subject> <reason>` per subject reported: `tests` for `[tests]` (a table, not a gate id), and the gate id (`assertion-reduction`, `vacuous-tests`) for each gate whose `assert_helper_fns` grew. Adopting `functions = ["self_test"]` and one helper name for both assertion gates needs three lines:
   ```text
   allow-gate-weakening: tests self_test is the script's test entry point

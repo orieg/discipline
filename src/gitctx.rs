@@ -114,6 +114,13 @@ pub fn verify_named_head(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether a configuration path names a file in the repository's tree. `--config` outside
+/// the repository stays absolute: no side of the change holds it, and git rejects the
+/// path, so callers look it up only when this holds.
+pub fn config_in_tree(path: &str) -> bool {
+    !std::path::Path::new(path).is_absolute()
+}
+
 pub fn is_push_event_environment() -> bool {
     is_push_event_environment_with_env(|k| std::env::var(k).ok())
 }

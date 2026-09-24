@@ -167,7 +167,12 @@ fn load_base_policy(
     config_path: &str,
     overrides: &Overrides,
 ) -> Result<DisciplineConfig> {
-    let base_src = match git.base_content(config_path)? {
+    let own = if discipline::gitctx::config_in_tree(config_path) {
+        git.base_content(config_path)?
+    } else {
+        None
+    };
+    let base_src = match own {
         Some(s) => Some(s),
         None if config_path != "discipline.toml" => git.base_content("discipline.toml")?,
         None => None,

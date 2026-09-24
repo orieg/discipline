@@ -27,8 +27,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
 
     // Read base discipline.toml to get base configuration
     let base_cfg = ctx
-        .git
-        .base_content(ctx.config_path)
+        .base_config_text()
         .ok()
         .flatten()
         .and_then(|s| crate::config::DisciplineConfig::from_toml_str(&s).ok());

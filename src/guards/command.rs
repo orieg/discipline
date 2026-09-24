@@ -195,10 +195,7 @@ pub fn run_command_bounded(
 /// Checks whether an untrusted PR diff modified command gate definitions without
 /// runner environment authorization.
 fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
-    let base_src = match ctx.git.base_content(ctx.config_path)? {
-        None if ctx.config_path != "discipline.toml" => ctx.git.base_content("discipline.toml")?,
-        other => other,
-    };
+    let base_src = ctx.base_config_text()?;
 
     let head_cmd = &ctx.config.gates.command;
     let head_has_commands =
@@ -253,12 +250,7 @@ fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
 
 /// Retrieves the base min_count ratchet floor for a named command.
 fn get_base_min_count(ctx: &Context, name: &str) -> Option<u64> {
-    let base_src = match ctx.git.base_content(ctx.config_path).ok()? {
-        None if ctx.config_path != "discipline.toml" => {
-            ctx.git.base_content("discipline.toml").ok()?
-        }
-        other => other,
-    }?;
+    let base_src = ctx.base_config_text().ok()??;
     let base_cfg = DisciplineConfig::from_toml_str(&base_src).ok()?;
     if name == "command" || name == "default" {
         base_cfg.gates.command.min_count
