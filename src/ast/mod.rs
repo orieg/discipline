@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 
+pub mod bounds;
 pub mod budgets;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
 pub mod c_cpp;
@@ -248,6 +249,9 @@ pub struct TestFn {
     /// `raise` / `throw` / `panic!` on a failure branch). `assertion-reduction` reads a
     /// drop that coincides with more of these as checks moved into helpers.
     pub helper_checks: usize,
+    /// Numeric bounds of its assertions (`super::bounds`), paired by skeleton across a
+    /// change so a bound moved the loose way is seen although the count is unchanged.
+    pub bounds: Vec<bounds::Bound>,
 }
 
 impl TestFn {
@@ -431,6 +435,7 @@ impl Default for ParsedFileFacts {
                 sleeps: 0,
                 trivial_asserts: 0,
                 helper_checks: 0,
+                bounds: Vec::new(),
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -460,6 +465,7 @@ impl ParsedFileFacts {
             sleeps: 0,
             trivial_asserts: 0,
             helper_checks: 0,
+            bounds: Vec::new(),
         });
     }
 }

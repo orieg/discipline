@@ -114,6 +114,7 @@ impl LanguagePack for JavaScriptPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
+        super::bounds::javascript(root, src, &mut extractor.facts.tests);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "template_string"]);
         extractor.facts.budgets = super::budgets::extract(root, src, &JS_BUDGETS);

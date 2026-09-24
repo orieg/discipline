@@ -774,6 +774,24 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a Python bound moved from 1.5 to 5.0 is loosened, back to 1.5 is not",
+        || {
+            use crate::ast::bounds::loosened;
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let at = |n: &str| -> anyhow::Result<Vec<crate::ast::bounds::Bound>> {
+                let src = format!("def test_t():\n    assert d < {n}\n");
+                Ok(pack.extract("tests/test_t.py", &src, &v)?.tests[0].bounds.clone())
+            };
+            let (tight, loose) = (at("1.5")?, at("5.0")?);
+            Ok(loosened(&tight, &loose).len() == 1 && loosened(&loose, &tight).is_empty())
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;
