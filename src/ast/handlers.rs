@@ -214,6 +214,13 @@ pub fn extract(
             };
             if let Some(kind) = swallows
                 .filter(|_| !expects_the_error(node, src) && !catches_only_signals(node, src))
+                .map(|k| {
+                    if k == "empty-handler" && skips_unparseable_input(node, src) {
+                        "skipped-input"
+                    } else {
+                        k
+                    }
+                })
             {
                 out.push(SwallowSite {
                     line,
@@ -262,8 +269,9 @@ pub fn extract(
 /// The expect-this-to-raise idiom: the handler is the passing path and the code around it
 /// fails when nothing was raised. Either the `try` body ends in a statement that always
 /// fails (`assert False`, `raise`, `pytest.fail(...)`), the `try` has an `else` that
-/// raises or fails, or the handler is `continue` / `pass` and the statement after the
-/// `try` records a failure.
+/// raises or fails, or the handler is `continue` / `pass` / a bare `return` and the
+/// statement after the `try` records a failure (`try: fn() except E: return` then
+/// `raise AssertionError(...)`).
 fn expects_the_error(handler: Node, src: &str) -> bool {
     let Some(try_stmt) = handler.parent() else {
         return false;
@@ -314,7 +322,7 @@ fn expects_the_error(handler: Node, src: &str) -> bool {
         .lines()
         .skip(1)
         .map(str::trim)
-        .all(|l| l.is_empty() || l == "continue" || l == "pass" || l == "...");
+        .all(|l| l.is_empty() || matches!(l, "continue" | "pass" | "..." | "return"));
     handler_only_skips
         && try_stmt
             .next_named_sibling()
@@ -380,6 +388,59 @@ fn catches_only_signals(handler: Node, src: &str) -> bool {
         .filter(|t| !t.is_empty())
         .collect();
     !names.is_empty() && names.iter().all(|n| SIGNALS.contains(n))
+}
+
+/// Python: `for line in out: try: rows.append(json.loads(line)) except JSONDecodeError:
+/// continue`. The handler is `continue` alone (Python allows `continue` only in a loop,
+/// however deep in `if` blocks) and it catches only parse errors: an input item that does
+/// not parse is skipped. The item is still dropped without a count, so the site stays
+/// reported, as `skipped-input`.
+fn skips_unparseable_input(handler: Node, src: &str) -> bool {
+    const PARSE_ERRORS: &[&str] = &[
+        "ValueError",
+        "JSONDecodeError",
+        "UnicodeDecodeError",
+        "InvalidOperation",
+        "csv.Error",
+    ];
+    let head = first_line(text(handler, src));
+    let Some(rest) = head.strip_prefix("except") else {
+        return false;
+    };
+    let types = rest.split(':').next().unwrap_or("");
+    let types = types.split(" as ").next().unwrap_or("");
+    let parse_only = {
+        let names: Vec<&str> = types
+            .trim()
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .collect();
+        !names.is_empty()
+            && names.iter().all(|n| {
+                PARSE_ERRORS.contains(n)
+                    || PARSE_ERRORS
+                        .iter()
+                        .any(|p| !p.contains('.') && n.ends_with(&format!(".{p}")))
+            })
+    };
+    let only_continue = {
+        let mut cursor = handler.walk();
+        let stmts: Vec<Node> = handler
+            .children(&mut cursor)
+            .filter(|c| c.kind() == "block")
+            .flat_map(|b| {
+                let mut c = b.walk();
+                b.named_children(&mut c)
+                    .filter(|s| s.kind() != "comment")
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        stmts.len() == 1 && stmts[0].kind() == "continue_statement"
+    };
+    parse_only && only_continue
 }
 
 pub fn no_discard(_: &str) -> bool {
@@ -955,6 +1016,38 @@ mod pack_tests {
         );
         // An ordinary assertion at the end of the body can pass: that handler swallows.
         assert_eq!(got, vec![(15, "empty-handler")]);
+    }
+
+    #[test]
+    fn python_expect_error_helper_returning_on_the_error_is_not_a_site() {
+        let got = sites(
+            "scripts/drive.py",
+            "def self_check():\n    def expect_error(fn, what):\n        try:\n            fn()\n        except InstrumentError:\n            return\n        raise AssertionError(f\"expected InstrumentError: {what}\")\n\n    def parse(v):\n        try:\n            return int(v)\n        except ValueError:\n            return\n\n",
+        );
+        // A bare `return` followed by a failure after the `try` is the passing path; the same
+        // `return` with nothing failing after it swallows.
+        assert_eq!(got, vec![(12, "empty-handler")]);
+    }
+
+    #[test]
+    fn python_parse_filters_in_a_loop_are_skipped_input() {
+        let got = sites(
+            "scripts/parse.py",
+            "import json\n\ndef rows(lines):\n    out = []\n    for line in lines:\n        try:\n            out.append(json.loads(line))\n        except json.JSONDecodeError:\n            continue  # banner lines\n    for tok in lines:\n        try:\n            out.append(int(tok))\n        except (ValueError, OSError):\n            continue\n    try:\n        out.append(json.loads(lines[0]))\n    except ValueError:\n        pass\n    for line in lines:\n        try:\n            out.append(float(line))\n        except ValueError:\n            pass\n    for line in lines:\n        if line:\n            try:\n                out.append(int(line))\n            except ValueError:\n                continue\n    return out\n",
+        );
+        // Parse filters: the first, and the fifth, whose `try` sits in an `if` in the loop.
+        // The second also drops an OSError, the third does not `continue` (and is outside a
+        // loop), the fourth does not `continue`.
+        assert_eq!(
+            got,
+            vec![
+                (8, "skipped-input"),
+                (13, "empty-handler"),
+                (17, "empty-handler"),
+                (22, "empty-handler"),
+                (28, "skipped-input")
+            ]
+        );
     }
 
     #[test]

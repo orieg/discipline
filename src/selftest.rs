@@ -830,6 +830,25 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: a Python loop skipping an unparseable line is skipped input, a swallowed OSError is not",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("scripts/p.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let src = "def rows(lines):\n    for line in lines:\n        try:\n            yield json.loads(line)\n        except json.JSONDecodeError:\n            continue\n    try:\n        open('x')\n    except OSError:\n        pass\n";
+            let kinds: Vec<&str> = pack
+                .extract("scripts/p.py", src, &v)?
+                .swallowed
+                .iter()
+                .map(|s| s.kind)
+                .collect();
+            Ok(kinds == vec!["skipped-input", "empty-handler"])
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;

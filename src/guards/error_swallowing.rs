@@ -109,6 +109,10 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                     "Empty Error Handler Added",
                     "catches an error, logs it, and does nothing else with it: the failure is recorded and dropped",
                 ),
+                "skipped-input" => (
+                    "Unparseable Input Skipped",
+                    "skips an input item that does not parse and goes on with the next; the item is dropped without a count, so this is reported at `warning` at most",
+                ),
                 "silenced-error" => (
                     "Error Silenced",
                     "replaces every error it raises with nothing",
@@ -120,7 +124,7 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             };
             // The syntax tree carries no types: a callee off a pack's known-fallible list
             // may return a plain value, so it never blocks on its own.
-            let severity = if site.kind == "discarded-value"
+            let severity = if matches!(site.kind, "discarded-value" | "skipped-input")
                 && settings.severity() == crate::config::Severity::Error
             {
                 crate::config::Severity::Warning

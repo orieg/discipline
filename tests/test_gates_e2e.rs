@@ -12342,3 +12342,37 @@ fn a_multi_language_replay_refactor_and_idioms_are_not_findings() {
     );
     assert!(!run.stdout.contains("parse error region"), "{}", run.stdout);
 }
+
+#[test]
+fn a_loop_skipping_unparseable_lines_is_a_warning_and_a_swallowed_error_still_blocks() {
+    let repo = Repo::new();
+    repo.write(
+        "scripts/bench_parse.py",
+        "import json\n\n\ndef records(lines):\n    out = []\n    for line in lines:\n        try:\n            out.append(json.loads(line))\n        except json.JSONDecodeError:\n            continue  # progress banners are not JSON\n    return out\n",
+    );
+    repo.commit("feat: parse benchmark output");
+    let run = repo.check(&[]);
+    let found = run.violations("error-swallowing");
+    assert_eq!(
+        run.titles("error-swallowing"),
+        vec!["Unparseable Input Skipped"]
+    );
+    assert_eq!(found[0]["severity"], "warning");
+    assert_eq!(found[0]["line"], 9);
+    assert!(
+        run.titles("error-swallowing").len() == 1 && run.code == 0,
+        "{}",
+        run.stdout
+    );
+
+    repo.write(
+        "scripts/load.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n",
+    );
+    repo.commit("feat: loader");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert!(run
+        .titles("error-swallowing")
+        .contains(&"Empty Error Handler Added".to_string()));
+}
