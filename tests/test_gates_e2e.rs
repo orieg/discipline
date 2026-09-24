@@ -12007,3 +12007,59 @@ fn unsafe_safety_comment_counts_only_what_it_reads_and_names_unsafe_capable_lang
         "a language without unsafe code is not named: {notes}"
     );
 }
+
+#[test]
+fn c_extension_macros_are_read_and_configuring_one_is_a_weakening() {
+    // A PHP extension method: without the macro lists the head, the parameter block and
+    // the table are error regions and the discard inside the method is lost.
+    let repo = Repo::new();
+    repo.write(
+        "ext/judy.c",
+        "ZEND_BEGIN_ARG_INFO_EX(arginfo_clear, 0, 0, 0)\nZEND_END_ARG_INFO()\n\nPHP_METHOD(Judy, clear)\n{\n\tZEND_PARSE_PARAMETERS_NONE();\n\t(void)zend_hash_clean(h);\n}\n\nstatic const zend_function_entry judy_methods[] = {\n\tPHP_ME(Judy, clear, arginfo_clear, ZEND_ACC_PUBLIC)\n\tPHP_FE_END\n};\n",
+    );
+    repo.commit("feat: clear");
+    let run = repo.check(&[]);
+    let swallowed = run.violations("error-swallowing");
+    assert_eq!(swallowed.len(), 1, "{swallowed:?}");
+    assert_eq!(swallowed[0]["file"], "ext/judy.c");
+    assert_eq!(swallowed[0]["line"], 7);
+    let notes = run.outcome("assertion-reduction")["notes"].to_string();
+    assert!(!notes.contains("parse error"), "{notes}");
+
+    // The repository's own macros, declared in the base configuration, are read the same way.
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[languages.c]\nmacros = [\"MYEXT_CHECK\"]\nfunction_macros = [\"MYEXT_METHOD\"]\n"
+    ));
+    repo.write(
+        "ext/own.c",
+        "MYEXT_METHOD(Box, reset)\n{\n\tMYEXT_CHECK(self)\n\t(void)zend_hash_clean(h);\n}\n",
+    );
+    repo.commit("feat: reset");
+    let run = repo.check(&[]);
+    let swallowed = run.violations("error-swallowing");
+    assert_eq!(swallowed.len(), 1, "{swallowed:?}");
+    assert_eq!(swallowed[0]["line"], 4);
+    let notes = run.outcome("assertion-reduction")["notes"].to_string();
+    assert!(!notes.contains("parse error"), "{notes}");
+
+    // Adding a macro to the list hides its text from every gate: a weakening.
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[languages.c]\nmacros = [\"MYEXT_CHECK\"]\n"),
+    );
+    repo.commit("chore: declare a macro");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+    assert!(run.violations("config-integrity")[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("[languages] `c.macros` gained 1"));
+    repo.write("ext/other.c", "int other(void) { return 0; }\n");
+    repo.commit("chore: other\n\nallow-gate-weakening: languages MYEXT_CHECK is a statement macro without a semicolon");
+    let run = repo.check(&[]);
+    assert!(run.titles("config-integrity").is_empty(), "{}", run.stdout);
+}

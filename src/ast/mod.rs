@@ -9,6 +9,7 @@ use anyhow::Result;
 pub mod budgets;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
 pub mod c_cpp;
+pub mod c_macros;
 pub mod calls;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
@@ -505,6 +506,12 @@ pub struct AssertVocabulary {
     pub test_functions: Vec<String>,
     /// Path globs whose every line is test scope (`[tests].paths`).
     pub test_paths: Vec<String>,
+    /// C / C++ macros blanked before parsing, beyond the built-in list
+    /// (`[languages.c].macros`).
+    pub c_macros: Vec<String>,
+    /// C / C++ macros that expand to a function head, beyond the built-in list
+    /// (`[languages.c].function_macros`).
+    pub c_function_macros: Vec<String>,
 }
 
 /// Top-level helper to analyze Rust code directly.

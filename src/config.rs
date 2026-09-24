@@ -389,7 +389,28 @@ pub struct DisciplineConfig {
     #[serde(default)]
     pub tests: TestsConfig,
     #[serde(default)]
+    pub languages: LanguagesConfig,
+    #[serde(default)]
     pub gates: Gates,
+}
+
+/// Per-language parsing settings, read by the language packs before any gate runs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LanguagesConfig {
+    pub c: CLanguageConfig,
+}
+
+/// Macros the C and C++ packs rewrite before parsing (`src/ast/c_macros.rs`), appended to
+/// the built-in Zend, CPython and Ruby C API lists. An entry ending in `*` is a prefix.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CLanguageConfig {
+    /// Blanked with their arguments: statement or declaration macros written without a
+    /// semicolon, list entries written without a comma, attribute-like prefixes.
+    pub macros: Vec<String>,
+    /// Expand to a function head (`MYEXT_METHOD(Class, name) { ... }`).
+    pub function_macros: Vec<String>,
 }
 
 /// What the repository counts as test code beyond what each language's conventions say.
@@ -1714,6 +1735,7 @@ impl DisciplineConfig {
             },
             directives: DirectivesConfig::default(),
             tests: TestsConfig::default(),
+            languages: LanguagesConfig::default(),
             gates: Gates::default(),
         }
     }

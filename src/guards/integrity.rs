@@ -667,6 +667,28 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
         }
     }
 
+    // [languages.c]: a macro blanked before parsing is code no gate reads.
+    for (key, b, h) in [
+        (
+            "c.macros",
+            &base.languages.c.macros,
+            &head.languages.c.macros,
+        ),
+        (
+            "c.function_macros",
+            &base.languages.c.function_macros,
+            &head.languages.c.function_macros,
+        ),
+    ] {
+        let gained = h.iter().filter(|x| !b.contains(x)).count();
+        if gained > 0 {
+            found.push(Weakening {
+                gate: "languages".to_string(),
+                what: format!("`{key}` gained {gained} entr(y/ies)"),
+            });
+        }
+    }
+
     // [meta]: advisory mode exits 0 whatever the gates found.
     if base.meta.mode == RunMode::Enforcing && head.meta.mode == RunMode::Advisory {
         found.push(Weakening {

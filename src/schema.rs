@@ -103,6 +103,22 @@ pub fn generate_schema() -> Value {
                     "paths": { "$ref": "#/$defs/StringListOrReset", "description": "Path globs whose every line is test scope (default: [])" }
                 }
             },
+            "languages": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Per-language parsing settings, read by the language packs before any gate runs",
+                "properties": {
+                    "c": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "description": "C and C++ macros rewritten before parsing, appended to the built-in Zend, CPython and Ruby C API lists; an entry ending in * is a prefix. Adding an entry is a config-integrity weakening",
+                        "properties": {
+                            "macros": { "$ref": "#/$defs/StringListOrReset", "description": "Macros blanked with their arguments: statement or declaration macros written without a semicolon, list entries without a comma, attribute-like prefixes (default: [])" },
+                            "function_macros": { "$ref": "#/$defs/StringListOrReset", "description": "Macros that expand to a function head, e.g. MYEXT_METHOD(Class, name) { ... } (default: [])" }
+                        }
+                    }
+                }
+            },
             "directives": {
                 "type": "object",
                 "additionalProperties": false,

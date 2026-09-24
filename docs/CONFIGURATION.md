@@ -319,6 +319,8 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `gates.version-lockstep.groups[].sources[].path` | string | *(required)* | Source file path |
 | `gates.version-lockstep.groups[].sources[].regex` | string | *(required)* | Regex pattern capturing the version string in group 1 |
 | `gates.version-lockstep.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `languages.c.function_macros` | list | `[]` | Macros that expand to a function head, e.g. MYEXT_METHOD(Class, name) { ... } (default: []) |
+| `languages.c.macros` | list | `[]` | Macros blanked with their arguments: statement or declaration macros written without a semicolon, list entries without a comma, attribute-like prefixes (default: []) |
 | `meta.description` | string | *(per entry)* | Optional short description of the project |
 | `meta.mode` | string | `"enforcing"` | Operating mode: 'enforcing' exits non-zero on violations; 'advisory' runs all checks and emits reports but exits 0. |
 | `meta.name` | string | *(required)* | Repository or project name |
@@ -673,6 +675,23 @@ paths = ["scripts/fixtures/**"] # globs whose every line is test scope
 
 One declaration is honoured by every gate that separates test code from production code: the assertion gates collect a declared function as a test; `error-swallowing`, `stub-bodies` and `suppression-delta` treat its body (or the whole declared file) as test scope; `pii` does not report fixture strings inside it. Widening either list is reported by `config-integrity` as a weakening, including the first change that sets it: that change carries `allow-gate-weakening: tests <reason>` (the subject is `tests`, not a gate id). Growing `assert_helper_fns` in the same change needs one more line per gate, named by its id (`allow-gate-weakening: assertion-reduction <reason>`, `allow-gate-weakening: vacuous-tests <reason>`); see `config-integrity` in [GATES.md](GATES.md).
 
+## C and C++ extension macros (`[languages.c]`)
+
+tree-sitter parses C without expanding macros, so the idioms of a PHP, Python or Ruby C extension become parse error regions (`file `php_ext.c` had N skipped C/C++ parse error region(s)`), and the stubs, discards and assertions inside them go unread. Before parsing, the C and C++ packs rewrite the listed macros byte for byte: the file keeps its length and its newlines, so every finding's line is the original's.
+
+- **Blanked** (`macros`): the name, and its balanced `(...)` when called, become spaces. For a statement or declaration macro written without a semicolon (`ZEND_PARSE_PARAMETERS_START(1, 1)`, `ZEND_DECLARE_MODULE_GLOBALS(ext)`), a table entry written without a comma (`PHP_ME(...)`, `PHP_FE_END`), or an attribute-like prefix (`PHPAPI`, `zend_always_inline`).
+- **Function heads** (`function_macros`): `PHP_METHOD(Judy, size)` becomes `int Judy_size()` padded with spaces, so the body after it is a function the gates read, named `Judy_size` in findings (`PHP_MINIT_FUNCTION(ext)` is `minit_ext`).
+
+Built in: the Zend argument-info, fast-parameter-parsing, module-globals, function-table, ini, hash-iteration and module-dependency macros, `PHP_FUNCTION` / `PHP_METHOD` / the module hooks (and their `ZEND_` forms); CPython `PyObject_HEAD`, `PyObject_HEAD_INIT` and the thread-state macros; the Ruby C API export markers (full list: `src/ast/c_macros.rs`). A repository adds its own:
+
+```toml
+[languages.c]
+macros = ["MYEXT_GET_OBJECT", "MYEXT_API", "JSLN"]   # an entry ending in `*` is a prefix
+function_macros = ["MYEXT_METHOD"]
+```
+
+Comments, string literals and preprocessor lines are never rewritten. A blanked macro is code no gate reads, so adding an entry to either list is a `config-integrity` weakening (`allow-gate-weakening: languages <reason>`).
+
 ## Trust Model
 
 Discipline distinguishes between **configurable** and **bypassable**:
@@ -700,7 +719,7 @@ Measured residue against merge base `HEAD~30` with unconfigured defaults on a re
 - `assertion-reduction`: 1 violation (a newly added PHP test fixture that intentionally contains NUL bytes).
 - `pii`: 1 violation (an example script whose sample data is a private LAN address).
 - `agents-md`: 1 violation (a `CLAUDE.md` that diverged from `AGENTS.md` instead of symlinking it).
-- 5 informational warnings (Zend engine C preprocessor macros that the C grammar cannot fully parse).
+- 5 informational warnings (Zend engine C preprocessor macros that the C grammar cannot fully parse). The built-in Zend macro list now reads those; the extension's own statement macros go in `[languages.c] macros`, see [C and C++ extension macros](#c-and-c-extension-macros-languagesc).
 
 Minimal configuration:
 

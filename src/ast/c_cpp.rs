@@ -37,6 +37,8 @@ impl LanguagePack for CPack {
         parser
             .set_language(&tree_sitter_c::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the C grammar: {e}"))?;
+        let masked = mask_macros(src, vocab);
+        let src = masked.as_deref().unwrap_or(src);
         let tree = parser
             .parse(src, None)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
@@ -97,6 +99,8 @@ impl LanguagePack for CppPack {
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the C++ grammar: {e}"))?;
+        let masked = mask_macros(src, vocab);
+        let src = masked.as_deref().unwrap_or(src);
         let tree = parser
             .parse(src, None)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
@@ -124,6 +128,17 @@ impl LanguagePack for CppPack {
         shared_facts(root, src, path, vocab, &mut extractor.facts);
         Ok(extractor.facts)
     }
+}
+
+/// `src` with the extension macros the grammar cannot read rewritten, byte for byte
+/// (`super::c_macros`); `None` when the file uses none.
+fn mask_macros(src: &str, vocab: &AssertVocabulary) -> Option<String> {
+    use super::c_macros::{lists, mask, BUILTIN_FUNCTION_MACROS, BUILTIN_MACROS};
+    mask(
+        src,
+        &lists(&vocab.c_macros, BUILTIN_MACROS),
+        &lists(&vocab.c_function_macros, BUILTIN_FUNCTION_MACROS),
+    )
 }
 
 /// The facts the shared walkers supply, for both grammars (they share node kinds).
@@ -1385,5 +1400,60 @@ int main() {
         assert_eq!(facts2.tests.len(), 1);
         assert!(!facts2.tests[0].is_vacuous());
         assert_eq!(facts2.tests[0].strong_asserts, 1);
+    }
+
+    fn parse_errors(src: &str, vocab: &AssertVocabulary) -> usize {
+        CPack
+            .extract("ext/judy.c", src, vocab)
+            .unwrap()
+            .skipped_error_nodes_count
+    }
+
+    #[test]
+    fn extension_macros_parse_without_error_regions() {
+        let v = AssertVocabulary::default();
+        for src in [
+            "PHP_METHOD(Judy, size)\n{\n\tRETURN_LONG(1);\n}\n",
+            "ZEND_DECLARE_MODULE_GLOBALS(judy)\n\nstatic int f(void) { return 1; }\n",
+            "ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_x, 0, 0, IS_LONG, 0)\n\tZEND_ARG_TYPE_INFO(0, i, IS_LONG, 0)\nZEND_END_ARG_INFO()\n",
+            "static void f(zval *z) {\n\tZEND_PARSE_PARAMETERS_START(1, 1)\n\t\tZ_PARAM_ZVAL(z)\n\tZEND_PARSE_PARAMETERS_END();\n}\n",
+            "static const zend_function_entry m[] = {\n\tPHP_ME(Judy, size, arginfo_x, ZEND_ACC_PUBLIC)\n\tPHP_FE_END\n};\n",
+            "typedef struct {\n\tPyObject_HEAD\n\tint n;\n} Box;\n",
+        ] {
+            assert_eq!(parse_errors(src, &v), 0, "{src}");
+        }
+        // Negative control: a macro no list names is still an error region, and becomes
+        // readable once configured.
+        let own = "MYEXT_METHOD(Judy, size)\n{\n\tMYEXT_CHECK(1)\n\treturn;\n}\n";
+        assert!(parse_errors(own, &v) > 0);
+        let configured = AssertVocabulary {
+            c_macros: vec!["MYEXT_CHECK".to_string()],
+            c_function_macros: vec!["MYEXT_METHOD".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(parse_errors(own, &configured), 0);
+    }
+
+    #[test]
+    fn findings_inside_a_macro_function_keep_their_lines() {
+        let src = "ZEND_BEGIN_ARG_INFO_EX(arginfo_clear, 0, 0, 0)\nZEND_END_ARG_INFO()\n\nPHP_METHOD(Judy, clear)\n{\n\tZEND_PARSE_PARAMETERS_NONE();\n\t(void)zend_hash_clean(h);\n}\n\nPHP_METHOD(Judy, later)\n{\n}\n";
+        let facts = CPack
+            .extract("ext/judy.c", src, &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(facts.skipped_error_nodes_count, 0);
+        let lines: Vec<usize> = facts.swallowed.iter().map(|s| s.line).collect();
+        assert_eq!(lines, vec![7], "{:?}", facts.swallowed);
+        assert!(facts.swallowed[0]
+            .snippet
+            .starts_with("(void)zend_hash_clean"));
+        let later = facts
+            .functions
+            .iter()
+            .find(|f| f.name == "Judy_later")
+            .unwrap_or_else(|| panic!("{:?}", facts.functions));
+        assert_eq!(
+            (later.line, later.shape.clone()),
+            (10, functions::BodyShape::Empty)
+        );
     }
 }

@@ -726,6 +726,22 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "c pack: a PHP extension's macro head and parameter block parse, the discard inside is read",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("ext/a.c")
+                .ok_or_else(|| anyhow::anyhow!("no c pack"))?;
+            let src = "PHP_METHOD(Judy, clear)\n{\n\tZEND_PARSE_PARAMETERS_START(1, 1)\n\t\tZ_PARAM_ZVAL(z)\n\tZEND_PARSE_PARAMETERS_END();\n\t(void)zend_hash_clean(h);\n}\n";
+            let facts = pack.extract("ext/a.c", src, &v)?;
+            Ok(facts.skipped_error_nodes_count == 0
+                && facts.swallowed.iter().map(|s| s.line).collect::<Vec<_>>() == vec![6]
+                && facts.functions.iter().any(|f| f.name == "Judy_clear" && f.line == 1))
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;

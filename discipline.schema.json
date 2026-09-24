@@ -1536,6 +1536,28 @@
       },
       "type": "object"
     },
+    "languages": {
+      "additionalProperties": false,
+      "description": "Per-language parsing settings, read by the language packs before any gate runs",
+      "properties": {
+        "c": {
+          "additionalProperties": false,
+          "description": "C and C++ macros rewritten before parsing, appended to the built-in Zend, CPython and Ruby C API lists; an entry ending in * is a prefix. Adding an entry is a config-integrity weakening",
+          "properties": {
+            "function_macros": {
+              "$ref": "#/$defs/StringListOrReset",
+              "description": "Macros that expand to a function head, e.g. MYEXT_METHOD(Class, name) { ... } (default: [])"
+            },
+            "macros": {
+              "$ref": "#/$defs/StringListOrReset",
+              "description": "Macros blanked with their arguments: statement or declaration macros written without a semicolon, list entries without a comma, attribute-like prefixes (default: [])"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "meta": {
       "additionalProperties": false,
       "description": "Repository metadata and configuration format version",

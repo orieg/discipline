@@ -58,6 +58,8 @@ pub(crate) fn assert_vocabulary(config: &crate::config::DisciplineConfig) -> Ass
         .concat(),
         test_functions: config.tests.functions.clone(),
         test_paths: config.tests.paths.clone(),
+        c_macros: config.languages.c.macros.clone(),
+        c_function_macros: config.languages.c.function_macros.clone(),
     }
 }
 
