@@ -136,3 +136,67 @@ fn replay_reads_the_waiver_in_the_merged_pull_request_body() {
     assert_eq!(case["directives_from"], "pull request body");
     assert_eq!(case["verdict"], "passed", "{s}");
 }
+
+#[test]
+fn a_blocked_change_whose_pull_request_could_not_be_read_is_not_checked() {
+    let (repo, _) = history();
+    // The fake forge answers every lookup 403, as a rate-limited API does.
+    let api = FakeForge::start();
+    let url = api.url();
+    let s = replay(
+        &repo,
+        &[],
+        &[
+            ("GITHUB_REPOSITORY", "o/r"),
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ],
+    );
+    assert_eq!(
+        verdicts(&s),
+        [
+            (3, "passed".to_string()),
+            (2, "could_not_check".to_string())
+        ],
+        "{s}"
+    );
+    assert!(s["errors_by_gate"].as_object().unwrap().is_empty(), "{s}");
+    let reasons = s["could_not_check_by_reason"].as_object().unwrap();
+    assert_eq!(reasons.len(), 1, "{s}");
+    let (reason, changes) = reasons.iter().next().unwrap();
+    assert!(
+        reason.contains("pull request could not be read"),
+        "{reason}"
+    );
+    assert_eq!(changes, &serde_json::json!(["#2"]));
+}
+
+#[test]
+fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_only() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    let cfg = "[meta]\nversion = 1\nname = \"t\"\n[gates.version-lockstep]\nenabled = true\ngroups = [{ name = \"v\", sources = [\n  { path = \"pyproject.toml\", regex = 'version = \"([^\"]+)\"' },\n  { path = \"server.json\", regex = '\"version\": \"([^\"]+)\"' },\n]}]\n";
+    repo.write("pyproject.toml", "version = \"1.0\"\n");
+    repo.commit("build: project (#2)");
+    repo.write("server.json", "{\"version\": \"1.0\"}\n");
+    repo.commit("build: server manifest (#3)");
+    let candidate = repo.file("candidate.toml");
+    std::fs::write(&candidate, cfg).unwrap();
+    let s = replay(&repo, &["--config", candidate.to_str().unwrap()], &[]);
+    assert_eq!(
+        verdicts(&s),
+        [(3, "passed".to_string()), (2, "passed".to_string())],
+        "{s}"
+    );
+
+    // Outside replay the same missing file is a configuration error.
+    repo.git(&["checkout", "-q", "-B", "old", "HEAD~1"]);
+    repo.write("discipline.toml", cfg);
+    repo.commit("chore: configuration");
+    let live = repo.check(&[]);
+    assert_eq!(live.code, 2, "{}\n{}", live.stdout, live.stderr);
+    assert!(
+        live.stderr.contains("server.json` does not exist"),
+        "{}",
+        live.stderr
+    );
+}

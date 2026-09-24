@@ -251,7 +251,21 @@ pub struct Context<'a> {
     pub bench_head_file: Option<std::path::PathBuf>,
 }
 
+/// Set by `discipline replay` on each case's `check`: the configuration under test is
+/// newer than the replayed trees.
+pub const REPLAY_CASE_ENV: &str = "DISCIPLINE_REPLAY_CASE";
+
 impl Context<'_> {
+    /// Under `discipline replay`, a file the configuration names that neither side of the
+    /// replayed change has predates the configuration, so the part of a gate that reads it
+    /// does not apply to that change. Outside replay (or when either side has the file) a
+    /// missing file stays a configuration error.
+    pub fn predates_config(&self, path: &str) -> Result<bool> {
+        Ok(std::env::var_os(REPLAY_CASE_ENV).is_some()
+            && self.git.base_content(path)?.is_none()
+            && self.git.head_content(path)?.is_none())
+    }
+
     pub fn find_override(
         &self,
         gate: &str,

@@ -51,6 +51,8 @@ pub struct Summary {
     pub errors_by_gate: BTreeMap<String, Vec<String>>,
     /// Gate id → the number of changes with a warning from it.
     pub warnings_by_gate: BTreeMap<String, usize>,
+    /// Why a change could not be checked → the changes (`#N`, else the short sha).
+    pub could_not_check_by_reason: BTreeMap<String, Vec<String>>,
     pub cases_detail: Vec<Case>,
 }
 
@@ -73,9 +75,16 @@ impl Summary {
             match c.verdict {
                 "passed" => s.passed += 1,
                 "blocked" => s.blocked += 1,
-                _ => s.could_not_check += 1,
+                _ => {
+                    s.could_not_check += 1;
+                    s.could_not_check_by_reason
+                        .entry(reason(&c.detail))
+                        .or_default()
+                        .push(c.label());
+                }
             }
-            for g in &c.blocking_gates {
+            // A change that could not be checked keeps its gates in its detail only.
+            for g in c.blocking_gates.iter().filter(|_| c.verdict == "blocked") {
                 s.errors_by_gate
                     .entry(g.clone())
                     .or_default()
@@ -127,7 +136,30 @@ impl Summary {
         for (g, n) in &self.warnings_by_gate {
             out.push_str(&format!("  warning  {g:<24} {n} change(s)\n"));
         }
+        for (r, changes) in &self.could_not_check_by_reason {
+            out.push_str(&format!(
+                "  could not check {} change(s): {r}\n    {}\n",
+                changes.len(),
+                changes.join(" ")
+            ));
+        }
         out
+    }
+}
+
+/// The reason a case could not be checked: the last line of its detail, without the
+/// `discipline check: error: ` prefix, so identical failures group together.
+fn reason(detail: &str) -> String {
+    let last = detail
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
+    let r = last.trim().trim_start_matches("discipline check: error: ");
+    if r.is_empty() {
+        "no reason given".to_string()
+    } else {
+        r.to_string()
     }
 }
 
@@ -328,6 +360,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
                 .remove_untracked(true),
         ))?;
 
+        let mut lookup_error = None;
         let (pr, body, directives_from) = match &forge {
             Ok(f) => match crate::forge::merged_pull_for_commit(&api, f, &c.id().to_string()) {
                 Ok(Some(m)) => (
@@ -340,7 +373,10 @@ pub fn run(opts: &Options) -> Result<Summary> {
                     None,
                     "commit message only: no merged pull request".to_string(),
                 ),
-                Err(e) => (None, None, format!("commit message only: {e}")),
+                Err(e) => {
+                    lookup_error = Some(e.to_string());
+                    (None, None, format!("commit message only: {e}"))
+                }
             },
             Err(e) => (None, None, format!("commit message only: {e}")),
         };
@@ -348,7 +384,8 @@ pub fn run(opts: &Options) -> Result<Summary> {
         std::fs::write(&body_file, body.as_deref().unwrap_or(""))?;
 
         let mut cmd = std::process::Command::new(&exe);
-        cmd.current_dir(tmp.0.join("tree"))
+        cmd.env(crate::guards::REPLAY_CASE_ENV, "1")
+            .current_dir(tmp.0.join("tree"))
             .args(["check", "--format", "json", "--base"])
             .arg(base.to_string())
             .arg("--pr-body-file")
@@ -374,8 +411,21 @@ pub fn run(opts: &Options) -> Result<Summary> {
         }
         let out = cmd.output().context("cannot run discipline check")?;
         let code = out.status.code().unwrap_or(2);
-        let (verdict, blocking, warning) =
+        let (mut verdict, blocking, warning) =
             read_verdict(code, &String::from_utf8_lossy(&out.stdout));
+        let mut detail = if verdict == "could_not_check" {
+            String::from_utf8_lossy(&out.stderr).trim().to_string()
+        } else {
+            String::new()
+        };
+        // A forge that was found but could not answer may hold a merged pull request whose
+        // body lifts these findings: the change's verdict is unknown, not blocked.
+        if let (Some(e), "blocked") = (&lookup_error, verdict) {
+            verdict = "could_not_check";
+            detail = format!(
+                "its merged pull request could not be read, and its body may carry directives: {e} (a forge token in DISCIPLINE_FORGE_TOKEN raises the API rate limit)"
+            );
+        }
         eprintln!(
             "replay {}/{}: {} {}",
             cases.len() + 1,
@@ -391,11 +441,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
             blocking_gates: blocking,
             warning_gates: warning,
             directives_from,
-            detail: if verdict == "could_not_check" {
-                String::from_utf8_lossy(&out.stderr).trim().to_string()
-            } else {
-                String::new()
-            },
+            detail,
         });
     }
     Ok(Summary::from_cases(cases))
@@ -455,6 +501,20 @@ mod tests {
         );
         assert_eq!(s.errors_by_gate["pii"], vec!["#1", "0123456789"]);
         assert_eq!(s.warnings_by_gate["pr-checklist"], 2);
+        assert_eq!(s.could_not_check_by_reason["no reason given"], vec!["#4"]);
+        let lockstep = |pr| Case {
+            detail: "replay noise\ndiscipline check: error: gate version-lockstep could not run\n"
+                .into(),
+            ..case(Some(pr), "could_not_check", &[], &[])
+        };
+        let grouped = Summary::from_cases(vec![lockstep(5), lockstep(6)]);
+        assert_eq!(
+            grouped.could_not_check_by_reason["gate version-lockstep could not run"],
+            vec!["#5", "#6"]
+        );
+        assert!(grouped.render().contains(
+            "could not check 2 change(s): gate version-lockstep could not run\n    #5 #6"
+        ));
         assert!(s
             .render()
             .contains("4 changes: 1 passed, 2 blocked, 1 could not be checked"));

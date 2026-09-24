@@ -207,6 +207,14 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
     let registry = default_registry();
     let vocab = super::agent_diff::assert_vocabulary(ctx.config);
     let lift = |subject: &str| ctx.find_override(GATE, tokens::ALLOW_SMUGGLING, subject);
+    // A path `agent-scratch` reports as tracked scratch state (`.claude/*.lock`) is not
+    // instructions: deleting it is that gate's remediation. Its hook files are exempt
+    // there, so their deletion is still reported here.
+    let scratch = &ctx.config.gates.agent_scratch;
+    let scratch_paths = PathFilter::new(&scratch.paths)?;
+    let scratch_exempt = PathFilter::new(&scratch.exempt_paths)?;
+    let is_scratch =
+        |p: &str| scratch.enabled && scratch_paths.matches(p) && !scratch_exempt.matches(p);
 
     for file in ctx.git.changed_files()? {
         if exempt.matches(&file.path) {
@@ -215,7 +223,10 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         // A deleted instruction file changes what the next agent is told, and a deleted
         // hook file removes the check on the agent: both are reported like an edit.
         if file.kind == ChangeKind::Deleted {
-            if is_instruction_file(&file.path) && !ctx.git.is_whole_tree() {
+            if is_instruction_file(&file.path)
+                && !is_scratch(&file.path)
+                && !ctx.git.is_whole_tree()
+            {
                 out.examined += 1;
                 if let Some(ov) =
                     lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))

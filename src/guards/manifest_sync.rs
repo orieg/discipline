@@ -34,6 +34,13 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
     for rule in &settings.rules {
         let manifest_path = root.join(&rule.manifest);
         if !manifest_path.is_file() {
+            if ctx.predates_config(&rule.manifest)? {
+                out.notes.push(format!(
+                    "manifest `{}` skipped: it is not in this change's tree (the configuration is newer)",
+                    rule.manifest
+                ));
+                continue;
+            }
             bail!("manifest `{}` does not exist", rule.manifest);
         }
 

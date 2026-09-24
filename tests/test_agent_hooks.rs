@@ -429,3 +429,30 @@ fn a_change_that_removes_its_own_agent_hook_is_reported() {
         run.stdout
     );
 }
+
+#[test]
+fn deleting_tracked_agent_scratch_is_not_an_instruction_change_but_deleting_the_hook_is() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    let install = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(install.code, 0, "{}", install.stderr);
+    repo.write(".claude/scheduled_tasks.lock", "pid 1\n");
+    repo.commit("chore: agent hook and a stray lock");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.remove(".claude/scheduled_tasks.lock");
+    repo.commit("chore: untrack the lock");
+    let tidy = repo.check(&[]);
+    assert!(
+        tidy.titles("instruction-smuggling").is_empty(),
+        "removing agent scratch state was reported as an instruction change: {}",
+        tidy.stdout
+    );
+    repo.remove(".claude/settings.json");
+    repo.commit("chore: drop settings");
+    let unhooked = repo.check(&[]);
+    assert!(
+        !unhooked.titles("instruction-smuggling").is_empty(),
+        "removing the Claude Code hook went unreported: {}",
+        unhooked.stdout
+    );
+}

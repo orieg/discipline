@@ -29,7 +29,7 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
     let root = ctx.git.root();
     let mut total_examined = 0;
 
-    for group in &settings.groups {
+    'groups: for group in &settings.groups {
         if group.sources.len() < 2 {
             bail!(
                 "version-lockstep group `{}` requires at least 2 sources to compare, got {}",
@@ -42,6 +42,13 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
         for source in &group.sources {
             let path = root.join(&source.path);
             if !path.is_file() {
+                if ctx.predates_config(&source.path)? {
+                    out.notes.push(format!(
+                        "version-lockstep group `{}` skipped: `{}` is not in this change's tree (the configuration is newer)",
+                        group.name, source.path
+                    ));
+                    continue 'groups;
+                }
                 bail!(
                     "version-lockstep group `{}`: source file `{}` does not exist",
                     group.name,

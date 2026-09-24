@@ -355,7 +355,8 @@ pub fn run_check(dir: &Path, side: &CheckSide) -> Result<(i32, String, String)> 
         .env_remove("DISCIPLINE_DIRECTIVE_SOURCES")
         .env_remove("PR_BODY")
         .env_remove("PR_TITLE")
-        .env_remove("DISCIPLINE_COMMENT");
+        .env_remove("DISCIPLINE_COMMENT")
+        .env_remove(crate::guards::REPLAY_CASE_ENV);
     match side {
         CheckSide::Default => {}
         CheckSide::Base(b) => {
