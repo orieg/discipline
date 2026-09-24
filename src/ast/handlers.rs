@@ -239,7 +239,7 @@ pub fn extract(
             }
         } else if spec.silence_kinds.contains(&node.kind()) && !is_test_line(line) {
             let t = text(node, src);
-            if (spec.silences)(t) {
+            if (spec.silences)(t) && !result_is_tested(node, src) {
                 out.push(SwallowSite {
                     line,
                     kind: "silenced-error",
@@ -296,6 +296,45 @@ fn expects_the_error(handler: Node, src: &str) -> bool {
         && try_stmt
             .next_named_sibling()
             .is_some_and(|next| fails(text(next, src)))
+}
+
+/// Whether a silencing expression's value decides what runs next: the condition of an
+/// `if` / `while` / ternary, a comparison (`@f() === false`), or the left operand of
+/// `&&` / `||`, possibly under `!` and parentheses (not `?:`, which substitutes). The operator mutes the diagnostic,
+/// but the caller reads the failure from the return value, so nothing is swallowed.
+fn result_is_tested(node: Node, src: &str) -> bool {
+    let mut cur = node;
+    while let Some(p) = cur.parent() {
+        let is = |field: &str| {
+            p.child_by_field_name(field)
+                .is_some_and(|c| c.id() == cur.id())
+        };
+        match p.kind() {
+            "parenthesized_expression" => {}
+            "unary_op_expression" if text(p, src).trim_start().starts_with('!') => {}
+            "binary_expression" => {
+                let op = p
+                    .child_by_field_name("operator")
+                    .map_or("", |o| text(o, src));
+                match op {
+                    "&&" | "||" | "and" | "or" | "xor" if is("left") => return true,
+                    "&&" | "||" | "and" | "or" | "xor" => {}
+                    "===" | "!==" | "==" | "!=" | "<>" | "<" | ">" | "<=" | ">=" => return true,
+                    _ => return false,
+                }
+            }
+            "if_statement" | "else_if_clause" | "while_statement" | "do_statement" => {
+                return is("condition")
+            }
+            // `@f() ?: 0` replaces the failure with a constant; `@f() ? a : b` branches.
+            "conditional_expression" => {
+                return is("condition") && p.child_by_field_name("body").is_some()
+            }
+            _ => return false,
+        }
+        cur = p;
+    }
+    false
 }
 
 pub fn no_discard(_: &str) -> bool {
@@ -954,13 +993,25 @@ mod pack_tests {
     fn php_ruby_and_c_cpp_handlers_silences_and_discards() {
         let php = sites(
             "src/Loader.php",
-            "<?php\nfunction load($p) {\n    try { g(); } catch (\\Throwable $e) { }\n    try { g(); } catch (E $e) { return null; }\n    try { g(); } catch (E $e) { log($e); throw $e; }\n    $x = @file_get_contents($p);\n    @unlink($p);\n    return $x;\n}\nfunction testLoad() { try { load('x'); } catch (E $e) { } $y = @g(); }\n",
+            "<?php\nfunction load($p) {\n    try { g(); } catch (\\Throwable $e) { }\n    try { g(); } catch (E $e) { return null; }\n    try { g(); } catch (E $e) { log($e); throw $e; }\n    $x = @file_get_contents($p);\n    @unlink($p);\n    return $x;\n}\n/** @test */\nfunction testLoad() { try { load('x'); } catch (E $e) { } $y = @g(); }\n",
         );
         assert_eq!(
             php,
             vec![
                 (3, "empty-handler"),
                 (4, "empty-handler"),
+                (6, "silenced-error"),
+                (7, "silenced-error")
+            ]
+        );
+        let tested = sites(
+            "scripts/clean.php",
+            "<?php\nif (!@chdir($d)) { exit(2); }\n$ok = @mkdir($d) || is_dir($d);\n@is_file($f) && @unlink($f);\nif (@file_get_contents($f) === false) { exit(1); }\n$n = @filesize($f) ?: 0;\n$s = (string) @file_get_contents($f);\nwhile (@ob_end_clean()) {}\n$t = @stat($f) ? 1 : 0;\n",
+        );
+        assert_eq!(
+            tested,
+            vec![
+                (4, "silenced-error"),
                 (6, "silenced-error"),
                 (7, "silenced-error")
             ]

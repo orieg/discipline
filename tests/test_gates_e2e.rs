@@ -6308,6 +6308,35 @@ class CalcTest extends TestCase {
 }
 
 #[test]
+fn php_example_helpers_and_tested_error_control_are_not_findings() {
+    let repo = Repo::new();
+    // A `test*`-named helper in `examples/` is not a test, and an `@call()` whose result
+    // decides the branch reads the failure; the bare `@unlink()` still drops it.
+    repo.write(
+        "examples/coverage.php",
+        "<?php\nfunction testsCovering(array $c, int $l): array { return $c[$l] ?? []; }\n",
+    );
+    repo.write(
+        "scripts/clean.php",
+        "<?php\nif (!@chdir($d)) { exit(2); }\n@is_file($f) && print('x');\n@unlink($f);\n",
+    );
+    repo.commit("feat: add example and cleanup script");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert!(run.outcome("vacuous-tests")["violations"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let swallowed = run.outcome("error-swallowing")["violations"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(swallowed.len(), 1, "{swallowed:?}");
+    assert_eq!(swallowed[0]["file"], "scripts/clean.php");
+    assert_eq!(swallowed[0]["line"], 4);
+}
+
+#[test]
 fn php_skipped_tests_detected_and_accepts_override() {
     let repo = Repo::new();
     repo.write(

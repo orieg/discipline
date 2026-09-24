@@ -44,6 +44,7 @@ impl LanguagePack for PhpPack {
             src: src.as_bytes(),
             vocab,
             is_test_path: is_php_test_path(path),
+            declared_test_path: functions::declared_test_path(path, &vocab.test_paths),
             facts: ParsedFileFacts {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
@@ -178,6 +179,8 @@ struct PhpExtractor<'a> {
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
+    /// Under a `[tests] paths` glob: a `test*` top-level function there is a test.
+    declared_test_path: bool,
     facts: ParsedFileFacts,
     /// Same-file callees of each test (`Class::method` or `function`), in test order.
     test_calls: Vec<Vec<String>>,
@@ -463,7 +466,9 @@ impl<'a> PhpExtractor<'a> {
         let func_name = name_node.map(|n| self.text(n)).unwrap_or("");
 
         let (annotated_as_test, is_ignored) = self.check_doc_or_attrs_for_test(node);
-        let name_is_test = func_name.starts_with("test");
+        // No PHP runner collects a top-level function by its name, so `testsCovering()`
+        // in `examples/` is not a test; the name counts only under a declared test path.
+        let name_is_test = func_name.starts_with("test") && self.declared_test_path;
 
         // Any top-level function can be called from a test; in a test path it is also
         // collected as a test itself, as before.
@@ -800,6 +805,33 @@ class ExampleTest extends PHPUnit\Framework\TestCase
         assert_eq!(facts.tests[0].total_asserts, 4);
         assert_eq!(facts.tests[0].strong_asserts, 1);
         assert!(!facts.tests[0].is_vacuous());
+    }
+
+    #[test]
+    fn top_level_test_named_function_outside_a_test_path_is_not_a_test() {
+        let src = "<?php\nfunction testsCovering(array $c, int $line): array\n{\n    return $c[$line] ?? [];\n}\n/** @test */\nfunction checks_cover(): void { assert(testsCovering([], 1) === []); }\n";
+        let pack = PhpPack;
+        let vocab = AssertVocabulary::default();
+        let names = |path: &str, vocab: &AssertVocabulary| -> Vec<String> {
+            let facts = pack.extract(path, src, vocab).unwrap();
+            facts.tests.iter().map(|t| t.name.clone()).collect()
+        };
+        assert_eq!(
+            names("examples/coverage-index.php", &vocab),
+            vec!["checks_cover"]
+        );
+        assert_eq!(
+            names("tests/coverage.php", &vocab),
+            vec!["testsCovering", "checks_cover"]
+        );
+        let declared = AssertVocabulary {
+            test_paths: vec!["qa/**".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(
+            names("qa/coverage.php", &declared),
+            vec!["testsCovering", "checks_cover"]
+        );
     }
 
     #[test]

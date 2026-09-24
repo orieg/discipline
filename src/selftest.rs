@@ -693,6 +693,39 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: a PHP `@call()` whose result is tested reads the failure, `?:` does not",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("scripts/a.php")
+                .ok_or_else(|| anyhow::anyhow!("no php pack"))?;
+            let src = "<?php\nif (!@chdir($d)) { exit(2); }\nif (@file_get_contents($f) === false) { exit(1); }\n$n = @filesize($f) ?: 0;\n";
+            let lines: Vec<usize> = pack
+                .extract("scripts/a.php", src, &v)?
+                .swallowed
+                .iter()
+                .map(|s| s.line)
+                .collect();
+            Ok(lines == vec![4])
+        },
+    ),
+    (
+        "vacuous-tests: a PHP top-level `test*` function outside a test path is not a test",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("examples/a.php")
+                .ok_or_else(|| anyhow::anyhow!("no php pack"))?;
+            let src = "<?php\nfunction testsCovering(array $c): array { return $c; }\n";
+            Ok(pack.extract("examples/a.php", src, &v)?.tests.is_empty()
+                && pack.extract("tests/a.php", src, &v)?.tests.len() == 1)
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;
