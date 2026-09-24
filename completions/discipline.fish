@@ -55,8 +55,8 @@ quality\t''
 verification\t''
 bench\t''"
 complete -c discipline -n "__fish_discipline_using_subcommand check" -s b -l base -d 'Base branch or commit to measure the change against (auto-detected in CI if omitted)' -r
-complete -c discipline -n "__fish_discipline_using_subcommand check" -l commit -d 'Specific commit to inspect (compares against parent commit <sha>~1)' -r
-complete -c discipline -n "__fish_discipline_using_subcommand check" -l commit-range -d 'Commit range to inspect (<before>..<after> or <before>...<after>)' -r
+complete -c discipline -n "__fish_discipline_using_subcommand check" -l commit -d 'Specific commit to inspect, against its parent <sha>~1; it must be the commit checked out (exit 2 otherwise)' -r
+complete -c discipline -n "__fish_discipline_using_subcommand check" -l commit-range -d 'Commit range to inspect (<before>..<after> or <before>...<after>); <after>, when given, must be the commit checked out (exit 2 otherwise)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l pr-body-file -l commit-msg-file -d 'File holding the PR body or commit message (override directives, hygiene scanning). Falls back to the PR_BODY environment variable' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l pr-title -d 'PR title for PR-level hygiene checks (e.g. issue-link). Falls back to the PR_TITLE environment variable' -r
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l policy-from -d 'Which side\'s discipline.toml judges the change. `base` reads it from the base ref, so a policy edit takes effect once merged; `config-integrity` still reports it' -r -f -a "head\t'The configuration in the working tree (the change\'s own copy)'

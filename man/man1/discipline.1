@@ -90,10 +90,10 @@ May also be specified with the \fBDISCIPLINE_BASE_REF\fR environment variable.
 .RE
 .TP
 \fB\-\-commit\fR \fI<COMMIT>\fR
-Specific commit to inspect (compares against parent commit <sha>~1)
+Specific commit to inspect, against its parent <sha>~1; it must be the commit checked out (exit 2 otherwise)
 .TP
 \fB\-\-commit\-range\fR \fI<COMMIT_RANGE>\fR
-Commit range to inspect (<before>..<after> or <before>...<after>)
+Commit range to inspect (<before>..<after> or <before>...<after>); <after>, when given, must be the commit checked out (exit 2 otherwise)
 .TP
 \fB\-\-staged\fR
 Inspect the index against HEAD instead (pre\-commit hook mode)

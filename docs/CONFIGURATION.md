@@ -430,8 +430,8 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
 | `-s`, `--suite` |  | `all` | Which check suite to run |
 | `-b`, `--base` | `DISCIPLINE_BASE_REF` |  | Base branch or commit to measure the change against (auto-detected in CI if omitted) |
-| `--commit` |  |  | Specific commit to inspect (compares against parent commit &lt;sha&gt;~1) |
-| `--commit-range` |  |  | Commit range to inspect (&lt;before&gt;..&lt;after&gt; or &lt;before&gt;...&lt;after&gt;) |
+| `--commit` |  |  | Specific commit to inspect, against its parent &lt;sha&gt;~1; it must be the commit checked out (exit 2 otherwise) |
+| `--commit-range` |  |  | Commit range to inspect (&lt;before&gt;..&lt;after&gt; or &lt;before&gt;...&lt;after&gt;); &lt;after&gt;, when given, must be the commit checked out (exit 2 otherwise) |
 | `--staged` |  |  | Inspect the index against HEAD instead (pre-commit hook mode) |
 | `--pr-body-file` |  |  | File holding the PR body or commit message (override directives, hygiene scanning). Falls back to the PR_BODY environment variable |
 | `--pr-title` | `PR_TITLE` |  | PR title for PR-level hygiene checks (e.g. issue-link). Falls back to the PR_TITLE environment variable |

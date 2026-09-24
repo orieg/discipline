@@ -558,7 +558,10 @@ fn check(args: CheckArgs) -> Result<bool> {
         args.commit.as_deref(),
         args.commit_range.as_deref(),
     );
-    let git = match GitCtx::open(&base_ref, args.staged) {
+    let named =
+        discipline::gitctx::named_head(args.commit.as_deref(), args.commit_range.as_deref())
+            .map_or(Ok(()), |n| discipline::gitctx::verify_named_head(&n));
+    let git = match named.and_then(|()| GitCtx::open(&base_ref, args.staged)) {
         Ok(g) => g,
         Err(err) => {
             emit_fatal_reports(&args, is_gitlab, &base_ref, &err);

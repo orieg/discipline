@@ -227,11 +227,11 @@ pub struct CheckArgs {
     #[arg(short, long, env = "DISCIPLINE_BASE_REF")]
     pub base: Option<String>,
 
-    /// Specific commit to inspect (compares against parent commit <sha>~1)
+    /// Specific commit to inspect, against its parent <sha>~1; it must be the commit checked out (exit 2 otherwise)
     #[arg(long, conflicts_with = "commit_range", conflicts_with = "staged")]
     pub commit: Option<String>,
 
-    /// Commit range to inspect (<before>..<after> or <before>...<after>)
+    /// Commit range to inspect (<before>..<after> or <before>...<after>); <after>, when given, must be the commit checked out (exit 2 otherwise)
     #[arg(long, conflicts_with = "commit", conflicts_with = "staged")]
     pub commit_range: Option<String>,
 

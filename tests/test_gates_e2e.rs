@@ -9776,7 +9776,7 @@ fn commit_and_commit_range_cli_flags() {
         "#[test]\nfn b1() { let x = 1; assert_eq!(x, 1); }\n",
     );
     repo.commit("test: commit 1");
-    let _commit1_sha = repo.git_output(&["rev-parse", "HEAD"]);
+    let commit1_sha = repo.git_output(&["rev-parse", "HEAD"]);
 
     repo.write("tests/b.rs", "#[test]\nfn b1() { let x = 1; assert_eq!(x, 1); }\n#[test]\nfn b2() { let y = 2; assert_eq!(y, 2); }\n");
     repo.commit("test: commit 2");
@@ -9804,6 +9804,28 @@ fn commit_and_commit_range_cli_flags() {
         "run_range failed: {}{}",
         run_range.stdout, run_range.stderr
     );
+
+    // The change is read from the checkout: naming a head that is not checked out would
+    // judge a different change, so it is refused (exit 2) rather than silently widened.
+    let commit1 = commit1_sha.trim();
+    for args in [
+        vec!["check", "--format", "json", "--commit", commit1],
+        vec![
+            "check",
+            "--format",
+            "json",
+            "--commit-range",
+            &format!("{}..{commit1}", base_sha.trim()),
+        ],
+    ] {
+        let run = repo.run(&args, &[]);
+        assert_eq!(run.code, 2, "{args:?}: {}{}", run.stdout, run.stderr);
+        assert!(run.stderr.contains("the checkout is at"), "{}", run.stderr);
+    }
+    // A range with no head means the checkout.
+    let open = format!("{}..", base_sha.trim());
+    let run = repo.run(&["check", "--format", "json", "--commit-range", &open], &[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
 
 // ---- scope-confinement -----------------------------------------------------

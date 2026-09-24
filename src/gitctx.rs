@@ -76,6 +76,44 @@ pub fn detect_base_ref(
     })
 }
 
+/// The head a `--commit X` or `--commit-range A..B` names: `X`, or `B` (`None` when the
+/// range leaves it out, which means the checkout).
+pub fn named_head(commit: Option<&str>, commit_range: Option<&str>) -> Option<String> {
+    if let Some(c) = commit.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(c.to_string());
+    }
+    let r = commit_range.map(str::trim).filter(|s| !s.is_empty())?;
+    let after = r
+        .split_once("...")
+        .or_else(|| r.split_once(".."))
+        .map(|(_, a)| a.trim())?;
+    (!after.is_empty()).then(|| after.to_string())
+}
+
+/// The change is read from the working tree, so the head a flag names must be the commit
+/// checked out; otherwise the run would judge a different change than the one asked for.
+pub fn verify_named_head(name: &str) -> Result<()> {
+    let repo = discover_repository(".")?;
+    let named = repo
+        .revparse_single(name)
+        .and_then(|o| o.peel_to_commit())
+        .map_err(|e| anyhow!("`{name}` does not resolve to a commit: {}", e.message()))?
+        .id();
+    let head = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .map(|c| c.id());
+    if head != Some(named) {
+        let at = head.map_or("no commit".to_string(), |h| h.to_string()[..10].to_string());
+        bail!(
+            "`{name}` is {}, but the checkout is at {at}: discipline reads the change from the working tree, so check out `{name}` first (or pass `--base <before>` with it checked out)",
+            &named.to_string()[..10]
+        );
+    }
+    Ok(())
+}
+
 pub fn is_push_event_environment() -> bool {
     is_push_event_environment_with_env(|k| std::env::var(k).ok())
 }
@@ -1107,6 +1145,16 @@ pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_named_head_is_the_commit_or_the_range_end() {
+        assert_eq!(named_head(Some("abc"), None).as_deref(), Some("abc"));
+        assert_eq!(named_head(None, Some("a..b")).as_deref(), Some("b"));
+        assert_eq!(named_head(None, Some("a...b")).as_deref(), Some("b"));
+        assert_eq!(named_head(None, Some("a..")), None);
+        assert_eq!(named_head(None, Some("a")), None);
+        assert_eq!(named_head(None, None), None);
+    }
 
     #[test]
     fn test_detect_base_ref_explicit() {
