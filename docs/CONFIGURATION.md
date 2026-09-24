@@ -56,7 +56,7 @@ Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with 
 | `directives.require_approval` | boolean | `false` | PR-body / commit-body overrides fail the run until the forge shows an approving review of the head commit by an allowed_override_actors member other than the author (default: false) |
 | `directives.sources` | list | `["pr-body","commits","merged-pr-body"]` | Allowed directive sources: pr-body, commits, merged-pr-body (default: ["pr-body", "commits", "merged-pr-body"]). merged-pr-body reads, on a push event, the body of the merged pull request each pushed commit arrived through |
 | `gates.agent-scratch.enabled` | boolean | `true` | Whether this gate is active |
-| `gates.agent-scratch.exempt_paths` | list | *(3 entries)* | File path globs exempted from this gate |
+| `gates.agent-scratch.exempt_paths` | list | *(4 entries)* | File path globs exempted from this gate |
 | `gates.agent-scratch.paths` | list | *(7 entries)* | Directory and file globs that must never be tracked |
 | `gates.agent-scratch.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.agents-md.enabled` | boolean | `true` | Whether this gate is active |

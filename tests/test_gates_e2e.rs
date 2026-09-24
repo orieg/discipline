@@ -2779,6 +2779,85 @@ fn sleeps_trivial_assertions_and_injected_pr_bodies_are_reported() {
 // ---- consumer replay: false positives -------------------------------------
 
 #[test]
+fn go_repository_replay_false_positives_stay_quiet_and_their_controls_do_not() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "go.mod",
+        "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/a/direct v1.0.0\n)\n",
+    );
+    repo.commit("build: module");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    // A dependency bump that pulls in a transitive module, go mod tidy style.
+    repo.write(
+        "go.mod",
+        "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/a/direct v1.1.0\n\tgithub.com/b/transitive v1.0.0 // indirect\n)\n",
+    );
+    // A test that skips only in short mode, and Cursor's project MCP server list.
+    repo.write(
+        "app/app_test.go",
+        "package app\n\nimport \"testing\"\n\nfunc TestIntegration(t *testing.T) {\n\tif testing.Short() {\n\t\tt.Skip(\"integration\")\n\t}\n\tif 1+1 != 2 {\n\t\tt.Fatal(\"math\")\n\t}\n}\n",
+    );
+    repo.write(".cursor/mcp.json", "{\"mcpServers\": {}}\n");
+    repo.commit("deps: bump direct");
+    // Dependabot's release notes quote handles as `@\u{200B}name`.
+    let body = "Bumps direct.\n\n<li>fix by <a href=\"https://github.com/someone\"><code>@\u{200B}someone</code></a></li>\n";
+    let run = repo.check_with_pr(&[], body);
+    assert!(
+        run.titles("dependency-delta").is_empty(),
+        "{:?}",
+        run.violations("dependency-delta")
+    );
+    // A short-mode skip is monitored as a note, not a test that arrives ignored.
+    let skipped = run.violations("ignored-tests");
+    assert_eq!(
+        run.titles("ignored-tests"),
+        vec!["Test Conditionally Skipped"]
+    );
+    assert_eq!(skipped[0]["severity"], "note");
+    assert!(
+        run.titles("agent-scratch").is_empty(),
+        "{:?}",
+        run.violations("agent-scratch")
+    );
+    assert!(
+        !run.titles("instruction-smuggling")
+            .iter()
+            .any(|t| t.starts_with("Invisible")),
+        "{:?}",
+        run.violations("instruction-smuggling")
+    );
+
+    // Controls: a new direct module, an unconditional skip, a scratch file under `.cursor/`
+    // and a zero-width space elsewhere in the body are still reported.
+    repo.write(
+        "go.mod",
+        "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/a/direct v1.1.0\n\tgithub.com/b/transitive v1.0.0 // indirect\n\tgithub.com/c/new v1.0.0\n)\n",
+    );
+    repo.write(
+        "app/later_test.go",
+        "package app\n\nimport \"testing\"\n\nfunc TestLater(t *testing.T) {\n\tt.Skip(\"later\")\n}\n",
+    );
+    repo.write(".cursor/notes.md", "scratch\n");
+    repo.commit("deps: add new");
+    let run = repo.check_with_pr(&[], "Adds new.\u{200B}\n");
+    assert_eq!(
+        run.titles("dependency-delta"),
+        vec!["New Direct Dependency Added"]
+    );
+    assert!(run
+        .titles("ignored-tests")
+        .contains(&"Test Arrives Ignored".to_string()));
+    assert_eq!(
+        run.titles("agent-scratch"),
+        vec!["Tracked Agent Scratch State"]
+    );
+    assert!(run
+        .titles("instruction-smuggling")
+        .contains(&"Invisible Characters In Change Description".to_string()));
+}
+
+#[test]
 fn a_declared_test_entry_point_is_test_scope_for_every_gate() {
     // A script's `self_test()` holds fixture strings, an expect-to-raise handler and
     // helper-only assertions. Without the declaration three gates read it as production.

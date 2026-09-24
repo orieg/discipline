@@ -491,6 +491,23 @@ pub fn parse_requirements_txt(content: &str, path: &str) -> Vec<DependencyRecord
     records
 }
 
+/// Modules a `go.mod` marks `// indirect`: required only because a direct dependency
+/// needs them, written by `go mod tidy`, not chosen by the change.
+pub fn go_mod_indirect(content: &str) -> HashSet<String> {
+    content
+        .lines()
+        .filter_map(|l| {
+            let (req, comment) = l.split_once("//")?;
+            if comment.trim() != "indirect" {
+                return None;
+            }
+            let req = req.trim();
+            let req = req.strip_prefix("require ").unwrap_or(req).trim();
+            req.split_whitespace().next().map(str::to_string)
+        })
+        .collect()
+}
+
 /// Parses dependencies from `go.mod`.
 pub fn parse_go_mod(content: &str, path: &str) -> Vec<DependencyRecord> {
     let mut records = Vec::new();
@@ -994,6 +1011,14 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             }
         }
 
+        // A Go module marked `// indirect` arrives with a direct dependency's update; it is
+        // not a new direct dependency (bans, wildcards and source changes still apply).
+        let indirect = if f.path.rsplit('/').next() == Some("go.mod") {
+            go_mod_indirect(&head_content)
+        } else {
+            HashSet::new()
+        };
+
         // Find deltas: new dependencies or modified existing dependencies
         for h in &head_deps {
             let matching_base = base_deps.iter().find(|b| b.name == h.name);
@@ -1016,7 +1041,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             let mut dep_violations = Vec::new();
 
             // 0. Core rule: New direct dependency check
-            if matching_base.is_none() {
+            if matching_base.is_none() && !indirect.contains(&h.name) {
                 let allowed = gate.allow_dependencies.contains(&h.name)
                     || deny_policy.allow_bans.contains(&h.name);
                 if !allowed {
@@ -1278,6 +1303,11 @@ require (
 "#;
         let deps = parse_go_mod(sample, "go.mod");
         assert_eq!(deps.len(), 2);
+        assert!(go_mod_indirect(sample).is_empty());
+        let tidy = "require github.com/a/direct v1.0.0\nrequire github.com/b/one v1.0.0 // indirect\nrequire (\n\tgithub.com/c/two v2.0.0 // indirect\n\tgithub.com/d/kept v1.0.0 // pinned by hand\n)\n";
+        let names = go_mod_indirect(tidy);
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(names.contains("github.com/b/one") && names.contains("github.com/c/two"));
 
         let gin = deps
             .iter()

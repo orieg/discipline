@@ -389,15 +389,17 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             })
             .collect();
         let joined = kept.join("\n");
-        let invisible = kept.iter().flat_map(|l| invisible_classes(l, false)).fold(
-            Vec::new(),
-            |mut acc: Vec<&str>, c| {
+        // GitHub writes `@\u{200B}name` in bot-generated bodies (Dependabot release notes)
+        // so the quoted handle does not mention anyone; that pair hides nothing.
+        let invisible = kept
+            .iter()
+            .flat_map(|l| invisible_classes(&l.replace("@\u{200B}", "@"), false))
+            .fold(Vec::new(), |mut acc: Vec<&str>, c| {
                 if !acc.contains(&c) {
                     acc.push(c);
                 }
                 acc
-            },
-        );
+            });
         let mut classes = phrase_classes(&joined);
         if has_encoded_blob(&joined) {
             classes.push("encoded-blob");

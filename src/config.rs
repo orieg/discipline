@@ -805,12 +805,14 @@ impl Default for ScratchGate {
         Self {
             enabled: true,
             severity: Severity::Error,
-            // The shared hook configuration `discipline hook install` writes is project
-            // configuration, not scratch state. A change to it is still an agent-control
-            // change that `instruction-smuggling` reports.
+            // The shared hook configuration `discipline hook install` writes, and Cursor's
+            // project MCP server list, are project configuration, not scratch state. A
+            // change to them is still an agent-control change `instruction-smuggling`
+            // reports.
             exempt_paths: [
                 ".claude/settings.json",
                 ".cursor/hooks.json",
+                ".cursor/mcp.json",
                 ".aider.conf.yml",
             ]
             .iter()

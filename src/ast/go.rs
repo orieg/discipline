@@ -405,7 +405,12 @@ impl<'a> GoExtractor<'a> {
             || call_text == "Skip"
             || call_text == "Skipf"
         {
-            test_fn.ignored = true;
+            // `if testing.Short() { t.Skip(...) }` runs in a full run: a conditional skip,
+            // reported as a note. A constant condition skips every run.
+            match enclosing_if_condition(node, self.src) {
+                Some(cond) if cond != "true" => test_fn.conditional_ignore = Some(cond),
+                _ => test_fn.ignored = true,
+            }
             return;
         }
 
@@ -559,6 +564,29 @@ fn go_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
     path.ends_with("_test.go") || is_go_test_function_name(name)
 }
 
+/// The condition of the nearest `if` whose body holds `node`, stopping at the function
+/// the call is in; `None` when the call runs unconditionally.
+fn enclosing_if_condition(node: Node, src: &[u8]) -> Option<String> {
+    let mut cur = node;
+    while let Some(p) = cur.parent() {
+        match p.kind() {
+            "function_declaration" | "method_declaration" | "func_literal" => return None,
+            "if_statement" => {
+                let cond = p.child_by_field_name("condition")?;
+                let in_body = p
+                    .child_by_field_name("consequence")
+                    .is_some_and(|c| c.id() == cur.id());
+                if in_body {
+                    return cond.utf8_text(src).ok().map(|t| t.trim().to_string());
+                }
+            }
+            _ => {}
+        }
+        cur = p;
+    }
+    None
+}
+
 pub const GO_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["function_declaration", "method_declaration"],
     name_fields: &["name"],
@@ -640,6 +668,20 @@ func TestCalculator(t *testing.T) {
         assert_eq!(t.strong_asserts, 2);
         assert!(!t.is_vacuous());
         assert!(!t.ignored);
+    }
+
+    #[test]
+    fn a_skip_under_an_if_is_conditional_and_an_unconditional_one_is_ignored() {
+        let src = "package p\n\nimport \"testing\"\n\nfunc TestShort(t *testing.T) {\n\tif testing.Short() {\n\t\tt.Skip(\"short mode\")\n\t}\n\tif 1+1 != 2 {\n\t\tt.Fatal(\"math\")\n\t}\n}\n\nfunc TestAlways(t *testing.T) {\n\tt.Skip(\"later\")\n}\n\nfunc TestConstant(t *testing.T) {\n\tif true {\n\t\tt.Skip(\"later\")\n\t}\n}\n";
+        let facts = GoPack
+            .extract("p_test.go", src, &AssertVocabulary::default())
+            .unwrap();
+        let by = |n: &str| facts.tests.iter().find(|t| t.name == n).unwrap();
+        let short = by("TestShort");
+        assert!(!short.ignored);
+        assert_eq!(short.conditional_ignore.as_deref(), Some("testing.Short()"));
+        assert!(by("TestAlways").ignored && by("TestAlways").conditional_ignore.is_none());
+        assert!(by("TestConstant").ignored && by("TestConstant").conditional_ignore.is_none());
     }
 
     #[test]

@@ -742,6 +742,23 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ignored-tests: a Go `t.Skip` under `if testing.Short()` is conditional, a bare one is ignored",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("p_test.go")
+                .ok_or_else(|| anyhow::anyhow!("no go pack"))?;
+            let src = "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tif testing.Short() {\n\t\tt.Skip()\n\t}\n}\n\nfunc TestB(t *testing.T) {\n\tt.Skip()\n}\n";
+            let tests = pack.extract("p_test.go", src, &v)?.tests;
+            let a = tests.iter().find(|t| t.name == "TestA");
+            let b = tests.iter().find(|t| t.name == "TestB");
+            Ok(a.is_some_and(|t| !t.ignored && t.conditional_ignore.is_some())
+                && b.is_some_and(|t| t.ignored && t.conditional_ignore.is_none()))
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;
