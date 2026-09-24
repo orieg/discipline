@@ -212,7 +212,9 @@ pub fn extract(
                     }
                 }
             };
-            if let Some(kind) = swallows.filter(|_| !expects_the_error(node, src)) {
+            if let Some(kind) = swallows
+                .filter(|_| !expects_the_error(node, src) && !catches_only_signals(node, src))
+            {
                 out.push(SwallowSite {
                     line,
                     kind,
@@ -335,6 +337,28 @@ fn result_is_tested(node: Node, src: &str) -> bool {
         cur = p;
     }
     false
+}
+
+/// Python: a handler for `KeyboardInterrupt`, `SystemExit` or `GeneratorExit` alone. These
+/// derive from `BaseException`, not `Exception`: a stop request or an exit a sub-run already
+/// reported (`except KeyboardInterrupt: print("stopped")`), not a failure to swallow.
+fn catches_only_signals(handler: Node, src: &str) -> bool {
+    const SIGNALS: &[&str] = &["KeyboardInterrupt", "SystemExit", "GeneratorExit"];
+    let head = first_line(text(handler, src));
+    let Some(rest) = head.strip_prefix("except") else {
+        return false;
+    };
+    let types = rest.split(':').next().unwrap_or("");
+    let types = types.split(" as ").next().unwrap_or("");
+    let names: Vec<&str> = types
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .split(',')
+        .map(|t| t.trim().trim_start_matches("builtins."))
+        .filter(|t| !t.is_empty())
+        .collect();
+    !names.is_empty() && names.iter().all(|n| SIGNALS.contains(n))
 }
 
 pub fn no_discard(_: &str) -> bool {
@@ -900,6 +924,17 @@ mod pack_tests {
              def test_f():\n    try:\n        f()\n    except Exception:\n        pass\n",
         );
         assert_eq!(got, vec![(4, "empty-handler"), (13, "empty-handler")]);
+    }
+
+    #[test]
+    fn python_interrupt_and_exit_handlers_are_not_error_handlers() {
+        let got = sites(
+            "pkg/cli.py",
+            "def watch():\n    try:\n        run()\n    except SystemExit:\n        pass\n    try:\n        loop()\n    except KeyboardInterrupt:\n        print('stopped')\n    try:\n        run()\n    except (SystemExit, KeyboardInterrupt) as e:\n        pass\n    try:\n        run()\n    except (SystemExit, OSError):\n        pass\n    try:\n        run()\n    except BaseException:\n        pass\n",
+        );
+        // A signal alone is a stop request; one mixed with an error type, or the
+        // `BaseException` that covers errors too, still swallows.
+        assert_eq!(got, vec![(16, "empty-handler"), (20, "empty-handler")]);
     }
 
     #[test]

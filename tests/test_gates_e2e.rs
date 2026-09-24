@@ -12288,3 +12288,17 @@ fn a_configuration_outside_the_repository_is_read_and_not_compared() {
         assert!(run.titles("config-integrity").is_empty());
     }
 }
+
+#[test]
+fn a_python_watch_loop_handling_exit_and_ctrl_c_is_not_error_swallowing() {
+    let repo = Repo::new();
+    repo.write(
+        "pkg/cli.py",
+        "def watch(args):\n    try:\n        run(args)\n    except SystemExit:\n        pass  # keep watching after a failed run\n    try:\n        while True:\n            wait()\n    except KeyboardInterrupt:\n        print(\"Watch mode stopped.\")\n\n\ndef load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n",
+    );
+    repo.commit("feat: watch mode");
+    let run = repo.check(&[]);
+    let found = run.violations("error-swallowing");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["line"], 16);
+}

@@ -792,6 +792,25 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: a Python handler for SystemExit or KeyboardInterrupt alone is not a site",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("pkg/a.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let src = "def f():\n    try:\n        g()\n    except KeyboardInterrupt:\n        pass\n    try:\n        g()\n    except (KeyboardInterrupt, OSError):\n        pass\n";
+            let lines: Vec<usize> = pack
+                .extract("pkg/a.py", src, &v)?
+                .swallowed
+                .iter()
+                .map(|s| s.line)
+                .collect();
+            Ok(lines == vec![8])
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;
