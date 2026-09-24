@@ -47,7 +47,16 @@ fn replay_reports_what_the_configuration_would_have_blocked() {
     let (repo, _) = history();
     let status_before = repo.git_output(&["status", "--porcelain"]);
     let head_before = repo.git_output(&["rev-parse", "HEAD"]);
-    let objects_before = repo.git_output(&["count-objects"]);
+    // Object ids, not `count-objects`: a repack moves loose objects into a pack without
+    // adding any, and "no new objects" is what the replay promises.
+    let all_objects = |r: &Repo| {
+        r.git_output(&[
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectname)",
+        ])
+    };
+    let objects_before = all_objects(&repo);
 
     let s = replay(&repo, &[], &[]);
     assert_eq!(
@@ -78,7 +87,7 @@ fn replay_reports_what_the_configuration_would_have_blocked() {
     // no new objects (the candidate configuration's blob lives in the throwaway store).
     assert_eq!(repo.git_output(&["status", "--porcelain"]), status_before);
     assert_eq!(repo.git_output(&["rev-parse", "HEAD"]), head_before);
-    assert_eq!(repo.git_output(&["count-objects"]), objects_before);
+    assert_eq!(all_objects(&repo), objects_before);
 
     let text = repo.run(&["replay", "--last", "2", "--ref", "main"], &[]);
     assert!(
@@ -198,5 +207,31 @@ fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_on
         live.stderr.contains("server.json` does not exist"),
         "{}",
         live.stderr
+    );
+}
+
+/// Since git 2.54, `git commit` ends with `git maintenance run --auto`, detached, and its
+/// repack fires when `objects/17/` holds two loose objects: a test repository's objects
+/// could be packed in the background mid-test. The harness's git commands never start it,
+/// even with a repository configured to run a maintenance task on every command.
+#[test]
+fn harness_git_commands_never_start_background_maintenance() {
+    let repo = Repo::new();
+    for kv in [
+        ["maintenance.loose-objects.enabled", "true"],
+        ["maintenance.loose-objects.auto", "-1"],
+        ["maintenance.autoDetach", "false"],
+        ["gc.autoDetach", "false"],
+    ] {
+        repo.git(&["config", kv[0], kv[1]]);
+    }
+    for i in 0..3 {
+        repo.write(&format!("docs/n{i}.md"), &format!("# {i}\n"));
+        repo.commit(&format!("docs: note {i}"));
+    }
+    let counts = repo.git_output(&["count-objects", "-v"]);
+    assert!(
+        counts.contains("\npacks: 0\n"),
+        "a maintenance task packed objects:\n{counts}"
     );
 }

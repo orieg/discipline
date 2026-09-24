@@ -158,6 +158,21 @@ pub const ISOLATED_ENV_VARS: &[&str] = &[
     "CI_COMMIT_SHA",
 ];
 
+/// Configuration every harness git command runs with. No signing and no hooks, and no
+/// automatic maintenance: since git 2.54 a commit ends with a detached
+/// `git maintenance run --auto` whose repack fires on two loose objects in `objects/17/`,
+/// so a test repository could be repacked in the background mid-test.
+const HARNESS_GIT_CONFIG: &[&str] = &[
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "gc.auto=0",
+];
+
 impl Repo {
     /// A clean repository with one commit on `main`, checked out on `work`.
     pub fn new() -> Self {
@@ -191,12 +206,7 @@ impl Repo {
     pub fn git(&self, args: &[&str]) {
         let out = Command::new("git")
             .args(["-c", "user.email=t@example.invalid", "-c", "user.name=t"])
-            .args([
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "core.hooksPath=/dev/null",
-            ])
+            .args(HARNESS_GIT_CONFIG)
             .args(args)
             .current_dir(self.path())
             .output()
@@ -211,12 +221,7 @@ impl Repo {
     pub fn git_output(&self, args: &[&str]) -> String {
         let out = Command::new("git")
             .args(["-c", "user.email=t@example.invalid", "-c", "user.name=t"])
-            .args([
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "core.hooksPath=/dev/null",
-            ])
+            .args(HARNESS_GIT_CONFIG)
             .args(args)
             .current_dir(self.path())
             .output()
