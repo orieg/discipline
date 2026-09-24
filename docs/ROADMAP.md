@@ -370,6 +370,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | `assertion-reduction` | New `Assertion Bound Loosened`: an existing test whose assertion keeps its shape while its numeric bound or tolerance moves the way that accepts more (`< 1.5` -> `< 5.0`, `rel=1e-6` -> `rel=1e-2`), read for Python, JS/TS, Rust and Go. At the gate's severity; lifted by `allow-assertion-drop:`. | stricter | A change that relaxes a timing or tolerance bound in a test needs `allow-assertion-drop: <test> <reason>`. |
 | unreleased | `check` | `--commit X` and `--commit-range A..B` exit 2 when `X` / `B` is not the commit checked out; before, the base came from the flag but the change was read from the checkout, so a different change was judged without a word. A range with no end (`A..`) is unchanged. | stricter | Check out the commit first, or pass `--base <before>` with it checked out. |
 | unreleased | `instruction-smuggling` | New `instruction_files` key: globs of a repository's own agent-instruction files (a runtime prompt an MCP server loads), reported like `AGENTS.md` when edited or deleted. Removing an entry is a `config-integrity` weakening. | additive | None; empty unless configured. |
 | unreleased | `dependency-delta` | A `go.mod` requirement marked `// indirect` is no longer `New Direct Dependency Added`; bans, wildcards and source changes still apply to it. | looser | None. |

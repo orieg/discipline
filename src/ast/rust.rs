@@ -115,6 +115,7 @@ impl LanguagePack for RustPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
+        super::bounds::rust(root, src, &mut cx.facts.tests);
         cx.facts.prose = super::prose::extract(
             root,
             src,
@@ -454,6 +455,7 @@ impl<'a> Extractor<'a> {
             sleeps: 0,
             trivial_asserts: 0,
             helper_checks: 0,
+            bounds: Vec::new(),
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")

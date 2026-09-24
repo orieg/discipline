@@ -12217,3 +12217,44 @@ fn a_repository_declares_its_own_instruction_files() {
         .unwrap()
         .contains("`instruction_files`"));
 }
+
+#[test]
+fn a_loosened_assertion_bound_is_reported_and_a_tightened_one_is_not() {
+    let base = "import time\n\n\ndef test_parallel_batch():\n    start_time = time.time()\n    run_batch()\n    end_time = time.time()\n    assert end_time - start_time < 1.5  # ~0.5s in parallel\n";
+    let loose = "import time\n\n\ndef test_parallel_batch():\n    start_time = time.time()\n    run_batch()\n    end_time = time.time()\n    # tasks serialize on a lock, so timing is not a reliable signal\n    assert end_time - start_time < 5.0  # generous timeout\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/test_batch.py", base);
+    repo.commit("test: batch timing");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("tests/test_batch.py", loose);
+    repo.commit("fix: serialize tasks");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let found = run.violations("assertion-reduction");
+    assert_eq!(
+        run.titles("assertion-reduction"),
+        vec!["Assertion Bound Loosened"]
+    );
+    assert_eq!(found[0]["line"], 9);
+    let msg = found[0]["message"].as_str().unwrap();
+    assert!(msg.contains("from 1.5 to 5.0"), "{msg}");
+    assert!(
+        !msg.contains("end_time"),
+        "the assertion text is not echoed: {msg}"
+    );
+
+    // The directive that lifts an assertion drop lifts it.
+    repo.commit("chore: record\n\nallow-assertion-drop: test_parallel_batch tasks now serialize on the working-directory lock");
+    assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
+
+    // Tightening the same bound is not a finding.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/test_batch.py", loose);
+    repo.commit("test: batch timing");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("tests/test_batch.py", &loose.replace("5.0", "1.5"));
+    repo.commit("test: tighten");
+    assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
+}

@@ -646,7 +646,10 @@ pub fn evaluate_assertion_reduction(
         let mock_growth = h.mock_setups > b.mock_setups
             && h.strong_asserts <= b.strong_asserts
             && h_eff.saturating_sub(h.mock_asserts) <= b_eff.saturating_sub(b.mock_asserts);
-        if !(total_drop || strong_drop || fatal_drop || mock_growth) {
+        // The same assertion with its numeric bound moved the loose way: the count holds.
+        let loosened = crate::ast::bounds::loosened(&b.bounds, &h.bounds);
+        let dropped = total_drop || strong_drop || fatal_drop || mock_growth;
+        if !dropped && loosened.is_empty() {
             continue;
         }
 
@@ -683,6 +686,32 @@ pub fn evaluate_assertion_reduction(
             format!("Test `{}`", h.name)
         };
         let directive_name = if p.forced { leaf_name(b) } else { leaf_name(h) };
+
+        for l in &loosened {
+            out.push(
+                if is_staged {
+                    crate::config::Severity::Warning
+                } else {
+                    settings.severity()
+                },
+                "Assertion Bound Loosened",
+                Some(p.path),
+                Some(l.line),
+                // The line and the two literals only: the assertion's text is the change's
+                // own and is not echoed into a report agents read.
+                format!(
+                    "{test_label}: the assertion on line {} moved its bound from {} to {}, which accepts more results.",
+                    l.line, l.from, l.to
+                ),
+                &format!(
+                    "Restore the bound, or justify the change on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
+        }
+        if !dropped {
+            continue;
+        }
 
         if !total_drop && !strong_drop && !fatal_drop && mock_growth {
             out.push(

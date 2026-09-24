@@ -115,6 +115,7 @@ impl LanguagePack for PythonPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
+        super::bounds::python(root, src, &mut extractor.facts.tests);
         super::calls::count_python_assert_statements(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string"]);
         extractor.facts.budgets = super::budgets::extract(root, src, &PY_BUDGETS);
