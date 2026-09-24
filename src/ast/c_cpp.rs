@@ -46,6 +46,17 @@ fn transitive_helper(
     Some(out)
 }
 
+/// Functions a test or helper body runs through a table (`super::dispatch_calls`):
+/// `std::vector<std::pair<std::string, void (*)(Scope)>> tests = {{"get", TestGet}}`,
+/// `void (*checks[])(void) = {check_a, &check_b}`. A table declared at file scope is
+/// outside the body and is not read.
+pub const C_DISPATCH: super::DispatchSpec = super::DispatchSpec {
+    containers: &["initializer_list"],
+    names: &["identifier"],
+    // `&check_b` in a table: the name's grandparent is the list, so `names` finds it.
+    references: &[],
+};
+
 /// C language pack implementing [`LanguagePack`].
 pub struct CPack;
 
@@ -498,6 +509,7 @@ impl<'a> CCppExtractor<'a> {
                         let mut helper_fn = TestFn::default();
                         let mut dummy_calls = Vec::new();
                         self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
+                        super::dispatch_calls(body, self.src, &C_DISPATCH, &mut dummy_calls);
                         self.helpers.insert(
                             fn_name.to_string(),
                             super::HelperFacts {
@@ -542,6 +554,7 @@ impl<'a> CCppExtractor<'a> {
                                 };
                                 let mut calls = Vec::new();
                                 self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
+                                super::dispatch_calls(body, self.src, &C_DISPATCH, &mut calls);
                                 self.test_calls.push(calls);
                                 self.test_spans.push(call.start_byte()..body.end_byte());
                                 self.facts.tests.push(test_fn);
@@ -606,6 +619,7 @@ impl<'a> CCppExtractor<'a> {
             };
             let mut calls = Vec::new();
             self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
+            super::dispatch_calls(body, self.src, &C_DISPATCH, &mut calls);
             self.test_calls.push(calls);
             return Some(test_fn);
         }
@@ -634,6 +648,7 @@ impl<'a> CCppExtractor<'a> {
             };
             let mut calls = Vec::new();
             self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
+            super::dispatch_calls(body, self.src, &C_DISPATCH, &mut calls);
             self.test_calls.push(calls);
             return Some(test_fn);
         }
@@ -661,6 +676,7 @@ impl<'a> CCppExtractor<'a> {
             };
             let mut calls = Vec::new();
             self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
+            super::dispatch_calls(body, self.src, &C_DISPATCH, &mut calls);
             self.test_calls.push(calls);
             return Some(test_fn);
         }
@@ -1575,5 +1591,21 @@ int main() {
                 .skipped_error_nodes_count
                 > 0
         );
+    }
+
+    #[test]
+    fn a_test_main_calling_its_tests_through_a_table_counts_their_checks() {
+        let v = AssertVocabulary::default();
+        let asserts =
+            |src: &str| CppPack.extract("tests/t.cc", src, &v).unwrap().tests[0].total_asserts;
+        let tests =
+            "void TestFirst() { assert(a()); assert(b()); }\nvoid TestSecond() { assert(c()); }\n";
+        let direct = format!("{tests}int main() {{ TestFirst(); TestSecond(); return 0; }}\n");
+        let table = format!("{tests}int main() {{\n  const std::vector<std::pair<std::string, void (*)()>> tests = {{{{\"first\", TestFirst}}, {{\"second\", &TestSecond}}}};\n  for (const auto& t : tests) t.second();\n  return 0;\n}}\n");
+        assert_eq!(asserts(&direct), 3);
+        assert_eq!(asserts(&table), 3);
+        // A name in a table that is not a same-file helper counts nothing.
+        let other = "int main() { const int codes[] = {ERR_A, ERR_B}; use(codes); return 0; }\n";
+        assert_eq!(asserts(other), 0);
     }
 }

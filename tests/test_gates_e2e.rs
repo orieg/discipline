@@ -12376,3 +12376,36 @@ fn a_loop_skipping_unparseable_lines_is_a_warning_and_a_swallowed_error_still_bl
         .titles("error-swallowing")
         .contains(&"Empty Error Handler Added".to_string()));
 }
+
+#[test]
+fn a_cpp_test_table_and_a_declared_private_self_test_are_read() {
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[tests]\nfunctions = [\"_self_test\"]\n"
+    ));
+    repo.write(
+        "tests/park_test.cc",
+        "#include <cassert>\nvoid TestGet(int s) { assert(get(s) == 1); assert(size(s) == 1); }\nvoid TestSeek(int s) { assert(seek(s) == 2); }\nint main() {\n  for (int s = 0; s < 2; ++s) {\n    TestGet(s);\n    TestSeek(s);\n  }\n  return 0;\n}\n",
+    );
+    repo.commit("test: park points");
+    // The calls become a table the loop runs; the checks are the same.
+    repo.write(
+        "tests/park_test.cc",
+        "#include <cassert>\n#include <string>\n#include <utility>\n#include <vector>\nvoid TestGet(int s) { assert(get(s) == 1); assert(size(s) == 1); }\nvoid TestSeek(int s) { assert(seek(s) == 2); }\nint main() {\n  const std::vector<std::pair<std::string, void (*)(int)>> tests = {{\"get\", TestGet}, {\"seek\", TestSeek}};\n  for (int s = 0; s < 2; ++s) {\n    for (const auto& t : tests) t.second(s);\n  }\n  return 0;\n}\n",
+    );
+    repo.write(
+        "scripts/gate.py",
+        "def outside(span):\n    if span[0] > span[1]:\n        raise ValueError(\"inverted\")\n    return False\n\n\ndef _self_test():\n    def check(name, ok):\n        if not ok:\n            raise SystemExit(name)\n    try:\n        outside((3.0, 2.0))\n        check(\"an inverted span is refused\", False)\n    except ValueError:\n        pass\n",
+    );
+    repo.commit("refactor: table-driven tests");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+    assert!(
+        run.titles("error-swallowing").is_empty(),
+        "{:?}",
+        run.violations("error-swallowing")
+    );
+}

@@ -849,6 +849,27 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a C++ main running its tests from a table counts their checks; a declared _self_test is a test",
+        || {
+            use crate::ast::default_registry;
+            let reg = default_registry();
+            let cpp = reg
+                .find_pack("tests/t.cc")
+                .ok_or_else(|| anyhow::anyhow!("no c++ pack"))?;
+            let src = "void TestA() { assert(a()); assert(b()); }\nint main() {\n  const std::vector<std::pair<std::string, void (*)()>> tests = {{\"a\", TestA}};\n  for (const auto& t : tests) t.second();\n  return 0;\n}\n";
+            let table = cpp.extract("tests/t.cc", src, &AssertVocabulary::default())?.tests[0].total_asserts;
+            let py = reg
+                .find_pack("scripts/g.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let vocab = AssertVocabulary {
+                test_functions: vec!["_self_test".into()],
+                ..Default::default()
+            };
+            let tests = py.extract("scripts/g.py", "def _self_test():\n    return 0\n", &vocab)?.tests;
+            Ok(table == 2 && tests.len() == 1)
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;

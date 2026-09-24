@@ -539,8 +539,14 @@ impl<'a> PythonExtractor<'a> {
     ///   `@classmethod` / `@property` members are never tests.
     ///
     /// No other name is special: `self_test()` is a script entry point that
-    /// neither runner collects.
+    /// neither runner collects, unless `[tests].functions` declares it, which wins over
+    /// every rule above.
     fn is_collected_test(&self, fn_name: &str, decorators: Option<&[Node]>) -> bool {
+        // A name the repository declares (`[tests].functions`) is its test entry point
+        // whatever its spelling: `_self_test` is private by convention, not by rule.
+        if self.vocab.test_functions.iter().any(|f| f == fn_name) {
+            return true;
+        }
         if fn_name.starts_with('_')
             || matches!(
                 fn_name,
@@ -558,9 +564,6 @@ impl<'a> PythonExtractor<'a> {
         }
         if decorators.is_some_and(|decs| decs.iter().any(|d| self.is_non_test_decorator(*d))) {
             return false;
-        }
-        if self.vocab.test_functions.iter().any(|f| f == fn_name) {
-            return true;
         }
         match self.class_stack.last() {
             Some(&collected) => (collected || self.is_test_path) && fn_name.starts_with("test"),
@@ -1463,6 +1466,23 @@ def test_cluster():
         let facts = PythonPack.extract("scripts/s.py", src, &vocab).unwrap();
         let t = &facts.tests[0];
         assert_eq!((t.total_asserts, t.helper_checks), (2, 2), "{t:?}");
+    }
+
+    #[test]
+    fn a_declared_private_function_is_a_test_and_its_handlers_are_test_code() {
+        // A `_self_test` the repository declares is its test entry point: its body is test
+        // scope, so an expect-to-raise handler there is not error swallowing. An
+        // undeclared `_private` function is still not a test.
+        let src = "def _self_test():\n    try:\n        outside((3.0, 2.0))\n        check(\"refused\", False)\n    except ValueError:\n        pass\n\ndef _helper():\n    try:\n        g()\n    except ValueError:\n        pass\n";
+        let vocab = AssertVocabulary {
+            test_functions: vec!["_self_test".into()],
+            ..Default::default()
+        };
+        let facts = PythonPack.extract("scripts/gate.py", src, &vocab).unwrap();
+        let names: Vec<&str> = facts.tests.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["_self_test"]);
+        let lines: Vec<usize> = facts.swallowed.iter().map(|s| s.line).collect();
+        assert_eq!(lines, vec![11]);
     }
 
     #[test]
