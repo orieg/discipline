@@ -12302,3 +12302,43 @@ fn a_python_watch_loop_handling_exit_and_ctrl_c_is_not_error_swallowing() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["line"], 16);
 }
+
+#[test]
+fn a_multi_language_replay_refactor_and_idioms_are_not_findings() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    // A C++ differential test whose checks sit inline in main.
+    repo.write(
+        "tests/diff_test.cc",
+        "#include <cassert>\nint main() {\n  assert(seek(1) == 1);\n  assert(seek(2) == 2);\n  assert(count() == 2);\n  return 0;\n}\n",
+    );
+    repo.commit("test: differential");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    // The same checks moved two calls down: main -> CheckSeek -> Require -> abort.
+    repo.write(
+        "tests/diff_test.cc",
+        "#include <cstdlib>\nnamespace {\nvoid Require(bool ok) { if (!ok) std::abort(); }\nvoid CheckSeek(int k) { Require(seek(k) == k); }\nvoid CheckCount(int n) { Require(count() == n); }\n}  // namespace\nint main() {\n  CheckSeek(1);\n  CheckSeek(2);\n  CheckCount(2);\n  return 0;\n}\n",
+    );
+    // A self-test asserting that bad input raises, and a C header guarded for C++.
+    repo.write(
+        "scripts/check_bounds.py",
+        "def calculate(v):\n    if v < 0:\n        raise ValueError(\"negative\")\n    return v\n\n\ndef _self_test():\n    try:\n        calculate(-1)\n        assert False, \"expected ValueError\"\n    except ValueError:\n        pass\n",
+    );
+    repo.write(
+        "include/lib.h",
+        "#ifndef LIB_H\n#define LIB_H\n#ifdef __cplusplus\nextern \"C\" {\n#endif\nint lib_open(const char *path);\n#ifdef __cplusplus\n} /* extern \"C\" */\n#endif\n#endif\n",
+    );
+    repo.commit("refactor: move checks into helpers");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+    assert!(
+        run.titles("error-swallowing").is_empty(),
+        "{:?}",
+        run.violations("error-swallowing")
+    );
+    assert!(!run.stdout.contains("parse error region"), "{}", run.stdout);
+}

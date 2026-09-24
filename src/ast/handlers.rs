@@ -260,12 +260,33 @@ pub fn extract(
 }
 
 /// The expect-this-to-raise idiom: the handler is the passing path and the code around it
-/// fails when nothing was raised. Either the `try` has an `else` that raises or fails, or
-/// the handler is `continue` / `pass` and the statement after the `try` records a failure.
+/// fails when nothing was raised. Either the `try` body ends in a statement that always
+/// fails (`assert False`, `raise`, `pytest.fail(...)`), the `try` has an `else` that
+/// raises or fails, or the handler is `continue` / `pass` and the statement after the
+/// `try` records a failure.
 fn expects_the_error(handler: Node, src: &str) -> bool {
     let Some(try_stmt) = handler.parent() else {
         return false;
     };
+    let always_fails = |t: &str| {
+        let t = t.trim();
+        let assert_false = t
+            .strip_prefix("assert")
+            .map(|r| r.trim_start().trim_start_matches('('))
+            .is_some_and(|r| r.starts_with("False") || r.starts_with("0,") || r == "0");
+        assert_false
+            || t.starts_with("raise")
+            || t.starts_with("throw")
+            || t.starts_with("fail(")
+            || t.contains(".fail(")
+    };
+    let body_ends_failing = try_stmt
+        .child_by_field_name("body")
+        .and_then(|b| b.named_child(b.named_child_count().checked_sub(1)?))
+        .is_some_and(|last| always_fails(text(last, src)));
+    if body_ends_failing {
+        return true;
+    }
     let fails = |t: &str| {
         let t = t.trim();
         t.starts_with("raise")
@@ -924,6 +945,16 @@ mod pack_tests {
              def test_f():\n    try:\n        f()\n    except Exception:\n        pass\n",
         );
         assert_eq!(got, vec![(4, "empty-handler"), (13, "empty-handler")]);
+    }
+
+    #[test]
+    fn python_expect_raise_with_a_failing_try_body_is_not_a_site() {
+        let got = sites(
+            "pkg/check.py",
+            "def _self_test():\n    try:\n        calculate(-1)\n        assert False, \"expected ValueError\"\n    except ValueError:\n        pass\n    try:\n        calculate(-1)\n        pytest.fail(\"no raise\")\n    except ValueError:\n        pass\n    try:\n        calculate(-1)\n        assert result\n    except ValueError:\n        pass\n",
+        );
+        // An ordinary assertion at the end of the body can pass: that handler swallows.
+        assert_eq!(got, vec![(15, "empty-handler")]);
     }
 
     #[test]

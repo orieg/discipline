@@ -364,3 +364,79 @@ mod tests {
         assert_eq!(mask("OTHER(a)\n", &[], &[]), None);
     }
 }
+
+/// C headers open and close `extern "C"` under `#ifdef __cplusplus`:
+///
+/// ```c
+/// #ifdef __cplusplus
+/// extern "C" {
+/// #endif
+/// ...
+/// #ifdef __cplusplus
+/// }
+/// #endif
+/// ```
+///
+/// `extern "C"` is not C, and the lone `}` then closes nothing, so both are error regions
+/// for the C grammar. Inside such a guard, the `extern "C" {` line and a lone `}` line
+/// become spaces (same length, same newlines). `None` when the file has no such guard.
+pub fn mask_cplusplus_guards(src: &str) -> Option<String> {
+    let mut out = String::with_capacity(src.len());
+    let mut in_guard = false;
+    let mut changed = false;
+    for line in src.split_inclusive('\n') {
+        let t = line.trim();
+        let directive: String = t.split_whitespace().collect::<Vec<_>>().join(" ");
+        if directive == "#ifdef __cplusplus"
+            || directive == "#if defined(__cplusplus)"
+            || directive == "#if defined __cplusplus"
+        {
+            in_guard = true;
+        } else if t.starts_with("#endif") || t.starts_with("#else") || t.starts_with("#elif") {
+            in_guard = false;
+        } else if in_guard {
+            // `} /* extern "C" */` and `} // extern "C"` carry a comment after the brace.
+            let code = t.split("//").next().unwrap_or(t);
+            let code = code.split("/*").next().unwrap_or(code);
+            let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+            if compact == "extern\"C\"{" || compact == "}" {
+                out.extend(
+                    line.chars()
+                        .map(|c| if c == '\n' || c == '\r' { c } else { ' ' }),
+                );
+                changed = true;
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    changed.then_some(out)
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::mask_cplusplus_guards;
+
+    #[test]
+    fn extern_c_guards_are_blanked_and_other_braces_are_not() {
+        let src = "#ifdef __cplusplus\nextern \"C\" {\n#endif\nint f(void);\nstruct s { int a; };\n#ifdef __cplusplus\n}\n#endif\n";
+        let m = mask_cplusplus_guards(src).unwrap();
+        assert_eq!(m.len(), src.len());
+        assert!(
+            m.contains("#ifdef __cplusplus\n            \n#endif"),
+            "{m:?}"
+        );
+        assert!(m.contains("#ifdef __cplusplus\n \n#endif"), "{m:?}");
+        assert!(m.contains("struct s { int a; };"));
+        let commented = "#ifdef __cplusplus\n} /* extern \"C\" */\n#endif\n";
+        assert_eq!(
+            mask_cplusplus_guards(commented).unwrap(),
+            format!(
+                "#ifdef __cplusplus\n{}\n#endif\n",
+                " ".repeat("} /* extern \"C\" */".len())
+            )
+        );
+        // A `}` outside a __cplusplus guard is code.
+        assert_eq!(mask_cplusplus_guards("int f(void) {\n}\n"), None);
+    }
+}

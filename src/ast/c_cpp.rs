@@ -9,6 +9,43 @@ use super::{
     ParsedFileFacts, TestFn,
 };
 
+/// How many calls deep a test's same-file helpers are followed: a C or C++ test `main`
+/// usually drives check functions that call one `require`-style helper that aborts.
+const HELPER_DEPTH: usize = 3;
+
+/// A same-file helper's checks with those of the helpers it calls, up to `HELPER_DEPTH`
+/// levels; a recursive call is not followed again. `None` when `name` is not a helper.
+fn transitive_helper(
+    name: &str,
+    helpers: &std::collections::HashMap<String, super::HelperFacts>,
+    calls: &std::collections::HashMap<String, Vec<String>>,
+    path: &mut Vec<String>,
+) -> Option<super::HelperFacts> {
+    let own = helpers.get(name)?;
+    if path.iter().any(|p| p == name) {
+        return None;
+    }
+    let mut out = super::HelperFacts {
+        total_asserts: own.total_asserts,
+        strong_asserts: own.strong_asserts,
+        tautologies: own.tautologies,
+        fatal_asserts: own.fatal_asserts,
+    };
+    if path.len() + 1 < HELPER_DEPTH {
+        path.push(name.to_string());
+        for callee in calls.get(name).into_iter().flatten() {
+            if let Some(sub) = transitive_helper(callee, helpers, calls, path) {
+                out.total_asserts += sub.total_asserts;
+                out.strong_asserts += sub.strong_asserts;
+                out.tautologies += sub.tautologies;
+                out.fatal_asserts += sub.fatal_asserts;
+            }
+        }
+        path.pop();
+    }
+    Some(out)
+}
+
 /// C language pack implementing [`LanguagePack`].
 pub struct CPack;
 
@@ -33,12 +70,34 @@ impl LanguagePack for CPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
+        let facts = self.extract_as_c(path, src, vocab)?;
+        // A `.h` header may be C++ (a class, a namespace): when the C grammar leaves error
+        // regions, the C++ reading is kept if it leaves fewer.
+        if facts.has_parse_errors && super::extension(path) == Some("h") {
+            let cpp = CppPack.extract(path, src, vocab)?;
+            if cpp.skipped_error_nodes_count < facts.skipped_error_nodes_count {
+                return Ok(cpp);
+            }
+        }
+        Ok(facts)
+    }
+}
+
+impl CPack {
+    fn extract_as_c(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_c::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the C grammar: {e}"))?;
         let masked = mask_macros(src, vocab);
         let src = masked.as_deref().unwrap_or(src);
+        let guarded = super::c_macros::mask_cplusplus_guards(src);
+        let src = guarded.as_deref().unwrap_or(src);
         let tree = parser
             .parse(src, None)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
@@ -52,6 +111,7 @@ impl LanguagePack for CPack {
             is_test_path: is_c_cpp_test_path(path),
             test_spans: Vec::new(),
             helpers: std::collections::HashMap::new(),
+            helper_calls: std::collections::HashMap::new(),
             test_calls: Vec::new(),
             facts: ParsedFileFacts {
                 has_parse_errors: has_errors,
@@ -114,6 +174,7 @@ impl LanguagePack for CppPack {
             is_test_path: is_c_cpp_test_path(path),
             test_spans: Vec::new(),
             helpers: std::collections::HashMap::new(),
+            helper_calls: std::collections::HashMap::new(),
             test_calls: Vec::new(),
             facts: ParsedFileFacts {
                 has_parse_errors: has_errors,
@@ -312,6 +373,9 @@ struct CCppExtractor<'a> {
     is_test_path: bool,
     test_spans: Vec<std::ops::Range<usize>>,
     helpers: std::collections::HashMap<String, super::HelperFacts>,
+    /// The calls each same-file helper makes: `main` -> `check_seek` -> `require` is a
+    /// test's checks two levels down.
+    helper_calls: std::collections::HashMap<String, Vec<String>>,
     test_calls: Vec<Vec<String>>,
     facts: ParsedFileFacts,
 }
@@ -358,10 +422,14 @@ impl<'a> CCppExtractor<'a> {
     }
 
     fn resolve_same_file_helpers(&mut self) {
+        let (helpers, helper_calls) = (&self.helpers, &self.helper_calls);
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
                 for call in calls {
-                    if let Some(h) = self.helpers.get(call) {
+                    let mut path = Vec::new();
+                    if let Some(h) =
+                        transitive_helper(call, helpers, helper_calls, &mut path).as_ref()
+                    {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {
                             test.total_asserts = test.total_asserts.saturating_sub(1);
                         }
@@ -439,6 +507,7 @@ impl<'a> CCppExtractor<'a> {
                                 fatal_asserts: helper_fn.fatal_asserts,
                             },
                         );
+                        self.helper_calls.insert(fn_name.to_string(), dummy_calls);
                     }
                 }
                 i += 1;
@@ -776,6 +845,11 @@ impl<'a> CCppExtractor<'a> {
             {
                 test_fn.total_asserts += 1;
                 test_fn.strong_asserts += 1;
+                // Ending the process is as fatal as `assert` / `ASSERT_*`; `fail` means
+                // different things in different frameworks.
+                if fn_name != "fail" {
+                    test_fn.fatal_asserts += 1;
+                }
                 return;
             }
 
@@ -1454,6 +1528,52 @@ int main() {
         assert_eq!(
             (later.line, later.shape.clone()),
             (10, functions::BodyShape::Empty)
+        );
+    }
+
+    #[test]
+    fn helpers_are_followed_three_calls_deep_and_recursion_stops() {
+        let v = AssertVocabulary::default();
+        let asserts =
+            |src: &str| CppPack.extract("tests/t.cc", src, &v).unwrap().tests[0].total_asserts;
+        let require = "namespace {\nvoid Require(bool c) { if (!c) std::abort(); }\n";
+        // main -> CheckA -> Require: the checks moved two levels down still count.
+        let two = format!("{require}void CheckA() {{ Require(f()); Require(g()); }}\n}}  // namespace\nint main() {{ CheckA(); return 0; }}\n");
+        assert_eq!(asserts(&two), 2);
+        // Three levels is the limit; a fourth is not followed.
+        let three = format!("{require}void CheckA() {{ Require(f()); }}\nvoid Suite() {{ CheckA(); }}\n}}\nint main() {{ Suite(); return 0; }}\n");
+        assert_eq!(asserts(&three), 1);
+        let four = format!("{require}void CheckA() {{ Require(f()); }}\nvoid Suite() {{ CheckA(); }}\nvoid All() {{ Suite(); }}\n}}\nint main() {{ All(); return 0; }}\n");
+        assert_eq!(asserts(&four), 0);
+        // Mutual recursion terminates and counts each helper once per path.
+        let cycle = "void A(int n);\nvoid B(int n) { if (n) A(n - 1); assert(n >= 0); }\nvoid A(int n) { if (n) B(n - 1); }\nint main() { A(3); return 0; }\n";
+        assert_eq!(asserts(cycle), 1);
+        // A self-recursive helper's checks count once, not once per level.
+        let recursive = "void Walk(int n) { assert(n >= 0); if (n) Walk(n - 1); }\nint main() { Walk(3); return 0; }\n";
+        assert_eq!(asserts(recursive), 1);
+    }
+
+    #[test]
+    fn c_headers_with_extern_c_guards_and_cpp_headers_parse() {
+        let v = AssertVocabulary::default();
+        let guarded = "#ifndef X_H\n#define X_H\n#ifdef __cplusplus\nextern \"C\" {\n#endif\nint x_open(const char *p);\n#ifdef __cplusplus\n}\n#endif\n#endif\n";
+        assert_eq!(
+            CPack
+                .extract("include/x.h", guarded, &v)
+                .unwrap()
+                .skipped_error_nodes_count,
+            0
+        );
+        let cpp = "#pragma once\n#include <string>\nnamespace db {\nclass Table {\n public:\n  explicit Table(std::string name);\n  bool Contains(const std::string& k) const;\n private:\n  std::string name_;\n};\n}  // namespace db\n";
+        let facts = CPack.extract("include/table.h", cpp, &v).unwrap();
+        assert_eq!(facts.skipped_error_nodes_count, 0);
+        // A `.c` file is never re-read as C++.
+        assert!(
+            CPack
+                .extract("src/table.c", cpp, &v)
+                .unwrap()
+                .skipped_error_nodes_count
+                > 0
         );
     }
 }

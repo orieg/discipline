@@ -811,6 +811,25 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a C++ test's checks two helper calls down still count, a C header's extern \"C\" guard parses",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let cpp = reg
+                .find_pack("tests/t.cc")
+                .ok_or_else(|| anyhow::anyhow!("no c++ pack"))?;
+            let src = "void Require(bool c) { if (!c) std::abort(); }\nvoid CheckA() { Require(f()); Require(g()); }\nint main() { CheckA(); return 0; }\n";
+            let t = &cpp.extract("tests/t.cc", src, &v)?.tests[0];
+            let c = reg
+                .find_pack("include/x.h")
+                .ok_or_else(|| anyhow::anyhow!("no c pack"))?;
+            let header = "#ifdef __cplusplus\nextern \"C\" {\n#endif\nint f(void);\n#ifdef __cplusplus\n}\n#endif\n";
+            let h = c.extract("include/x.h", header, &v)?;
+            Ok(t.total_asserts == 2 && t.fatal_asserts == 2 && h.skipped_error_nodes_count == 0)
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;
