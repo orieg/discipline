@@ -1018,6 +1018,52 @@ Working for 3 weeks on migration.
 }
 
 #[test]
+fn time_estimates_observed_durations_and_number_word_intervals_pass() {
+    let repo = Repo::new();
+    repo.write(
+        "docs/ops.md",
+        "# Operations\n\
+The job pulls the latest image every five minutes.\n\
+The check fails unless the newest backup is under two hours old.\n\
+The coordinator has been running the old build for two days.\n\
+The shutdown was raised by the low-battery flag after 14.5 min at 23% charge.\n\
+There has been no successful restore drill on record for nine days.\n\
+The alert fires: nine days with no passing drill.\n\
+The Jepsen suite requires a 100-hour run with zero anomalies.\n\
+The agent pulls the new image within five minutes of a push.\n",
+    );
+    repo.commit("docs: operations");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.outcome("time-estimates")["violations"],
+        serde_json::json!([]),
+        "{}",
+        run.stdout
+    );
+
+    // Controls: the same shapes carrying an estimate still fire, one finding per line.
+    let bad = Repo::new();
+    bad.write(
+        "docs/plan.md",
+        "# Plan\n\
+The team was asked to finish the port in three days.\n\
+The migration has been scoped at two weeks.\n\
+We will ship within two weeks.\n\
+Budget a 100-hour effort for the rewrite.\n",
+    );
+    bad.commit("docs: plan");
+    let run = bad.check(&["--fail-on-warnings"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let lines: Vec<u64> = run.outcome("time-estimates")["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(lines, [2, 3, 4, 5], "{}", run.stdout);
+}
+
+#[test]
 fn f2_repro_brief_time_estimates_all_fire_and_negative_controls_pass() {
     let repo = Repo::new();
     repo.write(

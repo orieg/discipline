@@ -761,5 +761,89 @@
     "is_violation": false,
     "category": "brief_repro",
     "description": "libjudy is 19 years old."
+  },
+  {
+    "id": "tn-50",
+    "text": "The job pulls the latest image every five minutes.",
+    "is_violation": false,
+    "category": "operational_frequency",
+    "description": "Frequency written with a number word"
+  },
+  {
+    "id": "tn-51",
+    "text": "The check fails unless the newest backup is under two hours old.",
+    "is_violation": false,
+    "category": "historical_age",
+    "description": "Age threshold written with a number word"
+  },
+  {
+    "id": "tn-52",
+    "text": "The coordinator has been running the old build for two days.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Observed duration in the present perfect"
+  },
+  {
+    "id": "tn-53",
+    "text": "The shutdown was raised by the low-battery flag after 14.5 min at 23% charge.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "A past event narrated in the past tense"
+  },
+  {
+    "id": "tn-54",
+    "text": "There has been no successful restore drill on record for nine days.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Observed absence on record"
+  },
+  {
+    "id": "tn-55",
+    "text": "The alert fires: nine days with no passing drill.",
+    "is_violation": false,
+    "category": "historical_duration",
+    "description": "Observed gap with no event"
+  },
+  {
+    "id": "tn-56",
+    "text": "The Jepsen suite requires a 100-hour run with zero anomalies.",
+    "is_violation": false,
+    "category": "operational_budget",
+    "description": "Test run length, not a delivery estimate"
+  },
+  {
+    "id": "tn-57",
+    "text": "The agent pulls the new image within five minutes of a push.",
+    "is_violation": false,
+    "category": "operational_interval",
+    "description": "Sub-hour operational bound"
+  },
+  {
+    "id": "tp-61",
+    "text": "The team was asked to finish the port in three days.",
+    "is_violation": true,
+    "category": "duration_estimate",
+    "description": "Past tense does not excuse an 'in N days' estimate"
+  },
+  {
+    "id": "tp-62",
+    "text": "The migration has been scoped at two weeks.",
+    "is_violation": true,
+    "category": "duration_estimate",
+    "description": "Present perfect with plan vocabulary"
+  },
+  {
+    "id": "tp-63",
+    "text": "We will ship within two weeks.",
+    "is_violation": true,
+    "category": "delivery_verb",
+    "description": "'within' with a delivery-scale unit stays an estimate"
+  },
+  {
+    "id": "tp-64",
+    "text": "Budget a 100-hour effort for the rewrite.",
+    "is_violation": true,
+    "category": "engineering_labor_unit",
+    "description": "N-hour effort is labor, not a test run"
   }
 ]
