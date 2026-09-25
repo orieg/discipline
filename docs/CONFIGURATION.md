@@ -644,6 +644,7 @@ Directives must begin on their own line. Mentions mid-sentence or inside markdow
 | `allow-msrv:` / `discipline:allow(msrv)` / `allow(msrv)` | `msrv` | Crate name or MSRV error diagnostic |
 | `allow-miri:` / `discipline:allow(miri)` / `allow(miri)` | `miri` | Test name or unsupported Miri operation |
 | `allow-sanitizers:` / `discipline:allow(sanitizers)` / `allow(sanitizers)` | `sanitizers` | Test or binary name with memory check rationale |
+| `allow-vacuous-test:` / `discipline:allow(vacuous-tests)` / `allow(vacuous-tests)` | `vacuous-tests` | Name of the new test the vacuous-tests finding is on |
 
 ### Inline Line Exemptions
 

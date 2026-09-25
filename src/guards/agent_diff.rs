@@ -124,7 +124,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
             &ctx.directives,
             is_staged,
         )?,
-        evaluate_vacuous_tests(&added, &gates.vacuous_tests)?,
+        evaluate_vacuous_tests(&added, &gates.vacuous_tests, &ctx.directives)?,
         evaluate_ignored_tests(
             &pairs,
             &added,
@@ -823,6 +823,7 @@ pub fn evaluate_assertion_reduction(
 pub fn evaluate_vacuous_tests(
     added: &[Located],
     settings: &crate::config::AssertionGate,
+    directives: &[crate::tokens::ParsedDirective],
 ) -> Result<GateOutcome> {
     const GATE: &str = "vacuous-tests";
     let exempt = exempt_filter(settings)?;
@@ -830,6 +831,16 @@ pub fn evaluate_vacuous_tests(
     out.examined = added.len();
 
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
+        // `allow-vacuous-test: <test> <reason>` lifts every finding on that one test.
+        if let Some(record) = tokens::find_override(
+            directives,
+            GATE,
+            tokens::ALLOW_VACUOUS_TEST,
+            leaf_name(a.test),
+        ) {
+            out.overrides.push(record);
+            continue;
+        }
         // Every assertion is on a double's interactions: the test checks that the mock
         // was called, and nothing about what the code produced.
         if a.test.mock_asserts > 0
@@ -887,7 +898,8 @@ pub fn evaluate_vacuous_tests(
                 Some(a.test.line),
                 format!("New test `{}` {why}; it cannot fail.", a.test.name),
                 "Assert the behavior under test. If the suite asserts through helpers or custom \
-                 macros, declare them in `assert_helper_fns` / `extra_assert_macros`.",
+                 macros, declare them in `assert_helper_fns` / `extra_assert_macros`; a test that \
+                 is meant not to assert (a smoke test) takes `allow-vacuous-test: <test> <reason>`.",
             );
         } else if let Some(min) = settings.min_assertions_per_test {
             if a.test.effective_asserts() < min {
@@ -1566,18 +1578,34 @@ mod tests {
             file_survives: true,
             test: &t_empty,
         }];
-        let out_empty = evaluate_vacuous_tests(&loc_empty, &settings).unwrap();
+        let out_empty = evaluate_vacuous_tests(&loc_empty, &settings, &[]).unwrap();
         assert_eq!(out_empty.violations.len(), 1);
         assert!(out_empty.violations[0]
             .message
             .contains("contains no assertion"));
+
+        // `allow-vacuous-test` naming the test lifts it and records the override; naming
+        // another test lifts nothing.
+        let lift = |body: &str| {
+            let d = tokens::parse_directives(body, tokens::OverrideSource::PrBody);
+            evaluate_vacuous_tests(&loc_empty, &settings, &d).unwrap()
+        };
+        let lifted = lift(&format!(
+            "allow-vacuous-test: {} smoke test\n",
+            t_empty.name
+        ));
+        assert!(lifted.violations.is_empty());
+        assert_eq!(lifted.overrides.len(), 1);
+        let other = lift("allow-vacuous-test: some_other_test smoke test\n");
+        assert_eq!(other.violations.len(), 1);
+        assert!(other.overrides.is_empty());
 
         let loc_tauto = [Located {
             path: "tests/a.rs",
             file_survives: true,
             test: &t_tautology,
         }];
-        let out_tauto = evaluate_vacuous_tests(&loc_tauto, &settings).unwrap();
+        let out_tauto = evaluate_vacuous_tests(&loc_tauto, &settings, &[]).unwrap();
         assert_eq!(out_tauto.violations.len(), 1);
         assert!(out_tauto.violations[0]
             .message
@@ -1588,7 +1616,7 @@ mod tests {
             file_survives: true,
             test: &t_real,
         }];
-        let out_real = evaluate_vacuous_tests(&loc_real, &settings).unwrap();
+        let out_real = evaluate_vacuous_tests(&loc_real, &settings, &[]).unwrap();
         assert_eq!(out_real.violations.len(), 0);
     }
 

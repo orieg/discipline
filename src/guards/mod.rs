@@ -527,6 +527,8 @@ pub fn run_checks(
             "miri"
         } else if note.contains("allow-sanitizers") {
             "sanitizers"
+        } else if note.contains("allow-vacuous-test") {
+            "vacuous-tests"
         } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
             "assertion-reduction"
         } else {

@@ -330,11 +330,18 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_kind: DirectiveSubjectKind::TestName,
         subject_doc: "Test or binary name with memory check rationale",
     },
+    DirectiveSpec {
+        canonical: "allow-vacuous-test",
+        deprecated: None,
+        gate: "vacuous-tests",
+        subject_kind: DirectiveSubjectKind::TestName,
+        subject_doc: "Name of the new test the vacuous-tests finding is on",
+    },
 ];
 
-/// The 40 named directives recognized by discipline (30 canonical + 10 deprecated aliases).
+/// The 41 named directives recognized by discipline (31 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 30 Canonical
+    // 31 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
@@ -365,6 +372,7 @@ pub const KNOWN_DIRECTIVES: &[&str] = &[
     "allow-msrv",
     "allow-miri",
     "allow-sanitizers",
+    "allow-vacuous-test",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -551,6 +559,14 @@ pub const ALLOW_SANITIZERS: &[&str] = &[
     "allow(sanitizers)",
 ];
 
+/// Lifts a `vacuous-tests` finding on one new test. The namespaced forms are shared with
+/// [`ALLOW_NUL`], whose subject is a file path, never a test name.
+pub const ALLOW_VACUOUS_TEST: &[&str] = &[
+    "allow-vacuous-test",
+    "discipline:allow(vacuous-tests)",
+    "allow(vacuous-tests)",
+];
+
 /// Returns the slice of aliases accepted for a given directive name.
 pub fn names_for_directive(name: &str) -> &'static [&'static str] {
     let lower = name.to_ascii_lowercase();
@@ -585,6 +601,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-msrv" => ALLOW_MSRV,
         "allow-miri" => ALLOW_MIRI,
         "allow-sanitizers" => ALLOW_SANITIZERS,
+        "allow-vacuous-test" => ALLOW_VACUOUS_TEST,
         _ => &[],
     }
 }
@@ -599,7 +616,7 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 24 Canonical
+    // 31 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
@@ -630,6 +647,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-msrv",
     "allow-miri",
     "allow-sanitizers",
+    "allow-vacuous-test",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",

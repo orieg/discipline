@@ -282,6 +282,55 @@ fn vacuous_tests_fire_on_empty_and_tautological_tests_only() {
 }
 
 #[test]
+fn vacuous_tests_are_lifted_per_test_by_allow_vacuous_test() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/b.rs",
+        "#[test]\nfn ghost() {}\n\n#[test]\nfn tautology() { assert!(true); }\n",
+    );
+    repo.commit("test: add");
+    assert_eq!(repo.check(&[]).titles("vacuous-tests").len(), 2);
+
+    // Naming one test lifts that test only, and the override is recorded.
+    repo.write(
+        "body.md",
+        "Summary\n\nallow-vacuous-test: ghost smoke test, it only has to load the fixtures\n",
+    );
+    let run = repo.check(&["--pr-body-file", "body.md"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let outcome = run.outcome("vacuous-tests");
+    let lines: Vec<u64> = outcome["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(lines, [5], "{}", run.stdout);
+    assert_eq!(outcome["overrides"].as_array().unwrap().len(), 1);
+
+    // The namespaced form works too; with a path subject (the NUL-byte marker's) it lifts
+    // no test.
+    repo.write(
+        "body.md",
+        "discipline:allow(vacuous-tests): tautology placeholder until the parser lands\n",
+    );
+    let lines = |run: &common::Run| {
+        run.outcome("vacuous-tests")["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["line"].as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(lines(&repo.check(&["--pr-body-file", "body.md"])), [2]);
+    repo.write(
+        "body.md",
+        "discipline:allow(vacuous-tests): tests/b.rs fixture file with an embedded NUL\n",
+    );
+    assert_eq!(lines(&repo.check(&["--pr-body-file", "body.md"])), [2, 5]);
+}
+
+#[test]
 fn vacuous_tests_honor_configured_assert_helpers() {
     let repo = Repo::new();
     repo.write(
