@@ -238,6 +238,7 @@ mod tests {
             planned_gates: Vec::new(),
             outcomes: Vec::new(),
             policy_failures: Vec::new(),
+            deprecations: Vec::new(),
         };
         let json = format_gitlab(&summary);
         assert_eq!(json.trim(), "[]");
@@ -266,6 +267,7 @@ mod tests {
             planned_gates: Vec::new(),
             outcomes: vec![outcome],
             policy_failures: Vec::new(),
+            deprecations: Vec::new(),
         };
 
         let json = format_gitlab(&summary);

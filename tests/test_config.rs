@@ -620,3 +620,59 @@ fn extra_assert_macros_drop_a_trailing_bang_at_load() {
         ["check_sorted"]
     );
 }
+
+/// The rename mechanism under a synthetic alias table: no key is renamed yet, so the real
+/// table is empty and this is the only way to exercise the path 1.0 promises.
+#[test]
+fn a_renamed_key_is_read_under_its_old_name_with_a_deprecation_note() {
+    use discipline::config::KeyAlias;
+    const ALIASES: &[KeyAlias] = &[
+        KeyAlias {
+            old: "gates.vacuous-tests.min_assertions",
+            new: "min_assertions_per_test",
+        },
+        KeyAlias {
+            old: "gates.*.exempt",
+            new: "exempt_paths",
+        },
+    ];
+    let head = "[meta]\nversion = 1\nname = \"t\"\n";
+
+    // The old name alone: read as the new one, with one note per rewrite.
+    let cfg = DisciplineConfig::from_toml_str_with_aliases(
+        &format!("{head}[gates.vacuous-tests]\nmin_assertions = 2\n[gates.pii]\nexempt = [\"a/**\"]\n[gates.agents-md]\nexempt = [\"b/**\"]\n"),
+        ALIASES,
+    )
+    .unwrap();
+    assert_eq!(cfg.gates.vacuous_tests.min_assertions_per_test, Some(2));
+    assert_eq!(cfg.gates.pii.exempt_paths, ["a/**"]);
+    assert_eq!(cfg.gates.agents_md.exempt_paths, ["b/**"]);
+    assert_eq!(cfg.deprecations.len(), 3, "{:?}", cfg.deprecations);
+    assert!(cfg.deprecations.iter().any(|n| n.starts_with(
+        "`gates.vacuous-tests.min_assertions` is deprecated: it is read as `gates.vacuous-tests.min_assertions_per_test`"
+    )));
+
+    // Both names in one table: an error, never a silent pick.
+    let err = DisciplineConfig::from_toml_str_with_aliases(
+        &format!("{head}[gates.vacuous-tests]\nmin_assertions = 2\nmin_assertions_per_test = 3\n"),
+        ALIASES,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("are both set"), "{err}");
+
+    // The new name alone: no note.
+    let cfg = DisciplineConfig::from_toml_str_with_aliases(
+        &format!("{head}[gates.vacuous-tests]\nmin_assertions_per_test = 3\n"),
+        ALIASES,
+    )
+    .unwrap();
+    assert!(cfg.deprecations.is_empty());
+
+    // Without the alias the old name is an unknown key, as for any typo.
+    assert!(DisciplineConfig::from_toml_str_with_aliases(
+        &format!("{head}[gates.vacuous-tests]\nmin_assertions = 2\n"),
+        &[],
+    )
+    .is_err());
+}

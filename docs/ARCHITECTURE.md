@@ -202,7 +202,7 @@ A consumer who runs Discipline with zero configuration, or who configures only s
 
 ### 3.2 What 1.0 Freezes
 
-From 1.0, the surfaces below change incompatibly only in a new major version. Adding to them (a new flag, key, field, gate, tool or language) is a minor release; changing or removing what exists is a major one. A renamed flag or key keeps its old name as an alias, with a deprecation note in the report, until the next major version.
+From 1.0, the surfaces below change incompatibly only in a new major version. Adding to them (a new flag, key, field, gate, tool or language) is a minor release; changing or removing what exists is a major one. A renamed flag or key keeps its old name as an alias, with a deprecation note in the report, until the next major version. For configuration keys the mechanism is `KEY_ALIASES` in `src/config.rs`: the old name is read as the new one, setting both is a configuration error (exit 2), and each use adds a line to the report's `deprecations` list (`deprecated: ...` in the text report), which never fails the run.
 
 | Surface | Frozen | Free to evolve in a minor release |
 |---|---|---|

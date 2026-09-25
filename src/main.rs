@@ -510,6 +510,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
             .collect(),
         outcomes: vec![fatal_outcome],
         policy_failures: Vec::new(),
+        deprecations: Vec::new(),
     };
     if let Some(path) = &args.json_out {
         let _ = std::fs::write(

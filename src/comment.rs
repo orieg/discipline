@@ -347,6 +347,7 @@ mod tests {
             outcomes: vec![o],
             planned_gates: vec![],
             policy_failures: vec![],
+            deprecations: Vec::new(),
         };
         let body = render(&summary, false);
         assert!(body.starts_with(MARKER));

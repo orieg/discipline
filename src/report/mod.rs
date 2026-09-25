@@ -206,6 +206,9 @@ fn render_terminal_to_writer<W: Write>(
     for failure in &summary.policy_failures {
         writeln!(w, "{}", style::red(&format!("failure: {failure}")))?;
     }
+    for note in &summary.deprecations {
+        writeln!(w, "deprecated: {note}")?;
+    }
     if summary.is_success(fail_on_warnings, fail_on_overrides) {
         writeln!(w, "{}", style::green("Status: PASS"))?;
     } else {
@@ -288,6 +291,9 @@ pub fn render_step_summary_to_writer(
     writeln!(file, "{heading}\n\nBase: `{}`\n", summary.base)?;
     for failure in &summary.policy_failures {
         writeln!(file, "**Refused:** {failure}\n")?;
+    }
+    for note in &summary.deprecations {
+        writeln!(file, "**Deprecated:** {note}\n")?;
     }
 
     let (passed, failed, disabled, examined) =
@@ -628,6 +634,7 @@ mod tests {
             outcomes: vec![o1, o2, o3, o4, o5],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            deprecations: Vec::new(),
         };
 
         let prompt = format_agent_prompt(&summary);
@@ -689,6 +696,7 @@ mod tests {
             outcomes: vec![o1, o2, o3],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            deprecations: Vec::new(),
         };
 
         let mut buf = Vec::new();
@@ -701,6 +709,41 @@ mod tests {
         );
         assert!(out.contains("errors: 0  warnings: 0  overrides: 0"));
         assert!(out.contains("Status: PASS"));
+    }
+
+    #[test]
+    fn deprecations_are_reported_and_never_fail_the_run() {
+        let summary = CheckSummary {
+            base: "main".to_string(),
+            errors: 0,
+            warnings: 0,
+            notes: 0,
+            overrides: 0,
+            baselined: 0,
+            outcomes: vec![],
+            planned_gates: vec![],
+            policy_failures: Vec::new(),
+            deprecations: vec!["`gates.x.old` is deprecated".into()],
+        };
+        let mut buf = Vec::new();
+        render_terminal_to_writer(&mut buf, &summary, false, false).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("deprecated: `gates.x.old` is deprecated"),
+            "{out}"
+        );
+        assert!(out.contains("Status: PASS"), "{out}");
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["deprecations"][0], "`gates.x.old` is deprecated");
+        // An empty list stays out of the report, as policy_failures does.
+        let quiet = CheckSummary {
+            deprecations: Vec::new(),
+            ..summary
+        };
+        assert!(serde_json::to_value(&quiet)
+            .unwrap()
+            .get("deprecations")
+            .is_none());
     }
 
     #[test]
@@ -727,6 +770,7 @@ mod tests {
             outcomes: vec![o1],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            deprecations: Vec::new(),
         };
 
         let mut buf = Vec::new();
@@ -758,6 +802,7 @@ mod tests {
             outcomes: vec![o1, o2],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            deprecations: Vec::new(),
         };
 
         let prompt = format_agent_prompt(&summary);
@@ -791,6 +836,7 @@ mod tests {
             outcomes: vec![o1],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            deprecations: Vec::new(),
         };
 
         let mut buf = Vec::new();

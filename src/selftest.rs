@@ -2118,6 +2118,7 @@ command = "cargo test"
                 outcomes: vec![o],
                 planned_gates: vec![],
                 policy_failures: Vec::new(),
+                deprecations: Vec::new(),
             };
 
             let prompt = format_agent_prompt(&summary);

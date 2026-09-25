@@ -392,6 +392,72 @@ pub struct DisciplineConfig {
     pub languages: LanguagesConfig,
     #[serde(default)]
     pub gates: Gates,
+    /// Deprecated key names this configuration used, one note each (see [`KEY_ALIASES`]).
+    #[serde(skip)]
+    pub deprecations: Vec<String>,
+}
+
+/// A configuration key renamed after 1.0. The old name keeps working until the next major
+/// version: it is read as the new one, and the report carries a deprecation note.
+#[derive(Debug, Clone, Copy)]
+pub struct KeyAlias {
+    /// Dotted path of the old key, e.g. `gates.vacuous-tests.old_name`. A `*` segment
+    /// matches any key at that level (a key every gate table carries).
+    pub old: &'static str,
+    /// The new key's name, at the same level as the old one.
+    pub new: &'static str,
+}
+
+/// Every renamed configuration key. Empty until a key is renamed: the mechanism exists so
+/// the 1.0 promise (docs/ARCHITECTURE.md §3.2) is kept by code, not by hand.
+pub const KEY_ALIASES: &[KeyAlias] = &[];
+
+/// Rewrites each old key in `value` to its new name and returns one deprecation note per
+/// rewrite. Both names set in the same table is an error: the two values could disagree,
+/// and neither can be picked silently.
+pub fn apply_key_aliases(value: &mut Value, aliases: &[KeyAlias]) -> Result<Vec<String>> {
+    fn walk(
+        table: &mut toml::map::Map<String, Value>,
+        prefix: &str,
+        segments: &[&str],
+        alias: &KeyAlias,
+        notes: &mut Vec<String>,
+    ) -> Result<()> {
+        let (first, rest) = segments.split_first().expect("non-empty path");
+        if rest.is_empty() {
+            if let Some(old_value) = table.remove(*first) {
+                let old_path = format!("{prefix}{first}");
+                let new_path = format!("{prefix}{}", alias.new);
+                if table.contains_key(alias.new) {
+                    bail!("`{old_path}` and `{new_path}` are both set; `{old_path}` is the deprecated name of `{new_path}`: keep only `{new_path}`");
+                }
+                table.insert(alias.new.to_string(), old_value);
+                notes.push(format!(
+                    "`{old_path}` is deprecated: it is read as `{new_path}` until the next major version; rename it"
+                ));
+            }
+            return Ok(());
+        }
+        let keys: Vec<String> = if *first == "*" {
+            table.keys().cloned().collect()
+        } else {
+            vec![first.to_string()]
+        };
+        for k in keys {
+            if let Some(Value::Table(child)) = table.get_mut(&k) {
+                walk(child, &format!("{prefix}{k}."), rest, alias, notes)?;
+            }
+        }
+        Ok(())
+    }
+    let mut notes = Vec::new();
+    if let Value::Table(root) = value {
+        for alias in aliases {
+            let segments: Vec<&str> = alias.old.split('.').collect();
+            walk(root, "", &segments, alias, &mut notes)?;
+        }
+    }
+    Ok(notes)
 }
 
 /// Per-language parsing settings, read by the language packs before any gate runs.
@@ -1765,6 +1831,7 @@ impl DisciplineConfig {
             tests: TestsConfig::default(),
             languages: LanguagesConfig::default(),
             gates: Gates::default(),
+            deprecations: Vec::new(),
         }
     }
 
@@ -1957,6 +2024,19 @@ impl DisciplineConfig {
     }
 
     fn from_value(value: Value) -> Result<Self> {
+        Self::from_value_with_aliases(value, KEY_ALIASES)
+    }
+
+    /// [`Self::from_toml_str`] under another alias table. For tests of the rename
+    /// mechanism, which ships with no renamed key.
+    #[doc(hidden)]
+    pub fn from_toml_str_with_aliases(content: &str, aliases: &[KeyAlias]) -> Result<Self> {
+        let value: Value = toml::from_str(content)?;
+        Self::from_value_with_aliases(value, aliases)
+    }
+
+    fn from_value_with_aliases(mut value: Value, aliases: &[KeyAlias]) -> Result<Self> {
+        let deprecations = apply_key_aliases(&mut value, aliases)?;
         // Name planned gates explicitly: "unknown field" would read as a typo,
         // and a user must learn the gate exists but is not shipped yet.
         if let Some(gates) = value.get("gates").and_then(Value::as_table) {
@@ -1968,6 +2048,7 @@ impl DisciplineConfig {
             .try_into()
             .context("discipline configuration failed schema validation")?;
         config.normalize();
+        config.deprecations = deprecations;
         if config.meta.version != SCHEMA_VERSION {
             bail!(
                 "unsupported [meta] version {} (this binary understands version {})",

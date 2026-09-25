@@ -153,6 +153,9 @@ pub struct CheckSummary {
     /// overrides awaiting approval). Any entry fails the run.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub policy_failures: Vec<String>,
+    /// Deprecated configuration keys this run read, one note each. They never fail the run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub deprecations: Vec<String>,
 }
 
 impl CheckSummary {
@@ -611,6 +614,7 @@ pub fn run_checks(
             .collect(),
         outcomes,
         policy_failures: Vec::new(),
+        deprecations: ctx.config.deprecations.clone(),
     })
 }
 
