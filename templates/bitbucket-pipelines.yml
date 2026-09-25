@@ -15,7 +15,7 @@ pipelines:
           script:
             - set -euo pipefail
             - target_branch="${BITBUCKET_PR_DESTINATION_BRANCH:-main}"
-            - git fetch origin "${target_branch}" --depth=100 || true
+            - git fetch origin "${target_branch}" || true
             - discipline check --base "origin/${target_branch}" --json-out discipline-report.json
           artifacts:
             - discipline-report.json

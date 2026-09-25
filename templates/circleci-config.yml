@@ -17,7 +17,7 @@ jobs:
           command: |
             set -euo pipefail
             base_ref="${CIRCLE_BASE_REVISION:-origin/main}"
-            git fetch origin main --depth=100 || true
+            git fetch origin main || true
             discipline check --base "${base_ref}" --json-out discipline-report.json
       - store_artifacts:
           path: discipline-report.json

@@ -53,11 +53,11 @@ discipline:
     - |
       # Ensure remote refs are fetched so merge base is resolvable
       if [ -n "$[[ inputs.base_ref ]]" ]; then
-        git fetch origin "$[[ inputs.base_ref ]]" --depth=100 || true
+        git fetch origin "$[[ inputs.base_ref ]]" || true
       elif [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
-        git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=100 || true
+        git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" || true
       elif [ -n "$CI_DEFAULT_BRANCH" ]; then
-        git fetch origin "$CI_DEFAULT_BRANCH" --depth=100 || true
+        git fetch origin "$CI_DEFAULT_BRANCH" || true
       fi
   script:
     - |

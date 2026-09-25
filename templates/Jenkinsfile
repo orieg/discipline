@@ -20,7 +20,7 @@ pipeline {
             steps {
                 sh '''
                     set -euo pipefail
-                    git fetch origin "${DISCIPLINE_BASE_REF#origin/}" --depth=100 || true
+                    git fetch origin "${DISCIPLINE_BASE_REF#origin/}" || true
                     discipline check --base "${DISCIPLINE_BASE_REF}" --json-out discipline-report.json
                 '''
             }

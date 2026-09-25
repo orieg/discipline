@@ -34,7 +34,7 @@ steps:
       base="${DISCIPLINE_BASE_REF#refs/heads/}"
       base="${base#origin/}"
       echo "Target base ref: origin/${base}"
-      git fetch origin "${base}" --depth=100 || true
+      git fetch origin "${base}" || true
       discipline check --base "origin/${base}" --json-out discipline-report.json
     displayName: 'Run Discipline Gatekeeper'
 
