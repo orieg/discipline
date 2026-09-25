@@ -1206,6 +1206,7 @@ Notes for adapting it:
 - **What it catches:**
   - Missing `rust-version` declaration in `Cargo.toml`.
   - A configured `command` (for example a build under the MSRV toolchain) that fails.
+- **Exit codes:** a `command` that exits 0 passes; one that exits non-zero is a finding (1); one that cannot run (not found, cannot start, over the timeout) or a `Cargo.toml` that cannot be read means nothing was verified, so the check exits 2.
 - **Lifting directive:** `allow-msrv: <subject> <reason>`: `rust-version`, `Cargo.toml`, `msrv` or `crate` for a missing declaration; `command`, `msrv` or the command text for a failing command.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `pinned_version`, `command`.
 

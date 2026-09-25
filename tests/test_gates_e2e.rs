@@ -10220,6 +10220,48 @@ enabled = true
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
 }
 
+#[test]
+fn msrv_command_exit_codes_follow_the_contract() {
+    let repo = Repo::new();
+    repo.write(
+        "Cargo.toml",
+        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nedition = \"2021\"\nrust-version = \"1.90\"\n",
+    );
+    repo.commit("chore: crate");
+    let with = |command: &str| {
+        repo.check(&[
+            "--config-override",
+            &format!("[gates.msrv]\nenabled = true\ncommand = \"{command}\""),
+        ])
+    };
+
+    // 0: the command ran and passed.
+    let pass = with("true");
+    assert_eq!(pass.code, 0, "{}{}", pass.stdout, pass.stderr);
+    assert!(
+        notes_of(&pass, "msrv")
+            .iter()
+            .any(|n| n.contains("`true` passed under Rust 1.90")),
+        "{:?}",
+        notes_of(&pass, "msrv")
+    );
+
+    // 1: the command ran and failed; that is a finding.
+    let fail = with("false");
+    assert_eq!(fail.code, 1, "{}{}", fail.stdout, fail.stderr);
+    assert!(!fail.titles("msrv").is_empty());
+
+    // 2: the command could not run, so nothing was verified.
+    let missing = with("no-such-msrv-tool-4242");
+    assert_eq!(missing.code, 2, "{}{}", missing.stdout, missing.stderr);
+    assert!(
+        missing.stderr.contains("gate `msrv` could not run")
+            && missing.stderr.contains("no-such-msrv-tool-4242"),
+        "{}",
+        missing.stderr
+    );
+}
+
 // ---- miri ------------------------------------------------------------------
 
 #[test]

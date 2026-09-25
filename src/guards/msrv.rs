@@ -5,7 +5,7 @@
 
 use crate::guards::{Context, GateOutcome};
 use crate::tokens::ALLOW_MSRV;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use std::fs;
 
 pub const GATE: &str = "msrv";
@@ -27,19 +27,9 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
     let declared_msrv = if let Some(pinned) = &settings.pinned_version {
         Some(pinned.clone())
     } else if cargo_toml.is_file() {
-        match fs::read_to_string(&cargo_toml) {
-            Ok(content) => parse_rust_version(&content),
-            Err(e) => {
-                out.add_violation(
-                    ctx.overridable(settings.severity),
-                    "Cargo.toml",
-                    1,
-                    format!("could not read Cargo.toml: {e}"),
-                    "ensure Cargo.toml is readable",
-                );
-                return Ok(out);
-            }
-        }
+        // An unreadable manifest is a check that could not run (exit 2), not a finding.
+        let content = fs::read_to_string(&cargo_toml).context("cannot read Cargo.toml")?;
+        parse_rust_version(&content)
     } else {
         None
     };
@@ -74,12 +64,16 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     };
 
-    out.notes.push(format!("MSRV verified: `{version}`"));
+    out.notes.push(format!("MSRV declared: `{version}`"));
 
-    // If an explicit verification command is declared, execute it
+    // A declared verification command is run: exit 0 passes, any other exit is a finding,
+    // and a command that cannot run (not found, cannot spawn, timed out) is exit 2.
     if let Some(cmd) = &settings.command {
         let (status, stdout, stderr) = run_msrv_command(cmd, root)?;
-        if !status {
+        if status {
+            out.notes
+                .push(format!("MSRV command `{cmd}` passed under Rust {version}"));
+        } else {
             if let Some(ov) = ctx
                 .find_override(GATE, ALLOW_MSRV, "command")
                 .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, "msrv"))
@@ -138,20 +132,23 @@ pub fn parse_rust_version(toml_str: &str) -> Option<String> {
 }
 
 fn run_msrv_command(cmd: &str, dir: &std::path::Path) -> Result<(bool, String, String)> {
-    match crate::guards::command::run_command_bounded("msrv", cmd, 120, dir) {
-        Ok(res) => Ok((res.status.success(), res.stdout, res.stderr)),
-        Err(e) => Ok((
-            false,
-            String::new(),
-            format!("failed to execute `{cmd}`: {e}"),
-        )),
-    }
+    let res = crate::guards::command::run_command_bounded("msrv", cmd, 120, dir)?;
+    Ok((res.status.success(), res.stdout, res.stderr))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{MsrvGate, Severity};
+
+    #[test]
+    fn the_command_passes_fails_or_could_not_run() {
+        let dir = std::path::Path::new(".");
+        assert!(run_msrv_command("true", dir).unwrap().0);
+        assert!(!run_msrv_command("false", dir).unwrap().0);
+        // Not found is an error the caller turns into exit 2, never a failed build.
+        assert!(run_msrv_command("no-such-msrv-tool-4242", dir).is_err());
+    }
 
     #[test]
     fn test_parse_rust_version() {
