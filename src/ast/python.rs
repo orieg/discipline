@@ -61,6 +61,7 @@ impl LanguagePack for PythonPack {
             collected_classes: HashSet::new(),
             class_stack: Vec::new(),
             helpers: HashMap::new(),
+            helper_calls: HashMap::new(),
             test_calls: Vec::new(),
         };
 
@@ -153,6 +154,8 @@ struct PythonExtractor<'a> {
     /// name (`check` or `TestOrders::_expect`), with the failure paths in
     /// their own body.
     helpers: HashMap<String, HelperFacts>,
+    /// Scope-qualified callees of each helper, followed to `super::HELPER_DEPTH`.
+    helper_calls: HashMap<String, Vec<String>>,
     /// Scope-qualified callees of each test, parallel to `facts.tests`.
     test_calls: Vec<Vec<String>>,
 }
@@ -578,9 +581,17 @@ impl<'a> PythonExtractor<'a> {
     /// Records a non-test function as a helper a test may call.
     fn record_helper(&mut self, node: Node, key: String) {
         let mut facts = TestFn::default();
+        let mut calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
             self.scan_test_body(body, &mut facts, BodyMode::Helper);
+            // `Class::method` calls `self.other()` in its class's scope.
+            let scope: Vec<String> = key
+                .rsplit_once("::")
+                .map(|(s, _)| s.split("::").map(str::to_string).collect())
+                .unwrap_or_default();
+            self.collect_calls(body, &scope, &mut calls);
         }
+        self.helper_calls.entry(key.clone()).or_insert(calls);
         self.helpers.entry(key).or_insert(HelperFacts {
             total_asserts: facts.total_asserts,
             strong_asserts: facts.strong_asserts,
@@ -632,14 +643,16 @@ impl<'a> PythonExtractor<'a> {
         }
     }
 
-    /// Adds the failure paths of each same-file helper a test calls.
-    ///
-    /// One level only: a helper's own callees are not followed, so a cycle
-    /// between helpers cannot recurse, and nothing crosses a file boundary.
+    /// Adds the failure paths of each same-file helper a test calls, and of the helpers
+    /// those call, up to `super::HELPER_DEPTH` calls deep; a recursive call is not
+    /// followed again, and nothing crosses a file boundary.
     fn resolve_same_file_helpers(&mut self) {
+        let (helpers, helper_calls) = (&self.helpers, &self.helper_calls);
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
             for call in calls {
-                let Some(h) = self.helpers.get(call) else {
+                let mut path = Vec::new();
+                let Some(h) = super::transitive_helper(call, helpers, helper_calls, &mut path)
+                else {
                     continue;
                 };
                 // A configured assertion helper was already counted once at
@@ -1486,10 +1499,11 @@ def test_cluster():
     }
 
     #[test]
-    fn helper_resolution_is_one_level_and_cycle_safe() {
-        // `outer` does not raise itself; it calls `inner`, which does. One level
-        // of resolution only, so `outer` contributes nothing. `loop_a`/`loop_b`
-        // call each other and never raise: resolution must terminate at zero.
+    fn helpers_are_followed_three_calls_deep_and_cycle_safe() {
+        // `outer` does not raise itself; it calls `inner`, which does: two levels, counted
+        // (a validator moved out of the function a self-test drives). `four` is one level
+        // past the limit. `loop_a`/`loop_b` call each other and never raise; `walk`
+        // raises and calls itself: each counts once, and resolution terminates.
         let src = r#"
 def inner(x):
     if not x:
@@ -1498,17 +1512,37 @@ def inner(x):
 def outer(x):
     inner(x)
 
+def two(x):
+    outer(x)
+
+def four(x):
+    two(x)
+
 def loop_a(n):
     return loop_b(n)
 
 def loop_b(n):
     return loop_a(n)
 
+def walk(n):
+    if n < 0:
+        raise ValueError(n)
+    return walk(n - 1)
+
 def test_nested_helper():
     outer(1)
 
+def test_three_deep():
+    two(1)
+
+def test_four_deep():
+    four(1)
+
 def test_cycle():
     loop_a(3)
+
+def test_recursive():
+    walk(3)
 
 def test_direct():
     inner(1)
@@ -1517,8 +1551,11 @@ def test_direct():
             .extract("tests/test_nested.py", src, &AssertVocabulary::default())
             .unwrap();
         let by_name = |n: &str| facts.tests.iter().find(|t| t.name == n).unwrap();
-        assert_eq!(by_name("test_nested_helper").total_asserts, 0);
+        assert_eq!(by_name("test_nested_helper").total_asserts, 1);
+        assert_eq!(by_name("test_three_deep").total_asserts, 1);
+        assert_eq!(by_name("test_four_deep").total_asserts, 0);
         assert_eq!(by_name("test_cycle").total_asserts, 0);
+        assert_eq!(by_name("test_recursive").total_asserts, 1);
         assert_eq!(by_name("test_direct").total_asserts, 1);
     }
 

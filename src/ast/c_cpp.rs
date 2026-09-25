@@ -9,43 +9,6 @@ use super::{
     ParsedFileFacts, TestFn,
 };
 
-/// How many calls deep a test's same-file helpers are followed: a C or C++ test `main`
-/// usually drives check functions that call one `require`-style helper that aborts.
-const HELPER_DEPTH: usize = 3;
-
-/// A same-file helper's checks with those of the helpers it calls, up to `HELPER_DEPTH`
-/// levels; a recursive call is not followed again. `None` when `name` is not a helper.
-fn transitive_helper(
-    name: &str,
-    helpers: &std::collections::HashMap<String, super::HelperFacts>,
-    calls: &std::collections::HashMap<String, Vec<String>>,
-    path: &mut Vec<String>,
-) -> Option<super::HelperFacts> {
-    let own = helpers.get(name)?;
-    if path.iter().any(|p| p == name) {
-        return None;
-    }
-    let mut out = super::HelperFacts {
-        total_asserts: own.total_asserts,
-        strong_asserts: own.strong_asserts,
-        tautologies: own.tautologies,
-        fatal_asserts: own.fatal_asserts,
-    };
-    if path.len() + 1 < HELPER_DEPTH {
-        path.push(name.to_string());
-        for callee in calls.get(name).into_iter().flatten() {
-            if let Some(sub) = transitive_helper(callee, helpers, calls, path) {
-                out.total_asserts += sub.total_asserts;
-                out.strong_asserts += sub.strong_asserts;
-                out.tautologies += sub.tautologies;
-                out.fatal_asserts += sub.fatal_asserts;
-            }
-        }
-        path.pop();
-    }
-    Some(out)
-}
-
 /// Functions a test or helper body runs through a table (`super::dispatch_calls`):
 /// `std::vector<std::pair<std::string, void (*)(Scope)>> tests = {{"get", TestGet}}`,
 /// `void (*checks[])(void) = {check_a, &check_b}`. A table declared at file scope is
@@ -439,7 +402,7 @@ impl<'a> CCppExtractor<'a> {
                 for call in calls {
                     let mut path = Vec::new();
                     if let Some(h) =
-                        transitive_helper(call, helpers, helper_calls, &mut path).as_ref()
+                        super::transitive_helper(call, helpers, helper_calls, &mut path).as_ref()
                     {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {
                             test.total_asserts = test.total_asserts.saturating_sub(1);

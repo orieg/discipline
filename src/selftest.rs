@@ -1338,16 +1338,17 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
-        "python: a same-file helper that raises is an assertion, resolved one level",
+        "python: a same-file helper that raises is an assertion, followed up to three calls deep",
         || {
             use crate::ast::LanguagePack;
             let py_pack = crate::ast::python::PythonPack;
             let vocab = AssertVocabulary::default();
-            let src = "def check(x):\n    if x != 1:\n        raise AssertionError(x)\n\ndef outer(x):\n    check(x)\n\ndef test_direct():\n    check(f())\n\ndef test_nested():\n    outer(f())\n";
+            let src = "def check(x):\n    if x != 1:\n        raise AssertionError(x)\n\ndef outer(x):\n    check(x)\n\ndef two(x):\n    outer(x)\n\ndef three(x):\n    two(x)\n\ndef test_direct():\n    check(f())\n\ndef test_nested():\n    outer(f())\n\ndef test_too_deep():\n    three(f())\n";
             let facts = py_pack.extract("tests/test_mod.py", src, &vocab)?;
             let by = |n: &str| facts.tests.iter().find(|t| t.name == n);
             Ok(by("test_direct").is_some_and(|t| t.total_asserts == 1)
-                && by("test_nested").is_some_and(|t| t.total_asserts == 0))
+                && by("test_nested").is_some_and(|t| t.total_asserts == 1)
+                && by("test_too_deep").is_some_and(|t| t.total_asserts == 0))
         },
     ),
     #[cfg(feature = "lang-python")]

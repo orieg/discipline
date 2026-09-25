@@ -12379,14 +12379,18 @@ fn a_loop_skipping_unparseable_lines_is_a_warning_and_a_swallowed_error_still_bl
 
 #[test]
 fn a_cpp_test_table_and_a_declared_private_self_test_are_read() {
-    let repo = repo_with_base_config(&format!(
-        "{CONFIG_HEAD}[tests]\nfunctions = [\"_self_test\"]\n"
-    ));
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[tests]\nfunctions = [\"_self_test\"]\n"),
+    );
     repo.write(
         "tests/park_test.cc",
         "#include <cassert>\nvoid TestGet(int s) { assert(get(s) == 1); assert(size(s) == 1); }\nvoid TestSeek(int s) { assert(seek(s) == 2); }\nint main() {\n  for (int s = 0; s < 2; ++s) {\n    TestGet(s);\n    TestSeek(s);\n  }\n  return 0;\n}\n",
     );
     repo.commit("test: park points");
+    repo.git(&["checkout", "-q", "-B", "work"]);
     // The calls become a table the loop runs; the checks are the same.
     repo.write(
         "tests/park_test.cc",
@@ -12407,5 +12411,33 @@ fn a_cpp_test_table_and_a_declared_private_self_test_are_read() {
         run.titles("error-swallowing").is_empty(),
         "{:?}",
         run.violations("error-swallowing")
+    );
+}
+
+#[test]
+fn a_self_test_whose_raising_check_moved_into_a_validator_keeps_its_assertion() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[tests]\nfunctions = [\"_self_test\"]\n"),
+    );
+    repo.write(
+        "scripts/tables.py",
+        "def splice(runs):\n    if len(runs) != 2:\n        raise SystemExit(\"run count mismatch\")\n    return 0\n\n\ndef _self_test():\n    failures = []\n    try:\n        splice([1])\n        failures.append(\"a mismatched run count was spliced\")\n    except SystemExit:\n        pass\n    return 1 if failures else 0\n",
+    );
+    repo.commit("feat: splice tables");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    // The check moves into a validator splice calls: two calls down from the self-test.
+    repo.write(
+        "scripts/tables.py",
+        "def pair_runs(runs):\n    if len(runs) != 2:\n        raise SystemExit(\"run count mismatch\")\n    return list(zip(runs, runs))\n\n\ndef splice(runs):\n    pair_runs(runs)\n    return 0\n\n\ndef _self_test():\n    failures = []\n    try:\n        splice([1])\n        failures.append(\"a mismatched run count was spliced\")\n    except SystemExit:\n        pass\n    return 1 if failures else 0\n",
+    );
+    repo.commit("refactor: pair runs before splicing");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
     );
 }

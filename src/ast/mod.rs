@@ -274,6 +274,44 @@ pub struct HelperFacts {
     pub fatal_asserts: usize,
 }
 
+/// How many calls deep a test's same-file helpers are followed: a C or C++ test `main`
+/// drives check functions that call one `require`-style helper that aborts, and a
+/// script's `self_test` calls a function that calls the validator that raises.
+pub const HELPER_DEPTH: usize = 3;
+
+/// A same-file helper's checks with those of the helpers it calls, up to `HELPER_DEPTH`
+/// levels; a recursive call is not followed again. `None` when `name` is not a helper.
+pub fn transitive_helper(
+    name: &str,
+    helpers: &std::collections::HashMap<String, HelperFacts>,
+    calls: &std::collections::HashMap<String, Vec<String>>,
+    path: &mut Vec<String>,
+) -> Option<HelperFacts> {
+    let own = helpers.get(name)?;
+    if path.iter().any(|p| p == name) {
+        return None;
+    }
+    let mut out = HelperFacts {
+        total_asserts: own.total_asserts,
+        strong_asserts: own.strong_asserts,
+        tautologies: own.tautologies,
+        fatal_asserts: own.fatal_asserts,
+    };
+    if path.len() + 1 < HELPER_DEPTH {
+        path.push(name.to_string());
+        for callee in calls.get(name).into_iter().flatten() {
+            if let Some(sub) = transitive_helper(callee, helpers, calls, path) {
+                out.total_asserts += sub.total_asserts;
+                out.strong_asserts += sub.strong_asserts;
+                out.tautologies += sub.tautologies;
+                out.fatal_asserts += sub.fatal_asserts;
+            }
+        }
+        path.pop();
+    }
+    Some(out)
+}
+
 /// Failure exits in a helper body: nodes of one of `kinds` whose text starts with one of
 /// `prefixes` (an empty prefix list accepts any text; a prefix ending in a space also
 /// matches the bare keyword). Bodies of nested functions
