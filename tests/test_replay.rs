@@ -277,6 +277,19 @@ fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_on
         "{}",
         live.stderr
     );
+
+    // Setting replay's variable by hand (as a CI job could) does not loosen it: the base
+    // is not a commit replay built.
+    let forged = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("DISCIPLINE_REPLAY_CASE", "1")],
+    );
+    assert_eq!(forged.code, 2, "{}\n{}", forged.stdout, forged.stderr);
+    assert!(
+        forged.stderr.contains("server.json` does not exist"),
+        "{}",
+        forged.stderr
+    );
 }
 
 /// Since git 2.54, `git commit` ends with `git maintenance run --auto`, detached, and its

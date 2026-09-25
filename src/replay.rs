@@ -373,9 +373,16 @@ pub fn run(opts: &Options) -> Result<Summary> {
     for c in commits {
         let parent = c.parent(0)?;
         let subject = c.summary().ok().flatten().unwrap_or("").to_string();
-        let sig = git2::Signature::now("discipline replay", "replay@discipline.invalid")?;
+        let sig = git2::Signature::now("discipline replay", crate::gitctx::REPLAY_BASE_EMAIL)?;
         let base_tree = scratch.find_tree(with_config(&scratch, &parent.tree()?, config_blob)?)?;
-        let base = scratch.commit(None, &sig, &sig, "replay base", &base_tree, &[])?;
+        let base = scratch.commit(
+            None,
+            &sig,
+            &sig,
+            crate::gitctx::REPLAY_BASE_MESSAGE,
+            &base_tree,
+            &[],
+        )?;
         let head_tree = scratch.find_tree(with_config(&scratch, &c.tree()?, config_blob)?)?;
         let base_commit = scratch.find_commit(base)?;
         let head = scratch.commit(

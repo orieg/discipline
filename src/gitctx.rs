@@ -43,6 +43,11 @@ impl ChangedFile {
     }
 }
 
+/// Author and committer of the base commit `discipline replay` builds for each case.
+pub const REPLAY_BASE_EMAIL: &str = "replay@discipline.invalid";
+/// Message of that base commit.
+pub const REPLAY_BASE_MESSAGE: &str = "replay base";
+
 pub struct GitCtx {
     repo: Repository,
     /// Tree the change is measured against; `None` = empty tree (first commit).
@@ -773,6 +778,19 @@ impl GitCtx {
             .find_remote(name)
             .ok()
             .and_then(|r| r.url().ok().map(str::to_string))
+    }
+
+    /// Whether the base is a commit `discipline replay` built: parentless, authored and
+    /// committed as [`REPLAY_BASE_EMAIL`], with the message [`REPLAY_BASE_MESSAGE`]. A
+    /// pull request's merge base on a real branch never has that shape.
+    pub fn base_is_replay_base(&self) -> bool {
+        let Some(c) = self.base.and_then(|b| self.repo.find_commit(b).ok()) else {
+            return false;
+        };
+        c.parent_count() == 0
+            && c.author().email().ok() == Some(REPLAY_BASE_EMAIL)
+            && c.committer().email().ok() == Some(REPLAY_BASE_EMAIL)
+            && c.message().ok() == Some(REPLAY_BASE_MESSAGE)
     }
 
     /// Full hex id of the `HEAD` commit, if there is one.

@@ -252,7 +252,9 @@ pub struct Context<'a> {
 }
 
 /// Set by `discipline replay` on each case's `check`: the configuration under test is
-/// newer than the replayed trees.
+/// newer than the replayed trees. Honoured only when the base is a commit replay built
+/// ([`crate::gitctx::GitCtx::base_is_replay_base`]), so setting it in a CI job loosens
+/// nothing.
 pub const REPLAY_CASE_ENV: &str = "DISCIPLINE_REPLAY_CASE";
 
 impl Context<'_> {
@@ -280,6 +282,7 @@ impl Context<'_> {
     /// missing file stays a configuration error.
     pub fn predates_config(&self, path: &str) -> Result<bool> {
         Ok(std::env::var_os(REPLAY_CASE_ENV).is_some()
+            && self.git.base_is_replay_base()
             && self.git.base_content(path)?.is_none()
             && self.git.head_content(path)?.is_none())
     }
