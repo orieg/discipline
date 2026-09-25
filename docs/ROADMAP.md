@@ -370,7 +370,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
-| unreleased | Python | Same-file helpers are followed up to three calls deep (was one), as in C/C++, a recursive helper counted once: a check that moves from the function a test drives into a validator that function calls is no longer an assertion drop. | looser (assertion counts) | None. |
+| v0.12.3 | Python | Same-file helpers are followed up to three calls deep (was one), as in C/C++, a recursive helper counted once: a check that moves from the function a test drives into a validator that function calls is no longer an assertion drop. | looser (assertion counts) | None. |
 | v0.12.2 | C/C++ | A test (or helper) that calls same-file functions through a table it builds (`std::vector<std::pair<std::string, void (*)()>> tests = {{"get", TestGet}}`, `{check_a, &check_b}`) counts their checks; the three-call helper depth of v0.12.1 had turned such a refactor into an assertion drop. | looser | None. |
 | v0.12.2 | `[tests] functions` | A declared Python name that starts with `_` (`_self_test`) is a test and its body test scope; the private-name rule used to override the declaration. | looser | None. |
 | v0.12.1 | `error-swallowing` | A Python handler that catches only parse errors and does nothing but `continue` (a loop skipping lines that do not parse) is `Unparseable Input Skipped`, a warning at most, instead of a blocking `Empty Error Handler Added`. A bare `return` in a handler followed by a failing statement after the `try` is the expect-this-to-raise idiom and is no longer reported. | looser | None. |
