@@ -515,9 +515,19 @@ pub(crate) fn report_parse_errors(
                         crate::ast::Language::C
                             | crate::ast::Language::Cpp
                             | crate::ast::Language::CSharp
+                            | crate::ast::Language::ObjectiveC
                     )
                 );
-                let sev = if is_c_like {
+                // A file with no tests on either side, outside a test path, in a language
+                // that keeps its tests in test files: a parse error there hides no test. Rust
+                // keeps tests inline in source files, so it stays strict.
+                let holds_no_tests = !matches!(
+                    crate::ast::language_for(&ff.file.path),
+                    Some(crate::ast::Language::Rust)
+                ) && !crate::ast::functions::test_path(&ff.file.path)
+                    && h.tests.is_empty()
+                    && ff.base.as_ref().is_none_or(|b| b.tests.is_empty());
+                let sev = if is_c_like || holds_no_tests {
                     crate::config::Severity::Warning
                 } else {
                     severity
@@ -531,6 +541,7 @@ pub(crate) fn report_parse_errors(
                     let line_display = err_line.unwrap_or(1);
                     let lang_name = match crate::ast::language_for(&ff.file.path) {
                         Some(crate::ast::Language::CSharp) => "C#",
+                        Some(crate::ast::Language::ObjectiveC) => "Objective-C",
                         _ => "C/C++",
                     };
                     out.notes.push(format!(
@@ -547,9 +558,15 @@ pub(crate) fn report_parse_errors(
                 } else {
                     (
                         "Source File Could Not Be Fully Parsed",
-                        "The grammar reported syntax errors, so assertion and unsafe facts for \
-                         this file may be incomplete. A gate that cannot read its input does not pass."
-                            .to_string(),
+                        if holds_no_tests {
+                            "The grammar reported syntax errors in a file that holds no tests on \
+                             either side, so no test can be hidden by them; reported at warning."
+                                .to_string()
+                        } else {
+                            "The grammar reported syntax errors, so assertion and unsafe facts for \
+                             this file may be incomplete. A gate that cannot read its input does not pass."
+                                .to_string()
+                        },
                     )
                 };
 

@@ -12484,3 +12484,72 @@ fn no_network_keeps_the_ci_base_fetch_off_the_network() {
         run.stderr
     );
 }
+
+#[test]
+fn a_parse_error_blocks_only_where_it_could_hide_a_test() {
+    // A construct the bundled Swift grammar does not read: an empty tuple argument.
+    let unreadable = "    return .success(())\n";
+    let repo = Repo::new();
+    repo.write(
+        "Source/Request.swift",
+        &format!("func finish() -> Result<Void, Error> {{\n{unreadable}}}\n"),
+    );
+    repo.write(
+        "Source/SDCache.m",
+        "static BOOL SDIs8Bit(CGImageRef cg_nullable image) {\n    return YES;\n}\n",
+    );
+    repo.commit("feat: production code");
+    let run = repo.check(&[]);
+    let parse: Vec<(String, String)> = run
+        .violations("assertion-reduction")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(parse.iter().all(|(_, s)| s == "warning"), "{parse:?}");
+    assert_eq!(parse.len(), 2, "{parse:?}");
+
+    // In a test file, or in Rust (tests live inline), it still blocks.
+    let repo = Repo::new();
+    repo.write(
+        "Tests/RequestTests.swift",
+        &format!("import XCTest\nfinal class RequestTests: XCTestCase {{\n    func testFinish() {{\n        XCTAssertTrue(ok())\n    }}\n    func finish() -> Result<Void, Error> {{\n{unreadable}    }}\n}}\n"),
+    );
+    repo.write("src/broken.rs", "pub fn f( -> u8 { 1 }\n");
+    // A test-path file with no test in it still blocks: a test may be what failed to parse.
+    repo.write(
+        "tests/Support.swift",
+        &format!("func finish() -> Result<Void, Error> {{\n{unreadable}}}\n"),
+    );
+    // Objective-C reads like C: a macro the grammar does not know warns even in a test file.
+    repo.write(
+        "tests/SDCacheTests.m",
+        "@implementation SDCacheTests\n- (void)testCopy {\n    XCTAssertTrue(SDIs8Bit(nil));\n}\n@end\nstatic BOOL SDIs8Bit(CGImageRef cg_nullable image) {\n    return YES;\n}\n",
+    );
+    repo.commit("test: request");
+    let run = repo.check(&[]);
+    let blocking: Vec<String> = run
+        .violations("assertion-reduction")
+        .iter()
+        .filter(|v| v["severity"] == "error")
+        .map(|v| v["file"].as_str().unwrap().to_string())
+        .collect();
+    // (`Tests/` shares the fixture's `tests/` directory on a case-insensitive file system.)
+    assert!(
+        blocking.iter().any(|f| f.ends_with("/RequestTests.swift")),
+        "{blocking:?}"
+    );
+    assert!(
+        blocking.contains(&"src/broken.rs".to_string()),
+        "{blocking:?}"
+    );
+    assert!(
+        blocking.iter().any(|f| f.ends_with("/Support.swift")),
+        "{blocking:?}"
+    );
+    assert!(!blocking.iter().any(|f| f.ends_with(".m")), "{blocking:?}");
+}

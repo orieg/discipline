@@ -96,6 +96,138 @@ pub const BUILTIN_MACROS: &[&str] = &[
     "RUBY_SYMBOL_EXPORT_END",
 ];
 
+/// Apple SDK annotation and availability macros, blanked with their arguments in
+/// Objective-C: `API_DEPRECATED("x", ios(8.0, API_TO_BE_DEPRECATED))`, `NS_SWIFT_NAME(x)`,
+/// `CF_RETURNS_RETAINED` after a function head, `NS_ASSUME_NONNULL_BEGIN` alone on a line.
+/// Explicit names: a prefix such as `API_*` would also blank a constant named `API_KEY`.
+pub const APPLE_MACROS: &[&str] = &[
+    "NS_ASSUME_NONNULL_BEGIN",
+    "NS_ASSUME_NONNULL_END",
+    "API_AVAILABLE",
+    "API_UNAVAILABLE",
+    "API_DEPRECATED",
+    "API_DEPRECATED_WITH_REPLACEMENT",
+    "API_TO_BE_DEPRECATED",
+    "NS_AVAILABLE",
+    "NS_AVAILABLE_IOS",
+    "NS_AVAILABLE_MAC",
+    "NS_DEPRECATED",
+    "NS_DEPRECATED_IOS",
+    "NS_DEPRECATED_MAC",
+    "NS_CLASS_AVAILABLE",
+    "NS_EXTENSION_UNAVAILABLE",
+    "NS_EXTENSION_UNAVAILABLE_IOS",
+    "NS_SWIFT_NAME",
+    "NS_SWIFT_UNAVAILABLE",
+    "NS_SWIFT_UI_ACTOR",
+    "NS_SWIFT_NONISOLATED",
+    "NS_SWIFT_SENDABLE",
+    "NS_REFINED_FOR_SWIFT",
+    "NS_DESIGNATED_INITIALIZER",
+    "NS_UNAVAILABLE",
+    "NS_REQUIRES_SUPER",
+    "NS_REQUIRES_NIL_TERMINATION",
+    "NS_NOESCAPE",
+    "NS_FORMAT_FUNCTION",
+    "NS_RETURNS_RETAINED",
+    "NS_RETURNS_NOT_RETAINED",
+    "NS_RETURNS_INNER_POINTER",
+    "CF_RETURNS_RETAINED",
+    "CF_RETURNS_NOT_RETAINED",
+    "CF_CONSUMED",
+    "NS_STRING_ENUM",
+    "NS_EXTENSIBLE_STRING_ENUM",
+    "NS_TYPED_ENUM",
+    "NS_TYPED_EXTENSIBLE_ENUM",
+    "FOUNDATION_EXPORT",
+    "FOUNDATION_EXTERN",
+    "UIKIT_EXTERN",
+    "APPKIT_EXTERN",
+    "__nullable",
+    "__nonnull",
+];
+
+/// Apple enum macros written as a type head: `typedef NS_ENUM(NSInteger, SDImageCacheType)`.
+const ENUM_HEAD_MACROS: &[&str] = &[
+    "NS_ENUM",
+    "NS_OPTIONS",
+    "NS_CLOSED_ENUM",
+    "NS_ERROR_ENUM",
+    "CF_ENUM",
+    "CF_OPTIONS",
+    "CF_CLOSED_ENUM",
+];
+
+/// `typedef NS_ENUM(NSInteger, Name) { ... };` becomes `enum Name { ... };` padded with
+/// spaces (same length, same newlines): the `typedef` and the macro are one span, and the
+/// last argument is the type's name. `None` when the file has no such head.
+pub fn mask_enum_heads(src: &str) -> Option<String> {
+    let s = src.as_bytes();
+    let mut out = s.to_vec();
+    let mut changed = false;
+    let mut i = 0;
+    while i < s.len() {
+        if let Some(end) = skip_opaque(s, i) {
+            i = end;
+            continue;
+        }
+        if !(s[i].is_ascii_alphabetic() || s[i] == b'_') || (i > 0 && is_ident(s[i - 1])) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < s.len() && is_ident(s[i]) {
+            i += 1;
+        }
+        if !ENUM_HEAD_MACROS.contains(&&src[start..i]) {
+            continue;
+        }
+        let mut open = i;
+        while open < s.len() && (s[open] == b' ' || s[open] == b'\t') {
+            open += 1;
+        }
+        let Some(end) = (s.get(open) == Some(&b'('))
+            .then(|| matching_paren(s, open))
+            .flatten()
+        else {
+            continue;
+        };
+        let args = String::from_utf8_lossy(&s[open + 1..end - 1]).to_string();
+        let name: String = args
+            .rsplit(',')
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        // Take a `typedef` right before the macro into the span.
+        let before = src[..start].trim_end();
+        let from = if before.ends_with("typedef")
+            && !before[..before.len() - 7]
+                .ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        {
+            before.len() - 7
+        } else {
+            start
+        };
+        let head = if name.is_empty() {
+            "enum".to_string()
+        } else {
+            format!("enum {name}")
+        };
+        if head.len() > end - from || s[from..end].contains(&b'\n') {
+            continue;
+        }
+        out[from..from + head.len()].copy_from_slice(head.as_bytes());
+        for o in &mut out[from + head.len()..end] {
+            *o = b' ';
+        }
+        changed = true;
+        i = end;
+    }
+    changed.then(|| String::from_utf8(out).ok()).flatten()
+}
+
 /// Macros that expand to a function head: `PHP_METHOD(Judy, size) { ... }`.
 pub const BUILTIN_FUNCTION_MACROS: &[&str] = &[
     "PHP_FUNCTION",
@@ -438,5 +570,22 @@ mod guard_tests {
         );
         // A `}` outside a __cplusplus guard is code.
         assert_eq!(mask_cplusplus_guards("int f(void) {\n}\n"), None);
+    }
+}
+
+#[cfg(test)]
+mod enum_tests {
+    use super::mask_enum_heads;
+
+    #[test]
+    fn apple_enum_heads_become_plain_enums_of_the_same_length() {
+        let src = "typedef NS_ENUM(NSInteger, SDImageCacheType) {\n    SDImageCacheTypeNone,\n};\ntypedef NS_OPTIONS(NSUInteger, SDOptions) { SDOptionA = 1 << 0 };\nint NS_ENUMERATE = 0;\n";
+        let m = mask_enum_heads(src).unwrap();
+        assert_eq!(m.len(), src.len());
+        assert!(m.starts_with("enum SDImageCacheType"), "{m:?}");
+        assert!(m.contains("\nenum SDOptions "), "{m:?}");
+        // A name that only starts like the macro is left alone.
+        assert!(m.contains("int NS_ENUMERATE = 0;"));
+        assert_eq!(mask_enum_heads("enum Plain { A };\n"), None);
     }
 }

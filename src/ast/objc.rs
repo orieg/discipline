@@ -19,6 +19,22 @@ use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFac
 /// Objective-C language pack implementing [`LanguagePack`].
 pub struct ObjcPack;
 
+/// `src` with the Objective-C macros the grammar cannot read rewritten byte for byte:
+/// enum heads, Apple's annotation macros plus `[languages.c]`, `extern "C"` guards.
+fn mask_objc_macros(src: &str, vocab: &AssertVocabulary) -> Option<String> {
+    use super::c_macros::{lists, mask, mask_cplusplus_guards, mask_enum_heads, APPLE_MACROS};
+    let enums = mask_enum_heads(src);
+    let step = enums.as_deref().unwrap_or(src);
+    let macros = mask(
+        step,
+        &lists(&vocab.c_macros, APPLE_MACROS),
+        &lists(&vocab.c_function_macros, &[]),
+    );
+    let step2 = macros.as_deref().unwrap_or(step);
+    let guards = mask_cplusplus_guards(step2);
+    guards.or(macros).or(enums)
+}
+
 impl LanguagePack for ObjcPack {
     fn id(&self) -> &'static str {
         "objc"
@@ -44,10 +60,16 @@ impl LanguagePack for ObjcPack {
         parser
             .set_language(&tree_sitter_objc::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the Objective-C grammar: {e}"))?;
+        // The C preprocessor habits of Objective-C, rewritten byte for byte before the parse
+        // (`super::c_macros`): `typedef NS_ENUM(T, Name)`, Apple's annotation macros, the
+        // repository's own `[languages.c]` macros, `extern "C"` guards.
+        let masked = mask_objc_macros(src, vocab);
+        let src = masked.as_deref().unwrap_or(src);
         let tree = parser
             .parse(src, None)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
+        let (has_errors, first_line, error_count) = super::collect_error_nodes_info(root);
 
         let mut extractor = ObjcExtractor {
             dead: super::reach::dead_ranges(root, src, &OBJC_REACH),
@@ -56,7 +78,9 @@ impl LanguagePack for ObjcPack {
             is_test_path: is_objc_test_path(path),
             xctest_classes: Vec::new(),
             facts: ParsedFileFacts {
-                has_parse_errors: root.has_error(),
+                has_parse_errors: has_errors,
+                first_parse_error_line: first_line,
+                skipped_error_nodes_count: error_count,
                 ..Default::default()
             },
             helpers: std::collections::HashMap::new(),
@@ -547,5 +571,35 @@ mod tests {
         assert!(is_objc_test_path("AppTests/CartTests.m"));
         assert!(is_objc_test_path("Tests/Cart.mm"));
         assert!(!is_objc_test_path("App/Cart.m"));
+    }
+
+    #[test]
+    fn apple_macros_and_enum_heads_parse_without_error_regions() {
+        let v = AssertVocabulary::default();
+        let src = "#import <Foundation/Foundation.h>\nNS_ASSUME_NONNULL_BEGIN\ntypedef NS_ENUM(NSInteger, SDCacheType) {\n    SDCacheTypeNone,\n    SDCacheTypeDisk,\n};\nstatic CGImageRef SDCopy(CGImageRef image) CF_RETURNS_RETAINED {\n    return image;\n}\n@implementation SDCache\n- (void)clear API_DEPRECATED(\"use clearAll\", ios(8.0, API_TO_BE_DEPRECATED)) {\n}\n@end\nNS_ASSUME_NONNULL_END\n";
+        let facts = ObjcPack
+            .extract("SDWebImage/Core/SDCache.m", src, &v)
+            .unwrap();
+        assert_eq!(facts.skipped_error_nodes_count, 0);
+        // A project macro no list names is still an error region until configured.
+        let own = "static BOOL SDIs8Bit(CGImageRef cg_nullable image) {\n    return YES;\n}\n";
+        assert!(
+            ObjcPack
+                .extract("SDWebImage/Core/SDImage.m", own, &v)
+                .unwrap()
+                .skipped_error_nodes_count
+                > 0
+        );
+        let configured = AssertVocabulary {
+            c_macros: vec!["cg_nullable".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(
+            ObjcPack
+                .extract("SDWebImage/Core/SDImage.m", own, &configured)
+                .unwrap()
+                .skipped_error_nodes_count,
+            0
+        );
     }
 }

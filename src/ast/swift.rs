@@ -484,6 +484,11 @@ impl<'a> SwiftExtractor<'a> {
                 test_fn.total_asserts += 1;
                 test_fn.strong_asserts += 1;
             }
+            // Waiting on XCTest expectations fails the test when one is not fulfilled (or is
+            // fulfilled fewer times than `expectedFulfillmentCount`). `wait` counts only with
+            // its `for:` label: `semaphore.wait()` is not a check.
+            "fulfillment" | "waitForExpectations" => test_fn.total_asserts += 1,
+            "wait" if self.text(node).contains("(for:") => test_fn.total_asserts += 1,
             other => {
                 if self.vocab.helper_fns.iter().any(|h| h == other) {
                     test_fn.total_asserts += 1;
@@ -676,5 +681,27 @@ mod tests {
         assert!(is_swift_test_path("AppTests/Cart.swift"));
         assert!(is_swift_test_path("Sources/App/CartTests.swift"));
         assert!(!is_swift_test_path("Sources/App/Cart.swift"));
+    }
+
+    #[test]
+    fn waiting_on_expectations_is_an_assertion_and_a_semaphore_wait_is_not() {
+        let v = AssertVocabulary::default();
+        let src = "import XCTest\nfinal class StreamTests: XCTestCase {\n    func testEvents() async {\n        let received = expectation(description: \"received\")\n        received.expectedFulfillmentCount = 4\n        for await _ in stream() { received.fulfill() }\n        await fulfillment(of: [received])\n    }\n    func testLegacy() {\n        let done = expectation(description: \"done\")\n        run { done.fulfill() }\n        wait(for: [done], timeout: 1)\n    }\n    func testOldest() {\n        run { }\n        waitForExpectations(timeout: 1)\n    }\n    func testSemaphore() {\n        let s = DispatchSemaphore(value: 0)\n        s.wait()\n    }\n}\n";
+        let facts = SwiftPack
+            .extract("Tests/StreamTests.swift", src, &v)
+            .unwrap();
+        let by = |n: &str| {
+            facts
+                .tests
+                .iter()
+                .find(|t| t.name.ends_with(n))
+                .unwrap()
+                .total_asserts
+        };
+        assert_eq!(
+            (by("testEvents"), by("testLegacy"), by("testOldest")),
+            (1, 1, 1)
+        );
+        assert_eq!(by("testSemaphore"), 0);
     }
 }

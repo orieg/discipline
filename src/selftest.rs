@@ -870,6 +870,25 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "objc: Apple enum heads and annotation macros parse; a Swift expectation wait is an assertion",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let objc = reg
+                .find_pack("Core/SDCache.m")
+                .ok_or_else(|| anyhow::anyhow!("no objc pack"))?;
+            let src = "NS_ASSUME_NONNULL_BEGIN\ntypedef NS_ENUM(NSInteger, SDCacheType) {\n    SDCacheTypeNone,\n};\nstatic CGImageRef SDCopy(CGImageRef image) CF_RETURNS_RETAINED {\n    return image;\n}\nNS_ASSUME_NONNULL_END\n";
+            let errors = objc.extract("Core/SDCache.m", src, &v)?.skipped_error_nodes_count;
+            let swift = reg
+                .find_pack("Tests/T.swift")
+                .ok_or_else(|| anyhow::anyhow!("no swift pack"))?;
+            let t = "import XCTest\nfinal class T: XCTestCase {\n    func testWait() async {\n        let e = expectation(description: \"e\")\n        run { e.fulfill() }\n        await fulfillment(of: [e])\n    }\n}\n";
+            let waits = swift.extract("Tests/T.swift", t, &v)?.tests[0].total_asserts;
+            Ok(errors == 0 && waits == 1)
+        },
+    ),
+    (
         "stub-bodies: a C function's name is read through its declarator, a `(void)` call is discarded",
         || {
             use crate::ast::default_registry;

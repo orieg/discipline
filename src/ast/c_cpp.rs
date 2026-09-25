@@ -45,13 +45,22 @@ impl LanguagePack for CPack {
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let facts = self.extract_as_c(path, src, vocab)?;
-        // A `.h` header may be C++ (a class, a namespace): when the C grammar leaves error
-        // regions, the C++ reading is kept if it leaves fewer.
+        // A `.h` header may be C++ (a class, a namespace) or Objective-C (`@interface`):
+        // when the C grammar leaves error regions, the reading that leaves fewest is kept.
         if facts.has_parse_errors && super::extension(path) == Some("h") {
+            let mut best = facts;
             let cpp = CppPack.extract(path, src, vocab)?;
-            if cpp.skipped_error_nodes_count < facts.skipped_error_nodes_count {
-                return Ok(cpp);
+            if cpp.skipped_error_nodes_count < best.skipped_error_nodes_count {
+                best = cpp;
             }
+            #[cfg(feature = "lang-objc")]
+            {
+                let objc = super::objc::ObjcPack.extract(path, src, vocab)?;
+                if objc.skipped_error_nodes_count < best.skipped_error_nodes_count {
+                    best = objc;
+                }
+            }
+            return Ok(best);
         }
         Ok(facts)
     }
@@ -1570,5 +1579,19 @@ int main() {
         // A name in a table that is not a same-file helper counts nothing.
         let other = "int main() { const int codes[] = {ERR_A, ERR_B}; use(codes); return 0; }\n";
         assert_eq!(asserts(other), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "lang-objc")]
+    fn an_objective_c_header_is_read_as_objective_c() {
+        let v = AssertVocabulary::default();
+        let header = "#import <Foundation/Foundation.h>\nNS_ASSUME_NONNULL_BEGIN\n@interface SDCache : NSObject\n- (void)clear;\n@property (nonatomic, copy) NSString *name;\n@end\nNS_ASSUME_NONNULL_END\n";
+        assert_eq!(
+            CPack
+                .extract("SDWebImage/Core/SDCache.h", header, &v)
+                .unwrap()
+                .skipped_error_nodes_count,
+            0
+        );
     }
 }
