@@ -213,6 +213,25 @@ A consumer who runs Discipline with zero configuration, or who configures only s
 - **Every default is pinned by a test.** `tests/test_config.rs::default_enablement_and_severity_match_snapshot` compares the compiled defaults of every available gate against a committed snapshot. Changing a default fails that test until the snapshot is edited, so the change is visible in review next to its ledger entry.
 - **The reference is generated.** The *Default* column of the configuration table in `docs/CONFIGURATION.md` is rendered by `discipline docs` from the compiled defaults and the JSON Schema, so documentation cannot claim a default the binary does not ship. Per-gate rationale lives in `docs/GATES.md` ("Default Severity by Gate").
 
+### 3.2 What 1.0 Freezes
+
+From 1.0, the surfaces below change incompatibly only in a new major version. Adding to them (a new flag, key, field, gate, tool or language) is a minor release; changing or removing what exists is a major one. A renamed flag or key keeps its old name as an alias, with a deprecation note in the report, until the next major version.
+
+| Surface | Frozen | Free to evolve in a minor release |
+|---|---|---|
+| CLI | Subcommand and flag names; the `DISCIPLINE_*` environment variables; exit codes `0` pass, `1` findings, `2` could not check | New subcommands and flags; help text |
+| Configuration | Table and key names and their value types in `discipline.toml` (`[meta] version = 1`); list reset syntax; how layers merge | New keys and tables; default values under the rules of §3.1 |
+| Directives | The directive names (`allow-*:`, `removes:`, `discipline:allow(<gate>)`), their subject grammar, the directive sources | New directives |
+| Gates and findings | Gate ids; finding **titles** (a baseline fingerprint is `gate:title:path:line-hash`, so a renamed title re-opens every baselined finding); severities as `error` / `warning` / `note` | What a gate detects, as recorded in the ledger (below); finding messages and remediation text, except where the next row applies |
+| Reports | The JSON report's existing fields, their names and types (`--format json`, `replay --json`); consumers ignore fields they do not know; SARIF 2.1.0, JUnit and GitLab Code Quality follow their external schemas | New fields; terminal, Markdown and agent-prompt text |
+| Baselines | The fingerprint formula; `discipline-baseline.toml` layout. A finding with no line is fingerprinted by its message, so such a message changes only with a ledger row naming the regeneration (`discipline baseline`) | |
+| Agent surfaces | The MCP tool names, argument names and result shape; `hook run`'s accepted payload fields and each agent's output contract; the files `hook install` writes | Support for more agents |
+| Action and templates | `action.yml` inputs and outputs; the major tag (`@v1`) moving only through the release pipeline (§8.2) | New inputs and outputs |
+
+**Detection is not frozen.** Language packs, parsers and gates keep improving, and every change to what a gate reports is a ledger row in `docs/ROADMAP.md`: a stricter one (a new finding, a construct now read) may land in a minor release; a looser one (a false positive fixed) follows §3.1 and names the configuration that restores the old behaviour where one exists. Pinning a version (`@v1.2.3`, an image digest) is the way to hold detection still.
+
+**Before 1.0** a minor release may still change these surfaces; the ledger records each change. The Interface freeze criterion in `docs/ROADMAP.md` ("1.0 Readiness") is met by one full minor release that changes none of the frozen column.
+
 ---
 
 ## 4. Module Map

@@ -334,11 +334,11 @@ Before 1.0 a minor release may change gate behaviour; from 1.0, `docs/ARCHITECTU
 
 | Criterion | Status | Ships when |
 |---|---|---|
-| Consumer replay of the v0.11 features | Met except the new language packs: on v0.12.0, `replay --last 100` on three consumer repositories (a PHP C extension, a Python CLI, a Go MCP server) shows no false-positive block from the agent-facing checks or `archive-contents`; the one remaining false positive (a Python `except SystemExit` / `KeyboardInterrupt` handler) is fixed for the next release. No consumer exercises the Swift, Scala or Objective-C packs yet | `discipline replay --last 100` on at least one consumer repository shows no false-positive block from the v0.11 language packs, agent-facing checks or `archive-contents` formats |
+| Consumer replay of the v0.11 features | Met: `replay --last 100` (200 on the multi-language one) on four consumer repositories (a PHP C extension, a Python CLI, a Go MCP server, a Rust core with bindings in seven languages) and on public Swift, Scala and Objective-C projects; every false positive they found is fixed (the last Objective-C and Swift ones for the release after v0.12.3), and what still blocks is a true positive or defensible | `discipline replay --last 100` on at least one consumer repository shows no false-positive block from the v0.11 language packs, agent-facing checks or `archive-contents` formats |
 | Live agent sessions | Open | One real session each with Claude Code, Codex CLI, Cursor, Copilot CLI, agy, Qwen Code and OpenCode runs the installed hook and the agent receives and acts on a finding; the contracts cited in `src/hook.rs` are confirmed or corrected |
 | Production forge evidence | Open | The production-Gitea records Phase 11 Step 0 lists exist |
 | External review | Open | A non-LLM reviewer has read the gate contract (`docs/ARCHITECTURE.md` §3) and the agent-facing threat model and their findings are resolved |
-| Interface freeze | Open | One full minor release passes with no change to CLI flags, configuration keys, the JSON report shape, the MCP tools or the hook contract, and a stability policy states what 1.0 freezes |
+| Interface freeze | Open: the stability policy is `docs/ARCHITECTURE.md` §3.2; the minor release that changes none of its frozen surfaces is still to come | One full minor release passes with no change to CLI flags, configuration keys, the JSON report shape, the MCP tools or the hook contract, and a stability policy states what 1.0 freezes |
 
 ---
 
