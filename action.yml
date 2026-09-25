@@ -82,7 +82,7 @@ inputs:
     required: false
     default: '.'
   version:
-    description: 'Release to download (e.g. v0.1.0). Default: the tag this action was referenced by, else the latest release.'
+    description: 'Release to download (e.g. v0.1.0). Default: the tag this action was referenced by (`@vX.Y.Z`); for a major tag, a commit SHA or a branch, the release in the action''s own Cargo.toml; the latest release only when neither is available.'
     required: false
     default: ''
   binary_path:
@@ -179,17 +179,19 @@ runs:
             *) fail "unsupported OS: $(uname -s) (pass binary_path to use your own build)" ;;
           esac
 
+          # version-resolution:begin (tests/test_action_version.rs runs these lines)
           version="${INPUT_VERSION}"
           if [ -z "${version}" ] && [[ "${ACTION_REF}" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)* ]]; then
             version="${ACTION_REF}"
           fi
-          # A major tag (`@v0`) runs the binary of the release it points at, read from
-          # the action's own Cargo.toml, never `latest`: `latest` can move before the
-          # major tag does, which would pair a new binary with an older action.
-          if [ -z "${version}" ] && [[ "${ACTION_REF}" =~ ^v[0-9]+$ ]] && [ -f "${GITHUB_ACTION_PATH:-}/Cargo.toml" ]; then
+          # Any other ref (a major tag `@v0`, a commit SHA, a branch) runs the binary of the
+          # release the action's own Cargo.toml names, never `latest`: `latest` can move
+          # before the major tag does, and a SHA-pinned action must not run an unpinned binary.
+          if [ -z "${version}" ] && [ -f "${GITHUB_ACTION_PATH:-}/Cargo.toml" ]; then
             pinned="$(sed -n 's/^version = "\(.*\)"/\1/p' "${GITHUB_ACTION_PATH}/Cargo.toml" | head -n 1)"
             [ -n "${pinned}" ] && version="v${pinned}"
           fi
+          # version-resolution:end
           if [ -n "${version}" ]; then
             base="${INPUT_DOWNLOAD_URL}/download/${version}"
           else

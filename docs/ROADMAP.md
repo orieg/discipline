@@ -370,6 +370,10 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | action | A workflow that pins the action by commit SHA (as `ci-integrity` requires) or a branch runs the binary of the release in the action's own `Cargo.toml`, as `@v0` already did, instead of the latest release. An explicit `version:` still wins. | changed | None; set `version:` to choose another release. |
+| unreleased | `check` | `--config ../candidate.toml`, a relative path that escapes the repository, no longer exits 2; it is treated like an absolute path outside the repository (v0.12.1). | looser | None. |
+| unreleased | `check` | `DISCIPLINE_NO_NETWORK=1` also skips the CI-only `git fetch` that deepens a shallow clone when the base does not resolve, and says so in the diagnostics. | stricter | Unset `DISCIPLINE_NO_NETWORK` to let a shallow CI clone fetch its base. |
+| unreleased | `assertion-reduction` | A newly added NUL byte is also lifted by the marker of the gate that reports it (`discipline:allow(assertion-reduction): <path> <reason>`), as its remediation says; the old `discipline:allow(vacuous-tests)` form still works. | looser | None. |
 | v0.12.3 | Python | Same-file helpers are followed up to three calls deep (was one), as in C/C++, a recursive helper counted once: a check that moves from the function a test drives into a validator that function calls is no longer an assertion drop. | looser (assertion counts) | None. |
 | v0.12.2 | C/C++ | A test (or helper) that calls same-file functions through a table it builds (`std::vector<std::pair<std::string, void (*)()>> tests = {{"get", TestGet}}`, `{check_a, &check_b}`) counts their checks; the three-call helper depth of v0.12.1 had turned such a refactor into an assertion drop. | looser | None. |
 | v0.12.2 | `[tests] functions` | A declared Python name that starts with `_` (`_self_test`) is a test and its body test scope; the private-name rule used to override the declaration. | looser | None. |

@@ -118,7 +118,12 @@ pub fn verify_named_head(name: &str) -> Result<()> {
 /// the repository stays absolute: no side of the change holds it, and git rejects the
 /// path, so callers look it up only when this holds.
 pub fn config_in_tree(path: &str) -> bool {
-    !std::path::Path::new(path).is_absolute()
+    let p = std::path::Path::new(path);
+    // `../candidate.toml` stays relative but escapes the repository all the same.
+    !p.is_absolute()
+        && !p
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
 pub fn is_push_event_environment() -> bool {
@@ -931,6 +936,14 @@ fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) 
     let mut fetch_errors = Vec::new();
     if !is_ci_environment() {
         // Do not make unsolicited network requests in local developer environments
+        return fetch_errors;
+    }
+    // `DISCIPLINE_NO_NETWORK=1` keeps every request off the network, this fetch included.
+    if std::env::var("DISCIPLINE_NO_NETWORK").is_ok_and(|v| v == "1") {
+        fetch_errors.push(
+            "git fetch skipped: DISCIPLINE_NO_NETWORK=1 keeps every request off the network"
+                .to_string(),
+        );
         return fetch_errors;
     }
 

@@ -1582,7 +1582,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">version</td>
       <td><em>(none)</em></td>
-      <td>Release to download (e.g. v0.1.0). Default: the tag this action was referenced by, else the latest release.</td>
+      <td>Release to download (e.g. v0.1.0). Default: the tag this action was referenced by (`@vX.Y.Z`); for a major tag, a commit SHA or a branch, the release in the action''s own Cargo.toml; the latest release only when neither is available.</td>
     </tr>
     <tr>
       <td class="gate-id">binary_path</td>

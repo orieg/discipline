@@ -582,7 +582,18 @@ pub(crate) fn report_newly_added_nul_bytes(
         }
         if ff.newly_added_nul {
             if let Some(record) =
+                // The finding lands in the first enabled AST gate: its own marker lifts it.
                 tokens::find_override(directives, out.gate, tokens::ALLOW_NUL, &ff.file.path)
+                        .or_else(|| {
+                            let own = format!("discipline:allow({})", out.gate);
+                            let short = format!("allow({})", out.gate);
+                            tokens::find_override(
+                                directives,
+                                out.gate,
+                                &[own.as_str(), short.as_str()],
+                                &ff.file.path,
+                            )
+                        })
             {
                 out.overrides.push(record);
                 continue;
