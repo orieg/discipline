@@ -190,27 +190,38 @@ fn an_override_is_judged_against_the_pull_request_author_not_the_replaying_shell
         serde_json::json!([]),
         "{allowed}"
     );
+    assert_eq!(
+        allowed["refused_overrides"],
+        serde_json::json!([]),
+        "{allowed}"
+    );
+    assert_eq!(allowed["actor"], "dev", "{allowed}");
 
-    // Another author: the override is refused, and the case names the gate and the reason
-    // even though no finding is an error. The replaying shell's actor does not rescue it.
+    // Another author: the override is refused. The case names the gate in its own field,
+    // not as an error finding, and the actor it was judged as. The replaying shell's
+    // actor does not rescue it.
     let refused = run("outsider", "dev");
     assert_eq!(refused["verdict"], "blocked", "{refused}");
     assert_eq!(
         refused["blocking_gates"],
+        serde_json::json!([]),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["refused_overrides"],
         serde_json::json!(["assertion-reduction"]),
         "{refused}"
     );
-    let detail = refused["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("`fail_on_overrides` refused") && detail.contains("`outsider`"),
-        "{detail}"
-    );
+    assert_eq!(refused["actor"], "outsider", "{refused}");
+    assert!(refused.get("detail").is_none(), "{refused}");
 
     // No author on the pull request: no actor at all, not the replaying shell's.
     let anonymous = run("", "dev");
     assert_eq!(anonymous["verdict"], "blocked", "{anonymous}");
-    assert!(
-        anonymous["detail"].as_str().unwrap().contains("no actor"),
+    assert_eq!(anonymous["actor"], serde_json::Value::Null, "{anonymous}");
+    assert_eq!(
+        anonymous["refused_overrides"],
+        serde_json::json!(["assertion-reduction"]),
         "{anonymous}"
     );
 }

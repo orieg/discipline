@@ -30,15 +30,18 @@ pub struct Case {
     pub subject: String,
     /// `passed`, `blocked` or `could_not_check`.
     pub verdict: &'static str,
-    /// Gates with an `error` finding; when there is none, the gates whose overrides
-    /// `fail_on_overrides` refused.
+    /// Gates with an `error` finding.
     pub blocking_gates: Vec<String>,
+    /// Gates whose overrides `fail_on_overrides` refused, since `actor` is not in
+    /// `allowed_override_actors`. Each blocks the change as an error finding does.
+    pub refused_overrides: Vec<String>,
+    /// The login the change was checked as: its merged pull request's author, or none.
+    pub actor: Option<String>,
     /// Gates with a `warning` finding.
     pub warning_gates: Vec<String>,
     /// Where the directives came from: `pull request body`, or why they did not.
     pub directives_from: String,
-    /// The child's stderr when it could not check; for a change blocked with no `error`
-    /// finding, which overrides were refused and for which actor.
+    /// The child's stderr when it could not check.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub detail: String,
 }
@@ -51,6 +54,8 @@ pub struct Summary {
     pub could_not_check: usize,
     /// Gate id → the changes it blocked (`#N`, else the short sha).
     pub errors_by_gate: BTreeMap<String, Vec<String>>,
+    /// Gate id → the changes whose overrides of that gate were refused.
+    pub refused_overrides_by_gate: BTreeMap<String, Vec<String>>,
     /// Gate id → the number of changes with a warning from it.
     pub warnings_by_gate: BTreeMap<String, usize>,
     /// Why a change could not be checked → the changes (`#N`, else the short sha).
@@ -92,6 +97,16 @@ impl Summary {
                     .or_default()
                     .push(c.label());
             }
+            for g in c
+                .refused_overrides
+                .iter()
+                .filter(|_| c.verdict == "blocked")
+            {
+                s.refused_overrides_by_gate
+                    .entry(g.clone())
+                    .or_default()
+                    .push(c.label());
+            }
             for g in &c.warning_gates {
                 *s.warnings_by_gate.entry(g.clone()).or_default() += 1;
             }
@@ -103,11 +118,17 @@ impl Summary {
     pub fn render(&self) -> String {
         let mut out = String::new();
         for c in &self.cases_detail {
-            let gates = if c.blocking_gates.is_empty() {
+            let mut gates = if c.blocking_gates.is_empty() {
                 String::new()
             } else {
                 format!("  {}", c.blocking_gates.join(", "))
             };
+            if !c.refused_overrides.is_empty() {
+                gates.push_str(&format!(
+                    "  overrides refused: {}",
+                    c.refused_overrides.join(", ")
+                ));
+            }
             out.push_str(&format!(
                 "{:<9} {:<16} {}{gates}\n",
                 c.label(),
@@ -131,6 +152,13 @@ impl Summary {
         for (g, changes) in &self.errors_by_gate {
             out.push_str(&format!(
                 "  error    {g:<24} {} change(s): {}\n",
+                changes.len(),
+                changes.join(" ")
+            ));
+        }
+        for (g, changes) in &self.refused_overrides_by_gate {
+            out.push_str(&format!(
+                "  override refused {g:<16} {} change(s): {}\n",
                 changes.len(),
                 changes.join(" ")
             ));
@@ -208,21 +236,24 @@ pub fn gates_with_overrides(json: &str) -> Vec<String> {
         .collect()
 }
 
-/// Why a change with no `error` finding was blocked: `fail_on_overrides` refused its
-/// overrides, since its actor is not in `allowed_override_actors`.
-pub fn refused_overrides(json: &str, actor: Option<&str>) -> String {
-    let gates = gates_with_overrides(json);
-    if gates.is_empty() {
-        return String::new();
+/// Gates whose overrides `check` refused, by the rule it applies: under
+/// `fail_on_overrides`, every override fails the change unless the actor is in
+/// `allowed_override_actors` (case-insensitive).
+pub fn refused_overrides(
+    json: &str,
+    directives: &crate::config::DirectivesConfig,
+    actor: Option<&str>,
+) -> Vec<String> {
+    let authorized = actor.is_some_and(|a| {
+        directives
+            .allowed_override_actors
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(a))
+    });
+    if !directives.fail_on_overrides || authorized {
+        return Vec::new();
     }
-    let by = actor.map_or(
-        "no actor (no merged pull request author)".to_string(),
-        |a| format!("actor `{a}`"),
-    );
-    format!(
-        "no error finding: `fail_on_overrides` refused the override(s) of {} applied by {by}, who is not in `allowed_override_actors`",
-        gates.join(", ")
-    )
+    gates_with_overrides(json)
 }
 
 /// `(#123)` at the end of a squash-merge subject.
@@ -347,6 +378,15 @@ pub fn run(opts: &Options) -> Result<Summary> {
         .as_deref()
         .map(|b| scratch.blob(b))
         .transpose()?;
+    // The override policy of the configuration under test, to name the overrides each
+    // case's `check` refused. A configuration that does not parse makes every case exit
+    // 2, so its defaults are never used for a verdict.
+    let directives = config_bytes
+        .as_deref()
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|t| crate::config::DisciplineConfig::from_toml_str(t).ok())
+        .map(|c| c.directives)
+        .unwrap_or_default();
 
     let forge = {
         let origin = src
@@ -467,15 +507,17 @@ pub fn run(opts: &Options) -> Result<Summary> {
             read_verdict(code, &String::from_utf8_lossy(&out.stdout));
         let mut detail = if verdict == "could_not_check" {
             String::from_utf8_lossy(&out.stderr).trim().to_string()
-        } else if verdict == "blocked" && blocking.is_empty() {
-            refused_overrides(&String::from_utf8_lossy(&out.stdout), author.as_deref())
         } else {
             String::new()
         };
-        let blocking = if verdict == "blocked" && blocking.is_empty() {
-            gates_with_overrides(&String::from_utf8_lossy(&out.stdout))
+        let refused = if verdict == "blocked" {
+            refused_overrides(
+                &String::from_utf8_lossy(&out.stdout),
+                &directives,
+                author.as_deref(),
+            )
         } else {
-            blocking
+            Vec::new()
         };
         // A forge that was found but could not answer may hold a merged pull request whose
         // body lifts these findings: the change's verdict is unknown, not blocked.
@@ -498,6 +540,8 @@ pub fn run(opts: &Options) -> Result<Summary> {
             subject,
             verdict,
             blocking_gates: blocking,
+            refused_overrides: refused,
+            actor: author,
             warning_gates: warning,
             directives_from,
             detail,
@@ -530,6 +574,23 @@ mod tests {
     }
 
     #[test]
+    fn overrides_are_refused_only_under_fail_on_overrides_for_an_outside_actor() {
+        let json = r#"{"outcomes":[
+            {"gate":"dependency-delta","overrides":[{"directive":"allow-dependency"}]},
+            {"gate":"pii","overrides":[]}]}"#;
+        let policy = |fail: bool| crate::config::DirectivesConfig {
+            fail_on_overrides: fail,
+            allowed_override_actors: vec!["Lead".into()],
+            ..Default::default()
+        };
+        let gates = vec!["dependency-delta".to_string()];
+        assert!(refused_overrides(json, &policy(false), None).is_empty());
+        assert!(refused_overrides(json, &policy(true), Some("lead")).is_empty());
+        assert_eq!(refused_overrides(json, &policy(true), Some("other")), gates);
+        assert_eq!(refused_overrides(json, &policy(true), None), gates);
+    }
+
+    #[test]
     fn a_pull_request_number_comes_from_the_squash_subject() {
         assert_eq!(pr_from_subject("fix(x): y (#1028)"), Some(1028));
         assert_eq!(pr_from_subject("no number"), None);
@@ -544,6 +605,8 @@ mod tests {
             subject: "s".into(),
             verdict,
             blocking_gates: e.iter().map(|s| s.to_string()).collect(),
+            refused_overrides: Vec::new(),
+            actor: None,
             warning_gates: w.iter().map(|s| s.to_string()).collect(),
             directives_from: String::new(),
             detail: String::new(),
@@ -577,5 +640,17 @@ mod tests {
         assert!(s
             .render()
             .contains("4 changes: 1 passed, 2 blocked, 1 could not be checked"));
+        let refused = Summary::from_cases(vec![Case {
+            refused_overrides: vec!["dependency-delta".into()],
+            ..case(Some(7), "blocked", &[], &[])
+        }]);
+        assert_eq!(
+            refused.refused_overrides_by_gate["dependency-delta"],
+            vec!["#7"]
+        );
+        assert!(refused.errors_by_gate.is_empty());
+        assert!(refused
+            .render()
+            .contains("override refused dependency-delta 1 change(s): #7"));
     }
 }
