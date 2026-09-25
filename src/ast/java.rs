@@ -178,36 +178,9 @@ impl<'a> JavaExtractor<'a> {
             }
             return;
         }
+        // A comment is never a suppression: `@SuppressWarnings` named in a comment or a
+        // Javadoc `{@code ...}` suppresses nothing. Only the annotation node above counts.
         if kind == "line_comment" || kind == "block_comment" {
-            let text = self.text(node);
-            let line = node.start_position().row + 1;
-            let trimmed = text
-                .trim_start_matches("//")
-                .trim_start_matches("/*")
-                .trim_end_matches("*/")
-                .trim();
-
-            if trimmed.contains("@SuppressWarnings") {
-                let rule = if let Some(start) = trimmed.find('(') {
-                    if let Some(end) = trimmed[start..].find(')') {
-                        trimmed[start + 1..start + end]
-                            .trim()
-                            .trim_matches('"')
-                            .to_string()
-                    } else {
-                        "all".to_string()
-                    }
-                } else {
-                    "all".to_string()
-                };
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule,
-                        snippet: text.to_string(),
-                    });
-            }
             return;
         }
 
@@ -733,6 +706,23 @@ class ExampleMapTest {
         assert_eq!(t.effective_asserts(), 2);
         assert!(!t.is_vacuous());
         assert!(!t.ignored);
+    }
+
+    #[test]
+    fn suppress_warnings_counts_as_an_annotation_never_in_a_comment() {
+        let src = "class A {\n  // no @SuppressWarnings(\"unchecked\") here\n  /** see {@code @SuppressWarnings(\"rawtypes\")} */\n  @SuppressWarnings(\"deprecation\")\n  void f() {}\n}\n";
+        let facts = JavaPack
+            .extract("A.java", src, &AssertVocabulary::default())
+            .expect("extraction must succeed");
+        let rules: Vec<(usize, String)> = facts
+            .escape_hatches
+            .iter()
+            .filter_map(|h| match h {
+                EscapeHatchSite::LinterDisable { line, rule, .. } => Some((*line, rule.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rules, [(4, "deprecation".to_string())]);
     }
 
     #[test]

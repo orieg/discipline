@@ -2194,6 +2194,36 @@ fn suppression_delta_is_a_delta_read_from_the_syntax_tree() {
     assert_eq!(lifted.violations("suppression-delta").len(), 2);
 }
 
+#[test]
+fn java_suppress_warnings_counts_only_as_an_annotation() {
+    let repo = Repo::new();
+    repo.write(
+        "src/main/java/A.java",
+        "public class A {\n  // Do not add @SuppressWarnings(\"unchecked\") here: fix the generics.\n  /* @SuppressWarnings(\"rawtypes\") was removed in 2.0 */\n  /** Callers may need {@code @SuppressWarnings(\"deprecation\")}. */\n  void f() {}\n}\n",
+    );
+    repo.commit("docs: mention the annotation");
+    let run = repo.check(SUPPRESSION_BLOCKING);
+    assert!(
+        run.titles("suppression-delta").is_empty(),
+        "{:?}",
+        run.violations("suppression-delta")
+    );
+
+    // Control: the annotation itself is still a new suppression.
+    repo.write(
+        "src/main/java/B.java",
+        "public class B {\n  @SuppressWarnings(\"unchecked\")\n  void g() {}\n}\n",
+    );
+    repo.commit("chore: suppress");
+    let run = repo.check(SUPPRESSION_BLOCKING);
+    let files: Vec<String> = run
+        .violations("suppression-delta")
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(files, ["src/main/java/B.java"], "{}", run.stdout);
+}
+
 // ---- stub-bodies -----------------------------------------------------------
 
 #[test]
