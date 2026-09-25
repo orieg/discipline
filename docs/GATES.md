@@ -796,7 +796,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Newly introduced dependencies that violate repository `deny.toml` `[bans]` or `[sources]`.
   - Dependencies listed in configured `deny_dependencies`.
   - `New Direct Dependency Added`: every new direct dependency, unless it is in `allow_dependencies` or the `deny.toml` allow list; with `allow_dependencies` set, a dependency outside it is also `Dependency Outside Allowlist`. `Loosened Dependency Constraint` and `Dependency Source Modified` judge a changed one. A `go.mod` requirement marked `// indirect` is a transitive module `go mod tidy` wrote, not a new direct dependency; bans, wildcards and source changes still apply to it.
-  - **Lockfile integrity** (offline; `Cargo.lock`, `package-lock.json`, `yarn.lock` v1 and 2+, `pnpm-lock.yaml` and `poetry.lock` are read entry by entry, base side against head side):
+  - **Lockfile integrity** (offline; `Cargo.lock`, `package-lock.json`, `yarn.lock` v1 and 2+, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `composer.lock` and `Gemfile.lock` are read entry by entry, base side against head side):
     - `Lockfile Entry From New Source`: an entry fetched from git or a bare URL, or from a registry host that is neither a default registry nor a host the base lockfile already uses (a private registry present on the base side is known).
     - `Lockfile Integrity Hash Dropped`: an entry (same name and version) that carried a checksum / `integrity` on the base side and no longer does.
     - `Manifest Changed Without Lockfile`: the dependency set of a manifest changed while the tracked lockfile governing it (same directory, else the nearest ancestor's) did not. A project that tracks no lockfile is not asked for one; `go.mod` is exempt because requiring an already-indirect module leaves `go.sum` unchanged.
@@ -815,7 +815,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - Unmodified pre-existing dependencies already present in the merge base ref.
   - Whether a package exists, how old it is, or whether its name is a typosquat: that needs a registry lookup, which discipline does not make (`AGENTS.md` §3.3). Use an audit preset of the `command` gate.
-  - `go.sum` (requiring an already-indirect module leaves it unchanged): its size is noted, its sources and hashes are not read, and the notes say so. `uv.lock`, `composer.lock`, `Gemfile.lock` and any other lockfile format are not read entry by entry, and deleting one is not `Lockfile Deleted`; they still count as the lockfile a manifest change must touch.
+  - `go.sum` (requiring an already-indirect module leaves it unchanged): its size is noted, its sources and hashes are not read, and the notes say so. Any other lockfile format is not read entry by entry, and deleting one is not `Lockfile Deleted`; it still counts as the lockfile a manifest change must touch.
   - A lockfile entry whose version changed within the same source (a routine update).
   - Dependencies explicitly excused via scoped `allow-dependency: <name> <reason>`.
 - **Lifting directive:** `allow-dependency: <dependency-name> <reason>`. A lockfile entry finding is lifted by naming the **package**; a stale or deleted lockfile by naming the **lockfile path**.

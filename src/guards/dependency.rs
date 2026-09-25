@@ -786,7 +786,9 @@ fn count_lockfile_entries(content: &str, file_name: &str) -> usize {
             })
             .count()
     } else {
-        0
+        // The formats `lockfile.rs` reads entry by entry (`uv.lock`, `composer.lock`,
+        // `Gemfile.lock`) count their parsed entries.
+        lockfile::parse_lock(file_name, content).map_or(0, |e| e.len())
     }
 }
 
@@ -877,6 +879,9 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
         "pnpm-lock.yaml",
         "yarn.lock",
         "poetry.lock",
+        "uv.lock",
+        "composer.lock",
+        "Gemfile.lock",
         "go.sum",
     ];
     let mut lock_files = Vec::new();
@@ -1191,6 +1196,19 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lockfiles_read_entry_by_entry_count_their_parsed_entries() {
+        let uv = "[[package]]\nname = \"a\"\nversion = \"1\"\nsource = { registry = \"https://pypi.org/simple\" }\n\n[[package]]\nname = \"b\"\nversion = \"2\"\nsource = { registry = \"https://pypi.org/simple\" }\n";
+        let composer = "{\"packages\": [{\"name\": \"a/a\", \"version\": \"1\"}], \"packages-dev\": [{\"name\": \"b/b\", \"version\": \"2\"}]}";
+        let gem =
+            "GEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.6)\n    rack (3.0.0)\n";
+        assert_eq!(count_lockfile_entries(uv, "uv.lock"), 2);
+        assert_eq!(count_lockfile_entries(composer, "composer.lock"), 2);
+        assert_eq!(count_lockfile_entries(gem, "Gemfile.lock"), 2);
+        // A format no parser reads counts nothing, rather than guessing.
+        assert_eq!(count_lockfile_entries("x", "mix.lock"), 0);
+    }
 
     #[test]
     fn test_parse_cargo_toml_dependencies() {

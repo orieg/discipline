@@ -3654,6 +3654,86 @@ fn a_push_run_reads_the_merged_pull_requests_body() {
 }
 
 #[test]
+fn uv_composer_and_gemfile_lockfiles_are_read_entry_by_entry() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    let sides = [
+        (
+            "py/uv.lock",
+            "[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\nsource = { registry = \"https://pypi.org/simple\" }\nsdist = { url = \"https://files.pythonhosted.org/r.tar.gz\", hash = \"sha256:abc\" }\n",
+            "[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\nsource = { url = \"https://evil.example/requests.tar.gz\" }\nsdist = { url = \"https://evil.example/requests.tar.gz\" }\n",
+        ),
+        (
+            "php/composer.lock",
+            "{\"packages\": [{\"name\": \"monolog/monolog\", \"version\": \"3.0.0\", \"dist\": {\"type\": \"zip\", \"url\": \"https://api.github.com/repos/Seldaek/monolog/zipball/abc\", \"shasum\": \"deadbeef\"}}]}\n",
+            "{\"packages\": [{\"name\": \"monolog/monolog\", \"version\": \"3.0.0\", \"dist\": {\"type\": \"zip\", \"url\": \"https://evil.example/monolog.zip\", \"shasum\": \"\"}}]}\n",
+        ),
+        (
+            "rb/Gemfile.lock",
+            "GEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.6)\n\nPLATFORMS\n  ruby\n\nCHECKSUMS\n  rake (13.0.6) sha256=abc\n",
+            "GIT\n  remote: https://evil.example/rake.git\n  revision: abc\n  specs:\n    rake (13.0.6)\n\nPLATFORMS\n  ruby\n",
+        ),
+    ];
+    for (path, base, _) in sides {
+        repo.write(path, base);
+    }
+    repo.commit("chore: lockfiles");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    // Each lockfile repoints its package at another host and drops the hash.
+    for (path, _, head) in sides {
+        repo.write(path, head);
+    }
+    repo.commit("chore: repoint");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let mut rows: Vec<(String, String)> = run
+        .violations("dependency-delta")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["title"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    rows.sort();
+    rows.dedup();
+    let expected: Vec<(String, String)> = ["php/composer.lock", "py/uv.lock", "rb/Gemfile.lock"]
+        .iter()
+        .flat_map(|f| {
+            [
+                (f.to_string(), "Lockfile Entry From New Source".to_string()),
+                (f.to_string(), "Lockfile Integrity Hash Dropped".to_string()),
+            ]
+        })
+        .collect();
+    assert_eq!(rows, expected, "{:?}", run.violations("dependency-delta"));
+    for f in ["php/composer.lock", "py/uv.lock", "rb/Gemfile.lock"] {
+        assert!(
+            notes_of(&run, "dependency-delta")
+                .iter()
+                .any(|n| n.starts_with(&format!("lockfile `{f}` package count: base 1, head 1"))),
+            "{f}: {:?}",
+            notes_of(&run, "dependency-delta")
+        );
+    }
+
+    // Deleting one is `Lockfile Deleted`, as for the other formats.
+    repo.git(&["checkout", "-q", "-B", "drop", "main"]);
+    repo.git(&["rm", "-q", "php/composer.lock"]);
+    repo.commit("chore: drop the lockfile");
+    let dropped = repo.check(&[]);
+    assert!(
+        dropped
+            .violations("dependency-delta")
+            .iter()
+            .any(|v| v["title"] == "Lockfile Deleted" && v["file"] == "php/composer.lock"),
+        "{}",
+        dropped.stdout
+    );
+}
+
+#[test]
 fn pnpm_and_poetry_lockfiles_are_read_entry_by_entry() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
