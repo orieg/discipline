@@ -964,7 +964,7 @@ Each change is checked with its pull request's author as the actor (`--actor`), 
 
 The configuration under test is usually newer than the history it replays. A file it names for `version-lockstep` or `manifest-sync` that neither side of a replayed change has yet skips that group or rule with a note, rather than failing the whole change; outside replay, the same missing file is a configuration error (exit 2). Replay marks its cases with `DISCIPLINE_REPLAY_CASE`, which is honoured only when the base is the parentless commit replay builds for the case; set on any other `check`, it changes nothing.
 
-`--json` prints the per-change verdicts and the per-gate counts (`errors_by_gate` names the changes each gate blocked with an error finding; `refused_overrides_by_gate` the changes whose override of a gate was refused; `could_not_check_by_reason` groups the changes that could not be checked by the error they stopped on). The command exits 0 when the replay ran, whatever it found; 2 when it could not run.
+`--json` prints the per-change verdicts and the per-gate counts (`errors_by_gate` names the changes each gate blocked with an error finding; `refused_overrides_by_gate` the changes whose override of a gate was refused; `could_not_check_by_reason` groups the changes that could not be checked by the error they stopped on). The command exits 0 when the replay ran, whatever it found; 2 when it could not run. The shape is defined by `discipline.replay.schema.json`, and the `check --format json` report's by `discipline.report.schema.json`, both at the repository root.
 
 ### VS Code Problems Panel
 

@@ -1,0 +1,148 @@
+{
+  "$defs": {
+    "Case": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "description": "The login the change was checked as: its merged pull request's author",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blocking_gates": {
+          "description": "Gates with an `error` finding",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "detail": {
+          "description": "Why the change could not be checked. Omitted otherwise",
+          "type": "string"
+        },
+        "directives_from": {
+          "description": "`pull request body`, or why only the commit message was read",
+          "type": "string"
+        },
+        "pr": {
+          "description": "Pull request number, from the forge or the subject's `(#N)`",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "refused_overrides": {
+          "description": "Gates whose overrides `fail_on_overrides` refused",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sha": {
+          "description": "Full commit id of the replayed change",
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "passed",
+            "blocked",
+            "could_not_check"
+          ]
+        },
+        "warning_gates": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sha",
+        "pr",
+        "subject",
+        "verdict",
+        "blocking_gates",
+        "refused_overrides",
+        "actor",
+        "warning_gates",
+        "directives_from"
+      ],
+      "type": "object"
+    },
+    "ChangeLists": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The summary `discipline replay --json` prints: each replayed change's verdict under the configuration, and per-gate counts. Changes are labelled `#N` (pull request) or by a 10-character commit id.",
+  "properties": {
+    "blocked": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "cases": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "cases_detail": {
+      "description": "Newest first",
+      "items": {
+        "$ref": "#/$defs/Case"
+      },
+      "type": "array"
+    },
+    "could_not_check": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "could_not_check_by_reason": {
+      "$ref": "#/$defs/ChangeLists",
+      "description": "The error a change stopped on -> the changes"
+    },
+    "errors_by_gate": {
+      "$ref": "#/$defs/ChangeLists",
+      "description": "Gate id -> the changes it blocked with an error finding"
+    },
+    "passed": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "refused_overrides_by_gate": {
+      "$ref": "#/$defs/ChangeLists",
+      "description": "Gate id -> the changes whose override of that gate `fail_on_overrides` refused"
+    },
+    "warnings_by_gate": {
+      "additionalProperties": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "description": "Gate id -> the number of changes with a warning from it",
+      "type": "object"
+    }
+  },
+  "required": [
+    "cases",
+    "passed",
+    "blocked",
+    "could_not_check",
+    "errors_by_gate",
+    "refused_overrides_by_gate",
+    "warnings_by_gate",
+    "could_not_check_by_reason",
+    "cases_detail"
+  ],
+  "title": "DisciplineReplay",
+  "type": "object"
+}

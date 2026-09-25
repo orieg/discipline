@@ -29,6 +29,7 @@ Do not scatter notes into arbitrary files. Update canonical documents; do not pr
 | Project roadmap & milestones | `docs/ROADMAP.md` | Milestone completion or phase evolution |
 | Agent rules & engineering standards | `AGENTS.md` (this file) | Project-level policy evolution |
 | Reference configuration schema | `discipline.toml` | Schema version bump |
+| Output schemas (generated) | `discipline.report.schema.json`, `discipline.replay.schema.json` (from `src/output_schema.rs`; `discipline docs --write`) | Report or replay field change |
 | Action runner definition | `action.yml` | Action input/runtime change |
 | GitLab CI component | `templates/discipline.gitlab-ci.yml` | Component interface or runner change |
 | Argo Workflow template | `templates/argo-workflow-template.yaml` | Task spec or parameter change |

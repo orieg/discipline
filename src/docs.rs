@@ -798,26 +798,38 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         }
     }
 
-    // 2. Process discipline.schema.json
-    let schema_path = root.join("discipline.schema.json");
-    let generated_schema_val = generate_schema();
-    let generated_schema_str = serde_json::to_string_pretty(&generated_schema_val)? + "\n";
+    // 2. Process the JSON Schemas: the configuration, the `check` report and the
+    // `replay` summary.
+    for (file_name, generated_schema_val) in [
+        ("discipline.schema.json", generate_schema()),
+        (
+            "discipline.report.schema.json",
+            crate::output_schema::report_schema(),
+        ),
+        (
+            "discipline.replay.schema.json",
+            crate::output_schema::replay_schema(),
+        ),
+    ] {
+        let schema_path = root.join(file_name);
+        let generated_schema_str = serde_json::to_string_pretty(&generated_schema_val)? + "\n";
 
-    let existing_schema_str = if schema_path.exists() {
-        std::fs::read_to_string(&schema_path)?
-    } else {
-        String::new()
-    };
+        let existing_schema_str = if schema_path.exists() {
+            std::fs::read_to_string(&schema_path)?
+        } else {
+            String::new()
+        };
 
-    if existing_schema_str != generated_schema_str {
-        has_diffs = true;
-        let diff = unified_diff(&schema_path, &existing_schema_str, &generated_schema_str);
-        eprintln!("{diff}");
+        if existing_schema_str != generated_schema_str {
+            has_diffs = true;
+            let diff = unified_diff(&schema_path, &existing_schema_str, &generated_schema_str);
+            eprintln!("{diff}");
 
-        if write {
-            std::fs::write(&schema_path, &generated_schema_str)
-                .with_context(|| format!("failed to write {}", schema_path.display()))?;
-            println!("Updated {}", schema_path.display());
+            if write {
+                std::fs::write(&schema_path, &generated_schema_str)
+                    .with_context(|| format!("failed to write {}", schema_path.display()))?;
+                println!("Updated {}", schema_path.display());
+            }
         }
     }
 

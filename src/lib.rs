@@ -13,6 +13,7 @@ pub mod gitctx;
 pub mod guards;
 pub mod hook;
 pub mod mcp;
+pub mod output_schema;
 pub mod override_policy;
 pub mod replay;
 pub mod report;

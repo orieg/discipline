@@ -1,0 +1,304 @@
+{
+  "$defs": {
+    "GateOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "baselined": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "examined": {
+          "description": "Items the gate inspected",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gate": {
+          "description": "Stable kebab-case gate id (`engine` for a run that could not start)",
+          "type": "string"
+        },
+        "inline_exemptions": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "notes": {
+          "description": "What the gate could not verify, and other context",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "overrides": {
+          "items": {
+            "$ref": "#/$defs/Override"
+          },
+          "type": "array"
+        },
+        "suite": {
+          "description": "The suite the gate belongs to",
+          "type": "string"
+        },
+        "violations": {
+          "items": {
+            "$ref": "#/$defs/Violation"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "gate",
+        "suite",
+        "enabled",
+        "examined",
+        "inline_exemptions",
+        "baselined",
+        "notes",
+        "violations",
+        "overrides"
+      ],
+      "type": "object"
+    },
+    "Override": {
+      "additionalProperties": false,
+      "properties": {
+        "directive": {
+          "type": "string"
+        },
+        "gate": {
+          "type": "string"
+        },
+        "hidden": {
+          "description": "The directive was inside an HTML comment",
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/OverrideSource"
+        },
+        "subject": {
+          "description": "What the directive names: a test, path, rule, dependency, ...",
+          "type": "string"
+        }
+      },
+      "required": [
+        "gate",
+        "subject",
+        "directive",
+        "reason",
+        "source",
+        "hidden"
+      ],
+      "type": "object"
+    },
+    "OverrideSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "PrBody"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "description": "Commit id",
+              "type": "string"
+            },
+            "type": {
+              "const": "Commit"
+            }
+          },
+          "required": [
+            "type",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "additionalProperties": false,
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "file",
+                "line"
+              ],
+              "type": "object"
+            },
+            "type": {
+              "const": "Inline"
+            }
+          },
+          "required": [
+            "type",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "description": "Pull request number",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "MergedPrBody"
+            }
+          },
+          "required": [
+            "type",
+            "detail"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Violation": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gate": {
+          "type": "string"
+        },
+        "line": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "note"
+          ]
+        },
+        "title": {
+          "description": "Part of the baseline fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "gate",
+        "severity",
+        "title",
+        "file",
+        "line",
+        "message",
+        "remediation"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The report `discipline check --format json` prints on stdout and `--json-out` writes. Exit 0 means no finding blocks, 1 that one does, 2 that the check could not run: then stdout carries no report, and `--json-out` gets this shape with a single `engine` outcome whose violation holds the error.",
+  "properties": {
+    "base": {
+      "description": "The ref the change was measured against, as resolved (e.g. `origin/main (merge base 1a2b3c4d5e)`)",
+      "type": "string"
+    },
+    "baselined": {
+      "description": "Findings suppressed by the baseline file",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "deprecations": {
+      "description": "Deprecated configuration keys this run read, one note each; never fails the run. Omitted when empty",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "errors": {
+      "description": "Findings of severity `error` across all gates",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "notes": {
+      "description": "Findings of severity `note`",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "outcomes": {
+      "description": "One entry per gate, in registry order",
+      "items": {
+        "$ref": "#/$defs/GateOutcome"
+      },
+      "type": "array"
+    },
+    "overrides": {
+      "description": "Directive overrides applied across all gates",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "planned_gates": {
+      "description": "Gate ids the roadmap plans but this binary does not ship",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "policy_failures": {
+      "description": "Run-level refusals no single gate owns; any entry fails the run. Omitted when empty",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "warnings": {
+      "description": "Findings of severity `warning`",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "base",
+    "errors",
+    "warnings",
+    "notes",
+    "overrides",
+    "baselined",
+    "outcomes",
+    "planned_gates"
+  ],
+  "title": "DisciplineReport",
+  "type": "object"
+}
