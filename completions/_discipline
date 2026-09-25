@@ -30,8 +30,8 @@ _discipline() {
         case $line[1] in
             (check)
 _arguments "${_arguments_options[@]}" : \
-'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
-'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'-c+[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
 '--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
 '*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
 '*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \
@@ -76,8 +76,8 @@ base\:"The configuration on the base ref"))' \
 ;;
 (diff)
 _arguments "${_arguments_options[@]}" : \
-'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
-'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'-c+[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
 '--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
 '*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
 '*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \
@@ -103,8 +103,8 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (baseline)
 _arguments "${_arguments_options[@]}" : \
-'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
-'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'-c+[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
 '--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
 '*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
 '*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \
@@ -132,8 +132,8 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (gates)
 _arguments "${_arguments_options[@]}" : \
-'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
-'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'-c+[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
 '--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
 '*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
 '*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \
@@ -255,8 +255,8 @@ esac
 ;;
 (explain)
 _arguments "${_arguments_options[@]}" : \
-'-c+[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
-'--config=[Path to discipline.toml. Absent file = built-in defaults (\`discipline gates\` lists them)]:CONFIG:_files' \
+'-c+[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
+'--config=[Path to discipline.toml. An absent default file = built-in defaults (\`discipline gates\` lists them); any other path that does not exist is an error (exit 2)]:CONFIG:_files' \
 '--config-override=[Inline TOML merged over the file (tables merge, lists append, scalars replace)]:CONFIG_OVERRIDE:_default' \
 '*--enable=[Gate ids to force on (comma separated)]:ENABLE:_default' \
 '*--disable=[Gate ids to force off (comma separated)]:DISABLE:_default' \

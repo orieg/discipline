@@ -59,15 +59,16 @@ Top-level metadata and configuration schema version.
 .RS
 .TP
 .BI version " = 1"
-Required integer. Must match the schema version (currently 1).
+Optional integer. Default is \fB1\fR, the current schema version.
 .TP
-.BI name " = \"project-name\""
-Required string. Name of the project or repository.
+.BI name " = \(dqproject-name\(dq"
+Optional string. Name of the project or repository. Default is
+\fB"discipline-project"\fR.
 .TP
-.BI description " = \"...\""
+.BI description " = \(dq...\(dq"
 Optional string. High-level description of the repository.
 .TP
-.BI mode " = \"enforcing\" | \"advisory\""
+.BI mode " = \(dqenforcing\(dq | \(dqadvisory\(dq"
 Optional string. Default is \fB"enforcing"\fR. When set to \fB"advisory"\fR,
 all gates run and generate reports (terminal, SARIF, GitLab Code Quality, JUnit),
 but the process exits with code 0 even if violations occur.
@@ -75,11 +76,20 @@ but the process exits with code 0 even if violations occur.
 
 .TP
 .B [directives]
-Policy for developer override directives (e.g. \fBallow-time-estimates:\fR).
+Policy for developer override directives (e.g. \fBallow-assertion-drop:\fR).
 .RS
 .TP
-.BI sources " = [\"pr-body\", \"commits\"]"
-Allowed sources for directives. Valid values: \fB"pr-body"\fR, \fB"commits"\fR.
+.BI sources " = [\(dqpr-body\(dq, \(dqcommits\(dq, \(dqmerged-pr-body\(dq]"
+Allowed sources for directives (the default is all three). Valid values:
+\fB"pr-body"\fR, \fB"commits"\fR, \fB"merged-pr-body"\fR. On a push event,
+\fB"merged-pr-body"\fR reads the body of the merged pull request each pushed
+commit arrived through, from the forge API.
+.TP
+.BI degrade_offline " = true"
+On a push event, when the \fBmerged-pr-body\fR lookup fails (forge unreachable,
+token without permission), continue with a named note, the finding the body
+might have lifted standing, instead of stopping with exit 2. Default is
+\fBtrue\fR; \fBfalse\fR makes the review record a hard requirement of the push run.
 .TP
 .BI allow_hidden " = false"
 Whether directives placed inside HTML comments (\fB<!-- -->\fR) are honored.
@@ -89,9 +99,21 @@ Default is \fBfalse\fR to prevent stealth overrides.
 When \fBtrue\fR, any applied directive is treated as a build failure unless
 the executing actor is authorized.
 .TP
-.BI allowed_override_actors " = [\"username\"]"
+.BI allowed_override_actors " = [\(dqusername\(dq]"
 List of repository actors (GitHub/GitLab logins) authorized to supply overrides
-when \fBfail_on_overrides\fR is enabled.
+when \fBfail_on_overrides\fR is enabled, and the reviewers whose approval
+\fBrequire_approval\fR accepts. When non-empty, directives in a merged pull
+request whose author is not listed are ignored. Default is empty.
+.TP
+.BI max_overrides " = N"
+Most pull-request-body and commit-body overrides one change may apply; inline
+markers are not counted. Default is unset (no cap).
+.TP
+.BI require_approval " = false"
+When \fBtrue\fR, pull-request-body and commit-body overrides fail the run until
+the forge shows an approving review of the head commit by an
+\fBallowed_override_actors\fR member other than the author. Default is
+\fBfalse\fR.
 .RE
 
 .TP
@@ -102,10 +124,10 @@ Individual gate configuration. Every gate accepts these common fields:
 .BI enabled " = true | false"
 Enable or disable the gate.
 .TP
-.BI severity " = \"error\" | \"warning\" | \"note\""
+.BI severity " = \(dqerror\(dq | \(dqwarning\(dq | \(dqnote\(dq"
 Severity of violations reported by this gate.
 .TP
-.BI exempt_paths " = [\"glob\", ...]"
+.BI exempt_paths " = [\(dqglob\(dq, ...]"
 Glob patterns of files exempt from this gate.
 .RE
 

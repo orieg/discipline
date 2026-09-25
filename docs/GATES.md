@@ -58,23 +58,23 @@ This document establishes the normative enforcement rules, detection capabilitie
 
 ### Directive Policy
 
-Each gate gets exactly one canonical directive (with at most one documented deprecated spelling). Directives must be scoped to their natural subject (file path, test name, action ref, workflow job, dependency name, or rule identifier). Blanket waivers without subjects are rejected.
+Each gate has at most one canonical directive (with at most one documented deprecated spelling); `allow-test-shrink` serves both `test-floor` and `test-budget`. A few gates (`unsafe-safety-comment`, `agents-md`, `pii`, `agent-scratch`, `ci-skip-set`, `time-estimates`) have no directive: they are lifted by fixing the finding, an inline marker where the gate documents one, or `exempt_paths`. Directives must be scoped to their natural subject (file path, test name, action ref, workflow job, dependency name, or rule identifier). Blanket waivers without subjects are rejected.
 
 ---
 
 ## Language Scope & Detection Boundaries
 
-Most gates are language-independent and inspect text, git diffs, configuration, workflows, or repository metadata; the *Languages* column of the catalog above is the authority for each. Four AST gates (`assertion-reduction`, `vacuous-tests`, `ignored-tests`, `unsafe-safety-comment`) operate through tree-sitter AST extraction.
+Most gates are language-independent and inspect text, git diffs, configuration, workflows, or repository metadata; the *Languages* column of the catalog above is the authority for each. The AST gates (`assertion-reduction`, `vacuous-tests`, `ignored-tests`, `unsafe-safety-comment`, `error-swallowing`, `stub-bodies`, `suppression-delta`, and the phrase tier of `instruction-smuggling`) operate through tree-sitter AST extraction.
 
 When a change touches source files in a language without an active pack, each AST gate **names the unanalysed files in its report notes** (F7) rather than rendering a silent zero.
 
 ### Language Packs
 
-| Language | Test function patterns | Assertion vocabulary (strong = equality / pattern) | Skip markers (`ignored-tests`) | Escape hatches (`unsafe-safety-comment`) | Status |
+| Language | Test function patterns | Assertion vocabulary (strong = equality / pattern) | Skip markers (`ignored-tests`) | Suppression markers (`suppression-delta`) | Status |
 |---|---|---|---|---|---|
-| **Rust** | `#[test]`, `#[tokio::test]`, `#[async_std::test]`, `#[rstest]` | `assert*!`, `debug_assert*!`, `prop_assert*!`; strong: `_eq`, `_ne`, `matches` | `#[ignore]`, `#[cfg_attr(..., ignore)]` | `unsafe` block / impl + `// SAFETY:` | **shipped** |
-| **Python** | pytest / unittest collection rules: `test*` functions, `test*` methods of `Test*` classes and `TestCase` subclasses (`self_test()` is not a test) | `assert` statements, `self.assert*`, `pytest.raises`, `pytest.approx`; strong: `==`, `assertEqual` family | `@pytest.mark.skip` / `skipif` / `xfail`, `@unittest.skip*` | `# type: ignore`, `# noqa`, `# pragma: no cover` | **shipped** |
-| **JavaScript / TypeScript** | `test(` / `it(` callbacks (Jest, Vitest, Mocha, node:test) | `expect(...).matcher`, `assert.*`; strong: `toBe`, `toEqual`, `toStrictEqual`; weak: `toBeTruthy`, `toBeDefined` | `.skip`, `.todo`, `xit`, `xdescribe` | `@ts-ignore`, `@ts-expect-error`, `as any` | **shipped** |
+| **Rust** | `#[test]`, `#[tokio::test]`, `#[async_std::test]`, `#[rstest]` | `assert*!`, `debug_assert*!`, `prop_assert*!`; strong: `_eq`, `_ne`, `matches` | `#[ignore]`, `#[cfg_attr(..., ignore)]` | `#[allow(...)]`, `#[expect(...)]` (the `// SAFETY:` rule is `unsafe-safety-comment`) | **shipped** |
+| **Python** | pytest / unittest collection rules: `test*` functions, `test*` methods of `Test*` classes and `TestCase` subclasses (`self_test()` is not a test unless `[tests] functions` declares it) | `assert` statements, `self.assert*`, `pytest.raises`, `pytest.approx`; strong: `==`, `assertEqual` family | `@pytest.mark.skip` / `skipif` / `xfail`, `@unittest.skip*` | `# type: ignore`, `# noqa`, `# pragma: no cover` | **shipped** |
+| **JavaScript / TypeScript** | `test(` / `it(` callbacks (Jest, Vitest, Mocha, node:test) | `expect(...).matcher`, `assert.*`; strong: `toBe`, `toEqual`, `toStrictEqual`; weak: `toBeTruthy`, `toBeDefined` | `.skip`, `.todo`, `xit`, `xdescribe` | `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `eslint-disable*`, `istanbul ignore` / `c8 ignore` | **shipped** |
 | **Golden (PHPT)** | Standard PHPT sections (`--TEST--`, `--FILE--`, `--EXPECT--`) | Exact expectation sections (`--EXPECT--`, `--EXPECTF--`, `--EXPECTREGEX--`) | `--SKIPIF--`, `--XFAIL--` | — | **shipped** |
 | **Java** | `@Test`, `@ParameterizedTest`, `@RepeatedTest` (JUnit 4/5, TestNG) | JUnit `assert*`, AssertJ `assertThat(...)`; strong: `assertEquals`, `assertThrows`, `isEqualTo` | `@Disabled`, `@Ignore`, `@Test(enabled = false)` | `@SuppressWarnings` | **shipped** |
 | **Kotlin** | JUnit 4 / 5 and TestNG `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory`; Kotest `StringSpec` / `FunSpec` / `DescribeSpec` / `ShouldSpec` / `ExpectSpec` / `FeatureSpec` / `BehaviorSpec` bodies; `test*` functions in a test path | kotlin.test and JUnit `assert*`, `assert(...)`, AssertJ / Truth `assertThat`, Kotest `shouldBe` and the other `should*` matchers (infix or call), `assertThrows<E> { }` / `shouldThrow<E> { }`; strong: `assertEquals`, `shouldBe`, `assertThat`; tautology: `assertTrue(true)`, `assertEquals(x, x)`, `x shouldBe x` | `@Disabled`, `@Ignore`, `@Test(enabled = false)`, class-level `@Disabled`, Kotest `"!name"`, `xtest` / `xit` / `xdescribe`, `.config(enabled = false)` | `@Suppress`, `@SuppressWarnings`, `@SuppressLint` | **shipped** |
@@ -82,7 +82,7 @@ When a change touches source files in a language without an active pack, each AS
 | **Scala** | ScalaTest `test("x") { }`, `"x" should "y" in { }`, WordSpec / FunSpec nesting; MUnit `test("x") { }`; specs2 `"x" >> { }`; JUnit `@Test` | `assert`, `assertEquals`, `assertResult`, `intercept[E]`, `assertThrows[E]`, `fail`, `should` / `must` matchers; strong: `assert(a == b)`, `assertEquals`, `shouldBe x` | `ignore("x")`, `... ignore { }`, `test("x".ignore)`, `pending`, `cancel(...)` | `@nowarn`, `@SuppressWarnings`, `// scalastyle:off`, `// scalafix:off` / `ok` | **shipped** |
 | **Objective-C** | XCTest `- (void)test*` with no parameters in an `XCTestCase` subclass (a `*Tests` class, or any class in a test path) | `XCTAssert*`, `XCTFail`; strong: `XCTAssertEqual`, `XCTAssertEqualObjects` | `XCTSkipIf` / `XCTSkipUnless` | `#pragma clang diagnostic ignored`, `// NOLINT` | **shipped** |
 | **C / C++** | GoogleTest `TEST*`, Catch2 `TEST_CASE`, doctest, C ABI smoke (`main`, `test_*`) | `EXPECT_*` / `ASSERT_*`, `REQUIRE` / `CHECK`, `assert(...)`; strong: `_EQ`, `_STREQ`, comparison operators | `DISABLED_` prefix, `GTEST_SKIP()`, Catch2 `SKIP()` / `[.]` | `// NOLINT` | **shipped** |
-| **Go** | `func Test*(t *testing.T)`, subtests | `t.Error*` / `t.Fatal*`, testify `assert.*` / `require.*`; strong: `Equal`, `DeepEqual` | `t.Skip*` | `unsafe` package, `//nolint` | **shipped** |
+| **Go** | `func Test*(t *testing.T)`, subtests | `t.Error*` / `t.Fatal*`, testify `assert.*` / `require.*`; strong: `Equal`, `DeepEqual` | `t.Skip*` | `//nolint`, `//lint:ignore`, `revive:disable` | **shipped** |
 | **PHP** | PHPUnit `test*` methods, `@test` docblock / attribute (a top-level `test*` function only under a test path or a `[tests] paths` glob), Pest `test(` / `it(` | PHPUnit `assert*`, Pest matchers (`->toBe`, `->toEqual`); strong: `assertEquals`, `assertSame`, `assertCount` | `$this->markTestSkipped()`, `$this->markTestIncomplete()`, `->skip()`, `#[Requires*]` | `// @psalm-suppress`, `// @phpstan-ignore`, `// phpcs:ignore` | **shipped** |
 | **C#** | `[Fact]`, `[Theory]` (xUnit), `[Test]` (NUnit), `[TestMethod]` (MSTest) | `Assert.*`, `StringAssert.*`, `CollectionAssert.*`; strong: `Equal`, `True`, `Throws` | `[Ignore]`, `[Fact(Skip = "...")]` | `#pragma warning disable`, `[SuppressMessage]` | **shipped** |
 | **Ruby** | `def test_*` (Minitest, Test::Unit), `it` / `specify` (RSpec) | `assert_*`, `refute_*`, RSpec `expect(...).to eq(...)`; strong: `assert_equal`, `eq` | `xit`, `xdescribe`, `:skip`, `skip` | `# rubocop:disable` | **shipped** |
@@ -133,20 +133,20 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `bench-regression` | on, `warning` | Depends on the adapter: deterministic counts are high, wall-clock intervals are hardware-sensitive. | False block: runner jitter on wall-clock benchmarks. Miss: a real regression, still reported. | Projects with deterministic counters set `severity = "error"`. |
 | `agents-md` | on, `warning` | High, but the finding is documentation hygiene, not a code defect. | False block: a repository without an agent guide fails every change. | Missing or forked guidance does not make a change unsafe. |
 
-**Default-off gates** (`issue-link`, `provenance-tags`, `pr-checklist`, `scope-confinement`, `archive-contents`, `manifest-sync`, `version-lockstep`, `sanitizers`, `miri`, `unsafe-budget`, `msrv`) need repository-specific input (a tracker convention, archive path, manifest rules, version sources, toolchain) or encode a policy most repositories do not hold. They default to `error` so that enabling one is a single `enabled = true` line that blocks.
+**Default-off gates** (`issue-link`, `commit-provenance`, `provenance-tags`, `pr-checklist`, `scope-confinement`, `archive-contents`, `manifest-sync`, `version-lockstep`, `sanitizers`, `miri`, `unsafe-budget`, `msrv`) need repository-specific input (a tracker convention, archive path, manifest rules, version sources, toolchain) or encode a policy most repositories do not hold. They default to `error` so that enabling one is a single `enabled = true` line that blocks.
 
 ### Finding-Level Severity Overrides
 
 Certain gates distinguish high-confidence rules from heuristic indicators within the same gate:
 
 - **`shell-secrets`:**
-  - **High-confidence token rules (`error`):** Structured secrets matching canonical token entropy or formats (`TOKEN-GHP` `ghp_`, `TOKEN-AWS` `AKIA...`, `TOKEN-SLACK` `xox[bap]-`, `TOKEN-OPENAI` `sk-...`, `TOKEN-ANTHROPIC`, `TOKEN-PRIVATE-KEY` PEM headers).
-  - **Heuristic rules (`warning`):** Command-line arguments and pipe constructs (`ARGV-ENV`, `FLAG-PASSWD`, `INJECT-PIPE`).
+  - **High-confidence token rules (gate severity, `error` by default):** Structured secrets (`SECRET-TOKEN-GITHUB` `ghp_` / `github_pat_`, `SECRET-TOKEN-AWS` `AKIA...` or a literal `AWS_SECRET_ACCESS_KEY=`, `SECRET-TOKEN-SLACK` `xox[baprs]-`, `SECRET-TOKEN-OPENAI` OpenAI and Anthropic `sk-...` keys, `SECRET-KEY-BLOCK` PEM private-key headers).
+  - **Heuristic rules (`warning`):** Command-line arguments, pipe constructs and literal assignments (`ARGV-ENV`, `ARGV-DOCKER`, `ARGV-INLINE`, `INJECT-PIPE`, `INJECT-XARGS`, `SECRET-ARGV-PASSWORD`, `SECRET-LITERAL-BEARER`, `SECRET-LITERAL-ENV`).
 - **`ignored-tests`:**
   - **Unconditional skips (`error`):** Tests newly disabled via `#[ignore]`, `@pytest.mark.skip`, `xit`, or `@Disabled` without justification.
   - **Conditional target skips (`note`):** Platform-predicated skips (`#[cfg_attr(windows, ignore)]`, `skipif(sys.platform == 'win32')`).
 - **`pii` / Workstation Hygiene:**
-  - Private RFC 1918 LAN IPs (`192.168.x.x`, `10.x.x.x`, `172.16.x.x`) default to warning/redaction, but can be exempted for local triage via `gates.pii.lan_ips = false`.
+  - Private RFC 1918 LAN IPs (`192.168.x.x`, `10.x.x.x`, `172.16.x.x`) are reported at the gate's severity (`error` by default) and echoed in the finding unless `redact_lan_ips = true`; `gates.pii.lan_ips = false` turns the rule off.
 
 ---
 
@@ -163,10 +163,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Replacing strong matchers with truthiness checks (e.g. `expect(x).toEqual(y)` -> `expect(x).toBeTruthy()`).
   - Replacing assertions with tautologies (`assert!(true)`, `assert_eq!(x, x)`).
   - A file the grammar cannot fully read: C, C++, C# and Objective-C report `Preprocessor or Syntax Parse Warning` (warning, with the error-region count in the notes); in other languages `Source File Could Not Be Fully Parsed` blocks when the file could hide a test (a test path, tests on either side, or Rust, whose tests live in source files) and is a warning otherwise.
+  - `Fatal Assertions Weakened to Non-Fatal` (warning): fatal assertions drop while the effective and strong counts hold (`ASSERT_*` -> `EXPECT_*`, testify `require.*` -> `assert.*`).
   - `Assertion Bound Loosened`: the same assertion with its numeric bound moved the way that accepts more, while the count holds (`assert elapsed < 1.5` -> `< 5.0`, `pytest.approx(x, rel=1e-6)` -> `rel=1e-2`, `places=7` -> `places=2`). Read for Python (`assert` comparisons, tolerance keywords, `assertLess` / `assertGreater` / `assertAlmostEqual`), JS/TS (`toBeLessThan` / `toBeGreaterThan` and their `OrEqual` forms, `toBeCloseTo` digits, chai `below` / `above` / `most` / `least`, comparisons inside `expect(...)` / `assert(...)`), Rust (a literal that is a whole operand of a comparison in an `assert` macro, `epsilon =` style tolerances) and Go (`if x > N { t.Fatal(...) }`, `N*time.Unit` included; testify `Less` / `Greater` / `InDelta` / `InEpsilon`). Assertions are paired by their text with the literal masked; one that appears twice in a test is ambiguous and not compared. A bound held in a variable or constant, or nested in a call (`Duration::from_millis(1500)`), is not read. The finding names the line and the two values, never the assertion's text. Lifted by the same `allow-assertion-drop:` directive.
   - `Mocking Grew Without Stronger Assertions` (warning): an existing test gains test doubles (`Mock()`, `jest.fn`, `when(`, `.Setup(`, ...; `mock_setup_fns` extends the vocabulary) while its equality / pattern assertions and its assertions on real output do not grow. That is the shape of an integration failure mocked away. Doubles added together with a stronger assertion on the result are not reported.
   - Deleting compile-time invariant assertions outside tests (e.g. `const _: () = assert!(...);`, `static_assertions::*`, `const_assert!`, C/C++ `static_assert`).
-- **Checks moved into helpers that fail:** a same-file helper resolved from a test counts its assertions and its failure exits: Python `raise`, Rust `panic!` / `unreachable!`, Go `panic(`, Java, C#, Kotlin, Scala, JS / TS and PHP `throw`, Swift `throw` / `fatalError` / `preconditionFailure`, Objective-C `@throw` / `abort()`, Ruby `raise` / `fail` (C/C++ already counts `throw`, `abort()` and a non-zero `return`). One `raise` in a helper's loop stands for many inline assertions, so moving checks into such helpers lowers the count. When a test's count drops **and** it calls more helpers that fail than before, the drop is read as a refactor and recorded in the gate's notes instead of reported. Removing a helper call, or deleting an inline assertion while the helper calls stay the same, is still a drop. A helper named in a dispatch table that the test runs in a loop resolves like a direct call: Python lists, tuples and sets; Rust and JS / TS array literals (`for f in [check_a, check_b]`, `[checkA, checkB].forEach(...)`); Go slice literals (`[]func(){checkA, checkB}`); C# array and collection initializers (`new Action[] { CheckA, CheckB }`); Java method references (`this::checkA`); Kotlin callable references (`::checkA`; the grammar reads `this::checkA` as a property access, so that spelling is not resolved); Ruby symbol arrays (`%i[check_a check_b]`, `[:check_a]`). Removing an entry from the table is a drop.
+- **Checks moved into helpers that fail:** a same-file helper resolved from a test counts its assertions and its failure exits: Python `raise`, Rust `panic!` / `unreachable!`, Go `panic(`, Java, C#, Kotlin, Scala, JS / TS and PHP `throw`, Swift `throw` / `fatalError` / `preconditionFailure`, Objective-C `@throw` / `abort()`, Ruby `raise` / `fail` (C/C++ already counts `throw`, `abort()` and a non-zero `return`). One `raise` in a helper's loop stands for many inline assertions, so moving checks into such helpers lowers the count. When a test's count drops **and** it calls more helpers that fail than before, the drop is read as a refactor and recorded in the gate's notes instead of reported. Removing a helper call, or deleting an inline assertion while the helper calls stay the same, is still a drop. A helper named in a dispatch table that the test runs in a loop resolves like a direct call: Python lists, tuples and sets; Rust and JS / TS array literals (`for f in [check_a, check_b]`, `[checkA, checkB].forEach(...)`); Go slice literals (`[]func(){checkA, checkB}`); C# array and collection initializers (`new Action[] { CheckA, CheckB }`); Java method references (`this::checkA`); Kotlin callable references (`::checkA`; the grammar reads `this::checkA` as a property access, so that spelling is not resolved); Ruby symbol arrays (`%i[check_a check_b]`, `[:check_a]`); C / C++ initializer lists in the test or helper body (`{{"get", TestGet}}`); Swift array literals; Scala method values (`List(check _, other _)`). PHP and Objective-C read no tables. Removing an entry from the table is a drop.
 - **Compile-Time Invariant Protection:**
   In addition to test functions, `assertion-reduction` tracks compile-time assertions outside test functions (struct sizes, field alignments, type layout invariants, and C/C++ `static_assert`). Deleting or removing compile-time guards triggers an assertion reduction violation on `Test compile-time-assertions`:
   ```rust
@@ -200,12 +201,12 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```
 - **What it does NOT catch:**
   - Assertions inside dynamically evaluated strings or macro expansions (e.g. `proptest! { ... }`).
-  - Assertions inside unconfigured helper functions (configure via `assert_helper_fns` or `extra_assert_macros`, though same-file helper functions are resolved automatically in supported packs).
+  - Assertions inside unconfigured helper functions (configure via `assert_helper_fns` or `extra_assert_macros`; same-file helpers are resolved automatically, up to three calls deep in C/C++ and Python and one level in every other pack).
   - Assertions deleted in the same change that adds a call to a same-file helper that fails: the growth in helper calls excuses the whole drop for that test. The gate's notes name each test read this way.
   - Dynamic loops in Python (`@pytest.mark.parametrize` counts definitions, not iterations) or JS (`test.each`).
-  - Run-time reachability: an assertion under a condition that is false only at run time (`if DEBUG:`, a flag read from configuration), or inside a closure the test never calls, still counts. A constant-false condition and code after an unconditional terminator are handled (see *Unreachable assertions* above).
+  - Run-time reachability: an assertion under a condition that is false only at run time (`if DEBUG:`, a flag read from configuration), or inside a closure the test never calls, still counts. A constant-false condition and code after an unconditional terminator are handled (see *Unreachable assertions* under `vacuous-tests` below).
 - **Lifting directive:** `allow-assertion-drop: <test-name> <reason>` in PR description or commit message.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_assert_macros`, `assert_helper_fns`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_assert_macros`, `assert_helper_fns`, `mock_setup_fns`, `mock_assert_fns`.
 
 #### `vacuous-tests`
 - **Rule:** A newly added test function must carry at least one non-tautological assertion, a configured assertion helper call, `.unwrap()` / `.expect()`, `?` in a fallible test returning `Result` or `Option`, or an expected panic attribute.
@@ -216,7 +217,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Constant expression tautologies: `assert!(1 == 1)`, `assert!(1 + 1 > 0)`, `assert_ne!(1, 2)`.
   - Empty PHPT expectation sections.
   - `Test Asserts Only Trivial Properties` (warning): a new test whose every assertion holds for nearly any value (`is not None`, `assertIsNotNone`, `toBeDefined`, `toBeTruthy`, `.is_ok()`, `.is_some()`, `NotNil`, `assertNotNull`); it checks that something came back, not what.
-  - `Test Asserts Only On Mocks` (warning): a new test whose every assertion is on a double's interactions (`assert_called_with`, `toHaveBeenCalled`, `verify(`, `.Received(`, ...; `mock_assert_fns` extends the vocabulary) and none on what the code produces. Such a test passes whatever the code returns. Mock usage is read from the call nodes inside each test body (`src/ast/mocks.rs`), for Rust, Python, JS/TS, Go, Java and C#.
+  - `Test Asserts Only On Mocks` (warning): a new test whose every assertion is on a double's interactions (`assert_called_with`, `toHaveBeenCalled`, `verify(`, `.Received(`, ...; `mock_assert_fns` extends the vocabulary) and none on what the code produces. Such a test passes whatever the code returns. Mock usage is read from the call nodes inside each test body (`src/ast/mocks.rs`), for every language pack except PHPT.
+  - `Insufficient Assertion Density`: with `min_assertions_per_test` set, a new test with fewer effective assertions than the floor.
 - **Failing diff example (rejected):**
   ```python
   # Newly added test without non-tautological assertion — rejected by vacuous-tests:
@@ -239,28 +241,29 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - **Go**: Functions must match `TestXxx` or `FuzzXxx` with `*testing.T` or `*testing.F` parameters. Lowercase helpers (e.g. `testNewRouter`) and `testing.TB` interfaces are treated as helper functions. Direct same-file helper calls are resolved 1 level deep. *Known limit*: Indirect closure assertions (e.g. assertions inside HTTP handler or router callbacks executed indirectly via `router.ServeHTTP(rw, req)`) appear vacuous without `assert_helper_fns = ["ServeHTTP"]` or direct assertions in the test body.
   - **Java**: 1-level same-file helper resolution covers direct helper methods within the test class. Custom domain assertion methods named `assert*` with an uppercase following character (e.g. `assertMetaDataIsEqualTo`, `assertPreconditionViolationFor`) are recognized automatically. *Known limit*: Assertions dispatched through external test fixture classes or mock framework verifiers outside the file require `assert_helper_fns`.
   - **C / C++**: Catches GoogleTest, Catch2, doctest assertions. *Known limit*: Heavy preprocessor macro constructs (`#ifdef`, complex template metaprogramming) are gracefully downgraded to `Warning` severity with line numbers; surrounding well-formed AST regions continue to be inspected. Extension macros the grammar cannot read (a PHP `PHP_METHOD(Class, name)` head, `ZEND_PARSE_PARAMETERS_START(...)` with no semicolon, `PHP_ME(...)` table entries, CPython `PyObject_HEAD`) are rewritten byte for byte before the parse, so lines are exact and the code inside them is read; the repository's own macros go in `[languages.c]` ([CONFIGURATION.md](CONFIGURATION.md#c-and-c-extension-macros-languagesc)). Same-file helpers a test calls are followed up to three calls deep (`main` -> `CheckSeek` -> `Require` -> `std::abort()`), a recursive helper counted once; `abort`, `exit` and `std::terminate` are fatal assertions. `#ifdef __cplusplus` / `extern "C" {` guards are read as C, and a `.h` header the C grammar cannot read is re-read as C++ when that leaves fewer error regions. A helper named in a table the test body builds (`{{"get", TestGet}}`, `{check_a, &check_b}`) counts as called; a table at file scope is not read.
-  - **Python**: Tests follow pytest and unittest collection with default settings: module-level functions named `test_*` (any `test*` in a test path), and `test*` methods of a class named `Test*` or deriving from a `TestCase` (followed through same-file bases, cycle-guarded). A same-file mixin a test class inherits keeps its `test*` methods; in a test path a mixin's methods are kept even when the subclass is in another file. No other name is special: `self_test()` is a script entry point, not a test. Same-file helper calls (`helper(...)`, and `self.helper(...)` within the class) are followed up to three calls deep, as in C/C++ (a self-test drives a function that calls the validator that raises), a recursive helper counted once; a helper's `assert`, `self.assert*` and `raise` statements count, the `raise` being the helper's failure path. A same-file function named as an element of a list, tuple or set in the test body (a dispatch table, `steps = [("label", check_blocks), ...]` then `for _, fn in steps: fn()`) is resolved the same way. Nested `def` / `lambda` bodies inside a helper are not counted. *Known limit*: A helper's own callees, and helpers imported from another file, are not followed; configure `assert_helper_fns` for those. `python_files` / `python_functions` overrides in pytest configuration are not read.
+  - **Python**: Tests follow pytest and unittest collection with default settings: module-level functions named `test_*` (any `test*` in a test path), and `test*` methods of a class named `Test*` or deriving from a `TestCase` (followed through same-file bases, cycle-guarded). A same-file mixin a test class inherits keeps its `test*` methods; in a test path a mixin's methods are kept even when the subclass is in another file. No other name is special: `self_test()` is a script entry point, not a test, unless `[tests] functions` declares it (a declared name counts whatever its spelling, `_self_test` included). Same-file helper calls (`helper(...)`, and `self.helper(...)` within the class) are followed up to three calls deep, as in C/C++ (a self-test drives a function that calls the validator that raises), a recursive helper counted once; a helper's `assert`, `self.assert*` and `raise` statements count, the `raise` being the helper's failure path. A same-file function named as an element of a list, tuple or set in the test body (a dispatch table, `steps = [("label", check_blocks), ...]` then `for _, fn in steps: fn()`) is resolved the same way. Nested `def` / `lambda` bodies inside a helper are not counted. *Known limit*: helpers imported from another file are not followed, and a chain deeper than three calls counts only its first three; configure `assert_helper_fns` for those. `python_files` / `python_functions` overrides in pytest configuration are not read.
   - **C#**: Recognizes standard xUnit (`[Fact]`, `[Theory]`), NUnit (`[Test]`, `[TestCase]`, `[TestCaseSource]`), MSTest (`[TestMethod]`, `[DataTestMethod]`) attributes, qualified or with the `Attribute` suffix, and resolves 1-level same-file helpers. A method without one of these attributes is never a test, whatever its name. *Known limit*: Multi-targeting `#if` preprocessor branches inside expressions are gracefully downgraded to `Warning` severity with line numbers.
   - **Ruby**: Only methods prefixed with `test_` (or named `test`) in Minitest/Test::Unit and RSpec `it`/`specify` blocks are extracted as test cases. Lifecycle hooks (`setup`, `teardown`) are excluded from vacuous checks. Same-file helper method assertions are resolved 1 level deep.
-  - **Kotlin**: JUnit / TestNG annotations, kotlin.test and JUnit `assert*`, AssertJ / Truth `assertThat` chains, Kotest matchers as infix (`x shouldBe y`) or call (`x.shouldBe(y)`) and the Kotest spec styles (`StringSpec`, `FunSpec`, `DescribeSpec`, `ShouldSpec`, `ExpectSpec`, `FeatureSpec`, `BehaviorSpec`). Same-file helper function assertions are resolved 1 level deep. *Known limits*: `assertThrows<E> { }` (a generic call with a trailing lambda and no parentheses) is read by the grammar as two comparisons and recognised by its text; class members written on one line separated by `;` do not parse and are downgraded to `Warning` with line numbers.
+  - **Kotlin**: JUnit / TestNG annotations, kotlin.test and JUnit `assert*`, AssertJ / Truth `assertThat` chains, Kotest matchers as infix (`x shouldBe y`) or call (`x.shouldBe(y)`) and the Kotest spec styles (`StringSpec`, `FunSpec`, `DescribeSpec`, `ShouldSpec`, `ExpectSpec`, `FeatureSpec`, `BehaviorSpec`). Same-file helper function assertions are resolved 1 level deep. *Known limits*: `assertThrows<E> { }` (a generic call with a trailing lambda and no parentheses) is read by the grammar as two comparisons and recognised by its text; class members written on one line separated by `;` do not parse and are reported as `Source File Could Not Be Fully Parsed`, which blocks in a file that could hide a test and is a warning otherwise.
   - **Swift**: XCTest methods (`func test*()` with no parameters in an `XCTestCase` subclass, or in any type in a test path, since the superclass may be declared in another file) and Swift Testing `@Test` functions, in `@Suite` types or at top level. `#expect(a == b)` and `#require(...)` are strong; `#expect(true)`, `#expect(x == x)` and `XCTAssertEqual(x, x)` are tautologies. `throw XCTSkip(...)`, `try XCTSkipIf(...)` / `XCTSkipUnless(...)` and `@Test(.disabled(...))` mark the test ignored. Same-file helpers (a function that asserts, throws or calls `fatalError` / `preconditionFailure`) are resolved 1 level deep, including helpers named in an array literal the test loops over. `error-swallowing` reads an empty `catch { }` and a `try?` whose value is thrown away (a statement of its own, or `_ = try? f()`); `let v = try? f()` keeps a value and is not reported. `stub-bodies` reads `fatalError()` / `preconditionFailure()` bodies. *Known limit*: `unsafe-safety-comment` has no Swift facts; changed Swift files are named in its notes. Waiting on XCTest expectations counts as an assertion: `await fulfillment(of:)`, `wait(for:timeout:)`, `waitForExpectations(timeout:)` (a bare `wait()`, such as a semaphore's, does not).
   - **Scala**: tests are the calls and infix forms the ScalaTest, MUnit and specs2 styles define (`test("x") { }`, `"A cart" should "sum" in { }`, `"x" >> { }`), nested under `describe("x") { }` and WordSpec `"x" should { }` containers, and JUnit `@Test` methods. `assert(x == x)`, `assert(true)` and `x shouldBe x` are tautologies; `shouldBe true` is an assertion but not a strong one. Same-file `def` helpers (asserting, or `throw`ing) resolve 1 level deep, including `List(check _, other _)` tables. `error-swallowing` judges each `case` arm of a `catch` (an arm with nothing after `=>`, or `()` / `None` / `null`, is empty; a `match` arm outside a `catch` is not a handler) and reads `Try(...).getOrElse(...)` / `.toOption` as a silenced error (`.recover { }` is handling). `stub-bodies` reads `???` and `throw new NotImplementedError`. *Known limit*: `unsafe-safety-comment` has no Scala facts.
   - **Objective-C** (`.m`, `.mm`): XCTest methods; `XCTAssertEqual(x, x)` and `XCTAssertTrue(YES)` are tautologies; `XCTSkipIf` / `XCTSkipUnless` mark the test ignored. Same-file helpers called as `[self check...]` or as C functions resolve 1 level deep (an `XCTFail`, `@throw` or `abort()` is their failure exit). `error-swallowing` reads an empty `@catch { }`, a message whose `error:` argument is `nil` / `NULL`, and `(void)call()` sorted by callee as in C (`(void)[obj message]` is `Value Discarded`). `stub-bodies` reads `doesNotRecognizeSelector:`, `abort()`, and `@throw` / `NSAssert(NO, ...)` saying not implemented. *Known limits*: the grammar reads Objective-C, not Objective-C++, so a `.mm` file's C++ constructs are parse errors reported as for any file; `unsafe-safety-comment` has no Objective-C facts. Apple's enum heads (`typedef NS_ENUM(NSInteger, Name)`, `NS_OPTIONS`, `CF_ENUM`) are read as plain enums, and Apple's annotation and availability macros (`NS_ASSUME_NONNULL_BEGIN`, `API_DEPRECATED(...)`, `NS_SWIFT_NAME(...)`, `CF_RETURNS_RETAINED`, ...) are blanked byte for byte before the parse; a project's own go in `[languages.c] macros`. A `.h` header is read with the C, C++ or Objective-C grammar, whichever leaves the fewest error regions.
   - **JavaScript / TypeScript**: `test(` / `it(` callbacks. Same-file named functions (`function f() {}`, `const f = () => {}`) called from a test are resolved 1 level deep: their `expect` / `assert` calls and `throw` statements count. A function defined in the test body and never called there counts nothing. *Known limit*: helpers imported from another module need `assert_helper_fns`.
-  - **PHP / PHPT**: PHPT sections require explicit `--EXPECT--`, `--EXPECTF--`, or `--EXPECTREGEX--`. PHPUnit methods require `$this->assert*`, configured helpers, or a same-file helper: `$this->m()`, `self::m()` / `static::m()` and top-level `f()` calls are resolved 1 level deep, counting the helper's assertions and `throw`s; a closure assigned in the test and not called counts nothing. Newly added NUL bytes in source fixtures are flagged as potential corruption and require `allow-nul:` or `discipline:allow(assertion-reduction)`.
-- **Lifting directive:** `allow-assertion-drop: <test-name> <reason>` or configuring `assert_helper_fns`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_assert_macros`, `assert_helper_fns`, `min_assertions_per_test`.
+  - **PHP / PHPT**: PHPT sections require explicit `--EXPECT--`, `--EXPECTF--`, or `--EXPECTREGEX--`. PHPUnit methods require `$this->assert*`, configured helpers, or a same-file helper: `$this->m()`, `self::m()` / `static::m()` and top-level `f()` calls are resolved 1 level deep, counting the helper's assertions and `throw`s; a closure assigned in the test and not called counts nothing.
+- **NUL bytes:** a NUL byte newly added to any analysed source file, in any pack, is reported as `Source File Contains Newly Added NUL Byte` (possible corruption), under the first enabled AST gate (`assertion-reduction` by default, like `Source File Could Not Be Fully Parsed`); lifted by `allow-nul: <path> <reason>` (also `allow-nul-byte:` or `discipline:allow(vacuous-tests)`).
+- **Lifting directive:** none for the vacuous-test findings: fix the test, declare the suite's helpers and macros (`assert_helper_fns` / `extra_assert_macros`), use `exempt_paths`, or the grandfathering baseline. Only the NUL-byte finding takes a directive (`allow-nul:`).
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_assert_macros`, `assert_helper_fns`, `min_assertions_per_test`, `mock_setup_fns`, `mock_assert_fns`.
 
 #### `ignored-tests`
 - **Rule:** An existing test may not become ignored or skipped, and a new test may not arrive skipped.
 - **Languages:** Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C.
 - **What it catches:**
-  - Rust: `#[ignore]`, `#[cfg_attr(all(), ignore)]` (conditional skips like `#[cfg_attr(miri, ignore)]` emit a warning and do not count as unconditional ignores).
+  - Rust: `#[ignore]`, `#[cfg_attr(all(), ignore)]` (conditional skips like `#[cfg_attr(miri, ignore)]` emit a `Test Conditionally Skipped` note and do not count as unconditional ignores).
   - Python: `@pytest.mark.skip`, `@pytest.mark.skipif`, `@pytest.mark.xfail`, `@unittest.skip`, `@unittest.skipIf`.
   - JavaScript / TypeScript: `it.skip`, `test.skip`, `xit`, `xtest`, `describe.skip`, `xdescribe`, `it.todo`.
   - PHPT: newly added `--SKIPIF--` or `--XFAIL--` sections.
   - `Test Sleeps` (warning): a test that gains a hard-coded delay (`thread::sleep`, `time.sleep`, `setTimeout`, `Thread.sleep`, `Task.Delay`, ...) or arrives with one; a timing-dependent pass slows the suite and hides the race. Lifted by `allow-ignore: <test> <reason>`.
-  - `Test Retries On Failure`: a test that gains a retry / flaky marker, or arrives with one (`@pytest.mark.flaky`, `@flaky`, `jest.retryTimes` at file level, `this.retries(`, vitest `{ retry: n }`, `@RetryingTest`, `[Retry(`, `flaky_test`, RSpec `retry:`; `src/ast/retries.rs`). A retry does not skip the test; it lets a failure through as often as the marker allows. Lifted by `allow-ignore: <test> <reason>`. Rust, Python, JS/TS, Go, Java, C#.
+  - `Test Retries On Failure`: a test that gains a retry / flaky marker, or arrives with one (`@pytest.mark.flaky`, `@flaky`, `jest.retryTimes` at file level, `this.retries(`, vitest `{ retry: n }`, `@RetryingTest`, `[Retry(`, `flaky_test`, RSpec `retry:`; `src/ast/retries.rs`). A retry does not skip the test; it lets a failure through as often as the marker allows. Lifted by `allow-ignore: <test> <reason>`. Every language pack except Objective-C and PHPT.
   - Java: `@Disabled`, `@Ignore`, `@Test(enabled = false)` (including class-level annotations propagating to all methods).
   - Go: `t.Skip`, `t.Skipf`, `t.SkipNow`. Inside an `if` (`if testing.Short() { t.Skip(...) }`) the skip is conditional: a `Test Conditionally Skipped` note naming the condition, not a test that arrives ignored (`if true` is unconditional).
   - PHP: `$this->markTestSkipped()`, `$this->markTestIncomplete()`, `->skip()`, `#[Requires*]`, `@group skip`, `@skip` (including class docblock propagation).
@@ -278,20 +281,20 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Conditional runtime early-returns (`if condition { return; }`).
   - Dynamic test framework skips invoked within function bodies (`pytest.skip(...)`).
   - Commented-out test functions in languages other than Rust (the Rust pack reports them here).
-- **Lifting directive:** `allow-ignore: <test-name> <reason>`.
+- **Lifting directive:** `allow-ignore: <test-name> <reason>`. A reason that is empty or a placeholder (`todo`, `tbd`, `fix later`, `temporary`, `wip`) does not lift the skip: it is reported as `Unannotated Skip Justification`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `approved_predicates`.
 
 #### `error-swallowing`
 - **Rule:** A change must not add an error handler that drops the error, or a statement that throws a `Result` away, outside tests. Sites come from the language packs (`Fact::Handlers`, `src/ast/handlers.rs`) and are a base-versus-head delta per file: a handler that moved is not new.
-- **Languages:** Python (`except ...:` whose body is `pass`, `...`, bare `return` / `return None` / `continue`), JS/TS, Java and C# (`catch` with an empty block or a bare `return` / `return null`), Rust (`let _ = <call>`, sorted by callee name below; `fallible(...).ok();`), Go (`_ = err`, `x, _ := f()`, sorted by callee name below), PHP (`catch` with an empty block or a bare `return` / `return null`; the `@` error-control operator on a call), Ruby (`rescue` with no body or a bare `nil` / `false` / `return`; `call rescue nil` and the other constant-handler modifier forms), C/C++ (`catch` with an empty block or a bare `return` / `return false` / `return nullptr`; `(void)call()`, sorted by callee name below), Kotlin (`catch` with an empty block or a bare `null` / `Unit` / `return`; `runCatching { }.getOrNull()` / `.getOrDefault(x)`). Swift (`catch` with no statements or a bare `return` / `return nil`; a `try?` whose value is thrown away), Scala (a `catch` arm with nothing after `=>` or a bare `()` / `None` / `null`; `Try(...).getOrElse(...)` / `.toOption`), Objective-C (an empty `@catch`; a message whose `error:` argument is `nil` / `NULL`; `(void)call()` sorted by callee as in C). PHPT does not supply handler facts; its changed files are named in the notes.
+- **Languages:** Python (`except ...:` whose body is `pass`, `...`, bare `return` / `return None` / `continue`), JS/TS, Java and C# (`catch` with an empty block or a bare `return` / `return null` / `return false` / `continue`; JS/TS also `return undefined`), Rust (`let _ = <call>`, sorted by callee name below; `fallible(...).ok();`), Go (`_ = err`, `x, _ := f()`, sorted by callee name below), PHP (`catch` with an empty block or a bare `return` / `return null` / `return false` / `continue`; the `@` error-control operator on a call), Ruby (`rescue` with no body or a bare `nil` / `false` / `[]` / `{}` / `return` / `return nil` / `return false` / `next`; `call rescue nil` and the other constant-handler modifier forms), C/C++ (`catch` with an empty block or a bare `return` / `return false` / `return nullptr` / `return NULL` / `return {}` / `continue` / `break`; `(void)call()`, sorted by callee name below), Kotlin (`catch` with an empty block or a bare `null` / `Unit` / `return` / `return null` / `return false` / `continue` / `break`; `runCatching { }.getOrNull()` / `.getOrDefault(x)`). Swift (`catch` with no statements or a bare `return` / `return nil` / `return false` / `continue` / `break`; a `try?` whose value is thrown away), Scala (a `catch` arm with nothing after `=>` or a bare `()` / `None` / `null` / `false` / `0` / `Nil` / `return`; `Try(...).getOrElse(...)` / `.toOption`), Objective-C (an empty `@catch` or one with a bare `return` / `return nil` / `return NO` / `return 0` / `return NULL`; a message whose `error:` argument is `nil` / `NULL`; `(void)call()` sorted by callee as in C). The per-pack lists are the `trivial` field of each `*_HANDLERS` spec. PHPT does not supply handler facts; its changed files are named in the notes.
 - **What it catches:**
   - `Empty Error Handler Added`: a new handler that does nothing with the error (a comment inside the block does not count as doing something). A Python handler for `KeyboardInterrupt`, `SystemExit` or `GeneratorExit` alone is a stop or exit request, not an error, and is not reported; mixed with an error type, or as `BaseException`, it is. A handler whose `try` body ends in a statement that always fails (`assert False`, `raise`, `pytest.fail(...)`, JUnit `fail(...)`) is the expect-this-to-raise idiom and is not reported. A bare `return` in the handler followed by a failing statement after the `try` is the same idiom (`except InstrumentError: return` then `raise AssertionError(...)`).
   - `Empty Error Handler Added`, "logs it, and does nothing else": a new handler whose every statement is a logging or printing call (`log.`, `logger.`, `console.error`, `eprintln!`, `println`, `System.out.print`, ...) with no re-raise, no return of the error and no state change. A handler that logs **and** re-raises, returns or records the failure is not one.
   - `Unparseable Input Skipped` (warning at most): a Python handler that catches only parse errors (`ValueError`, `JSONDecodeError`, `UnicodeDecodeError`, `InvalidOperation`, `csv.Error`) and does nothing but `continue`: `for line in out: try: json.loads(line) except JSONDecodeError: continue`. The item that does not parse is dropped without a count, which can change a result built from the rest, so it stays reported; it does not block.
-  - `Error Silenced`: a new expression that replaces every error its operand raises with nothing: PHP `@call()` (not when its result decides a branch: the condition of `if` / `while` / `? :`, a comparison such as `@f() === false`, or the left of `&&` / `||`, under `!` and parentheses; `@f() ?: x` substitutes a value and is reported), Ruby `call rescue nil` (a modifier whose handler computes a fallback is not one), Kotlin `runCatching { }.getOrNull()` / `.getOrDefault(x)` (`.getOrElse { }` and `.onFailure { }` handle the failure and are not).
+  - `Error Silenced`: a new expression that replaces every error its operand raises with nothing: PHP `@call()` (not when its result decides a branch: the condition of `if` / `while` / `? :`, a comparison such as `@f() === false`, or the left of `&&` / `||`, under `!` and parentheses; `@f() ?: x` substitutes a value and is reported), Ruby `call rescue nil` (a modifier whose handler computes a fallback is not one), Kotlin `runCatching { }.getOrNull()` / `.getOrDefault(x)` (`.getOrElse { }` and `.onFailure { }` handle the failure and are not), Scala `Try(...).getOrElse(...)` / `.toOption` (`.recover { }` is handling).
   - `Result Discarded`: a new statement that drops a fallible call's result.
-  - `Value Discarded` (Rust, Go, C/C++; `warning` at most): a new discard whose callee is on neither of that language's lists below.
-- **Rust, Go and C / C++ are name-based.** Rust: The grammar carries no types, so `let _ = <call>` is sorted by the callee's name (the method in `a.b(..)`, the last path segment in `x::y(..)`, the macro in `m!(..)`):
+  - `Value Discarded` (Rust, Go, C/C++, Objective-C; `warning` at most): a new discard whose callee is on neither of that language's lists below; in Objective-C also `(void)[obj message]`.
+- **Rust, Go and C / C++ are name-based.** Names match exactly; a `*` below abbreviates a family of listed names, and only `try_*`, `checked_*` and `*_checked` match by prefix or suffix. Rust: The grammar carries no types, so `let _ = <call>` is sorted by the callee's name (the method in `a.b(..)`, the last path segment in `x::y(..)`, the macro in `m!(..)`):
   - Known fallible, `Result Discarded` at the gate's severity: `try_*`, `checked_*`, `*_checked`, `write!` / `writeln!`, and `send`, `recv`, `join`, `write`, `write_all`, `flush`, `sync_all`, `sync_data`, `lock`, `read*`, `seek`, `set_len`, `remove_file`, `remove_dir*`, `create_dir*`, `rename`, `copy`, `connect`, `bind`, `accept`, `parse`, `spawn`, `wait`, `kill`, `commit`, `rollback`, `execute`, `persist`, `close` and the rest of `RUST_FALLIBLE_CALLEES` in `src/ast/handlers.rs`.
   - Known to return a plain value, not reported: `get_or_init`, `get_or_insert*`, `entry`, `or_insert*`, `or_default`, `unwrap_or*`, `clone`, `to_owned`, `to_string`, `as_ref`, `borrow*`, `len` (`RUST_INFALLIBLE_CALLEES`).
   - Any other callee, and `let _ = f()?;` (the `?` already propagated the error): `Value Discarded`, reported at `warning` when the gate is at `error`, so it never blocks on its own.
@@ -312,9 +315,9 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   or, on the line, `# discipline:allow(error-swallowing): <reason>`.
 - **What it does NOT catch:**
   - A handler that does something besides logging (sets a flag, increments a counter, returns a fallback it computes) and then swallows the error: only an empty, bare-return, trivial-value or logging-only body is reported.
-  - The expect-this-to-raise idiom: a `try` whose `else:` raises or fails, or whose handler is `pass` / `continue` and whose next statement records a failure, is an assertion and is not reported.
+  - The expect-this-to-raise idiom: a `try` whose body ends in `assert False` / `raise` / `fail(...)`, whose `else:` raises or fails, or whose handler is `pass` / `...` / `continue` / a bare `return` and whose next statement records a failure, is an assertion and is not reported.
   - A binding of something that is not a call (`let _ = (a, b);`): only `let _ = <call>` and `<call>.ok();` are discarded results.
-  - Handlers inside test functions, in Cargo's `tests/`, `benches/` and `examples/` directories, in test directories of the other languages, and in functions or paths declared under `[tests]`.
+  - Handlers inside test functions, in Cargo's `tests/`, `benches/` and `examples/` directories, in test directories of the other languages, in files under `[tests] paths` (every pack), and in functions named in `[tests] functions` (Python and Rust packs only).
   - A discarded result the language does not mark (`_`): `fallible()` as a bare Rust statement is a compiler warning, not a site here.
   - A pre-existing handler, including one that moved to another line.
 - **Lifting directive:** `allow-swallow: <path-or-path:line> <reason>`, or `discipline:allow(error-swallowing)` on the handler's first line.
@@ -322,11 +325,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `instruction-smuggling`
-- **Rule:** A change cannot carry text aimed at an agent rather than at the compiler or a reader. Three checks, ordered by precision:
-  1. **Invisible and bidirectional Unicode** in added lines of any text file: zero-width characters (U+200B–U+200F, U+2060–U+2064, U+FEFF away from the start of the file, U+00AD), bidirectional embeddings, overrides and isolates (U+202A–U+202E, U+2066–U+2069), Unicode tag characters (U+E0000–U+E007F). What a reviewer sees is not what a parser or an agent reads. Blocking.
+- **Rule:** A change cannot carry text aimed at an agent rather than at the compiler or a reader. Four checks, ordered by precision:
+  1. **Invisible and bidirectional Unicode** in added lines of any text file: zero-width characters (U+200B–U+200F, U+2060–U+2064, U+FEFF away from the start of the file, U+180E, U+00AD), bidirectional embeddings, overrides and isolates (U+202A–U+202E, U+2066–U+2069), Unicode tag characters (U+E0000–U+E007F). What a reviewer sees is not what a parser or an agent reads. Blocking.
   2. **Agent-instruction files**: `AGENTS.md`, `AGENT.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.clinerules`, `.windsurfrules`, `.aider.conf.yml`, `copilot-instructions.md`, `SKILL.md`, `QWEN.md`, `opencode.json`, and anything under `.cursor/`, `.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.qwen/`, `.opencode/`, `.roo/`, `.github/instructions/`, `.github/prompts/`, `.github/hooks/`. This covers every hook file `discipline hook install` writes. Deleting one of these files is reported like an edit, so a change that removes the hook checking it is reported; deleting a file `agent-scratch` reports as tracked scratch state (`.claude/scheduled_tasks.lock`: matched by its `paths`, not in its `exempt_paths`, gate enabled) is that gate's remediation and is not reported here. Any edit is reported; what these files say is what the next agent will do, so the edit is reviewed as code and recorded with a directive. Blocking.
-  3. **Instruction phrases and encoded blobs** in comments, docstrings and string literals of code (`Fact::Prose`, Rust, Python, JS/TS, Go, Java, C#) and in whole added lines of prose and configuration files (`.md`, `.txt`, `.rst`, `.yml`, `.toml`, `.json`, `.html`, ...): instruction overrides (`ignore previous instructions`), role overrides and chat role markers (`<|im_start|>`, `### Instruction:`, `Assistant:`), concealment (`do not tell the user`), exfiltration (`print your system prompt`), reviewer steering (`approve this pull request`), and a base64 run of 80 or more characters that mixes cases and digits (hex digests, URLs, paths and `sha256-` / `sha512-` integrity values are excluded by shape). Heuristic and paraphrasable: **warning**, a tripwire, not a defence.
-  4. **The change description**: the PR title and body and every commit message in the range are scanned for the same phrase classes and invisible characters (`Instruction-Like Text In Change Description`, warning; `Invisible Characters In Change Description`, blocking). A review bot reads these before the diff. Directive lines (`allow-...:`) are the repository's own vocabulary and are not scanned. A zero-width space right after `@` is GitHub's mention guard in bot-written bodies (Dependabot quotes handles as `@\u200Bname`) and is not reported; any other invisible character is. Lifted by `allow-agent-instructions: pr-body|pr-title|commit:<sha7> <reason>`.
+  3. **Instruction phrases and encoded blobs** in comments, docstrings and string literals of code (`Fact::Prose`, every language pack except PHPT) and in whole added lines of prose and configuration files (`.md`, `.txt`, `.rst`, `.yml`, `.toml`, `.json`, `.html`, ...): instruction overrides (`ignore previous instructions`), role overrides and chat role markers (`<|im_start|>`, `### Instruction:`, `Assistant:`), concealment (`do not tell the user`), exfiltration (`print your system prompt`), reviewer steering (`approve this pull request`), and a base64 run of 80 or more characters that mixes cases and digits (hex digests, URLs, paths and `sha256-` / `sha512-` integrity values are excluded by shape). Heuristic and paraphrasable: **warning**, a tripwire, not a defence.
+  4. **The change description**: the PR title and body and every commit message in the range are scanned for the same phrase classes, encoded blobs and invisible characters (`Instruction-Like Text In Change Description`, warning; `Invisible Characters In Change Description`, blocking). A review bot reads these before the diff. Lines that start with a known directive (`allow-...:`, `removes:`, `no-issue:`, `secrets-argv-ok:`, ...) are the repository's own vocabulary and are not scanned. A zero-width space right after `@` is GitHub's mention guard in bot-written bodies (Dependabot quotes handles as `@\u200Bname`) and is not reported; any other invisible character is. Lifted by `allow-agent-instructions: pr-body|pr-title|commit:<sha7> <reason>`.
 - **Location only:** every finding names the file, the line and the class (`instruction-override`, `bidirectional-control`, `encoded-blob`), never the matched text. The report is read by the next agent, including through `--format agent-prompt`; echoing the text would deliver the injection. That format prints violation titles, messages and locations only, never override reasons.
 - **Languages:** any (checks 1 and 2); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C and prose files (check 3).
 - **Failing diff (rejected):**
@@ -351,7 +354,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 
 #### `stub-bodies`
 - **Rule:** An added function is not a stub, and an existing body is not replaced by one. Each language pack supplying function facts (`Fact::Functions`) reports every function with a body and what the body amounts to: a **stub** (the whole body is a not-implemented marker, or the marker preceded only by statements that cannot affect the result: a logging or printing line, an assignment whose right-hand side calls nothing), **empty**, **trivial** (one bare constant return) or **substantive** (`fn f() { init(); todo!() }` is substantive: the call before the marker may be the work). Functions pair by name and order between the base and head side.
-- **Languages:** Rust (`todo!()`, `unimplemented!()`, `panic!("not implemented")`), Python (`pass`, `...`, `raise NotImplementedError`), JS/TS (`throw new Error("not implemented" / "TODO")`), Go (`panic("not implemented")`), Java and C# (`throw new UnsupportedOperationException` / `NotImplementedException`), PHP (`throw new ...Exception('not implemented')`), Ruby (`raise NotImplementedError`; a bare `nil` / `[]` body is trivial), C/C++ (`abort()`, `assert(false)`, `throw std::logic_error("not implemented")`; the name is read through the declarator, so `static int *f(int)` is `f`, a destructor is `~A`, a method defined outside its class is `A::f`). Kotlin (`TODO()`, `throw NotImplementedError()`, an expression body `= null`; a block body is judged as the block). A pure-virtual, `= default` / `= delete`, abstract or interface member has no body and is never described. PHPT does not supply function facts; its changed files are named in the notes as not analysed.
+- **Languages:** Rust (`todo!()`, `unimplemented!()`, `panic!("not implemented")`), Python (`pass`, `...`, `raise NotImplementedError`), JS/TS (`throw new Error("not implemented" / "TODO")`), Go (`panic("not implemented")`), Java and C# (`throw new UnsupportedOperationException` / `NotImplementedException`), PHP (`throw new ...Exception('not implemented')`), Ruby (`raise NotImplementedError`; a bare `nil` / `[]` body is trivial), C/C++ (`abort()`, `assert(false)`, `throw std::logic_error("not implemented")`; the name is read through the declarator, so `static int *f(int)` is `f`, a destructor is `~A`, a method defined outside its class is `A::f`). Kotlin (`TODO()`, `throw NotImplementedError()`, an expression body `= null`; a block body is judged as the block), Swift (`fatalError()`, `preconditionFailure()`), Scala (`???`, `throw new NotImplementedError`), Objective-C (`doesNotRecognizeSelector:`, `abort()`, `@throw` / `NSAssert(NO, ...)` saying not implemented). A pure-virtual, `= default` / `= delete`, abstract or interface member has no body and is never described. PHPT does not supply function facts; its changed files are named in the notes as not analysed.
 - **What it catches:**
   - `Stub Body Added`: a new non-test function whose whole body is a stub marker.
   - `Function Body Replaced By Stub`: a function whose base body was substantive and whose head body is a stub, empty, or a bare constant return (`None`, `return null`, `return nil, nil`).
@@ -368,19 +371,19 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - An added empty or constant-returning function (`fn noop() {}`, `return null`): a no-op is a legitimate shape for a new function; only a marker that says "not implemented" is reported when added.
   - A stub padded with a second statement (a log line, an assignment), or a body that special-cases the inputs its tests use: mutation presets of the `command` gate are the control for that class.
-  - Test functions, `#[cfg(test)]` modules, abstract and overload members, Protocol / interface declarations, `.pyi` stubs, classes deriving from `abc.ABC`, and a base-class method that a subclass in the same file overrides (the stub is the contract, not an unimplemented function). Files and functions declared under `[tests]`.
+  - Test functions, `#[cfg(test)]` modules, abstract and overload members, Protocol / interface declarations, `.pyi` stubs, classes deriving from `abc.ABC`, and a base-class method that a subclass in the same file overrides (the stub is the contract, not an unimplemented function). Files under `[tests] paths` (every pack) and functions named in `[tests] functions` (Python and Rust packs only).
   - A body changed for the worse while staying substantive.
 - **Lifting directive:** `allow-stub: <function-name-or-path> <reason>`. A file path lifts every finding in that file.
 - **Default:** on, `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `unsafe-safety-comment`
-- **Rule:** Every `unsafe` block, `unsafe fn`, or `unsafe impl` on an added line must be preceded by a load-bearing `// SAFETY:` comment. Deleting a `// SAFETY:` comment above an existing block is also blocked.
+- **Rule:** Every `unsafe` block, `unsafe impl`, or `unsafe trait` on an added line must be preceded by a load-bearing `// SAFETY:` comment. Deleting a `// SAFETY:` comment above an existing block is also blocked.
 - **Languages:** Rust. Its `examined` count is the Rust files it read. A changed file in another language with its own unsafe construct (Go's `unsafe` package, C# `unsafe` blocks, Swift's `Unsafe*Pointer`) is named in the gate's notes as not analysed; a language without one (Python, JS / TS, ...) has nothing for this gate to miss and is not named.
 - **What it catches:**
   - Unsafe blocks or impls without preceding `// SAFETY:` comments.
   - Deletion of an existing `// SAFETY:` comment above an untouched `unsafe` block.
-  - Vacuous placeholder comments: `// SAFETY: todo`, `// SAFETY: tbd`, `// SAFETY: safe`, `// SAFETY: trust me`, `// SAFETY: noop`, `// SAFETY: fine`.
+  - Vacuous placeholder comments: `// SAFETY: todo`, `// SAFETY: tbd`, `// SAFETY: safe`, `// SAFETY: trust me`, `// SAFETY: fine` (the `placeholders` list, `DEFAULT_SAFETY_PLACEHOLDERS`).
   - Misplaced comments (comments trailing after the block or lowercase `safety:`).
 - **Failing diff example (rejected):**
   ```rust
@@ -406,7 +409,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 
 #### `deletion-rationale`
 - **Rule:** Deleted files and removed tests require an explicit, scoped `removes:` or `deletes:` rationale in the PR description or commit message.
-- **Languages:** Any (files); Rust, Python, JS/TS, PHPT (removed test functions).
+- **Languages:** Any (files); every language pack (removed test functions).
 - **What it catches:**
   - Silent file deletions across all tracked paths.
   - Silent test removals from surviving test files.
@@ -449,12 +452,12 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Modifications touching paths matching `forbidden_paths` (e.g. security credentials, CI workflow definitions, release scripts).
 - **Passing commit / PR body (accepted):**
   ```text
-  allow-scope: authorized infra migration across deploy scripts
+  allow-scope: deploy/ authorized infra migration across deploy scripts
   ```
 - **What it does NOT catch:**
   - Files exempted via `exempt_paths`.
   - Modifications when `allowed_paths` is empty and no `forbidden_paths` are matched.
-- **Lifting directive:** `allow-scope: <reason>`.
+- **Lifting directive:** `allow-scope: <path-or-directory/> <reason>` (a directory prefix is written with its slash).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `allowed_paths`, `forbidden_paths`.
 
 #### `suppression-delta`
@@ -469,14 +472,14 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```
 - **Passing commit / PR body (accepted):**
   ```text
-  allow-suppression: unavoidable legacy FFI bindings in wrapper module
+  allow-suppression: src/ffi.rs unavoidable legacy FFI bindings in wrapper module
   ```
 - **What it does NOT catch:**
   - Pre-existing suppression annotations present on the base ref, including one that moved to another line.
   - A suppression widened in place (`#[allow(dead_code)]` to `#[allow(dead_code, unused)]`): the reworded site counts as one new site, named by its new text.
   - Commented-out or `#[cfg]`-gated tests. The Rust pack detects those and reports them through `ignored-tests`; no other pack does.
   - Suppressions inside explicitly exempted file paths, and files whose head side does not parse (named in the notes; a base side that does not parse makes every head-side site count as new).
-- **Lifting directive:** `allow-suppression: <reason>`.
+- **Lifting directive:** `allow-suppression: <rule-or-path> <reason>` (the suppressed rule, such as `dead_code`, or the file's path or name).
 - **Default:** on, severity `warning` (see [Default Severity by Gate](#default-severity-by-gate)).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `max_increase`, `allowed_suppressions`.
 
@@ -504,7 +507,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Terms of art: metric names ("one-minute load average", "1-min average", "`load1`"), derived operational wrap windows ("~6.06 days active window", wrap window, bitfield, epoch).
   - Benchmark measurements ("ran in 4.2 seconds").
   - Historical durations and narration ("was maintained for three years", "forty minutes later — a commit ordering", "shipped a day ago"). <!-- discipline:allow(time-estimates) -->
-  - Code inside fenced blocks (` ``` `).
+  - Code inside fenced blocks (` ``` ` or `~~~`).
   - An estimate split across a line break (`ship in 3` / `weeks`): built-in and `extra_patterns` matches are found within a single line, then scoped to the clause that contains them. <!-- discipline:allow(time-estimates) -->
 - **`allow_patterns` scope:** each pattern is matched against every line and against every paragraph with its soft-wrapped lines joined by one space (a blank line or a code fence ends the paragraph), so a phrase that wraps, such as `one-minute load average` split after `load`, is still matched. The exemption covers only the text the pattern matched: an estimate elsewhere on the same line or in the same paragraph still fires. `^` and `$` keep their per-line meaning. To exempt a whole line, write the pattern to match the whole line (`^Status:.*`).
 - **Lifting directive:** In markdown: `<!-- discipline:allow(time-estimates) -->` or inline marker `docs-lint: allow` on the matching line.
@@ -517,6 +520,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Local home directory paths: `/Users/<username>/...`, `/home/<username>/...`, `C:\Users\<username>\...`.
   - Private IPv4 LAN addresses: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`.
   - Whole-token matches of denylisted internal hostnames.
+  - With `secrets` (on by default): private-key headers, AWS access key ids, GitHub and Slack tokens (the match is never echoed).
   - References to personal maintainer agent configuration (`~/.claude`, `$HOME/.gemini`, `RESEARCH_DISCIPLINES.md`, `*_PLAYBOOK.md`) across tracked text files. <!-- discipline:allow(pii) -->
   - Leaks inside decoded JSON keys and string literals, including escaped slashes (`\/`).
 - **Failing diff example (rejected):**
@@ -531,12 +535,13 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   let target_node = "127.0.0.1";
   ```
 - **What it does NOT catch:**
-  - Standard documentation placeholders: `runner`, `user`, `username`, `example`, `shared`.
+  - Standard documentation placeholders: `runner`, `user`, `username`, `you`, `me`, `name`, `example`, `shared` (the default `allowed_users`).
+  - Lines inside a function `[tests] functions` declares (Python and Rust files), and files under `[tests] paths`: declared test scope holds fixtures by definition.
   - RFC 1918 CIDR network notations in routing documentation (`10.0.0.0/8`, `192.168.0.0/16`).
   - Binary files (non-text).
-  *(Note: Test code is explicitly scanned because test fixtures are where paths and IPs frequently leak. Self-referential fixtures must use runtime assembly, inline `discipline:allow(pii)`, or `exempt_paths`).*
+  *(Note: Other test code is explicitly scanned because test fixtures are where paths and IPs frequently leak. Self-referential fixtures must use runtime assembly, inline `discipline:allow(pii)`, or `exempt_paths`).*
 - **Lifting directive:** `<!-- discipline:allow(pii) -->` or `docs-lint: allow` on the matching line.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `secrets`, `agent_config_refs`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `redact_lan_ips`, `secrets`, `agent_config_refs`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 
 #### `agent-scratch`
 - **Rule:** Agent transcripts, session files, and scratch artifacts must never be tracked in git.
@@ -576,8 +581,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Checksum-verifying installers that inspect payloads internally: when an installer script internally fetches release assets, verifies their cryptographic SHA-256 checksum against `SHA256SUMS`, and only unpacks or executes upon hash verification, the downloaded binary payload is verified.
   - However, download-verify-run (`curl -fsSL -o install.sh ... && bash install.sh`) remains the primary recommended pattern so operators can inspect the script before execution and avoid partial execution on interrupted connections.
 - **Finding Severity Breakdown:**
-  - `error`: High-entropy/structured secret tokens (`TOKEN-GHP` `ghp_`, `TOKEN-AWS` `AKIA...`, `TOKEN-SLACK` `xox[bap]-`, `TOKEN-OPENAI` `sk-...`, `TOKEN-ANTHROPIC`, `TOKEN-PRIVATE-KEY` PEM blocks).
-  - `warning`: Heuristic argument and piping patterns (`ARGV-ENV`, `ARGV-DOCKER`, `ARGV-INLINE`, `FLAG-PASSWD`, `INJECT-PIPE`, `INJECT-XARGS`).
+  - Gate severity (`error` by default): structured secret tokens (`SECRET-TOKEN-GITHUB` `ghp_` / `github_pat_`, `SECRET-TOKEN-AWS` `AKIA...` or a literal `AWS_SECRET_ACCESS_KEY=`, `SECRET-TOKEN-SLACK` `xox[baprs]-`, `SECRET-TOKEN-OPENAI` OpenAI and Anthropic keys, `SECRET-KEY-BLOCK` PEM private-key headers).
+  - `warning`: heuristic argument, piping and literal patterns (`ARGV-ENV`, `ARGV-DOCKER`, `ARGV-INLINE`, `INJECT-PIPE`, `INJECT-XARGS`, `SECRET-ARGV-PASSWORD`, `SECRET-LITERAL-BEARER`, `SECRET-LITERAL-ENV`).
 - **Lifting directive:** `secrets-argv-ok: <file-or-line> <reason>` in PR body or commit, or inline `discipline:allow(shell-secrets)`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_secret_patterns`, `allow_patterns`, `diff_only`.
 
@@ -586,7 +591,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Languages:** Any (commit metadata).
 - **What it catches:**
   - `Commit Trailer Missing`: a commit without one of `required_trailers` (`Signed-off-by`, `Agent-Tool`, ...).
-  - `Agent Commit Without Review`: a commit matching an `agent_markers` entry (a trailer line, the author name or the author email; defaults cover `Agent-Tool:`, `Generated-by:`, `Co-authored-by: Claude` / `Copilot` / `Gemini` / `Codex` / `Cursor` / `aider`, `[bot]`, `noreply@anthropic.com`, `noreply@openai.com`) with no `review_trailer` (`Reviewed-by` by default).
+  - `Agent Commit Without Review`: a commit matching an `agent_markers` entry (a trailer line, the author name or the author email; defaults cover `Agent-Tool:`, `Agent:`, `Generated-by:`, `Co-authored-by: Claude` / `Copilot` / `Gemini` / `Codex` / `Cursor` / `aider`, `[bot]`, `noreply@anthropic.com`, `noreply@openai.com`) with no `review_trailer` (`Reviewed-by` by default; an empty `review_trailer` switches this rule off).
   - `Agent Commit Reviewed By Its Author`: the review trailer names the commit's own author (by name or email).
 - **Failing commit (rejected):**
   ```text
@@ -615,22 +620,25 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - PRs with no referenced issue in the PR title or PR description.
   - Placeholder waiver values like `no-issue: <reason>` or empty waivers.
+  - `Directive in Subject Line`: a commit on the branch whose subject line carries a directive (directives belong in the body).
+  - With `require_in_commit_if_no_pr` and no PR title or body: no commit message on the branch references an issue.
 - **Lifting directive:** `no-issue: <reason>` on its own line in the PR description.
-- **Config keys:** `enabled`, `severity`, `pattern`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `pattern`, `require_in_commit_if_no_pr`.
 
 #### `provenance-tags`
 - **Rule:** Published numeric claims, tables, mechanism assertions, wall-clock intervals, and paired comparisons in markdown files and PR bodies must carry truthful provenance tags, hardware counter evidence, confidence intervals, or explicit hypothesis/differentiation qualifiers.
 - **Default:** `enabled = false` (opt-in).
 - **False-Positive Rationale:** Field measurements on consumer repositories and public open-source projects indicate that `provenance-tags` produces excessive noise on tabular benchmark comparisons, descriptive configuration tables, and architectural diagrams that are illustrative or descriptive rather than novel-claim-bearing. Repositories publishing empirical research benchmarks and requiring strict provenance tagging can opt in via `[gates.provenance-tags] enabled = true`.
-- **Languages:** Markdown (`*.md`) and PR description.
+- **Languages:** Markdown (`*.md`) and PR description. Agent guides (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) are skipped by every check.
 - **What it catches:**
   - Markdown tables containing unit-bearing numbers (`ns`, `µs`, `ms`, `ops/s`, `Mops/s`, `B/key`, etc.) without a provenance tag (`(measured: host, commit)`, `(target)`, or `(projected)`).
   - Unverified mechanism claims (`memory-latency-bound`, `branch-misprediction`, `TLB-bound`, etc.) without citing hardware counters (`perf stat`, `cycle_activity`, etc.) or marking as `hypothesis` / `unmeasured`.
   - Wall-clock ratios (`2.9x faster`, `3.1x speedup`) without confidence intervals (`[lo, hi]`, `BCa`, `CI`) or provisional markers.
   - Paired comparison figures (`11.9 ns vs 108.9 ns`, cross-metric comparisons) without shared workload tags (`(workload: id)`) or documented differentiation markers.
   - **Superseded figures** (with `superseded_registry`): a figure the repository has withdrawn, republished without a retraction marker (`retracted`, `superseded`, `corrected`, `previously`, ...) within three lines. The registry is a JSON file at `HEAD`: `{"figures": [{"id", "patterns", "context", "array_sequence", "replacement"}]}`; unknown fields are ignored. Patterns are case-insensitive and may use look-around. A pattern counts only when at least two of the figure's `context` words (one, if it lists one) appear in the same sentence or table cell or in the surrounding lines. Tracked JSON datasets matched by `superseded_json_paths` are swept value by value (string values by pattern, arrays by `array_sequence`; `provenance`, `retraction*`, `meta`, `description` and `_comment` keys are skipped). Changed files are swept; when the registry itself changes, every tracked markdown file and matching dataset is swept, so withdrawing a figure finds where it is already published. A change is checked against the base registry and its own together, so a change cannot delete the entry for a figure it republishes; a removed entry stops applying once the change is merged. Each pattern search is bounded (100,000 backtracking steps per sentence); a pattern past the bound is a could-not-check.
-  - **Pending measurements** (with `check_pending_citations`): a statement that a measurement is pending (`pending re-run`, `pending re-measurement`, `pending a quiet-host run`, ...) with no issue cited (`#123`, `issues/123`, or an issue URL) within the next 150 characters. With `require_open_pending_issues`, at least one cited issue must be open, read from the repository's forge over HTTPS (see [Forge access](#forge-access)). A bare `#123` resolves in the repository under review. An issue URL must be on the same host and name this repository, or one listed in `pending_issue_repos`: an open issue elsewhere on the host does not satisfy a claim about this one (reported as a violation naming the repository). A GitLab `/-/merge_requests/123` link is read as a merge request, open while `opened`. Text still saying "pending" after its issue closed is stale. Agent guides (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) are not read for this check.
-- **Could not check (exit 2):** a configured registry missing at `HEAD`, not JSON, or holding a pattern that does not compile; a swept dataset that is not JSON; with `require_open_pending_issues`, an issue whose state the forge cannot report (tool missing, no access, rate limited, an issue on another host, a forge that cannot be identified). Each is named in the error.
+  - **Pending measurements** (with `check_pending_citations`): a statement that a measurement is pending (`pending re-run`, `pending re-measurement`, `pending a quiet-host run`, ...) with no issue cited (`#123`, `issues/123`, or an issue URL) within the next 150 characters. With `require_open_pending_issues`, at least one cited issue must be open, read from the repository's forge over HTTPS (see [Forge access](#forge-access)). A bare `#123` resolves in the repository under review. An issue URL must be on the same host and name this repository, or one listed in `pending_issue_repos`: an open issue elsewhere on the host does not satisfy a claim about this one (reported as a violation naming the repository). A GitLab `/-/merge_requests/123` link is read as a merge request, open while `opened`. Text still saying "pending" after its issue closed is stale.
+- **Could not check (exit 2):** a configured registry missing at `HEAD`, not JSON, or holding a pattern that does not compile; a swept dataset that is not JSON; with `require_open_pending_issues`, an issue whose state the forge cannot report through the in-process HTTPS client (no access, rate limited, no network, an issue on another host, a forge that cannot be identified). Each is named in the error.
+- **Configurable ratio satisfaction:** the interval rule is paragraph-scoped. `ratio_satisfied_by` replaces the built-in list of what satisfies a published ratio with the repository's own: `interval` (a `[lo, hi]` / BCa / CI mention), `marker:<word>`, `artifact:<glob>` (a path reference in the paragraph matching the glob), `regex:<pattern>`. `deterministic_units` adds units whose figures are exempt (instructions, cycles, bytes and allocations are built in). `diff_only` judges only paragraphs containing an added line, as the other hygiene gates do. Growing either list is a `config-integrity` weakening.
 - **Passing examples (accepted):**
   - Table caption carrying `*(measured: host, commit)*` or `*(target)*`.
   - Mechanism claim citing `perf stat` counters or labeled as `(hypothesis — unmeasured pending PMU counters)`.
@@ -648,8 +656,9 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Ticked benchmark checkboxes when zero benchmark files were modified.
 - **Passing PR body (accepted):**
   Checklists accurately reflect modified files, or unticked items remain `- [ ]`.
-- **Lifting directive:** `allow-pr-checklist: <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `require_tests`, `require_docs`, `require_benches`.
+- **Lifting directive:** `allow-pr-checklist: test|docs|bench <reason>` (the claim the finding names).
+- **Default:** off, severity `error`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 ---
 
@@ -672,11 +681,10 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Lowering or removing a floor (`min_tests`, `min_count`, `min_assertions_per_test`); raising or removing a cap (`max_unsafe`, `max_increase`); raising a tolerance.
   - Changing or removing what a gate runs or checks against (`command`, `test_command`, `preset`, `count_pattern`, `ratio_baseline`, ...).
   - `[meta] mode = "advisory"` introduced by the change. It is reported under the subject `meta` and **not honoured** for that run: the exit code stays enforcing until the setting is on the base side.
-  - `[directives]`: `allow_hidden` switched on, `sources` gaining `commits`, `fail_on_overrides` or `require_approval` switched off, `max_overrides` raised or removed, `allowed_override_actors` grown.
+  - `[directives]`: `allow_hidden` switched on, `sources` gaining `commits`, `fail_on_overrides` or `require_approval` switched off, `degrade_offline` switched on, `max_overrides` raised or removed, `allowed_override_actors` grown (subject `directives`).
   - `[tests]`: `functions` or `paths` grown (more code counted as test scope is less code the production-code gates see).
-  - Growth of the grandfathering baseline file.
+  - `Baseline Contains New Findings Without Directive`: the grandfathering baseline grows, or swaps a fingerprint one for one (subject `baseline`).
 - **Self-protection:** the gate runs whenever the **base** configuration enables it, whatever the head configuration or `--disable` says, and reports at the stricter of the base and head severity. Every gate option has a declared loosening direction in `src/guards/integrity.rs::KEY_DIRECTIONS`; a unit test fails when an option is added without one.
-- **Configurable ratio satisfaction:** the interval rule is paragraph-scoped. `ratio_satisfied_by` replaces the built-in list of what satisfies a published ratio with the repository's own: `interval` (a `[lo, hi]` / BCa / CI mention), `marker:<word>`, `artifact:<glob>` (a path reference in the paragraph matching the glob), `regex:<pattern>`. `deterministic_units` adds units whose figures are exempt (instructions, cycles, bytes and allocations are built in). `diff_only` judges only paragraphs containing an added line, as the other hygiene gates do. Growing either list is a `config-integrity` weakening.
 - **What it does NOT catch:**
   - Deleting `discipline.toml`: the run falls back to built-in defaults, and only options the base file set stricter than those defaults are reported.
   - A loosening expressed by editing an entry of `commands`, `rules` or `groups` in a way that keeps the entry count: it is reported as one lost entry, without naming the field.
@@ -695,12 +703,12 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - Tightening edits (enabling gates, adding denylists, raising severity) — tightening is permitted freely.
   - Workflow-level switches (`disable:` in GitHub Actions steps) — protected by `ci-integrity`.
-- **Lifting directive:** `allow-gate-weakening: <gate-id> <reason>` in PR description or commit message.
+- **Lifting directive:** `allow-gate-weakening: <subject> <reason>` in PR description or commit message; the subject is the gate id, or `directives`, `tests`, `languages`, `meta` or `baseline` for those tables.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `build-hooks`
 - **Rule:** Code that runs unasked when a package is installed or built, and the configuration that decides where packages come from, cannot change without a directive. `ci-integrity` closes the workflow files; this gate closes the other place an agent can run a command on every install.
-- **Languages:** `package.json` lifecycle scripts (`preinstall`, `install`, `postinstall`, `prepare`, `prepublish`, `prepublishOnly`, `prepack`, `postpack`, `preuninstall`, `postuninstall`); build scripts (`build.rs`, `setup.py`, `Makefile.PL`, `binding.gyp`); package-manager configuration (`.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pypirc`, `pip.conf`, `.cargo/config.toml`, `Pipfile`, `.gemrc`, `.env*`).
+- **Languages:** `package.json` lifecycle scripts (`preinstall`, `install`, `postinstall`, `prepare`, `prepublish`, `prepublishOnly`, `prepack`, `postpack`, `preuninstall`, `postuninstall`); build scripts (`build.rs`, `setup.py`, `Makefile.PL`, `binding.gyp`); package-manager configuration (`.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pypirc`, `pip.conf`, `pip.ini`, `.pip/pip.conf`, `.cargo/config.toml`, `.cargo/config`, `Pipfile`, `.gemrc`, `.env*`).
 - **What it catches:**
   - `Install Hook Added`: a lifecycle script that is new or whose body changed (a non-lifecycle script such as `test` is not a hook).
   - `Install Hook Runs Network Or Shell`: the same, when the body carries `curl`, `wget`, `nc`, `/dev/tcp/`, `bash -c`, `eval`, `base64 -d`, `python -c`, `node -e`, `powershell`, a URL, or `chmod +x`.
@@ -726,7 +734,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 
 #### `toolchain-config`
 - **Rule:** A change cannot loosen the compiler, linter, type-checker, test-runner or coverage configuration it is judged by without an explicit override directive. Each recognised file is loaded on the base side and the head side into one generic tree (TOML, YAML, JSON with comments, INI, PHPUnit's root attributes) and diffed against a rule table (`src/guards/toolchain_config.rs::RULES`) that says which key paths loosen in which direction.
-- **Languages:** `tsconfig*.json` / `jsconfig.json`; `ruff.toml` and `pyproject.toml` (`[tool.ruff]`, `[tool.mypy]`, `[tool.pytest.ini_options]`, `[tool.coverage]`); `mypy.ini`, `pytest.ini`, `tox.ini`, `setup.cfg`, `.coveragerc`, `.flake8`; `Cargo.toml` (`[lints]`, `[workspace.lints]`), `.cargo/config.toml` (`rustflags`), `.config/nextest.toml`; `.eslintrc` (JSON / YAML forms); `.golangci.yml`; `jest.config.json` and `package.json` (`jest`); `codecov.yml`; `phpstan.neon`; `phpunit.xml`.
+- **Languages:** `tsconfig*.json` / `jsconfig.json`; `ruff.toml` and `pyproject.toml` (`[tool.ruff]`, `[tool.mypy]`, `[tool.pytest.ini_options]`, `[tool.coverage]`); `mypy.ini`, `pytest.ini`, `tox.ini`, `setup.cfg`, `.coveragerc`, `.flake8`; `Cargo.toml` (`[lints]`, `[workspace.lints]`), `.cargo/config.toml` (`rustflags`), `.config/nextest.toml`; `.eslintrc` (JSON / YAML forms); `.golangci.yml`; `clippy.toml` / `.clippy.toml`; `jest.config.json` and `package.json` (`jest`); `codecov.yml`; `phpstan.neon`; `phpunit.xml`.
 - **What it catches:**
   - A strictness switch turned off (`strict`, `noImplicitAny`, `xfail_strict`, `fail-fast`, `failOnWarning`, ...) or a laxness switch turned on (`skipLibCheck`, `ignore_missing_imports`, `ignore_errors`, `disable-all`).
   - A lint level lowered (`error` / `deny` / `forbid` to `warn` / `off` / `allow`) in ESLint rules or Cargo `[lints]`.
@@ -735,6 +743,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - A strict flag lost (`-D warnings`, `--strict-markers`, `--cov-fail-under`, `-Werror`) or a lax flag gained (`--reruns`, `--ignore`, `-A`, `--cap-lints`) in `rustflags` or pytest `addopts`.
   - A recognised configuration file deleted, or one that no longer parses on one side.
   - A configuration written as code (`eslint.config.js`, `jest.config.ts`, `vitest.config.*`, `.eslintrc.js`, `conftest.py`) **changed**: reported at `warning` as not analysed, because whether code loosens a bar cannot be read from a diff.
+  - `clippy.toml`: every `*-threshold` / size limit is a cap (raising it loosens), `allowed-*` lists grow, `disallowed-*` lists shrink, `allow-*-in-tests` and the other `allow-*` booleans loosen when switched on.
+  - `Toolchain Configuration Changed (not analysed)` (warning) also when a configuration gains or swaps what it inherits — `extends` / `plugins` (tsconfig, eslintrc), `preset` (jest), `extend` (ruff), `linters.presets` (golangci): what the inherited configuration loosens cannot be read from the diff, so the swap is recorded rather than passed. Losing an `extends` entry stays a `Shrunk` weakening.
 - **Failing diff (rejected):**
   ```diff
   // tsconfig.json
@@ -745,12 +755,10 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```text
   allow-toolchain-weakening: strict migrating the legacy tree file by file
   ```
-  - `clippy.toml`: every `*-threshold` / size limit is a cap (raising it loosens), `allowed-*` lists grow, `disallowed-*` lists shrink, `allow-*-in-tests` and the other `allow-*` booleans loosen when switched on.
-  - `Toolchain Configuration Changed (not analysed)` (warning) also when a configuration gains or swaps what it inherits — `extends` / `plugins` (tsconfig, eslintrc), `preset` (jest), `extend` (ruff), `linters.presets` (golangci): what the inherited configuration loosens cannot be read from the diff, so the swap is recorded rather than passed. Losing an `extends` entry stays a `Shrunk` weakening.
 - **What it does NOT catch:**
   - A tool or option not in the rule table. A file it does not recognise is not examined.
   - A list that appears where none was (`select = ["E"]` narrowing a tool's default set): defaults differ per tool version and are not modelled.
-  - What a configuration file pulls in (`extends`, `include`, presets): only the file's own keys are read.
+  - What a configuration file pulls in (`extends`, `include`, presets): only the file's own keys are read (a gained or swapped inheritance is recorded as not analysed, above).
   - A lowering expressed in code, in a CI command line (see `ci-integrity`), or in an environment variable.
 - **Lifting directive:** `allow-toolchain-weakening: <subject> <reason>`, where the subject is the option's key path (`compilerOptions.strict`), its last segment (`strict`), or the file path (which lifts every finding in that file, and is the only form for a not-analysed or deleted file).
 - **Default:** on, `error`.
@@ -763,6 +771,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Edits or deletions of files matching `paths` (`**/golden/**`, `**/snapshots/**`, `**/__snapshots__/**`, `**/*.snap`, `**/*.ambr`, `**/*.golden`, `**/*.approved.*`, `tests/fixtures/**/output*`). The message states how many lines were rewritten.
   - `Golden Output Regenerated Without Source Change`: the same finding under its own title when nothing in the diff produces output (only golden files, prose, or `discipline.toml` changed). That is the shape of a failing comparison resolved by rewriting the expectation.
   - Stealth snapshot re-blessing to mask test regressions.
+  - `Snapshot Added For Existing Test`: a new snapshot file whose test already existed on the base side and is not added by this change: Jest `__snapshots__/<file>.snap` (keys ``exports[`<title> 1`]``), insta `snapshots/<crate>__<module>__<test>.snap` (`<module>.rs` beside the directory), syrupy / pytest-snapshot `__snapshots__/<test_file>.ambr` (`# name:` lines). A snapshot arriving with its test is not reported.
 - **Failing diff example (rejected):**
   ```diff
   // Modified golden output file: tests/golden/api_response.json
@@ -773,7 +782,6 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```text
   allow-golden-update: tests/golden/api_response.json schema upgrade for version 2 endpoint
   ```
-  - `Snapshot Added For Existing Test`: a new snapshot file whose test already existed on the base side and is not added by this change: Jest `__snapshots__/<file>.snap` (keys ``exports[`<title> 1`]``), insta `snapshots/<crate>__<module>__<test>.snap` (`<module>.rs` beside the directory), syrupy / pytest-snapshot `__snapshots__/<test_file>.ambr` (`# name:` lines). A snapshot arriving with its test is not reported.
 - **What it does NOT catch:**
   - Newly added snapshot files for newly created tests.
 - **Lifting directive:** `allow-golden-update: <path> <reason>`.
@@ -787,8 +795,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Unpinned git dependencies (floating branches like `branch = "main"` without explicit commit SHA or tag).
   - Newly introduced dependencies that violate repository `deny.toml` `[bans]` or `[sources]`.
   - Dependencies listed in configured `deny_dependencies`.
-  - Newly added dependencies not present in configured `allow_dependencies` (when configured). A `go.mod` requirement marked `// indirect` is a transitive module `go mod tidy` wrote, not a new direct dependency; bans, wildcards and source changes still apply to it.
-  - **Lockfile integrity** (offline; `Cargo.lock`, `package-lock.json`, `yarn.lock` v1 and 2+, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `composer.lock` and `Gemfile.lock` are read entry by entry, base side against head side):
+  - `New Direct Dependency Added`: every new direct dependency, unless it is in `allow_dependencies` or the `deny.toml` allow list; with `allow_dependencies` set, a dependency outside it is also `Dependency Outside Allowlist`. `Loosened Dependency Constraint` and `Dependency Source Modified` judge a changed one. A `go.mod` requirement marked `// indirect` is a transitive module `go mod tidy` wrote, not a new direct dependency; bans, wildcards and source changes still apply to it.
+  - **Lockfile integrity** (offline; `Cargo.lock`, `package-lock.json`, `yarn.lock` v1 and 2+, `pnpm-lock.yaml` and `poetry.lock` are read entry by entry, base side against head side):
     - `Lockfile Entry From New Source`: an entry fetched from git or a bare URL, or from a registry host that is neither a default registry nor a host the base lockfile already uses (a private registry present on the base side is known).
     - `Lockfile Integrity Hash Dropped`: an entry (same name and version) that carried a checksum / `integrity` on the base side and no longer does.
     - `Manifest Changed Without Lockfile`: the dependency set of a manifest changed while the tracked lockfile governing it (same directory, else the nearest ancestor's) did not. A project that tracks no lockfile is not asked for one; `go.mod` is exempt because requiring an already-indirect module leaves `go.sum` unchanged.
@@ -807,7 +815,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - Unmodified pre-existing dependencies already present in the merge base ref.
   - Whether a package exists, how old it is, or whether its name is a typosquat: that needs a registry lookup, which discipline does not make (`AGENTS.md` §3.3). Use an audit preset of the `command` gate.
-  - `go.sum` (requiring an already-indirect module leaves it unchanged) and any lockfile format not listed above: their size is noted, their sources and hashes are not read, and the notes say so. Composer's Packagist entries carry no hash (`dist.shasum` is empty), so a dropped hash is only reported for an entry that had one; a `Gemfile.lock` carries hashes only from Bundler 2.6 (`CHECKSUMS`).
+  - `go.sum` (requiring an already-indirect module leaves it unchanged): its size is noted, its sources and hashes are not read, and the notes say so. `uv.lock`, `composer.lock`, `Gemfile.lock` and any other lockfile format are not read entry by entry, and deleting one is not `Lockfile Deleted`; they still count as the lockfile a manifest change must touch.
   - A lockfile entry whose version changed within the same source (a routine update).
   - Dependencies explicitly excused via scoped `allow-dependency: <name> <reason>`.
 - **Lifting directive:** `allow-dependency: <dependency-name> <reason>`. A lockfile entry finding is lifted by naming the **package**; a stale or deleted lockfile by naming the **lockfile path**.
@@ -822,7 +830,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Reductions in JS/TS `fast-check` (`numRuns`).
   - Lowered fuzzing or test effort in workflows and shell scripts (`PROPTEST_CASES`, `-max_total_time`, `-runs`, Go fuzz `-fuzztime`).
   - Removal of fuzz targets from `fuzz/Cargo.toml` (`[[bin]] name = "..."`) or deletion of `fuzz/fuzz_targets/*.rs`.
-  - Shrunken seed corpus directories or deleted seed files (`fuzz/corpus/**`, `corpus/**`).
+  - Shrunken seed corpus directories or deleted seed files (`corpus_dirs`, default `fuzz/corpus/**`, `corpus/**`, `**/tests/corpus/**`).
 - **Failing diff example (rejected):**
   ```diff
   // tests/prop.rs
@@ -838,32 +846,35 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Increases or additions of property-testing iterations or new fuzz targets (ratchet permits tightening).
   - Reductions explicitly excused by scoped directive `allow-test-shrink: <target/metric> <reason>`.
 - **Lifting directive:** `allow-test-shrink: <target-or-metric> <reason>`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `corpus_dirs`, `fuzz_targets` (default `fuzz/Cargo.toml`, `fuzz/fuzz_targets/**`), `scan_workflows`, `scan_scripts`.
+
 #### `ci-integrity`
 - **Rule:** CI/CD workflow integrity and rollup sentinel. Enforces complete rollup jobs (`ci-gate` must `needs:` all verification jobs), pins third-party actions by 40-character commit SHA, bans masked failures (`continue-on-error: true`), and bans exit-code suppression (`|| true`, `set +e`).
 - **Languages:** Actions workflow files (`*.yml` / `*.yaml` under `.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/`) and GitLab pipelines (`.gitlab-ci.yml`, `.gitlab/ci/*.yml`).
 - **What it catches:**
   - Rollup job missing a dependency on verification jobs defined in the workflow (`Incomplete Rollup Job Needs`).
-  - Third-party GitHub actions unpinned or pinned to mutable tags/branches (`@v4`, `@main`) instead of 40-character commit SHA.
+  - Third-party GitHub actions unpinned or pinned to mutable tags/branches (`@v4`, `@main`) instead of 40-character commit SHA. Only a `uses:` new relative to the base side is checked; `first_party_action_prefixes` (default `actions/`, `github/`) are exempt.
   - Steps carrying `continue-on-error: true`.
   - Commands masking exit codes (`|| true`, `set +e`).
-  - In a GitLab pipeline, against its base side: a deleted verification job, a job gaining `allow_failure` (boolean or `exit_codes` form), an existing verification job changed to `when: manual`, a script line gaining `|| true` / `|| :` / `set +e` (hidden `.template` jobs included, comment lines excluded), a `discipline check` line gaining `--advisory`, a pipeline file that no longer parses, and a deleted pipeline that defined verification jobs. Pipelines pulled in through `include:` and changes to `rules:` / `only:` / `except:` are **not** read; the gate says so in its notes.
+  - In a GitLab pipeline, against its base side: a deleted verification job, a job gaining `allow_failure` (boolean or `exit_codes` form), an existing verification job changed to `when: manual`, a script line gaining `|| true` / `|| :` / `set +e` (hidden `.template` jobs included, comment lines excluded), a `discipline check` line gaining `--advisory`, a pipeline file that no longer parses, and a deleted pipeline that defined verification jobs (`include:` and `rules:` / `only:` / `except:` are covered below).
   - The discipline step moved off the base policy: `policy_from: base` changed, removed, or its whole `with:` block dropped.
   - The discipline step made non-blocking: `advisory: true` added to the action's `with:`, or `--advisory` added to a `discipline check` / `discipline diff` run line (comment lines do not count).
   - Documented job count mismatches when `documented_job_count_path` is configured.
   - Deleted verification jobs and steps (`Deletion of Verification Step`). A base step is found in head by id, name, action, or first `run:` line; failing that, it is paired as a **rename** with an otherwise unmatched head step whose body (`run:` script without its full-line `#` comments, or action and `with:` inputs) has token Dice similarity of at least 0.60 (`STEP_RENAME_SIMILARITY`) and still carries every verification marker (`test`, `clippy`, `lint`, ...) the base body carried; ties go to the nearest position. A rename is reported in the gate notes, not as a violation, and the renamed step is still checked against its base form (dropped flags, `continue-on-error`). A step whose name and body both changed past the threshold, or whose body stopped verifying, is reported as deleted, with the closest candidate and its similarity in the message.
-- **Passing commit / PR description (accepted):**
-  ```text
-  allow-ci-weakening: ci-gate temporary rollup relaxation during migration
-  ```
   - `Frozen Install Flag Dropped`: a `run:` step that carried `--frozen-lockfile`, `--immutable`, `--require-hashes`, `--frozen` or `--no-update` no longer does (the `--locked` case has its own title), so the install may resolve past the lockfile.
   - `Install Command Softened`: `npm ci` became `npm install`, which may rewrite the lockfile instead of honouring it.
   - GitLab: `include: local:` files in the same tree are followed on both sides (their jobs are diffed with the pipeline's; a local include that adds `allow_failure` is found); `project:`, `remote:`, `template:` and `component:` includes are named in the notes as not read. `Verification Job Narrowed`: an existing verification job gains or changes `rules:` / `only:` / `except:`.
   - `Verification Step Narrowed` (warning): a verification step, including the discipline step, gains a step-level `if:` or its `if:` changes, so it no longer runs on every event or condition it ran on before (`if: github.event_name == 'pull_request'` on the gate stops it gating pushes to the default branch). The `always()` / `failure()` forms are `Conditional Masking on Verification Step`. Lifted with `allow-gate-weakening: ci-integrity <reason>`.
+  - Also reported, each under its own title: `Dangerous pull_request_target Trigger`, `Workflow Permissions Widened`, `Workflow timeout-minutes Removed` / `Job timeout-minutes Removed`, `Cargo Flag Dropped (--locked)`, `Clippy Flag Dropped (--all-targets)`, `Compiler Flag Dropped (-D warnings)`, `Rollup Job Dropped Dependency`, `Discipline Action Suite Changed`, `Discipline Action Directive Sources Widened`, `Discipline Action Weakened (...)` (`policy_from`, `disable` input, `advisory: true`, `fail_on_warnings: false`), and `Command Masks Exit Code`.
+- **Passing commit / PR description (accepted):**
+  ```text
+  allow-ci-weakening: ci-gate temporary rollup relaxation during migration
+  ```
 - **What it does NOT catch:**
   - Local actions (`./...`) and docker actions (`docker://...`).
-  - Workflows matching `excluded_jobs` (e.g. `detect-changes`).
+  - A job listed in `excluded_jobs` (default `detect-changes`) missing from the rollup's `needs`.
 - **Lifting directive:** `allow-ci-weakening: <subject> <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `workflows`, `rollup_job`, `excluded_jobs`, `pin_actions`, `forbid_continue_on_error`, `forbid_or_true`, `diff_only`, `documented_job_count_path`, `documented_job_count_pattern`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `workflows`, `rollup_job`, `excluded_jobs`, `pin_actions`, `forbid_continue_on_error`, `forbid_or_true`, `diff_only`, `documented_job_count_path`, `documented_job_count_pattern`, `first_party_action_prefixes`.
 
 #### `ci-skip-set`
 - **Rule:** A rollup job (`ci-gate`) has to count `skipped` as passing, because a conditional matrix skips the jobs a change does not touch. That rule alone cannot tell *skipped because irrelevant* from *skipped because the filter evaluation was wrong*: if change detection succeeds but emits all-false (a path-filter upgrade changing quantifier semantics, a renamed filter key resolving to empty), every conditional job skips, the rollup sees no failure, and a green required context sits over a run that verified nothing. This gate checks the skip set against the data the rollup actually observed. It asserts:
@@ -912,7 +923,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Test count increases (ratchet permits additions).
   - Reductions within configured `tolerance`.
   - Reductions excused with `allow-test-shrink: <subject> <reason>` or `allow-gate-weakening: test-floor <reason>`.
-- **Lifting directive:** `allow-test-shrink: <subject> <reason>` or `allow-gate-weakening: test-floor <reason>`.
+- **Lifting directive:** `allow-gate-weakening: test-floor <reason>`, or `allow-test-shrink: <subject> <reason>` where the subject is what shrank: for a count below the floor, `min_tests`, a changed test file's path or name, or a removed test's name; for a lowered floor constant, its `constant_name`; for a missing suite, its `required_suites` path.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `min_tests`, `tolerance`, `constant_file`, `constant_name`, `required_suites`, `test_command`.
 
 ##### Counting basis: static or runtime
@@ -1024,7 +1035,7 @@ To port the other way, adopting the static basis instead, run `discipline check`
   - Unparseable manifest extraction regex (fails closed with exit 2).
   - Zero manifest entries found when watched paths contain tracked files (fail-closed integrity guard).
   - Unmanifested files (`+`): git-tracked files matching `watched_paths` (excluding `exclude_paths`) not declared in the manifest.
-  - Ghost manifest entries (`-`): files declared in the manifest that do not exist in the working directory.
+  - Ghost manifest entries (`-`): files declared in the manifest, inside `watched_paths` and not excluded, that git does not track.
 - **Failing diff example (rejected):**
   Adding a new source file to git repository without declaring it in `package.xml`.
 - **Passing PR description (accepted):**
@@ -1140,6 +1151,7 @@ Notes for adapting it:
   - **Semver & API Compatibility:** `cargo-semver-checks` (`cargo semver-checks check-release`), `api-snapshot` (`git diff --exit-code api.snapshot`).
   - **Supply Chain & Advisory Wrappers:** `cargo-deny` (`cargo deny check`, guarded policy file `deny.toml`), `pip-audit` (`pip-audit`), `npm-audit` (`npm audit --audit-level=high`), `govulncheck` (`govulncheck ./...`).
   - **Deterministic Concurrency Testing:** `loom` (`cargo test --test loom -- --nocapture`, zero-tests guard `running 0 tests`).
+  - **Rust Runtime Checks:** `miri` (`cargo miri test`, zero-tests guard `running 0 tests`), `sanitizers` (`cargo test -Zsanitizer=address`), `cargo-public-api` (`cargo public-api diff`).
 - **Languages:** any.
 - **What it catches:**
   - Non-zero command exit codes (exit 1).
@@ -1158,13 +1170,12 @@ Notes for adapting it:
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `preset`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `commands`.
 
 #### `sanitizers`
-- **Rule:** Executes runtime sanitizers (AddressSanitizer `ASan` or ThreadSanitizer `TSan`) with negative-control race canaries and audited suppression list verification.
-- **Languages:** Rust, C/C++.
+- **Rule:** Runs `cargo test -Zsanitizer=<sanitizer>` (`sanitizer` default `address`; nightly Rust) and, with `canary = true`, first a negative-control race canary (`cargo test --test race_canary`) that must print `ThreadSanitizer: data race`.
+- **Languages:** Rust.
 - **What it catches:**
-  - Memory errors (out-of-bounds access, use-after-free) or data races detected by LLVM sanitizers.
-  - Failure of negative-control canaries to trigger expected sanitizer diagnostics.
-  - Unaudited sanitizer suppression entries.
-- **Lifting directive:** `allow-sanitizers: <reason>`.
+  - Memory errors (out-of-bounds access, use-after-free) or data races detected by LLVM sanitizers, and a sanitizer run that cannot execute.
+  - A canary that does not produce its expected diagnostic.
+- **Lifting directive:** `allow-sanitizers: <subject> <reason>`: `canary` for the canary, `execution` for a run that could not start, `failure` for a failing run; `sanitizers` covers any of them, `toolchain` or `nightly` either run finding.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `sanitizer`, `timeout_seconds`, `canary`.
 
 #### `miri`
@@ -1172,30 +1183,31 @@ Notes for adapting it:
 - **Languages:** Rust.
 - **What it catches:**
   - Undefined behavior flagged during Miri execution.
-  - Zero tests executing under Miri when test filters match zero cases (prevents vacuous passes).
-- **Lifting directive:** `allow-miri: <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `args`, `timeout_seconds`, `allow_zero`.
+  - Zero tests executing under Miri when test filters match zero cases (prevents vacuous passes; the guard is always on).
+- **Lifting directive:** `allow-miri: <subject> <reason>`: `execution` for a run that could not start, `zero-tests` (or `tests`) for the zero-tests guard, `failure` for a failing run; `miri`, `cargo-miri` or `toolchain` cover any of them.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `args`, `timeout_seconds` (default 600).
 
 #### `unsafe-budget`
-- **Rule:** Enforces an `unsafe` block count ratchet: the total number of `unsafe` blocks and functions cannot increase without an explicit justification directive.
+- **Rule:** Enforces an `unsafe` count ratchet: the number of `unsafe` sites (blocks, `unsafe impl`, `unsafe trait`) in changed files cannot increase without an explicit justification directive, and with `max_unsafe` set the head count cannot exceed that cap.
 - **Languages:** Rust.
 - **What it catches:**
-  - Net additions of `unsafe` blocks or `unsafe fn` declarations across tracked source files.
-- **Lifting directive:** `allow-unsafe: <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`.
+  - Net additions of `unsafe` sites across changed source files (unless `allow_increase = true`), reported at each added site.
+  - A head count above `max_unsafe`.
+- **Lifting directive:** `allow-unsafe: <subject> <reason>`: for an added site, its file path or name, `FFI`, or `unsafe-budget`; for the cap, `max_unsafe`, `unsafe-budget`, `budget`, `FFI` or `pointer`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `max_unsafe`, `allow_increase` (default `false`).
 
 ---
 
 ### Pillar 5: Quality & Compiler Toolchain (`quality`)
 
 #### `msrv`
-- **Rule:** Validates that the repository declares a Minimum Supported Rust Version (`rust-version` in `Cargo.toml` or `pinned_version`) and compiles cleanly under that toolchain.
+- **Rule:** Validates that the repository declares a Minimum Supported Rust Version (`rust-version` in `Cargo.toml` or `pinned_version`) and, when `command` is set, that the command passes (120-second timeout). Without `command` only the declaration is checked; the gate builds nothing itself.
 - **Languages:** Rust.
 - **What it catches:**
   - Missing `rust-version` declaration in `Cargo.toml`.
-  - Compilation or syntax errors when building under the declared or pinned MSRV toolchain.
-- **Lifting directive:** `allow-msrv: <reason>`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `pinned_version`.
+  - A configured `command` (for example a build under the MSRV toolchain) that fails.
+- **Lifting directive:** `allow-msrv: <subject> <reason>`: `rust-version`, `Cargo.toml`, `msrv` or `crate` for a missing declaration; `command`, `msrv` or the command text for a failing command.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `pinned_version`, `command`.
 
 ---
 
@@ -1211,7 +1223,7 @@ Notes for adapting it:
   - Missing merge-base benchmark artifacts (fails closed with exit 2).
   - Garbage or corrupted benchmark output files (fails closed with exit 2).
   - Deleted benchmark files without authorization (exit 1).
-  - Benchmarks renamed away without baseline (exit 1).
+  - `New or Renamed Benchmark Lacks Baseline` (exit 1): a head arm, new or renamed, with no base entry; lifted with `allow-regression: <arm> <reason>`.
   - Unmatched host/runner provenance tags between base and head.
   - Memory growth in generic JSON rows with no usable timing signal (`{"median_ms": 0, "heap_bytes": 160, "rss_bytes": 20480}`): the row is a deterministic byte counter (`heap_bytes`, else `bytes`, else `rss_bytes`) gated like instruction counts.
   - Stale `exempt_arms` entries that match no benchmark arm in the run (error, whatever the gate severity). In git mode the arms are those of every tracked benchmark artifact at head.
@@ -1232,7 +1244,7 @@ Notes for adapting it:
   - the cited run's head must be reachable from the head under review (`ahead` or `identical` in the compare API); a run at a head a force-push rewrote away measured other code;
   - a cited data artifact (`.json`, `.csv`, `.txt`, `.log`, `.out`) must be tracked and must not have been last committed before the branch's newest change under `citation_source_paths`. Prose and figures (`.md`, `.svg`) are cited as rules, not as the source of a number, and are not dated.
 
-  Run, job and commit data come from the GitHub REST API over HTTPS (see [Forge Access](#forge-access); token from `GH_TOKEN` or `GITHUB_TOKEN`). A citation the job cannot decide (no network, unauthenticated, rate limited, a non-GitHub run URL, no base ref, no `citation_measurement_jobs` for a `failure` run, no `citation_source_paths` for an artifact) is reported by name as **"citation not verified"** and the override is **not admitted**: the gate stays armed.
+  Run, job and commit data come from the GitHub REST API over HTTPS (see [Forge Access](#forge-access); token from `DISCIPLINE_FORGE_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`). A citation the job cannot decide (no network, unauthenticated, rate limited, a non-GitHub run URL, no base ref, no `citation_measurement_jobs` for a `failure` run, no `citation_source_paths` for an artifact) is reported by name as **"citation not verified"** and the override is **not admitted**: the gate stays armed.
 - **Paired-ratio mode (`mode = "paired-ratio"`):** gates a ratio of two arms measured in the same interleaved rounds (a subject and a fixed twin), compared against a committed ratio baseline: a ratio of ratios. A runner that is slower than yesterday's slows both arms and the ratio holds, which makes this the one sound way to gate wall-clock numbers on shared CI runners **when building the old version is impractical**. When the old version can be built and run in the same job, version-vs-version in the same run (the default mode with `--bench-base-file` and `--bench-head-file`) remains the preferred model: it needs no stored baseline and compares the change directly. The two are not interchangeable; a paired-ratio verdict is about the subject relative to its twin.
   - **Run file (`discipline-bench-ratio/v1`, passed with `--bench-head-file`):** `provenance` (`platform`, `runner_class`, optional `runner_id`, `commit`, `twin.identity`, `twin.version`) and named `axes` (`timing`, `memory`, ...), each with an `adverse` direction (`up` or `down`), gated `cells` carrying per-round data `rounds[] = {subject, twin, order}` with `order` `subject-first` or `twin-first`, and in-situ `controls` carrying `rounds[] = {a, b, order}` from two independently built arms of identical source interleaved into the same rounds.
   - discipline computes each cell's ratio (the median of the per-round `subject / twin`) and its 95% percentile-bootstrap interval. A supplied `ratio` is advisory; one that disagrees with its own rounds is an error. A cell with only means, fewer than 6 rounds (below that the bootstrap interval collapses onto the sample extremes), or an arm order that does not alternate is **"not comparable"**, never a pass.
@@ -1242,26 +1254,28 @@ Notes for adapting it:
   - **The twin is part of the baseline.** A twin identity or version that differs from the baseline's reports **"baseline invalidated by twin change"** and nothing is compared across it. A twin whose own median leaves its historical band makes the cell "not comparable". There is deliberately no "every arm moved together, so it is runner noise" rule: a uniform move leaves the ratio unchanged and adds no signal, and treating it as noise would let a real uniform regression pass.
   - **The baseline is a threshold file.** `ratio_baseline` is read from the base ref, never from head. A change that loosens it (a floor, ceiling or twin band widened, a cell or axis removed, a cell made ungateable, a twin changed, or a stored ratio moved in the adverse direction) needs `allow-regression: <ratio_baseline path> <reason>`, and the directive appears in the overrides audit. So does a diff that touches the baseline together with non-benchmark source.
   - **Known limit.** A ratio of ratios is still a cross-run comparison, one level removed. The in-situ control validates this run's stability; it does not show that a baseline recorded on one runner generation stays valid after a runner fleet rotates to a different CPU generation. Re-derive the baseline when the fleet changes.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `tolerance_pct`, `paths`, `provenance`, `allow_cross_host`, `max_noise_cv`, `noise_margin_pct`, `exempt_arms`, `require_sourced_override`, `citation_source_paths`, `citation_measurement_jobs`, `mode`, `ratio_baseline`, `ratio_tolerance_pct`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `tolerance_pct`, `paths`, `provenance`, `allow_cross_host`, `max_noise_cv`, `noise_margin_pct`, `base_file`, `head_file`, `noise_floor_pct` (default 0.5), `advisory_pct` (default 0.1), `exempt_arms`, `require_sourced_override`, `citation_source_paths`, `citation_measurement_jobs`, `mode`, `ratio_baseline`, `ratio_tolerance_pct`.
 
 ---
 
 ## Preset Profile Configurations
 
-The following curated configuration profiles provide turn-key setups tailored for specific engineering environments. Copy the desired profile directly into `discipline.toml` at the repository root.
+The following curated configuration profiles provide turn-key setups tailored for specific engineering environments. Copy the desired profile directly into `discipline.toml` at the repository root and replace `<project>`. Whether warnings block is a property of the run, not of the file: pass `--fail-on-warnings` (or set `DISCIPLINE_FAIL_ON_WARNINGS=1`) where a profile says so.
 
 ### Profile 1: Research & High-Assurance Algorithm Labs
 
 Tailored for scientific computing, cryptographic libraries, and high-assurance algorithmic cores. Enforces zero-tolerance benchmark drift with statistical variance guards, strict hygiene (zero time estimates, PII redaction), property-test ratchets, and immutability of golden outputs.
 
 ```toml
-schema_version = 1
-fail_on_warnings = true
-fail_on_overrides = false
+# Run with --fail-on-warnings.
+[meta]
+version = 1
+name = "<project>"
 
 [directives]
 sources = ["pr-body", "commits"]
 allow_hidden = false
+fail_on_overrides = false
 
 [gates.assertion-reduction]
 enabled = true
@@ -1291,7 +1305,8 @@ severity = "error"
 [gates.pii]
 enabled = true
 severity = "error"
-allow_lan_ips = false
+lan_ips = true
+redact_lan_ips = true
 
 [gates.agent-scratch]
 enabled = true
@@ -1308,14 +1323,13 @@ severity = "error"
 [gates.dependency-delta]
 enabled = true
 severity = "error"
-deny_wildcards = true
-enforce_deny_toml = true
-enforce_git_pins = true
+allow_wildcards = false
+require_git_pins = true
+deny_file = "deny.toml"
 
 [gates.test-budget]
 enabled = true
 severity = "error"
-ratchet = true
 
 [gates.bench-regression]
 enabled = true
@@ -1323,7 +1337,6 @@ severity = "error"
 tolerance_pct = 3.0
 max_noise_cv = 0.15
 noise_margin_pct = 2.0
-provenance = true
 allow_cross_host = false
 ```
 
@@ -1332,13 +1345,14 @@ allow_cross_host = false
 Tailored for production web services, distributed systems, and enterprise microservices. Focuses on multi-language test coverage preservation, supply chain audit verification, PII redaction, and preventing silent test suppression.
 
 ```toml
-schema_version = 1
-fail_on_warnings = false
-fail_on_overrides = false
+[meta]
+version = 1
+name = "<project>"
 
 [directives]
 sources = ["pr-body"]
 allow_hidden = false
+fail_on_overrides = false
 
 [gates.assertion-reduction]
 enabled = true
@@ -1377,7 +1391,7 @@ severity = "error"
 [gates.dependency-delta]
 enabled = true
 severity = "error"
-deny_wildcards = true
+allow_wildcards = false
 
 [gates.command]
 enabled = true
@@ -1393,13 +1407,15 @@ preset = "cargo-deny"
 Designed specifically for automated agent workflows (Claude Code, Antigravity, Copilot, Cursor). Restricts agent drift, prevents deletion or weakening of test suites, blocks ghost/vacuous tests with assertion density requirements, rejects placeholder justifications (e.g. `todo`, `fix later`), and bans ephemeral agent scratch directories from entering git history.
 
 ```toml
-schema_version = 1
-fail_on_warnings = true
-fail_on_overrides = false
+# Run with --fail-on-warnings.
+[meta]
+version = 1
+name = "<project>"
 
 [directives]
 sources = ["pr-body"]
 allow_hidden = false
+fail_on_overrides = false
 
 [gates.agents-md]
 enabled = true
@@ -1449,14 +1465,13 @@ severity = "error"
 [gates.test-budget]
 enabled = true
 severity = "error"
-ratchet = true
 ```
 
 ---
 
 ## Forge Access
 
-`require_open_pending_issues`, bench-regression citation freshness and `discipline doctor` read from the forge that hosts the repository. No gate needs the network otherwise. Requests are made by the binary itself over HTTPS (rustls; no OpenSSL, no `gh`, no `curl`), so they work the same in the static binary and the container.
+`require_open_pending_issues`, bench-regression citation freshness, `directives.require_approval` (pull-request reviews), the `merged-pr-body` directive source on a push event, `discipline replay` (each replayed change's merged pull-request body) and `discipline doctor` read from the forge that hosts the repository; `check --comment` (opt-in) writes one pull-request comment. No gate needs the network otherwise. Requests are made by the binary itself over HTTPS (rustls; no OpenSSL, no `gh`, no `curl`), so they work the same in the static binary and the container.
 
 | Forge | API base | Token (optional for public repositories) |
 |---|---|---|
@@ -1468,7 +1483,7 @@ ratchet = true
 - **Transport rules:** HTTPS only; plain HTTP is accepted for a loopback address, or for any host with `DISCIPLINE_FORGE_ALLOW_HTTP=1` (the token then travels in clear). Redirects are followed only to the same scheme, host and port, at most three times, so a token never leaves the forge. API paths with empty, `.` or `..` segments are refused. Credentials embedded in a URL variable (`https://user:token@host`) are dropped; put tokens in a token variable. Certificates are verified with the platform's trust store (the system CA bundle; the macOS keychain), so a corporate CA installed there is honoured. `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are honoured. Responses are capped at 25 MiB and each request at 30 seconds.
 - **No network:** `DISCIPLINE_NO_NETWORK=1` refuses every request that is not to a loopback address; the features that need the forge then exit 2.
 - **Other endpoint:** `DISCIPLINE_FORGE_API_URL` replaces the API base (an internal mirror or proxy, or a local mock).
-- **Token scope:** use the narrowest read-only token: a fine-grained GitHub token with read access to issues and metadata (the job's `GITHUB_TOKEN` with `issues: read` works); a GitLab project access token with `read_api`; a Gitea or Forgejo token with `read:issue` and `read:repository`. `doctor`'s admin-only settings need an admin token: run it locally or in a scheduled job on the default branch, never in a pull-request job, and never expose a forge token to fork pipelines (see [`pull_request_target`](guides/ci-platforms.md#8-repository-protection)).
+- **Token scope:** use the narrowest read-only token: a fine-grained GitHub token with read access to issues and metadata (the job's `GITHUB_TOKEN` with `issues: read` works); a GitLab project access token with `read_api`; a Gitea or Forgejo token with `read:issue` and `read:repository`. `check --comment` needs a token that can write pull-request comments; one that cannot is reported as a note, not a failure. `doctor`'s admin-only settings need an admin token: run it locally or in a scheduled job on the default branch, never in a pull-request job, and never expose a forge token to fork pipelines (see [`pull_request_target`](guides/ci-platforms.md#8-repository-protection)).
 
 The forge is identified in this order: `DISCIPLINE_FORGE` (`github`, `gitlab`, `gitea`, `forgejo`, with `DISCIPLINE_FORGE_URL` and `DISCIPLINE_FORGE_REPO` when the `origin` remote does not give them); the CI runner (`GITLAB_CI` with `CI_SERVER_URL` and `CI_PROJECT_PATH`; `FORGEJO_ACTIONS` or `GITEA_ACTIONS` with `GITHUB_SERVER_URL` and `GITHUB_REPOSITORY`; `GITHUB_ACTIONS`); then the `origin` host (`github.com`, `gitlab.com` or a host containing `gitlab`, `codeberg.org` or a host containing `forgejo`, a host containing `gitea`); with no remote, `GITHUB_REPOSITORY` alone means GitHub. A self-hosted forge under another name needs `DISCIPLINE_FORGE`; without it, a check that needs the forge exits 2.
 
@@ -1489,7 +1504,7 @@ Discipline provides universal static binary drop-in replacements for the legacy 
 | `test-floor` | `scripts/check_test_floors.py` | Automatic base-ref constant extraction, direct `test_command` execution, fail-closed handling on unresolvable base floors, `allow-test-shrink:` override. |
 | `ci-integrity` | `scripts/check_ci_gate.py` | Complete rollup job `needs:` closure validation, 40-character commit SHA pinning, masked failure detection (`continue-on-error`, `\|\| true`, `set +e`), `allow-ci-weakening:` override. |
 | `ci-skip-set` | A rollup skip-set floor script | Parses each job's `if:` as an expression instead of splitting on `\|\|`, models GitHub's implicit `success()` over transitive dependencies, reads filter outputs from the same `toJson(needs)` as the results, reports an absent boolean filter output by name, fails closed on unmodelled terms. |
-| `bench-regression` | `scripts/perf_report.py`, `scripts/wasm_fuel.py` | In-job dual-file mode (`--bench-base-file` and `--bench-head-file`), `iai-callgrind` console line and neutral JSON parsers, two-tier threshold (single-worst >5% or $\ge 2$ arms regressing >0.5% noise floor, advisory 0.1%), declared arm exemptions, sourced overrides verifying CI URL or committed artifact and named arms, missing-baseline fatal fail-closed. |
+| `bench-regression` | `scripts/perf_report.py`, `scripts/wasm_fuel.py` | In-job dual-file mode (`--bench-base-file` and `--bench-head-file`), `iai-callgrind` console line and neutral JSON parsers, two-tier threshold (single-worst above `tolerance_pct` + `noise_margin_pct`, or $\ge 2$ arms regressing above `noise_floor_pct`, default 0.5%; advisory `advisory_pct`, default 0.1%), declared arm exemptions, sourced overrides verifying CI URL or committed artifact and named arms, missing-baseline fatal fail-closed. |
 | `provenance-tags` | `scripts/check_docs_hygiene.py` | Table numeric provenance (`(measured: host, commit)`, `(target)`, `(projected)`), mechanism claim hardware counter citations, wall-clock intervals, paired comparison tags (`(workload: id)`), a superseded-figure registry over markdown and JSON datasets, and pending-measurement issue citations checked for an open issue. |
 | `command` | Bespoke shell runner wrappers | Universal fail-closed timeout wrapper, zero-tests guards, turnkey presets (`cargo-public-api`, `miri`, `sanitizers`, `loom`, `cargo-deny`, `cargo-mutants`). |
 
@@ -1500,7 +1515,7 @@ Discipline provides universal static binary drop-in replacements for the legacy 
 
 ## Repository Security Boundary & Workspace Ownership
 
-Discipline inspects git history and diffs using `libgit2`. Access to the underlying git repository enforces strict security boundaries that differ between host workstations and containerized environments:
+Discipline inspects git history and diffs using `libgit2`. In CI (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `GITEA_ACTIONS` or `FORGEJO_ACTIONS` set), when the base ref cannot be resolved, it runs `git fetch --no-tags` against `origin` (30-second timeout) to deepen a shallow checkout; that is the only external `git` process it starts. Access to the underlying git repository enforces strict security boundaries that differ between host workstations and containerized environments:
 
 ### Host Binary Enforcement (CVE-2022-24765 Protection)
 On developer workstations and multi-tenant hosts, the native `discipline` binary enforces strict repository owner validation by default.
@@ -1513,12 +1528,12 @@ The official container image (`ghcr.io/orieg/discipline`) intentionally relaxes 
 - **Operational Reality:** In containerized CI/CD runners (Docker volume mounts, Gitea Act Runner, Forgejo Runner, GitLab CI `/builds`, Kubernetes/Argo `/workspace`), checkout volumes are frequently owned by root (`0:0`) or the host runner UID, while the container executes as unprivileged `USER 10001:10001`. Requiring manual `--user` overrides or volume-mounted git configs adds significant friction and causes false-positive failures on normal setups.
 - **Security Assessment:** Relaxing owner validation within the official container image is safe because:
   1. **Ephemeral Single-Purpose Sandbox:** The container executes inside an isolated container namespace with a dedicated filesystem and unprivileged user credentials (`USER 10001:10001`).
-  2. **No Hook or Pager Execution:** `discipline` and `libgit2` do not invoke external git hooks, custom diff filters, or pager binaries, which eliminated the execution vector exploited in CVE-2022-24765.
+  2. **No Hook or Pager Execution:** apart from the CI-only `git fetch` above, which runs the `git` binary with the repository's configuration, `discipline` and `libgit2` do not invoke external git hooks, custom diff filters, or pager binaries, which eliminated the execution vector exploited in CVE-2022-24765.
   3. **No Root Escalation:** The container lacks `setuid` binaries or root escalation capabilities.
 
 ---
 
 ## Roadmap & Future Gates
 
-All 31 gates across the six suites are implemented and shipped; `discipline gates` lists them with their effective state. Paired within-run ratio benchmarking shipped as `bench-regression` `mode = "paired-ratio"`. Known limitations and candidate work are tracked in the "Outstanding Checks & Known Limitations" section of [ROADMAP.md](ROADMAP.md).
+All 37 gates across the six suites are implemented and shipped; `discipline gates` lists them with their effective state. Paired within-run ratio benchmarking shipped as `bench-regression` `mode = "paired-ratio"`. Known limitations and candidate work are tracked in the "Outstanding Checks & Known Limitations" section of [ROADMAP.md](ROADMAP.md).
 

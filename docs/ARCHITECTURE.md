@@ -40,7 +40,7 @@ Discipline's operational rigors were developed to defend high-assurance reposito
 ```mermaid
 flowchart TD
     subgraph CFG_LAYER["Layered Configuration & Directives"]
-        D["1. Built-in Defaults<br/>(All gates ON; correctness/integrity: error, heuristic/bench: warning)"]
+        D["1. Built-in Defaults<br/>(25 gates on, 12 opt-in; see discipline gates)"]
         F["2. discipline.toml<br/>(Repository configuration)"]
         O["3. Inline Overrides / Directives<br/>(--config-override, PR body)"]
         CLI["4. CLI Flags & Environment<br/>(--enable, --disable, denylist)"]
@@ -76,8 +76,8 @@ flowchart TD
 ```
 
 1. **Binary-first & zero-dependency:** Statically linked musl binaries (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) and native macOS binaries (`x86_64-apple-darwin`, `aarch64-apple-darwin`). No Node.js, Python, or container bootstrap required at runtime.
-2. **Offline execution & no transport stack:** Built with `vendored-libgit2` with all network and transport features disabled. The binary interacts exclusively with the local git object database.
-3. **AST-aware, never regex-naive:** `unsafe` or `assert!` appearing within comments, string literals, or doc tests are never counted as code nodes. Regular expressions are reserved exclusively for prose scanning (markdown, PR bodies).
+2. **Offline by default, one HTTPS client:** `libgit2` is vendored with its network and transport features disabled, so every diff is read from the local git object database. The forge REST API is reached only through the in-process HTTPS client in `src/forge.rs` (`ureq` over `rustls`, no OpenSSL), for opt-in features: open-issue state and bench citation freshness (`provenance-tags`, `bench-regression`), `require_approval` reviews, the `merged-pr-body` directive source, `discipline replay` and `discipline doctor`; its one write is `check --comment`. `DISCIPLINE_NO_NETWORK=1` keeps that client off the network (a loopback address excepted). One exception sits outside the client: in CI (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `GITEA_ACTIONS` or `FORGEJO_ACTIONS` set), when the base ref cannot be resolved, `src/gitctx.rs` spawns the external `git fetch` against `origin` to deepen a shallow clone, and exits `2` if the base is still missing; `DISCIPLINE_NO_NETWORK` does not cover it.
+3. **AST-aware, never regex-naive:** `unsafe` or `assert!` appearing within comments, string literals, or doc tests are never counted as code nodes. Source-code invariants (tests, assertions, `unsafe`, handlers, stubs) are read from the syntax tree only. Regular expressions read text that has no grammar here: prose, PR bodies, shell and workflow lines, manifests and tool output.
 4. **Unified gate registry:** Every gate possesses a stable kebab-case identifier in `src/config.rs::GATES`.
 5. **Language packs behind a shared fact model:** Tree-sitter grammars and extractors map diverse ecosystems onto language-neutral facts (`TestFn`, `UnsafeSite`, assertion counts).
 
@@ -85,7 +85,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    D["1. Built-in Defaults<br/>(All gates ON; correctness: error, heuristic/bench: warning)"] --> M1["Merge Layer 1"]
+    D["1. Built-in Defaults<br/>(25 gates on, 12 opt-in; see discipline gates)"] --> M1["Merge Layer 1"]
     F["2. discipline.toml<br/>(Repository configuration)"] --> M1
     M1 --> M2["Merge Layer 2"]
     O["3. Inline Override<br/>(--config-override / action input)"] --> M2
@@ -114,17 +114,11 @@ sequenceDiagram
     activate AST
     AST-->>CLI: ParsedFileFacts (base vs head TestFn, assertions, unsafe)
     deactivate AST
-    par Agent-Guard Gates
-        CLI->>Gates: evaluate_assertion_reduction, vacuous_tests, etc.
-    and Hygiene Sweeps
-        CLI->>Gates: time_estimates, pii, agent_scratch
-    and Integrity Gates
-        CLI->>Gates: config_integrity, golden_output, test_budget
-    and Verification Gates
-        CLI->>Gates: command presets, canary, count ratchet
+    loop Each enabled gate, one at a time in registry order
+        CLI->>Gates: agent-guard, hygiene, integrity, verification, bench
     end
     Gates-->>CLI: Vec<GateOutcome> (examined counts, violations, overrides)
-    CLI->>Report: Render (Terminal, GitHub Summary, gl-codequality, JUnit, SARIF, Agent-Prompt)
+    CLI->>Report: Render (Terminal, GitHub Summary, JSON, gl-codequality, JUnit, SARIF, Agent-Prompt)
     Report-->>CLI: Exit code (0 = pass, 1 = violations, 2 = could not check)
 ```
 
@@ -133,26 +127,16 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     SRC["Changed Source File Blob"] --> LANG{"Language Dispatcher by Extension"}
-    LANG -->|"*.rs"| P_RS["Rust Parser (tree-sitter-rust)"]
-    LANG -->|"*.py"| P_PY["Python Parser (tree-sitter-python)"]
-    LANG -->|"*.js, *.ts"| P_JS["JS / TS Parser (tree-sitter)"]
-    LANG -->|"*.go"| P_GO["Go Parser (tree-sitter-go)"]
-    LANG -->|"*.java"| P_JV["Java Parser (tree-sitter-java)"]
-    LANG -->|"*.cs"| P_CS["C# Parser (tree-sitter-c-sharp)"]
-    LANG -->|"*.c, *.cpp"| P_CPP["C / C++ Parser (tree-sitter-cpp)"]
-    LANG -->|"*.rb"| P_RB["Ruby Parser (tree-sitter-ruby)"]
-    LANG -->|"*.php, *.phpt"| P_PHP["PHP / Golden Parser"]
+    LANG -->|"*.rs, *.py, *.js / *.ts, *.go, *.java, *.cs, *.rb, *.php"| P_TS["Tree-sitter pack per language<br/>(rust, python, javascript / typescript, go, java, c-sharp, ruby, php)"]
+    LANG -->|"*.c, *.h / *.cpp, *.cc, *.hpp"| P_CPP["C pack (tree-sitter-c)<br/>C++ pack (tree-sitter-cpp)"]
+    LANG -->|"*.kt, *.swift, *.scala, *.m / *.mm"| P_NEW["Kotlin, Swift, Scala, Objective-C packs<br/>(tree-sitter)"]
+    LANG -->|"*.phpt"| P_PHPT["PHPT section parser (no grammar)"]
     LANG -->|"Unmatched"| UNK["Unanalysed Language Note (F7)"]
 
-    P_RS --> EXT["Fact Extractor Engine"]
-    P_PY --> EXT
-    P_JS --> EXT
-    P_GO --> EXT
-    P_JV --> EXT
-    P_CS --> EXT
+    P_TS --> EXT["Fact Extractor Engine"]
     P_CPP --> EXT
-    P_RB --> EXT
-    P_PHP --> EXT
+    P_NEW --> EXT
+    P_PHPT --> EXT
 
     EXT --> T_DISC{"Partition Function Nodes"}
     T_DISC -->|"Go: Benchmark* with *testing.B"| BENCH_NODE["Benchmark Node (Excluded from Unit Tests)"]
@@ -165,7 +149,9 @@ flowchart TD
     SCAN_AST --> CNT_ASSERT["Count Assertions & Matchers"]
     CNT_ASSERT --> TAUT{"Inspect Assertion AST Expressions"}
     TAUT -->|"assert_eq!(1, 1), assert!(true)"| FLG_TAUT["Increment tautological_count"]
-    TAUT -->|"Custom Helper Call"| CHK_HELP{"In assert_helper_fns?"}
+    TAUT -->|"Other Call"| SAME_FILE{"Same-file helper that asserts?"}
+    SAME_FILE -->|"Yes (3 calls deep in C/C++ and Python, 1 elsewhere)"| ADD_HELP["Add the Helper's Assertion Counts"]
+    SAME_FILE -->|"No"| CHK_HELP{"In assert_helper_fns?"}
     CHK_HELP -->|"Yes"| INC_HELP["Count as Effective Assertion"]
     CHK_HELP -->|"No"| REG_CALL["Regular Function Call"]
     TAUT -->|"Standard Assert Macro / Expect Matcher"| INC_STD["Count Effective & Strong Assertions"]
@@ -173,14 +159,15 @@ flowchart TD
     FLG_SKIP --> FACTS["Output ParsedFileFacts (tests, assertions, unsafe)"]
     FLG_TAUT --> FACTS
     INC_HELP --> FACTS
+    ADD_HELP --> FACTS
     INC_STD --> FACTS
     REG_CALL --> FACTS
 ```
 
 ### 2.4 Binary Footprint & Static Linking Profiles
 
-Discipline compiles to a standalone static binary with zero external runtime dependencies:
-- **Full Static Binary (Linux musl `x86_64`):** 23.6 MB (23,624,256 bytes) (measured: `x86_64-unknown-linux-musl`, `32c81b5`). Statically links `libgit2` (vendored, offline) and all 11 `tree-sitter` language grammars (Rust, Python, JavaScript, TypeScript, Go, Java, C#, C, C++, Ruby, PHP). Fully static-pie linked; runs in scratch containers or minimal CI runners without glibc, openssl, or package managers.
+Discipline compiles to a standalone static binary with zero external runtime dependencies. It statically links `libgit2` (vendored, no transport), the 15 `tree-sitter` grammars (Rust, Python, JavaScript, TypeScript, Go, Java, C#, C, C++, Ruby, PHP, Kotlin, Swift, Scala, Objective-C) and the `rustls` / `ring` TLS stack of the forge client. It is fully static-pie linked on musl and runs in scratch containers or minimal CI runners without glibc, OpenSSL, or package managers. The sizes below were measured at `32c81b5`, before the Kotlin, Swift, Scala and Objective-C packs and the forge client were added; the current binaries have not been re-measured:
+- **Full Static Binary (Linux musl `x86_64`):** 23.6 MB (23,624,256 bytes) (measured: `x86_64-unknown-linux-musl`, `32c81b5`, 11 grammars).
 - **macOS Native (`aarch64-apple-darwin`):** 22.3 MB (22,310,544 bytes) (measured: `aarch64-apple-darwin`, `32c81b5`). Mach-O binary optimized for local developer inner loops and git hooks.
 
 ---
@@ -202,7 +189,7 @@ Every gate in Discipline must satisfy the following 12 load-bearing invariant ru
 | **F9** | **A change cannot lower its own bar.** Configuration on head is diffed against base ref; loosening requires an explicit `allow-gate-weakening:` directive. | Threshold constants edited in the diff that violated them. |
 | **F10** | **Secrets are not echoed.** Denylisted hostnames, local user workstation paths, and PII patterns are reported by file location only, never printed. | Hostname denylists echoed in public CI logs. |
 | **F11** | **Untrusted text never reaches a shell parser.** All action inputs pass through `env:`, never inline `${{ }}` interpolation. | Inline shell injection vulnerabilities in workflow expressions. |
-| **F12** | **The installer verifies what it runs.** Actions download release archives and verify them against `SHA256SUMS` with no opt-out; no fallbacks to unverified compilation. | Scaffold download failure falling back to unverified local build. |
+| **F12** | **The installer verifies what it runs.** A release archive the action downloads is verified against `SHA256SUMS` with no opt-out; no fallbacks to unverified compilation. `binary_path` skips the download, so the operator vouches for that binary. | Scaffold download failure falling back to unverified local build. |
 
 ### 3.1 Defaults Are Part of the Compatibility Contract
 
@@ -241,13 +228,16 @@ From 1.0, the surfaces below change incompatibly only in a new major version. Ad
 | `src/config.rs` | Gate registry (`GATES`), schema definition, layered configuration resolution |
 | `src/gitctx.rs` | Git interaction via `libgit2`: base ref detection, merge-base computation, blob streaming, index inspection |
 | `src/tokens.rs` | Line-anchored override directive parser and validation |
-| `src/ast/` | Tree-sitter dispatch (`mod.rs`: registry, `Fact`, shared helper and dispatch-table resolution) and one module per language pack (`rust.rs`, `python.rs`, `javascript.rs`, `java.rs`, `kotlin.rs`, `go.rs`, `php.rs`, `c_cpp.rs`, `csharp.rs`, `ruby.rs`, `swift.rs`, `scala.rs`, `objc.rs`, `golden.rs`), plus the facts every pack shares: `functions.rs` (stubs), `handlers.rs` (swallowed errors), `prose.rs`, `reach.rs` (unreachable code), `mocks.rs`, `calls.rs`, `retries.rs`, `budgets.rs` |
-| `src/guards/agent_diff.rs` | Semantic diff inspection across base vs. head AST facts |
+| `src/main.rs`, `src/lib.rs`, `src/cli.rs` | Binary entry point and subcommand wiring (including the `merged-pr-body` read); library root; the `clap` command-line definition |
+| `src/schema.rs` | JSON Schema generation for `discipline.toml` |
+| `src/ast/` | Tree-sitter dispatch (`mod.rs`: registry, `Fact`, shared helper and dispatch-table resolution) and one module per language pack (`rust.rs`, `python.rs`, `javascript.rs`, `java.rs`, `kotlin.rs`, `go.rs`, `php.rs`, `c_cpp.rs`, `csharp.rs`, `ruby.rs`, `swift.rs`, `scala.rs`, `objc.rs`, `golden.rs`), plus the facts every pack shares: `functions.rs` (stubs), `handlers.rs` (swallowed errors), `prose.rs`, `reach.rs` (unreachable code), `mocks.rs`, `calls.rs`, `retries.rs`, `budgets.rs`, `bounds.rs` (numeric bounds inside assertions); `c_macros.rs` masks C extension macros before parsing |
+| `src/guards/agent_diff.rs` | Semantic diff inspection across base vs. head AST facts: `assertion-reduction`, `vacuous-tests`, `ignored-tests`, `unsafe-safety-comment`, `deletion-rationale` |
 | `src/guards/hygiene.rs` | Repository sweeps: `time-estimates`, `pii`, `agent-scratch`, `agents-md` |
 | `src/guards/integrity.rs` | Structural integrity gates: `config-integrity`, `golden-output` |
-| `src/guards/perf/` | Benchmark regression sentinel (`bench-regression`): mathematical bounds engine (`bounds.rs`) and harness adapter (`mod.rs`) |
+| `src/guards/<gate>.rs` | One module per remaining gate (`shell_secrets.rs`, `ci_integrity.rs`, `dependency.rs`, `command.rs`, `archive_contents.rs`, ...), with helpers beside their gate: `ci_gitlab.rs` (`ci-integrity`), `lockfile.rs` (`dependency-delta`), `presets.rs` (`command`), `archive_formats.rs` / `archive_presets.rs` / `source_maps.rs` (`archive-contents`), `claim_registry.rs` (`provenance-tags`) |
+| `src/guards/perf/` | Benchmark regression sentinel (`bench-regression`): mathematical bounds engine (`bounds.rs`), harness adapter (`mod.rs`), the `paired-ratio` mode (`paired_ratio.rs`) and override citation freshness (`citation.rs`) |
 | `src/guards/mod.rs` | Gate execution scheduling, `GateOutcome`, path filtering, inline marker accounting |
-| `src/report/` | Multi-format reporting: terminal, GitHub summary, GitLab Code Quality, JUnit XML, SARIF, JSON |
+| `src/report/` | Multi-format reporting: terminal, GitHub summary, JSON, GitLab Code Quality, JUnit XML, SARIF, `agent-prompt` |
 | `src/docs.rs` | Automated reference docs generator and schema validation sentinel |
 | `src/selftest.rs` | Embedded positive and negative controls compiled into binary |
 | `src/style.rs` | Zero-dependency ANSI terminal styling |
@@ -269,10 +259,13 @@ From 1.0, the surfaces below change incompatibly only in a new major version. Ad
 
 ### Fact Representation
 
-Tree-sitter AST extraction translates source files into language-neutral fact structures:
-- `TestFn`: Qualified name, line number, assertion counts (total, strong, tautological), skip state (`ignored`), expected panic (`should_panic`).
+Tree-sitter AST extraction translates each source file into one `ParsedFileFacts` of language-neutral fact structures. A pack declares which facts it fills (`LanguagePack::supplies(Fact)`); a gate that needs a fact a pack does not supply names the file instead of passing it.
+- `TestFn`: Qualified name, line span, assertion counts (total, strong, tautological, fatal, trivial), skip state (`ignored`, `conditional_ignore`), expected panic (`should_panic`), mock setups and verifications, retries, sleeps, `helper_checks` (same-file helpers that assert) and numeric `bounds` inside assertions.
 - `UnsafeSite`: Line number, block kind, documentation status (`documented`).
+- `escape_hatches`, `functions` (bodies, for stubs), `swallowed` (error handlers and discarded results outside tests), `prose` (comments, docstrings, string literals) and `budgets` (testing-effort settings).
 - `has_parse_errors`: Tracks whether unparseable syntax was encountered.
+
+**Helper resolution.** A call from a test to a function defined in the same file adds that helper's assertions to the test. C/C++ and Python follow such helpers up to three calls deep (`HELPER_DEPTH`, `transitive_helper` in `src/ast/mod.rs`); the other packs follow one level. Helpers are never followed across files. A function reached only through a dispatch table (a `*_DISPATCH` spec) is resolved in Rust, JS/TS, Go, Java, Kotlin, C#, C/C++, Ruby, Swift and Scala; Python reads list and tuple dispatch tables in its own extractor; PHP and Objective-C read none.
 
 ### SAFETY: Invariant Comments
 
@@ -280,7 +273,7 @@ An `unsafe` block or implementation is documented iff a comment containing `SAFE
 1. In the contiguous run of comments directly preceding the `unsafe` node or its parent statement; or
 2. Inline between the start of the statement and the `unsafe` keyword.
 
-**Placeholder Rejection:** Comments consisting entirely of placeholder tokens (`todo`, `tbd`, `n/a`, `safe`, `ok`, `fine`, `valid`, `trust me`, `temporary`, `placeholder`, `fixme`, `wip`, `noop`) or keyword restatements are rejected. Substantive justifications naming actual memory safety invariants are required.
+**Placeholder Rejection:** A `SAFETY:` comment whose words all come from the placeholder list is rejected. The default list (`DEFAULT_SAFETY_PLACEHOLDERS` in `src/config.rs`) is `todo`, `tbd`, `n/a`, `na`, `none`, `safe`, `safety`, `unsafe`, `ok`, `fine`, `valid`, `trust me`, `trust`, `me`, `this`, `is`, `totally`, replaceable through the gate's `placeholders` option. The check is a word filter, not a judgement of the justification: one word outside the list passes (`// SAFETY: fixme` is accepted by default).
 
 ### Assertion Strength & Tautologies
 
@@ -297,12 +290,12 @@ Assertions are classified into two levels:
 ## 6. Golden-Output Gate Design
 
 Committed test snapshots (e.g. `insta` `.snap`), serialized fixtures, and golden files are common drift vectors. Agents frequently re-bless or edit fixtures to make broken tests pass.
-- **Blob diff inspection:** Tracks modifications and deletions across configured file globs (`**/golden/**`, `**/snapshots/**`, `**/*.snap`, `tests/fixtures/**/output*`).
+- **Blob diff inspection:** Tracks modifications and deletions across configured file globs (defaults: `**/golden/**`, `**/snapshots/**`, `**/__snapshots__/**`, `**/*.snap`, `**/*.ambr`, `**/*.golden`, `**/*.approved.*`, `tests/fixtures/**/output*`). An added snapshot is judged too when the test that owns it already existed on the base side: that is an expectation written after the fact.
 - **Scoped authorization:** Requires explicit `allow-golden-update: <path> <reason>` directive.
 
 ---
 
-## 7. Reporter Architecture & Zero-Dependency Cryptography
+## 7. Reporter Architecture & Fingerprint Hashing
 
 Discipline exports standard structured formats:
 - **GitLab Code Quality (`gl-codequality.json`):** Code Climate JSON array consumed natively by GitLab Merge Request widgets.
@@ -314,7 +307,7 @@ Discipline exports standard structured formats:
 
 GitLab Code Quality issue tracking and Discipline's grandfathering baseline engine require unique, deterministic 32-byte hex fingerprints:
 - Discipline implements a zero-dependency NIST FIPS 180-4 compliant SHA-256 algorithm in `src/report/gitlab.rs` (reused across reporting and `src/baseline.rs`).
-- Avoids pulling in external cryptographic dependencies (`ring`, `openssl`, `sha2`), preserving zero-dependency static musl compilation and strict license purity.
+- Fingerprints do not depend on a hashing crate (`sha2`). TLS for the forge client is `rustls` with `ring` as its cryptographic provider; OpenSSL is not in the dependency tree, which keeps the musl build static.
 - Verified directly against NIST CAVP test vectors.
 
 ### 7.2 Grandfathering Baseline Architecture
@@ -341,25 +334,26 @@ To support brownfield adoption without weakening gates or ignoring violations, D
 
 ### 8.1 CI Pipeline (`.github/workflows/ci.yml`)
 
-Third-party GitHub Actions are pinned by full commit SHA. Tooling binaries (`act`, `actionlint`) are installed by version with pinned SHA-256 checksums. The `ci-gate` rollup enforces an **allow-list**: every required job must succeed, and the total job count is asserted.
+Third-party GitHub Actions are pinned by full commit SHA. Tooling binaries (`act`, `actionlint`) are installed by version with pinned SHA-256 checksums. The `ci-gate` rollup enforces an **allow-list**: every required job must succeed, and the total job count (10, the jobs below) is asserted.
 
 | Job | Verification Scope |
 |---|---|
-| `lint` | `cargo fmt --check`, `cargo clippy -- -D warnings`, `actionlint` on workflows, `shellcheck`, `lint-action.py` (F11), `docs --check` (G7), link integrity validator, and `test-check-major-tag.sh`. |
+| `lint` | `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `actionlint` on `.github/`, `.gitea/` and `.forgejo/` workflows, `shellcheck`, `lint-action.py` (F11), `docs --check` (generated reference in sync), link and CI-recipe validator (`check-links.py`), ecosystem theme contract, release-notes sanitiser and ledger checks, `test-check-major-tag.sh`, and a PR-title mention lint. |
 | `test` (Linux & macOS) | Full test suite execution asserting at least 65 test cases ran, followed by embedded `self-test`. |
 | `msrv` | `cargo check` under the pinned Minimum Supported Rust Version (`1.90`). |
 | `supply-chain` | `cargo-deny` validation of advisories, bans, license allow-list, and sources. |
-| `build-static` | Cross-compiles `x86_64` and `aarch64` musl binaries; validates static linkage and executes `self-test`. |
-| `action-github` | Exercises composite action on hosted runner: clean fixture passes, bad fixture fails for expected gates, overrides take effect, unresolvable base exits 2, tampered archive rejected. |
-| `action-gitea` | Runs action under `act` using Gitea runner images with mandatory log assertions. |
+| `build-static` | Builds the `x86_64-unknown-linux-musl` binary every downstream job uses; validates static linkage and executes `self-test`. (`aarch64` musl is built by the release pipeline.) |
+| `action-github` | Exercises composite action on a hosted Linux runner: clean fixture passes, bad fixture fails for expected gates, overrides take effect, unresolvable base exits 2, tampered archive rejected. |
+| `action-gitea` | Runs `.gitea/workflows/action-selftest.yml` under `act` using Gitea runner images with mandatory log assertions, then runs the documented job-container recipe under `act` against an image built from this run's binary. (`.forgejo/workflows/action-selftest.yml` is linted by `actionlint` only.) |
 | `pre-commit` | Runs `pre-commit try-repo` against staged fixtures. |
-| `dogfood` | Executes Discipline against its own repository diff. |
+| `dogfood` | Executes Discipline against its own repository diff (`policy_from: base`), then `discipline doctor` (local checks under `--strict`, forge checks without it). |
+| `docker-smoke` | Builds the container image from the static binary and runs it against a root-owned workspace (positive control), a bad fixture (negative control) and an in-container checkout. |
 
 ### 8.2 Release Pipeline (`.github/workflows/release.yml`)
 
 Releases are triggered exclusively by pushing a `vX.Y.Z` tag:
 1. **Verify:** Asserts tag matches `Cargo.toml` version, tagged commit resides on `main`, and tests/lints/deny pass.
-2. **Build:** Compiles 4 static release targets (`x86_64-musl`, `aarch64-musl`, `x86_64-darwin`, `aarch64-darwin`); executes `self-test` on each.
+2. **Build:** Compiles 4 release targets (`x86_64-musl` and `aarch64-musl`, asserted static; `x86_64-darwin`, `aarch64-darwin`) and executes `self-test` on each target that can run on its runner: `x86_64-darwin` is cross-built on Apple Silicon, and when it cannot execute there its self-test is skipped with a notice. The musl legs also build the `.deb` and `.rpm` packages, which are checksummed into `SHA256SUMS`, attested and uploaded with the archives.
 3. **Publish:** Generates `SHA256SUMS`, the Homebrew formula and the MacPorts `Portfile` (with the tag's source-archive and crate checksums), attaches build-provenance attestations, creates the GitHub release (not yet `latest`), and pushes the container image under its exact tags (`0.7.0`, `v0.7.0`) only, with a provenance attestation stored in the registry. Release binaries are built with the toolchain pinned in `RELEASE_TOOLCHAIN`, and the image from an Alpine base pinned by digest.
 4. **Smoke test:** Action downloads published release assets on Linux and macOS, validates checksums, tests clean and negative fixtures, and verifies GitHub attestations.
 5. **Promote:** Only after every smoke test succeeds: verifies the image's provenance, marks the release `latest`, re-tags the proven image manifest as `v0`, `0`, `v0.7`, `0.7` and `latest` (no rebuild), and updates the Homebrew tap.

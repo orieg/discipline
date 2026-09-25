@@ -105,7 +105,7 @@ jobs:
           fail_on_warnings: true
 ```
 
-The floating `@v0` ref tracks the latest `v0.x.y` release, and moves only after that release has passed its smoke tests. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger). Pin `@v0.12.3` when a verdict must be reproducible from the workflow file alone.
+The floating `@v0` ref tracks the latest `v0.x.y` release, and moves only after that release has passed its smoke tests. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger). Pin `@v0.12.3` when a verdict must be reproducible from the workflow file alone. The default `ci-integrity` gate reports any tag ref (`@v0`, `@v0.12.3`) newly added to a workflow as an unpinned action; a repository that runs it pins a commit SHA: `uses: orieg/discipline@<commit-sha> # v0.12.3`. A SHA ref runs the binary of the release that commit's `Cargo.toml` names; `version:` under `with:` picks another release.
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding an authorized override directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
 >
@@ -167,7 +167,7 @@ Adoption and editor tooling:
 
 ## Gates
 
-Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, PHPT, Java, Go, PHP, C / C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C) supply the AST facts; the language table in [`docs/GATES.md`](docs/GATES.md) lists what each pack reads. `discipline gates` prints this table with each gate's effective state. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md). Gates ship on unless their rule is a repository policy (`issue-link`, `commit-provenance`, `provenance-tags`, `scope-confinement`, `pr-checklist`, the verification presets); `docs/ROADMAP.md` records every default change per release.
+Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java, Go, PHP, C, C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C) and a section parser for PHPT test files supply the AST facts; the language table in [`docs/GATES.md`](docs/GATES.md) lists what each pack reads. `discipline gates` lists every gate with its suite, effective state and severity. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md). Gates ship on unless their rule is a repository policy (`issue-link`, `commit-provenance`, `provenance-tags`, `scope-confinement`, `pr-checklist`, `msrv`, `archive-contents`, `manifest-sync`, `version-lockstep`, and the `sanitizers`, `miri` and `unsafe-budget` presets); `docs/ROADMAP.md` records every default change per release.
 
 <!-- generated:gates -->
 | Gate | Suite | Languages | Rule Description |
@@ -283,11 +283,7 @@ Direct `.rpm` package downloads and repodata manifests: [Discipline RPM Reposito
 
 ### Rust Toolchain
 
-- **`cargo-binstall`** (pre-compiled binary fetch):
-  ```bash
-  cargo binstall discipline
-  ```
-- **`cargo install`** (from source via git, requires `rustc` 1.80+):
+- **`cargo install`** (from source via git, requires `rustc` 1.90+):
   ```bash
   cargo install --git https://github.com/orieg/discipline
   ```

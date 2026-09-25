@@ -37,7 +37,7 @@ Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check
 \fBOPTIONS\fR
 .TP
 \fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
-Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+Path to discipline.toml. An absent default file = built\-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)
 .RS
 May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
 .RE
@@ -258,7 +258,7 @@ Shorthand for checking uncommitted or working tree changes against HEAD
 \fBOPTIONS\fR
 .TP
 \fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
-Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+Path to discipline.toml. An absent default file = built\-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)
 .RS
 May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
 .RE
@@ -385,7 +385,7 @@ Record or manage grandfathered finding baselines
 \fBOPTIONS\fR
 .TP
 \fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
-Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+Path to discipline.toml. An absent default file = built\-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)
 .RS
 May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
 .RE
@@ -492,7 +492,7 @@ List every gate: id, suite, availability, and effective state
 \fBOPTIONS\fR
 .TP
 \fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
-Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+Path to discipline.toml. An absent default file = built\-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)
 .RS
 May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
 .RE
@@ -711,7 +711,7 @@ Explain a gate: what it checks, its state here, and the directive that lifts a f
 \fBOPTIONS\fR
 .TP
 \fB\-c\fR, \fB\-\-config\fR \fI<CONFIG>\fR [default: discipline.toml]
-Path to discipline.toml. Absent file = built\-in defaults (`discipline gates` lists them)
+Path to discipline.toml. An absent default file = built\-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)
 .RS
 May also be specified with the \fBDISCIPLINE_CONFIG\fR environment variable. 
 .RE

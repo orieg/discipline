@@ -124,6 +124,7 @@ error [assertion-reduction] Assertion Reduction In Existing Test [test_calculato
    Remediation: Restore the assertions, or justify the drop on its own line in the PR body or a commit message: `allow-assertion-drop: test_addition <reason>`.
    Doc: https://orieg.github.io/discipline/gates/#assertion-reduction
 
+gates:  23 passed, 1 failed, 12 disabled, 1 not evaluated (13 items examined)
 errors: 1  warnings: 0  overrides: 0
 Status: FAILED
 
@@ -160,6 +161,7 @@ discipline check --base main
 Discipline reports success:
 
 ```text
+gates:  24 passed, 0 failed, 12 disabled, 1 not evaluated (13 items examined)
 errors: 0  warnings: 0  overrides: 0
 Status: PASS
 ```

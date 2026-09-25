@@ -22,28 +22,28 @@ Discipline employs a 5-layer configuration hierarchy. With zero configuration, e
 | **2. Repository configuration** | `discipline.toml` | ↑ | Durable, peer-reviewed repository policy. |
 | **3. Inline TOML override** | `--config-override`, `DISCIPLINE_CONFIG_OVERRIDE`, action input `config_override` | ↑ | Per-workflow tuning without modifying files. |
 | **4. Gate switches** | `--enable` / `--disable`, `DISCIPLINE_ENABLE` / `DISCIPLINE_DISABLE`, action inputs `enable` / `disable` | ↑ | Command-line switches (comma- or newline-separated). |
-| **5. Secret denylist** | `DISCIPLINE_HOSTNAME_DENYLIST`, action input `hostname_denylist` | Highest | Sensitive hostnames that must not appear even in repository config. |
+| **5. Secret denylist** | `DISCIPLINE_HOSTNAME_DENYLIST` (legacy fallback `DOCS_HOSTNAME_DENYLIST`), action input `hostname_denylist` | Highest | Sensitive hostnames that must not appear even in repository config. |
+
+Two `check` switches apply after layer 5: `--directive-sources` (`DISCIPLINE_DIRECTIVE_SOURCES`, action input `directive_sources`) replaces `directives.sources`, and `--fail-on-overrides` can only turn `fail_on_overrides` on.
 
 ### Merge Rules & Asymmetric List Resets
 
-Configuration layers are merged as TOML values under strict typing (F6):
+`discipline.toml` is read over the built-in defaults key by key: a key it leaves out keeps its default, and a list it sets replaces the built-in list (`config-integrity` reports the edit). From layer 3 up, values merge onto the file's as TOML under strict typing (F6); a list key the file left out is inserted whole, so it replaces the built-in default:
 - **Tables** merge recursively key by key.
 - **Scalars** replace previous values.
-- **Tightening lists** (`hostname_denylist`, `extra_patterns`, `paths`, `include`): Strictly append-only. Higher layers can only add restrictions; they cannot loosen them. Any reset directive on tightening lists is ignored.
-- **Loosening lists** (`exempt_paths`, `allow_patterns`, `allowed_users`, `assert_helper_fns`, `extra_assert_macros`): Default to appending across layers. To clear lower-precedence exemptions and enforce stricter rules, use explicit reset syntax:
+- **Tightening lists** (`hostname_denylist`, `extra_patterns`, `paths`, `include`, `deny_dependencies`, `manifests`, ...): append-only; a reset marker on them is ignored.
+- **Loosening lists** (`exempt_paths`, `allow_patterns`, `allowed_users`, `assert_helper_fns`, `extra_assert_macros`, `allow_dependencies`, `directives.sources`): append by default; a reset clears the lower layers' list first. Reset works only in `--config-override` / `config_override`; in `discipline.toml` the table form fails schema validation.
   ```toml
-  # Table reset syntax
+  [gates.pii]
   exempt_paths = { reset = true, items = ["tests/legacy/**"] }
-
-  # Or sentinel list reset syntax
-  exempt_paths = ["__reset__", "tests/legacy/**"]
+  # or the sentinel form: exempt_paths = ["__reset__", "tests/legacy/**"]
   ```
 
 ---
 
 ## Configuration Schema
 
-Discipline validates `discipline.toml` against JSON Schema (draft 2020-12) with zero tolerance for unknown keys or malformed entries.
+Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown or unshipped gate id, or a malformed entry is exit `2`. `discipline schema` prints a JSON Schema (draft 2020-12) of the same shape for editors.
 
 <!-- generated:config-schema -->
 | Section / Key | Type | Default | Description |
@@ -343,8 +343,8 @@ The action runs on `pull_request`, `merge_group` and `push` events (the base is 
 <!-- generated:action-inputs -->
 | Input | Default | Description |
 |---|---|---|
-| `config` | `discipline.toml` | Path to discipline.toml. When the file is absent, built-in defaults apply (each gate at its built-in default enablement and severity). |
-| `suite` | `all` | Suite to run: all, agent-guard, hygiene, integrity |
+| `config` | `discipline.toml` | Path to discipline.toml. When the default discipline.toml is absent, built-in defaults apply (each gate at its built-in default enablement and severity); any other path that does not exist is an error (exit 2). |
+| `suite` | `all` | Suite to run: all, agent-guard, hygiene, integrity, quality, verification, bench |
 | `base_ref` | *(none)* | Branch or commit the change is measured against. Default: PR base branch, else the pushed-from commit, else the default branch. |
 | `enable` | *(none)* | Gate ids to force on (comma or newline separated). See `discipline gates`. |
 | `disable` | *(none)* | Gate ids to force off (comma or newline separated), e.g. "time-estimates, pii". |
@@ -424,7 +424,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 
 | Option | Env | Default | Description |
 |---|---|---|---|
-| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2) |
 | `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
 | `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
 | `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
@@ -461,7 +461,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 
 | Option | Env | Default | Description |
 |---|---|---|---|
-| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2) |
 | `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
 | `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
 | `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
@@ -482,7 +482,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 
 | Option | Env | Default | Description |
 |---|---|---|---|
-| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2) |
 | `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
 | `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
 | `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
@@ -505,7 +505,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 
 | Option | Env | Default | Description |
 |---|---|---|---|
-| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2) |
 | `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
 | `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
 | `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
@@ -540,7 +540,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | Option | Env | Default | Description |
 |---|---|---|---|
 | `<QUERY>` |  |  | A gate id (`assertion-reduction`) or a finding line naming `[gate-id]` |
-| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them) |
+| `-c`, `--config` | `DISCIPLINE_CONFIG` | `discipline.toml` | Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2) |
 | `--config-override` | `DISCIPLINE_CONFIG_OVERRIDE` |  | Inline TOML merged over the file (tables merge, lists append, scalars replace) |
 | `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
 | `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
@@ -578,8 +578,8 @@ Every option of every subcommand, generated from the binary's own definitions (`
 
 | Code | Status | Meaning |
 |---|---|---|
-| `0` | **Pass** | Every enabled gate ran and detected no blocking violations. |
-| `1` | **Violations** | Gate violations found (blocking errors, or warnings under `--fail-on-warnings`). |
+| `0` | **Pass** | Every enabled gate ran and detected no blocking violations; also a run with violations in advisory mode (`--advisory`, or `meta.mode = "advisory"` once merged). |
+| `1` | **Violations** | Gate violations found (blocking errors, or warnings under `--fail-on-warnings`), an applied override under `fail_on_overrides`, or a `max_overrides` / `require_approval` refusal (`policy_failures`). |
 | `2` | **Could not check** | Engine failed to check: missing repository, unresolvable base ref, shallow clone with unreachable merge base, unreadable configuration, or syntax errors. |
 
 ---
@@ -588,12 +588,13 @@ Every option of every subcommand, generated from the binary's own definitions (`
 
 Legitimate test refactorings, file deletions, or configuration adjustments are authorized through scoped directives in the PR description or commit messages. Directives never apply globally: they must name the exact subject they cover.
 
-**Which sources each event sees.** A `pull_request` run reads the pull request's body and the branch's commit messages. A `push` run (and `--commit` / `--commit-range`) reads only the pushed commits' messages: there is no pull request in its payload. A squash merge builds the commit message from the branch's commits, a rebase merge keeps them as they were, and a merge commit's default message carries neither — so a waiver written only in the PR body is not seen by the push run on the default branch that follows the merge, and that run fails on a change the pull request had already passed. Options, in the order to prefer them: gate on `pull_request` (the event whose body is the review record) and do not run the gate on `push` to the default branch; or put the directive in a commit message as well; or keep the `merged-pr-body` source (on by default) and give the push run a token that can read pull requests: it resolves each pushed commit's merged pull request through the forge and reads its body under the same trust rules, and the gate notes name the pull request. When that lookup fails (forge unreachable, token without permission — a least-privilege `contents: read` token cannot read pull requests on a private repository), the run continues with a named note and the finding the body might have lifted stands (`directives.degrade_offline`, default `true`: fail-closed, never a silent pass); set it to `false` to stop with `could not check` (exit 2) naming the commit when the review record must be readable. `DISCIPLINE_NO_NETWORK` and an unidentifiable forge are notes. On a push, a finding that a PR-body directive would have lifted says so in its remediation and in the gate's notes (naming the merged pull request whose body was read, when one was), and `doctor` reports a workflow that runs the gate on `push` to a default branch whose merge method allows squash or rebase.
+**Which sources each event sees.** A `pull_request` run reads the pull request's body and the branch's commit messages. A `push` run (and `--commit` / `--commit-range`) reads only the pushed commits' messages: there is no pull request in its payload. A squash merge builds the commit message from the branch's commits, a rebase merge keeps them as they were, and a merge commit's default message carries neither — so a waiver written only in the PR body is not seen by the push run on the default branch that follows the merge, and that run fails on a change the pull request had already passed. Options, in the order to prefer them: gate on `pull_request` (the event whose body is the review record) and do not run the gate on `push` to the default branch; or put the directive in a commit message as well; or keep the `merged-pr-body` source (on by default) and give the push run a token that can read pull requests (`GH_TOKEN` or `DISCIPLINE_FORGE_TOKEN` in the step's `env:`; the action passes its `token` input only when `comment` is true): it resolves each pushed commit's merged pull request through the forge and reads its body under the same trust rules, and the gate notes name the pull request. When that lookup fails (forge unreachable, token without permission — a least-privilege `contents: read` token cannot read pull requests on a private repository), the run continues with a named note and the finding the body might have lifted stands (`directives.degrade_offline`, default `true`: fail-closed, never a silent pass); set it to `false` to stop with `could not check` (exit 2) naming the commit when the review record must be readable. `DISCIPLINE_NO_NETWORK` and an unidentifiable forge are notes. On a push, a finding that a PR-body directive would have lifted says so in its remediation and in the gate's notes (naming the merged pull request whose body was read, when one was), and `doctor` reports a workflow that runs the gate on `push` to a default branch whose merge method allows squash or rebase.
 
-| Event | Sources read (`directives.sources` default `["pr-body", "commits"]`) |
+| Event | Sources read (`directives.sources` default `["pr-body", "commits", "merged-pr-body"]`) |
 |---|---|
-| `pull_request`, `merge_group` | PR body (`pr-body`), branch commit messages (`commits`) |
-| `push` to any branch | pushed commit messages (`commits`); with `merged-pr-body` (on by default), the body of the merged pull request each pushed commit arrived through, resolved through the forge (GitHub `commits/{sha}/pulls`, Gitea / Forgejo `commits/{sha}/pull`, GitLab `repository/commits/:sha/merge_requests`) and trusted like a PR body: line-anchored, `allow_hidden`, scoped subjects, `allowed_override_actors` against the pull request's author, `max_overrides`, `require_approval` (with that pull request as the context when exactly one was merged). A direct push has none. At most 20 pushed commits are looked up. |
+| `pull_request` | PR body (`pr-body`), branch commit messages (`commits`) |
+| `merge_group` | the queued commits' messages (`commits`); the payload has no PR body |
+| `push` to any branch | pushed commit messages (`commits`); with `merged-pr-body` (on by default), the body of the merged pull request each pushed commit arrived through, resolved through the forge (GitHub `commits/{sha}/pulls`, Gitea / Forgejo `commits/{sha}/pull`, GitLab `repository/commits/:sha/merge_requests`) and trusted like a PR body: line-anchored, `allow_hidden`, scoped subjects, `allowed_override_actors` against the pull request's author, `max_overrides`, `require_approval` (with that pull request as the context when exactly one was merged). A direct push has none. A push of more than 20 commits looks up none and says so in a note. |
 | `--commit`, `--commit-range` (local) | the named commits' messages (`commits`) only |
 | `--staged` (local) | `--pr-body-file` if given, else none; staged changes have no commits |
 
@@ -603,20 +604,20 @@ Legitimate test refactorings, file deletions, or configuration adjustments are a
 <directive>: <subject> <reason>
 ```
 
-Alternatively, namespaced or HTML-comment syntax is accepted:
+Alternatively, namespaced or HTML-comment syntax is accepted (`discipline:allow(<gate-id>)` takes a colon or a space before the subject); the HTML-comment form counts only with `directives.allow_hidden = true` (for `removes:`, also `gates.deletion-rationale.allow_hidden = true`):
 ```text
 discipline: <directive>: <subject> <reason>
 <!-- discipline:allow(<gate-id>): <subject> <reason> -->
 ```
 
-Directives must begin on their own line. Mentions mid-sentence, inside markdown tables, or within code blocks never arm the directive (F8). The reason must be substantive and non-empty; placeholders (`TODO`, `tbd`, `n/a`, `...`) are rejected.
+Directives must begin on their own line. Mentions mid-sentence or inside markdown tables never arm the directive (F8). The text after the colon must name the subject and must not be empty or a bare placeholder (`TODO`, `tbd`, `none`, `n/a`, `...`, `<reason>`). A subject with no reason is accepted, so write the reason for the reviewer. Lines inside fenced (```` ``` ```` / `~~~`) code blocks are ignored; indented code blocks are not. A commit's subject line is never read.
 
 | Directive | Lifts | Subject |
 |---|---|---|
 | `removes:` / `deletes:` / `discipline:allow(deletion-rationale)` / `allow(deletion-rationale)` | `deletion-rationale` | File path, directory prefix, or test function name (or unscoped with `require_scope = false`) |
 | `allow-assertion-drop:` / `discipline:allow(assertion-reduction)` / `allow(assertion-reduction)` | `assertion-reduction` | Test function name, file path, or directory prefix |
 | `allow-ignore:` / `discipline:allow(ignored-tests)` / `allow(ignored-tests)` | `ignored-tests` | Test function name |
-| `allow-gate-weakening:` / `discipline:allow(config-integrity)` / `allow(config-integrity)` | `config-integrity` | Gate id |
+| `allow-gate-weakening:` / `discipline:allow(config-integrity)` / `allow(config-integrity)` | `config-integrity`; with subject `ci-integrity` or `test-floor`, that gate too | Gate id, or `directives`, `tests`, `languages`, `meta`, `baseline` |
 | `allow-golden-update:` / `discipline:allow(golden-output)` / `allow(golden-output)` | `golden-output` | Snapshot/fixture file path or directory prefix |
 | `allow-toolchain-weakening:` / `discipline:allow(toolchain-config)` / `allow(toolchain-config)` | `toolchain-config` | Option key path (`compilerOptions.strict`), its last segment, or the configuration file path |
 | `allow-stub:` / `discipline:allow(stub-bodies)` / `allow(stub-bodies)` | `stub-bodies` | Function name, or the file path |
@@ -660,7 +661,7 @@ let _ = 1; // discipline:allow(pii)
 planned for 2 weeks docs-lint: allow
 ```
 
-Every report records the exact count of lines exempted by inline markers.
+`docs-lint: allow` exempts only `time-estimates` and `pii`. Where a gate counts the lines its inline markers exempted, the report shows the count (`inline_exemptions`); not every gate counts them (`suppression-delta` lists each marked line as an override instead).
 
 ---
 
@@ -674,7 +675,7 @@ functions = ["self_test"]      # leaf function names that are test entry points 
 paths = ["scripts/fixtures/**"] # globs whose every line is test scope
 ```
 
-A declared name wins over each language's naming rules: `_self_test` is a test once listed, although Python treats a leading underscore as private. One declaration is honoured by every gate that separates test code from production code: the assertion gates collect a declared function as a test; `error-swallowing`, `stub-bodies` and `suppression-delta` treat its body (or the whole declared file) as test scope; `pii` does not report fixture strings inside it. Widening either list is reported by `config-integrity` as a weakening, including the first change that sets it: that change carries `allow-gate-weakening: tests <reason>` (the subject is `tests`, not a gate id). Growing `assert_helper_fns` in the same change needs one more line per gate, named by its id (`allow-gate-weakening: assertion-reduction <reason>`, `allow-gate-weakening: vacuous-tests <reason>`); see `config-integrity` in [GATES.md](GATES.md).
+`paths` is honoured by every language pack; `functions` by the Python and Rust packs and by `pii`. A declared name wins over the language's naming rules: `_self_test` is a test once listed, although Python treats a leading underscore as private. The gates that separate test code from production code read the declaration through the packs: in Python and Rust the assertion gates collect a declared function as a test and `error-swallowing`, `stub-bodies` and `suppression-delta` treat its body as test scope; in every language those three treat a declared file as test scope; `pii` does not report fixture strings inside either. Widening either list is reported by `config-integrity` as a weakening, including the first change that sets it: that change carries `allow-gate-weakening: tests <reason>` (the subject is `tests`, not a gate id). Growing `assert_helper_fns` in the same change needs one more line per gate, named by its id (`allow-gate-weakening: assertion-reduction <reason>`, `allow-gate-weakening: vacuous-tests <reason>`); see `config-integrity` in [GATES.md](GATES.md).
 
 ## C and C++ extension macros (`[languages.c]`)
 
@@ -691,19 +692,21 @@ macros = ["MYEXT_GET_OBJECT", "MYEXT_API", "JSLN"]   # an entry ending in `*` is
 function_macros = ["MYEXT_METHOD"]
 ```
 
+The C pack also blanks, inside an `#ifdef __cplusplus` guard, the `extern "C" {` line and its lone `}` (same bytes, same newlines). A `.h` header the C grammar leaves with parse errors is re-read as C++, and the reading with fewer error regions is kept; a `.c` file is never re-read.
+
 Comments, string literals and preprocessor lines are never rewritten. A blanked macro is code no gate reads, so adding an entry to either list is a `config-integrity` weakening (`allow-gate-weakening: languages <reason>`).
 
 ## Trust Model
 
 Discipline distinguishes between **configurable** and **bypassable**:
-0. **Who wrote the policy:** By default a change is judged by its own copy of `discipline.toml`. With `--policy-from base` (action input `policy_from: base`, env `DISCIPLINE_POLICY_FROM`) it is judged by the base ref's copy: a policy edit, looser or stricter, takes effect once merged, and `config-integrity` still reports the edit for review. A base ref without the file is judged by the built-in defaults, never by the change's copy. The change's own file must still parse (exit `2` otherwise).
+0. **Who wrote the policy:** By default a change is judged by its own copy of `discipline.toml`. With `--policy-from base` (action input `policy_from: base`, env `DISCIPLINE_POLICY_FROM`) it is judged by the base ref's copy: a policy edit, looser or stricter, takes effect once merged, and `config-integrity` still reports the edit for review. A base ref without the file is judged by the built-in defaults, never by the change's copy. The change's own file must still parse (exit `2` otherwise). A `--config` given as an absolute path outside the repository is on neither side of the change, so `config-integrity` compares nothing for it, and under `--policy-from base` it is not used: the base ref's `discipline.toml` (else the built-in defaults) judges. A relative path that leaves the repository (`../outside.toml`) is exit `2`.
 1. **Config integrity:** A pull request cannot weaken its own `discipline.toml` without triggering `config-integrity`. If an agent disables a gate or grows an exemption list, the PR is rejected unless an authorized `allow-gate-weakening:` directive is present.
-2. **Directive channel enforcement:** Directives are parsed exclusively from trusted channels specified in `directives.sources` (defaulting to `["pr-body", "commits"]`).
-3. **Hidden directive policy:** By default, HTML comment-wrapped directives in PR bodies are forbidden (`directives.allow_hidden = false`) to ensure reviewers see all requested waivers.
+2. **Directive channel enforcement:** Directives are parsed exclusively from trusted channels specified in `directives.sources` (defaulting to `["pr-body", "commits", "merged-pr-body"]`).
+3. **Hidden directive policy:** By default, HTML comment-wrapped directives in PR bodies, commit messages and merged PR bodies are ignored (`directives.allow_hidden = false`; `gates.deletion-rationale.allow_hidden` can admit them for deletions) to ensure reviewers see all requested waivers.
 4. **Machine gate for human sign-off:** When `directives.fail_on_overrides = true` (or `--fail-on-overrides`), any applied override causes Discipline to exit `1`, requiring an authorized human approver to bypass or merge.
    A directive in the PR body or a commit body is written by the author of the change it excuses. Two options sit between accepting every such override and refusing them all; both count directive overrides only (inline `discipline:allow(...)` markers are part of the reviewed tree):
    - `directives.max_overrides = N`: a change applying more than `N` fails, with the refusal listed under `policy_failures` in the JSON report.
-   - `directives.require_approval = true`: directive overrides fail the run until the forge shows an **approving review of the pull request's head commit** by a login in `allowed_override_actors` **other than the pull request's author**. An approval of an earlier commit does not count, and a later "changes requested" by the same reviewer withdraws it. The pull request is read from the Actions event payload (GitHub, Gitea, Forgejo) or, on GitLab, from `CI_MERGE_REQUEST_IID` and `CI_MERGE_REQUEST_SOURCE_BRANCH_SHA`, and the reviews from the forge API (read-only token; on GitLab the merge request's `sha` must be the head being checked and the author is never an approver). No payload, an unreachable forge, `DISCIPLINE_NO_NETWORK=1`, GitLab, or an empty `allowed_override_actors` is exit `2`, never a pass. Re-run the check after the review (trigger the workflow on `pull_request_review`), since the first run precedes it.
+   - `directives.require_approval = true`: directive overrides fail the run until the forge shows an **approving review of the pull request's head commit** by a login in `allowed_override_actors` **other than the pull request's author**. An approval of an earlier commit does not count, and a later "changes requested" by the same reviewer withdraws it. The pull request is read from the Actions event payload (GitHub, Gitea, Forgejo) or, on GitLab, from `CI_MERGE_REQUEST_IID` and `CI_MERGE_REQUEST_SOURCE_BRANCH_SHA`, and the reviews from the forge API (read-only token; on GitLab the merge request's `sha` must be the head being checked and the author is never an approver). When a directive override applies, no pull-request context, a forge that cannot be identified or reached, `DISCIPLINE_NO_NETWORK=1`, or an empty `allowed_override_actors` is exit `2`, never a pass. Re-run the check after the review (trigger the workflow on `pull_request_review`), since the first run precedes it.
    Raising or removing `max_overrides`, switching `require_approval` off, and growing `allowed_override_actors` are themselves weakenings reported by `config-integrity`.
 5. **Residual gap:** Workflow files (`.github/workflows/*.yml`) are evaluated by CI from the PR head commit; an agent could conceivably edit the workflow step to pass `disable: ...` or `advisory: true`. The `ci-integrity` gate catches the common forms of this in modified workflows: those two inputs, masked failures (`continue-on-error`, `|| true`, `set +e`), unpinned actions, deleted verification steps, and a rollup job whose `needs` no longer covers every verification job. Repositories should still protect workflow files and `discipline.toml` with `CODEOWNERS` and branch protection, because a workflow can be rewritten in ways no static check anticipates; see [Repository Protection](guides/ci-platforms.md#8-repository-protection).
 
@@ -775,6 +778,8 @@ jobs:
           fail_on_warnings: true
 ```
 
+A repository that runs the default `ci-integrity` gate reports a tag ref (`@v0`, `@v0.12.3`) as an unpinned action. Pin the action to a commit SHA (`uses: orieg/discipline@<commit-sha> # v0.12.3`): a SHA ref runs the binary of the release that commit's `Cargo.toml` names, and `version:` picks another release.
+
 ### GitLab CI/CD
 
 Include the remote pipeline template directly:
@@ -819,7 +824,7 @@ Forgejo Actions runs natively via `forgejo-runner` using workflows in `.forgejo/
 ```yaml
       - uses: https://github.com/orieg/discipline@v0
         with:
-          binary_path: /opt/discipline/discipline
+          binary_path: /opt/discipline/discipline # optional: a binary already on the runner (air-gapped); omit to download
 ```
 
 ### Gitea Actions
@@ -829,7 +834,7 @@ The same composite action runs under Gitea's `act_runner` without modification:
 ```yaml
       - uses: https://github.com/orieg/discipline@v0
         with:
-          binary_path: /opt/discipline/discipline
+          binary_path: /opt/discipline/discipline # optional: a binary already on the runner (air-gapped); omit to download
 ```
 
 ### Argo Workflows
@@ -849,6 +854,10 @@ Use [`templates/argo-workflow-template.yaml`](https://github.com/orieg/disciplin
         value: "main"
       - name: source-branch
         value: "feat/my-feature"
+      - name: pr-body
+        value: ""
+      - name: discipline-image
+        value: "ghcr.io/orieg/discipline:v0"
 ```
 
 ### pre-commit Hook
@@ -893,7 +902,7 @@ discipline hook install --agent claude-code   # or: codex, cursor, aider, copilo
 }
 ```
 
-The hook file is project configuration: commit it so every contributor's agent runs the same check. `agent-scratch` does not report the files `hook install` writes (`.claude/settings.json`, `.cursor/hooks.json`, `.aider.conf.yml` are in its default `exempt_paths`); `instruction-smuggling` does report a change to them, because it changes what the agent is made to do, so the pull request that adds the hook carries `allow-agent-instructions: <file> <reason>`. Each configuration runs `discipline hook run --agent <name>`, which checks the change so far (committed on the branch and uncommitted, against the merge base with `origin`'s default branch, else `main` / `master`; `--base` or `DISCIPLINE_BASE_REF` overrides it) and answers in that agent's hook contract:
+The hook file is project configuration: commit it so every contributor's agent runs the same check. `agent-scratch` does not report the files `hook install` writes (`.claude/settings.json`, `.cursor/hooks.json`, `.aider.conf.yml` are in its default `exempt_paths`); `instruction-smuggling` does report a change to them, because it changes what the agent is made to do, so the pull request that adds the hook carries `allow-agent-instructions: <file> <reason>`. Each configuration runs `discipline hook run --agent <name>`, which checks the change so far (committed on the branch and uncommitted, though a file never `git add`ed is not seen, against the merge base with `origin`'s default branch, else `main` / `master`; `--base` or `DISCIPLINE_BASE_REF` overrides it) and answers in that agent's hook contract:
 
 | Agent | File | Runs on | A finding |
 |---|---|---|---|
@@ -921,7 +930,7 @@ Discipline gatekeeper detected violations in your changes. Please fix each issue
 
 **What a change cannot do to the check that judges it.** The hook (and `discipline mcp`) judges the change by the base ref's `discipline.toml` (`--policy-from base`), so an agent that edits the configuration does not switch its own gates off, and it reads no directive (a waiver in a commit message does not lift a finding here; the reviewed PR body lifts it in CI). Leaving waiver syntax out of the report is a convenience, not the control: an agent can run `discipline explain` like anyone else. The control is CI with `policy_from: base`, directives read from the PR body only, and `fail_on_overrides` or `require_approval` (see [High-Assurance Agent Guard Configuration](#high-assurance-agent-guard-configuration)). Findings a repository already has, such as a missing `AGENTS.md`, appear in every hook report too; record them with `discipline baseline --write` before installing the hook.
 
-A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. A Claude Code or Codex `Stop` event that this hook already continued (`stop_hook_active`) is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. `discipline` must be on the agent's `PATH`.
+A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. An event that this hook already continued (`stop_hook_active`, sent by Claude Code, Codex, Copilot CLI and Qwen Code) is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. `discipline` must be on the agent's `PATH`.
 
 ### Pull-Request Comments
 
@@ -937,7 +946,7 @@ steps:
 
 `--comment` (`DISCIPLINE_COMMENT=1`, the action's `comment` input) posts the report as one comment on the pull request and edits that comment on every later run, so a pull request carries one report however often it is checked. It is the reviewer-visible surface on Gitea and Forgejo, which have no code-scanning view. The comment lists each finding with its repair, the overrides that lifted findings and any policy refusal; it never carries directive syntax (reviewers run `discipline explain <gate>`).
 
-The token comes from `DISCIPLINE_FORGE_TOKEN` or the forge's own variable (`GITHUB_TOKEN`, `GITEA_TOKEN`, `FORGEJO_TOKEN`, `GITLAB_TOKEN`); the action passes its `token` input only when `comment` is true. The pull request is read from the event payload (`GITHUB_EVENT_PATH` and the Gitea / Forgejo equivalents) or GitLab's `CI_MERGE_REQUEST_IID`; a run without one posts nothing. A token that cannot write, as on a pull request from a fork, is reported and the gates' verdict stands; a forge that cannot be identified or reached stops the run (exit 2). The check's status, not the comment, is the verdict.
+The token comes from `DISCIPLINE_FORGE_TOKEN` or the forge's own variable (`GH_TOKEN` or `GITHUB_TOKEN`, `GITEA_TOKEN`, `FORGEJO_TOKEN`, `GITLAB_TOKEN`); the action passes its `token` input only when `comment` is true. The pull request is read from the event payload (`GITHUB_EVENT_PATH` and the Gitea / Forgejo equivalents) or GitLab's `CI_MERGE_REQUEST_IID`; a run without one posts nothing. A token that cannot write, as on a pull request from a fork, is reported and the gates' verdict stands; a forge that cannot be identified or reached stops the run (exit 2). The check's status, not the comment, is the verdict.
 
 ### Previewing Adoption: `discipline replay`
 
@@ -948,7 +957,7 @@ discipline replay --last 100 --config candidate.toml --ref origin/main --json
 
 Replays the last N first-parent commits of a branch (default: `origin`'s default branch, else `main` / `master`), one merged change each, through a configuration, and prints which would have been blocked and by which gate. Each change is rebuilt in a throwaway repository that borrows the source repository's objects: its parent with the configuration under test as the base, and the change on top with the same configuration (a change to `discipline.toml` itself is not replayed), then `discipline check` runs on it. Nothing is written to the source repository, and the throwaway repository is removed when the replay ends.
 
-The directives each change carried are read from the body of the pull request it was merged through, by the same forge lookup as the `merged-pr-body` source (a token that can read pull requests: `DISCIPLINE_FORGE_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `GITEA_TOKEN`, ...; unauthenticated lookups hit the forge's rate limit after a few dozen changes). With no forge, no merged pull request, or `DISCIPLINE_NO_NETWORK=1`, only the commit message is read, and each case says so (`directives_from`). When the forge is found but its lookup fails (a rate limit, a private repository without a token), a change that would be blocked is `could_not_check` instead: its pull request body may hold the directive that lifts the finding.
+The directives each change carried are read from the body of the pull request it was merged through, by the same forge lookup as the `merged-pr-body` source (a token that can read pull requests: `DISCIPLINE_FORGE_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `GITEA_TOKEN`, ...; unauthenticated lookups hit the forge's rate limit after a few dozen changes). With no forge (no `origin` on a known forge) or no merged pull request, only the commit message is read, and each case says so (`directives_from`). When the forge is found but cannot be read (a rate limit, a private repository without a token, or `DISCIPLINE_NO_NETWORK=1`), a change that would be blocked is `could_not_check` instead: its pull request body may hold the directive that lifts the finding.
 
 The configuration under test is usually newer than the history it replays. A file it names for `version-lockstep` or `manifest-sync` that neither side of a replayed change has yet skips that group or rule with a note, rather than failing the whole change; outside replay, the same missing file is a configuration error (exit 2).
 
@@ -992,7 +1001,7 @@ Run discipline as a VS Code task and its findings land in the **Problems** panel
 ```
 <!-- /vscode-problem-matcher -->
 
-`discipline diff` checks the working tree against `HEAD`; use `discipline check --base main` to check the whole branch. `NO_COLOR` keeps the output plain, which the pattern needs. A finding with no line (a whole-file or gate-wide finding, such as a missing `AGENTS.md`) points at the file's first line or stays in the terminal.
+`discipline diff` checks the working tree against `HEAD` (a file never `git add`ed is not seen); use `discipline check --base main` to check the whole branch. `NO_COLOR` keeps the output plain, which the pattern needs. A finding with no line (a whole-file or gate-wide finding, such as a missing `AGENTS.md`) points at the file's first line or stays in the terminal.
 
 ### Keeping Pins Current with Renovate
 
@@ -1002,7 +1011,7 @@ A repository pins discipline in up to four places: the action (`uses: orieg/disc
 { "extends": ["github>orieg/discipline//renovate/discipline"] }
 ```
 
-It groups every discipline dependency under one `discipline` update, pins image digests, turns on Renovate's `pre-commit` manager (off by default in Renovate; this enables it for every hook in the repository), and adds a regex manager for the GitLab `include: remote:` URL, which no built-in manager reads. Renovate's own `github-actions` manager already covers `.github`, `.gitea` and `.forgejo` workflows, including `container: image:` with a digest.
+It groups every discipline dependency under one `discipline` update, pins digests (the image's, and the action to a commit SHA; it does not set the action's `version:` input), turns on Renovate's `pre-commit` manager (off by default in Renovate; this enables it for every hook in the repository), and adds a regex manager for the GitLab `include: remote:` URL, which no built-in manager reads. Renovate's own `github-actions` manager already covers `.github`, `.gitea` and `.forgejo` workflows, including `container: image:` with a digest.
 
 ### Explaining a Gate
 
@@ -1038,7 +1047,7 @@ The server checks the repository it is started in: a client that starts servers 
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `check_diff` | none | The `agent-prompt` report for the change so far (committed and uncommitted, against the merge base with the default branch, under the default branch's configuration, reading no directive); `structuredContent.status` is `pass`, `findings` or `could_not_check` (the last also `isError`). The agent cannot choose the base: naming `HEAD` would judge a committed change by its own configuration |
+| `check_diff` | none | The `agent-prompt` report for the change so far (committed and uncommitted, not files never `git add`ed, against the merge base with the default branch, under the default branch's configuration, reading no directive); `structuredContent.status` is `pass`, `findings` or `could_not_check` (the last also `isError`). The agent cannot choose the base: naming `HEAD` would judge a committed change by its own configuration |
 | `list_gates` | none | The `discipline gates` table under the repository's configuration |
 | `explain_finding` | `query`: a gate id or a finding line naming `[gate-id]` | The gate's suite, what it checks, its languages and its reference link; an unknown query suggests gate ids |
 
@@ -1194,9 +1203,7 @@ Discipline is available as a standalone static binary across Linux and macOS.
 
 - **Cargo**:
   ```bash
-  cargo binstall discipline
-  # or from source:
-  cargo install --git https://github.com/orieg/discipline
+  cargo install --git https://github.com/orieg/discipline   # from source; not published on crates.io
   ```
 
 #### CLI Execution
@@ -1219,7 +1226,7 @@ Discipline produces multi-target reports from a single execution run:
 |---|---|---|
 | **Human Terminal (stdout)** | Default stdout | ANSI-colored terminal summary with per-gate examined counts, notes, and file/line locations. |
 | **Machine JSON Report** | `--format json` (stdout) or `--json-out <path>` | Full JSON outcome with detailed violation records, notes, examined tallies, and applied overrides. |
-| **GitHub Step Summary** | `--format github-summary` (the action appends it to `GITHUB_STEP_SUMMARY`) | Formatted Markdown table appended to GitHub Actions run summaries. |
+| **GitHub Step Summary** | `--format github-summary` (the action's format) | Terminal report plus annotations; when set, appends a Markdown table to `GITHUB_STEP_SUMMARY` and writes the counts to `GITHUB_OUTPUT`. |
 | **GitLab Code Quality** | `--report-gitlab <path>` (written to `gl-codequality.json` by default in GitLab CI) | JSON format rendered directly in GitLab Merge Request diff widgets. |
 | **SARIF** | `--report-sarif <path>` | OASIS SARIF v2.1.0 report for GitHub Code Scanning, VS Code, and security dashboards. |
 | **JUnit XML** | `--report-junit <path>` (written to `junit.xml` by default in GitLab CI) | Standard test results XML for CI test summary dashboards and flaky test tracking. |
@@ -1231,7 +1238,7 @@ Discipline produces multi-target reports from a single execution run:
 When an authorized directive is parsed and applied:
 1. **Audit Record:** The gate outcome records the override in its result structure, naming the gate, subject, and reason.
 2. **Action Outputs:** Outputs `overrides` (total count of applied overrides) and `overridden_gates` (comma-separated list of gate ids) are populated.
-3. **Machine Report:** Included in the JSON report under `overrides_applied` for compliance logging.
+3. **Machine Report:** The JSON report carries the total as top-level `overrides` and each record under `outcomes[].overrides[]` (`gate`, `subject`, `directive`, `reason`, `source`, `hidden`) for compliance logging.
 4. **Enforced Sign-off:** Setting `directives.fail_on_overrides = true` (or passing `--fail-on-overrides`) causes Discipline to exit `1` whenever any override is present. This blocks automated merge and mandates human sign-off while preserving the audit trail.
 
 ---
@@ -1258,7 +1265,7 @@ discipline baseline --write --whole-tree
 Whole-tree mode measures against the empty tree, so every tracked file is in scope. That matters because two kinds of gate see a repository differently:
 
 - **Whole-tree gates** such as `pii` and `time-estimates` scan the tree regardless of the diff, so diff mode already reaches their pre-existing findings.
-- **Diff-scoped gates** such as `vacuous-tests`, `assertion-reduction`, `ci-integrity` and `provenance-tags` only look at what changed. On a clean branch the diff is empty, so diff mode records **none** of their pre-existing findings, and the gate cannot be enabled without first fixing everything it would report.
+- **Diff-scoped gates** such as `vacuous-tests`, `unsafe-safety-comment` and `provenance-tags` only look at what changed. On a clean branch the diff is empty, so diff mode records **none** of their pre-existing findings, and the gate cannot be enabled without first fixing everything it would report.
 
 A whole-tree baseline diffs against the empty tree, so every file is "added". Gates whose rule describes a change (`dependency-delta`, `ignored-tests`, `config-integrity`, `ci-integrity`, `build-hooks`, `error-swallowing`, `stub-bodies`, `suppression-delta`, and the other delta rules) are reported as not evaluated in that mode and record nothing: a dependency that exists is not debt. Rules describing a state (`pii`, `time-estimates`, `vacuous-tests`, `unsafe-safety-comment`, invisible characters) are recorded. A symlink is its target, enumerated once.
 
@@ -1310,9 +1317,9 @@ Because fingerprints are computed from `sha256(gate:rule:path:sha256(trimmed_lin
 ### 2. Subsequent CI Execution
 
 Subsequent runs automatically detect `discipline-baseline.toml` if present:
-- **Pre-existing findings:** Grandfathered and reported as a non-blocking note: `"N baselined findings not blocking"`. They do not cause non-zero exit codes.
+- **Pre-existing findings:** Grandfathered and reported per gate as a non-blocking note (`N finding(s) grandfathered by baseline in this gate (not blocking)`) and as `baselined: N` in the summary line. They do not cause non-zero exit codes.
 - **New violations:** Fail CI immediately with exit code 1.
-- **Transparency:** The baselined count is reported in every output format (terminal, GitHub step summaries, JSON, JUnit, SARIF, GitLab) and exposed to GitHub Actions workflows via the `steps.<id>.outputs.baselined` step output.
+- **Transparency:** The baselined count is reported in the terminal, the GitHub step summary and JSON (not in JUnit, SARIF or GitLab reports) and exposed to GitHub Actions workflows via the `steps.<id>.outputs.baselined` step output.
 - **Bypassing Baseline:** Pass `--no-baseline` (or set `no_baseline: true` in the action) to evaluate the diff without grandfathering.
 - **Custom Baseline Path:** Pass `--baseline-file <path>` (or set `baseline_file` in the action).
 
@@ -1322,9 +1329,10 @@ Subsequent runs automatically detect `discipline-baseline.toml` if present:
    ```text
    allow-gate-weakening: baseline grandfathering legacy modules for migration
    ```
-2. **Ratchet Down (Stale Entry Notes):** When a grandfathered finding is fixed in source code, Discipline reports the stale baseline entry as an informational note:
+   A baseline that keeps its size but swaps grandfathered findings for new ones is refused the same way ("Baseline Contains New Findings Without Directive").
+2. **Ratchet Down (Stale Entry Notes):** When a grandfathered finding is fixed in source code, Discipline reports the stale baseline entry as a note on its gate:
    ```text
-   NOTE: baseline entry docs/old_plan.md (time-estimates:duration-estimate) is stale — violation resolved in source. Run `discipline baseline --write` to burn down baseline debt.
+   1 stale baseline entry (resolved findings) (`Time Estimate` in `docs/old_plan.md`): run `discipline baseline --write` to ratchet down
    ```
    Maintainers can re-run `discipline baseline --write` to remove the stale entry and lock in the improvement without needing an override.
 
@@ -1518,7 +1526,7 @@ name = "polyglot-monorepo"
 [gates.assertion-reduction]
 enabled = true
 severity = "error"
-extra_assert_macros = ["custom_assert!", "verify_invariant!"]
+extra_assert_macros = ["custom_assert", "verify_invariant"] # macro names, without `!`
 assert_helper_fns = ["assert_response_ok", "check_bounds"]
 
 [gates.vacuous-tests]
@@ -1537,15 +1545,15 @@ paths = ["**/fixtures/**", "apps/web/__snapshots__/**", "**/*.snap"]
 [gates.dependency-delta]
 enabled = true
 severity = "error"
-banned_dependencies = ["left-pad", "evil-package"]
-forbid_wildcards = true
+deny_dependencies = ["left-pad", "evil-package"]
+allow_wildcards = false
 require_git_pins = true
 
 [gates.command]
 enabled = true
 commands = [
   { name = "cargo-mutants", preset = "cargo-mutants", timeout_seconds = 300 },
-  { name = "frontend-coverage", preset = "lcov", policy_files = ["apps/web/coverage/lcov.info"] }
+  { name = "frontend-coverage", preset = "lcov", command = "lcov --summary apps/web/coverage/lcov.info" }
 ]
 ```
 

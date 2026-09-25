@@ -818,9 +818,9 @@
   <!-- Hero -->
   <header class="hero">
     <div class="hero-badge-row">
-      <span class="pill pill-green">&#x2714; Rust 1.80+ Static Binary</span>
+      <span class="pill pill-green">&#x2714; Rust 1.90+ Static Binary</span>
       <span class="pill pill-purple">&#x26a1; Zero C Runtime Dependencies</span>
-      <span class="pill">&#x1f504; 7 CI/CD Platforms</span>
+      <span class="pill">&#x1f504; 9 CI/CD Platforms</span>
       <span class="pill">&#x1f916; AI Agent Drift Sentinel</span>
     </div>
 
@@ -851,7 +851,7 @@
       </div>
       <div class="stat-item">
         <h3>0</h3>
-        <p>Network Calls by Default</p>
+        <p>Network Calls on a Pull-Request Run</p>
       </div>
     </div>
   </header>
@@ -900,7 +900,7 @@
         <div>
           <div class="card-icon-box">&#x1f512;</div>
           <h3>Fail-Closed Engineering</h3>
-          <p>If git history cannot be resolved, a clone is shallow, or a configuration file is malformed, Discipline exits with code <code>2</code>. It never yields a false-positive pass on broken pipelines or empty diff outputs. The trust boundary is guarded too: a change cannot switch its own run to advisory, disable <code>config-integrity</code>, loosen <code>tsconfig.json</code> / <code>ruff.toml</code> / <code>[lints]</code> / coverage floors, mask the CI step, or add a <code>postinstall</code> hook or a <code>.npmrc</code> registry that runs on every install, without a scoped directive.</p>
+          <p>If the base ref or the merge base cannot be resolved (a clone too shallow to reach it, a branch never fetched), or a configuration file is malformed, Discipline exits with code <code>2</code>. It never yields a false-positive pass on broken pipelines or empty diff outputs. The trust boundary is guarded too: a change cannot switch its own run to advisory, disable <code>config-integrity</code>, loosen <code>tsconfig.json</code> / <code>ruff.toml</code> / <code>[lints]</code> / coverage floors, mask the CI step, or add a <code>postinstall</code> hook or a <code>.npmrc</code> registry that runs on every install, without a scoped directive.</p>
         </div>
         <div class="card-tags">
           <span class="card-tag">exit 0: pass</span>
@@ -947,7 +947,7 @@
       <!-- GitHub Actions -->
       <div class="platform-pane active" id="pane-github">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
-          Composite GitHub Action publishing workflow annotations, SARIF code scanning results, and PR status checks.
+          Composite GitHub Action writing workflow annotations, a step summary and step outputs. <code>comment: true</code> adds one pull-request comment (needs <code>pull-requests: write</code>); <code>DISCIPLINE_REPORT_SARIF</code> plus an upload step adds code scanning (<a href="guides/ci-platforms/">guide</a>).
         </p>
         <div class="code-block"><span class="code-comment"># .github/workflows/discipline.yml</span>
 <span class="code-prop">name:</span> Discipline Sentinel
@@ -958,8 +958,6 @@
 
 <span class="code-prop">permissions:</span>
   <span class="code-prop">contents:</span> read
-  <span class="code-prop">pull-requests:</span> write
-  <span class="code-prop">security-events:</span> write
 
 <span class="code-prop">jobs:</span>
   <span class="code-prop">sentinel:</span>
@@ -970,9 +968,10 @@
           <span class="code-prop">fetch-depth:</span> 0   <span class="code-comment"># Ensure git merge-base is reachable</span>
 
       - <span class="code-prop">name:</span> Run Discipline Sentinel
-        <span class="code-prop">uses:</span> orieg/discipline@v0
-        <span class="code-prop">with:</span>
-          <span class="code-prop">fail_on_warnings:</span> false</div>
+        <span class="code-prop">uses:</span> orieg/discipline@v0</div>
+        <p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          The default <code>ci-integrity</code> gate rejects a newly added action that is not pinned by commit SHA, <code>@v0</code> included. Pin it to a commit SHA, which runs the binary of the release that commit names: <code>uses: orieg/discipline@&lt;commit-sha&gt; # v0.12.3</code>.
+        </p>
       </div>
 
       <!-- GitLab CI/CD -->
@@ -1000,7 +999,7 @@
     - <span class="code-prop">if:</span> $CI_PIPELINE_SOURCE == <span class="code-string">"merge_request_event"</span>
     - <span class="code-prop">if:</span> $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   <span class="code-prop">before_script:</span>
-    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME --depth=100 || true
+    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME || true
   <span class="code-prop">script:</span>
     <span class="code-comment"># Under $GITLAB_CI, automatically outputs gl-codequality.json and junit.xml</span>
     - discipline check
@@ -1036,8 +1035,7 @@
 
       - <span class="code-prop">name:</span> Run Discipline
         <span class="code-prop">uses:</span> https://github.com/orieg/discipline@v0
-        <span class="code-prop">with:</span>
-          <span class="code-prop">binary_path:</span> /opt/discipline/discipline</div>
+        <span class="code-comment"># Runner without internet access: with: { binary_path: /opt/discipline/discipline }</span></div>
       </div>
 
       <!-- Gitea Actions -->
@@ -1062,8 +1060,7 @@
 
       - <span class="code-prop">name:</span> Run Discipline
         <span class="code-prop">uses:</span> https://github.com/orieg/discipline@v0
-        <span class="code-prop">with:</span>
-          <span class="code-prop">binary_path:</span> /opt/discipline/discipline</div>
+        <span class="code-comment"># Runner without internet access: with: { binary_path: /opt/discipline/discipline }</span></div>
       </div>
 
       <!-- Argo Workflows -->
@@ -1083,7 +1080,11 @@
       - <span class="code-prop">name:</span> target-branch
         <span class="code-prop">value:</span> <span class="code-string">"main"</span>
       - <span class="code-prop">name:</span> source-branch
-        <span class="code-prop">value:</span> <span class="code-string">"feat/my-pr"</span></div>
+        <span class="code-prop">value:</span> <span class="code-string">"feat/my-pr"</span>
+      - <span class="code-prop">name:</span> pr-body
+        <span class="code-prop">value:</span> <span class="code-string">""</span>
+      - <span class="code-prop">name:</span> discipline-image
+        <span class="code-prop">value:</span> <span class="code-string">"ghcr.io/orieg/discipline:v0"</span></div>
       </div>
 
       <!-- Container / Docker -->
@@ -1160,6 +1161,9 @@ claude mcp add discipline -- discipline mcp
         </p>
       </div>
     </div>
+    <p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+      Azure Pipelines, Bitbucket Pipelines, CircleCI and Jenkins templates, and the full wiring for each platform: <a href="guides/ci-platforms/">CI/CD Platform Integration Guide</a>.
+    </p>
   </section>
 
   <!-- Active Gates Reference -->
@@ -1492,12 +1496,12 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">config</td>
       <td><code>discipline.toml</code></td>
-      <td>Path to discipline.toml. When the file is absent, built-in defaults apply (each gate at its built-in default enablement and severity).</td>
+      <td>Path to discipline.toml. When the default discipline.toml is absent, built-in defaults apply (each gate at its built-in default enablement and severity); any other path that does not exist is an error (exit 2).</td>
     </tr>
     <tr>
       <td class="gate-id">suite</td>
       <td><code>all</code></td>
-      <td>Suite to run: all, agent-guard, hygiene, integrity</td>
+      <td>Suite to run: all, agent-guard, hygiene, integrity, quality, verification, bench</td>
     </tr>
     <tr>
       <td class="gate-id">base_ref</td>
@@ -1689,7 +1693,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
   <section class="section-block" id="architecture">
     <div class="section-head">
       <div class="section-title">Architecture & Execution Model</div>
-      <p class="section-desc">Zero-dependency, standalone binary operating entirely in-memory and offline.</p>
+      <p class="section-desc">Zero-dependency, standalone binary. A pull-request run reads git in memory and makes no network requests.</p>
     </div>
 
     <div class="card arch-card">
@@ -1711,7 +1715,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
         <!-- 2. GitCtx Merge Base Resolver -->
         <rect x="90" y="100" width="680" height="60" rx="8" class="arch-box arch-box-git"/>
         <text x="430" y="125" class="arch-title" text-anchor="middle">GitCtx: Resolves merge-base against Target Ref</text>
-        <text x="430" y="144" class="arch-meta" text-anchor="middle">In-memory git2 diff • Zero transport / network stack • Fail-closed on shallow clone</text>
+        <text x="430" y="144" class="arch-meta" text-anchor="middle">In-memory git2 diff • No network on a pull-request run • Exit 2 when no merge base resolves</text>
 
         <!-- Connector: GitCtx -> AST & Hygiene -->
         <path class="arch-line" d="M 430 160 L 430 185 M 250 185 L 610 185"/>
@@ -1742,7 +1746,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
         <circle cx="463" cy="311" r="3" class="arch-dot-purple"/>
         <text x="475" y="315" class="arch-bullet">Workstation paths, LAN IPs &amp; PII scrub</text>
         <circle cx="463" cy="333" r="3" class="arch-dot-purple"/>
-        <text x="475" y="337" class="arch-bullet">Agent scratch state deny (.claude/, *.tmp)</text>
+        <text x="475" y="337" class="arch-bullet">Agent scratch state deny (.claude/, scratch/)</text>
         <circle cx="463" cy="355" r="3" class="arch-dot-purple"/>
         <text x="475" y="359" class="arch-bullet">Lockfile, toolchain, CI, build-hook &amp; config integrity</text>
 
@@ -1780,7 +1784,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
         <text x="600" y="554" class="arch-subheading">Fail-Closed Exit Code</text>
         <text x="600" y="572" class="arch-bullet-sm"><tspan class="arch-mono arch-bold">0</tspan>: All gates pass</text>
         <text x="600" y="588" class="arch-bullet-sm"><tspan class="arch-mono arch-bold">1</tspan>: Policy or AST violations</text>
-        <text x="600" y="604" class="arch-bullet-sm"><tspan class="arch-mono arch-bold">2</tspan>: Gate error or shallow ref</text>
+        <text x="600" y="604" class="arch-bullet-sm"><tspan class="arch-mono arch-bold">2</tspan>: Gate error or unresolved base</text>
       </svg>
     </div>
   </section>
@@ -1815,23 +1819,18 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       </div>
       <div class="install-card">
         <h4>MacPorts (macOS)</h4>
-        <div class="install-snippet">curl -fsSL -o ~/ports/devel/discipline/Portfile https://github.com/orieg/discipline/releases/latest/download/Portfile</div>
+        <div class="install-snippet">mkdir -p ~/ports/devel/discipline && curl -fsSL -o ~/ports/devel/discipline/Portfile https://github.com/orieg/discipline/releases/latest/download/Portfile</div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">A generated Portfile is attached to each release; install it from a local ports tree (see the README).</p>
-      </div>
-      <div class="install-card">
-        <h4>Cargo Binstall (Pre-built)</h4>
-        <div class="install-snippet">cargo binstall discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Fast binary fetch directly from verified GitHub release assets.</p>
       </div>
       <div class="install-card">
         <h4>Cargo (From Source)</h4>
         <div class="install-snippet">cargo install --git https://github.com/orieg/discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Pure Rust build requiring rustc 1.80+.</p>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Builds with rustc 1.90+ and a C compiler (vendored libgit2 and the C tree-sitter grammars).</p>
       </div>
       <div class="install-card">
         <h4>Shell Completions</h4>
         <div class="install-snippet">discipline completions zsh &gt; ~/.zfunc/_discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">The APT, RPM, Homebrew and MacPorts packages install bash, zsh and fish completions. For a tarball or Cargo install, generate them into your shell's completion directory and regenerate after each upgrade (see the README).</p>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">The APT, RPM, Homebrew and MacPorts packages install bash, zsh and fish completions, and a release tarball carries them under <code>completions/</code>. For a Cargo install, generate them into your shell's completion directory and regenerate after each upgrade (see the README).</p>
       </div>
       <div class="install-card">
         <h4>Docker Container</h4>
@@ -1841,7 +1840,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       <div class="install-card">
         <h4>GitHub Action</h4>
         <div class="install-snippet">uses: orieg/discipline@v0</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Composite action with automatic binary bootstrap.</p>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Composite action with automatic binary bootstrap. Under the default <code>ci-integrity</code> gate, pin it by commit SHA and set <code>version:</code>.</p>
       </div>
       <div class="install-card">
         <h4>GitLab CI/CD</h4>

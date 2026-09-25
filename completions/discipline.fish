@@ -43,7 +43,7 @@ complete -c discipline -n "__fish_discipline_needs_command" -f -a "mcp" -d 'Serv
 complete -c discipline -n "__fish_discipline_needs_command" -f -a "bench" -d 'Benchmark tooling for the bench-regression gate'
 complete -c discipline -n "__fish_discipline_needs_command" -f -a "doctor" -d 'Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check'
 complete -c discipline -n "__fish_discipline_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c discipline -n "__fish_discipline_using_subcommand check" -s c -l config -d 'Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them)' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand check" -s c -l config -d 'Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l config-override -d 'Inline TOML merged over the file (tables merge, lists append, scalars replace)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l enable -d 'Gate ids to force on (comma separated)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l disable -d 'Gate ids to force off (comma separated)' -r
@@ -89,7 +89,7 @@ complete -c discipline -n "__fish_discipline_using_subcommand check" -s q -l qui
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l allow-cross-host-bench -d 'Allow benchmark comparison across mismatched host/runner provenance tags'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l no-baseline -d 'Ignore grandfathering baseline even if present'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c discipline -n "__fish_discipline_using_subcommand diff" -s c -l config -d 'Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them)' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand diff" -s c -l config -d 'Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand diff" -l config-override -d 'Inline TOML merged over the file (tables merge, lists append, scalars replace)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand diff" -l enable -d 'Gate ids to force on (comma separated)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand diff" -l disable -d 'Gate ids to force off (comma separated)' -r
@@ -118,7 +118,7 @@ complete -c discipline -n "__fish_discipline_using_subcommand diff" -l no-baseli
 complete -c discipline -n "__fish_discipline_using_subcommand diff" -l trust-workspace -d 'Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)'
 complete -c discipline -n "__fish_discipline_using_subcommand diff" -l advisory -d 'Advisory mode: run checks and emit reports, but exit 0 even if violations are found'
 complete -c discipline -n "__fish_discipline_using_subcommand diff" -s h -l help -d 'Print help'
-complete -c discipline -n "__fish_discipline_using_subcommand baseline" -s c -l config -d 'Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them)' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand baseline" -s c -l config -d 'Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l config-override -d 'Inline TOML merged over the file (tables merge, lists append, scalars replace)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l enable -d 'Gate ids to force on (comma separated)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l disable -d 'Gate ids to force off (comma separated)' -r
@@ -139,7 +139,7 @@ complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l trust
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -s h -l help -d 'Print help'
 complete -c discipline -n "__fish_discipline_using_subcommand init" -s n -l name -d 'Name of the project (defaults to current directory name)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand init" -s h -l help -d 'Print help'
-complete -c discipline -n "__fish_discipline_using_subcommand gates" -s c -l config -d 'Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them)' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand gates" -s c -l config -d 'Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand gates" -l config-override -d 'Inline TOML merged over the file (tables merge, lists append, scalars replace)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand gates" -l enable -d 'Gate ids to force on (comma separated)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand gates" -l disable -d 'Gate ids to force off (comma separated)' -r
@@ -178,7 +178,7 @@ complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_s
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "run" -d 'Check the change so far and answer in the agent\'s hook contract (reads the hook payload on stdin)'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "install" -d 'Write the agent\'s hook configuration at the repository root; an existing file is never rewritten'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c discipline -n "__fish_discipline_using_subcommand explain" -s c -l config -d 'Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them)' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand explain" -s c -l config -d 'Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand explain" -l config-override -d 'Inline TOML merged over the file (tables merge, lists append, scalars replace)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand explain" -l enable -d 'Gate ids to force on (comma separated)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand explain" -l disable -d 'Gate ids to force off (comma separated)' -r

@@ -10,11 +10,11 @@ branding:
 # text and must not be parsed as shell.
 inputs:
   config:
-    description: 'Path to discipline.toml. When the file is absent, built-in defaults apply (each gate at its built-in default enablement and severity).'
+    description: 'Path to discipline.toml. When the default discipline.toml is absent, built-in defaults apply (each gate at its built-in default enablement and severity); any other path that does not exist is an error (exit 2).'
     required: false
     default: 'discipline.toml'
   suite:
-    description: 'Suite to run: all, agent-guard, hygiene, integrity'
+    description: 'Suite to run: all, agent-guard, hygiene, integrity, quality, verification, bench'
     required: false
     default: 'all'
   base_ref:

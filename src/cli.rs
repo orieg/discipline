@@ -192,7 +192,8 @@ pub struct DocsArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct ConfigArgs {
-    /// Path to discipline.toml. Absent file = built-in defaults (`discipline gates` lists them)
+    /// Path to discipline.toml. An absent default file = built-in defaults (`discipline gates`
+    /// lists them); any other path that does not exist is an error (exit 2)
     #[arg(
         short,
         long,

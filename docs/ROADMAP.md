@@ -493,11 +493,11 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 - **No external review:** The architecture and test coverage were established through internal pairing and rigorous self-tests. External review by independent systems engineers is an outstanding verification check.
 - **Runner environment testing:**
-  - GitHub Actions: verified on hosted Linux and macOS runners in CI.
+  - GitHub Actions: verified on hosted Linux runners in CI (`action-github`), and against published release assets on Linux and macOS runners in the release smoke job.
   - Gitea Actions: tested via `act` runner images; a private production Gitea instance runs the job-container recipe on `pull_request` and `push`, and the evidence Phase 11 Step 0 lists (versions, a clean run, an inverted canary, a push run reading the merged pull request, `doctor` against its API) is outstanding.
-  - Forgejo Actions: verified under local and CI runner environments; testing against enterprise Forgejo clusters is outstanding.
-  - GitLab CI: reusable component template linted and schema-validated; live GitLab runner execution is outstanding.
-  - Argo Workflows: template linted; live Kubernetes cluster DAG execution is outstanding.
+  - Forgejo Actions: CI lints `.forgejo/workflows/action-selftest.yml` with `actionlint` but does not run it; the same composite action runs under `act` for Gitea. Execution on a Forgejo runner is outstanding.
+  - GitLab CI: the component template is checked by `tests/action/check-links.py` for recipe defects (an image in `runs-on:`, a `git clone` in job steps, obsolete image tags); it is not schema-validated, and live GitLab runner execution is outstanding.
+  - Argo Workflows: the template gets the same text checks only; it is not linted by an Argo tool, and live Kubernetes cluster DAG execution is outstanding.
 - **Macro opacity:** Tests generated dynamically inside complex macro bodies (`proptest! { ... }`, `quickcheck! { ... }`) are invisible to tree-sitter AST fact extractors without compilation expansion. Use `extra_assert_macros` and `assert_helper_fns` to configure macro vocabulary.
 - **Grammar lag:** Source syntax newer than the bundled tree-sitter grammars is treated as a parse error, failing closed by design. Use `exempt_paths` until grammars are updated.
 - **Consumer replay of the push-event fix:** run 2026-09-22 (Phase 11 Step 0): the consumer's squash merge of its #1071 replayed as a push (base `020ec7a4`, head `a8eb5e30`) passes with the waiver read from merged pull request #1071, and fails on the same finding with `DISCIPLINE_NO_NETWORK=1`, each gate naming why the body was not read.

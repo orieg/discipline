@@ -6,13 +6,21 @@ permalink: /guides/ci-platforms/
 
 # CI/CD Platform Integration Guide
 
-This how-to guide walks through integrating `discipline` into major continuous integration, GitOps, and local developer workflows. Discipline runs as a single static binary with no runtime dependencies (the opt-in forge checks make their own HTTPS requests; see [Forge access](../GATES.md#forge-access)) and communicates with CI runners via standard exit codes, SARIF reports, JUnit XML, and GitLab Code Quality JSON. A gate only protects a branch when the platform refuses merges that fail it: see [Repository Protection](#8-repository-protection).
+This how-to guide walks through integrating `discipline` into major continuous integration, GitOps, and local developer workflows. Discipline runs as a single static binary with no runtime dependencies and communicates with CI runners via standard exit codes, SARIF reports, JUnit XML, and GitLab Code Quality JSON. A pull-request run with a resolvable merge base makes no network requests. Three cases do: the opt-in forge features (issue state, bench citation freshness, `require_approval`, `replay`, `doctor`, `comment`); a push run with no pull-request body, where the default `merged-pr-body` directive source asks the forge API for the merged pull request; and a CI run (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `GITEA_ACTIONS` or `FORGEJO_ACTIONS` set) whose merge base does not resolve, where the binary runs `git fetch` for the base and unshallows the clone. `DISCIPLINE_NO_NETWORK=1` keeps the forge requests off the network; it does not stop that `git fetch`. See [Forge access](../GATES.md#forge-access). A gate only protects a branch when the platform refuses merges that fail it: see [Repository Protection](#8-repository-protection).
 
 ---
 
 ## 1. GitHub Actions
 
-Discipline provides an official composite GitHub Action at `orieg/discipline@v0`. Because it is implemented as a pure composite action wrapping static native binaries, it requires no Node.js or Docker setup on the runner.
+Discipline provides an official composite GitHub Action at `orieg/discipline@v0`. Because it is implemented as a pure composite action wrapping static native binaries, it requires no Node.js or Docker setup on the runner. The action writes workflow annotations, a step summary and step outputs; a pull-request comment needs `comment: true`, and a SARIF file needs `DISCIPLINE_REPORT_SARIF` plus an upload step (below).
+
+A repository that runs the default `ci-integrity` gate must pin third-party actions by commit SHA, so adding `uses: orieg/discipline@v0` is itself an `Unpinned Third-Party Action` error. Pin the action to a commit; a SHA ref runs the binary of the release that commit's `Cargo.toml` names (`version:` under `with:` picks another):
+
+```yaml
+      - uses: orieg/discipline@<commit-sha> # v0.12.3
+```
+
+The examples below use `@v0` for readability.
 
 ### Basic Pull Request Sentinel
 
@@ -31,8 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      security-events: write # Required if uploading SARIF
+      security-events: write # Required to upload SARIF
 
     steps:
       - name: Checkout Code
@@ -42,9 +49,8 @@ jobs:
 
       - name: Run Discipline Gatekeeper
         uses: orieg/discipline@v0
-        with:
-          fail_on_warnings: false
-          sarif: results.sarif
+        env:
+          DISCIPLINE_REPORT_SARIF: results.sarif
 
       - name: Upload SARIF Security Findings
         if: always()
@@ -63,6 +69,8 @@ When evaluating Discipline on high-velocity repositories with legacy technical d
         with:
           advisory: true
 ```
+
+Adding `advisory: true` is itself a `ci-integrity` finding (`Discipline Action Weakened`), since the step then exits 0 whatever the gates report. Record the decision in the pull-request body with `allow-gate-weakening: ci-integrity <reason>`.
 
 ---
 
@@ -191,7 +199,7 @@ discipline:gate:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   before_script:
-    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME --depth=100 || true
+    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME || true
   script:
     - discipline check --report-gitlab gl-codequality.json --report-junit junit.xml
   artifacts:
@@ -206,7 +214,7 @@ discipline:gate:
 
 ## 3. Forgejo & Gitea Actions
 
-Forgejo and Gitea Actions use runner engines compatible with GitHub Actions workflows. The composite action runs natively under `forgejo-runner` and `act_runner` without requiring internet access if the binary is cached.
+Forgejo and Gitea Actions use runner engines compatible with GitHub Actions workflows. The composite action runs natively under `forgejo-runner` and `act_runner`. It downloads the release binary on every run; on a runner without internet access, pass `binary_path` pointing at a discipline binary already on the runner.
 
 ### Workflow Configuration
 
@@ -230,8 +238,6 @@ jobs:
 
       - name: Run Gatekeeper
         uses: https://github.com/orieg/discipline@v0
-        with:
-          fail_on_warnings: true
 ```
 
 ---
@@ -262,6 +268,10 @@ spec:
                   value: "main"
                 - name: source-branch
                   value: "feat/my-feature"
+                - name: pr-body
+                  value: ""
+                - name: discipline-image
+                  value: "ghcr.io/orieg/discipline:v0"
 ```
 
 ---
@@ -311,7 +321,8 @@ repos:
 Install Discipline's native hooks directly into `.git/hooks/`:
 
 ```bash
-# Installs non-blocking pre-commit and pre-push hooks
+# Writes .git/hooks/pre-commit, which runs `discipline check --staged`
+# and blocks the commit when a gate fails
 discipline install-hooks
 ```
 
@@ -321,7 +332,7 @@ To run manually during interactive git staging:
 # Check staged changes against HEAD
 discipline check --staged
 
-# Fast diff inspection of unstaged working tree changes
+# Staged and unstaged changes against HEAD (untracked files are not included)
 discipline diff
 ```
 
@@ -329,7 +340,7 @@ discipline diff
 
 ## 7. Other CI Platforms (Templates)
 
-Copy-paste starting points live in [`templates/`](https://github.com/orieg/discipline/tree/main/templates). Each runs the official container image, fetches the merge base, and writes `discipline-report.json`:
+Copy-paste starting points live in [`templates/`](https://github.com/orieg/discipline/tree/main/templates). Each runs the official container image and fetches the base branch. The Azure, Bitbucket, CircleCI and Jenkins templates write `discipline-report.json`; the GitLab component writes `gl-codequality.json` and `junit.xml`; the Argo template writes `junit.xml`, `sarif.sarif` and `discipline.json` under `/workspace/reports/`:
 
 | Platform | Template | Base ref |
 |---|---|---|
