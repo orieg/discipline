@@ -70,7 +70,7 @@
         },
         "extra_assert_macros": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Additional macro names treated as assertions"
+          "description": "Additional macro names treated as assertions (a trailing `!` is optional)"
         },
         "min_assertions_per_test": {
           "description": "Minimum assertions required per test method",

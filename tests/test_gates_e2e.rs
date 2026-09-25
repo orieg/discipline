@@ -331,6 +331,28 @@ fn vacuous_tests_are_lifted_per_test_by_allow_vacuous_test() {
 }
 
 #[test]
+fn extra_assert_macros_accept_the_name_with_or_without_its_bang() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/b.rs",
+        "#[test]\nfn via_macro() { check_sorted!(vec![1, 2]); }\n",
+    );
+    repo.commit("test: add");
+    assert_eq!(repo.check(&[]).titles("vacuous-tests").len(), 1);
+    for name in ["check_sorted", "check_sorted!"] {
+        let run = repo.check(&[
+            "--config-override",
+            &format!("[gates.vacuous-tests]\nextra_assert_macros = [\"{name}\"]"),
+        ]);
+        assert!(
+            run.titles("vacuous-tests").is_empty(),
+            "`{name}`: {}",
+            run.stdout
+        );
+    }
+}
+
+#[test]
 fn vacuous_tests_honor_configured_assert_helpers() {
     let repo = Repo::new();
     repo.write(

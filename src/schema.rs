@@ -205,7 +205,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "extra_assert_macros": { "$ref": "#/$defs/StringListOrReset", "description": "Additional macro names treated as assertions" },
+                    "extra_assert_macros": { "$ref": "#/$defs/StringListOrReset", "description": "Additional macro names treated as assertions (a trailing `!` is optional)" },
                     "assert_helper_fns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional function names treated as assertions" },
                     "min_assertions_per_test": { "type": "integer", "description": "Minimum assertions required per test method" },
                     "mock_setup_fns": { "$ref": "#/$defs/StringListOrReset", "description": "Callee fragments that construct or program a test double, beyond the built-in vocabulary" },

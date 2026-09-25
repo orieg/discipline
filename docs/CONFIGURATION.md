@@ -75,7 +75,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.assertion-reduction.assert_helper_fns` | list | `[]` | Additional function names treated as assertions |
 | `gates.assertion-reduction.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.assertion-reduction.exempt_paths` | list | `[]` | File path globs exempted from this gate |
-| `gates.assertion-reduction.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |
+| `gates.assertion-reduction.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions (a trailing `!` is optional) |
 | `gates.assertion-reduction.min_assertions_per_test` | integer | *(unset)* | Minimum assertions required per test method |
 | `gates.assertion-reduction.mock_assert_fns` | list | `[]` | Callee fragments that assert on a test double's interactions, beyond the built-in vocabulary |
 | `gates.assertion-reduction.mock_setup_fns` | list | `[]` | Callee fragments that construct or program a test double, beyond the built-in vocabulary |
@@ -307,7 +307,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.vacuous-tests.assert_helper_fns` | list | `[]` | Additional function names treated as assertions |
 | `gates.vacuous-tests.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.vacuous-tests.exempt_paths` | list | `[]` | File path globs exempted from this gate |
-| `gates.vacuous-tests.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions |
+| `gates.vacuous-tests.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions (a trailing `!` is optional) |
 | `gates.vacuous-tests.min_assertions_per_test` | integer | *(unset)* | Minimum assertions required per test method |
 | `gates.vacuous-tests.mock_assert_fns` | list | `[]` | Callee fragments that assert on a test double's interactions, beyond the built-in vocabulary |
 | `gates.vacuous-tests.mock_setup_fns` | list | `[]` | Callee fragments that construct or program a test double, beyond the built-in vocabulary |
@@ -1529,7 +1529,7 @@ name = "polyglot-monorepo"
 [gates.assertion-reduction]
 enabled = true
 severity = "error"
-extra_assert_macros = ["custom_assert", "verify_invariant"] # macro names, without `!`
+extra_assert_macros = ["custom_assert", "verify_invariant"] # macro names; a trailing `!` is optional
 assert_helper_fns = ["assert_response_ok", "check_bounds"]
 
 [gates.vacuous-tests]

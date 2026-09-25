@@ -663,7 +663,8 @@ pub struct AssertionGate {
     pub enabled: bool,
     pub severity: Severity,
     pub exempt_paths: Vec<String>,
-    /// Extra macro names (final path segment, no `!`) counted as assertions.
+    /// Extra macro names (final path segment) counted as assertions. A trailing `!` is
+    /// accepted and removed at load.
     pub extra_assert_macros: Vec<String>,
     /// Function names (final path segment) whose call counts as an assertion,
     /// for suites that assert through helpers such as `check_invariants(&t)`.
@@ -1938,6 +1939,23 @@ impl DisciplineConfig {
         }
     }
 
+    /// Spellings with one reading are brought to the form the gates match: a macro
+    /// name in `extra_assert_macros` written with its `!` (`assert_matches!`) is the
+    /// same macro as `assert_matches`, which is what the parsers compare against.
+    fn normalize(&mut self) {
+        for gate in [
+            &mut self.gates.assertion_reduction,
+            &mut self.gates.vacuous_tests,
+        ] {
+            for m in &mut gate.extra_assert_macros {
+                let name = m.trim().trim_end_matches('!').trim_end();
+                if name.len() != m.len() {
+                    *m = name.to_string();
+                }
+            }
+        }
+    }
+
     fn from_value(value: Value) -> Result<Self> {
         // Name planned gates explicitly: "unknown field" would read as a typo,
         // and a user must learn the gate exists but is not shipped yet.
@@ -1946,9 +1964,10 @@ impl DisciplineConfig {
                 check_gate_id(id)?;
             }
         }
-        let config: DisciplineConfig = value
+        let mut config: DisciplineConfig = value
             .try_into()
             .context("discipline configuration failed schema validation")?;
+        config.normalize();
         if config.meta.version != SCHEMA_VERSION {
             bail!(
                 "unsupported [meta] version {} (this binary understands version {})",

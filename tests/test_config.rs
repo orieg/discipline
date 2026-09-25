@@ -604,3 +604,19 @@ fn test_harness_isolates_every_environment_variable_the_binary_reads() {
         "add to tests/common/mod.rs ISOLATED_ENV_VARS: {missing:?}"
     );
 }
+
+#[test]
+fn extra_assert_macros_drop_a_trailing_bang_at_load() {
+    let cfg = discipline::config::DisciplineConfig::from_toml_str(
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nextra_assert_macros = [\"assert_matches!\", \"plain\"]\n[gates.vacuous-tests]\nextra_assert_macros = [\" check_sorted! \"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.gates.assertion_reduction.extra_assert_macros,
+        ["assert_matches", "plain"]
+    );
+    assert_eq!(
+        cfg.gates.vacuous_tests.extra_assert_macros,
+        ["check_sorted"]
+    );
+}
