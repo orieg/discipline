@@ -147,6 +147,75 @@ fn replay_reads_the_waiver_in_the_merged_pull_request_body() {
 }
 
 #[test]
+fn an_override_is_judged_against_the_pull_request_author_not_the_replaying_shell() {
+    let (repo, weakening) = history();
+    let cfg = repo.file("candidate.toml");
+    std::fs::write(
+        &cfg,
+        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nfail_on_overrides = true\nallowed_override_actors = [\"dev\"]\n",
+    )
+    .unwrap();
+    let run = |author: &str, shell_actor: &str| {
+        let api = FakeForge::start();
+        api.serve(
+            &format!("repos/o/r/commits/{weakening}/pulls"),
+            serde_json::json!([{
+                "number": 12,
+                "merged_at": "2026-09-21T00:00:00Z",
+                "user": {"login": author},
+                "body": "Simplified.\n\nallow-assertion-drop: adds the second check moved to an integration test",
+                "head": {"sha": "feedbeef"}
+            }]),
+        );
+        let url = api.url();
+        replay(
+            &repo,
+            &["--config", cfg.to_str().unwrap()],
+            &[
+                ("GITHUB_REPOSITORY", "o/r"),
+                ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+                ("GITHUB_TOKEN", "t"),
+                ("GITHUB_ACTOR", shell_actor),
+                ("DISCIPLINE_ACTOR", shell_actor),
+            ],
+        )["cases_detail"][1]
+            .clone()
+    };
+
+    // The author is an allowed actor: the override stands, as it did in the change's CI.
+    let allowed = run("dev", "someone-else");
+    assert_eq!(allowed["verdict"], "passed", "{allowed}");
+    assert_eq!(
+        allowed["blocking_gates"],
+        serde_json::json!([]),
+        "{allowed}"
+    );
+
+    // Another author: the override is refused, and the case names the gate and the reason
+    // even though no finding is an error. The replaying shell's actor does not rescue it.
+    let refused = run("outsider", "dev");
+    assert_eq!(refused["verdict"], "blocked", "{refused}");
+    assert_eq!(
+        refused["blocking_gates"],
+        serde_json::json!(["assertion-reduction"]),
+        "{refused}"
+    );
+    let detail = refused["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("`fail_on_overrides` refused") && detail.contains("`outsider`"),
+        "{detail}"
+    );
+
+    // No author on the pull request: no actor at all, not the replaying shell's.
+    let anonymous = run("", "dev");
+    assert_eq!(anonymous["verdict"], "blocked", "{anonymous}");
+    assert!(
+        anonymous["detail"].as_str().unwrap().contains("no actor"),
+        "{anonymous}"
+    );
+}
+
+#[test]
 fn a_blocked_change_whose_pull_request_could_not_be_read_is_not_checked() {
     let (repo, _) = history();
     // The fake forge answers every lookup 403, as a rate-limited API does.

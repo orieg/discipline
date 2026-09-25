@@ -30,13 +30,15 @@ pub struct Case {
     pub subject: String,
     /// `passed`, `blocked` or `could_not_check`.
     pub verdict: &'static str,
-    /// Gates with an `error` finding.
+    /// Gates with an `error` finding; when there is none, the gates whose overrides
+    /// `fail_on_overrides` refused.
     pub blocking_gates: Vec<String>,
     /// Gates with a `warning` finding.
     pub warning_gates: Vec<String>,
     /// Where the directives came from: `pull request body`, or why they did not.
     pub directives_from: String,
-    /// The child's stderr when it could not check.
+    /// The child's stderr when it could not check; for a change blocked with no `error`
+    /// finding, which overrides were refused and for which actor.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub detail: String,
 }
@@ -190,6 +192,37 @@ pub fn read_verdict(code: i32, json: &str) -> (&'static str, Vec<String>, Vec<St
         }
     }
     (verdict, errors, warnings)
+}
+
+/// Gates that applied an override, in report order.
+pub fn gates_with_overrides(json: &str) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    v["outcomes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|o| o["overrides"].as_array().is_some_and(|a| !a.is_empty()))
+        .filter_map(|o| o["gate"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// Why a change with no `error` finding was blocked: `fail_on_overrides` refused its
+/// overrides, since its actor is not in `allowed_override_actors`.
+pub fn refused_overrides(json: &str, actor: Option<&str>) -> String {
+    let gates = gates_with_overrides(json);
+    if gates.is_empty() {
+        return String::new();
+    }
+    let by = actor.map_or(
+        "no actor (no merged pull request author)".to_string(),
+        |a| format!("actor `{a}`"),
+    );
+    format!(
+        "no error finding: `fail_on_overrides` refused the override(s) of {} applied by {by}, who is not in `allowed_override_actors`",
+        gates.join(", ")
+    )
 }
 
 /// `(#123)` at the end of a squash-merge subject.
@@ -361,24 +394,26 @@ pub fn run(opts: &Options) -> Result<Summary> {
         ))?;
 
         let mut lookup_error = None;
-        let (pr, body, directives_from) = match &forge {
+        let (pr, body, author, directives_from) = match &forge {
             Ok(f) => match crate::forge::merged_pull_for_commit(&api, f, &c.id().to_string()) {
                 Ok(Some(m)) => (
                     Some(m.number),
                     Some(m.body),
+                    Some(m.author).filter(|a| !a.trim().is_empty()),
                     "pull request body".to_string(),
                 ),
                 Ok(None) => (
+                    None,
                     None,
                     None,
                     "commit message only: no merged pull request".to_string(),
                 ),
                 Err(e) => {
                     lookup_error = Some(e.to_string());
-                    (None, None, format!("commit message only: {e}"))
+                    (None, None, None, format!("commit message only: {e}"))
                 }
             },
-            Err(e) => (None, None, format!("commit message only: {e}")),
+            Err(e) => (None, None, None, format!("commit message only: {e}")),
         };
         let body_file = tmp.0.join("body.txt");
         std::fs::write(&body_file, body.as_deref().unwrap_or(""))?;
@@ -390,6 +425,11 @@ pub fn run(opts: &Options) -> Result<Summary> {
             .arg(base.to_string())
             .arg("--pr-body-file")
             .arg(&body_file);
+        // The pull request's author stands in for the CI actor that ran its check, so
+        // `allowed_override_actors` is judged per change, never as whoever runs the replay.
+        if let Some(a) = &author {
+            cmd.arg("--actor").arg(a);
+        }
         for (k, _) in std::env::vars() {
             let event = k.ends_with("_EVENT_NAME")
                 || k.ends_with("_EVENT_BEFORE")
@@ -404,6 +444,11 @@ pub fn run(opts: &Options) -> Result<Summary> {
                         | "GITLAB_CI"
                         | "CI_PIPELINE_SOURCE"
                         | "CI_COMMIT_BEFORE_SHA"
+                        | "DISCIPLINE_ACTOR"
+                        | "GITHUB_ACTOR"
+                        | "GITEA_ACTOR"
+                        | "FORGEJO_ACTOR"
+                        | "GITLAB_USER_LOGIN"
                 )
             {
                 cmd.env_remove(&k);
@@ -415,8 +460,15 @@ pub fn run(opts: &Options) -> Result<Summary> {
             read_verdict(code, &String::from_utf8_lossy(&out.stdout));
         let mut detail = if verdict == "could_not_check" {
             String::from_utf8_lossy(&out.stderr).trim().to_string()
+        } else if verdict == "blocked" && blocking.is_empty() {
+            refused_overrides(&String::from_utf8_lossy(&out.stdout), author.as_deref())
         } else {
             String::new()
+        };
+        let blocking = if verdict == "blocked" && blocking.is_empty() {
+            gates_with_overrides(&String::from_utf8_lossy(&out.stdout))
+        } else {
+            blocking
         };
         // A forge that was found but could not answer may hold a merged pull request whose
         // body lifts these findings: the change's verdict is unknown, not blocked.
