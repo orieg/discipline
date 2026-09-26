@@ -614,6 +614,7 @@ jobs:
           rc=0
           .ci-bin/discipline check --suite integrity --base HEAD --format json --json-out "${report}" > /dev/null || rc=$?
           [ "${rc}" -eq 1 ] || { echo "::error::expected exit 1 from the canary, got ${rc}"; exit 1; }
-          jq -e --arg t "\`${first}\` skipped although its \`if:\` is true" \
-            '[.outcomes[] | select(.gate == "ci-skip-set") | .violations[].title] | any(. == $t)' "${report}" \
+          # The finding's code is its stable identity; its title is display text.
+          jq -e --arg m "\`${first}\` was skipped" \
+            '[.outcomes[] | select(.gate == "ci-skip-set") | .violations[] | select(.code == "ci-skip-set/job-skipped-while-condition-true") | .message] | any(startswith($m))' "${report}" \
             || { echo "::error::canary did not carry the ci-skip-set diagnostic"; jq '.outcomes[] | select(.gate == "ci-skip-set")' "${report}"; exit 1; }
