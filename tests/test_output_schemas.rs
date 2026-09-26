@@ -447,3 +447,75 @@ fn replay_output_conforms_to_the_replay_schema() {
     assert_eq!(summary["could_not_check"], 1, "{summary:#}");
     assert_valid(&replay_schema(), &summary);
 }
+
+/// A repository whose check reports several findings across files and gates, with a note
+/// on stderr (no discipline.toml).
+fn noisy_repo() -> Repo {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn kept() { assert_eq!(1 + 1, 2); }\n",
+    );
+    repo.commit("test: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn kept() {}\n\n#[test]\nfn ghost() {}\n",
+    );
+    repo.write("tests/b.rs", "#[test]\nfn other() { assert!(true); }\n");
+    repo.write("docs/plan.md", "# Plan\n\nShip it in 3 weeks.\n");
+    repo.write(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n",
+    );
+    repo.commit("feat: several findings");
+    repo
+}
+
+#[test]
+fn the_same_tree_gives_byte_identical_reports() {
+    let repo = noisy_repo();
+    for format in ["json", "sarif"] {
+        let first = repo.run(&["check", "--format", format, "--base", "main"], &[]);
+        let second = repo.run(&["check", "--format", format, "--base", "main"], &[]);
+        assert_eq!(first.code, 1, "{}", first.stdout);
+        assert_eq!(
+            first.stdout, second.stdout,
+            "{format} output differs between runs"
+        );
+    }
+}
+
+#[test]
+fn stdout_carries_only_the_requested_format() {
+    let repo = noisy_repo();
+    for format in ["json", "sarif"] {
+        let run = repo.run(
+            &[
+                "check",
+                "--format",
+                format,
+                "--base",
+                "main",
+                "--fail-on-warnings",
+            ],
+            &[],
+        );
+        assert!(
+            !run.stderr.is_empty(),
+            "the fixture should print notes on stderr"
+        );
+        let parsed: Result<Value, _> = serde_json::from_str(&run.stdout);
+        assert!(
+            parsed.is_ok(),
+            "{format}: stdout is not a single JSON document:\n{}",
+            run.stdout
+        );
+    }
+    // A run that cannot start prints nothing on stdout (the error is on stderr).
+    repo.write("discipline.toml", "not = [valid\n");
+    let broken = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(broken.code, 2, "{}", broken.stderr);
+    assert_eq!(broken.stdout, "", "exit 2 must not print a partial report");
+}
