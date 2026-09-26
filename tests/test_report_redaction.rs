@@ -58,7 +58,7 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
         });
         shell_outcome.push(
             Severity::Error,
-            rule.title(),
+            rule.kind(),
             Some("deploy.sh"),
             Some(idx + 1),
             rule.message().to_string(),
@@ -103,7 +103,7 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
         };
         pii_outcome.push(
             Severity::Error,
-            "Host / PII Leak",
+            &discipline::findings::HOST_OR_PII_LEAK,
             Some("config.json"),
             Some(idx + 1),
             format!("Found a {detail}."),

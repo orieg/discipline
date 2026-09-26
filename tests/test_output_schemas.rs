@@ -55,6 +55,7 @@ const REPORT_FIELDS: &[&str] = &[
     "outcomes[].suite: string",
     "outcomes[].violations: array",
     "outcomes[].violations[]: object",
+    "outcomes[].violations[].code: string",
     "outcomes[].violations[].file: string|null",
     "outcomes[].violations[].gate: string",
     "outcomes[].violations[].line: integer|null",
@@ -220,7 +221,7 @@ fn committed_schema_files_match_the_generator() {
     }
 }
 
-/// The subset of JSON Schema the two schemas use: `type`, `enum`, `const`, `minimum`,
+/// The subset of JSON Schema the two schemas use: `type`, `enum`, `const`, `pattern`, `minimum`,
 /// `properties` / `required` / `additionalProperties`, `items`, local `$ref`, `oneOf`.
 fn validate(root: &Value, node: &Value, v: &Value, at: &str, errs: &mut Vec<String>) {
     let node = resolve(root, node);
@@ -266,6 +267,11 @@ fn validate(root: &Value, node: &Value, v: &Value, at: &str, errs: &mut Vec<Stri
         if !types.contains(&actual) {
             errs.push(format!("{at}: {actual} where {types:?} is required"));
             return;
+        }
+    }
+    if let (Some(p), Some(s)) = (node.get("pattern").and_then(Value::as_str), v.as_str()) {
+        if !regex::Regex::new(p).unwrap().is_match(s) {
+            errs.push(format!("{at}: `{s}` does not match `{p}`"));
         }
     }
     if let (Some(min), Some(n)) = (node.get("minimum").and_then(Value::as_i64), v.as_i64()) {

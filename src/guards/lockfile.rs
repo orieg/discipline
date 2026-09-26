@@ -39,7 +39,7 @@ pub struct LockEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockFinding {
-    pub title: &'static str,
+    pub kind: &'static crate::findings::FindingKind,
     /// Package name: what an `allow-dependency:` reason must name.
     pub package: String,
     pub message: String,
@@ -505,7 +505,7 @@ pub fn diff_lock(base: &[LockEntry], head: &[LockEntry]) -> Vec<LockFinding> {
             if let Some(message) = finding {
                 if seen.insert(("source", e.name.clone())) {
                     found.push(LockFinding {
-                        title: "Lockfile Entry From New Source",
+                        kind: &crate::findings::LOCKFILE_ENTRY_FROM_NEW_SOURCE,
                         package: e.name.clone(),
                         message,
                     });
@@ -517,7 +517,7 @@ pub fn diff_lock(base: &[LockEntry], head: &[LockEntry]) -> Vec<LockFinding> {
             && seen.insert(("hash", e.name.clone()))
         {
             found.push(LockFinding {
-                title: "Lockfile Integrity Hash Dropped",
+                kind: &crate::findings::LOCKFILE_INTEGRITY_HASH_REMOVED,
                 package: e.name.clone(),
                 message: format!(
                     "`{}` {} carried an integrity hash on the base side and no longer does",
@@ -594,7 +594,7 @@ source = "git+https://git.example.com/pinned?rev=abc#abc"
         let h = parse_lock(file, head).unwrap();
         diff_lock(&b, &h)
             .into_iter()
-            .map(|f| (f.title, f.package))
+            .map(|f| (f.kind.fixed_title(), f.package))
             .collect()
     }
 

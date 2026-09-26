@@ -51,11 +51,12 @@ pub fn report_schema() -> Value {
             "Violation": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["gate", "severity", "title", "file", "line", "message", "remediation"],
+                "required": ["gate", "code", "severity", "title", "file", "line", "message", "remediation"],
                 "properties": {
                     "gate": { "type": "string" },
+                    "code": { "type": "string", "pattern": "^[a-z0-9-]+/[a-z0-9-]+$", "description": "`gate/code`: the finding's stable identity, frozen from 1.0 (the registry in `src/findings.rs`)" },
                     "severity": { "enum": ["error", "warning", "note"] },
-                    "title": { "type": "string", "description": "Part of the baseline fingerprint" },
+                    "title": { "type": "string", "description": "Display text; part of the baseline fingerprint until fingerprints key on `code`" },
                     "file": { "type": ["string", "null"] },
                     "line": { "type": ["integer", "null"], "minimum": 0 },
                     "message": { "type": "string" },

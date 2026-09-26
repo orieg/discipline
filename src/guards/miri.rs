@@ -55,6 +55,7 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
+&crate::findings::MIRI_COULD_NOT_RUN,
                     "miri",
                     1,
                     format!("miri command execution failed: {e}"),
@@ -86,6 +87,7 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
+&crate::findings::MIRI_ZERO_TESTS_EXECUTED,
                     "miri",
                     1,
                     "miri reported 0 tests executed (zero-tests guard triggered)",
@@ -119,6 +121,7 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
             let diag = if !stderr.is_empty() { stderr } else { stdout };
             out.add_violation(
                 ctx.overridable(settings.severity),
+                &crate::findings::MIRI_UNDEFINED_BEHAVIOR,
                 "miri",
                 1,
                 "miri detected undefined behavior or assertion failure",

@@ -94,7 +94,7 @@ const SUSPECT_TOKENS: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
-    pub title: &'static str,
+    pub kind: &'static crate::findings::FindingKind,
     /// Hook name or path: what a directive must name.
     pub subject: String,
     pub line: Option<usize>,
@@ -157,14 +157,14 @@ pub fn judge(file: &ChangedFile, base: Option<&str>, head: Option<&str>) -> Vec<
             let tokens = suspect_in(body);
             if tokens.is_empty() {
                 out.push(Finding {
-                    title: "Install Hook Added",
+                    kind: &crate::findings::INSTALL_HOOK_ADDED,
                     subject: k.clone(),
                     line: None,
                     what: format!("lifecycle script `{k}` in `{}` is new or changed; it runs on every install", file.path),
                 });
             } else {
                 out.push(Finding {
-                    title: "Install Hook Runs Network Or Shell",
+                    kind: &crate::findings::INSTALL_HOOK_NETWORK_OR_SHELL,
                     subject: k.clone(),
                     line: None,
                     what: format!(
@@ -181,7 +181,7 @@ pub fn judge(file: &ChangedFile, base: Option<&str>, head: Option<&str>) -> Vec<
         let Some(head) = head else { return out };
         if file.kind == ChangeKind::Added {
             out.push(Finding {
-                title: "Build Script Added",
+                kind: &crate::findings::BUILD_SCRIPT_ADDED,
                 subject: file.path.clone(),
                 line: None,
                 what: format!("`{}` is new; it runs at build time", file.path),
@@ -195,7 +195,7 @@ pub fn judge(file: &ChangedFile, base: Option<&str>, head: Option<&str>) -> Vec<
             let tokens = suspect_in(line);
             if !tokens.is_empty() {
                 out.push(Finding {
-                    title: "Build Script Gains Network Or Shell Access",
+                    kind: &crate::findings::BUILD_SCRIPT_NETWORK_OR_SHELL,
                     subject: file.path.clone(),
                     line: Some(n),
                     what: format!("line {n} of `{}` adds `{}`", file.path, tokens.join("`, `")),
@@ -206,7 +206,7 @@ pub fn judge(file: &ChangedFile, base: Option<&str>, head: Option<&str>) -> Vec<
     }
     if is_manager_config(&file.path) {
         out.push(Finding {
-            title: "Package Manager Configuration Changed",
+            kind: &crate::findings::PACKAGE_MANAGER_CONFIG_CHANGED,
             subject: file.path.clone(),
             line: None,
             what: format!(
@@ -252,7 +252,7 @@ pub fn build_hooks(ctx: &Context) -> Result<GateOutcome> {
             }
             out.push(
                 ctx.overridable(settings.severity()),
-                f.title,
+                f.kind,
                 Some(&file.path),
                 f.line,
                 format!("{}.", f.what),
@@ -301,7 +301,10 @@ mod tests {
             Some(base),
             Some(head),
         );
-        let titles: Vec<(&str, &str)> = got.iter().map(|f| (f.title, f.subject.as_str())).collect();
+        let titles: Vec<(&str, &str)> = got
+            .iter()
+            .map(|f| (f.kind.fixed_title(), f.subject.as_str()))
+            .collect();
         assert!(
             titles.contains(&("Install Hook Runs Network Or Shell", "postinstall")),
             "{titles:?}"
@@ -321,8 +324,11 @@ mod tests {
             None,
             Some(rs),
         );
-        assert_eq!(got[0].title, "Build Script Added");
-        assert_eq!(got[1].title, "Build Script Gains Network Or Shell Access");
+        assert_eq!(got[0].kind.fixed_title(), "Build Script Added");
+        assert_eq!(
+            got[1].kind.fixed_title(),
+            "Build Script Gains Network Or Shell Access"
+        );
         assert_eq!(got[1].line, Some(3));
         // Only added lines of an existing script are scanned.
         let got = judge(
@@ -337,7 +343,10 @@ mod tests {
             None,
             Some("registry=https://evil.example/\n"),
         );
-        assert_eq!(got[0].title, "Package Manager Configuration Changed");
+        assert_eq!(
+            got[0].kind.fixed_title(),
+            "Package Manager Configuration Changed"
+        );
         assert!(is_manager_config(".env.test") && is_manager_config("api/.cargo/config.toml"));
         assert!(!is_manager_config("docs/env.md") && !is_manager_config("src/config.toml"));
     }

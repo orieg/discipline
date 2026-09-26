@@ -249,6 +249,7 @@ mod tests {
         let mut outcome = GateOutcome::new("assertion-reduction");
         outcome.violations.push(Violation {
             gate: "assertion-reduction",
+            code: "assertion-reduction/fixture".to_string(),
             severity: Severity::Error,
             title: "Strong Assertions Decreased".to_string(),
             file: Some("tests/trie_traversal.rs".to_string()),

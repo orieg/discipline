@@ -163,7 +163,7 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
 
             out.push(
                 ctx.overridable(settings.severity),
-                "Manifest Synchronization Drift",
+                &crate::findings::MANIFEST_DRIFT,
                 Some(&rule.manifest),
                 None,
                 format!(

@@ -941,6 +941,20 @@ fn job_line(workflow_src: &str, job: &str) -> Option<usize> {
         .map(|i| i + 1)
 }
 
+fn registered(kind: FindingKind) -> &'static crate::findings::FindingKind {
+    use crate::findings as f;
+    match kind {
+        FindingKind::ChangeJobMissing => &f::CHANGE_JOB_MISSING_FROM_NEEDS,
+        FindingKind::ChangeJobNotSuccess => &f::CHANGE_JOB_DID_NOT_SUCCEED,
+        FindingKind::UnconditionalMissing => &f::UNCONDITIONAL_JOB_MISSING_FROM_NEEDS,
+        FindingKind::UnconditionalSkipped => &f::UNCONDITIONAL_JOB_SKIPPED,
+        FindingKind::UnknownJob => &f::NEEDS_NAMES_UNDEFINED_JOB,
+        FindingKind::NotUnderstood => &f::SKIP_DECISION_UNVERIFIABLE,
+        FindingKind::SkippedWhileGateTrue => &f::JOB_SKIPPED_WHILE_CONDITION_TRUE,
+        FindingKind::RanWhileGateFalse => &f::JOB_RAN_WHILE_CONDITION_FALSE,
+    }
+}
+
 fn title(kind: FindingKind, job: &str) -> String {
     match kind {
         FindingKind::ChangeJobMissing => {
@@ -1087,11 +1101,11 @@ fn evaluate_with(
     out.examined = report.examined;
     out.notes.extend(report.notes);
     for f in report.findings {
-        out.push(
+        out.push_titled(
             settings.severity,
-            &title(f.kind, &f.job),
-            Some(&workflow),
-            job_line(&workflow_src, &f.job),
+            registered(f.kind),
+            title(f.kind, &f.job),
+            (Some(&workflow), job_line(&workflow_src, &f.job)),
             f.message,
             remediation(f.kind),
         );

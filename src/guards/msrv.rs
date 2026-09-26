@@ -55,6 +55,7 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
         } else {
             out.add_violation(
                 ctx.overridable(settings.severity),
+&crate::findings::MSRV_DECLARATION_MISSING,
                 "Cargo.toml",
                 1,
                 "missing `rust-version` MSRV declaration in Cargo.toml",
@@ -88,6 +89,7 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
                 let diag = if !stderr.is_empty() { stderr } else { stdout };
                 out.add_violation(
                     ctx.overridable(settings.severity),
+                    &crate::findings::MSRV_COMMAND_FAILED,
                     "Cargo.toml",
                     1,
                     format!("MSRV verification command `{cmd}` failed under Rust {version}"),

@@ -8,6 +8,7 @@ pub mod config;
 pub mod docs;
 pub mod doctor;
 pub mod explain;
+pub mod findings;
 pub mod forge;
 pub mod gitctx;
 pub mod guards;

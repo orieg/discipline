@@ -963,7 +963,7 @@ const CASES: &[Case] = &[
             let dropped = diff_lock(&pnpm_base, &pnpm_head);
             Ok(pnpm_base.len() == 1
                 && pnpm_base[0].has_hash
-                && dropped.iter().any(|f| f.title == "Lockfile Integrity Hash Dropped")
+                && dropped.iter().any(|f| f.kind.code == crate::findings::LOCKFILE_INTEGRITY_HASH_REMOVED.code)
                 && uv[0].has_hash
                 && gem[0].name == "rake"
                 && !gem[0].has_hash)
@@ -2100,6 +2100,7 @@ command = "cargo test"
             let mut o = GateOutcome::new("assertion-reduction");
             o.violations.push(Violation {
                 gate: "assertion-reduction",
+                code: "assertion-reduction/fixture".to_string(),
                 severity: Severity::Error,
                 title: "Assertion Reduction In Existing Test".into(),
                 file: Some("src/lib.rs".into()),
@@ -3282,6 +3283,7 @@ smoke_cost::set_contains
             let dummy_root = Path::new(".");
             let v1 = Violation {
                 gate: "unsafe-safety-comment",
+                code: "unsafe-safety-comment/fixture".to_string(),
                 severity: Severity::Error,
                 title: "Unsafe Without SAFETY Comment".to_string(),
                 file: Some("src/lib.rs".to_string()),
@@ -3298,6 +3300,7 @@ smoke_cost::set_contains
 
             let v2 = Violation {
                 gate: "unsafe-safety-comment",
+                code: "unsafe-safety-comment/fixture".to_string(),
                 severity: Severity::Error,
                 title: "Unsafe Without SAFETY Comment".to_string(),
                 file: Some("src/extra.rs".to_string()),

@@ -25,7 +25,7 @@ pub const GATE: &str = "stub-bodies";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
-    pub title: &'static str,
+    pub kind: &'static crate::findings::FindingKind,
     pub name: String,
     pub line: usize,
     pub what: String,
@@ -60,7 +60,7 @@ pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
             None => {
                 if let BodyShape::Stub(m) = &h.shape {
                     found.push(Finding {
-                        title: "Stub Body Added",
+                        kind: &crate::findings::STUB_BODY_ADDED,
                         name: h.name.clone(),
                         line: h.line,
                         what: format!("`{}` is added with the body `{m}` and nothing else", h.name),
@@ -70,7 +70,7 @@ pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
             Some(b) => {
                 if b.shape == BodyShape::Substantive && h.shape != BodyShape::Substantive {
                     found.push(Finding {
-                        title: "Function Body Replaced By Stub",
+                        kind: &crate::findings::BODY_REPLACED_BY_STUB,
                         name: h.name.clone(),
                         line: h.line,
                         what: format!(
@@ -137,7 +137,7 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
             }
             out.push(
                 ctx.overridable(settings.severity()),
-                f.title,
+                f.kind,
                 Some(&file.path),
                 Some(f.line),
                 format!("{} in `{}`.", f.what, file.path),
@@ -187,7 +187,7 @@ mod tests {
         ];
         let got = judge(&[], &head);
         assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0].title, "Stub Body Added");
+        assert_eq!(got[0].kind.fixed_title(), "Stub Body Added");
         assert_eq!(got[0].name, "a");
     }
 
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(names, vec!["a", "b", "c"]);
         assert!(got
             .iter()
-            .all(|g| g.title == "Function Body Replaced By Stub"));
+            .all(|g| g.kind.fixed_title() == "Function Body Replaced By Stub"));
         assert!(judge(&head, &base).iter().all(|g| g.name == "d"));
     }
 

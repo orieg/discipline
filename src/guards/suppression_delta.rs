@@ -253,6 +253,7 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
         for (path, site, pat) in &unwaived {
             out.add_violation(
                 ctx.overridable(settings.severity),
+&crate::findings::SUPPRESSION_ADDED,
                 path,
                 site.line,
                 format!("new {} suppression `{pat}` introduced without override", site.kind),

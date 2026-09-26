@@ -248,7 +248,8 @@ From 1.0, the surfaces below change incompatibly only in a new major version. Ad
 | `src/baseline.rs` | Grandfathering baseline read / write and fingerprints |
 | `src/hook.rs` | `discipline hook run` / `install`: the agent-facing check (base policy, no directives) translated into each agent's hook contract |
 | `src/mcp.rs` | `discipline mcp`: the MCP server over stdio (read-only tools) |
-| `src/explain.rs` | `discipline explain`: a gate's rule, state and lifting directive |
+| `src/explain.rs` | `discipline explain`: a gate's rule, state, finding codes and lifting directive |
+| `src/findings.rs` | The registry of finding kinds: each `gate/code` with its title; a finding that is not registered does not compile |
 | `src/replay.rs` | `discipline replay`: rebuild merged changes in a throwaway repository and check each |
 | `src/comment.rs` | `check --comment`: the one pull-request comment, found by marker and edited in place |
 

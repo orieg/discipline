@@ -417,6 +417,7 @@ mod tests {
 
         let v1 = Violation {
             gate: "pii",
+            code: "pii/fixture".to_string(),
             severity: Severity::Error,
             title: "Host Leak".to_string(),
             file: Some("sample.txt".to_string()),
@@ -432,6 +433,7 @@ mod tests {
 
         let v2 = Violation {
             gate: "pii",
+            code: "pii/fixture".to_string(),
             severity: Severity::Error,
             title: "Host Leak".to_string(),
             file: Some("sample.txt".to_string()),

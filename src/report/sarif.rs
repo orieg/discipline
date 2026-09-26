@@ -171,6 +171,7 @@ mod tests {
                 notes: Vec::new(),
                 violations: vec![Violation {
                     gate: "unsafe-safety-comment",
+                    code: "unsafe-safety-comment/fixture".to_string(),
                     severity: Severity::Error,
                     title: "Undocumented unsafe".to_string(),
                     file: Some("src/lib.rs".to_string()),
@@ -221,6 +222,7 @@ mod tests {
                 notes: Vec::new(),
                 violations: vec![Violation {
                     gate: "time-estimates",
+                    code: "time-estimates/fixture".to_string(),
                     severity: Severity::Error,
                     title: "Time estimate in PR body".to_string(),
                     file: Some("<pr-body>".to_string()),

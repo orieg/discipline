@@ -294,7 +294,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     if let Some(err_msg) = check_untrusted_command_tampering(ctx)? {
         outcome.push(
             gate.severity(),
-            "Untrusted Command Modification",
+            &crate::findings::UNTRUSTED_COMMAND_MODIFICATION,
             Some(ctx.config_path),
             None,
             err_msg,
@@ -475,7 +475,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                 let pf_path = ctx.git.root().join(pf);
                 if !pf_path.exists() {
                     command_violations.push((
-                        "Policy File Deleted",
+                        &crate::findings::POLICY_FILE_DELETED,
                         format!(
                             "Command `{}` required policy file `{pf}` was deleted in this change.",
                             item.name
@@ -503,7 +503,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                 };
                 if !matched {
                     command_violations.push((
-                        "Canary Diagnostic Missing",
+                        &crate::findings::CANARY_DIAGNOSTIC_MISSING,
                         format!(
                             "Command `{}` negative-control canary did not produce expected diagnostic `{expected_diag}`.",
                             item.name
@@ -513,7 +513,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                 }
                 if canary_res.status.success() {
                     command_violations.push((
-                        "Canary Command Succeeded",
+                        &crate::findings::CANARY_COMMAND_SUCCEEDED,
                         format!(
                             "Command `{}` negative-control canary exited with status 0 but was expected to fail.",
                             item.name
@@ -523,7 +523,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                 }
             } else if canary_res.status.success() {
                 command_violations.push((
-                    "Canary Command Succeeded",
+                    &crate::findings::CANARY_COMMAND_SUCCEEDED,
                     format!(
                         "Command `{}` negative-control canary exited with status 0 but was expected to fail.",
                         item.name
@@ -550,7 +550,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "signal".to_string());
             command_violations.push((
-                "Command Exited With Error",
+                &crate::findings::COMMAND_FAILED,
                 format!(
                     "Command `{}` failed with exit status {code_str}.",
                     item.name
@@ -568,7 +568,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             };
             if matched {
                 command_violations.push((
-                    "Forbidden Output Detected",
+                    &crate::findings::FORBIDDEN_OUTPUT,
                     format!(
                         "Command `{}` produced forbidden output matching pattern `{pattern}`.",
                         item.name
@@ -611,7 +611,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
 
         if !item.allow_zero && zero_items {
             command_violations.push((
-                "Zero Items Selected Or Executed",
+                &crate::findings::ZERO_ITEMS_EXECUTED,
                 format!("Command `{}` selected or executed zero items.", item.name),
                 "Ensure test or verification commands select and execute tests.",
             ));
@@ -625,7 +625,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             match extracted_count {
                 Some(cnt) if cnt < effective_floor => {
                     command_violations.push((
-                        "Count Ratchet Regression",
+                        &crate::findings::COUNT_BELOW_RATCHET,
                         format!(
                             "Command `{}` count {cnt} fell below ratchet floor {effective_floor} (enforced from base ref).",
                             item.name
@@ -635,7 +635,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                 }
                 None if item.count_pattern.is_some() => {
                     command_violations.push((
-                        "Count Pattern Did Not Match",
+                        &crate::findings::COUNT_PATTERN_UNMATCHED,
                         format!(
                             "Command `{}` count pattern could not extract count to verify against ratchet floor {effective_floor}.",
                             item.name

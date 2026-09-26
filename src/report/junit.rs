@@ -258,6 +258,7 @@ mod tests {
                 notes: Vec::new(),
                 violations: vec![Violation {
                     gate: "assertion-reduction",
+                    code: "assertion-reduction/fixture".to_string(),
                     severity: Severity::Error,
                     title: "Effective Asserts < Expected & \"Dangerous\"".to_string(),
                     file: Some("tests/a.rs".to_string()),
@@ -304,6 +305,7 @@ mod tests {
                 notes: Vec::new(),
                 violations: vec![Violation {
                     gate: "shell-secrets",
+                    code: "shell-secrets/fixture".to_string(),
                     severity: Severity::Warning,
                     title: "Hardcoded Secret".to_string(),
                     file: Some("deploy.sh".to_string()),

@@ -69,7 +69,8 @@ fn claude_code_hook_blocks_a_weakened_test_with_repair_text_and_no_waiver() {
     let run = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
     assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.stderr.contains("[assertion-reduction]"),
+        run.stderr
+            .contains("[assertion-reduction/assertions-reduced]"),
         "{}",
         run.stderr
     );
@@ -98,7 +99,8 @@ fn a_committed_weakening_on_the_branch_is_seen() {
     let run = hook(&repo, &["hook", "run", "--agent", "codex"], POST_EDIT);
     assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
     assert!(
-        run.stderr.contains("[assertion-reduction]"),
+        run.stderr
+            .contains("[assertion-reduction/assertions-reduced]"),
         "{}",
         run.stderr
     );
@@ -118,7 +120,7 @@ fn cursor_and_aider_get_their_own_contracts() {
     assert!(v["followup_message"]
         .as_str()
         .unwrap()
-        .contains("[assertion-reduction]"));
+        .contains("[assertion-reduction/assertions-reduced]"));
     let aider = hook(
         &repo,
         &["hook", "run", "--agent", "aider", "tests/a.rs"],
@@ -126,7 +128,9 @@ fn cursor_and_aider_get_their_own_contracts() {
     );
     assert_eq!(aider.code, 1, "{}", aider.stderr);
     assert!(
-        aider.stdout.contains("[assertion-reduction]"),
+        aider
+            .stdout
+            .contains("[assertion-reduction/assertions-reduced]"),
         "{}",
         aider.stdout
     );
@@ -239,7 +243,8 @@ fn an_agent_cannot_silence_its_own_hook() {
         run.stderr
     );
     assert!(
-        run.stderr.contains("[assertion-reduction]"),
+        run.stderr
+            .contains("[assertion-reduction/assertions-reduced]"),
         "{}",
         run.stderr
     );
@@ -304,7 +309,7 @@ fn copilot_gets_additional_context_after_an_edit_and_a_block_at_stop() {
     assert!(v["additionalContext"]
         .as_str()
         .unwrap()
-        .contains("[assertion-reduction]"));
+        .contains("[assertion-reduction/assertions-reduced]"));
 
     let stop = hook(
         &repo,
@@ -344,7 +349,7 @@ fn agy_repairs_only_at_stop_and_lets_the_fourth_stop_through() {
         assert!(v["reason"]
             .as_str()
             .unwrap()
-            .contains("[assertion-reduction]"));
+            .contains("[assertion-reduction/assertions-reduced]"));
     }
     // agy documents no loop guard: the fourth consecutive block is let through.
     let fourth = hook(&repo, &["hook", "run", "--agent", "agy"], stop);
@@ -365,7 +370,8 @@ fn qwen_follows_claude_codes_contract_and_opencode_aiders() {
     );
     assert_eq!(qwen.code, 2);
     assert!(
-        qwen.stderr.contains("[assertion-reduction]"),
+        qwen.stderr
+            .contains("[assertion-reduction/assertions-reduced]"),
         "{}",
         qwen.stderr
     );
@@ -379,7 +385,9 @@ fn qwen_follows_claude_codes_contract_and_opencode_aiders() {
     let opencode = hook(&repo, &["hook", "run", "--agent", "opencode"], "");
     assert_eq!(opencode.code, 1);
     assert!(
-        opencode.stdout.contains("[assertion-reduction]"),
+        opencode
+            .stdout
+            .contains("[assertion-reduction/assertions-reduced]"),
         "{}",
         opencode.stdout
     );

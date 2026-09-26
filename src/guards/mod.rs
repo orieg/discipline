@@ -46,6 +46,8 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 pub struct Violation {
     pub gate: &'static str,
+    /// `gate/code`: the finding's stable identity (`crate::findings`).
+    pub code: String,
     pub severity: Severity,
     pub title: String,
     pub file: Option<String>,
@@ -96,19 +98,50 @@ impl GateOutcome {
         }
     }
 
+    /// `gate/code` for a kind this gate may report.
+    pub fn code_of(&self, kind: &crate::findings::FindingKind) -> String {
+        assert!(
+            kind.gates.contains(&self.gate),
+            "gate `{}` reports `{}`, registered for {:?}",
+            self.gate,
+            kind.code,
+            kind.gates
+        );
+        format!("{}/{}", self.gate, kind.code)
+    }
+
+    /// Report a finding of a kind with a fixed title.
     pub fn push(
         &mut self,
         severity: Severity,
-        title: &str,
+        kind: &crate::findings::FindingKind,
         file: Option<&str>,
         line: Option<usize>,
         message: String,
         remediation: &str,
     ) {
+        let title = kind.fixed_title().to_string();
+        self.push_titled(severity, kind, title, (file, line), message, remediation);
+    }
+
+    /// Report a finding whose title the site builds ([`crate::findings::Title::Legacy`]).
+    /// `at` is the file and line, as for [`Self::push`].
+    pub fn push_titled(
+        &mut self,
+        severity: Severity,
+        kind: &crate::findings::FindingKind,
+        title: String,
+        at: (Option<&str>, Option<usize>),
+        message: String,
+        remediation: &str,
+    ) {
+        let (file, line) = at;
+        let code = self.code_of(kind);
         self.violations.push(Violation {
             gate: self.gate,
+            code,
             severity,
-            title: title.to_string(),
+            title,
             file: file.map(str::to_string),
             line,
             message,
@@ -116,24 +149,26 @@ impl GateOutcome {
         });
     }
 
+    /// Report a finding whose title is its message ([`crate::findings::Title::Legacy`]).
     pub fn add_violation(
         &mut self,
         severity: Severity,
+        kind: &crate::findings::FindingKind,
         file: impl AsRef<str>,
         line: usize,
         message: impl Into<String>,
         remediation: impl Into<String>,
     ) {
         let msg = message.into();
-        self.violations.push(Violation {
-            gate: self.gate,
+        let remediation = remediation.into();
+        self.push_titled(
             severity,
-            title: msg.clone(),
-            file: Some(file.as_ref().to_string()),
-            line: Some(line),
-            message: msg,
-            remediation: Some(remediation.into()),
-        });
+            kind,
+            msg.clone(),
+            (Some(file.as_ref()), Some(line)),
+            msg,
+            &remediation,
+        );
     }
 }
 

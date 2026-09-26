@@ -1661,7 +1661,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                 };
                 out.push(
                     ctx.overridable(sev),
-                    "Toolchain Configuration Changed (not analysed)",
+                    &crate::findings::TOOLCHAIN_CHANGE_NOT_ANALYSED,
                     Some(&file.path),
                     None,
                     format!(
@@ -1683,7 +1683,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                         } else {
                             out.push(
                                 ctx.overridable(settings.severity()),
-                                "Toolchain Configuration Deleted",
+                                &crate::findings::TOOLCHAIN_CONFIG_DELETED,
                                 Some(&file.path),
                                 None,
                                 format!("`{}` was deleted; the settings it carried no longer apply.", file.path),
@@ -1698,7 +1698,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                 else {
                     out.push(
                         settings.severity(),
-                        "Toolchain Configuration Unreadable",
+                        &crate::findings::TOOLCHAIN_CONFIG_UNREADABLE,
                         Some(&file.path),
                         None,
                         format!("`{}` could not be parsed on one side, so its weakening could not be checked.", file.path),
@@ -1717,7 +1717,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                     };
                     out.push(
                         ctx.overridable(sev),
-                        "Toolchain Configuration Changed (not analysed)",
+                        &crate::findings::TOOLCHAIN_CHANGE_NOT_ANALYSED,
                         Some(&file.path),
                         None,
                         format!(
@@ -1739,7 +1739,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                     }
                     out.push(
                         ctx.overridable(settings.severity()),
-                        "Toolchain Configuration Weakened",
+                        &crate::findings::TOOLCHAIN_CONFIG_WEAKENED,
                         Some(&file.path),
                         None,
                         format!("`{}` {} in `{}`.", w.key, w.what, file.path),

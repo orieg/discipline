@@ -116,6 +116,7 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
+                    &crate::findings::UNSAFE_BUDGET_EXCEEDED,
                     "workspace",
                     1,
                     format!(
@@ -149,6 +150,7 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
+&crate::findings::UNSAFE_ADDED_WITHOUT_AUTHORIZATION,
                     path,
                     *line,
                     format!("unsafe {} added without budget increase authorization (+{} net)", kind, delta),
@@ -162,6 +164,7 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
+                    &crate::findings::UNSAFE_COUNT_INCREASED,
                     "workspace",
                     1,
                     format!(

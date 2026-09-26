@@ -57,21 +57,21 @@ impl ShellRuleId {
         }
     }
 
-    pub fn title(self) -> &'static str {
+    pub fn kind(self) -> &'static crate::findings::FindingKind {
         match self {
-            ShellRuleId::ArgvEnv => "Unsafe Shell Pattern: ARGV-ENV",
-            ShellRuleId::ArgvDocker => "Unsafe Shell Pattern: ARGV-DOCKER",
-            ShellRuleId::ArgvInline => "Unsafe Shell Pattern: ARGV-INLINE",
-            ShellRuleId::InjectXargs => "Unsafe Shell Pattern: INJECT-XARGS",
-            ShellRuleId::InjectPipe => "Unsafe Shell Pattern: INJECT-PIPE",
-            ShellRuleId::TokenGitHub => "Hardcoded Secret: GitHub Token",
-            ShellRuleId::TokenAws => "Hardcoded Secret: AWS Access Key",
-            ShellRuleId::TokenSlack => "Hardcoded Secret: Slack Token",
-            ShellRuleId::TokenOpenAi => "Hardcoded Secret: OpenAI / Anthropic Token",
-            ShellRuleId::PrivateKeyBlock => "Hardcoded Secret: Private Key Block",
-            ShellRuleId::LiteralBearer => "Hardcoded Secret: Authorization Bearer Token",
-            ShellRuleId::LiteralPassword => "Hardcoded Secret: Command-Line Password Flag",
-            ShellRuleId::LiteralSecretEnv => "Hardcoded Secret: Literal Credential Assignment",
+            ShellRuleId::ArgvEnv => &crate::findings::SHELL_ARGV_ENV,
+            ShellRuleId::ArgvDocker => &crate::findings::SHELL_ARGV_DOCKER,
+            ShellRuleId::ArgvInline => &crate::findings::SHELL_ARGV_INLINE,
+            ShellRuleId::InjectXargs => &crate::findings::SHELL_INJECT_XARGS,
+            ShellRuleId::InjectPipe => &crate::findings::SHELL_INJECT_PIPE,
+            ShellRuleId::TokenGitHub => &crate::findings::SECRET_GITHUB_TOKEN,
+            ShellRuleId::TokenAws => &crate::findings::SECRET_AWS_ACCESS_KEY,
+            ShellRuleId::TokenSlack => &crate::findings::SECRET_SLACK_TOKEN,
+            ShellRuleId::TokenOpenAi => &crate::findings::SECRET_LLM_API_TOKEN,
+            ShellRuleId::PrivateKeyBlock => &crate::findings::SECRET_PRIVATE_KEY_BLOCK,
+            ShellRuleId::LiteralBearer => &crate::findings::SECRET_BEARER_TOKEN,
+            ShellRuleId::LiteralPassword => &crate::findings::SECRET_PASSWORD_FLAG,
+            ShellRuleId::LiteralSecretEnv => &crate::findings::SECRET_CREDENTIAL_ASSIGNMENT,
         }
     }
 
@@ -735,7 +735,7 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
                 };
                 out.push(
                     rule_sev,
-                    rule.title(),
+                    rule.kind(),
                     Some(file),
                     Some(log_line.primary_line),
                     rule.message().to_string(),

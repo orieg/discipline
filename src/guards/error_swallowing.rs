@@ -100,25 +100,25 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                 continue;
             }
             let (title, what) = match site.kind {
-                "discarded-result" => ("Result Discarded", "throws a fallible call's result away"),
+                "discarded-result" => (&crate::findings::RESULT_DISCARDED, "throws a fallible call's result away"),
                 "discarded-value" => (
-                    "Value Discarded",
+                    &crate::findings::VALUE_DISCARDED,
                     "throws a call's value away; the callee is not on the known-fallible list, so this is reported at `warning` at most",
                 ),
                 "logging-handler" => (
-                    "Empty Error Handler Added",
+                    &crate::findings::ERROR_LOGGED_AND_DROPPED,
                     "catches an error, logs it, and does nothing else with it: the failure is recorded and dropped",
                 ),
                 "skipped-input" => (
-                    "Unparseable Input Skipped",
+                    &crate::findings::UNPARSEABLE_INPUT_SKIPPED,
                     "skips an input item that does not parse and goes on with the next; the item is dropped without a count, so this is reported at `warning` at most",
                 ),
                 "silenced-error" => (
-                    "Error Silenced",
+                    &crate::findings::ERROR_SILENCED,
                     "replaces every error it raises with nothing",
                 ),
                 _ => (
-                    "Empty Error Handler Added",
+                    &crate::findings::EMPTY_ERROR_HANDLER_ADDED,
                     "catches an error and does nothing with it",
                 ),
             };

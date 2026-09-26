@@ -178,6 +178,11 @@
     "Violation": {
       "additionalProperties": false,
       "properties": {
+        "code": {
+          "description": "`gate/code`: the finding's stable identity, frozen from 1.0 (the registry in `src/findings.rs`)",
+          "pattern": "^[a-z0-9-]+/[a-z0-9-]+$",
+          "type": "string"
+        },
         "file": {
           "type": [
             "string",
@@ -211,12 +216,13 @@
           ]
         },
         "title": {
-          "description": "Part of the baseline fingerprint",
+          "description": "Display text; part of the baseline fingerprint until fingerprints key on `code`",
           "type": "string"
         }
       },
       "required": [
         "gate",
+        "code",
         "severity",
         "title",
         "file",

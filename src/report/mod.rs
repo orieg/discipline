@@ -462,7 +462,7 @@ pub fn format_agent_prompt(summary: &CheckSummary) -> String {
         out.push_str(&format!(
             "### Issue {} [{}]: {}\n- Location: {}\n- Problem: {}\n- Repair: {}\n\n",
             idx + 1,
-            v.gate,
+            v.code,
             v.title,
             loc,
             v.message,
@@ -568,6 +568,7 @@ mod tests {
         let mut o1 = GateOutcome::new("assertion-reduction");
         o1.violations.push(Violation {
             gate: "assertion-reduction",
+            code: "assertion-reduction/fixture".to_string(),
             severity: Severity::Error,
             title: "Assertion Reduction In Existing Test".into(),
             file: Some("tests/foo.rs".into()),
@@ -579,6 +580,7 @@ mod tests {
         let mut o2 = GateOutcome::new("command");
         o2.violations.push(Violation {
             gate: "command",
+            code: "command/fixture".to_string(),
             severity: Severity::Error,
             title: "Command Gate Failed".into(),
             file: None,
@@ -590,6 +592,7 @@ mod tests {
         let mut o3 = GateOutcome::new("dependency-delta");
         o3.violations.push(Violation {
             gate: "dependency-delta",
+            code: "dependency-delta/fixture".to_string(),
             severity: Severity::Error,
             title: "Disallowed Dependency Added".into(),
             file: Some("Cargo.toml".into()),
@@ -603,6 +606,7 @@ mod tests {
         let mut o4 = GateOutcome::new("deletion-rationale");
         o4.violations.push(Violation {
             gate: "deletion-rationale",
+            code: "deletion-rationale/fixture".to_string(),
             severity: Severity::Error,
             title: "Undocumented Test Deletion".into(),
             file: Some("tests/old.rs".into()),
@@ -614,6 +618,7 @@ mod tests {
         let mut o5 = GateOutcome::new("unsafe-safety-comment");
         o5.violations.push(Violation {
             gate: "unsafe-safety-comment",
+            code: "unsafe-safety-comment/fixture".to_string(),
             severity: Severity::Error,
             title: "Undocumented Unsafe Block".into(),
             file: Some("src/lib.rs".into()),
@@ -752,6 +757,7 @@ mod tests {
         o1.examined = 1;
         o1.violations.push(Violation {
             gate: "agents-md",
+            code: "agents-md/fixture".to_string(),
             severity: Severity::Error,
             title: "Agents MD Missing".into(),
             file: Some("AGENTS.md".into()),
@@ -818,6 +824,7 @@ mod tests {
         o1.examined = 1;
         o1.violations.push(Violation {
             gate: "shell-secrets",
+            code: "shell-secrets/fixture".to_string(),
             severity: Severity::Error,
             title: "Secret <Key> Detected".into(),
             file: Some("<pr-body>".into()),

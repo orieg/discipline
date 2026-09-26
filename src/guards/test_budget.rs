@@ -280,7 +280,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     } else {
                         outcome.violations.push(Violation {
                             gate: GATE,
-                            title: "Fuzz Target Removed".to_string(),
+                            code: crate::findings::full_code(GATE, &crate::findings::FUZZ_TARGET_REMOVED),
+                            title: crate::findings::FUZZ_TARGET_REMOVED.fixed_title().to_string(),
                             message: format!(
                                 "Fuzz target `{target}` was removed from fuzz harness `{}` without an explicit override.",
                                 f.path
@@ -316,7 +317,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 outcome.violations.push(Violation {
                     gate: GATE,
-                    title: "Fuzz Target Deleted".to_string(),
+                    code: crate::findings::full_code(GATE, &crate::findings::FUZZ_TARGET_DELETED),
+                    title: crate::findings::FUZZ_TARGET_DELETED.fixed_title().to_string(),
                     message: format!(
                         "Fuzz target file `{}` was deleted without an explicit override.",
                         f.old_path
@@ -380,7 +382,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 } else {
                     outcome.violations.push(Violation {
                         gate: GATE,
-                        title: "Test Budget Reduced".to_string(),
+                        code: crate::findings::full_code(GATE, &crate::findings::TEST_BUDGET_DECREASED),
+                        title: crate::findings::TEST_BUDGET_DECREASED.fixed_title().to_string(),
                         message: format!(
                             "Testing effort `{}` in `{}` reduced from {} to {}.",
                             base_m.subject, f.path, base_m.value, head_val_str
@@ -416,7 +419,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 outcome.violations.push(Violation {
                     gate: GATE,
-                    title: "Seed Corpus Shrunk".to_string(),
+                    code: crate::findings::full_code(GATE, &crate::findings::SEED_CORPUS_DECREASED),
+                    title: crate::findings::SEED_CORPUS_DECREASED.fixed_title().to_string(),
                     message: format!(
                         "Seed corpus directory `{dir}` lost {deleted_count} seed file(s) without an explicit override."
                     ),

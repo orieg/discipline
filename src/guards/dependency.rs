@@ -725,7 +725,7 @@ fn lock_violation(
     ctx: &Context,
     outcome: &mut GateOutcome,
     severity: Severity,
-    title: &str,
+    kind: &crate::findings::FindingKind,
     file: &str,
     subject: &str,
     message: String,
@@ -736,7 +736,7 @@ fn lock_violation(
     }
     outcome.push(
         ctx.overridable(severity),
-        title,
+        kind,
         Some(file),
         None,
         message,
@@ -909,7 +909,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                 ctx,
                 &mut outcome,
                 gate.severity(),
-                "Lockfile Deleted",
+                &crate::findings::LOCKFILE_DELETED,
                 &f.path,
                 &f.path,
                 format!(
@@ -955,7 +955,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                 ctx,
                 &mut outcome,
                 gate.severity(),
-                finding.title,
+                finding.kind,
                 &f.path,
                 &finding.package,
                 format!("{} in `{}`.", finding.message, f.path),
@@ -1004,7 +1004,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                         ctx,
                         &mut outcome,
                         gate.severity(),
-                        "Manifest Changed Without Lockfile",
+                        &crate::findings::MANIFEST_CHANGED_WITHOUT_LOCKFILE,
                         &f.path,
                         &lock,
                         format!(
@@ -1051,7 +1051,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                     || deny_policy.allow_bans.contains(&h.name);
                 if !allowed {
                     dep_violations.push((
-                        "New Direct Dependency Added",
+                        &crate::findings::DIRECT_DEPENDENCY_ADDED,
                         format!(
                             "Direct dependency `{}` was newly added to `{}`.",
                             h.name, f.path
@@ -1063,7 +1063,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                 // Check loosened version constraint
                 if is_constraint_loosened(b.version.as_deref(), h.version.as_deref()) {
                     dep_violations.push((
-                        "Loosened Dependency Constraint",
+                        &crate::findings::DEPENDENCY_CONSTRAINT_LOOSENED,
                         format!(
                             "Dependency `{}` in `{}` loosened version constraint from `{}` to `{}`.",
                             h.name,
@@ -1080,7 +1080,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                     || (b.is_git && h.is_git && b.git_url != h.git_url);
                 if source_shifted {
                     dep_violations.push((
-                        "Dependency Source Modified",
+                        &crate::findings::DEPENDENCY_SOURCE_CHANGED,
                         format!(
                             "Dependency `{}` in `{}` modified its source specification (git: {} -> {}, path: {} -> {}).",
                             h.name, f.path, b.is_git, h.is_git, b.is_path, h.is_path
@@ -1094,7 +1094,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             let enforce_wildcards = !gate.allow_wildcards || deny_policy.wildcards_denied;
             if enforce_wildcards && h.is_wildcard {
                 dep_violations.push((
-                    "Wildcard Dependency Version",
+                    &crate::findings::WILDCARD_DEPENDENCY_VERSION,
                     format!(
                         "Dependency `{}` in `{}` specifies a wildcard or unconstrained version `{}`.",
                         h.name,
@@ -1108,7 +1108,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             // 2. Git pin check
             if gate.require_git_pins && h.is_git && h.git_pin.is_none() {
                 dep_violations.push((
-                    "Unpinned Git Dependency",
+                    &crate::findings::UNPINNED_GIT_DEPENDENCY,
                     format!(
                         "Git dependency `{}` in `{}` does not specify an immutable commit or tag pin.",
                         h.name, f.path
@@ -1120,7 +1120,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             // 3. Deny / Banned dependency checks
             if gate.deny_dependencies.contains(&h.name) || deny_policy.deny_bans.contains(&h.name) {
                 dep_violations.push((
-                    "Banned Dependency",
+                    &crate::findings::BANNED_DEPENDENCY,
                     format!(
                         "Dependency `{}` in `{}` is banned by repository policy.",
                         h.name, f.path
@@ -1132,7 +1132,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             // 4. Allowlist checks
             if !gate.allow_dependencies.is_empty() && !gate.allow_dependencies.contains(&h.name) {
                 dep_violations.push((
-                    "Dependency Outside Allowlist",
+                    &crate::findings::DEPENDENCY_OUTSIDE_ALLOWLIST,
                     format!(
                         "Dependency `{}` in `{}` is not in the allowed dependencies list.",
                         h.name, f.path
@@ -1142,7 +1142,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             }
             if !deny_policy.allow_bans.is_empty() && !deny_policy.allow_bans.contains(&h.name) {
                 dep_violations.push((
-                    "Dependency Outside Allowlist",
+                    &crate::findings::DEPENDENCY_OUTSIDE_DENY_ALLOWLIST,
                     format!(
                         "Dependency `{}` in `{}` is not in deny.toml allow list.",
                         h.name, f.path
@@ -1157,7 +1157,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                     let allowed = deny_policy.allow_git.iter().any(|a| url.starts_with(a));
                     if !allowed {
                         dep_violations.push((
-                            "Unauthorized Git Repository Source",
+                            &crate::findings::UNAUTHORIZED_GIT_SOURCE,
                             format!(
                                 "Git dependency `{}` from source `{}` is not in deny.toml allow-git sources.",
                                 h.name, url

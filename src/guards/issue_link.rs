@@ -49,7 +49,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             directive_in_subject_found = true;
             out.push(
                 settings.severity(),
-                "Directive in Subject Line",
+                &crate::findings::DIRECTIVE_IN_SUBJECT_LINE,
                 None,
                 None,
                 format!(
@@ -67,7 +67,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
                 directive_in_subject_found = true;
                 out.push(
                     settings.severity(),
-                    "Directive in Subject Line",
+                    &crate::findings::DIRECTIVE_IN_SUBJECT_LINE,
                     None,
                     None,
                     format!(
@@ -86,7 +86,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             if let Some(dir) = tokens::find_directive_in_subject(subject) {
                 out.push(
                     settings.severity(),
-                    "Directive in Subject Line",
+                    &crate::findings::DIRECTIVE_IN_SUBJECT_LINE,
                     None,
                     None,
                     format!(
@@ -118,7 +118,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             }
             out.push(
                 settings.severity(),
-                "Missing Tracking Issue Link in Commit Message",
+                &crate::findings::ISSUE_LINK_MISSING_IN_COMMIT_MESSAGE,
                 None,
                 None,
                 "Commit message does not reference a tracking issue (#123) and lacks a no-issue waiver.".to_string(),
@@ -163,7 +163,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
                 } else {
                     out.push(
                         settings.severity(),
-                        "Missing Tracking Issue Link in Commits",
+                        &crate::findings::ISSUE_LINK_MISSING_IN_COMMITS,
                         None,
                         None,
                         "No commit message on the branch references a tracking issue (#123) and lack a no-issue waiver."
@@ -201,7 +201,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
     // 3. Report violation
     out.push(
         settings.severity(),
-        "Missing Tracking Issue Link",
+        &crate::findings::ISSUE_LINK_MISSING,
         None,
         None,
         "Pull request title and body do not reference any tracking issue (#123, Fixes #123) and lack a no-issue waiver."

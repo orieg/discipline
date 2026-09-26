@@ -63,11 +63,15 @@ fn evaluate_findings_for_directive(
         if let Some(ov) = tokens::find_override(&directives, gate, directive_names, subj) {
             outcome.overrides.push(ov);
         } else {
-            outcome.push(
+            let kind = discipline::findings::FINDINGS
+                .iter()
+                .find(|k| k.gates.contains(&gate))
+                .unwrap_or_else(|| panic!("no finding kind registered for `{gate}`"));
+            outcome.push_titled(
                 Severity::Error,
-                &format!("Violation on {subj}"),
-                None,
-                None,
+                kind,
+                format!("Violation on {subj}"),
+                (None, None),
                 format!("Unexcused violation on subject '{subj}'"),
                 "Provide a scoped override directive.",
             );

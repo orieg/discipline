@@ -56,6 +56,10 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`version-lockstep`](#version-lockstep) | integrity | **shipped** | any | version declarations across headers, manifests, and files must remain in lockstep |
 <!-- /generated -->
 
+### Finding Codes
+
+Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacuous-tests/vacuous-test-added`): the `code` field of the JSON report and the `[gate/code]` heading of the `agent-prompt` report that hooks and `discipline mcp` hand to agents. `discipline explain <gate>` lists a gate's codes. The code names what the finding protects, not how it is detected: a gate that learns to catch more cases of the same problem keeps the code. Codes are registered in `src/findings.rs`; the title beside a code is display text.
+
 ### Directive Policy
 
 Each gate has at most one canonical directive (with at most one documented deprecated spelling); `allow-test-shrink` serves both `test-floor` and `test-budget`. A few gates (`unsafe-safety-comment`, `agents-md`, `pii`, `agent-scratch`, `ci-skip-set`, `time-estimates`) have no directive: they are lifted by fixing the finding, an inline marker where the gate documents one, or `exempt_paths`. Directives must be scoped to their natural subject (file path, test name, action ref, workflow job, dependency name, or rule identifier). Blanket waivers without subjects are rejected.

@@ -58,7 +58,8 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                         out.violations.push(Violation {
                             gate: GATE,
                             severity: ctx.overridable(settings.severity),
-                            title: "Floor Constant Missing in Base Ref".to_string(),
+                            code: crate::findings::full_code(GATE, &crate::findings::FLOOR_CONSTANT_MISSING_IN_BASE),
+                            title: crate::findings::FLOOR_CONSTANT_MISSING_IN_BASE.fixed_title().to_string(),
                             file: Some(const_file.clone()),
                             line: None,
                             message: format!(
@@ -80,7 +81,8 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                     out.violations.push(Violation {
                         gate: GATE,
                         severity: ctx.overridable(settings.severity),
-                        title: "Floor Constant File Missing in Base Ref".to_string(),
+                        code: crate::findings::full_code(GATE, &crate::findings::FLOOR_CONSTANT_FILE_MISSING_IN_BASE),
+                        title: crate::findings::FLOOR_CONSTANT_FILE_MISSING_IN_BASE.fixed_title().to_string(),
                         file: Some(const_file.clone()),
                         line: None,
                         message: format!("Base ref does not contain floor constant file '{const_file}'."),
@@ -123,7 +125,8 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                                     out.violations.push(Violation {
                                         gate: GATE,
                                         severity: ctx.overridable(settings.severity),
-                                        title: "Floor Constant Decreased".to_string(),
+                                        code: crate::findings::full_code(GATE, &crate::findings::FLOOR_CONSTANT_DECREASED),
+                                        title: crate::findings::FLOOR_CONSTANT_DECREASED.fixed_title().to_string(),
                                         file: Some(const_file.clone()),
                                         line: None,
                                         message: format!(
@@ -160,7 +163,8 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                 out.violations.push(Violation {
                     gate: GATE,
                     severity: ctx.overridable(settings.severity),
-                    title: "Configured Test Floor Decreased".to_string(),
+                    code: crate::findings::full_code(GATE, &crate::findings::CONFIGURED_FLOOR_DECREASED),
+                    title: crate::findings::CONFIGURED_FLOOR_DECREASED.fixed_title().to_string(),
                     file: Some(ctx.config_path.to_string()),
                     line: None,
                     message: msg,
@@ -183,7 +187,8 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                 out.violations.push(Violation {
                     gate: GATE,
                     severity: ctx.overridable(settings.severity),
-                    title: "Required Test Suite Missing".to_string(),
+                    code: crate::findings::full_code(GATE, &crate::findings::REQUIRED_SUITE_MISSING),
+                    title: crate::findings::REQUIRED_SUITE_MISSING.fixed_title().to_string(),
                     file: Some(suite.clone()),
                     line: None,
                     message: format!("Required test suite file '{suite}' is missing from the repository."),
@@ -230,7 +235,8 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                 out.violations.push(Violation {
                     gate: GATE,
                     severity: ctx.overridable(settings.severity),
-                    title: "Test Count Below Floor".to_string(),
+                    code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
+                    title: crate::findings::TEST_COUNT_BELOW_FLOOR.fixed_title().to_string(),
                     file: None,
                     line: None,
                     message: format!(
@@ -255,7 +261,8 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                 out.violations.push(Violation {
                     gate: GATE,
                     severity: ctx.overridable(settings.severity),
-                    title: "Test Count Below Floor".to_string(),
+                    code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
+                    title: crate::findings::TEST_COUNT_BELOW_FLOOR.fixed_title().to_string(),
                     file: None,
                     line: None,
                     message: format!(

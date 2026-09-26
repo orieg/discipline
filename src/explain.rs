@@ -7,11 +7,20 @@
 use crate::config::{GateInfo, Severity, GATES};
 use crate::tokens::DIRECTIVE_SPECS;
 
-/// The gate a query names: an exact id, a finding line containing `[gate-id]`, or
-/// text containing an id (the longest match wins).
+/// The gate a query names: an exact id or finding code (`gate/code`), a finding line
+/// containing `[gate/code]` or `[gate-id]`, or text containing an id (the longest match
+/// wins).
 pub fn gate_for(query: &str) -> Option<&'static GateInfo> {
     let q = query.trim();
-    if let Some(g) = GATES.iter().find(|g| g.id == q) {
+    let id = q.split_once('/').map_or(q, |(gate, _)| gate);
+    if let Some(g) = GATES.iter().find(|g| g.id == id) {
+        return Some(g);
+    }
+    if let Some(g) = GATES
+        .iter()
+        .filter(|g| q.contains(&format!("[{}/", g.id)))
+        .max_by_key(|g| g.id.len())
+    {
         return Some(g);
     }
     let longest = |pred: &dyn Fn(&str) -> bool| {
@@ -51,6 +60,22 @@ pub fn render(g: &GateInfo, state: Option<(bool, Severity)>) -> String {
         (true, None) => "on".to_string(),
     };
     out.push_str(&format!("  Here:        {here}\n"));
+    let kinds: Vec<_> = crate::findings::FINDINGS
+        .iter()
+        .filter(|k| k.gates.contains(&g.id))
+        .collect();
+    for (i, k) in kinds.iter().enumerate() {
+        let label = if i == 0 {
+            "  Findings:   "
+        } else {
+            "              "
+        };
+        let title = match k.title {
+            crate::findings::Title::Fixed(t) => t,
+            crate::findings::Title::Legacy => "(title carries the details)",
+        };
+        out.push_str(&format!("{label} {}/{}  {title}\n", g.id, k.code));
+    }
     let specs: Vec<_> = DIRECTIVE_SPECS.iter().filter(|s| s.gate == g.id).collect();
     if specs.is_empty() {
         out.push_str("  Lifted by:   no directive; change the code, or change the gate in discipline.toml (a config-integrity weakening)\n");
@@ -122,6 +147,31 @@ mod tests {
             "pii"
         );
         assert!(gate_for("zzz").is_none());
+        // Each gate's explanation lists its finding codes.
+        let ci = render(gate_for("ci-integrity").unwrap(), None);
+        assert!(
+            ci.contains("ci-integrity/unpinned-action  Unpinned Third-Party Action"),
+            "{ci}"
+        );
+        // A finding code, alone or in an agent-prompt heading, names its gate even when
+        // the code's slug contains another gate's id.
+        assert_eq!(
+            gate_for("ci-integrity/unpinned-action").unwrap().id,
+            "ci-integrity"
+        );
+        assert_eq!(
+            gate_for("### Issue 1 [agents-md/agent-guide-forked]: Forked Agent Guide")
+                .unwrap()
+                .id,
+            "agents-md"
+        );
+        // `msrv/msrv-command-failed` contains the longer gate id `command`.
+        assert_eq!(
+            gate_for("### Issue 1 [msrv/msrv-command-failed]: MSRV check failed")
+                .unwrap()
+                .id,
+            "msrv"
+        );
         assert!(suggestions("swallow").contains(&"error-swallowing"));
     }
 }

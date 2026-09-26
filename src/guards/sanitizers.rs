@@ -51,6 +51,7 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
                 } else {
                     out.add_violation(
                         ctx.overridable(settings.severity),
+                        &crate::findings::SANITIZER_CANARY_DIAGNOSTIC_MISSING,
                         "sanitizers-canary",
                         1,
                         "sanitizer negative-control canary failed to produce expected diagnostic",
@@ -87,6 +88,7 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
+&crate::findings::SANITIZER_COULD_NOT_RUN,
                     "sanitizers",
                     1,
                     format!("sanitizer command execution failed: {e}"),
@@ -126,6 +128,7 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
             };
             out.add_violation(
                 ctx.overridable(settings.severity),
+                &crate::findings::SANITIZER_VIOLATION_DETECTED,
                 "sanitizers",
                 1,
                 format!(

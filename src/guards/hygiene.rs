@@ -20,7 +20,7 @@ pub fn evaluate_agents_guide(
     if !has_agents_md {
         out.push(
             settings.severity(),
-            "Missing AGENTS.md",
+            &crate::findings::AGENTS_MD_MISSING,
             Some("AGENTS.md"),
             None,
             "The repository tracks no canonical AGENTS.md to govern AI agent behavior.".to_string(),
@@ -37,7 +37,7 @@ pub fn evaluate_agents_guide(
         if *head_content != canonical_content {
             out.push(
                 settings.severity(),
-                "Forked Agent Guide",
+                &crate::findings::AGENT_GUIDE_FORKED,
                 Some(alias),
                 None,
                 format!("`{alias}` is a regular file whose content differs from AGENTS.md."),
@@ -633,7 +633,7 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
             }
             out.push(
                 settings.severity(),
-                "Time Estimate",
+                &crate::findings::TIME_ESTIMATE,
                 Some(label),
                 Some(line_num),
                 format!("Calendar / duration estimate `{}`.", hit_str),
@@ -952,7 +952,7 @@ fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bo
                     };
                     out.push(
                         opts.settings.severity(),
-                        "Host / PII Leak",
+                        &crate::findings::HOST_OR_PII_LEAK,
                         Some(opts.label),
                         Some(line_num),
                         format!("Found a {detail}."),
@@ -1099,7 +1099,7 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
             };
             out.push(
                 settings.severity(),
-                "Host / PII Leak",
+                &crate::findings::HOST_OR_PII_LEAK,
                 Some(label),
                 Some(idx + 1),
                 format!("Found a {detail}."),
@@ -1182,7 +1182,7 @@ pub fn agent_scratch(ctx: &Context) -> Result<GateOutcome> {
         if forbidden.matches(&path) && !exempt.matches(&path) {
             out.push(
                 settings.severity(),
-                "Tracked Agent Scratch State",
+                &crate::findings::AGENT_SCRATCH_TRACKED,
                 Some(&path),
                 None,
                 format!("`{path}` matches a forbidden agent-scratch pattern and is tracked."),

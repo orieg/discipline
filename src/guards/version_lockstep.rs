@@ -132,7 +132,7 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
                 // consensus, so an annotation lands where the edit is needed.
                 out.push(
                     ctx.overridable(settings.severity),
-                    "Version Declaration Lockstep Mismatch",
+                    &crate::findings::VERSION_MISMATCH,
                     Some(first_drifted),
                     None,
                     format!(

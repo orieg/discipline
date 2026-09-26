@@ -15,7 +15,7 @@ use serde_yaml::Value;
 /// One weakening of a GitLab pipeline file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitlabWeakening {
-    pub title: &'static str,
+    pub kind: &'static crate::findings::FindingKind,
     pub job: String,
     pub message: String,
     /// What an `allow-ci-weakening:` reason must name.
@@ -198,7 +198,7 @@ pub fn diff_gitlab_ci_with(
     for (name, b) in &base_jobs {
         if !head_jobs.contains_key(name) && !name.starts_with('.') && is_verification_job(name, b) {
             found.push(GitlabWeakening {
-                title: "Deletion of Verification Job",
+                kind: &crate::findings::VERIFICATION_JOB_REMOVED,
                 job: name.clone(),
                 message: format!("Verification job '{name}' was deleted from the pipeline."),
                 subject: name.clone(),
@@ -210,7 +210,7 @@ pub fn diff_gitlab_ci_with(
         let b = base_jobs.get(name);
         if allows_failure(h) && !b.is_some_and(allows_failure) {
             found.push(GitlabWeakening {
-                title: "allow_failure Masks Failure",
+                kind: &crate::findings::JOB_FAILURE_MASKED_ALLOW_FAILURE,
                 job: name.clone(),
                 message: format!(
                     "Job '{name}' carries 'allow_failure', so its failure no longer fails the pipeline."
@@ -223,7 +223,7 @@ pub fn diff_gitlab_ci_with(
         if let Some(b) = b {
             if is_manual(h) && !is_manual(b) && is_verification_job(name, b) {
                 found.push(GitlabWeakening {
-                    title: "Verification Job Made Manual",
+                    kind: &crate::findings::VERIFICATION_JOB_MADE_MANUAL,
                     job: name.clone(),
                     message: format!(
                         "Verification job '{name}' was changed to 'when: manual'; it no longer runs on its own."
@@ -241,7 +241,7 @@ pub fn diff_gitlab_ci_with(
                     let hv = h.get(key);
                     if bv != hv && hv.is_some() {
                         found.push(GitlabWeakening {
-                            title: "Verification Job Narrowed",
+                            kind: &crate::findings::VERIFICATION_JOB_NARROWED,
                             job: name.clone(),
                             message: format!(
                                 "Verification job '{name}' {} '{key}:'; it may no longer run on every pipeline it ran on before.",
@@ -259,7 +259,7 @@ pub fn diff_gitlab_ci_with(
             && !base_lines.iter().any(|l| masks_exit_code(l))
         {
             found.push(GitlabWeakening {
-                title: "Command Masks Exit Code",
+                kind: &crate::findings::EXIT_CODE_MASKED,
                 job: name.clone(),
                 message: format!(
                     "Job '{name}' gained a script line that masks a command's exit code ('|| true', '|| :' or 'set +e')."
@@ -270,7 +270,7 @@ pub fn diff_gitlab_ci_with(
         let advisory = |lines: &[String]| super::ci_integrity::run_is_advisory(&lines.join("\n"));
         if advisory(&head_lines) && !advisory(&base_lines) {
             found.push(GitlabWeakening {
-                title: "Discipline Run Weakened (--advisory)",
+                kind: &crate::findings::DISCIPLINE_RUN_ADVISORY,
                 job: name.clone(),
                 message: format!(
                     "Job '{name}' runs discipline with '--advisory'; it exits 0 whatever the gates report."
@@ -305,7 +305,7 @@ mod tests {
         diff_gitlab_ci(BASE, head)
             .unwrap()
             .into_iter()
-            .map(|w| (w.title, w.job))
+            .map(|w| (w.kind.fixed_title(), w.job))
             .collect()
     }
 
@@ -400,7 +400,7 @@ mod tests {
         let base_inc = "unit-tests:\n  stage: test\n  script:\n    - cargo test\n".to_string();
         let head_inc = "unit-tests:\n  stage: test\n  script:\n    - cargo test\n  allow_failure: true\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n".to_string();
         let found = diff_gitlab_ci_with(&[main.clone(), base_inc], &[main, head_inc]).unwrap();
-        let titles: Vec<&str> = found.iter().map(|w| w.title).collect();
+        let titles: Vec<&str> = found.iter().map(|w| w.kind.fixed_title()).collect();
         assert!(
             titles.contains(&"allow_failure Masks Failure"),
             "{titles:?}"

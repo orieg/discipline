@@ -491,6 +491,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
     };
     fatal_outcome.add_violation(
         discipline::guards::Severity::Error,
+        &discipline::findings::ENGINE_COULD_NOT_RUN,
         "engine",
         1,
         format!("fatal error during check execution: {err}"),

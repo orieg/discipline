@@ -121,7 +121,7 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
     if !missing_paths.is_empty() {
         out.push(
             ctx.overridable(settings.severity),
-            "Missing Required Archive Path",
+            &crate::findings::REQUIRED_ARCHIVE_PATH_MISSING,
             Some(&rel_archive_display),
             None,
             format!(
@@ -168,7 +168,7 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
 
         out.push(
             ctx.overridable(settings.severity),
-            "Forbidden Entry Found in Archive",
+            &crate::findings::FORBIDDEN_ARCHIVE_ENTRY,
             Some(&rel_archive_display),
             None,
             format!(
@@ -298,7 +298,7 @@ fn report_scan(
         }
         out.push(
             ctx.overridable(settings.severity),
-            "Source Leaked In Archive",
+            &crate::findings::SOURCE_LEAKED_IN_ARCHIVE,
             Some(archive),
             None,
             format!(
@@ -326,7 +326,7 @@ fn report_scan(
         };
         out.push(
             severity,
-            "Source Map Shipped",
+            &crate::findings::SOURCE_MAP_SHIPPED,
             Some(archive),
             None,
             format!(

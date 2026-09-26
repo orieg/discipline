@@ -87,7 +87,7 @@ fn reviewed_by_someone_else(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
-    pub title: &'static str,
+    pub kind: &'static crate::findings::FindingKind,
     pub sha: String,
     pub what: String,
 }
@@ -105,7 +105,7 @@ pub fn judge(
         for key in required {
             if !has_trailer(&t, key) {
                 out.push(Finding {
-                    title: "Commit Trailer Missing",
+                    kind: &crate::findings::COMMIT_TRAILER_MISSING,
                     sha: c.sha.clone(),
                     what: format!("commit {short} has no `{key}:` trailer"),
                 });
@@ -114,7 +114,7 @@ pub fn judge(
         if !review_key.is_empty() && is_agent_commit(c, &t, markers) {
             if !has_trailer(&t, review_key) {
                 out.push(Finding {
-                    title: "Agent Commit Without Review",
+                    kind: &crate::findings::AGENT_COMMIT_WITHOUT_REVIEW,
                     sha: c.sha.clone(),
                     what: format!(
                         "commit {short} identifies itself as agent-produced and carries no `{review_key}:` trailer"
@@ -122,7 +122,7 @@ pub fn judge(
                 });
             } else if !reviewed_by_someone_else(c, &t, review_key) {
                 out.push(Finding {
-                    title: "Agent Commit Reviewed By Its Author",
+                    kind: &crate::findings::AGENT_COMMIT_REVIEWED_BY_AUTHOR,
                     sha: c.sha.clone(),
                     what: format!(
                         "commit {short} is agent-produced and its `{review_key}:` trailer names its own author"
@@ -162,7 +162,7 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
         }
         out.push(
             ctx.overridable(settings.severity()),
-            f.title,
+            f.kind,
             None,
             None,
             format!("{}.", f.what),
@@ -217,18 +217,21 @@ mod tests {
         let unsigned = commit("Ada", "ada@x", "feat: x\n");
         let f = judge(&[unsigned], &v(&["Signed-off-by"]), &markers, "Reviewed-by");
         assert_eq!(f.len(), 1);
-        assert_eq!(f[0].title, "Commit Trailer Missing");
+        assert_eq!(f[0].kind.fixed_title(), "Commit Trailer Missing");
 
         let agent = commit("Ada", "ada@x", "feat: x\n\nAgent-Tool: coder 1.2\n");
         let f = judge(&[agent], &[], &markers, "Reviewed-by");
-        assert_eq!(f[0].title, "Agent Commit Without Review");
+        assert_eq!(f[0].kind.fixed_title(), "Agent Commit Without Review");
         let self_reviewed = commit(
             "Ada",
             "ada@x",
             "feat: x\n\nAgent-Tool: coder 1.2\nReviewed-by: Ada <ada@x>\n",
         );
         let f = judge(&[self_reviewed], &[], &markers, "Reviewed-by");
-        assert_eq!(f[0].title, "Agent Commit Reviewed By Its Author");
+        assert_eq!(
+            f[0].kind.fixed_title(),
+            "Agent Commit Reviewed By Its Author"
+        );
         let reviewed = commit(
             "Ada",
             "ada@x",
@@ -242,7 +245,9 @@ mod tests {
             "feat: x\n",
         );
         assert_eq!(
-            judge(&[bot], &[], &markers, "Reviewed-by")[0].title,
+            judge(&[bot], &[], &markers, "Reviewed-by")[0]
+                .kind
+                .fixed_title(),
             "Agent Commit Without Review"
         );
         // Without a review key the agent rule is off.

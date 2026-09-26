@@ -92,7 +92,7 @@ static PAIRED_FALLBACK_PAT: LazyLock<Regex> = LazyLock::new(|| {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HygieneFinding {
     pub line: usize,
-    pub title: &'static str,
+    pub kind: &'static crate::findings::FindingKind,
     pub message: String,
     pub remediation: &'static str,
     pub is_warning: bool,
@@ -297,7 +297,7 @@ pub fn scan_markdown_text_with_policy(
                     if has_unit {
                         findings.push(HygieneFinding {
                             line: start_line,
-                            title: "Unprovenanced Table Numerics",
+                            kind: &crate::findings::TABLE_NUMERICS_UNPROVENANCED,
                             message: "Markdown table contains unit-bearing numbers without a provenance tag (measured: host, commit), (target), or (projected).".to_string(),
                             remediation: "Add a provenance tag to the table caption or header, e.g. *(measured: host, commit)* or *(target)*.",
                             is_warning: true,
@@ -370,7 +370,7 @@ pub fn scan_markdown_text_with_policy(
                     if let Some(m) = MECHANISM_TERMS.find(text) {
                         findings.push(HygieneFinding {
                             line: *line_num,
-                            title: "Mechanism Claim Without Evidence",
+                            kind: &crate::findings::MECHANISM_CLAIM_WITHOUT_EVIDENCE,
                             message: format!(
                                 "Paragraph asserts mechanism `{}` without citing hardware counter evidence or an explicit hypothesis qualifier.",
                                 m.as_str()
@@ -403,7 +403,7 @@ pub fn scan_markdown_text_with_policy(
                     {
                         findings.push(HygieneFinding {
                             line: *line_num,
-                            title: "Bare Wall-Clock Ratio Without Interval",
+                            kind: &crate::findings::WALL_CLOCK_RATIO_WITHOUT_INTERVAL,
                             message: "Published wall-clock speedup or slowdown ratio lacks confidence interval [lo, hi] or explicit qualifier.".to_string(),
                             remediation: "Add confidence interval [lo, hi] (e.g. BCa 95% CI) or qualify as provisional / unmeasured / unsourced.",
                             is_warning: false,
@@ -437,7 +437,7 @@ pub fn scan_markdown_text_with_policy(
                     {
                         findings.push(HygieneFinding {
                             line: *line_num,
-                            title: "Paired Figures Without Workload Tag",
+                            kind: &crate::findings::PAIRED_FIGURES_WITHOUT_WORKLOAD_TAG,
                             message: format!(
                                 "Paired figures `{}` lack a shared workload tag (workload: id) or differentiation marker.",
                                 m.as_str().trim()
@@ -475,7 +475,7 @@ pub fn scan_markdown_text_with_policy(
                     if classes_count >= 2 {
                         findings.push(HygieneFinding {
                             line: *line_num,
-                            title: "Cross-Metric Figures Without Workload Tag",
+                            kind: &crate::findings::CROSS_METRIC_FIGURES_WITHOUT_WORKLOAD_TAG,
                             message: "Cross-metric figures in the same sentence lack a shared workload tag (workload: id) or differentiation marker.".to_string(),
                             remediation: "Add (workload: id), (workloads differ: a vs b), or an explicit retraction marker.",
                             is_warning: false,
@@ -595,7 +595,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                 };
                 out.push(
                     severity,
-                    f.title,
+                    f.kind,
                     Some(path),
                     Some(f.line),
                     f.message,
@@ -636,7 +636,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
             };
             out.push(
                 severity,
-                f.title,
+                f.kind,
                 Some("PR body"),
                 Some(f.line),
                 f.message,
@@ -711,7 +711,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                 } else {
                     out.push(
                         settings.severity(),
-                        "Superseded Figure Republished",
+                        &crate::findings::SUPERSEDED_FIGURE_REPUBLISHED,
                         Some(path),
                         line,
                         message,
@@ -725,7 +725,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
             for h in claim_registry::scan_superseded(&stripped, figures)? {
                 out.push(
                     settings.severity(),
-                    "Superseded Figure Republished",
+                    &crate::findings::SUPERSEDED_FIGURE_REPUBLISHED,
                     Some("PR body"),
                     Some(h.line),
                     format!(
@@ -773,7 +773,7 @@ fn pending_finding((line, problem): (usize, claim_registry::PendingProblem)) -> 
     };
     HygieneFinding {
         line,
-        title: "Pending Measurement Without Open Issue",
+        kind: &crate::findings::PENDING_MEASUREMENT_WITHOUT_OPEN_ISSUE,
         message,
         remediation: "Cite an open tracking issue (#123) after the pending statement, or state the measured result.",
         is_warning: false,
@@ -814,7 +814,10 @@ mod tests {
         let untagged = "| arm | ns |\n|---|---|\n| a | 35.8 ns |\n";
         let findings = scan_markdown_text(untagged, "t.md", true, false, false, false);
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].title, "Unprovenanced Table Numerics");
+        assert_eq!(
+            findings[0].kind.fixed_title(),
+            "Unprovenanced Table Numerics"
+        );
 
         let tagged = "*(measured: host, commit)*\n| arm | ns |\n|---|---|\n| a | 35.8 ns |\n";
         let findings = scan_markdown_text(tagged, "t.md", true, false, false, false);
@@ -827,7 +830,10 @@ mod tests {
             "The arm is memory-latency-bound, so the work removed is off the critical path.\n";
         let findings = scan_markdown_text(claim, "t.md", false, true, false, false);
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].title, "Mechanism Claim Without Evidence");
+        assert_eq!(
+            findings[0].kind.fixed_title(),
+            "Mechanism Claim Without Evidence"
+        );
 
         let evidence = "The arm is memory-latency-bound according to perf stat counters.\n";
         let findings = scan_markdown_text(evidence, "t.md", false, true, false, false);
@@ -843,7 +849,10 @@ mod tests {
         let bare = "Point lookups are 2.9x faster than BTreeMap at 1M keys.\n";
         let findings = scan_markdown_text(bare, "t.md", false, false, true, false);
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].title, "Bare Wall-Clock Ratio Without Interval");
+        assert_eq!(
+            findings[0].kind.fixed_title(),
+            "Bare Wall-Clock Ratio Without Interval"
+        );
 
         let interval = "Random 1M get is 1.031x, BCa 95% CI [1.024, 1.038].\n";
         let findings = scan_markdown_text(interval, "t.md", false, false, true, false);
@@ -855,7 +864,10 @@ mod tests {
         let bare = "Sequential lookup is 11.9 ns vs 108.9 ns at 1M keys.\n";
         let findings = scan_markdown_text(bare, "t.md", false, false, false, true);
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].title, "Paired Figures Without Workload Tag");
+        assert_eq!(
+            findings[0].kind.fixed_title(),
+            "Paired Figures Without Workload Tag"
+        );
 
         let tagged =
             "Sequential lookup is 11.9 ns vs 108.9 ns at 1M keys (workload: core_compare).\n";

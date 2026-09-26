@@ -85,7 +85,7 @@ All CI builds target `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl
 ### 3.4 Adding or Changing a Gate
 A gate is not done until all of these hold (full contract: `docs/ARCHITECTURE.md` §3 and §9):
 1. It has a stable kebab-case id in `src/config.rs::GATES` and its own `[gates.<id>]` table with `enabled`, `severity`, `exempt_paths`. A gate that is designed but not implemented is registered with `available: false`; it is never accepted as configuration.
-2. It returns a `GateOutcome` with a truthful `examined` count and a `notes` entry for anything it could not verify.
+2. It returns a `GateOutcome` with a truthful `examined` count and a `notes` entry for anything it could not verify. Every finding kind it reports is registered in `src/findings.rs` with a kebab-case code that names what it protects; the code is frozen once released, the title is not.
 3. **Unit test** with a positive and a negative control; **end-to-end test** in `tests/test_gates_e2e.rs` driving the real binary; a **`self-test` case**.
 4. **Mutation evidence:** break the detector, watch a test fail, restore it. State which test killed the mutant in the PR.
 5. Any escape hatch goes through `src/tokens.rs` (line-anchored, placeholder-rejecting, scoped). No in-source override comments.

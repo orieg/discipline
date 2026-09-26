@@ -115,7 +115,7 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.push(
                     ctx.overridable(settings.severity),
-                    "Benchmark Artifact Deleted",
+                    &crate::findings::BENCHMARK_ARTIFACT_DELETED,
                     Some(&file.path),
                     None,
                     format!(
@@ -156,7 +156,7 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.push(
                     ctx.overridable(settings.severity),
-                    "New Benchmark Artifact Lacks Baseline",
+                    &crate::findings::NEW_ARTIFACT_BASELINE_MISSING,
                     Some(&file.path),
                     None,
                     format!(
@@ -222,7 +222,7 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
             if head_prov.as_deref() != Some(req.as_str()) {
                 out.push(
                     ctx.overridable(settings.severity),
-                    "Mismatched Benchmark Provenance",
+                    &crate::findings::BENCHMARK_PROVENANCE_MISMATCH,
                     Some(&file.path),
                     None,
                     format!(
@@ -238,7 +238,7 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
             if b_p != h_p && !allow_cross {
                 out.push(
                     ctx.overridable(settings.severity),
-                    "Cross-Host Benchmark Comparison Mismatch",
+                    &crate::findings::CROSS_HOST_COMPARISON,
                     Some(&file.path),
                     None,
                     format!(
@@ -332,7 +332,7 @@ fn run_dual_file_bench_regression(
         if !std::path::Path::new(b_path).exists() {
             out.push(
                     ctx.overridable(settings.severity),
-                    "Missing Benchmark Baseline",
+                    &crate::findings::BENCHMARK_BASELINE_MISSING,
                     Some(b_path),
                     None,
                     "NO BASELINE — regression gate did not run".to_string(),
@@ -348,7 +348,7 @@ fn run_dual_file_bench_regression(
         if base_content.trim().is_empty() {
             out.push(
                 ctx.overridable(settings.severity),
-                "Missing Benchmark Baseline",
+                &crate::findings::BENCHMARK_BASELINE_MISSING,
                 Some(b_path),
                 None,
                 "NO BASELINE — regression gate did not run".to_string(),
@@ -363,7 +363,7 @@ fn run_dual_file_bench_regression(
         if base_metrics.is_empty() {
             out.push(
                 ctx.overridable(settings.severity),
-                "Missing Benchmark Baseline",
+                &crate::findings::BENCHMARK_BASELINE_MISSING,
                 Some(b_path),
                 None,
                 "NO BASELINE — regression gate did not run".to_string(),
@@ -391,7 +391,7 @@ fn run_dual_file_bench_regression(
         } else {
             out.push(
                     ctx.overridable(settings.severity),
-                    "Missing Benchmark Baseline",
+                    &crate::findings::BENCHMARK_BASELINE_MISSING,
                     Some(h_path),
                     None,
                     "NO BASELINE — regression gate did not run".to_string(),
@@ -409,7 +409,7 @@ fn run_dual_file_bench_regression(
         if head_prov.as_deref() != Some(req.as_str()) {
             out.push(
                 ctx.overridable(settings.severity),
-                "Mismatched Benchmark Provenance",
+                &crate::findings::BENCHMARK_PROVENANCE_MISMATCH,
                 Some(h_path),
                 None,
                 format!(
@@ -425,7 +425,7 @@ fn run_dual_file_bench_regression(
         if b_p != h_p && !allow_cross {
             out.push(
                 ctx.overridable(settings.severity),
-                "Cross-Host Benchmark Comparison Mismatch",
+                &crate::findings::CROSS_HOST_COMPARISON,
                 Some(h_path),
                 None,
                 format!(
@@ -515,7 +515,7 @@ fn report_unfresh_override(
     if !report.problems.is_empty() {
         out.push(
             severity,
-            "Regression Override Is Void — Citation Does Not Measure This Code",
+            &crate::findings::OVERRIDE_VOID_CITATION_DOES_NOT_MEASURE,
             Some(head_path),
             None,
             format!(
@@ -533,7 +533,7 @@ fn report_unfresh_override(
         }
         out.push(
             severity,
-            "Regression Override Not Verified — Citation Undecidable",
+            &crate::findings::OVERRIDE_UNVERIFIED_CITATION_UNDECIDABLE,
             Some(head_path),
             None,
             format!(
@@ -547,7 +547,7 @@ fn report_unfresh_override(
     for (arm, delta, base_c, head_c, unit) in regressions {
         out.push(
             severity,
-            "Instruction Count Regressed",
+            &crate::findings::COUNTER_REGRESSED,
             Some(head_path),
             None,
             format!(
@@ -585,7 +585,7 @@ pub fn evaluate_metrics_regression_with_instruments(
             } else {
                 out.push(
                     severity,
-                    "Benchmark Removed",
+                    &crate::findings::BENCHMARK_REMOVED,
                     Some(head_path),
                     None,
                     format!(
@@ -631,7 +631,7 @@ pub fn evaluate_metrics_regression_with_instruments(
             } else {
                 out.push(
                     severity,
-                    "New or Renamed Benchmark Lacks Baseline",
+                    &crate::findings::NEW_OR_RENAMED_ARM_BASELINE_MISSING,
                     Some(head_path),
                     None,
                     format!(
@@ -697,7 +697,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                     } else {
                         out.push(
                             severity,
-                            "Benchmark Performance Regressed",
+                            &crate::findings::PERFORMANCE_REGRESSED,
                             Some(head_path),
                             None,
                             format!(
@@ -759,7 +759,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                         if citation.is_none() {
                             out.push(
                                 severity,
-                                "Regression Override Is Void — No Resolvable Citation",
+                                &crate::findings::OVERRIDE_VOID_NO_RESOLVABLE_CITATION,
                                 Some(head_path),
                                 None,
                                 format!(
@@ -771,7 +771,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                             for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
                                 out.push(
                                     severity,
-                                    "Instruction Count Regressed",
+                                    &crate::findings::COUNTER_REGRESSED,
                                     Some(head_path),
                                     None,
                                     format!(
@@ -787,7 +787,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                             if unapproved.len() == regressed_arm_names.len() {
                                 out.push(
                                     severity,
-                                    "Regression Override Is Void — Names No Regressed Arm",
+                                    &crate::findings::OVERRIDE_VOID_NAMES_NO_REGRESSED_ARM,
                                     Some(head_path),
                                     None,
                                     format!(
@@ -799,7 +799,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                                 for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
                                     out.push(
                                         severity,
-                                        "Instruction Count Regressed",
+                                        &crate::findings::COUNTER_REGRESSED,
                                         Some(head_path),
                                         None,
                                         format!(
@@ -830,7 +830,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                                     if unapproved.contains(&arm.as_str()) {
                                         out.push(
                                             severity,
-                                            "Instruction Count Regressed (Unapproved Arm)",
+                                            &crate::findings::COUNTER_REGRESSED_UNAPPROVED_ARM,
                                             Some(head_path),
                                             None,
                                             format!(
@@ -865,7 +865,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                         for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
                             out.push(
                                 severity,
-                                "Instruction Count Regressed",
+                                &crate::findings::COUNTER_REGRESSED,
                                 Some(head_path),
                                 None,
                                 format!(
@@ -890,7 +890,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                     } else {
                         out.push(
                             severity,
-                            "Instruction Count Regressed",
+                            &crate::findings::COUNTER_REGRESSED,
                             Some(head_path),
                             None,
                             format!(
@@ -1019,7 +1019,7 @@ pub fn report_stale_exempt_arms(
     for entry in exemptions.unmatched(arms.iter().map(String::as_str)) {
         out.push(
             crate::config::Severity::Error,
-            "Stale Benchmark Arm Exemption",
+            &crate::findings::STALE_ARM_EXEMPTION,
             location,
             None,
             format!(

@@ -549,7 +549,7 @@ pub(crate) fn report_parse_errors(
                         ff.file.path, h.skipped_error_nodes_count, lang_name, line_display
                     ));
                     (
-                        "Preprocessor or Syntax Parse Warning",
+                        &crate::findings::SOURCE_PARSED_WITH_ERRORS_PREPROCESSOR,
                         format!(
                             "{lang_name} grammar encountered preprocessor or syntax errors near line {line_display} ({} skipped AST error region(s)). Surrounding well-formed code was inspected, but some facts may be incomplete.",
                             h.skipped_error_nodes_count
@@ -557,7 +557,7 @@ pub(crate) fn report_parse_errors(
                     )
                 } else {
                     (
-                        "Source File Could Not Be Fully Parsed",
+                        &crate::findings::SOURCE_PARSED_WITH_ERRORS,
                         if holds_no_tests {
                             "The grammar reported syntax errors in a file that holds no tests on \
                              either side, so no test can be hidden by them; reported at warning."
@@ -622,7 +622,7 @@ pub(crate) fn report_newly_added_nul_bytes(
             };
             out.push(
                 sev,
-                "Source File Contains Newly Added NUL Byte",
+                &crate::findings::NUL_BYTE_ADDED,
                 Some(&ff.file.path),
                 None,
                 format!(
@@ -722,7 +722,7 @@ pub fn evaluate_assertion_reduction(
                 } else {
                     settings.severity()
                 },
-                "Assertion Bound Loosened",
+                &crate::findings::ASSERTION_BOUND_LOOSENED,
                 Some(p.path),
                 Some(l.line),
                 // The line and the two literals only: the assertion's text is the change's
@@ -744,7 +744,7 @@ pub fn evaluate_assertion_reduction(
         if !total_drop && !strong_drop && !fatal_drop && mock_growth {
             out.push(
                 crate::config::Severity::Warning,
-                "Mocking Grew Without Stronger Assertions",
+                &crate::findings::MOCKING_INCREASED,
                 Some(p.path),
                 Some(h.line),
                 format!(
@@ -762,7 +762,7 @@ pub fn evaluate_assertion_reduction(
         if !total_drop && !strong_drop && fatal_drop {
             out.push(
                 crate::config::Severity::Warning,
-                "Fatal Assertions Weakened to Non-Fatal",
+                &crate::findings::FATAL_ASSERTIONS_WEAKENED,
                 Some(p.path),
                 Some(h.line),
                 format!(
@@ -806,7 +806,7 @@ pub fn evaluate_assertion_reduction(
 
         out.push(
             severity,
-            "Assertion Reduction In Existing Test",
+            &crate::findings::ASSERTIONS_REDUCED,
             Some(p.path),
             Some(violation_line),
             format!("{test_label}: {what}."),
@@ -850,7 +850,7 @@ pub fn evaluate_vacuous_tests(
         {
             out.push(
                 crate::config::Severity::Warning,
-                "Test Asserts Only On Mocks",
+                &crate::findings::ASSERTS_ONLY_ON_MOCKS,
                 Some(a.path),
                 Some(a.test.line),
                 format!(
@@ -871,7 +871,7 @@ pub fn evaluate_vacuous_tests(
         {
             out.push(
                 crate::config::Severity::Warning,
-                "Test Asserts Only Trivial Properties",
+                &crate::findings::ASSERTS_ONLY_TRIVIAL,
                 Some(a.path),
                 Some(a.test.line),
                 format!(
@@ -893,7 +893,7 @@ pub fn evaluate_vacuous_tests(
             };
             out.push(
                 settings.severity(),
-                "Vacuous Test Added",
+                &crate::findings::VACUOUS_TEST_ADDED,
                 Some(a.path),
                 Some(a.test.line),
                 format!("New test `{}` {why}; it cannot fail.", a.test.name),
@@ -905,7 +905,7 @@ pub fn evaluate_vacuous_tests(
             if a.test.effective_asserts() < min {
                 out.push(
                     settings.severity(),
-                    "Insufficient Assertion Density",
+                    &crate::findings::ASSERTION_DENSITY_BELOW_FLOOR,
                     Some(a.path),
                     Some(a.test.line),
                     format!(
@@ -965,7 +965,7 @@ pub fn evaluate_ignored_tests(
             {
                 out.push(
                     settings.severity(),
-                    "Unannotated Skip Justification",
+                    &crate::findings::SKIP_JUSTIFICATION_INSUFFICIENT,
                     Some(path),
                     Some(test.line),
                     format!(
@@ -986,12 +986,12 @@ pub fn evaluate_ignored_tests(
         };
         let (title, message) = if arrives_ignored {
             (
-                "Test Arrives Ignored",
+                &crate::findings::IGNORED_TEST_ADDED,
                 format!("Test `{}` arrives ignored.", test.name),
             )
         } else {
             (
-                "Test Newly Skipped",
+                &crate::findings::EXISTING_TEST_SKIPPED,
                 format!("Test `{}` no longer runs.", test.name),
             )
         };
@@ -1034,7 +1034,7 @@ pub fn evaluate_ignored_tests(
         }
         out.push(
             crate::config::Severity::Warning,
-            "Test Sleeps",
+            &crate::findings::TEST_SLEEP_ADDED,
             Some(path),
             Some(test.line),
             format!(
@@ -1075,7 +1075,7 @@ pub fn evaluate_ignored_tests(
             } else {
                 settings.severity()
             },
-            "Test Retries On Failure",
+            &crate::findings::TEST_RETRY_ADDED,
             Some(path),
             Some(test.line),
             format!(
@@ -1123,7 +1123,7 @@ pub fn evaluate_ignored_tests(
         }
         out.push(
             crate::config::Severity::Note,
-            "Test Conditionally Skipped",
+            &crate::findings::TEST_CONDITIONALLY_SKIPPED,
             Some(path),
             Some(test.line),
             format!(
@@ -1195,7 +1195,7 @@ pub fn evaluate_unsafe_safety_comment(
             }
             out.push(
                 settings.severity(),
-                "Unsafe Without SAFETY Comment",
+                &crate::findings::SAFETY_COMMENT_MISSING,
                 Some(&ff.file.path),
                 Some(site.line),
                 format!("Undocumented {}: `{}`", site.kind, site.snippet),
@@ -1269,7 +1269,7 @@ pub fn evaluate_deletion_rationale(
         }
         out.push(
             severity,
-            "File Deleted Without Rationale",
+            &crate::findings::FILE_DELETED_WITHOUT_RATIONALE,
             Some(&file.path),
             None,
             format!(
@@ -1299,7 +1299,7 @@ pub fn evaluate_deletion_rationale(
         }
         out.push(
             severity,
-            "Test Removed Without Rationale",
+            &crate::findings::TEST_REMOVED_WITHOUT_RATIONALE,
             Some(r.path),
             None,
             format!("Test `{}` was removed from `{}`.", r.test.name, r.path),

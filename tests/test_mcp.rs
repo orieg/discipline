@@ -78,7 +78,7 @@ fn an_mcp_client_checks_a_weakened_test_and_never_sees_a_waiver() {
     assert_eq!(check["structuredContent"]["status"], "findings", "{check}");
     let text = check["content"][0]["text"].as_str().unwrap();
     assert!(
-        text.contains("[assertion-reduction]") && text.contains("Repair:"),
+        text.contains("[assertion-reduction/assertions-reduced]") && text.contains("Repair:"),
         "{text}"
     );
 

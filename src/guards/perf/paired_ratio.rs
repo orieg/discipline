@@ -427,7 +427,7 @@ fn not_comparable(out: &mut GateOutcome, opts: &EvalOptions<'_>, reason: String)
         .push(format!("paired-ratio: not comparable — {reason}"));
     out.push(
         opts.severity,
-        "Paired Ratio Not Comparable",
+        &crate::findings::PAIRED_RATIO_NOT_COMPARABLE,
         Some(opts.location),
         None,
         format!("not comparable — {reason}; this run asserts nothing, and is not a pass"),
@@ -603,7 +603,7 @@ pub fn evaluate_run(
                 None => {
                     out.push(
                         opts.severity,
-                        "Paired Ratio Cell Missing",
+                        &crate::findings::PAIRED_RATIO_CELL_MISSING,
                         Some(opts.location),
                         None,
                         format!("baselined cell `{axis_name}/{id}` is absent from this run; a cell that stops being measured stops being gated"),
@@ -625,7 +625,7 @@ pub fn evaluate_run(
                 if (supplied / est.ratio - 1.0).abs() > ADVISORY_RATIO_TOLERANCE {
                     out.push(
                         Severity::Error,
-                        "Paired Ratio Disagrees With Its Rounds",
+                        &crate::findings::PAIRED_RATIO_INCONSISTENT_WITH_ROUNDS,
                         Some(opts.location),
                         None,
                         format!(
@@ -702,7 +702,7 @@ pub fn evaluate_run(
                     if !approve(id, opts, out) {
                         out.push(
                             opts.severity,
-                            "Paired Ratio Regressed",
+                            &crate::findings::PAIRED_RATIO_REGRESSED,
                             Some(opts.location),
                             None,
                             format!(
@@ -841,7 +841,7 @@ fn check_baseline_change(
             Some(ov) => out.overrides.push(ov.clone()),
             None => out.push(
                 severity,
-                "Ratio Baseline Loosened",
+                &crate::findings::RATIO_BASELINE_LOOSENED,
                 Some(path),
                 None,
                 format!(
@@ -870,7 +870,7 @@ fn check_baseline_change(
             }
             None => out.push(
                 severity,
-                "Ratio Baseline Changed With Source",
+                &crate::findings::RATIO_BASELINE_CHANGED_WITH_SOURCE,
                 Some(path),
                 None,
                 format!(
@@ -920,7 +920,7 @@ pub fn bench_paired_ratio(ctx: &Context) -> Result<GateOutcome> {
             .push("paired-ratio: no run file supplied (`--bench-head-file`, `DISCIPLINE_BENCH_HEAD_FILE` or `head_file`); nothing was measured".to_string());
         out.push(
             ctx.overridable(settings.severity),
-            "Paired Ratio Run Missing",
+            &crate::findings::PAIRED_RATIO_RUN_MISSING,
             Some(opts_location),
             None,
             "paired-ratio mode is configured but no run file was supplied; the gate measured nothing".to_string(),

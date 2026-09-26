@@ -76,6 +76,7 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
+&crate::findings::FILE_IN_FORBIDDEN_SCOPE,
                     &file.path,
                     1,
                     format!("file `{}` is inside forbidden scope", file.path),
@@ -96,6 +97,7 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
+&crate::findings::FILE_OUTSIDE_AUTHORIZED_SCOPE,
                     &file.path,
                     1,
                     format!("file `{}` is outside authorized scope", file.path),

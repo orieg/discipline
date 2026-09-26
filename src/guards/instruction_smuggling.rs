@@ -234,7 +234,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 } else {
                     out.push(
                         ctx.overridable(settings.severity()),
-                        "Agent Instructions Changed",
+                        &crate::findings::AGENT_INSTRUCTIONS_CHANGED,
                         Some(&file.path),
                         None,
                         format!("`{}` instructs agents; this change deletes it.", file.path),
@@ -261,7 +261,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 out.push(
                     ctx.overridable(settings.severity()),
-                    "Agent Instructions Changed",
+                    &crate::findings::AGENT_INSTRUCTIONS_CHANGED,
                     Some(&file.path),
                     None,
                     format!(
@@ -293,7 +293,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             }
             out.push(
                 ctx.overridable(settings.severity()),
-                "Invisible Characters Added",
+                &crate::findings::INVISIBLE_CHARACTERS_ADDED,
                 Some(&file.path),
                 Some(n),
                 format!(
@@ -343,7 +343,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             }
             out.push(
                 ctx.overridable(heuristic_sev),
-                "Instruction-Like Text Added",
+                &crate::findings::INSTRUCTION_LIKE_TEXT_ADDED,
                 Some(&file.path),
                 Some(line),
                 format!(
@@ -413,7 +413,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         if !invisible.is_empty() {
             out.push(
                 ctx.overridable(settings.severity()),
-                "Invisible Characters In Change Description",
+                &crate::findings::INVISIBLE_CHARACTERS_IN_DESCRIPTION,
                 None,
                 None,
                 format!(
@@ -426,7 +426,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         if !classes.is_empty() {
             out.push(
                 ctx.overridable(heuristic_sev),
-                "Instruction-Like Text In Change Description",
+                &crate::findings::INSTRUCTION_LIKE_TEXT_IN_DESCRIPTION,
                 None,
                 None,
                 format!(

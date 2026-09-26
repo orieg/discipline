@@ -330,6 +330,7 @@ mod tests {
         let mut o = GateOutcome::new("assertion-reduction");
         o.violations.push(Violation {
             gate: "assertion-reduction",
+            code: "assertion-reduction/fixture".to_string(),
             severity: Severity::Error,
             title: "Assertion Reduction".into(),
             file: Some("tests/<b>|x.rs".into()),

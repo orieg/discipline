@@ -278,7 +278,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                     }
                     out.push(
                         ctx.overridable(severity),
-                        "Gate Weakened By This Change",
+                        &crate::findings::GATE_WEAKENED,
                         Some(ctx.config_path),
                         None,
                         format!("[{}] {}.", w.gate, w.what),
@@ -294,7 +294,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 // Blocking here would deadlock the PR that repairs the base config.
                 out.push(
                     Severity::Warning,
-                    "Base Configuration Unreadable",
+                    &crate::findings::BASE_CONFIGURATION_UNREADABLE,
                     Some(ctx.config_path),
                     None,
                     format!("The base-side configuration does not load with this binary ({e:#}); weakening could not be checked."),
@@ -361,7 +361,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 let sample = new_fps.first().unwrap_or(&"");
                 out.push(
                     ctx.overridable(severity),
-                    "Baseline Contains New Findings Without Directive",
+                    &crate::findings::BASELINE_NEW_FINDINGS,
                     Some(baseline_filename),
                     None,
                     format!("[baseline] Grandfathered baseline contains {count} new fingerprint(s) not present on base (e.g. `{sample}`). A 1-for-1 replacement of grandfathered findings with new ones is forbidden."),
@@ -371,7 +371,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 let diff = h_count.saturating_sub(b_count);
                 out.push(
                     ctx.overridable(severity),
-                    "Baseline Grew Without Directive",
+                    &crate::findings::BASELINE_INCREASED,
                     Some(baseline_filename),
                     None,
                     format!("[baseline] Grandfathered baseline grew from {b_count} to {h_count} findings ({diff} new grandfathered findings)."),
@@ -533,7 +533,7 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
             }
             out.push(
                 ctx.overridable(settings.severity()),
-                "Snapshot Added For Existing Test",
+                &crate::findings::SNAPSHOT_ADDED_FOR_EXISTING_TEST,
                 Some(&file.path),
                 None,
                 format!(
@@ -579,11 +579,11 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
 
         let (title, context) = if snapshot_only {
             (
-                "Golden Output Regenerated Without Source Change",
+                &crate::findings::GOLDEN_REGENERATED_WITHOUT_SOURCE_CHANGE,
                 " No file that produces output changed in this diff, so the expectation was rewritten to match existing behaviour.",
             )
         } else {
-            ("Golden Output Modified Without Directive", "")
+            (&crate::findings::GOLDEN_CHANGED_WITHOUT_DIRECTIVE, "")
         };
         out.push(
             ctx.overridable(settings.severity()),
