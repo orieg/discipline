@@ -296,7 +296,6 @@ findings! {
 
     // sanitizers
     SANITIZER_CANARY_DIAGNOSTIC_MISSING = ["sanitizers"], "canary-diagnostic-missing", Legacy;
-    SANITIZER_COULD_NOT_RUN = ["sanitizers"], "could-not-run", Legacy;
     SANITIZER_VIOLATION_DETECTED = ["sanitizers"], "violation-detected", Legacy;
 
     // msrv
@@ -304,7 +303,6 @@ findings! {
     MSRV_COMMAND_FAILED = ["msrv"], "msrv-command-failed", Legacy;
 
     // miri
-    MIRI_COULD_NOT_RUN = ["miri"], "could-not-run", Legacy;
     MIRI_ZERO_TESTS_EXECUTED = ["miri"], "zero-tests-executed", Legacy;
     MIRI_UNDEFINED_BEHAVIOR = ["miri"], "undefined-behavior-detected", Legacy;
 

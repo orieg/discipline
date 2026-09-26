@@ -40,30 +40,9 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
 
     let res = match run_command_bounded("miri", &full_cmd, timeout_secs, root) {
         Ok(r) => r,
-        Err(e) => {
-            if let Some(ov) = ctx
-                .find_override(GATE, ALLOW_MIRI, "execution")
-                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "miri"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "cargo-miri"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "toolchain"))
-            {
-                out.overrides.push(ov.clone());
-                out.notes.push(format!(
-                    "override applied: `{}: {}` (miri execution error allowed) ({})",
-                    ov.directive, ov.reason, ov.source
-                ));
-            } else {
-                out.add_violation(
-                    ctx.overridable(settings.severity),
-&crate::findings::MIRI_COULD_NOT_RUN,
-                    "miri",
-                    1,
-                    format!("miri command execution failed: {e}"),
-                    "ensure cargo-miri is installed (`cargo miri setup`); use `discipline:allow(miri): <reason>` to waive",
-                );
-            }
-            return Ok(out);
-        }
+        // A run that could not start verified nothing: exit 2 (could not check), which no
+        // directive lifts. A job without the toolchain disables the gate instead.
+        Err(e) => return Err(e.context("miri could not run")),
     };
 
     let stdout = &res.stdout;
@@ -99,6 +78,14 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     }
 
     if !res.status.success() {
+        if let Some(fault) = toolchain_unavailable(stdout, stderr) {
+            // Fail-closed: the tool never ran, so this is "could not check"
+            // (exit 2), never "undefined behavior detected" (exit 1).
+            anyhow::bail!(
+                "miri could not run: {fault}. Install the component \
+                 (`rustup +nightly component add miri`) or disable the `miri` gate."
+            );
+        }
         if let Some(ov) = ctx
             .find_override(GATE, ALLOW_MIRI, "failure")
             .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "miri"))
@@ -110,13 +97,6 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
                 "override applied: `{}: {}` (miri failure allowed) ({})",
                 ov.directive, ov.reason, ov.source
             ));
-        } else if let Some(fault) = toolchain_unavailable(stdout, stderr) {
-            // Fail-closed: the tool never ran, so this is "could not check"
-            // (exit 2), never "undefined behavior detected" (exit 1).
-            anyhow::bail!(
-                "miri could not run: {fault}. Install the component \
-                 (`rustup +nightly component add miri`) or disable the `miri` gate."
-            );
         } else {
             let diag = if !stderr.is_empty() { stderr } else { stdout };
             out.add_violation(

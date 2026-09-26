@@ -1180,7 +1180,8 @@ Notes for adapting it:
 - **What it catches:**
   - Memory errors (out-of-bounds access, use-after-free) or data races detected by LLVM sanitizers, and a sanitizer run that cannot execute.
   - A canary that does not produce its expected diagnostic.
-- **Lifting directive:** `allow-sanitizers: <subject> <reason>`: `canary` for the canary, `execution` for a run that could not start, `failure` for a failing run; `sanitizers` covers any of them, `toolchain` or `nightly` either run finding.
+- **Exit codes:** a sanitizer run that cannot start (the toolchain or the sanitizer runtime missing, over the timeout) verified nothing, so the check exits 2; no directive lifts it. A job without a nightly toolchain disables the gate in its configuration.
+- **Lifting directive:** `allow-sanitizers: <subject> <reason>`: `canary` for the canary, `failure` for a failing run; `sanitizers` covers either, `toolchain` or `nightly` the failing run.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `sanitizer`, `timeout_seconds`, `canary`.
 
 #### `miri`
@@ -1189,7 +1190,8 @@ Notes for adapting it:
 - **What it catches:**
   - Undefined behavior flagged during Miri execution.
   - Zero tests executing under Miri when test filters match zero cases (prevents vacuous passes; the guard is always on).
-- **Lifting directive:** `allow-miri: <subject> <reason>`: `execution` for a run that could not start, `zero-tests` (or `tests`) for the zero-tests guard, `failure` for a failing run; `miri`, `cargo-miri` or `toolchain` cover any of them.
+- **Exit codes:** a Miri run that cannot start (`cargo-miri` missing, over the timeout) verified nothing, so the check exits 2; no directive lifts it. A job without Miri disables the gate in its configuration.
+- **Lifting directive:** `allow-miri: <subject> <reason>`: `zero-tests` (or `tests`) for the zero-tests guard, `failure` for a failing run; `miri`, `cargo-miri` or `toolchain` cover either.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `args`, `timeout_seconds` (default 600).
 
 #### `unsafe-budget`

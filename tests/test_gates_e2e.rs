@@ -10392,17 +10392,35 @@ enabled = true
         ),
     }
 
-    // 2. With waiver directive, execution or missing cargo-miri is waived
+    // 2. A waiver lifts a Miri finding, never a run that could not start.
     repo.commit(
         "chore: run miri with waiver\n\ndiscipline:allow(miri): host lacks cargo-miri toolchain",
     );
     let run_ov = repo.check(&[]);
-    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
-    assert!(run_ov.outcome("miri")["notes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|n| n.as_str().unwrap().contains("override applied")));
+    if run_bad.code == 1 {
+        assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+        assert!(run_ov.outcome("miri")["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("override applied")));
+    } else {
+        assert_eq!(run_ov.code, 2, "{}{}", run_ov.stdout, run_ov.stderr);
+    }
+
+    // 3. With no toolchain on PATH the run cannot start: exit 2 despite the waiver.
+    let empty = repo.file("empty-path");
+    std::fs::create_dir_all(&empty).unwrap();
+    let no_tool = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", empty.to_str().unwrap())],
+    );
+    assert_eq!(no_tool.code, 2, "{}{}", no_tool.stdout, no_tool.stderr);
+    assert!(
+        no_tool.stderr.contains("miri could not run"),
+        "{}",
+        no_tool.stderr
+    );
 }
 
 // ---- sanitizers ------------------------------------------------------------
@@ -10444,15 +10462,33 @@ canary = false
         ),
     }
 
-    // 2. With waiver directive, execution on non-nightly host is waived
+    // 2. A waiver lifts a sanitizer finding, never a run that could not start.
     repo.commit("chore: run sanitizers with waiver\n\ndiscipline:allow(sanitizers): nightly toolchain unavailable");
     let run_ov = repo.check(&[]);
-    assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
-    assert!(run_ov.outcome("sanitizers")["notes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|n| n.as_str().unwrap().contains("override applied")));
+    if run_bad.code == 1 {
+        assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
+        assert!(run_ov.outcome("sanitizers")["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("override applied")));
+    } else {
+        assert_eq!(run_ov.code, 2, "{}{}", run_ov.stdout, run_ov.stderr);
+    }
+
+    // 3. With no toolchain on PATH the run cannot start: exit 2 despite the waiver.
+    let empty = repo.file("empty-path");
+    std::fs::create_dir_all(&empty).unwrap();
+    let no_tool = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", empty.to_str().unwrap())],
+    );
+    assert_eq!(no_tool.code, 2, "{}{}", no_tool.stdout, no_tool.stderr);
+    assert!(
+        no_tool.stderr.contains("sanitizer could not run"),
+        "{}",
+        no_tool.stderr
+    );
 }
 
 // ---- Q1: suppression-delta scoped override ---------------------------------

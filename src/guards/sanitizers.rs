@@ -73,33 +73,22 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
     // 2. Main sanitizer execution
     let res = match run_command_bounded("sanitizers", &cmd, timeout_secs, root) {
         Ok(r) => r,
-        Err(e) => {
-            if let Some(ov) = ctx
-                .find_override(GATE, ALLOW_SANITIZERS, "execution")
-                .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "sanitizers"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "toolchain"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "nightly"))
-            {
-                out.overrides.push(ov.clone());
-                out.notes.push(format!(
-                    "override applied: `{}: {}` (sanitizer execution error allowed) ({})",
-                    ov.directive, ov.reason, ov.source
-                ));
-            } else {
-                out.add_violation(
-                    ctx.overridable(settings.severity),
-&crate::findings::SANITIZER_COULD_NOT_RUN,
-                    "sanitizers",
-                    1,
-                    format!("sanitizer command execution failed: {e}"),
-                    "ensure nightly Rust and sanitizer libraries are available; use `discipline:allow(sanitizers): <reason>` to waive",
-                );
-            }
-            return Ok(out);
-        }
+        // A run that could not start verified nothing: exit 2 (could not check), which no
+        // directive lifts. A job without the toolchain disables the gate instead.
+        Err(e) => return Err(e.context("sanitizer could not run")),
     };
 
     if !res.status.success() {
+        if let Some(fault) = toolchain_unavailable(&res.stdout, &res.stderr) {
+            // Fail-closed: a missing nightly channel or sanitizer support means
+            // the run never happened; reporting it as a detected race would
+            // invert the meaning of the result.
+            anyhow::bail!(
+                "sanitizer ({}) could not run: {fault}. Sanitizers need a nightly \
+                 toolchain (`cargo +nightly`) or the gate must be disabled.",
+                settings.sanitizer
+            );
+        }
         if let Some(ov) = ctx
             .find_override(GATE, ALLOW_SANITIZERS, "failure")
             .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "sanitizers"))
@@ -111,15 +100,6 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
                 "override applied: `{}: {}` (sanitizer failure allowed) ({})",
                 ov.directive, ov.reason, ov.source
             ));
-        } else if let Some(fault) = toolchain_unavailable(&res.stdout, &res.stderr) {
-            // Fail-closed: a missing nightly channel or sanitizer support means
-            // the run never happened; reporting it as a detected race would
-            // invert the meaning of the result.
-            anyhow::bail!(
-                "sanitizer ({}) could not run: {fault}. Sanitizers need a nightly \
-                 toolchain (`cargo +nightly`) or the gate must be disabled.",
-                settings.sanitizer
-            );
         } else {
             let diag = if !res.stderr.is_empty() {
                 &res.stderr
