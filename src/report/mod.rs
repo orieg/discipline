@@ -475,67 +475,115 @@ pub fn format_agent_prompt(summary: &CheckSummary) -> String {
 
 /// Provides direct, actionable repair guidance for a violation without mentioning escape hatches.
 pub fn repair_action_for_violation(v: &Violation) -> String {
-    let raw = match v.gate {
+    let raw = repair_for_code(&v.code)
+        .or_else(|| repair_for_gate(v.gate))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            // A gate without a written repair: its remediation up to the waiver clause.
+            match v.remediation.as_deref() {
+                Some(rem) => match rem
+                    .find(", or justify")
+                    .or_else(|| rem.find(", or document"))
+                {
+                    Some(idx) => format!("{}.", &rem[..idx]),
+                    None => rem.to_string(),
+                },
+                None => "Fix the violation in the indicated file and line.".to_string(),
+            }
+        });
+    scrub_override_directives(&raw)
+}
+
+/// The repair for one kind of finding (`crate::findings`), where the gate's own repair
+/// would send the agent the wrong way. A repair names the fix, never a waiver, and never
+/// tells the agent to regenerate the evidence a finding is about.
+pub const REPAIRS: &[(&str, &str)] = &[
+    ("assertion-reduction/source-parsed-with-errors", "Fix the syntax error so that the file parses cleanly."),
+    ("assertion-reduction/source-parsed-with-errors-preprocessor", "Fix the syntax error so that the file parses cleanly."),
+    ("assertion-reduction/nul-byte-added", "Remove the NUL bytes the change added to the file."),
+    ("assertion-reduction/assertion-bound-loosened", "Restore the original bound in the assertion; a looser bound accepts results the old one rejected."),
+    ("assertion-reduction/mocking-increased-without-stronger-assertions", "Assert on what the code returns or changes, not only on the test doubles the change added."),
+    ("assertion-reduction/fatal-assertions-weakened", "Restore the fatal form of the assertions, which stops the test at the first failure."),
+    ("vacuous-tests/asserts-only-on-mocks", "Assert on what the code returns or changes, not only on how its test doubles were called."),
+    ("vacuous-tests/asserts-only-trivial-properties", "Assert on the value or effect the code produces, not only that something came back."),
+    ("ignored-tests/test-sleep-added", "Replace the sleep with a wait on the condition the test depends on."),
+    ("ignored-tests/test-retry-added", "Remove the retry and fix the cause of the intermittent failure."),
+    ("ignored-tests/skip-justification-insufficient", "Remove the skip and fix the test so it passes."),
+    ("dependency-delta/lockfile-deleted", "Restore the deleted lockfile."),
+    ("dependency-delta/lockfile-entry-from-new-source", "Restore the package's original source: resolve it from the registry the project already uses."),
+    ("dependency-delta/dependency-source-changed", "Restore the package's original source: resolve it from the registry the project already uses."),
+    ("dependency-delta/lockfile-integrity-hash-removed", "Regenerate the lockfile from the manifest with the package manager, so every entry keeps its integrity hash."),
+    ("dependency-delta/manifest-changed-without-lockfile", "Update the lockfile with the package manager and include it in the change."),
+    ("dependency-delta/dependency-constraint-loosened", "Restore the dependency's original version constraint."),
+    ("dependency-delta/wildcard-dependency-version", "Pin the dependency to a specific version or range."),
+    ("dependency-delta/unpinned-git-dependency", "Pin the git dependency to a specific commit."),
+    ("dependency-delta/banned-dependency", "Remove the dependency, or use one the repository already allows."),
+    ("dependency-delta/dependency-outside-allowlist", "Remove the dependency, or use one the repository already allows."),
+    ("dependency-delta/dependency-outside-deny-allowlist", "Remove the dependency, or use one the repository already allows."),
+    ("dependency-delta/unauthorized-git-source", "Remove the dependency, or use one the repository already allows."),
+    ("golden-output/golden-output-changed-without-directive", "Restore the golden output to its committed content, and fix the code so it produces that output."),
+    ("golden-output/golden-output-regenerated-without-source-change", "Restore the golden output to its committed content, and fix the code so it produces that output."),
+    ("golden-output/snapshot-added-for-existing-test", "Assert the expected value in the test itself instead of recording a new snapshot for it."),
+    ("bench-regression/benchmark-artifact-deleted", "Restore the deleted benchmark artifact."),
+    ("bench-regression/benchmark-removed", "Restore the removed benchmark."),
+    ("bench-regression/new-artifact-baseline-missing", "Provide the missing benchmark data: run the benchmark on the base and the head commit with the same harness."),
+    ("bench-regression/benchmark-baseline-missing", "Provide the missing benchmark data: run the benchmark on the base and the head commit with the same harness."),
+    ("bench-regression/new-or-renamed-arm-baseline-missing", "Provide the missing benchmark data: run the benchmark on the base and the head commit with the same harness."),
+    ("bench-regression/paired-ratio-cell-missing", "Provide the missing benchmark data: run the benchmark on the base and the head commit with the same harness."),
+    ("bench-regression/paired-ratio-run-missing", "Provide the missing benchmark data: run the benchmark on the base and the head commit with the same harness."),
+    ("bench-regression/benchmark-provenance-mismatch", "Compare benchmark results recorded on the same host and toolchain."),
+    ("bench-regression/cross-host-comparison", "Compare benchmark results recorded on the same host and toolchain."),
+    ("bench-regression/paired-ratio-not-comparable", "Re-run the paired benchmark so that its ratio and its rounds agree."),
+    ("bench-regression/paired-ratio-inconsistent-with-rounds", "Re-run the paired benchmark so that its ratio and its rounds agree."),
+    ("bench-regression/ratio-baseline-loosened", "Restore the ratio baseline's original values."),
+    ("bench-regression/ratio-baseline-changed-with-source", "Leave the ratio baseline unchanged in a change that edits the code it measures."),
+    ("bench-regression/stale-arm-exemption", "Remove the benchmark arm exemption that no longer matches any arm."),
+    ("bench-regression/override-void-citation-does-not-measure", "Eliminate the performance regression in the code."),
+    ("bench-regression/override-unverified-citation-undecidable", "Eliminate the performance regression in the code."),
+    ("bench-regression/override-void-no-resolvable-citation", "Eliminate the performance regression in the code."),
+    ("bench-regression/override-void-names-no-regressed-arm", "Eliminate the performance regression in the code."),
+];
+
+fn repair_for_code(code: &str) -> Option<&'static str> {
+    REPAIRS.iter().find(|(c, _)| *c == code).map(|(_, r)| *r)
+}
+
+/// The repair shared by every finding of a gate that has one.
+fn repair_for_gate(gate: &str) -> Option<&'static str> {
+    Some(match gate {
         "assertion-reduction" => {
-            "Restore the assertions that were removed or weakened to match or exceed the original assertion count.".to_string()
+            "Restore the assertions that were removed or weakened to match or exceed the original assertion count."
         }
         "vacuous-tests" => {
-            "Add substantive assertions that verify the behavior of the unit under test so the test can fail if behavior regresses.".to_string()
+            "Add substantive assertions that verify the behavior of the unit under test so the test can fail if behavior regresses."
         }
         "ignored-tests" => {
-            "Remove #[ignore] or skip annotations and fix the test so it passes cleanly.".to_string()
+            "Remove #[ignore] or skip annotations and fix the test so it passes cleanly."
         }
         "unsafe-safety-comment" => {
-            "Add a substantive `// SAFETY:` invariant comment directly preceding the unsafe block or impl explaining why the operation is sound.".to_string()
+            "Add a substantive `// SAFETY:` invariant comment directly preceding the unsafe block or impl explaining why the operation is sound."
         }
-        "deletion-rationale" => {
-            "Restore the deleted file or test function.".to_string()
-        }
+        "deletion-rationale" => "Restore the deleted file or test function.",
         "time-estimates" => {
-            "Remove all time estimates, calendar durations, or sprint projections from the text. Express timelines using ordering, dependencies, or completion gates instead.".to_string()
+            "Remove all time estimates, calendar durations, or sprint projections from the text. Express timelines using ordering, dependencies, or completion gates instead."
         }
-        "forbidden-words" => {
-            "Remove the forbidden term and replace it with precise architectural or technical layer terminology (e.g. engine, runtime, AST parser, memory hierarchy).".to_string()
-        }
-        "pii" | "host-leaks" => {
-            "Remove local absolute paths, usernames, LAN IPs, or private hostnames from the file.".to_string()
+        "pii" => {
+            "Remove local absolute paths, usernames, LAN IPs, or private hostnames from the file."
         }
         "command" => {
-            "Fix the code or configuration so that the verification command passes cleanly.".to_string()
+            "Fix the code or configuration so that the verification command passes cleanly."
         }
         "dependency-delta" => {
-            "Remove the added dependency from the manifest and use existing in-tree dependencies or standard library features.".to_string()
+            "Remove the added dependency from the manifest and use existing in-tree dependencies or standard library features."
         }
         "test-budget" => {
-            "Restore the property test runs, shrink iterations, or fuzzing parameters to meet or exceed previous thresholds.".to_string()
+            "Restore the property test runs, shrink iterations, or fuzzing parameters to meet or exceed previous thresholds."
         }
         "bench-regression" => {
-            "Optimize the code to eliminate the performance or cycle count regression.".to_string()
+            "Optimize the code to eliminate the performance or cycle count regression."
         }
-        "golden-output" | "golden-tests" => {
-            "Restore or regenerate the golden test output to match expected behavior.".to_string()
-        }
-        "nul-bytes" => {
-            "Remove the null bytes from the source file.".to_string()
-        }
-        "parse-errors" => {
-            "Fix the syntax error so that the file parses cleanly.".to_string()
-        }
-        _ => {
-            if let Some(ref rem) = v.remediation {
-                if let Some(idx) = rem.find(", or justify") {
-                    format!("{}.", &rem[..idx])
-                } else if let Some(idx) = rem.find(", or document") {
-                    format!("{}.", &rem[..idx])
-                } else {
-                    rem.clone()
-                }
-            } else {
-                "Fix the violation in the indicated file and line.".to_string()
-            }
-        }
-    };
-    scrub_override_directives(&raw)
+        _ => return None,
+    })
 }
 
 /// Strictly scrubs any override directive syntax, ensuring AI coding agents cannot learn bypass tokens.
@@ -719,6 +767,74 @@ mod tests {
         );
         assert!(out.contains("errors: 0  warnings: 0  overrides: 0"));
         assert!(out.contains("Status: PASS"));
+    }
+
+    fn finding_of(gate: &'static str, code: &str) -> Violation {
+        Violation {
+            gate,
+            code: format!("{gate}/{code}"),
+            fingerprint: String::new(),
+            severity: Severity::Error,
+            title: String::new(),
+            file: None,
+            line: None,
+            message: String::new(),
+            remediation: Some(
+                "Fix it, or justify it on its own line: `allow-gate-weakening: x <reason>`.".into(),
+            ),
+        }
+    }
+
+    #[test]
+    fn every_repair_is_keyed_by_a_registered_code() {
+        let registered: Vec<String> = crate::findings::FINDINGS
+            .iter()
+            .map(|k| format!("{}/{}", k.gates[0], k.code))
+            .collect();
+        let unknown: Vec<&str> = REPAIRS
+            .iter()
+            .map(|(c, _)| *c)
+            .filter(|c| !registered.iter().any(|r| r == c))
+            .collect();
+        assert_eq!(unknown, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn no_repair_names_a_waiver_or_tells_the_agent_to_regenerate() {
+        for k in crate::findings::FINDINGS {
+            let v = finding_of(k.gates[0], k.code);
+            let raw = repair_for_code(&v.code).or_else(|| repair_for_gate(v.gate));
+            if let Some(raw) = raw {
+                assert_eq!(scrub_override_directives(raw), raw, "{}: {raw}", v.code);
+                assert!(
+                    !raw.to_lowercase().contains("regenerate the golden")
+                        && !raw.to_lowercase().contains("or regenerate"),
+                    "{}: {raw}",
+                    v.code
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_finding_gets_the_repair_for_its_own_kind() {
+        let repair = |gate, code| repair_action_for_violation(&finding_of(gate, code));
+        assert!(
+            repair("dependency-delta", "lockfile-integrity-hash-removed")
+                .contains("integrity hash")
+        );
+        assert!(repair("ignored-tests", "test-sleep-added").contains("sleep"));
+        assert!(repair("assertion-reduction", "nul-byte-added").contains("NUL"));
+        assert!(repair("assertion-reduction", "source-parsed-with-errors").contains("parses"));
+        assert!(
+            !repair("golden-output", "golden-output-changed-without-directive")
+                .contains("regenerate")
+        );
+        // No repair of its own: the gate's.
+        assert!(repair("dependency-delta", "direct-dependency-added")
+            .starts_with("Remove the added dependency"));
+        // Neither: the remediation, cut before the waiver clause.
+        assert_eq!(repair("agents-md", "agents-md-missing"), "Fix it.");
     }
 
     #[test]

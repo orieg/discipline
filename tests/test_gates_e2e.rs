@@ -3835,6 +3835,45 @@ fn uv_composer_and_gemfile_lockfiles_are_read_entry_by_entry() {
 }
 
 #[test]
+fn agent_prompt_repair_matches_the_kind_of_finding() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "web/pnpm-lock.yaml",
+        "lockfileVersion: '9.0'\npackages:\n  left-pad@1.3.0:\n    resolution: {integrity: sha512-abc}\n",
+    );
+    repo.commit("chore: lockfile");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    // The same package from the same registry, its integrity hash dropped.
+    repo.write(
+        "web/pnpm-lock.yaml",
+        "lockfileVersion: '9.0'\npackages:\n  left-pad@1.3.0:\n    resolution: {}\n",
+    );
+    repo.commit("chore: drop the hash");
+    let run = repo.run(
+        &["check", "--format", "agent-prompt", "--base", "main"],
+        &[],
+    );
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains("[dependency-delta/lockfile-integrity-hash-removed]"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("keeps its integrity hash"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        !run.stdout.contains("Remove the added dependency"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
 fn pnpm_and_poetry_lockfiles_are_read_entry_by_entry() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
