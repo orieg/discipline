@@ -18,10 +18,7 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
             .filter(|k| k.gates.first() == Some(&o.gate))
         {
             let id = format!("{}/{}", o.gate, kind.code);
-            let short = match kind.title {
-                crate::findings::Title::Fixed(t) => t,
-                crate::findings::Title::Legacy => gate_summary,
-            };
+            let short = kind.title;
             rules.push(json!({
                 "id": id,
                 "name": to_pascal_case(&id),
@@ -194,6 +191,7 @@ mod tests {
                     gate: "unsafe-safety-comment",
                     code: "unsafe-safety-comment/fixture".to_string(),
                     fingerprint: String::new(),
+                    legacy_title: None,
                     severity: Severity::Error,
                     title: "Undocumented unsafe".to_string(),
                     file: Some("src/lib.rs".to_string()),
@@ -246,6 +244,7 @@ mod tests {
                     gate: "time-estimates",
                     code: "time-estimates/fixture".to_string(),
                     fingerprint: String::new(),
+                    legacy_title: None,
                     severity: Severity::Error,
                     title: "Time estimate in PR body".to_string(),
                     file: Some("<pr-body>".to_string()),

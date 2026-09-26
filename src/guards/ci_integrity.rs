@@ -223,9 +223,8 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 &crate::findings::JOB_COUNT_FILE_MISSING,
                             ),
                             fingerprint: String::new(),
-                            title: crate::findings::JOB_COUNT_FILE_MISSING
-                                .fixed_title()
-                                .to_string(),
+                            legacy_title: None,
+                            title: crate::findings::JOB_COUNT_FILE_MISSING.title.to_string(),
                             file: Some(doc_path.clone()),
                             line: None,
                             message: format!(
@@ -246,7 +245,8 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                             severity: ctx.overridable(settings.severity),
                                             code: crate::findings::full_code(GATE, &crate::findings::JOB_COUNT_MISMATCH),
                                             fingerprint: String::new(),
-                                            title: crate::findings::JOB_COUNT_MISMATCH.fixed_title().to_string(),
+                                            title: crate::findings::JOB_COUNT_MISMATCH.title.to_string(),
+                                            legacy_title: crate::findings::JOB_COUNT_MISMATCH.was_title(),
                                             file: Some(doc_path.clone()),
                                             line: None,
                                             message: format!(

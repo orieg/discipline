@@ -282,7 +282,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                             gate: GATE,
                             code: crate::findings::full_code(GATE, &crate::findings::FUZZ_TARGET_REMOVED),
                             fingerprint: String::new(),
-                            title: crate::findings::FUZZ_TARGET_REMOVED.fixed_title().to_string(),
+                            title: crate::findings::FUZZ_TARGET_REMOVED.title.to_string(),
+                            legacy_title: crate::findings::FUZZ_TARGET_REMOVED.was_title(),
                             message: format!(
                                 "Fuzz target `{target}` was removed from fuzz harness `{}` without an explicit override.",
                                 f.path
@@ -320,7 +321,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     gate: GATE,
                     code: crate::findings::full_code(GATE, &crate::findings::FUZZ_TARGET_DELETED),
                     fingerprint: String::new(),
-                    title: crate::findings::FUZZ_TARGET_DELETED.fixed_title().to_string(),
+                    title: crate::findings::FUZZ_TARGET_DELETED.title.to_string(),
+                    legacy_title: crate::findings::FUZZ_TARGET_DELETED.was_title(),
                     message: format!(
                         "Fuzz target file `{}` was deleted without an explicit override.",
                         f.old_path
@@ -386,7 +388,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                         gate: GATE,
                         code: crate::findings::full_code(GATE, &crate::findings::TEST_BUDGET_DECREASED),
                         fingerprint: String::new(),
-                        title: crate::findings::TEST_BUDGET_DECREASED.fixed_title().to_string(),
+                        title: crate::findings::TEST_BUDGET_DECREASED.title.to_string(),
+                        legacy_title: crate::findings::TEST_BUDGET_DECREASED.was_title(),
                         message: format!(
                             "Testing effort `{}` in `{}` reduced from {} to {}.",
                             base_m.subject, f.path, base_m.value, head_val_str
@@ -424,7 +427,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     gate: GATE,
                     code: crate::findings::full_code(GATE, &crate::findings::SEED_CORPUS_DECREASED),
                     fingerprint: String::new(),
-                    title: crate::findings::SEED_CORPUS_DECREASED.fixed_title().to_string(),
+                    title: crate::findings::SEED_CORPUS_DECREASED.title.to_string(),
+                    legacy_title: crate::findings::SEED_CORPUS_DECREASED.was_title(),
                     message: format!(
                         "Seed corpus directory `{dir}` lost {deleted_count} seed file(s) without an explicit override."
                     ),

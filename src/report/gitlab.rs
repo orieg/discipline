@@ -252,6 +252,7 @@ mod tests {
             gate: "assertion-reduction",
             code: "assertion-reduction/fixture".to_string(),
             fingerprint: String::new(),
+            legacy_title: None,
             severity: Severity::Error,
             title: "Strong Assertions Decreased".to_string(),
             file: Some("tests/trie_traversal.rs".to_string()),

@@ -2257,7 +2257,7 @@ smoke_cost::set_contains
             stale
                 .violations
                 .iter()
-                .filter(|v| v.title == "Instruction Count Regressed")
+                .filter(|v| v.title == "Deterministic Counter Regressed")
                 .count(),
             2,
             "every regression stays armed"

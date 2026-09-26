@@ -594,7 +594,7 @@ source = "git+https://git.example.com/pinned?rev=abc#abc"
         let h = parse_lock(file, head).unwrap();
         diff_lock(&b, &h)
             .into_iter()
-            .map(|f| (f.kind.fixed_title(), f.package))
+            .map(|f| (f.kind.title, f.package))
             .collect()
     }
 
@@ -618,7 +618,7 @@ source = "git+https://git.example.com/pinned?rev=abc#abc"
             titles("Cargo.lock", CARGO_BASE, &swapped),
             vec![
                 ("Lockfile Entry From New Source", "serde".to_string()),
-                ("Lockfile Integrity Hash Dropped", "serde".to_string()),
+                ("Lockfile Integrity Hash Removed", "serde".to_string()),
             ]
         );
         let mirror = format!(
@@ -632,7 +632,7 @@ source = "git+https://git.example.com/pinned?rev=abc#abc"
         let no_sum = CARGO_BASE.replace("checksum = \"aa\"\n", "");
         assert_eq!(
             titles("Cargo.lock", CARGO_BASE, &no_sum),
-            vec![("Lockfile Integrity Hash Dropped", "serde".to_string())]
+            vec![("Lockfile Integrity Hash Removed", "serde".to_string())]
         );
     }
 
@@ -696,7 +696,7 @@ source = "git+https://git.example.com/pinned?rev=abc#abc"
             titles("package-lock.json", &base, &bad),
             vec![
                 ("Lockfile Entry From New Source", "lodash".to_string()),
-                ("Lockfile Integrity Hash Dropped", "lodash".to_string()),
+                ("Lockfile Integrity Hash Removed", "lodash".to_string()),
             ]
         );
     }
@@ -788,7 +788,7 @@ source = "git+https://git.example.com/pinned?rev=abc#abc"
                 "{file}: {got:?}"
             );
             assert!(
-                names.contains(&"Lockfile Integrity Hash Dropped"),
+                names.contains(&"Lockfile Integrity Hash Removed"),
                 "{file}: {got:?}"
             );
             // Unchanged content reports nothing.

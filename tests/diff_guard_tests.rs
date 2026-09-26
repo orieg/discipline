@@ -68,7 +68,7 @@ fn test_suppression_rejects_commented_out_test() {
     assert_eq!(run.code, 1, "commented-out test must fail");
     assert_eq!(
         run.titles("ignored-tests"),
-        vec!["Test Newly Skipped"],
+        vec!["Existing Test Skipped"],
         "{}",
         run.stdout
     );
@@ -94,7 +94,7 @@ fn test_suppression_rejects_conditional_exclusion_cfg_not_ci() {
     assert_eq!(run.code, 1, "cfg(not(ci)) test suppression must fail");
     assert_eq!(
         run.titles("ignored-tests"),
-        vec!["Test Newly Skipped"],
+        vec!["Existing Test Skipped"],
         "{}",
         run.stdout
     );
@@ -115,7 +115,7 @@ fn test_suppression_rejects_conditional_exclusion_cfg_not_test() {
     assert_eq!(run.code, 1, "cfg(not(test)) test suppression must fail");
     assert_eq!(
         run.titles("ignored-tests"),
-        vec!["Test Newly Skipped"],
+        vec!["Existing Test Skipped"],
         "{}",
         run.stdout
     );

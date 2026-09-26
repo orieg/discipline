@@ -204,7 +204,8 @@ where
     let source = if version >= 2 {
         format!("v2:{}:{}:{}", v.code, path, content_hash)
     } else {
-        format!("{}:{}:{}:{}", v.gate, v.title, path, content_hash)
+        let title = v.legacy_title.as_deref().unwrap_or(&v.title);
+        format!("{}:{}:{}:{}", v.gate, title, path, content_hash)
     };
     sha256_hex(source.as_bytes())
 }
@@ -427,6 +428,7 @@ mod tests {
             gate: "unsafe-safety-comment",
             code: code.to_string(),
             fingerprint: String::new(),
+            legacy_title: None,
             severity: Severity::Error,
             title: title.to_string(),
             file: Some("src/lib.rs".to_string()),
@@ -466,6 +468,21 @@ mod tests {
         assert_ne!(
             fingerprint_for_version(&a, none, 1),
             fingerprint_for_version(&a, none, 2)
+        );
+    }
+
+    #[test]
+    fn a_renamed_finding_keeps_its_version_one_fingerprint() {
+        let none = |_: &str| None;
+        let old = finding("Test Newly Skipped", "ignored-tests/existing-test-skipped");
+        let mut renamed = finding(
+            "Existing Test Skipped",
+            "ignored-tests/existing-test-skipped",
+        );
+        renamed.legacy_title = Some("Test Newly Skipped".into());
+        assert_eq!(
+            fingerprint_for_version(&old, none, 1),
+            fingerprint_for_version(&renamed, none, 1)
         );
     }
 
@@ -581,6 +598,7 @@ mod tests {
             gate: "pii",
             code: "pii/fixture".to_string(),
             fingerprint: String::new(),
+            legacy_title: None,
             severity: Severity::Error,
             title: "Host Leak".to_string(),
             file: Some("sample.txt".to_string()),
@@ -598,6 +616,7 @@ mod tests {
             gate: "pii",
             code: "pii/fixture".to_string(),
             fingerprint: String::new(),
+            legacy_title: None,
             severity: Severity::Error,
             title: "Host Leak".to_string(),
             file: Some("sample.txt".to_string()),

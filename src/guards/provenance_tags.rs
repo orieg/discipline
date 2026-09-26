@@ -814,10 +814,7 @@ mod tests {
         let untagged = "| arm | ns |\n|---|---|\n| a | 35.8 ns |\n";
         let findings = scan_markdown_text(untagged, "t.md", true, false, false, false);
         assert_eq!(findings.len(), 1);
-        assert_eq!(
-            findings[0].kind.fixed_title(),
-            "Unprovenanced Table Numerics"
-        );
+        assert_eq!(findings[0].kind.title, "Unprovenanced Table Numerics");
 
         let tagged = "*(measured: host, commit)*\n| arm | ns |\n|---|---|\n| a | 35.8 ns |\n";
         let findings = scan_markdown_text(tagged, "t.md", true, false, false, false);
@@ -830,10 +827,7 @@ mod tests {
             "The arm is memory-latency-bound, so the work removed is off the critical path.\n";
         let findings = scan_markdown_text(claim, "t.md", false, true, false, false);
         assert_eq!(findings.len(), 1);
-        assert_eq!(
-            findings[0].kind.fixed_title(),
-            "Mechanism Claim Without Evidence"
-        );
+        assert_eq!(findings[0].kind.title, "Mechanism Claim Without Evidence");
 
         let evidence = "The arm is memory-latency-bound according to perf stat counters.\n";
         let findings = scan_markdown_text(evidence, "t.md", false, true, false, false);
@@ -850,7 +844,7 @@ mod tests {
         let findings = scan_markdown_text(bare, "t.md", false, false, true, false);
         assert_eq!(findings.len(), 1);
         assert_eq!(
-            findings[0].kind.fixed_title(),
+            findings[0].kind.title,
             "Bare Wall-Clock Ratio Without Interval"
         );
 
@@ -865,7 +859,7 @@ mod tests {
         let findings = scan_markdown_text(bare, "t.md", false, false, false, true);
         assert_eq!(findings.len(), 1);
         assert_eq!(
-            findings[0].kind.fixed_title(),
+            findings[0].kind.title,
             "Paired Figures Without Workload Tag"
         );
 

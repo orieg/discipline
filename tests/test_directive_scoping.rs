@@ -67,7 +67,7 @@ fn evaluate_findings_for_directive(
                 .iter()
                 .find(|k| k.gates.contains(&gate))
                 .unwrap_or_else(|| panic!("no finding kind registered for `{gate}`"));
-            outcome.push_titled(
+            outcome.push_site(
                 Severity::Error,
                 kind,
                 format!("Violation on {subj}"),

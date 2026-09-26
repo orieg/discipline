@@ -2102,8 +2102,9 @@ command = "cargo test"
                 gate: "assertion-reduction",
                 code: "assertion-reduction/fixture".to_string(),
                 fingerprint: String::new(),
+                legacy_title: None,
                 severity: Severity::Error,
-                title: "Assertion Reduction In Existing Test".into(),
+                title: "Assertion Count Decreased In Existing Test".into(),
                 file: Some("src/lib.rs".into()),
                 line: Some(10),
                 message: "effective assertions dropped from 2 to 0".into(),
@@ -3286,6 +3287,7 @@ smoke_cost::set_contains
                 gate: "unsafe-safety-comment",
                 code: "unsafe-safety-comment/fixture".to_string(),
                 fingerprint: String::new(),
+                legacy_title: None,
                 severity: Severity::Error,
                 title: "Unsafe Without SAFETY Comment".to_string(),
                 file: Some("src/lib.rs".to_string()),
@@ -3304,6 +3306,7 @@ smoke_cost::set_contains
                 gate: "unsafe-safety-comment",
                 code: "unsafe-safety-comment/fixture".to_string(),
                 fingerprint: String::new(),
+                legacy_title: None,
                 severity: Severity::Error,
                 title: "Unsafe Without SAFETY Comment".to_string(),
                 file: Some("src/extra.rs".to_string()),
@@ -3382,7 +3385,7 @@ smoke_cost::set_contains
             let missing = evaluate_agents_guide(false, None, &[], &settings)?;
             anyhow::ensure!(
                 missing.violations.len() == 1
-                    && missing.violations[0].title == "Missing AGENTS.md",
+                    && missing.violations[0].title == "AGENTS.md Missing",
                 "missing AGENTS.md must produce Missing AGENTS.md violation"
             );
 

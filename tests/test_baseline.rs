@@ -251,7 +251,7 @@ fn test_baseline_config_integrity_ratchet() {
     assert!(run
         .titles("config-integrity")
         .iter()
-        .any(|t| t.contains("Baseline Grew Without Directive")));
+        .any(|t| t.contains("Baseline Increased")));
 
     // With allow-gate-weakening: baseline directive, it passes
     let run_overridden = repo.check_with_pr(
@@ -305,7 +305,7 @@ fn test_baseline_one_for_one_swap_without_growth_fails_integrity() {
     assert!(run
         .titles("config-integrity")
         .iter()
-        .any(|t| t.contains("Baseline Contains New Findings Without Directive")));
+        .any(|t| t.contains("Baseline Contains New Findings")));
 
     // With allow-gate-weakening: baseline directive, it passes
     let run_overridden = repo.check_with_pr(
@@ -512,6 +512,18 @@ fn downgrade_to_v1(repo: &Repo, base: &str) {
                 gate,
                 code: v["code"].as_str().unwrap().to_string(),
                 fingerprint: String::new(),
+                legacy_title: {
+                    let code = v["code"].as_str().unwrap();
+                    let message = v["message"].as_str().unwrap().to_string();
+                    discipline::findings::FINDINGS
+                        .iter()
+                        .find(|k| format!("{}/{}", k.gates[0], k.code) == code)
+                        .and_then(|k| match k.v1 {
+                            discipline::findings::V1::Same | discipline::findings::V1::Site => None,
+                            discipline::findings::V1::Was(t) => Some(t.to_string()),
+                            discipline::findings::V1::Message => Some(message),
+                        })
+                },
                 severity: discipline::config::Severity::Error,
                 title: v["title"].as_str().unwrap().to_string(),
                 file: v["file"].as_str().map(str::to_string),
@@ -526,7 +538,7 @@ fn downgrade_to_v1(repo: &Repo, base: &str) {
             );
             toml.push_str(&format!(
                 "\n[[findings]]\ngate = \"{gate}\"\nrule = \"{}\"\npath = \"{}\"\nfingerprint = \"{fp}\"\n",
-                violation.title,
+                violation.legacy_title.as_deref().unwrap_or(&violation.title),
                 violation.file.clone().unwrap_or_default()
             ));
         }

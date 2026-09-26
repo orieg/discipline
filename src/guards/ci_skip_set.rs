@@ -1101,7 +1101,7 @@ fn evaluate_with(
     out.examined = report.examined;
     out.notes.extend(report.notes);
     for f in report.findings {
-        out.push_titled(
+        out.push_site(
             settings.severity,
             registered(f.kind),
             title(f.kind, &f.job),

@@ -70,11 +70,7 @@ pub fn render(g: &GateInfo, state: Option<(bool, Severity)>) -> String {
         } else {
             "              "
         };
-        let title = match k.title {
-            crate::findings::Title::Fixed(t) => t,
-            crate::findings::Title::Legacy => "(title carries the details)",
-        };
-        out.push_str(&format!("{label} {}/{}  {title}\n", g.id, k.code));
+        out.push_str(&format!("{label} {}/{}  {}\n", g.id, k.code, k.title));
     }
     let specs: Vec<_> = DIRECTIVE_SPECS.iter().filter(|s| s.gate == g.id).collect();
     if specs.is_empty() {

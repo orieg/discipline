@@ -217,21 +217,18 @@ mod tests {
         let unsigned = commit("Ada", "ada@x", "feat: x\n");
         let f = judge(&[unsigned], &v(&["Signed-off-by"]), &markers, "Reviewed-by");
         assert_eq!(f.len(), 1);
-        assert_eq!(f[0].kind.fixed_title(), "Commit Trailer Missing");
+        assert_eq!(f[0].kind.title, "Commit Trailer Missing");
 
         let agent = commit("Ada", "ada@x", "feat: x\n\nAgent-Tool: coder 1.2\n");
         let f = judge(&[agent], &[], &markers, "Reviewed-by");
-        assert_eq!(f[0].kind.fixed_title(), "Agent Commit Without Review");
+        assert_eq!(f[0].kind.title, "Agent Commit Without Review");
         let self_reviewed = commit(
             "Ada",
             "ada@x",
             "feat: x\n\nAgent-Tool: coder 1.2\nReviewed-by: Ada <ada@x>\n",
         );
         let f = judge(&[self_reviewed], &[], &markers, "Reviewed-by");
-        assert_eq!(
-            f[0].kind.fixed_title(),
-            "Agent Commit Reviewed By Its Author"
-        );
+        assert_eq!(f[0].kind.title, "Agent Commit Reviewed By Its Author");
         let reviewed = commit(
             "Ada",
             "ada@x",
@@ -245,9 +242,7 @@ mod tests {
             "feat: x\n",
         );
         assert_eq!(
-            judge(&[bot], &[], &markers, "Reviewed-by")[0]
-                .kind
-                .fixed_title(),
+            judge(&[bot], &[], &markers, "Reviewed-by")[0].kind.title,
             "Agent Commit Without Review"
         );
         // Without a review key the agent rule is off.

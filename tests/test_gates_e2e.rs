@@ -417,7 +417,7 @@ fn ignored_tests_fire_and_accept_a_scoped_override() {
     repo.commit("test: quiet");
     let run = repo.check(&[]);
     assert_eq!(run.code, 1);
-    assert_eq!(run.titles("ignored-tests"), vec!["Test Newly Skipped"]);
+    assert_eq!(run.titles("ignored-tests"), vec!["Existing Test Skipped"]);
 
     repo.write(
         "body.md",
@@ -440,7 +440,7 @@ fn ignored_tests_fire_on_cfg_attr_ignore() {
     repo.commit("test: conditional ignore");
     let run = repo.check(&[]);
     assert_eq!(run.code, 1);
-    assert_eq!(run.titles("ignored-tests"), vec!["Test Newly Skipped"]);
+    assert_eq!(run.titles("ignored-tests"), vec!["Existing Test Skipped"]);
 }
 
 // ---- unsafe-safety-comment -------------------------------------------------
@@ -592,7 +592,7 @@ fn r1_test_swap_without_directive_fails_assertion_reduction() {
         run.stdout, run.stderr
     );
     let titles = run.titles("assertion-reduction");
-    assert_eq!(titles, vec!["Assertion Reduction In Existing Test"]);
+    assert_eq!(titles, vec!["Assertion Count Decreased In Existing Test"]);
     let outcome = run.outcome("assertion-reduction");
     let violations = outcome["violations"].as_array().unwrap();
     let msg = violations[0]["message"].as_str().unwrap();
@@ -621,7 +621,7 @@ fn r1_rename_and_gut_with_truthful_removes_still_fails_assertion_reduction() {
     );
     assert_eq!(
         run.titles("assertion-reduction"),
-        vec!["Assertion Reduction In Existing Test"]
+        vec!["Assertion Count Decreased In Existing Test"]
     );
 }
 
@@ -668,7 +668,7 @@ fn r1_long_test_deleted_while_unrelated_one_line_test_added_fails() {
     );
     assert_eq!(
         run.titles("assertion-reduction"),
-        vec!["Assertion Reduction In Existing Test"]
+        vec!["Assertion Count Decreased In Existing Test"]
     );
 }
 
@@ -1369,7 +1369,7 @@ fn agents_md_gate_fires_when_missing_or_forked() {
     repo.commit("chore: drop\n\nremoves: AGENTS.md CLAUDE.md experiment");
     assert_eq!(
         repo.check(&[]).titles("agents-md"),
-        vec!["Missing AGENTS.md"]
+        vec!["AGENTS.md Missing"]
     );
 }
 
@@ -1740,7 +1740,7 @@ fn ci_integrity_reads_gitlab_pipelines() {
         run.titles("ci-integrity"),
         vec![
             "Discipline Run Weakened (--advisory)",
-            "allow_failure Masks Failure"
+            "Verification Job Failure Masked (allow_failure)"
         ]
     );
 
@@ -1764,7 +1764,7 @@ fn ci_integrity_reads_gitlab_pipelines() {
     repo.commit("ci: drop pipeline");
     assert_eq!(
         repo.check(&[]).titles("ci-integrity"),
-        vec!["Deletion of Verification Workflow"]
+        vec!["Verification Workflow Deleted"]
     );
 }
 
@@ -1825,7 +1825,7 @@ fn dependency_delta_reads_the_lockfile_not_only_its_size() {
         run.titles("dependency-delta"),
         vec![
             "Lockfile Entry From New Source",
-            "Lockfile Integrity Hash Dropped"
+            "Lockfile Integrity Hash Removed"
         ]
     );
     // The override names the package, not the file.
@@ -1937,10 +1937,7 @@ fn golden_output_names_a_regeneration_with_no_source_change() {
     );
     repo.commit("feat: render v2");
     let run = repo.check(&[]);
-    assert_eq!(
-        run.titles("golden-output"),
-        vec!["Golden Output Modified Without Directive"]
-    );
+    assert_eq!(run.titles("golden-output"), vec!["Golden Output Changed"]);
 
     // Either form is lifted by the scoped directive.
     repo.commit(
@@ -2078,7 +2075,7 @@ fn toolchain_config_reports_a_lowered_bar_and_lifts_it_by_key_or_path() {
         titled,
         vec![
             (
-                "Toolchain Configuration Changed (not analysed)".to_string(),
+                "Toolchain Configuration Change Not Analysed".to_string(),
                 "warning".to_string()
             ),
             (
@@ -2379,7 +2376,7 @@ fn a_test_that_asserts_only_on_mocks_and_a_test_that_mocks_its_way_past_a_failur
     let reduction = run.titles("assertion-reduction");
     assert_eq!(
         reduction,
-        vec!["Assertion Reduction In Existing Test"],
+        vec!["Assertion Count Decreased In Existing Test"],
         "{reduction:?}"
     );
 
@@ -2408,7 +2405,7 @@ fn a_test_that_asserts_only_on_mocks_and_a_test_that_mocks_its_way_past_a_failur
     );
     assert_eq!(
         run.titles("assertion-reduction"),
-        vec!["Mocking Grew Without Stronger Assertions"],
+        vec!["Mocking Increased Without Stronger Assertions"],
         "{:?}",
         run.violations("assertion-reduction")
     );
@@ -2557,7 +2554,7 @@ fn a_test_that_gains_a_retry_marker_is_reported_through_ignored_tests() {
     assert_eq!(run.code, 1);
     assert_eq!(
         run.titles("ignored-tests"),
-        vec!["Test Retries On Failure", "Test Retries On Failure"]
+        vec!["Test Retry Added", "Test Retry Added"]
     );
     repo.commit("test: explain\n\nallow-ignore: test_a upstream service rate-limits the fixture, tracked in #77\nallow-ignore: test_b same rate limit, tracked in #77");
     let lifted = repo.check(&[]);
@@ -2875,7 +2872,7 @@ fn sleeps_trivial_assertions_and_injected_pr_bodies_are_reported() {
     let run = repo.check(&[]);
     assert_eq!(
         run.titles("ignored-tests"),
-        vec!["Test Sleeps"],
+        vec!["Test Sleep Added"],
         "{:?}",
         run.violations("ignored-tests")
     );
@@ -2990,11 +2987,11 @@ fn go_repository_replay_false_positives_stay_quiet_and_their_controls_do_not() {
     let run = repo.check_with_pr(&[], "Adds new.\u{200B}\n");
     assert_eq!(
         run.titles("dependency-delta"),
-        vec!["New Direct Dependency Added"]
+        vec!["Direct Dependency Added"]
     );
     assert!(run
         .titles("ignored-tests")
-        .contains(&"Test Arrives Ignored".to_string()));
+        .contains(&"Ignored Test Added".to_string()));
     assert_eq!(
         run.titles("agent-scratch"),
         vec!["Tracked Agent Scratch State"]
@@ -3485,7 +3482,11 @@ fn padded_stubs_and_logging_handlers_are_findings() {
     assert_eq!(swallows.len(), 1, "{swallows:?}");
     assert_eq!(swallows[0]["file"], "pkg/io.py");
     assert_eq!(swallows[0]["line"], 5);
-    assert_eq!(swallows[0]["title"], "Empty Error Handler Added");
+    assert_eq!(swallows[0]["title"], "Error Logged And Dropped");
+    assert_eq!(
+        swallows[0]["code"],
+        "error-swallowing/error-logged-and-dropped"
+    );
     assert!(
         swallows[0]["message"]
             .as_str()
@@ -3804,7 +3805,7 @@ fn uv_composer_and_gemfile_lockfiles_are_read_entry_by_entry() {
         .flat_map(|f| {
             [
                 (f.to_string(), "Lockfile Entry From New Source".to_string()),
-                (f.to_string(), "Lockfile Integrity Hash Dropped".to_string()),
+                (f.to_string(), "Lockfile Integrity Hash Removed".to_string()),
             ]
         })
         .collect();
@@ -3927,7 +3928,7 @@ fn pnpm_and_poetry_lockfiles_are_read_entry_by_entry() {
             ),
             (
                 "svc/poetry.lock".into(),
-                "Lockfile Integrity Hash Dropped".into()
+                "Lockfile Integrity Hash Removed".into()
             ),
             (
                 "web/pnpm-lock.yaml".into(),
@@ -3935,7 +3936,7 @@ fn pnpm_and_poetry_lockfiles_are_read_entry_by_entry() {
             ),
             (
                 "web/pnpm-lock.yaml".into(),
-                "Lockfile Integrity Hash Dropped".into()
+                "Lockfile Integrity Hash Removed".into()
             ),
         ],
         "{:?}",
@@ -3995,8 +3996,8 @@ fn frozen_install_flags_and_npm_ci_cannot_be_dropped_silently() {
     assert_eq!(
         titles,
         vec![
-            "Frozen Install Flag Dropped".to_string(),
-            "Install Command Softened".to_string()
+            "Frozen Install Flag Removed".to_string(),
+            "Install Command Weakened".to_string()
         ],
         "{:?}",
         run.violations("ci-integrity")
@@ -4105,7 +4106,7 @@ fn gitlab_local_includes_are_followed_and_rules_narrowing_is_reported() {
     let run = repo.check(&[]);
     let titles = run.titles("ci-integrity");
     assert!(
-        titles.contains(&"allow_failure Masks Failure".to_string()),
+        titles.contains(&"Verification Job Failure Masked (allow_failure)".to_string()),
         "{titles:?}"
     );
     let notes = notes_of(&run, "ci-integrity");
@@ -4174,7 +4175,7 @@ fn clippy_toml_and_an_inherited_configuration_are_judged() {
             ),
             (
                 "tsconfig.json".into(),
-                "Toolchain Configuration Changed (not analysed)".into(),
+                "Toolchain Configuration Change Not Analysed".into(),
                 "warning".into()
             ),
         ],
@@ -5772,7 +5773,7 @@ fn f6_python_pack_depth_e2e() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|v| v["title"] == "Source File Could Not Be Fully Parsed"));
+        .any(|v| v["title"] == "Source File Parsed With Errors"));
 }
 
 #[test]
@@ -5840,7 +5841,7 @@ fn f6_javascript_pack_depth_e2e() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|v| v["title"] == "Source File Could Not Be Fully Parsed"));
+        .any(|v| v["title"] == "Source File Parsed With Errors"));
 }
 
 #[test]
@@ -5909,7 +5910,7 @@ fn f6_golden_pack_depth_e2e() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|v| v["title"] == "Source File Could Not Be Fully Parsed"));
+        .any(|v| v["title"] == "Source File Parsed With Errors"));
 }
 
 // ---- bench-regression ------------------------------------------------------
@@ -5946,7 +5947,7 @@ fn bench_regression_tracks_callgrind_instructions_and_accepts_override() {
         .unwrap();
     assert_eq!(
         outcome_fail["violations"][0]["title"],
-        "Instruction Count Regressed"
+        "Deterministic Counter Regressed"
     );
     assert!(outcome_fail["violations"][0]["message"]
         .as_str()
@@ -6375,7 +6376,7 @@ fn bench_audit_case4_benchmark_renamed_lacks_baseline_fails() {
         .map(|v| v["title"].as_str().unwrap())
         .collect();
     assert!(
-        titles.contains(&"New or Renamed Benchmark Lacks Baseline"),
+        titles.contains(&"Benchmark Baseline Missing For New Or Renamed Arm"),
         "violations: {:?}",
         titles
     );
@@ -7025,7 +7026,7 @@ min_count = 5
     assert_eq!(run_ratchet.code, 1);
     assert!(run_ratchet
         .titles("command")
-        .contains(&"Count Ratchet Regression".to_string()));
+        .contains(&"Command Count Below Ratchet Floor".to_string()));
 
     // 4. Lifted via scoped override directive
     let run_override = repo.run(
@@ -7167,7 +7168,7 @@ command = "sh -c 'exit 1'"
     );
     assert!(run_staged
         .titles("command")
-        .contains(&"Command Exited With Error".to_string()));
+        .contains(&"Command Failed".to_string()));
 }
 
 #[test]
@@ -7301,7 +7302,7 @@ fn dependency_delta_fires_on_new_direct_dependency_in_cargo_toml() {
     assert_eq!(run.code, 1);
     assert!(run
         .titles("dependency-delta")
-        .contains(&"New Direct Dependency Added".to_string()));
+        .contains(&"Direct Dependency Added".to_string()));
 
     // Override with allow-dependency
     let run_pass = repo.check_with_pr(
@@ -7331,7 +7332,7 @@ fn dependency_delta_fires_on_new_direct_dependency_in_package_json() {
     assert_eq!(run.code, 1);
     assert!(run
         .titles("dependency-delta")
-        .contains(&"New Direct Dependency Added".to_string()));
+        .contains(&"Direct Dependency Added".to_string()));
 }
 
 #[test]
@@ -7359,8 +7360,8 @@ tokio = { git = "https://github.com/tokio-rs/tokio.git", tag = "tokio-1.0.0" }
     let run = repo.check(&[]);
     assert_eq!(run.code, 1);
     let titles = run.titles("dependency-delta");
-    assert!(titles.contains(&"Loosened Dependency Constraint".to_string()));
-    assert!(titles.contains(&"Dependency Source Modified".to_string()));
+    assert!(titles.contains(&"Dependency Constraint Loosened".to_string()));
+    assert!(titles.contains(&"Dependency Source Changed".to_string()));
 }
 
 #[test]
@@ -7438,7 +7439,7 @@ fn property_test() {
     assert_eq!(
         titles
             .iter()
-            .filter(|t| *t == "Test Budget Reduced")
+            .filter(|t| *t == "Test Budget Decreased")
             .count(),
         2
     );
@@ -7486,7 +7487,7 @@ jobs:
     assert_eq!(
         titles
             .iter()
-            .filter(|t| *t == "Test Budget Reduced")
+            .filter(|t| *t == "Test Budget Decreased")
             .count(),
         2
     );
@@ -7531,7 +7532,7 @@ fn test_budget_fires_on_hypothesis_and_fuzz_target_removal() {
     assert_eq!(run.code, 1);
     let titles = run.titles("test-budget");
     assert!(titles.contains(&"Fuzz Target Removed".to_string()));
-    assert!(titles.contains(&"Test Budget Reduced".to_string()));
+    assert!(titles.contains(&"Test Budget Decreased".to_string()));
 
     // Override both
     let run_pass = repo.check_with_pr(
@@ -7732,7 +7733,7 @@ const _: () = assert!(std::mem::size_of::<Invariant>() == 16);
     let outcome_fail = run_fail.outcome("assertion-reduction");
     assert_eq!(outcome_fail["violations"].as_array().unwrap().len(), 1);
     let v = &outcome_fail["violations"][0];
-    assert_eq!(v["title"], "Assertion Reduction In Existing Test");
+    assert_eq!(v["title"], "Assertion Count Decreased In Existing Test");
     assert!(v["message"]
         .as_str()
         .unwrap()
@@ -8279,7 +8280,7 @@ fn shell_secrets_gate_e2e() {
     assert_eq!(multiline_violations.len(), 1, "{}", run_multiline.stdout);
     assert_eq!(
         multiline_violations[0]["title"].as_str().unwrap(),
-        "Unsafe Shell Pattern: ARGV-DOCKER"
+        "Unsafe Shell Pattern (ARGV-DOCKER)"
     );
 
     // 6. Secrets passed as positional arguments to inline interpreter script (Issue #66)
@@ -8296,7 +8297,7 @@ fn shell_secrets_gate_e2e() {
     assert_eq!(inline_violations.len(), 1, "{}", run_inline_args.stdout);
     assert_eq!(
         inline_violations[0]["title"].as_str().unwrap(),
-        "Unsafe Shell Pattern: ARGV-INLINE"
+        "Unsafe Shell Pattern (ARGV-INLINE)"
     );
 }
 
@@ -8435,7 +8436,7 @@ fn ignored_tests_distinguishes_arrives_ignored_from_no_longer_runs_and_honors_ap
     );
     repo.commit("test: initial suite");
 
-    // 1. Modify existing test to become ignored -> "Test Newly Skipped" ("no longer runs")
+    // 1. Modify existing test to become ignored -> "Existing Test Skipped" ("no longer runs")
     repo.write(
         "tests/suite.rs",
         "#[test]\n#[ignore]\nfn test_existing() { assert_eq!(1, 1); }\n",
@@ -8445,13 +8446,13 @@ fn ignored_tests_distinguishes_arrives_ignored_from_no_longer_runs_and_honors_ap
     let run_modified = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(run_modified.code, 1);
     let out_mod = run_modified.outcome("ignored-tests");
-    assert_eq!(out_mod["violations"][0]["title"], "Test Newly Skipped");
+    assert_eq!(out_mod["violations"][0]["title"], "Existing Test Skipped");
     assert!(out_mod["violations"][0]["message"]
         .as_str()
         .unwrap()
         .contains("no longer runs"));
 
-    // 2. Add brand new test that arrives ignored -> "Test Arrives Ignored" ("arrives ignored")
+    // 2. Add brand new test that arrives ignored -> "Ignored Test Added" ("arrives ignored")
     repo.write(
         "tests/new_suite.rs",
         "#[test]\n#[ignore]\nfn test_brand_new() { assert_eq!(2, 2); }\n",
@@ -8464,7 +8465,7 @@ fn ignored_tests_distinguishes_arrives_ignored_from_no_longer_runs_and_honors_ap
         .as_array()
         .unwrap()
         .iter()
-        .find(|v| v["title"] == "Test Arrives Ignored")
+        .find(|v| v["title"] == "Ignored Test Added")
         .expect("arrives ignored violation");
     assert!(arr_violation["message"]
         .as_str()
@@ -8822,7 +8823,7 @@ fn ci_integrity_gate_e2e() {
     let run = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run.titles("ci-integrity"),
-        vec!["Incomplete Rollup Job Needs"]
+        vec!["Rollup Job Needs Incomplete"]
     );
 
     // With allow-ci-weakening directive -> passes
@@ -8864,8 +8865,8 @@ fn ci_integrity_gate_e2e() {
     repo.commit("ci: masked failures");
     let run_mask = repo.check(&["--base", "HEAD~1"]);
     let titles = run_mask.titles("ci-integrity");
-    assert!(titles.contains(&"continue-on-error Masks Failure".to_string()));
-    assert!(titles.contains(&"Command Masks Exit Code".to_string()));
+    assert!(titles.contains(&"Verification Job Failure Masked (continue-on-error)".to_string()));
+    assert!(titles.contains(&"Command Exit Code Masked".to_string()));
 
     // Inline allow marker suppresses
     repo.write(
@@ -8964,9 +8965,9 @@ jobs:
     repo.commit("ci: drop flags");
     let run_flags = repo.check(&["--base", "HEAD~1"]);
     let titles = run_flags.titles("ci-integrity");
-    assert!(titles.contains(&"Compiler Flag Dropped (-D warnings)".to_string()));
-    assert!(titles.contains(&"Clippy Flag Dropped (--all-targets)".to_string()));
-    assert!(titles.contains(&"Cargo Flag Dropped (--locked)".to_string()));
+    assert!(titles.contains(&"Compiler Flag Removed (-D warnings)".to_string()));
+    assert!(titles.contains(&"Clippy Flag Removed (--all-targets)".to_string()));
+    assert!(titles.contains(&"Cargo Flag Removed (--locked)".to_string()));
 
     // Case 3: Weakening discipline inputs (disable, fail_on_warnings: false, invalid config_override, suite narrowed, directive_sources widened)
     let weakened_inputs_wf = r#"name: CI
@@ -9008,7 +9009,9 @@ jobs:
     assert!(
         titles_inputs.contains(&"Discipline Action Weakened (fail_on_warnings: false)".to_string())
     );
-    assert!(titles_inputs.contains(&"Discipline Action Invalid config_override".to_string()));
+    assert!(
+        titles_inputs.contains(&"Discipline Action Input Invalid (config_override)".to_string())
+    );
     assert!(titles_inputs.contains(&"Discipline Action Suite Changed".to_string()));
     assert!(titles_inputs.contains(&"Discipline Action Directive Sources Widened".to_string()));
 
@@ -9040,11 +9043,11 @@ jobs:
     repo.commit("ci: weaken security, drop needs and verification steps");
     let run_sec = repo.check(&["--base", "HEAD~1"]);
     let titles_sec = run_sec.titles("ci-integrity");
-    assert!(titles_sec.contains(&"Dangerous pull_request_target Trigger".to_string()));
+    assert!(titles_sec.contains(&"Dangerous Trigger (pull_request_target)".to_string()));
     assert!(titles_sec.contains(&"Workflow Permissions Widened".to_string()));
-    assert!(titles_sec.contains(&"Job timeout-minutes Removed".to_string()));
-    assert!(titles_sec.contains(&"Rollup Job Dropped Dependency".to_string()));
-    assert!(titles_sec.contains(&"Deletion of Verification Step".to_string()));
+    assert!(titles_sec.contains(&"Job Timeout Removed (timeout-minutes)".to_string()));
+    assert!(titles_sec.contains(&"Rollup Job Needs Entry Removed".to_string()));
+    assert!(titles_sec.contains(&"Verification Step Removed".to_string()));
 
     // Case 5: allow-gate-weakening: ci-integrity <reason> in PR body excuses all findings
     let run_ov = repo.check_with_pr(
@@ -9084,7 +9087,7 @@ fn bench_regression_dual_file_mode_and_missing_baseline() {
     ]);
     assert_eq!(run_fail.code, 1);
     let titles = run_fail.titles("bench-regression");
-    assert!(titles.contains(&"Instruction Count Regressed".to_string()));
+    assert!(titles.contains(&"Deterministic Counter Regressed".to_string()));
 
     // A sourced override naming the arm is admitted only once its citation is verified
     // fresh; with no `gh` available the citation is undecidable and the gate stays armed
@@ -9109,7 +9112,7 @@ fn bench_regression_dual_file_mode_and_missing_baseline() {
     );
     assert!(run_pass
         .titles("bench-regression")
-        .contains(&"Regression Override Not Verified — Citation Undecidable".to_string()));
+        .contains(&"Regression Override Unverified (Citation Undecidable)".to_string()));
 
     // Missing baseline fails closed with NO BASELINE note
     let missing_base = repo.dir.path().join("nonexistent_base.json");
@@ -9297,7 +9300,7 @@ strip_components = 1
     let run_missing = repo.check(&[]);
     assert_eq!(run_missing.code, 1);
     let titles = run_missing.titles("archive-contents");
-    assert!(titles.contains(&"Missing Required Archive Path".to_string()));
+    assert!(titles.contains(&"Required Archive Path Missing".to_string()));
 
     // Negative control 2: forbidden entry leak
     create_test_archive_tgz(
@@ -9311,7 +9314,7 @@ strip_components = 1
     let run_leak = repo.check(&[]);
     assert_eq!(run_leak.code, 1);
     let titles_leak = run_leak.titles("archive-contents");
-    assert!(titles_leak.contains(&"Forbidden Entry Found in Archive".to_string()));
+    assert!(titles_leak.contains(&"Forbidden Entry In Archive".to_string()));
 
     // Override control: allow-archive-leak lifts the forbidden entry violation
     let run_override = repo.check_with_pr(
@@ -9390,7 +9393,7 @@ forbidden_patterns = ["(^|/)tools/"]
         assert_eq!(run.code, 1, "{name}: {}{}", run.stdout, run.stderr);
         let violations = run.violations("archive-contents");
         assert_eq!(violations.len(), 1, "{name}: {violations:?}");
-        assert_eq!(violations[0]["title"], "Forbidden Entry Found in Archive");
+        assert_eq!(violations[0]["title"], "Forbidden Entry In Archive");
         assert!(
             violations[0]["message"]
                 .as_str()
@@ -9670,7 +9673,7 @@ preset = "no-source-npm"
     let run = repo.check(&[]);
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
     let violations = run.violations("archive-contents");
-    assert_eq!(violations[0]["title"], "Forbidden Entry Found in Archive");
+    assert_eq!(violations[0]["title"], "Forbidden Entry In Archive");
     let message = violations[0]["message"].as_str().unwrap();
     for needle in [
         "package/src/index.ts (matches pattern `(^|/)src/` from preset `no-source-npm`",
@@ -9725,10 +9728,7 @@ preset = "no-source-npm"
     titles.sort();
     assert_eq!(
         titles,
-        vec![
-            "Forbidden Entry Found in Archive",
-            "Source Leaked In Archive"
-        ]
+        vec!["Forbidden Entry In Archive", "Source Leaked In Archive"]
     );
 
     // An unknown preset fails closed.
@@ -10629,7 +10629,7 @@ jobs:
     assert_eq!(run_dropped.code, 1);
     let titles_dropped = run_dropped.titles("ci-integrity");
     assert!(
-        titles_dropped.contains(&"Rollup Job Dropped Dependency".to_string()),
+        titles_dropped.contains(&"Rollup Job Needs Entry Removed".to_string()),
         "expected 'Rollup Job Dropped Dependency', got: {:?}",
         titles_dropped
     );
@@ -10708,10 +10708,10 @@ enabled = true
     let run = repo.check(&[]);
     assert_eq!(run.code, 1);
 
-    // issue-link emits "Directive in Subject Line"
+    // issue-link emits "Directive In Subject Line"
     let issue_titles = run.titles("issue-link");
     assert!(
-        issue_titles.contains(&"Directive in Subject Line".to_string()),
+        issue_titles.contains(&"Directive In Subject Line".to_string()),
         "expected 'Directive in Subject Line' from issue-link, got: {:?}",
         issue_titles
     );
@@ -10723,7 +10723,7 @@ enabled = true
         "suppression-delta must still fire because subject directive is ignored"
     );
 
-    // 2. PR title containing directive also triggers "Directive in Subject Line"
+    // 2. PR title containing directive also triggers "Directive In Subject Line"
     let run_pr = repo.check_with_pr_metadata(
         &[],
         Some("allow-gate-weakening: ci-integrity bypass (#101)"),
@@ -10732,7 +10732,7 @@ enabled = true
     assert_eq!(run_pr.code, 1);
     let pr_issue_titles = run_pr.titles("issue-link");
     assert!(
-        pr_issue_titles.contains(&"Directive in Subject Line".to_string()),
+        pr_issue_titles.contains(&"Directive In Subject Line".to_string()),
         "expected 'Directive in Subject Line' for PR title directive, got: {:?}",
         pr_issue_titles
     );
@@ -10763,7 +10763,7 @@ max_unsafe = 0
     assert_eq!(run_bad.code, 1);
     let titles = run_bad.titles("unsafe-budget");
     assert!(
-        titles.iter().any(|t| t.contains("exceeds maximum budget")),
+        titles.iter().any(|t| t == "Unsafe Budget Exceeded"),
         "expected unsafe budget violation, got: {:?}",
         titles
     );
@@ -10941,7 +10941,8 @@ fn test_check_fatal_error_emits_configured_reports() {
         "expected engine testsuite in junit: {junit_content}"
     );
     assert!(
-        junit_content.contains("<failure message=\"fatal error during check execution:"),
+        junit_content.contains("<failure message=\"Check Could Not Run\"")
+            && junit_content.contains("fatal error during check execution:"),
         "expected fatal error failure in junit: {junit_content}"
     );
 
@@ -11683,7 +11684,7 @@ fn ci_integrity_step_removed_outright_is_still_a_deletion() {
     let run = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run.titles("ci-integrity"),
-        vec!["Deletion of Verification Step"],
+        vec!["Verification Step Removed"],
         "{}",
         run.stdout
     );
@@ -11705,7 +11706,7 @@ fn ci_integrity_step_renamed_and_rewritten_is_still_a_deletion() {
     let run = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run.titles("ci-integrity"),
-        vec!["Deletion of Verification Step"],
+        vec!["Verification Step Removed"],
         "renaming and rewriting a verification step in one change deletes it: {}",
         run.stdout
     );
@@ -11782,7 +11783,7 @@ fn ci_integrity_renamed_step_is_still_compared_against_its_base_form() {
     let run = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run.titles("ci-integrity"),
-        vec!["Cargo Flag Dropped (--locked)"],
+        vec!["Cargo Flag Removed (--locked)"],
         "{}",
         run.stdout
     );
@@ -12068,7 +12069,7 @@ fn assertion_reduction_reads_checks_moved_into_raising_helpers_as_a_refactor() {
     let run = repo.check(&[]);
     assert_eq!(
         run.titles("assertion-reduction"),
-        vec!["Assertion Reduction In Existing Test"],
+        vec!["Assertion Count Decreased In Existing Test"],
         "{}",
         run.stdout
     );
@@ -12086,7 +12087,7 @@ fn assertion_reduction_reads_checks_moved_into_raising_helpers_as_a_refactor() {
     let run = repo.check(&[]);
     assert_eq!(
         run.titles("assertion-reduction"),
-        vec!["Assertion Reduction In Existing Test"],
+        vec!["Assertion Count Decreased In Existing Test"],
         "{}",
         run.stdout
     );
@@ -12169,7 +12170,7 @@ fn js_and_php_checks_moved_into_same_file_helpers_are_a_refactor() {
         let run = repo.check(&[]);
         assert_eq!(
             run.titles("assertion-reduction"),
-            vec!["Assertion Reduction In Existing Test"],
+            vec!["Assertion Count Decreased In Existing Test"],
             "{path}: {}",
             run.stdout
         );
@@ -12261,7 +12262,7 @@ fn a_dispatch_table_of_helpers_in_rust_and_js_is_a_refactor_and_a_removed_entry_
         let run = repo.check(&[]);
         assert_eq!(
             run.titles("assertion-reduction"),
-            vec!["Assertion Reduction In Existing Test"],
+            vec!["Assertion Count Decreased In Existing Test"],
             "{path}: {}",
             run.stdout
         );

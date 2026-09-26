@@ -187,7 +187,7 @@ mod tests {
         ];
         let got = judge(&[], &head);
         assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0].kind.fixed_title(), "Stub Body Added");
+        assert_eq!(got[0].kind.title, "Stub Body Added");
         assert_eq!(got[0].name, "a");
     }
 
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(names, vec!["a", "b", "c"]);
         assert!(got
             .iter()
-            .all(|g| g.kind.fixed_title() == "Function Body Replaced By Stub"));
+            .all(|g| g.kind.title == "Function Body Replaced By Stub"));
         assert!(judge(&head, &base).iter().all(|g| g.name == "d"));
     }
 

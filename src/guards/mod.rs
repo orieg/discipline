@@ -51,6 +51,10 @@ pub struct Violation {
     /// The version-2 baseline fingerprint (`crate::baseline`): stable across line moves
     /// and title changes. Filled once all gates have run.
     pub fingerprint: String,
+    /// The title a fingerprint-version-1 baseline recorded, when it differs from `title`
+    /// ([`crate::findings::V1`]). Not reported.
+    #[serde(skip)]
+    pub legacy_title: Option<String>,
     pub severity: Severity,
     pub title: String,
     pub file: Option<String>,
@@ -106,7 +110,7 @@ impl GateOutcome {
         crate::findings::full_code(self.gate, kind)
     }
 
-    /// Report a finding of a kind with a fixed title.
+    /// Report a finding.
     pub fn push(
         &mut self,
         severity: Severity,
@@ -116,29 +120,53 @@ impl GateOutcome {
         message: String,
         remediation: &str,
     ) {
-        let title = kind.fixed_title().to_string();
-        self.push_titled(severity, kind, title, (file, line), message, remediation);
+        assert!(
+            kind.v1 != crate::findings::V1::Site,
+            "`{}` is reported with `push_site`",
+            kind.code
+        );
+        self.record(severity, kind, None, (file, line), message, remediation);
     }
 
-    /// Report a finding whose title the site builds ([`crate::findings::Title::Legacy`]).
-    /// `at` is the file and line, as for [`Self::push`].
-    pub fn push_titled(
+    /// Report a finding whose version-1 title the site builds
+    /// ([`crate::findings::V1::Site`]).
+    pub fn push_site(
         &mut self,
         severity: Severity,
         kind: &crate::findings::FindingKind,
-        title: String,
+        legacy_title: String,
         at: (Option<&str>, Option<usize>),
         message: String,
         remediation: &str,
     ) {
+        self.record(severity, kind, Some(legacy_title), at, message, remediation);
+    }
+
+    fn record(
+        &mut self,
+        severity: Severity,
+        kind: &crate::findings::FindingKind,
+        site_title: Option<String>,
+        at: (Option<&str>, Option<usize>),
+        message: String,
+        remediation: &str,
+    ) {
+        use crate::findings::V1;
         let (file, line) = at;
+        let legacy_title = match kind.v1 {
+            V1::Same => None,
+            V1::Was(t) => Some(t.to_string()),
+            V1::Message => Some(message.clone()),
+            V1::Site => site_title,
+        };
         let code = self.code_of(kind);
         self.violations.push(Violation {
             gate: self.gate,
             code,
             fingerprint: String::new(),
+            legacy_title,
             severity,
-            title,
+            title: kind.title.to_string(),
             file: file.map(str::to_string),
             line,
             message,
@@ -146,7 +174,7 @@ impl GateOutcome {
         });
     }
 
-    /// Report a finding whose title is its message ([`crate::findings::Title::Legacy`]).
+    /// Report a finding at a file and line (a kind whose version-1 title was its message).
     pub fn add_violation(
         &mut self,
         severity: Severity,
@@ -156,14 +184,13 @@ impl GateOutcome {
         message: impl Into<String>,
         remediation: impl Into<String>,
     ) {
-        let msg = message.into();
         let remediation = remediation.into();
-        self.push_titled(
+        self.push(
             severity,
             kind,
-            msg.clone(),
-            (Some(file.as_ref()), Some(line)),
-            msg,
+            Some(file.as_ref()),
+            Some(line),
+            message.into(),
             &remediation,
         );
     }

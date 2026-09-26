@@ -134,7 +134,16 @@ fn job_skipped_under_a_true_gate_fails_from_context_file() {
     assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
     let v = run.violations("ci-skip-set");
     assert_eq!(v.len(), 1, "{v:?}");
-    assert_eq!(v[0]["title"], "`lint` skipped although its `if:` is true");
+    assert_eq!(v[0]["title"], "Job Skipped While Condition True");
+    assert_eq!(v[0]["code"], "ci-skip-set/job-skipped-while-condition-true");
+    assert!(
+        v[0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("`lint` was skipped"),
+        "the job is named in the message: {}",
+        v[0]["message"]
+    );
     assert_eq!(v[0]["file"], ".github/workflows/ci.yml");
     assert_eq!(v[0]["line"], 18, "the `lint:` key");
 }
@@ -149,7 +158,7 @@ fn push_event_makes_the_fallback_term_true() {
     assert_eq!(push.code, 1, "{}", push.stdout);
     assert_eq!(
         push.titles("ci-skip-set"),
-        vec!["`miri` skipped although its `if:` is true".to_string()]
+        vec!["Job Skipped While Condition True".to_string()]
     );
 }
 
@@ -166,11 +175,11 @@ fn failed_change_detection_and_skipped_unconditional_job_fail() {
     assert_eq!(run.code, 1, "{}", run.stdout);
     let titles = run.titles("ci-skip-set");
     assert!(
-        titles.contains(&"change-detection job `detect-changes` did not succeed".to_string()),
+        titles.contains(&"Change-Detection Job Did Not Succeed".to_string()),
         "{titles:?}"
     );
     assert!(
-        titles.contains(&"unconditional job `docs-lint` was skipped".to_string()),
+        titles.contains(&"Unconditional Job Skipped".to_string()),
         "{titles:?}"
     );
 }

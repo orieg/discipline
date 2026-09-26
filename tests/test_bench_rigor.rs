@@ -146,11 +146,11 @@ fn sourced_override_citing_a_cancelled_run_leaves_the_gate_armed() {
     let titles = run.titles("bench-regression");
     assert!(
         titles.contains(
-            &"Regression Override Is Void — Citation Does Not Measure This Code".to_string()
+            &"Regression Override Void (Citation Does Not Measure This Code)".to_string()
         ),
         "{titles:?}"
     );
-    assert!(titles.contains(&"Instruction Count Regressed".to_string()));
+    assert!(titles.contains(&"Deterministic Counter Regressed".to_string()));
     let v = run.violations("bench-regression");
     assert!(v.iter().any(|v| v["message"]
         .as_str()
@@ -225,7 +225,7 @@ fn sourced_override_is_undecidable_without_network_and_stays_armed() {
     assert_eq!(run.code, 1, "{}", run.stdout);
     assert!(run
         .titles("bench-regression")
-        .contains(&"Regression Override Not Verified — Citation Undecidable".to_string()));
+        .contains(&"Regression Override Unverified (Citation Undecidable)".to_string()));
     assert!(notes(&run)
         .iter()
         .any(|n| n.contains("citation not verified") && n.contains("run 4401")));

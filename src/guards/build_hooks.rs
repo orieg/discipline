@@ -303,7 +303,7 @@ mod tests {
         );
         let titles: Vec<(&str, &str)> = got
             .iter()
-            .map(|f| (f.kind.fixed_title(), f.subject.as_str()))
+            .map(|f| (f.kind.title, f.subject.as_str()))
             .collect();
         assert!(
             titles.contains(&("Install Hook Runs Network Or Shell", "postinstall")),
@@ -324,9 +324,9 @@ mod tests {
             None,
             Some(rs),
         );
-        assert_eq!(got[0].kind.fixed_title(), "Build Script Added");
+        assert_eq!(got[0].kind.title, "Build Script Added");
         assert_eq!(
-            got[1].kind.fixed_title(),
+            got[1].kind.title,
             "Build Script Gains Network Or Shell Access"
         );
         assert_eq!(got[1].line, Some(3));
@@ -343,10 +343,7 @@ mod tests {
             None,
             Some("registry=https://evil.example/\n"),
         );
-        assert_eq!(
-            got[0].kind.fixed_title(),
-            "Package Manager Configuration Changed"
-        );
+        assert_eq!(got[0].kind.title, "Package Manager Configuration Changed");
         assert!(is_manager_config(".env.test") && is_manager_config("api/.cargo/config.toml"));
         assert!(!is_manager_config("docs/env.md") && !is_manager_config("src/config.toml"));
     }

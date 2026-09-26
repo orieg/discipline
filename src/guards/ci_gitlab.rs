@@ -305,7 +305,7 @@ mod tests {
         diff_gitlab_ci(BASE, head)
             .unwrap()
             .into_iter()
-            .map(|w| (w.kind.fixed_title(), w.job))
+            .map(|w| (w.kind.title, w.job))
             .collect()
     }
 
@@ -339,8 +339,11 @@ mod tests {
                     "Discipline Run Weakened (--advisory)",
                     "discipline".to_string()
                 ),
-                ("allow_failure Masks Failure", "unit-tests".to_string()),
-                ("Command Masks Exit Code", "unit-tests".to_string()),
+                (
+                    "Verification Job Failure Masked (allow_failure)",
+                    "unit-tests".to_string()
+                ),
+                ("Command Exit Code Masked", "unit-tests".to_string()),
             ]
         );
     }
@@ -353,7 +356,7 @@ mod tests {
         );
         assert_eq!(
             titles(&no_tests),
-            vec![("Deletion of Verification Job", "unit-tests".to_string())]
+            vec![("Verification Job Removed", "unit-tests".to_string())]
         );
         let no_docs = BASE.replace(
             "docs:\n  script:\n    - mkdocs build\n  allow_failure: true\n",
@@ -367,7 +370,7 @@ mod tests {
         let template = BASE.replace("    - echo setup\n", "    - set +e\n    - echo setup\n");
         assert_eq!(
             titles(&template),
-            vec![("Command Masks Exit Code", ".tmpl".to_string())]
+            vec![("Command Exit Code Masked", ".tmpl".to_string())]
         );
         let comment = BASE.replace(
             "    - cargo test --locked\n",
@@ -400,9 +403,9 @@ mod tests {
         let base_inc = "unit-tests:\n  stage: test\n  script:\n    - cargo test\n".to_string();
         let head_inc = "unit-tests:\n  stage: test\n  script:\n    - cargo test\n  allow_failure: true\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n".to_string();
         let found = diff_gitlab_ci_with(&[main.clone(), base_inc], &[main, head_inc]).unwrap();
-        let titles: Vec<&str> = found.iter().map(|w| w.kind.fixed_title()).collect();
+        let titles: Vec<&str> = found.iter().map(|w| w.kind.title).collect();
         assert!(
-            titles.contains(&"allow_failure Masks Failure"),
+            titles.contains(&"Verification Job Failure Masked (allow_failure)"),
             "{titles:?}"
         );
         assert!(titles.contains(&"Verification Job Narrowed"), "{titles:?}");

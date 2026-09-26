@@ -1652,7 +1652,7 @@ mod tests {
         }];
         let out = evaluate_ignored_tests(&pairs, &[], &settings, &[], false).unwrap();
         assert_eq!(out.violations.len(), 1);
-        assert_eq!(out.violations[0].title, "Test Newly Skipped");
+        assert_eq!(out.violations[0].title, "Existing Test Skipped");
         assert!(out.violations[0].message.contains("no longer runs"));
 
         // Test arriving ignored
@@ -1663,7 +1663,7 @@ mod tests {
         }];
         let out_added = evaluate_ignored_tests(&[], &added_ignored, &settings, &[], false).unwrap();
         assert_eq!(out_added.violations.len(), 1);
-        assert_eq!(out_added.violations[0].title, "Test Arrives Ignored");
+        assert_eq!(out_added.violations[0].title, "Ignored Test Added");
         assert!(out_added.violations[0].message.contains("arrives ignored"));
 
         // Test conditional ignore with and without approved_predicates

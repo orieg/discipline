@@ -1484,7 +1484,7 @@ mod tests {
             .unwrap()
             .ratio = Some(0.9);
         let out = eval(&run, Some(&baseline_with(5.0, &["map_get"])));
-        assert_eq!(titles(&out), vec!["Paired Ratio Disagrees With Its Rounds"]);
+        assert_eq!(titles(&out), vec!["Paired Ratio Inconsistent With Rounds"]);
         assert_eq!(out.violations[0].severity, Severity::Error);
         // A matching advisory ratio is accepted.
         run.axes

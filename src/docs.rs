@@ -568,6 +568,20 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Every registered finding (`crate::findings`), one row per code, grouped by gate.
+pub fn render_finding_codes_markdown() -> String {
+    let mut out = String::from("| Code | Title |\n|---|---|\n");
+    for k in crate::findings::FINDINGS {
+        out.push_str(&format!(
+            "| `{}/{}` | {} |\n",
+            k.gates[0],
+            k.code,
+            k.title.replace('|', "\\|")
+        ));
+    }
+    out
+}
+
 /// Replace regions between `<!-- generated:<name> -->` and `<!-- /generated -->`.
 pub fn update_generated_regions(
     path: &Path,
@@ -662,6 +676,7 @@ pub fn update_generated_regions(
                 "config-schema" | "schema" => render_config_schema_markdown(),
                 "cli" => render_cli_markdown(),
                 "cli-options" => render_cli_options_markdown(),
+                "finding-codes" => render_finding_codes_markdown(),
                 other => bail!(
                     "unknown generated marker target '{}' in {}",
                     other,
