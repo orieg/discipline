@@ -700,6 +700,35 @@ fn scan_pr_body(
     }
 }
 
+/// Configuration entries an agent tool documents under its home directory: settings,
+/// hooks, plugins, MCP servers, keybindings. A reference to one of them (or to the
+/// directory itself) documents the tool. A maintainer's own content there (instruction
+/// files such as `CLAUDE.md`, skills, agents, commands, rules, session history, notes)
+/// is still reported: that is the leak the rule exists for.
+pub const STANDARD_AGENT_ENTRIES: &[&str] = &[
+    "settings.json",
+    "settings.local.json",
+    "config.json",
+    "config.toml",
+    "hooks",
+    "hooks.json",
+    "plugins",
+    "mcp.json",
+    "mcp_config.json",
+    "keybindings.json",
+];
+
+/// Whether a `home agent-config path` match names the directory itself or a
+/// [`STANDARD_AGENT_ENTRIES`] entry, which `agent_config_standard_paths` allows.
+pub fn standard_agent_path(settings: &PiiGate, rule: &PiiRule, caps: &regex::Captures) -> bool {
+    rule.label == "home agent-config path"
+        && settings.agent_config_standard_paths
+        && caps.get(1).is_none_or(|c| {
+            c.as_str().is_empty()
+                || STANDARD_AGENT_ENTRIES.contains(&c.as_str().to_ascii_lowercase().as_str())
+        })
+}
+
 pub struct PiiRule {
     pub re: Regex,
     pub label: &'static str,
@@ -766,7 +795,11 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
         ]
         .join("|");
         rules.push(PiiRule {
-            re: Regex::new(&format!(r"(?i)(?:~|\$HOME)/\.(?:{agent_dirs})\b"))?,
+            // The first component under the directory is captured for
+            // `standard_agent_path`.
+            re: Regex::new(&format!(
+                r"(?i)(?:~|\$HOME)/\.(?:{agent_dirs})\b(?:/([A-Za-z0-9_.-]*))?"
+            ))?,
             label: "home agent-config path",
             user_group: false,
             redact: false,
@@ -916,7 +949,7 @@ fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bo
                             .iter()
                             .any(|a| a.eq_ignore_ascii_case(u.as_str()))
                     });
-                if allowed_user {
+                if allowed_user || standard_agent_path(opts.settings, rule, &caps) {
                     continue;
                 }
                 if opts.allowed.iter().any(|re| re.is_match(token)) {
@@ -1067,7 +1100,8 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                                 .iter()
                                 .any(|a| a.eq_ignore_ascii_case(u.as_str()))
                         });
-                    (!allowed_user).then(|| (rule, caps.get(0).map(|m| m.as_str().to_string())))
+                    (!allowed_user && !standard_agent_path(settings, rule, &caps))
+                        .then(|| (rule, caps.get(0).map(|m| m.as_str().to_string())))
                 })
             });
             let Some((rule, matched)) = hit else { continue };
@@ -1429,13 +1463,14 @@ mod tests {
     fn rule_hits(settings: &PiiGate, line: &str) -> bool {
         pii_rules(settings).unwrap().iter().any(|r| {
             r.re.captures_iter(line).any(|c| {
-                !(r.user_group
-                    && c.get(1).is_some_and(|u| {
-                        settings
-                            .allowed_users
-                            .iter()
-                            .any(|a| a.eq_ignore_ascii_case(u.as_str()))
-                    }))
+                !standard_agent_path(settings, r, &c)
+                    && !(r.user_group
+                        && c.get(1).is_some_and(|u| {
+                            settings
+                                .allowed_users
+                                .iter()
+                                .any(|a| a.eq_ignore_ascii_case(u.as_str()))
+                        }))
             })
         })
     }
@@ -1571,6 +1606,49 @@ mod tests {
         ];
         for g in good {
             assert!(!rule_hits(&s, g), "expected clean line to pass: {g}");
+        }
+    }
+
+    /// A tool's own configuration locations are documentation; a maintainer's content
+    /// under the same directory is not, and `agent_config_standard_paths = false`
+    /// reports both.
+    #[test]
+    fn standard_agent_config_locations_are_documentation_not_leaks() {
+        let narrowed = PiiGate {
+            home_paths: false,
+            lan_ips: false,
+            secrets: false,
+            ..PiiGate::default()
+        };
+        assert!(narrowed.agent_config_refs && narrowed.agent_config_standard_paths);
+        let standard = [
+            format!("writes {}{}", "~", "/.copilot/hooks/discipline.json"),
+            format!("trust it in {}{}", "~", "/.copilot/config.json"),
+            format!("edit {}{}", "$HOME", "/.claude/settings.json"),
+            format!("the {}{} directory", "~", "/.codex"),
+            format!("see {}{} for servers", "~", "/.gemini/mcp_config.json"),
+        ];
+        for line in &standard {
+            assert!(!rule_hits(&narrowed, line), "a tool location: {line}");
+        }
+        let personal = [
+            format!("with unit tests in {}{}", "~", "/.claude/CLAUDE.md"),
+            format!(
+                "see {}{}",
+                "~", "/.claude/projects/-Users-me-repo/memory/MEMORY.md"
+            ),
+            format!("my {}{}", "~", "/.claude/skills/review/SKILL.md"),
+            format!("notes in {}{}", "$HOME", "/.gemini/NOTES.md"),
+        ];
+        for line in &personal {
+            assert!(rule_hits(&narrowed, line), "personal content: {line}");
+        }
+        let strict = PiiGate {
+            agent_config_standard_paths: false,
+            ..narrowed.clone()
+        };
+        for line in standard.iter().chain(&personal) {
+            assert!(rule_hits(&strict, line), "strict reports every one: {line}");
         }
     }
 

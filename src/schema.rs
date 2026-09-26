@@ -265,7 +265,8 @@ pub fn generate_schema() -> Value {
                     "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns exempted from rejection" },
                     "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" },
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" },
-                    "agent_config_refs": { "type": "boolean", "description": "When true, flags references to personal agent configuration directories and playbook docs" }
+                    "agent_config_refs": { "type": "boolean", "description": "When true, flags references to personal agent configuration directories and playbook docs" },
+                    "agent_config_standard_paths": { "type": "boolean", "description": "With agent_config_refs: do not report a reference to an agent tool's home directory itself or to an entry the tool documents there (settings, hooks, skills, agents, commands, rules, plugins, MCP configuration, its instruction file); false reports every one" }
                 }
             },
             "InstructionSmugglingGate": {

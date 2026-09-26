@@ -507,6 +507,7 @@
       "gates.msrv.severity",
       "gates.pii",
       "gates.pii.agent_config_refs",
+      "gates.pii.agent_config_standard_paths",
       "gates.pii.allow_patterns",
       "gates.pii.allow_patterns.items",
       "gates.pii.allow_patterns.reset",

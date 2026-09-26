@@ -8616,6 +8616,53 @@ fn time_estimates_terms_of_art_and_docs_lint_allow() {
     );
 }
 
+/// `agent_config_standard_paths` (default on): documentation naming an agent tool's own
+/// configuration location passes, a maintainer's content under it does not; off, both
+/// are reported, as before the option existed.
+#[test]
+fn pii_tells_a_tools_config_location_from_personal_content() {
+    let repo = Repo::new();
+    repo.write(
+        "docs/setup.md",
+        &format!(
+            "# Setup\n\nThe user-level hook is {}{}.\n",
+            "~", "/.copilot/hooks/discipline.json"
+        ),
+    );
+    repo.commit("docs: document the user-level hook");
+    let standard = repo.check(&["--base", "HEAD~1"]);
+    assert!(standard.violations("pii").is_empty(), "{}", standard.stdout);
+
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\nagent_config_standard_paths = false\n",
+    );
+    repo.commit("chore: strict agent-config references");
+    let strict = repo.check(&["--base", "HEAD~2"]);
+    let v = strict.violations("pii");
+    assert!(
+        v.iter().any(|f| f["file"] == "docs/setup.md"),
+        "strict mode reports the tool location: {}",
+        strict.stdout
+    );
+
+    repo.write("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n");
+    repo.write(
+        "docs/setup.md",
+        &format!("# Setup\n\nFollow {}{}.\n", "~", "/.claude/CLAUDE.md"),
+    );
+    repo.commit("docs: point at personal instructions");
+    let personal = repo.check(&["--base", "HEAD~3"]);
+    assert!(
+        personal
+            .violations("pii")
+            .iter()
+            .any(|f| f["file"] == "docs/setup.md"),
+        "personal content is reported by default: {}",
+        personal.stdout
+    );
+}
+
 #[test]
 fn pii_scans_test_functions_and_agent_config_refs() {
     let repo = Repo::new();

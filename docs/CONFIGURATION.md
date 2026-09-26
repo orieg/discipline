@@ -212,6 +212,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.msrv.pinned_version` | string or null | *(unset)* | Explicit MSRV version string (e.g. "1.90.0") |
 | `gates.msrv.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.pii.agent_config_refs` | boolean | `true` | When true, flags references to personal agent configuration directories and playbook docs |
+| `gates.pii.agent_config_standard_paths` | boolean | `true` | With agent_config_refs: do not report a reference to an agent tool's home directory itself or to an entry the tool documents there (settings, hooks, skills, agents, commands, rules, plugins, MCP configuration, its instruction file); false reports every one |
 | `gates.pii.allow_patterns` | list | `[]` | Regex patterns exempted from rejection |
 | `gates.pii.allowed_users` | list | *(8 entries)* | Username tokens permitted inside home-directory paths |
 | `gates.pii.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
@@ -537,7 +538,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | Option | Env | Default | Description |
 |---|---|---|---|
 | `--agent` |  |  | The agent to configure |
-| `--user` |  |  | Write the user-level hook instead (copilot: hooks/discipline.json in the Copilot home directory, .copilot in your home or COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml |
+| `--user` |  |  | Write the user-level hook instead (copilot: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml |
 | `--cloud-agent` |  |  | Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only) |
 
 **`discipline explain`**
@@ -929,10 +930,10 @@ Loop guards at the end of a turn: Claude Code, Codex, Copilot CLI and Qwen Code 
 - **Codex cloud** blocks internet access during the agent phase by default, but runs the environment's setup script with access: install discipline there (the steps of `.claude/hooks/discipline-bootstrap.sh` without the `CLAUDE_CODE_REMOTE` check). Whether Codex cloud runs a repository's `.codex/hooks.json`, whose hooks must be trusted by hash, is not documented and has not been run live.
 - **Copilot cloud agent**: `hook install --agent copilot --cloud-agent` (below).
 
-**Copilot CLI setup.** Copilot reads hooks from `.github/hooks/*.json` at the repository root (what `hook install --agent copilot` writes), from `hooks/*.json` in the Copilot home directory (`.copilot` in your home directory, or `$COPILOT_HOME`) and from machine-wide policy files (docs.github.com/en/copilot/reference/hooks-reference). Two ways to set it up:
+**Copilot CLI setup.** Copilot reads hooks from `.github/hooks/*.json` at the repository root (what `hook install --agent copilot` writes), from `~/.copilot/hooks/*.json` (`$COPILOT_HOME/hooks/` when set) and from machine-wide policy files (docs.github.com/en/copilot/reference/hooks-reference). Two ways to set it up:
 
-- **In the repository** (the default, shared by the team): `discipline hook install --agent copilot`. Copilot runs a repository's hooks only in a folder it trusts: answer its trust prompt when it opens the repository (remember the choice), or list the folder in `trustedFolders` in the Copilot home directory's `config.json`. In a folder it does not trust, `.github/hooks/` is skipped without a message, in `copilot -p` too.
-- **For your user** (every repository, no per-folder trust): `discipline hook install --agent copilot --user` writes `hooks/discipline.json` in the Copilot home directory, which Copilot loads in any folder. Its command carries `--if-configured`: it checks only a git repository with a `discipline.toml` at its root and passes silently anywhere else, so folders that never adopted discipline are not gated.
+- **In the repository** (the default, shared by the team): `discipline hook install --agent copilot`. Copilot runs a repository's hooks only in a folder it trusts: answer its trust prompt when it opens the repository (remember the choice), or list the folder in `trustedFolders` in `~/.copilot/config.json`. In a folder it does not trust, `.github/hooks/` is skipped without a message, in `copilot -p` too.
+- **For your user** (every repository, no per-folder trust): `discipline hook install --agent copilot --user` writes `~/.copilot/hooks/discipline.json`, which Copilot loads in any folder. Its command carries `--if-configured`: it checks only a git repository with a `discipline.toml` at its root and passes silently anywhere else, so folders that never adopted discipline are not gated.
 
 - **For Copilot cloud agent**: `discipline hook install --agent copilot --cloud-agent` also writes `.github/workflows/copilot-setup-steps.yml`. The cloud agent reads the same `.github/hooks/*.json` from the cloned repository, and `postToolUse` and `agentStop` fire there, but its environment has no `discipline`: a hook whose command is missing is logged and skipped, so the agent works ungated. The setup-steps job, which GitHub runs before the agent starts, runs this action with `install_only: 'true'`: the pinned, checksum-verified binary is installed and put on `PATH`, and no check runs. The workflow takes effect once it is on the default branch; pin the action to the release's commit SHA, as the comment in the file says. A repository that already has the workflow gets the step to add to it, never a rewrite. Its network and runner follow GitHub's cloud agent settings (docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/customize-the-agent-environment).
 

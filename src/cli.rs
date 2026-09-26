@@ -182,7 +182,7 @@ pub struct HookInstallArgs {
     #[arg(long, value_enum)]
     pub agent: crate::hook::Agent,
 
-    /// Write the user-level hook instead (copilot: hooks/discipline.json in the Copilot home directory, .copilot in your home or COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml
+    /// Write the user-level hook instead (copilot: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml
     #[arg(long)]
     pub user: bool,
 

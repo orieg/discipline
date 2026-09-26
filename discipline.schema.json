@@ -706,6 +706,10 @@
           "description": "When true, flags references to personal agent configuration directories and playbook docs",
           "type": "boolean"
         },
+        "agent_config_standard_paths": {
+          "description": "With agent_config_refs: do not report a reference to an agent tool's home directory itself or to an entry the tool documents there (settings, hooks, skills, agents, commands, rules, plugins, MCP configuration, its instruction file); false reports every one",
+          "type": "boolean"
+        },
         "allow_patterns": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Regex patterns exempted from rejection"

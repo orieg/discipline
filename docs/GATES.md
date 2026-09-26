@@ -738,7 +738,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Private IPv4 LAN addresses: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`.
   - Whole-token matches of denylisted internal hostnames.
   - With `secrets` (on by default): private-key headers, AWS access key ids, GitHub and Slack tokens (the match is never echoed).
-  - References to personal maintainer agent configuration (`~/.claude`, `$HOME/.gemini`, `RESEARCH_DISCIPLINES.md`, `*_PLAYBOOK.md`) across tracked text files. <!-- discipline:allow(pii) -->
+  - References to personal maintainer agent configuration (`~/.claude/CLAUDE.md`, `$HOME/.gemini/NOTES.md`, `RESEARCH_DISCIPLINES.md`, `*_PLAYBOOK.md`) across tracked text files. With `agent_config_standard_paths` (default `true`), a reference to an agent tool's home directory itself or to a configuration entry the tool documents there (`settings.json`, `settings.local.json`, `config.json`, `config.toml`, `hooks/`, `hooks.json`, `plugins/`, `mcp.json`, `mcp_config.json`, `keybindings.json`) documents the tool and is not reported; instruction files, skills, agents, commands, rules, session history and any other file there still are. `agent_config_standard_paths = false` reports every `~/.<agent>` or `$HOME/.<agent>` path. <!-- discipline:allow(pii) -->
   - Leaks inside decoded JSON keys and string literals, including escaped slashes (`\/`).
 - **Failing diff example (rejected):**
   ```rust
@@ -758,7 +758,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Binary files (non-text).
   *(Note: Other test code is explicitly scanned because test fixtures are where paths and IPs frequently leak. Self-referential fixtures must use runtime assembly, inline `discipline:allow(pii)`, or `exempt_paths`).*
 - **Lifting directive:** `<!-- discipline:allow(pii) -->` or `docs-lint: allow` on the matching line.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `redact_lan_ips`, `secrets`, `agent_config_refs`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `redact_lan_ips`, `secrets`, `agent_config_refs`, `agent_config_standard_paths`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 
 #### `agent-scratch`
 - **Rule:** Agent transcripts, session files, and scratch artifacts must never be tracked in git.

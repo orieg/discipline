@@ -854,6 +854,11 @@ pub struct PiiGate {
     /// When true (default), flags references to personal agent configuration directories and playbooks.
     #[serde(default = "default_true")]
     pub agent_config_refs: bool,
+    /// With `agent_config_refs`: a reference to an agent tool's home directory itself or
+    /// to an entry the tool documents there (`~/.copilot/hooks/`, `~/.claude/settings.json`)
+    /// is not reported; any other path under it still is. `false` reports every one.
+    #[serde(default = "default_true")]
+    pub agent_config_standard_paths: bool,
 }
 
 impl Default for PiiGate {
@@ -878,6 +883,7 @@ impl Default for PiiGate {
             scan_pr_body: true,
             diff_only: false,
             agent_config_refs: true,
+            agent_config_standard_paths: true,
         }
     }
 }

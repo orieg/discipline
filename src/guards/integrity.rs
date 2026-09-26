@@ -126,6 +126,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("lan_ips", Direction::LooserWhenFalse),
     ("secrets", Direction::LooserWhenFalse),
     ("agent_config_refs", Direction::LooserWhenFalse),
+    ("agent_config_standard_paths", Direction::LooserWhenTrue),
     ("require_sourced_override", Direction::LooserWhenFalse),
     ("check_tables", Direction::LooserWhenFalse),
     ("check_mechanisms", Direction::LooserWhenFalse),
