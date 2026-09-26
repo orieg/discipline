@@ -190,7 +190,10 @@ jobs:
           [ -n "${BIN}" ] || { echo "::error::install_only left no bin output"; exit 1; }
           on_path="$(command -v discipline)" || { echo "::error::discipline is not on PATH after install_only"; exit 1; }
           [ "${on_path}" = "${BIN}" ] || { echo "::error::discipline on PATH is '${on_path}', expected '${BIN}'"; exit 1; }
-          [ -z "${STATUS}" ] && [ -z "${REPORT}" ] || { echo "::error::install_only ran the gates (status '${STATUS}')"; exit 1; }
+          if [ -n "${STATUS}" ] || [ -n "${REPORT}" ]; then
+            echo "::error::install_only ran the gates (status '${STATUS}')"
+            exit 1
+          fi
           discipline --version
 
       - name: "Negative control: bad change is rejected"
