@@ -204,6 +204,7 @@ opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit to
 '-b+[Base to measure the change against (default\: the merge base with origin'\''s default branch, else main / master)]:BASE:_default' \
 '--base=[Base to measure the change against (default\: the merge base with origin'\''s default branch, else main / master)]:BASE:_default' \
 '--if-configured[Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)]' \
+'--observe[Observe mode\: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook-observe.log]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::files -- Files an agent appends to the command (Aider'\''s lint-cmd); ignored, the whole change is checked:_default' \
@@ -220,6 +221,7 @@ agy\:"Antigravity CLI (\`.agents/hooks.json\`, Stop)"
 qwen\:"Qwen Code (\`.qwen/settings.json\`, PostToolUse + Stop)"
 opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit tools)"))' \
 '--user[Write the user-level hook instead (copilot\: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml]' \
+'--observe[Write the hook commands in observe mode (hook run --observe)\: the agent is never blocked while a hook is rolled out]' \
 '(--user)--cloud-agent[Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \

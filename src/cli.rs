@@ -171,6 +171,10 @@ pub struct HookRunArgs {
     #[arg(long)]
     pub if_configured: bool,
 
+    /// Observe mode: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook-observe.log
+    #[arg(long)]
+    pub observe: bool,
+
     /// Files an agent appends to the command (Aider's lint-cmd); ignored, the whole change is checked
     #[arg(hide = true, trailing_var_arg = true)]
     pub files: Vec<String>,
@@ -185,6 +189,10 @@ pub struct HookInstallArgs {
     /// Write the user-level hook instead (copilot: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml
     #[arg(long)]
     pub user: bool,
+
+    /// Write the hook commands in observe mode (hook run --observe): the agent is never blocked while a hook is rolled out
+    #[arg(long)]
+    pub observe: bool,
 
     /// Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
     #[arg(long, conflicts_with = "user")]

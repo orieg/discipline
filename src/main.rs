@@ -1389,7 +1389,8 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     .read_to_string(&mut stdin)
                     .context("cannot read the hook payload on stdin")?;
             }
-            let out = discipline::hook::run_with(a.agent, a.base, &stdin, a.if_configured)?;
+            let out =
+                discipline::hook::run_with(a.agent, a.base, &stdin, a.if_configured, a.observe)?;
             print!("{}", out.stdout);
             eprint!("{}", out.stderr);
             std::io::stdout()
@@ -1401,7 +1402,7 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             let mut results = vec![if a.user {
                 discipline::hook::install_user(a.agent)?
             } else {
-                discipline::hook::install(a.agent, &discipline::hook::repo_root()?)?
+                discipline::hook::install(a.agent, &discipline::hook::repo_root()?, a.observe)?
             }];
             if a.agent == discipline::hook::Agent::ClaudeCode && !a.user {
                 results.push(discipline::hook::install_claude_bootstrap(

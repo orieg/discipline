@@ -532,6 +532,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--agent` |  |  | The agent whose hook contract to answer in |
 | `-b`, `--base` |  |  | Base to measure the change against (default: the merge base with origin's default branch, else main / master) |
 | `--if-configured` |  |  | Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder) |
+| `--observe` |  |  | Observe mode: run the check but never block; what would have blocked is said on stderr and appended to &lt;git dir&gt;/discipline/hook-observe.log |
 
 **`discipline hook install`**
 
@@ -539,6 +540,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 |---|---|---|---|
 | `--agent` |  |  | The agent to configure |
 | `--user` |  |  | Write the user-level hook instead (copilot: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml |
+| `--observe` |  |  | Write the hook commands in observe mode (hook run --observe): the agent is never blocked while a hook is rolled out |
 | `--cloud-agent` |  |  | Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only) |
 
 **`discipline explain`**
@@ -959,7 +961,9 @@ Test `adds`: effective assertions dropped from 2 to 0.
 
 **What a change cannot do to the check that judges it.** The hook (and `discipline mcp`) judges the change by the base ref's `discipline.toml` (`--policy-from base`), so an agent that edits the configuration does not switch its own gates off, and it reads no directive (a waiver in a commit message does not lift a finding here; the reviewed PR body lifts it in CI). Leaving waiver syntax out of the report is a convenience, not the control: an agent can run `discipline explain` like anyone else. The control is CI with `policy_from: base`, directives read from the PR body only, and `fail_on_overrides` or `require_approval` (see [High-Assurance Agent Guard Configuration](#high-assurance-agent-guard-configuration)). Findings a repository already has, such as a missing `AGENTS.md`, appear in every hook report too; record them with `discipline baseline --write` before installing the hook.
 
-A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason; it never reads as a pass. An event that this hook already continued (`stop_hook_active`, sent by Claude Code, Codex, Copilot CLI and Qwen Code), and agy's stop after three blocks, is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. The hook still runs the check there, and when the change has findings or could not be checked it says so on stderr (the transcript or hook log the person reads, not the model): a stop let through is never reported as clean. `discipline` must be on the agent's `PATH`.
+A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason, which the text names as the report's `could_not_check.reason` (`discipline could not check this change (reason: configuration)`, `(reason: tool-missing, gate miri)`); it never reads as a pass. An event that this hook already continued (`stop_hook_active`, sent by Claude Code, Codex, Copilot CLI and Qwen Code), and agy's stop after three blocks, is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. The hook still runs the check there, and when the change has findings or could not be checked it says so on stderr (the transcript or hook log the person reads, not the model): a stop let through is never reported as clean. `discipline` must be on the agent's `PATH`.
+
+**Observe mode, for rolling a hook out.** `discipline hook install --agent <name> --observe` writes every check command as `discipline hook run --agent <name> --observe`. The check runs as usual but never blocks: the agent gets its pass, and what would have blocked (the finding codes, or the reason a check could not run) is said on stderr, marked "observe mode, not enforced", and appended to `<git dir>/discipline/hook-observe.log`, one JSON line per event (`time`, `agent`, `event`, `verdict`, `reason`, `codes`). Read the log to see what enforcing would have stopped, then drop `--observe` from the hook file. Observe mode is never enforcement: CI still gates the change.
 
 ### Pull-Request Comments
 

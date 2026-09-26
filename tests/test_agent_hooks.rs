@@ -718,3 +718,120 @@ fn claude_code_install_writes_the_cloud_bootstrap() {
         (Some(0), 0, 0)
     );
 }
+
+/// Observe mode: the check runs, the agent is never blocked, and what would have blocked
+/// is said on stderr and logged under the git directory; a clean change leaves no trace.
+#[test]
+fn observe_mode_reports_and_logs_without_blocking() {
+    let repo = Repo::new();
+    let log = repo.path().join(".git/discipline/hook-observe.log");
+    let clean = hook(
+        &repo,
+        &["hook", "run", "--agent", "claude-code", "--observe"],
+        POST_EDIT,
+    );
+    assert_eq!(
+        (clean.code, clean.stdout.as_str(), clean.stderr.as_str()),
+        (0, "", "")
+    );
+    assert!(!log.exists(), "a clean change is not logged");
+
+    weakened(&repo);
+    let edit = hook(
+        &repo,
+        &["hook", "run", "--agent", "claude-code", "--observe"],
+        POST_EDIT,
+    );
+    assert_eq!(
+        (edit.code, edit.stdout.as_str()),
+        (0, ""),
+        "{}",
+        edit.stderr
+    );
+    assert!(
+        edit.stderr.contains("observe mode, not enforced")
+            && edit
+                .stderr
+                .contains("assertion-reduction/assertions-reduced"),
+        "{}",
+        edit.stderr
+    );
+    // Copilot's end of turn is let through too: no `block` decision.
+    let stop = hook(
+        &repo,
+        &["hook", "run", "--agent", "copilot", "--observe"],
+        r#"{"stopReason":"end_turn","stop_hook_active":false}"#,
+    );
+    assert_eq!(
+        (stop.code, stop.stdout.as_str()),
+        (0, ""),
+        "{}",
+        stop.stdout
+    );
+    let lines: Vec<serde_json::Value> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["agent"], "claude-code");
+    assert_eq!(lines[0]["event"], "edit");
+    assert_eq!(lines[0]["verdict"], "findings");
+    assert!(lines[0]["codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "assertion-reduction/assertions-reduced"));
+    assert_eq!(
+        (lines[1]["agent"].as_str(), lines[1]["event"].as_str()),
+        (Some("copilot"), Some("stop"))
+    );
+}
+
+/// A check that cannot run names why in the text the agent reads, whether the hook
+/// blocks or observes.
+#[test]
+fn a_check_that_cannot_run_names_its_reason_to_the_agent() {
+    let repo = Repo::new();
+    repo.write("discipline.toml", "[meta\n");
+    let run = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(run.code, 2, "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("discipline could not check this change (reason: configuration)"),
+        "{}",
+        run.stderr
+    );
+    let observed = hook(
+        &repo,
+        &["hook", "run", "--agent", "claude-code", "--observe"],
+        POST_EDIT,
+    );
+    assert_eq!(observed.code, 0, "{}", observed.stderr);
+    assert!(
+        observed
+            .stderr
+            .contains("the check could not run (configuration)"),
+        "{}",
+        observed.stderr
+    );
+}
+
+/// `hook install --observe` writes every check command in observe mode.
+#[test]
+fn install_observe_writes_observe_commands() {
+    let repo = Repo::new();
+    let run = repo.run(
+        &["hook", "install", "--agent", "claude-code", "--observe"],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let settings = std::fs::read_to_string(repo.file(".claude/settings.json")).unwrap();
+    assert_eq!(
+        settings
+            .matches("discipline hook run --agent claude-code --observe")
+            .count(),
+        2,
+        "{settings}"
+    );
+}

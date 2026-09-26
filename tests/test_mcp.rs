@@ -140,6 +140,14 @@ fn a_clean_change_passes_and_a_broken_config_is_an_error_not_a_pass() {
         broken[0]["result"]["structuredContent"]["status"],
         "could_not_check"
     );
+    assert!(
+        broken[0]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("(reason: configuration)"),
+        "{}",
+        broken[0]
+    );
 }
 
 #[test]

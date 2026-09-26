@@ -167,6 +167,7 @@ qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
 opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s b -l base -d 'Base to measure the change against (default: the merge base with origin\'s default branch, else main / master)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l if-configured -d 'Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)'
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l observe -d 'Observe mode: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook-observe.log'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l agent -d 'The agent to configure' -r -f -a "claude-code\t'Claude Code (`.claude/settings.json`, PostToolUse + Stop)'
 codex\t'OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)'
@@ -177,6 +178,7 @@ agy\t'Antigravity CLI (`.agents/hooks.json`, Stop)'
 qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
 opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l user -d 'Write the user-level hook instead (copilot: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml'
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l observe -d 'Write the hook commands in observe mode (hook run --observe): the agent is never blocked while a hook is rolled out'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l cloud-agent -d 'Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "run" -d 'Check the change so far and answer in the agent\'s hook contract (reads the hook payload on stdin)'

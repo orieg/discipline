@@ -624,7 +624,7 @@ Check the change so far and answer in the agent\*(Aqs hook contract (reads the h
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline hook run\fR <\fB\-\-agent\fR> [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-if\-configured\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILES\fR] 
+\fBdiscipline hook run\fR <\fB\-\-agent\fR> [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-if\-configured\fR] [\fB\-\-observe\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILES\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -661,6 +661,9 @@ Base to measure the change against (default: the merge base with origin\*(Aqs de
 \fB\-\-if\-configured\fR
 Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user\-level hook, which runs in every folder)
 .TP
+\fB\-\-observe\fR
+Observe mode: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook\-observe.log
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS "discipline hook install"
@@ -670,7 +673,7 @@ Write the agent\*(Aqs hook configuration at the repository root (or, with \-\-us
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-\-user\fR] [\fB\-\-cloud\-agent\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-\-user\fR] [\fB\-\-observe\fR] [\fB\-\-cloud\-agent\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -703,6 +706,9 @@ opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools
 .TP
 \fB\-\-user\fR
 Write the user\-level hook instead (copilot: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml
+.TP
+\fB\-\-observe\fR
+Write the hook commands in observe mode (hook run \-\-observe): the agent is never blocked while a hook is rolled out
 .TP
 \fB\-\-cloud\-agent\fR
 Also write .github/workflows/copilot\-setup\-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
