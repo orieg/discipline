@@ -682,3 +682,39 @@ fn copilot_cloud_agent_gets_a_setup_steps_workflow() {
         cursor.stderr
     );
 }
+
+/// `hook install --agent claude-code` writes the settings and the executable bootstrap
+/// their `SessionStart` hook runs; neither is ever rewritten.
+#[test]
+fn claude_code_install_writes_the_cloud_bootstrap() {
+    let repo = Repo::new();
+    let run = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let script = repo.file(".claude/hooks/discipline-bootstrap.sh");
+    let text = std::fs::read_to_string(&script).unwrap();
+    assert!(text.starts_with("#!/bin/bash"), "{text}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&script).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "executable: {mode:o}");
+    }
+    let again = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(again.code, 0, "{}", again.stdout);
+    assert_eq!(
+        again.stdout.matches("already runs discipline").count(),
+        2,
+        "{}",
+        again.stdout
+    );
+    // Run locally, the bootstrap does nothing: no CLAUDE_CODE_REMOTE.
+    let out = Command::new("bash")
+        .arg(&script)
+        .env_remove("CLAUDE_CODE_REMOTE")
+        .output()
+        .unwrap();
+    assert_eq!(
+        (out.status.code(), out.stdout.len(), out.stderr.len()),
+        (Some(0), 0, 0)
+    );
+}

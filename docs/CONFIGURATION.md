@@ -56,7 +56,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `directives.require_approval` | boolean | `false` | PR-body / commit-body overrides fail the run until the forge shows an approving review of the head commit by an allowed_override_actors member other than the author (default: false) |
 | `directives.sources` | list | `["pr-body","commits","merged-pr-body"]` | Allowed directive sources: pr-body, commits, merged-pr-body (default: ["pr-body", "commits", "merged-pr-body"]). merged-pr-body reads, on a push event, the body of the merged pull request each pushed commit arrived through |
 | `gates.agent-scratch.enabled` | boolean | `true` | Whether this gate is active |
-| `gates.agent-scratch.exempt_paths` | list | *(4 entries)* | File path globs exempted from this gate |
+| `gates.agent-scratch.exempt_paths` | list | *(5 entries)* | File path globs exempted from this gate |
 | `gates.agent-scratch.paths` | list | *(7 entries)* | Directory and file globs that must never be tracked |
 | `gates.agent-scratch.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.agents-md.enabled` | boolean | `true` | Whether this gate is active |
@@ -908,11 +908,11 @@ discipline hook install --agent claude-code   # or: codex, cursor, aider, copilo
 }
 ```
 
-The hook file is project configuration: commit it so every contributor's agent runs the same check. `agent-scratch` does not report the files `hook install` writes (`.claude/settings.json`, `.cursor/hooks.json`, `.aider.conf.yml` are in its default `exempt_paths`); `instruction-smuggling` does report a change to them, because it changes what the agent is made to do, so the pull request that adds the hook carries `allow-agent-instructions: <file> <reason>`. Each configuration runs `discipline hook run --agent <name>`, which checks the change so far (committed on the branch and uncommitted, though a file never `git add`ed is not seen, against the merge base with `origin`'s default branch, else `main` / `master`; `--base` or `DISCIPLINE_BASE_REF` overrides it) and answers in that agent's hook contract:
+The hook file is project configuration: commit it so every contributor's agent runs the same check. `agent-scratch` does not report the files `hook install` writes (`.claude/settings.json`, `.claude/hooks/discipline-bootstrap.sh`, `.cursor/hooks.json`, `.aider.conf.yml` are in its default `exempt_paths`); `instruction-smuggling` does report a change to them, because it changes what the agent is made to do, so the pull request that adds the hook carries `allow-agent-instructions: <file> <reason>`. Each configuration runs `discipline hook run --agent <name>`, which checks the change so far (committed on the branch and uncommitted, though a file never `git add`ed is not seen, against the merge base with `origin`'s default branch, else `main` / `master`; `--base` or `DISCIPLINE_BASE_REF` overrides it) and answers in that agent's hook contract:
 
 | Agent | File | Runs on | A finding |
 |---|---|---|---|
-| Claude Code | `.claude/settings.json` | `PostToolUse` (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`) and `Stop` | exit 2, the report on stderr, which the agent reads |
+| Claude Code | `.claude/settings.json`, and `.claude/hooks/discipline-bootstrap.sh` its `SessionStart` runs (below) | `PostToolUse` (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`) and `Stop` | exit 2, the report on stderr, which the agent reads |
 | Codex CLI | `.codex/hooks.json` | `PostToolUse` (`apply_patch`, `Edit`, `Write`) and `Stop` | exit 2, the report on stderr |
 | Cursor | `.cursor/hooks.json` | `stop` (`loop_limit: 3`) | `{"followup_message": <report>}` on stdout, sent as the next message |
 | Aider | `.aider.conf.yml` | `lint-cmd` after each edit (`auto-lint: true`) | exit 1, the report on stdout |
@@ -922,6 +922,12 @@ The hook file is project configuration: commit it so every contributor's agent r
 | OpenCode | `.opencode/plugins/discipline.js` | a plugin on `tool.execute.after` for `edit`, `write`, `apply_patch` | the plugin appends the report to the tool's output; `hook run --agent opencode` exits 1 with the report on stdout |
 
 Loop guards at the end of a turn: Claude Code, Codex, Copilot CLI and Qwen Code send `stop_hook_active` on a turn a hook already continued, and the hook lets it through (Copilot CLI and Qwen Code also stop after eight continuations); Cursor's `loop_limit` is 3. agy documents no guard, so discipline counts consecutive blocks for each conversation in `<git dir>/discipline/agy-stop-<id>` (never tracked) and lets the stop through after three; a pass resets the count. OpenCode's plugin runs after edit tools only.
+
+**Cloud sessions.** An agent running in a hosted VM runs the repository's hooks there, but the VM starts without `discipline`, and a hook whose command is missing does not check anything.
+
+- **Claude Code on the web** runs the hooks in the repository's `.claude/settings.json` (a session with one repository; code.claude.com/docs/en/cloud-environments). `hook install --agent claude-code` also writes `.claude/hooks/discipline-bootstrap.sh`, which its `SessionStart` hook runs: when `CLAUDE_CODE_REMOTE` is `true` and `discipline` is not on `PATH`, it downloads this release's binary from GitHub, verifies it against `SHA256SUMS` and installs it into `~/.local/bin`, which is first on the cloud VM's `PATH`. It does nothing locally, never fails the session, and prints why when it cannot install (for example a **None** network access level). Run live in a Claude Code cloud session on a repository other than discipline's, under the default **Trusted** level: the bootstrap installed the release, and the `PostToolUse` and `Stop` hooks blocked a test whose assertions the agent deleted. To install once per cached environment instead of per session, put the same steps in the environment's setup script, which runs before Claude Code starts.
+- **Codex cloud** blocks internet access during the agent phase by default, but runs the environment's setup script with access: install discipline there (the steps of `.claude/hooks/discipline-bootstrap.sh` without the `CLAUDE_CODE_REMOTE` check). Whether Codex cloud runs a repository's `.codex/hooks.json`, whose hooks must be trusted by hash, is not documented and has not been run live.
+- **Copilot cloud agent**: `hook install --agent copilot --cloud-agent` (below).
 
 **Copilot CLI setup.** Copilot reads hooks from `.github/hooks/*.json` at the repository root (what `hook install --agent copilot` writes), from `hooks/*.json` in the Copilot home directory (`.copilot` in your home directory, or `$COPILOT_HOME`) and from machine-wide policy files (docs.github.com/en/copilot/reference/hooks-reference). Two ways to set it up:
 

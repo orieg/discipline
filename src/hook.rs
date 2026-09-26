@@ -448,6 +448,15 @@ pub fn config_for(agent: Agent) -> (&'static str, String) {
             ".claude/settings.json",
             serde_json::to_string_pretty(&serde_json::json!({
                 "hooks": {
+                    // A cloud session starts on a fresh VM without discipline: this
+                    // installs it there before the first edit ([`CLAUDE_BOOTSTRAP`]).
+                    "SessionStart": [{
+                        "matcher": "startup|resume",
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}")
+                        }]
+                    }],
                     "PostToolUse": [{
                         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
                         "hooks": [{ "type": "command", "command": cmd }]
@@ -651,6 +660,85 @@ pub fn install_user(agent: Agent) -> Result<Installed> {
     Ok(Installed::Written(path))
 }
 
+/// The script the Claude Code `SessionStart` hook runs, relative to the repository root.
+pub const CLAUDE_BOOTSTRAP: &str = ".claude/hooks/discipline-bootstrap.sh";
+
+/// [`CLAUDE_BOOTSTRAP`]: in a Claude Code cloud session (`CLAUDE_CODE_REMOTE=true`) with no
+/// `discipline` on `PATH`, install this release from its GitHub release, SHA256-verified,
+/// into `~/.local/bin` (first on the cloud VM's `PATH`). It does nothing locally or when
+/// discipline is already there, and always exits 0: a failure is a notice to the person,
+/// never a blocked session.
+pub fn claude_bootstrap_script() -> String {
+    format!(
+        r#"#!/bin/bash
+# Written by `discipline hook install --agent claude-code`.
+# A Claude Code cloud session starts on a fresh VM without discipline. This installs
+# the pinned release, checksum-verified, so the hooks in .claude/settings.json can
+# check the change. Locally it does nothing: install discipline yourself.
+set -u
+[ "${{CLAUDE_CODE_REMOTE:-}}" = "true" ] || exit 0
+command -v discipline >/dev/null 2>&1 && exit 0
+
+version="v{version}"
+say() {{ echo "discipline bootstrap: $*" >&2; }}
+case "$(uname -m)" in
+  x86_64|amd64) arch="x86_64" ;;
+  aarch64|arm64) arch="aarch64" ;;
+  *) say "unsupported architecture $(uname -m); the hooks cannot check this session"; exit 0 ;;
+esac
+asset="discipline-${{arch}}-unknown-linux-musl.tar.gz"
+base="https://github.com/orieg/discipline/releases/download/${{version}}"
+dir="$(mktemp -d)"
+if ! curl -fsSL --retry 3 -o "${{dir}}/${{asset}}" "${{base}}/${{asset}}" \
+  || ! curl -fsSL --retry 3 -o "${{dir}}/SHA256SUMS" "${{base}}/SHA256SUMS"; then
+  say "could not download ${{version}} (network access level?); the hooks cannot check this session"
+  exit 0
+fi
+want="$(awk -v f="${{asset}}" '$2 == f || $2 == "*" f {{ print $1 }}' "${{dir}}/SHA256SUMS")"
+got="$(sha256sum "${{dir}}/${{asset}}" | awk '{{ print $1 }}')"
+if [ -z "${{want}}" ] || [ "${{want}}" != "${{got}}" ]; then
+  say "checksum mismatch for ${{asset}}; not installed"
+  exit 0
+fi
+mkdir -p "${{dir}}/x" "${{HOME}}/.local/bin"
+if tar -xzf "${{dir}}/${{asset}}" -C "${{dir}}/x" \
+  && install -m 0755 "${{dir}}/x/discipline" "${{HOME}}/.local/bin/discipline"; then
+  say "installed $("${{HOME}}/.local/bin/discipline" --version)"
+else
+  say "could not unpack ${{asset}}; the hooks cannot check this session"
+fi
+exit 0
+"#,
+        version = env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// Write [`CLAUDE_BOOTSTRAP`] under `root` unless a file is there.
+pub fn install_claude_bootstrap(root: &Path) -> Result<Installed> {
+    let path = root.join(CLAUDE_BOOTSTRAP);
+    if path.exists() {
+        let existing = std::fs::read_to_string(&path)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        if existing.contains("orieg/discipline/releases") {
+            return Ok(Installed::AlreadyPresent(path));
+        }
+        return Ok(Installed::Refused(path, claude_bootstrap_script()));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    std::fs::write(&path, claude_bootstrap_script())
+        .with_context(|| format!("cannot write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("cannot make {} executable", path.display()))?;
+    }
+    Ok(Installed::Written(path))
+}
+
 /// `.github/workflows/copilot-setup-steps.yml`, which Copilot cloud agent runs before it
 /// starts working: this action, pinned to this binary's release, installs `discipline`
 /// and puts it on `PATH` without running a check, so the repository's hooks find it.
@@ -808,6 +896,45 @@ mod tests {
             assert!(re.is_match(tool), "{tool} is an edit: {matcher}");
         }
         assert!(!re.is_match("view") && !re.is_match("rg"), "{matcher}");
+    }
+
+    /// Claude Code's settings run the cloud bootstrap at session start, and the script
+    /// installs this release only in a cloud session that lacks discipline, verifying the
+    /// checksum and never failing the session.
+    #[test]
+    fn claude_code_bootstraps_discipline_only_in_a_cloud_session_without_it() {
+        let settings: serde_json::Value =
+            serde_json::from_str(&config_for(Agent::ClaudeCode).1).unwrap();
+        let start = &settings["hooks"]["SessionStart"][0];
+        assert_eq!(start["matcher"], "startup|resume");
+        assert_eq!(
+            start["hooks"][0]["command"],
+            format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}")
+        );
+        let script = claude_bootstrap_script();
+        let lines: Vec<&str> = script.lines().collect();
+        let guard = lines
+            .iter()
+            .position(|l| *l == r#"[ "${CLAUDE_CODE_REMOTE:-}" = "true" ] || exit 0"#)
+            .expect("the cloud guard");
+        let present = lines
+            .iter()
+            .position(|l| *l == "command -v discipline >/dev/null 2>&1 && exit 0")
+            .expect("the already-installed guard");
+        let download = lines.iter().position(|l| l.contains("curl ")).unwrap();
+        assert!(guard < download && present < download, "{script}");
+        assert!(script.contains(&format!("version=\"v{}\"", env!("CARGO_PKG_VERSION"))));
+        assert!(
+            script.contains(r#"[ "${want}" != "${got}" ]"#),
+            "the checksum is verified"
+        );
+        assert!(
+            lines
+                .iter()
+                .filter(|l| l.trim_start().starts_with("exit "))
+                .all(|l| l.trim() == "exit 0"),
+            "a bootstrap failure never fails the session"
+        );
     }
 
     /// The setup-steps workflow Copilot cloud agent runs: one job named

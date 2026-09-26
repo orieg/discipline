@@ -766,7 +766,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - Committing directories: `.claude/`, `.gemini/`, `.antigravity/`, `.cursor/`, `scratch/`.
   - Session files: `*.session.*`, `.aider*`.
-- **Not reported by default:** the shared hook files `discipline hook install` writes (`.claude/settings.json`, `.cursor/hooks.json`, `.aider.conf.yml`) and Cursor's project MCP server list (`.cursor/mcp.json`), which are the default `exempt_paths`. They are project configuration; `instruction-smuggling` reports a change to them.
+- **Not reported by default:** the shared hook files `discipline hook install` writes (`.claude/settings.json` and its `.claude/hooks/discipline-bootstrap.sh`, `.cursor/hooks.json`, `.aider.conf.yml`) and Cursor's project MCP server list (`.cursor/mcp.json`), which are the default `exempt_paths`. They are project configuration; `instruction-smuggling` reports a change to them.
 - **Failing commit (rejected):**
   ```bash
   git add .gemini/scratch/notes.md && git commit -m "add scratch notes"

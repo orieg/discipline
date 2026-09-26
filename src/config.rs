@@ -903,6 +903,7 @@ impl Default for ScratchGate {
             // reports.
             exempt_paths: [
                 ".claude/settings.json",
+                ".claude/hooks/discipline-bootstrap.sh",
                 ".cursor/hooks.json",
                 ".cursor/mcp.json",
                 ".aider.conf.yml",

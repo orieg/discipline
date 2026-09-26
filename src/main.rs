@@ -1403,6 +1403,11 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             } else {
                 discipline::hook::install(a.agent, &discipline::hook::repo_root()?)?
             }];
+            if a.agent == discipline::hook::Agent::ClaudeCode && !a.user {
+                results.push(discipline::hook::install_claude_bootstrap(
+                    &discipline::hook::repo_root()?,
+                )?);
+            }
             if a.cloud_agent {
                 if a.agent != discipline::hook::Agent::Copilot {
                     bail!("`--cloud-agent` is for copilot: Copilot cloud agent runs the repository's hooks");
