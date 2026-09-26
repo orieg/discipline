@@ -7845,8 +7845,9 @@ fn test_calc() {
 
     assert!(out.contains("Discipline gatekeeper detected violations in your changes"));
     assert!(out.contains("Location: tests/calc.rs:3"));
-    assert!(out
-        .contains("Problem: Test `test_calc`: equality / pattern assertions dropped from 2 to 1"));
+    assert!(out.contains(
+        "- Problem:\n```text\nTest `test_calc`: equality / pattern assertions dropped from 2 to 1"
+    ));
     assert!(out.contains("Repair: Restore the assertions that were removed or weakened"));
 
     // Verify ZERO directive syntax leaked
