@@ -312,6 +312,12 @@ pub fn run_with(
     Ok(translate_event(agent, event, code, &report, &detail))
 }
 
+/// agy's `SessionStart` handler: silent when `discipline` is on `PATH`; otherwise it tells
+/// the agent, through an injected message, that the repository's hook cannot check the
+/// change and that the person must be told. A hook whose command is missing does not
+/// check anything, and agy shows a hook's stderr to no one in print mode.
+pub const AGY_MISSING_BINARY: &str = r#"command -v discipline >/dev/null 2>&1 && { echo '{}'; exit 0; }; echo '{"injectSteps":[{"ephemeralMessage":"discipline is not installed or not on PATH, so the discipline hook in this repository cannot check your changes. Tell the user before you finish, so they can install it (https://orieg.github.io/discipline/)."}]}'"#;
+
 /// Consecutive `continue` answers agy gets for one conversation before its stop is let
 /// through (agy documents no loop guard of its own).
 pub const AGY_MAX_CONTINUATIONS: u32 = 3;
@@ -508,6 +514,9 @@ pub fn config_for(agent: Agent) -> (&'static str, String) {
                 // group them under a `matcher` (agy's hooks guide). A grouped Stop
                 // handler has no `command` and never runs.
                 "discipline": {
+                    // agy runs a `SessionStart` handler and injects its `injectSteps`
+                    // (seen live with agy 1.2; the event is not in its hooks guide).
+                    "SessionStart": [{ "type": "command", "command": AGY_MISSING_BINARY, "timeout": 10 }],
                     "Stop": [{ "type": "command", "command": cmd, "timeout": 120 }]
                 }
             }))
@@ -935,6 +944,44 @@ mod tests {
                 .all(|l| l.trim() == "exit 0"),
             "a bootstrap failure never fails the session"
         );
+    }
+
+    /// agy's `SessionStart` handler tells the agent to warn the person when `discipline`
+    /// is not on `PATH`, and is silent (`{}`) when it is; agy's `Stop` is unchanged.
+    #[cfg(unix)]
+    #[test]
+    fn agy_warns_through_the_agent_when_discipline_is_missing() {
+        let agy: serde_json::Value = serde_json::from_str(&config_for(Agent::Agy).1).unwrap();
+        let start = &agy["discipline"]["SessionStart"][0];
+        assert_eq!(start["command"], AGY_MISSING_BINARY);
+        assert_eq!(
+            agy["discipline"]["Stop"][0]["command"],
+            "discipline hook run --agent agy"
+        );
+        let run = |path: &str| -> serde_json::Value {
+            let out = std::process::Command::new("/bin/sh")
+                .args(["-c", AGY_MISSING_BINARY])
+                .env_clear()
+                .env("PATH", path)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            serde_json::from_slice(&out.stdout).unwrap()
+        };
+        let missing = run("/nonexistent");
+        let message = missing["injectSteps"][0]["ephemeralMessage"]
+            .as_str()
+            .unwrap();
+        assert!(
+            message.contains("discipline is not installed") && message.contains("Tell the user"),
+            "{missing}"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("discipline");
+        std::fs::write(&fake, "#!/bin/sh\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(run(dir.path().to_str().unwrap()), serde_json::json!({}));
     }
 
     /// The setup-steps workflow Copilot cloud agent runs: one job named
