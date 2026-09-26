@@ -338,7 +338,7 @@ Before 1.0 a minor release may change gate behaviour; from 1.0, `docs/ARCHITECTU
 | Live agent sessions | Open | One real session each with Claude Code, Codex CLI, Cursor, Copilot CLI, agy, Qwen Code and OpenCode runs the installed hook and the agent receives and acts on a finding; the contracts cited in `src/hook.rs` are confirmed or corrected |
 | Production forge evidence | Open | The production-Gitea records Phase 11 Step 0 lists exist |
 | External review | Open | A non-LLM reviewer has read the gate contract (`docs/ARCHITECTURE.md` §3) and the agent-facing threat model and their findings are resolved |
-| Interface freeze | Open: the stability policy is `docs/ARCHITECTURE.md` §3.2; the minor release that changes none of its frozen surfaces is still to come | One full minor release passes with no change to CLI flags, configuration keys, the JSON report shape, the MCP tools or the hook contract, and a stability policy states what 1.0 freezes |
+| Interface freeze | Open: the stability policy is `docs/ARCHITECTURE.md` §3.2, held by `tests/test_stability_contract.rs` against `tests/fixtures/v1_surface.json` and by the schema snapshots in `tests/test_output_schemas.rs`; the minor release that changes none of its `stable` surfaces is still to come | One full minor release passes with no removal or rename in `tests/fixtures/v1_surface.json` and no change to a pinned schema field, and a stability policy states what 1.0 freezes |
 
 ---
 

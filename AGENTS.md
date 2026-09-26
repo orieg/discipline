@@ -91,6 +91,7 @@ A gate is not done until all of these hold (full contract: `docs/ARCHITECTURE.md
 5. Any escape hatch goes through `src/tokens.rs` (line-anchored, placeholder-rejecting, scoped). No in-source override comments.
 6. If a finding could echo a secret or a user name, report the location only.
 7. `docs/GATES.md` and `README.md` list the gate with its true status.
+8. Its new interface names (gate id, finding codes, configuration keys, directives) are recorded in `tests/fixtures/v1_surface.json` (`DISCIPLINE_BLESS_SURFACE=1 cargo test --test test_stability_contract`). A name recorded there is never removed or renamed before a major version (`docs/ARCHITECTURE.md` §3.2).
 
 ### 3.5 Workflow and Action Rules
 - Pin third-party actions by commit SHA; pin downloaded tools by version and checksum.
