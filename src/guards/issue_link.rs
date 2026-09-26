@@ -57,6 +57,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
                 ),
                 "Move the directive into the commit body.",
             );
+            out.anchor_last(format!("commit:{sha}"));
         }
     }
 
@@ -75,6 +76,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
                     ),
                     "Move the directive into the PR body.",
                 );
+                out.anchor_last("pr-title");
             }
         }
     }
@@ -94,6 +96,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
                     ),
                     "Move the directive into the commit body.",
                 );
+                out.anchor_last("staged-subject");
                 out.examined = 1;
                 return Ok(out);
             }

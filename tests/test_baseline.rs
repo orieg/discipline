@@ -77,6 +77,48 @@ fn test_baseline_new_violation_fails_while_grandfathering_preexisting() {
     assert_eq!(json["baselined"], 1);
 }
 
+/// Two tests reported at identical lines (their `@Test` attribute) are two findings:
+/// baselining the first does not hide the second.
+#[test]
+fn a_baselined_finding_does_not_hide_another_at_an_identical_line() {
+    let repo = Repo::new();
+    let test = |names: &[&str]| {
+        let mut body = String::from("import org.junit.Test;\n\npublic class VacuousTest {\n");
+        for n in names {
+            body.push_str(&format!("    @Test\n    public void {n}() {{\n    }}\n\n"));
+        }
+        body.push_str("}\n");
+        body
+    };
+    repo.write("src/test/java/VacuousTest.java", &test(&["first"]));
+    repo.commit("test: first");
+    let first = repo.check(&[]);
+    assert_eq!(
+        first.violations("vacuous-tests").len(),
+        1,
+        "{}",
+        first.stdout
+    );
+    let written = repo.run(&["baseline", "--write"], &[]);
+    assert_eq!(written.code, 0, "{}", written.stderr);
+
+    repo.write(
+        "src/test/java/VacuousTest.java",
+        &test(&["first", "second"]),
+    );
+    repo.commit("test: second");
+    let run = repo.check_with_pr(&[], WEAKENING_PR);
+    let v = run.violations("vacuous-tests");
+    assert_eq!(v.len(), 1, "{}", run.stdout);
+    assert!(
+        v[0]["message"].as_str().unwrap().contains("`second`")
+            || v[0]["message"].as_str().unwrap().contains(".second`"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(run.json()["baselined"], 1, "{}", run.stdout);
+}
+
 #[test]
 fn test_no_baseline_flag_bypasses_grandfathering() {
     let repo = Repo::new();
@@ -512,6 +554,7 @@ fn downgrade_to_v1(repo: &Repo, base: &str) {
                 gate,
                 code: v["code"].as_str().unwrap().to_string(),
                 fingerprint: String::new(),
+                anchor: None,
                 legacy_title: {
                     let code = v["code"].as_str().unwrap();
                     let message = v["message"].as_str().unwrap().to_string();

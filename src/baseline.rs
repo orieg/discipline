@@ -8,7 +8,8 @@
 //! Fingerprints are stable and decoupled from line numbers. Version 2 (written since the
 //! finding registry, `crate::findings`) is `sha256("v2:" + gate/code + ":" + path + ":" +
 //! content_hash)`: the finding's code, never its title, so a reworded title keeps its
-//! baseline. Version 1 used the title in place of the code; a version-1 file still matches
+//! baseline, and the source line and the finding's anchor, never its message
+//! ([`fingerprint_for_version`]). Version 1 used the title in place of the code; a version-1 file still matches
 //! (with a deprecation note) until `discipline baseline --migrate` rewrites it.
 
 use crate::config::Severity;
@@ -180,27 +181,34 @@ where
 
 /// The fingerprint of a finding under a given baseline version: 1 keys on the title, 2 on
 /// the code.
+///
+/// What is hashed besides the code and path: the trimmed source line when the finding has
+/// one that can be read, and in version 2 the finding's anchor ([`Violation::anchor`], a
+/// typed source datum) with it. With no line, version 2 hashes the anchor alone, or
+/// nothing when there is none, so a reworded message never changes a fingerprint;
+/// version 1 hashed the message.
 pub fn fingerprint_for_version<F>(v: &Violation, read_file: F, version: u32) -> String
 where
     F: Fn(&str) -> Option<String>,
 {
     let path = v.file.as_deref().unwrap_or("");
-    let line_content = match (&v.file, v.line) {
+    let source_line = match (&v.file, v.line) {
         (Some(f), Some(l)) if l > 0 => {
-            if let Some(content) = read_file(f) {
-                content
-                    .lines()
-                    .nth(l - 1)
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_else(|| v.message.trim().to_string())
-            } else {
-                v.message.trim().to_string()
-            }
+            read_file(f).and_then(|c| c.lines().nth(l - 1).map(|s| s.trim().to_string()))
         }
-        _ => v.message.trim().to_string(),
+        _ => None,
+    };
+    let content = match (source_line, version >= 2, &v.anchor) {
+        // The anchor goes in with the line: two tests reported at identical lines (an
+        // `@Test` attribute) stay apart.
+        (Some(line), true, Some(a)) => format!("{line}\nanchor:{a}"),
+        (Some(line), _, _) => line,
+        (None, true, Some(a)) => format!("anchor:{a}"),
+        (None, true, None) => String::new(),
+        (None, false, _) => v.message.trim().to_string(),
     };
 
-    let content_hash = sha256_hex(line_content.as_bytes());
+    let content_hash = sha256_hex(content.as_bytes());
     let source = if version >= 2 {
         format!("v2:{}:{}:{}", v.code, path, content_hash)
     } else {
@@ -208,6 +216,66 @@ where
         format!("{}:{}:{}:{}", v.gate, title, path, content_hash)
     };
     sha256_hex(source.as_bytes())
+}
+
+/// Version-2 fingerprints for every finding of a run. Two findings with no line and no
+/// anchor, of one code in one file, would share a fingerprint, so baselining one would
+/// hide the other: those fall back to hashing their messages. A code that can repeat in
+/// a file without a line needs an anchor; debug builds (every test) stop on one that has
+/// none.
+pub fn fill_fingerprints<F>(violations: &mut [&mut Violation], read_file: F)
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let collided = fingerprint_all(violations, read_file);
+    debug_assert!(
+        collided.is_empty(),
+        "{} repeats in `{}` with no line and no anchor: give it an anchor (GateOutcome::anchor_last)",
+        collided
+            .iter()
+            .map(|(code, _)| format!("`{code}`"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        collided.first().map(|(_, f)| f.as_str()).unwrap_or("")
+    );
+}
+
+/// [`fill_fingerprints`] without the test-build stop: returns the `(code, path)` of each
+/// group that fell back to its messages.
+fn fingerprint_all<F>(violations: &mut [&mut Violation], read_file: F) -> Vec<(String, String)>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, v) in violations.iter_mut().enumerate() {
+        v.fingerprint = fingerprint_for_version(v, &read_file, FINGERPRINT_VERSION);
+        groups.entry(v.fingerprint.clone()).or_default().push(i);
+    }
+    let mut collided = Vec::new();
+    for idx in groups.into_values().filter(|g| g.len() > 1) {
+        let distinct: std::collections::HashSet<&str> = idx
+            .iter()
+            .map(|&i| violations[i].message.as_str())
+            .collect();
+        if distinct.len() < 2 {
+            continue;
+        }
+        collided.push((
+            violations[idx[0]].code.clone(),
+            violations[idx[0]].file.clone().unwrap_or_default(),
+        ));
+        for &i in &idx {
+            let v = &mut *violations[i];
+            let source = format!(
+                "v2:{}:{}:{}",
+                v.code,
+                v.file.as_deref().unwrap_or(""),
+                sha256_hex(format!("message:{}", v.message.trim()).as_bytes())
+            );
+            v.fingerprint = sha256_hex(source.as_bytes());
+        }
+    }
+    collided
 }
 
 /// A baseline entry for a finding, in the current version.
@@ -219,7 +287,13 @@ where
         gate: v.gate.to_string(),
         rule: v.code.clone(),
         path: v.file.clone().unwrap_or_default(),
-        fingerprint: compute_violation_fingerprint_with_content(v, read_file),
+        // The run's own fingerprint when it has one: it carries the collision fallback
+        // of `fill_fingerprints`.
+        fingerprint: if v.fingerprint.is_empty() {
+            compute_violation_fingerprint_with_content(v, read_file)
+        } else {
+            v.fingerprint.clone()
+        },
     }
 }
 
@@ -337,7 +411,11 @@ where
         let mut gate_baselined = 0;
 
         for v in outcome.violations.drain(..) {
-            let fp = fingerprint_for_version(&v, &read_file, baseline.version);
+            let fp = if baseline.version >= FINGERPRINT_VERSION && !v.fingerprint.is_empty() {
+                v.fingerprint.clone()
+            } else {
+                fingerprint_for_version(&v, &read_file, baseline.version)
+            };
             if let Some(count) = available_fps.get_mut(&fp) {
                 if *count > 0 {
                     *count -= 1;
@@ -428,6 +506,7 @@ mod tests {
             gate: "unsafe-safety-comment",
             code: code.to_string(),
             fingerprint: String::new(),
+            anchor: None,
             legacy_title: None,
             severity: Severity::Error,
             title: title.to_string(),
@@ -436,6 +515,94 @@ mod tests {
             message: "unsafe block".to_string(),
             remediation: None,
         }
+    }
+
+    #[test]
+    fn a_line_less_finding_is_keyed_by_its_anchor_never_its_message() {
+        let none = |_: &str| None;
+        let anchored = |anchor: &str, message: &str| Violation {
+            anchor: Some(anchor.to_string()),
+            message: message.to_string(),
+            ..finding("t", "deletion-rationale/test-removed-without-rationale")
+        };
+        let one = anchored("test_one", "Test `test_one` was removed.");
+        // A reworded message keeps the fingerprint; another anchor changes it.
+        assert_eq!(
+            fingerprint_for_version(&one, none, 2),
+            fingerprint_for_version(&anchored("test_one", "`test_one` is gone."), none, 2)
+        );
+        assert_ne!(
+            fingerprint_for_version(&one, none, 2),
+            fingerprint_for_version(
+                &anchored("test_two", "Test `test_one` was removed."),
+                none,
+                2
+            )
+        );
+        // No anchor: version 2 hashes nothing past the path, version 1 the message.
+        let plain = finding("t", "c/x");
+        let reworded = Violation {
+            message: "reworded".into(),
+            ..finding("t", "c/x")
+        };
+        assert_eq!(
+            fingerprint_for_version(&plain, none, 2),
+            fingerprint_for_version(&reworded, none, 2)
+        );
+        assert_ne!(
+            fingerprint_for_version(&plain, none, 1),
+            fingerprint_for_version(&reworded, none, 1)
+        );
+        // Identical source lines stay apart by their anchors.
+        let read = |_: &str| Some("@Test\n@Test\n".to_string());
+        let at = |line, anchor: &str| Violation {
+            line: Some(line),
+            ..anchored(anchor, "m")
+        };
+        assert_ne!(
+            fingerprint_for_version(&at(1, "a"), read, 2),
+            fingerprint_for_version(&at(2, "b"), read, 2)
+        );
+        assert_eq!(
+            fingerprint_for_version(&at(1, "a"), read, 1),
+            fingerprint_for_version(&at(2, "b"), read, 1),
+            "version 1 is unchanged"
+        );
+    }
+
+    #[test]
+    fn colliding_findings_fall_back_to_their_messages() {
+        let mut a = finding("t", "c/x");
+        let mut b = Violation {
+            message: "another".into(),
+            ..finding("t", "c/x")
+        };
+        let mut same = finding("t", "c/y");
+        let mut dup = finding("t", "c/y");
+        let collided = fingerprint_all(&mut [&mut a, &mut b, &mut same, &mut dup], |_| None);
+        assert_eq!(
+            collided,
+            vec![("c/x".to_string(), "src/lib.rs".to_string())]
+        );
+        assert_ne!(
+            a.fingerprint, b.fingerprint,
+            "baselining one must not hide the other"
+        );
+        // Identical findings are one finding reported twice: nothing to separate.
+        assert_eq!(same.fingerprint, dup.fingerprint);
+    }
+
+    /// Two unanchored line-less findings of one code in one file fall back to their
+    /// messages, so baselining one never hides the other; a test build stops on it.
+    #[test]
+    #[should_panic(expected = "repeats in `src/lib.rs` with no line and no anchor")]
+    fn unanchored_repeats_are_caught_in_a_test_build() {
+        let mut a = finding("t", "c/x");
+        let mut b = Violation {
+            message: "another".into(),
+            ..finding("t", "c/x")
+        };
+        fill_fingerprints(&mut [&mut a, &mut b], |_| None);
     }
 
     #[test]
@@ -598,6 +765,7 @@ mod tests {
             gate: "pii",
             code: "pii/fixture".to_string(),
             fingerprint: String::new(),
+            anchor: None,
             legacy_title: None,
             severity: Severity::Error,
             title: "Host Leak".to_string(),
@@ -616,6 +784,7 @@ mod tests {
             gate: "pii",
             code: "pii/fixture".to_string(),
             fingerprint: String::new(),
+            anchor: None,
             legacy_title: None,
             severity: Severity::Error,
             title: "Host Leak".to_string(),

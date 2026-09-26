@@ -1748,6 +1748,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                             w.key
                         ),
                     );
+                    out.anchor_last(w.key.clone());
                 }
             }
         }

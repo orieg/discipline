@@ -901,6 +901,7 @@ pub fn evaluate_vacuous_tests(
                  macros, declare them in `assert_helper_fns` / `extra_assert_macros`; a test that \
                  is meant not to assert (a smoke test) takes `allow-vacuous-test: <test> <reason>`.",
             );
+            out.anchor_last(a.test.name.clone());
         } else if let Some(min) = settings.min_assertions_per_test {
             if a.test.effective_asserts() < min {
                 out.push(
@@ -1309,6 +1310,7 @@ pub fn evaluate_deletion_rationale(
                 leaf_name(r.test)
             ),
         );
+        out.anchor_last(r.test.name.clone());
     }
     Ok(out)
 }

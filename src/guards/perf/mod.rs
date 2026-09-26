@@ -555,6 +555,7 @@ fn report_unfresh_override(
             ),
             &format!("optimize `{arm}` or cite a fresh measurement"),
         );
+        out.anchor_last(arm.to_string());
     }
     true
 }
@@ -780,6 +781,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                                     ),
                                     &format!("optimize `{}` or provide a valid sourced override", arm),
                                 );
+                                out.anchor_last(arm.to_string());
                             }
                         } else {
                             let unapproved =
@@ -808,6 +810,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                                         ),
                                         &format!("name `{}` in the override reason", arm),
                                     );
+                                    out.anchor_last(arm.to_string());
                                 }
                             } else if report_unfresh_override(
                                 &citation::check_citation_freshness(
@@ -839,6 +842,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                                             ),
                                             &format!("name `{}` in the override reason or optimize the benchmark", arm),
                                         );
+                                        out.anchor_last(arm.to_string());
                                     }
                                 }
                                 out.overrides.push(crate::tokens::OverrideRecord {
@@ -874,6 +878,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                                 ),
                                 &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", arm, arm),
                             );
+                            out.anchor_last(arm.to_string());
                         }
                     }
                 }
@@ -899,6 +904,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                             ),
                             &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", arm, arm),
                         );
+                        out.anchor_last(arm.to_string());
                     }
                 }
             }

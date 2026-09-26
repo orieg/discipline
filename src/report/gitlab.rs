@@ -254,6 +254,7 @@ mod tests {
             gate: "assertion-reduction",
             code: "assertion-reduction/fixture".to_string(),
             fingerprint: String::new(),
+            anchor: None,
             legacy_title: None,
             severity: Severity::Error,
             title: "Strong Assertions Decreased".to_string(),

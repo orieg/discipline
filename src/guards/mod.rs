@@ -55,6 +55,12 @@ pub struct Violation {
     /// ([`crate::findings::V1`]). Not reported.
     #[serde(skip)]
     pub legacy_title: Option<String>,
+    /// What tells this finding apart from another of its code in the same file when it
+    /// has no line: a typed source datum (a test, dependency, key, job or counter name),
+    /// never prose. The version-2 fingerprint hashes it in place of the line
+    /// ([`crate::baseline`]). Not reported.
+    #[serde(skip)]
+    pub anchor: Option<String>,
     pub severity: Severity,
     pub title: String,
     pub file: Option<String>,
@@ -128,6 +134,14 @@ impl GateOutcome {
         self.record(severity, kind, None, (file, line), message, remediation);
     }
 
+    /// Anchor the finding just reported ([`Violation::anchor`]): what tells it apart from
+    /// another finding of its code in the same file when it has no line.
+    pub fn anchor_last(&mut self, anchor: impl Into<String>) {
+        if let Some(v) = self.violations.last_mut() {
+            v.anchor = Some(anchor.into());
+        }
+    }
+
     /// Report a finding whose version-1 title the site builds
     /// ([`crate::findings::V1::Site`]).
     pub fn push_site(
@@ -164,6 +178,7 @@ impl GateOutcome {
             gate: self.gate,
             code,
             fingerprint: String::new(),
+            anchor: None,
             legacy_title,
             severity,
             title: kind.title.to_string(),
@@ -652,10 +667,12 @@ pub fn run_checks(
         });
     }
 
-    for v in outcomes.iter_mut().flat_map(|o| o.violations.iter_mut()) {
-        v.fingerprint = crate::baseline::compute_violation_fingerprint_with_content(v, |f| {
-            ctx.git.head_content(f).ok().flatten()
-        });
+    {
+        let mut all: Vec<&mut Violation> = outcomes
+            .iter_mut()
+            .flat_map(|o| o.violations.iter_mut())
+            .collect();
+        crate::baseline::fill_fingerprints(&mut all, |f| ctx.git.head_content(f).ok().flatten());
     }
 
     // Grandfathered findings baseline matching

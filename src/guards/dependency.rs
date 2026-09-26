@@ -1182,6 +1182,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                             msg,
                             rem,
                         );
+                        outcome.anchor_last(h.name.clone());
                     }
                 }
             }

@@ -192,6 +192,16 @@ pub struct Weakening {
     pub what: String,
 }
 
+impl Weakening {
+    /// The key the weakening is about: every `what` starts with it in backticks.
+    pub fn key(&self) -> &str {
+        self.what
+            .strip_prefix('`')
+            .and_then(|r| r.split('`').next())
+            .unwrap_or(&self.what)
+    }
+}
+
 /// The base-side configuration source. A `--config` pointing at a file the base does not
 /// have still compares against the base `discipline.toml`.
 fn base_config_source(ctx: &Context) -> Result<Option<String>> {
@@ -288,6 +298,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                             w.gate
                         ),
                     );
+                    out.anchor_last(format!("{}.{}", w.gate, w.key()));
                 }
             }
             Err(e) => {
