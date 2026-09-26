@@ -24,7 +24,7 @@ pub enum Title {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FindingKind {
     /// The gates that may report it. One, except for source-parse findings, which the
-    /// first enabled AST gate reports.
+    /// first enabled AST gate reports; their code always uses the first gate listed.
     pub gates: &'static [&'static str],
     /// Kebab-case code, unique within each of its gates.
     pub code: &'static str,
@@ -41,7 +41,10 @@ impl FindingKind {
     }
 }
 
-/// `gate/code` for a finding built as a [`crate::guards::Violation`] literal.
+/// `gate/code` for a finding `gate` reports. A kind several gates may report (the
+/// source-parse findings, which the first enabled AST gate reports) is always coded under
+/// its first registered gate, so its code, and the fingerprint built on it, does not
+/// depend on which gates are enabled.
 pub fn full_code(gate: &str, kind: &FindingKind) -> String {
     assert!(
         kind.gates.contains(&gate),
@@ -49,7 +52,7 @@ pub fn full_code(gate: &str, kind: &FindingKind) -> String {
         kind.code,
         kind.gates
     );
-    format!("{gate}/{}", kind.code)
+    format!("{}/{}", kind.gates[0], kind.code)
 }
 
 macro_rules! findings {
@@ -143,6 +146,7 @@ findings! {
     BASE_CONFIGURATION_UNREADABLE = ["config-integrity"], "base-configuration-unreadable", Fixed("Base Configuration Unreadable");
     BASELINE_NEW_FINDINGS = ["config-integrity"], "baseline-new-findings", Fixed("Baseline Contains New Findings Without Directive");
     BASELINE_INCREASED = ["config-integrity"], "baseline-increased", Fixed("Baseline Grew Without Directive");
+    BASELINE_MIGRATION_NOT_ALONE = ["config-integrity"], "baseline-migration-not-alone", Fixed("Baseline Migration Mixed With Other Changes");
 
     // golden-output
     SNAPSHOT_ADDED_FOR_EXISTING_TEST = ["golden-output"], "snapshot-added-for-existing-test", Fixed("Snapshot Added For Existing Test");
@@ -375,6 +379,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_finding_several_gates_report_is_coded_under_its_first_gate() {
+        for gate in SOURCE_PARSED_WITH_ERRORS.gates {
+            assert_eq!(
+                full_code(gate, &SOURCE_PARSED_WITH_ERRORS),
+                "assertion-reduction/source-parsed-with-errors"
+            );
+        }
+        assert_eq!(
+            full_code("ci-integrity", &UNPINNED_ACTION),
+            "ci-integrity/unpinned-action"
+        );
     }
 
     #[test]

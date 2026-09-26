@@ -189,6 +189,11 @@
             "null"
           ]
         },
+        "fingerprint": {
+          "description": "The baseline fingerprint (version 2: sha256 of code, path and the source line or message), stable across line moves and title changes; empty for the `engine` finding of a run that could not complete",
+          "pattern": "^([0-9a-f]{64})?$",
+          "type": "string"
+        },
         "gate": {
           "type": "string"
         },
@@ -216,13 +221,14 @@
           ]
         },
         "title": {
-          "description": "Display text; part of the baseline fingerprint until fingerprints key on `code`",
+          "description": "Display text, free to change",
           "type": "string"
         }
       },
       "required": [
         "gate",
         "code",
+        "fingerprint",
         "severity",
         "title",
         "file",

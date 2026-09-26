@@ -114,6 +114,7 @@ _arguments "${_arguments_options[@]}" : \
 '-s+[Specific suite to run\: all, agent-guard, hygiene, integrity ...]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
 '--suite=[Specific suite to run\: all, agent-guard, hygiene, integrity ...]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
 '--write[Record current findings to the baseline file]' \
+'(--write -b --base --whole-tree)--migrate[Rewrite a fingerprint-version-1 baseline to version 2\: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which \`config-integrity\` accepts without a directive]' \
 '(-b --base)--whole-tree[Record every pre-existing finding in the tree, not just the diff. Use when adopting discipline on an existing repository; conflicts with --base]' \
 '--all-severities[Also record warnings and notes. By default only findings that would block under the current configuration are recorded\: \`error\`, plus \`warning\` under --fail-on-warnings]' \
 '--fail-on-warnings[Treat warnings as blocking when choosing what to record (same switch as \`check --fail-on-warnings\`)]' \

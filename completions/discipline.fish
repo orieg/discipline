@@ -132,6 +132,7 @@ quality\t''
 verification\t''
 bench\t''"
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l write -d 'Record current findings to the baseline file'
+complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l migrate -d 'Rewrite a fingerprint-version-1 baseline to version 2: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which `config-integrity` accepts without a directive'
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l whole-tree -d 'Record every pre-existing finding in the tree, not just the diff. Use when adopting discipline on an existing repository; conflicts with --base'
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l all-severities -d 'Also record warnings and notes. By default only findings that would block under the current configuration are recorded: `error`, plus `warning` under --fail-on-warnings'
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l fail-on-warnings -d 'Treat warnings as blocking when choosing what to record (same switch as `check --fail-on-warnings`)'

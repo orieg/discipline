@@ -329,6 +329,71 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
         None
     };
 
+    // A fingerprint-version migration (`discipline baseline --migrate`) rewrites every
+    // fingerprint. It is accepted without a directive when it is the change's only file,
+    // does not grow, and keeps every entry's gate and path: then no finding can have been
+    // swapped in under it.
+    if let (Some(b), Some(h)) = (&base_baseline, &head_baseline) {
+        if b.version < crate::baseline::FINGERPRINT_VERSION
+            && h.version >= crate::baseline::FINGERPRINT_VERSION
+        {
+            let others: Vec<String> = ctx
+                .git
+                .changed_files()?
+                .into_iter()
+                .map(|f| f.path)
+                .filter(|p| p != baseline_filename)
+                .collect();
+            let mut base_places: std::collections::HashMap<(&str, &str), usize> =
+                std::collections::HashMap::new();
+            for e in &b.findings {
+                *base_places
+                    .entry((e.gate.as_str(), e.path.as_str()))
+                    .or_insert(0) += 1;
+            }
+            let kept_places = h.findings.iter().all(|e| {
+                base_places
+                    .get_mut(&(e.gate.as_str(), e.path.as_str()))
+                    .filter(|n| **n > 0)
+                    .map(|n| *n -= 1)
+                    .is_some()
+            });
+            if others.is_empty() && kept_places {
+                out.notes.push(format!(
+                    "`{baseline_filename}` migrated from fingerprint version {} to {} ({} of {} entries kept)",
+                    b.version,
+                    h.version,
+                    h.findings.len(),
+                    b.findings.len()
+                ));
+                return Ok(out);
+            }
+            if !others.is_empty() {
+                if let Some(record) =
+                    ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, "baseline")
+                {
+                    out.overrides.push(record);
+                    return Ok(out);
+                }
+                out.push(
+                    ctx.overridable(severity),
+                    &crate::findings::BASELINE_MIGRATION_NOT_ALONE,
+                    Some(baseline_filename),
+                    None,
+                    format!(
+                        "[baseline] `{baseline_filename}` is rewritten from fingerprint version {} to {} in a change that also touches {} other file(s) (e.g. `{}`); a migration is only verifiable on its own.",
+                        b.version,
+                        h.version,
+                        others.len(),
+                        others[0]
+                    ),
+                    "Commit `discipline baseline --migrate` in a change of its own, or justify it on its own line in the PR body or a commit message: `allow-gate-weakening: baseline <reason>`.",
+                );
+                return Ok(out);
+            }
+        }
+    }
+
     if let Some(ref h_base) = head_baseline {
         let b_count = base_baseline
             .as_ref()

@@ -38,10 +38,6 @@ pub fn generate_gitlab_issues(summary: &CheckSummary) -> Vec<GitlabCodeQualityIs
     let mut issues = Vec::new();
 
     for outcome in &summary.outcomes {
-        let suite_key = outcome.suite.replace('-', "_");
-        let gate_key = outcome.gate.replace('-', "_");
-        let check_name = format!("{suite_key}::{gate_key}");
-
         let suite_title = match outcome.suite {
             "agent-guard" => "Agent Guard",
             "hygiene" => "Hygiene",
@@ -71,13 +67,18 @@ pub fn generate_gitlab_issues(summary: &CheckSummary) -> Vec<GitlabCodeQualityIs
                 Severity::Note => "info",
             };
 
-            // Deterministic SHA-256 fingerprint over rule, path, line, title, and message
-            let fp_source = format!("{check_name}:{path}:{line}:{}:{}", v.title, v.message);
-            let fingerprint = sha256_hex(fp_source.as_bytes());
+            // The baseline fingerprint (stable across line moves and title changes), or,
+            // for a finding built outside a check run, one over code, path, line and message.
+            let fingerprint = if v.fingerprint.is_empty() {
+                let fp_source = format!("{}:{path}:{line}:{}", v.code, v.message);
+                sha256_hex(fp_source.as_bytes())
+            } else {
+                v.fingerprint.clone()
+            };
 
             issues.push(GitlabCodeQualityIssue {
                 description,
-                check_name: check_name.clone(),
+                check_name: v.code.clone(),
                 fingerprint,
                 severity: severity.to_string(),
                 location: GitlabLocation {
@@ -250,6 +251,7 @@ mod tests {
         outcome.violations.push(Violation {
             gate: "assertion-reduction",
             code: "assertion-reduction/fixture".to_string(),
+            fingerprint: String::new(),
             severity: Severity::Error,
             title: "Strong Assertions Decreased".to_string(),
             file: Some("tests/trie_traversal.rs".to_string()),
@@ -275,7 +277,7 @@ mod tests {
         let parsed: Vec<GitlabCodeQualityIssue> =
             serde_json::from_str(&json).expect("valid code quality json");
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].check_name, "agent_guard::assertion_reduction");
+        assert_eq!(parsed[0].check_name, "assertion-reduction/fixture");
         assert_eq!(
             parsed[0].description,
             "Agent Guard: 2 assertions removed from test_leaf_split without replacement"

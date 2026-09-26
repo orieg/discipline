@@ -378,7 +378,7 @@ Record or manage grandfathered finding baselines
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline baseline\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-\-write\fR] [\fB\-\-baseline\-file\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-\-whole\-tree\fR] [\fB\-\-all\-severities\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-trust\-workspace\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline baseline\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-\-write\fR] [\fB\-\-migrate\fR] [\fB\-\-baseline\-file\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-\-whole\-tree\fR] [\fB\-\-all\-severities\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-trust\-workspace\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -410,6 +410,9 @@ May also be specified with the \fBDISCIPLINE_DISABLE\fR environment variable.
 .TP
 \fB\-\-write\fR
 Record current findings to the baseline file
+.TP
+\fB\-\-migrate\fR
+Rewrite a fingerprint\-version\-1 baseline to version 2: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which `config\-integrity` accepts without a directive
 .TP
 \fB\-\-baseline\-file\fR \fI<BASELINE_FILE>\fR [default: discipline\-baseline.toml]
 Path to grandfathering baseline file (defaults to discipline\-baseline.toml)

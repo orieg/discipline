@@ -57,6 +57,7 @@ const REPORT_FIELDS: &[&str] = &[
     "outcomes[].violations[]: object",
     "outcomes[].violations[].code: string",
     "outcomes[].violations[].file: string|null",
+    "outcomes[].violations[].fingerprint: string",
     "outcomes[].violations[].gate: string",
     "outcomes[].violations[].line: integer|null",
     "outcomes[].violations[].message: string",

@@ -408,6 +408,13 @@ pub struct BaselineArgs {
     #[arg(long)]
     pub write: bool,
 
+    /// Rewrite a fingerprint-version-1 baseline to version 2: every entry a current
+    /// finding still matches is kept under its finding code, and stale entries are
+    /// dropped. Commit the result in a change of its own, which `config-integrity`
+    /// accepts without a directive.
+    #[arg(long, conflicts_with_all = ["write", "base", "whole_tree"])]
+    pub migrate: bool,
+
     /// Path to grandfathering baseline file (defaults to discipline-baseline.toml)
     #[arg(long, default_value = "discipline-baseline.toml")]
     pub baseline_file: PathBuf,

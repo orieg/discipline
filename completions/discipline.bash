@@ -178,7 +178,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__baseline)
-            opts="-c -b -s -h --config --config-override --enable --disable --write --baseline-file --base --suite --whole-tree --all-severities --fail-on-warnings --trust-workspace --help"
+            opts="-c -b -s -h --config --config-override --enable --disable --write --migrate --baseline-file --base --suite --whole-tree --all-severities --fail-on-warnings --trust-workspace --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

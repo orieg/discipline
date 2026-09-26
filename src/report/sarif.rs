@@ -9,20 +9,36 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
     let mut rules = Vec::new();
     let mut results = Vec::new();
 
-    // 1. Build rules list from gates
+    // 1. One rule per finding code (`crate::findings`) of every gate that ran, so code
+    //    scanning can triage, dismiss and track each kind of finding on its own.
     for o in &summary.outcomes {
-        let desc = gate_info(o.gate).map(|g| g.summary).unwrap_or(o.gate);
-        rules.push(json!({
-            "id": o.gate,
-            "name": to_pascal_case(o.gate),
-            "shortDescription": {
-                "text": desc
-            },
-            "helpUri": format!("https://orieg.github.io/discipline/gates/#{}", o.gate),
-            "properties": {
-                "examined": o.examined
-            }
-        }));
+        let gate_summary = gate_info(o.gate).map(|g| g.summary).unwrap_or(o.gate);
+        for kind in crate::findings::FINDINGS
+            .iter()
+            .filter(|k| k.gates.first() == Some(&o.gate))
+        {
+            let id = format!("{}/{}", o.gate, kind.code);
+            let short = match kind.title {
+                crate::findings::Title::Fixed(t) => t,
+                crate::findings::Title::Legacy => gate_summary,
+            };
+            rules.push(json!({
+                "id": id,
+                "name": to_pascal_case(&id),
+                "shortDescription": {
+                    "text": short
+                },
+                "fullDescription": {
+                    "text": gate_summary
+                },
+                "helpUri": format!("https://orieg.github.io/discipline/gates/#{}", o.gate),
+                "properties": {
+                    "gate": o.gate,
+                    "tags": [o.gate],
+                    "examined": o.examined
+                }
+            }));
+        }
     }
 
     // 2. Build results list from violations
@@ -55,12 +71,17 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
         }
 
         let mut result = json!({
-            "ruleId": v.gate,
+            "ruleId": v.code,
             "level": level,
             "message": {
                 "text": message_text
             }
         });
+        if !v.fingerprint.is_empty() {
+            // The baseline fingerprint: stable across line moves and title changes, so an
+            // alert keeps its identity (and its dismissal) from one run to the next.
+            result["partialFingerprints"] = json!({ "disciplineFingerprint/v2": v.fingerprint });
+        }
 
         if v.file.is_some() {
             result["locations"] = json!([location]);
@@ -172,6 +193,7 @@ mod tests {
                 violations: vec![Violation {
                     gate: "unsafe-safety-comment",
                     code: "unsafe-safety-comment/fixture".to_string(),
+                    fingerprint: String::new(),
                     severity: Severity::Error,
                     title: "Undocumented unsafe".to_string(),
                     file: Some("src/lib.rs".to_string()),
@@ -191,7 +213,7 @@ mod tests {
         assert_eq!(val["runs"][0]["tool"]["driver"]["name"], "discipline");
         assert_eq!(val["runs"][0]["results"].as_array().unwrap().len(), 1);
         let res = &val["runs"][0]["results"][0];
-        assert_eq!(res["ruleId"], "unsafe-safety-comment");
+        assert_eq!(res["ruleId"], "unsafe-safety-comment/fixture");
         assert_eq!(res["level"], "error");
         assert_eq!(
             res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
@@ -223,6 +245,7 @@ mod tests {
                 violations: vec![Violation {
                     gate: "time-estimates",
                     code: "time-estimates/fixture".to_string(),
+                    fingerprint: String::new(),
                     severity: Severity::Error,
                     title: "Time estimate in PR body".to_string(),
                     file: Some("<pr-body>".to_string()),

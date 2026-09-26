@@ -51,12 +51,13 @@ pub fn report_schema() -> Value {
             "Violation": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["gate", "code", "severity", "title", "file", "line", "message", "remediation"],
+                "required": ["gate", "code", "fingerprint", "severity", "title", "file", "line", "message", "remediation"],
                 "properties": {
                     "gate": { "type": "string" },
                     "code": { "type": "string", "pattern": "^[a-z0-9-]+/[a-z0-9-]+$", "description": "`gate/code`: the finding's stable identity, frozen from 1.0 (the registry in `src/findings.rs`)" },
+                    "fingerprint": { "type": "string", "pattern": "^([0-9a-f]{64})?$", "description": "The baseline fingerprint (version 2: sha256 of code, path and the source line or message), stable across line moves and title changes; empty for the `engine` finding of a run that could not complete" },
                     "severity": { "enum": ["error", "warning", "note"] },
-                    "title": { "type": "string", "description": "Display text; part of the baseline fingerprint until fingerprints key on `code`" },
+                    "title": { "type": "string", "description": "Display text, free to change" },
                     "file": { "type": ["string", "null"] },
                     "line": { "type": ["integer", "null"], "minimum": 0 },
                     "message": { "type": "string" },

@@ -2101,6 +2101,7 @@ command = "cargo test"
             o.violations.push(Violation {
                 gate: "assertion-reduction",
                 code: "assertion-reduction/fixture".to_string(),
+                fingerprint: String::new(),
                 severity: Severity::Error,
                 title: "Assertion Reduction In Existing Test".into(),
                 file: Some("src/lib.rs".into()),
@@ -3284,6 +3285,7 @@ smoke_cost::set_contains
             let v1 = Violation {
                 gate: "unsafe-safety-comment",
                 code: "unsafe-safety-comment/fixture".to_string(),
+                fingerprint: String::new(),
                 severity: Severity::Error,
                 title: "Unsafe Without SAFETY Comment".to_string(),
                 file: Some("src/lib.rs".to_string()),
@@ -3301,6 +3303,7 @@ smoke_cost::set_contains
             let v2 = Violation {
                 gate: "unsafe-safety-comment",
                 code: "unsafe-safety-comment/fixture".to_string(),
+                fingerprint: String::new(),
                 severity: Severity::Error,
                 title: "Unsafe Without SAFETY Comment".to_string(),
                 file: Some("src/extra.rs".to_string()),
@@ -3315,17 +3318,17 @@ smoke_cost::set_contains
             );
 
             let baseline = DisciplineBaseline {
-                version: 1,
+                version: crate::baseline::FINGERPRINT_VERSION,
                 findings: vec![
                     BaselineEntry {
                         gate: "unsafe-safety-comment".to_string(),
-                        rule: "Unsafe Without SAFETY Comment".to_string(),
+                        rule: "unsafe-safety-comment/fixture".to_string(),
                         path: "src/lib.rs".to_string(),
                         fingerprint: fp1.clone(),
                     },
                     BaselineEntry {
                         gate: "unsafe-safety-comment".to_string(),
-                        rule: "Unsafe Without SAFETY Comment".to_string(),
+                        rule: "unsafe-safety-comment/fixture".to_string(),
                         path: "src/old.rs".to_string(),
                         fingerprint:
                             "0000000000000000000000000000000000000000000000000000000000000000"

@@ -10878,7 +10878,7 @@ fn test_check_fatal_error_emits_configured_reports() {
     let sarif_content = std::fs::read_to_string(&sarif_path).unwrap();
     let sarif_json: serde_json::Value = serde_json::from_str(&sarif_content).unwrap();
     assert_eq!(
-        sarif_json["runs"][0]["results"][0]["ruleId"], "engine",
+        sarif_json["runs"][0]["results"][0]["ruleId"], "engine/could-not-run",
         "expected engine rule in sarif: {sarif_content}"
     );
     assert_eq!(
@@ -10894,8 +10894,8 @@ fn test_check_fatal_error_emits_configured_reports() {
     let gitlab_content = std::fs::read_to_string(&gitlab_path).unwrap();
     let gitlab_json: serde_json::Value = serde_json::from_str(&gitlab_content).unwrap();
     assert_eq!(
-        gitlab_json[0]["check_name"], "engine::engine",
-        "expected engine::engine in gitlab: {gitlab_content}"
+        gitlab_json[0]["check_name"], "engine/could-not-run",
+        "expected engine/could-not-run in gitlab: {gitlab_content}"
     );
 
     let report_path = repo.file("report.json");

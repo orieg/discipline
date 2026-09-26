@@ -1027,13 +1027,57 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     if args.trust_workspace {
         std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
     }
-    let git = if args.whole_tree {
+    let git = if args.whole_tree || args.migrate {
         GitCtx::open_whole_tree()?
     } else {
         let base_ref = discipline::gitctx::detect_base_ref(args.base.as_deref(), None, None);
         GitCtx::open(&base_ref, false)?
     };
     let (config, config_path) = load_config(&args.config, Some(git.root()), None, None)?;
+    let existing_baseline = {
+        let p = git.root().join(&args.baseline_file);
+        if p.exists() {
+            // An unreadable baseline is not an empty one: rewriting it would drop entries.
+            Some(
+                discipline::baseline::DisciplineBaseline::load_from_file(&p).with_context(
+                    || {
+                        format!(
+                            "existing baseline `{}` could not be read; fix or remove it first",
+                            args.baseline_file.display()
+                        )
+                    },
+                )?,
+            )
+        } else {
+            None
+        }
+    };
+    if args.migrate {
+        let Some(old) = existing_baseline.as_ref() else {
+            bail!(
+                "no baseline at `{}` to migrate",
+                args.baseline_file.display()
+            );
+        };
+        if old.version >= discipline::baseline::FINGERPRINT_VERSION {
+            println!(
+                "`{}` already uses fingerprint version {}; nothing to migrate.",
+                args.baseline_file.display(),
+                old.version
+            );
+            return Ok(true);
+        }
+    } else if args.write
+        && args.suite != discipline::cli::SuiteChoice::All
+        && existing_baseline
+            .as_ref()
+            .is_some_and(|b| b.version < discipline::baseline::FINGERPRINT_VERSION)
+    {
+        bail!(
+            "`{}` uses fingerprint version 1; run `discipline baseline --migrate` before writing part of it with --suite",
+            args.baseline_file.display()
+        );
+    }
 
     let commits = git.commits()?;
     let (directives, directive_notes) =
@@ -1060,22 +1104,40 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     let summary = run_checks(&config, args.suite, &ctx)?;
 
     let baseline_path = git.root().join(&args.baseline_file);
-    let mut entries = Vec::new();
+    let read_head = |f: &str| git.head_content(f).ok().flatten();
 
+    if args.migrate {
+        let old = existing_baseline.expect("checked above");
+        let findings: Vec<&discipline::guards::Violation> = summary
+            .outcomes
+            .iter()
+            .filter(|o| o.enabled)
+            .flat_map(|o| &o.violations)
+            .collect();
+        let (migrated, report) = discipline::baseline::migrate(&old, &findings, read_head);
+        migrated.write_to_file(&baseline_path)?;
+        println!(
+            "{} rewrote {} to fingerprint version {}: {} entr{} migrated, {} stale entr{} dropped",
+            style::green("ok:"),
+            args.baseline_file.display(),
+            migrated.version,
+            report.migrated,
+            if report.migrated == 1 { "y" } else { "ies" },
+            report.dropped,
+            if report.dropped == 1 { "y" } else { "ies" },
+        );
+        println!(
+            "Commit it in a change of its own: `config-integrity` accepts a migration that changes nothing but the baseline."
+        );
+        return Ok(true);
+    }
+
+    let mut entries = Vec::new();
     let examined_gates: std::collections::HashSet<&str> =
         summary.outcomes.iter().map(|o| o.gate).collect();
 
     // Preserve existing findings for gates that were not examined in this run (e.g. when --suite was passed)
-    if baseline_path.exists() {
-        // An unreadable baseline is not an empty one: rewriting it would drop every entry
-        // for the gates this run did not examine.
-        let existing = discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path)
-            .with_context(|| {
-                format!(
-                    "existing baseline `{}` could not be read; fix or remove it before --write",
-                    args.baseline_file.display()
-                )
-            })?;
+    if let Some(existing) = existing_baseline {
         for entry in existing.findings {
             if !examined_gates.contains(entry.gate.as_str()) {
                 entries.push(entry);
@@ -1100,22 +1162,14 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
                 continue;
             }
             recorded.add(v.severity, v.gate);
-            let fp = discipline::baseline::compute_violation_fingerprint_with_content(v, |f| {
-                git.head_content(f).ok().flatten()
-            });
-            entries.push(discipline::baseline::BaselineEntry {
-                gate: v.gate.to_string(),
-                rule: v.title.clone(),
-                path: v.file.clone().unwrap_or_default(),
-                fingerprint: fp,
-            });
+            entries.push(discipline::baseline::entry_for(v, read_head));
         }
     }
 
     entries.sort();
 
     let baseline_obj = discipline::baseline::DisciplineBaseline {
-        version: 1,
+        version: discipline::baseline::FINGERPRINT_VERSION,
         findings: entries,
     };
 

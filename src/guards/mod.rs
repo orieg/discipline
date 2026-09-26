@@ -48,6 +48,9 @@ pub struct Violation {
     pub gate: &'static str,
     /// `gate/code`: the finding's stable identity (`crate::findings`).
     pub code: String,
+    /// The version-2 baseline fingerprint (`crate::baseline`): stable across line moves
+    /// and title changes. Filled once all gates have run.
+    pub fingerprint: String,
     pub severity: Severity,
     pub title: String,
     pub file: Option<String>,
@@ -98,16 +101,9 @@ impl GateOutcome {
         }
     }
 
-    /// `gate/code` for a kind this gate may report.
+    /// `gate/code` for a kind this gate may report ([`crate::findings::full_code`]).
     pub fn code_of(&self, kind: &crate::findings::FindingKind) -> String {
-        assert!(
-            kind.gates.contains(&self.gate),
-            "gate `{}` reports `{}`, registered for {:?}",
-            self.gate,
-            kind.code,
-            kind.gates
-        );
-        format!("{}/{}", self.gate, kind.code)
+        crate::findings::full_code(self.gate, kind)
     }
 
     /// Report a finding of a kind with a fixed title.
@@ -140,6 +136,7 @@ impl GateOutcome {
         self.violations.push(Violation {
             gate: self.gate,
             code,
+            fingerprint: String::new(),
             severity,
             title,
             file: file.map(str::to_string),
@@ -621,9 +618,24 @@ pub fn run_checks(
         });
     }
 
+    for v in outcomes.iter_mut().flat_map(|o| o.violations.iter_mut()) {
+        v.fingerprint = crate::baseline::compute_violation_fingerprint_with_content(v, |f| {
+            ctx.git.head_content(f).ok().flatten()
+        });
+    }
+
     // Grandfathered findings baseline matching
+    let mut deprecations = ctx.config.deprecations.clone();
     if let Some(baseline) = ctx.baseline {
         crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes);
+        if baseline.version < crate::baseline::FINGERPRINT_VERSION {
+            deprecations.push(format!(
+                "`{}` uses fingerprint version {}, which keys on finding titles: run `discipline baseline --migrate` in a change of its own to rewrite it to version {}",
+                ctx.baseline_path.unwrap_or(crate::baseline::DEFAULT_BASELINE_FILE),
+                baseline.version,
+                crate::baseline::FINGERPRINT_VERSION
+            ));
+        }
     }
 
     let count = |s: Severity| {
@@ -649,7 +661,7 @@ pub fn run_checks(
             .collect(),
         outcomes,
         policy_failures: Vec::new(),
-        deprecations: ctx.config.deprecations.clone(),
+        deprecations,
     })
 }
 

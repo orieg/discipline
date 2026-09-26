@@ -133,7 +133,7 @@ fn test_baseline_stale_entry_reported_as_note() {
         .as_str()
         .unwrap();
     assert!(
-        note.contains("`Unsafe Without SAFETY Comment` in `src/lib.rs`"),
+        note.contains("`unsafe-safety-comment/safety-comment-missing` in `src/lib.rs`"),
         "expected sample rule and path in stale baseline note: {note}"
     );
 }
@@ -496,4 +496,194 @@ fn baseline_write_refuses_to_replace_an_unreadable_baseline() {
     // The file is left as it was, not rewritten without the other suites' entries.
     let after = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
     assert_eq!(after, "this is [[[ not toml\n");
+}
+
+/// Rewrite the version-2 baseline `baseline --write` produced into the version-1 file an
+/// older release wrote: the same findings, fingerprinted on their titles.
+fn downgrade_to_v1(repo: &Repo, base: &str) {
+    let run = repo.run(&["check", "--format", "json", "--base", base], &[]);
+    let report: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let mut toml = String::from("version = 1\n");
+    for o in report["outcomes"].as_array().unwrap() {
+        for v in o["violations"].as_array().unwrap() {
+            let gate: &'static str =
+                Box::leak(v["gate"].as_str().unwrap().to_string().into_boxed_str());
+            let violation = discipline::guards::Violation {
+                gate,
+                code: v["code"].as_str().unwrap().to_string(),
+                fingerprint: String::new(),
+                severity: discipline::config::Severity::Error,
+                title: v["title"].as_str().unwrap().to_string(),
+                file: v["file"].as_str().map(str::to_string),
+                line: v["line"].as_u64().map(|l| l as usize),
+                message: v["message"].as_str().unwrap().to_string(),
+                remediation: None,
+            };
+            let fp = discipline::baseline::fingerprint_for_version(
+                &violation,
+                |f| std::fs::read_to_string(repo.file(f)).ok(),
+                1,
+            );
+            toml.push_str(&format!(
+                "\n[[findings]]\ngate = \"{gate}\"\nrule = \"{}\"\npath = \"{}\"\nfingerprint = \"{fp}\"\n",
+                violation.title,
+                violation.file.clone().unwrap_or_default()
+            ));
+        }
+    }
+    std::fs::write(repo.file("discipline-baseline.toml"), toml).unwrap();
+}
+
+#[test]
+fn a_version_one_baseline_matches_until_migrated_and_a_migration_alone_is_accepted() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n",
+        "chore: base unsafe",
+    );
+    downgrade_to_v1(&repo, "HEAD~1");
+    repo.commit_base(
+        "discipline-baseline.toml",
+        &std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap(),
+        "chore: version-1 baseline",
+    );
+    let measured = |repo: &Repo| {
+        repo.check_with_pr(&["--base", "HEAD~2"], WEAKENING_PR)
+            .json()
+    };
+
+    // 1. A version-1 file still grandfathers its finding, and says it is deprecated.
+    let v1 = measured(&repo);
+    assert_eq!(v1["baselined"], 1, "{v1:#}");
+    assert!(
+        v1["deprecations"][0]
+            .as_str()
+            .is_some_and(|d| d.contains("fingerprint version 1")),
+        "{v1:#}"
+    );
+
+    // 2. `--migrate` rewrites it to version 2; the finding stays grandfathered.
+    let migrate = repo.run(&["baseline", "--migrate"], &[]);
+    assert_eq!(migrate.code, 0, "{}\n{}", migrate.stdout, migrate.stderr);
+    assert!(
+        migrate
+            .stdout
+            .contains("1 entry migrated, 0 stale entries dropped"),
+        "{}",
+        migrate.stdout
+    );
+    let migrated = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert!(migrated.contains("version = 2"), "{migrated}");
+    assert!(
+        migrated.contains("rule = \"unsafe-safety-comment/safety-comment-missing\""),
+        "{migrated}"
+    );
+    let v2 = measured(&repo);
+    assert_eq!(v2["baselined"], 1, "{v2:#}");
+    assert!(v2.get("deprecations").is_none(), "{v2:#}");
+
+    // 3. The migration committed on its own passes config-integrity without a directive.
+    repo.commit("chore: migrate the baseline");
+    let alone = repo.check(&[]);
+    assert_eq!(alone.code, 0, "{}", alone.stdout);
+    assert!(
+        alone.outcome("config-integrity")["notes"]
+            .to_string()
+            .contains("migrated from fingerprint version 1 to 2"),
+        "{}",
+        alone.stdout
+    );
+
+    // 4. Mixed with another change, it is a finding: the migration cannot be verified.
+    repo.write("docs/notes.md", "# Notes\n");
+    repo.commit("docs: notes");
+    let mixed = repo.check(&[]);
+    assert_eq!(mixed.code, 1, "{}", mixed.stdout);
+    let codes: Vec<String> = mixed
+        .violations("config-integrity")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        codes,
+        ["config-integrity/baseline-migration-not-alone"],
+        "{}",
+        mixed.stdout
+    );
+
+    // 5. A "migration" that moves an entry to another path is a swap, not a migration.
+    repo.git(&["reset", "-q", "--hard", "HEAD~2"]);
+    repo.run(&["baseline", "--migrate"], &[]);
+    let swapped = std::fs::read_to_string(repo.file("discipline-baseline.toml"))
+        .unwrap()
+        .replace("path = \"src/lib.rs\"", "path = \"src/other.rs\"");
+    std::fs::write(repo.file("discipline-baseline.toml"), swapped).unwrap();
+    repo.commit("chore: migrate the baseline");
+    let swap = repo.check(&[]);
+    assert_eq!(swap.code, 1, "{}", swap.stdout);
+    assert!(
+        swap.violations("config-integrity")
+            .iter()
+            .any(|v| v["code"] == "config-integrity/baseline-new-findings"),
+        "{}",
+        swap.stdout
+    );
+}
+
+#[test]
+fn json_and_sarif_carry_the_baseline_fingerprint_and_a_rule_per_code() {
+    let repo = Repo::new();
+    repo.write(
+        "src/lib.rs",
+        "pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n",
+    );
+    repo.commit("feat: unsafe");
+    let json = repo.check(&[]).json();
+    let fp = json["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|o| o["violations"].as_array().unwrap())
+        .map(|v| v["fingerprint"].as_str().unwrap().to_string())
+        .next()
+        .unwrap();
+    assert_eq!(fp.len(), 64);
+
+    // The fingerprint is what `baseline --write` records.
+    repo.run(&["baseline", "--write"], &[]);
+    let recorded = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert!(recorded.contains(&fp), "{recorded}");
+
+    let sarif = repo.run(
+        &[
+            "check",
+            "--format",
+            "sarif",
+            "--base",
+            "main",
+            "--no-baseline",
+        ],
+        &[],
+    );
+    let sarif: serde_json::Value = serde_json::from_str(&sarif.stdout).unwrap();
+    let result = &sarif["runs"][0]["results"][0];
+    assert_eq!(
+        result["ruleId"],
+        "unsafe-safety-comment/safety-comment-missing"
+    );
+    assert_eq!(
+        result["partialFingerprints"]["disciplineFingerprint/v2"],
+        fp.as_str()
+    );
+    let rules: Vec<&str> = sarif["runs"][0]["tool"]["driver"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        rules.contains(&"unsafe-safety-comment/safety-comment-missing"),
+        "{rules:?}"
+    );
 }

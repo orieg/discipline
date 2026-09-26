@@ -281,6 +281,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                         outcome.violations.push(Violation {
                             gate: GATE,
                             code: crate::findings::full_code(GATE, &crate::findings::FUZZ_TARGET_REMOVED),
+                            fingerprint: String::new(),
                             title: crate::findings::FUZZ_TARGET_REMOVED.fixed_title().to_string(),
                             message: format!(
                                 "Fuzz target `{target}` was removed from fuzz harness `{}` without an explicit override.",
@@ -318,6 +319,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 outcome.violations.push(Violation {
                     gate: GATE,
                     code: crate::findings::full_code(GATE, &crate::findings::FUZZ_TARGET_DELETED),
+                    fingerprint: String::new(),
                     title: crate::findings::FUZZ_TARGET_DELETED.fixed_title().to_string(),
                     message: format!(
                         "Fuzz target file `{}` was deleted without an explicit override.",
@@ -383,6 +385,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     outcome.violations.push(Violation {
                         gate: GATE,
                         code: crate::findings::full_code(GATE, &crate::findings::TEST_BUDGET_DECREASED),
+                        fingerprint: String::new(),
                         title: crate::findings::TEST_BUDGET_DECREASED.fixed_title().to_string(),
                         message: format!(
                             "Testing effort `{}` in `{}` reduced from {} to {}.",
@@ -420,6 +423,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 outcome.violations.push(Violation {
                     gate: GATE,
                     code: crate::findings::full_code(GATE, &crate::findings::SEED_CORPUS_DECREASED),
+                    fingerprint: String::new(),
                     title: crate::findings::SEED_CORPUS_DECREASED.fixed_title().to_string(),
                     message: format!(
                         "Seed corpus directory `{dir}` lost {deleted_count} seed file(s) without an explicit override."

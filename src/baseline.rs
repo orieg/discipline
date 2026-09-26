@@ -5,9 +5,11 @@
 //! Subsequent runs report baselined findings as non-blocking notes ("N findings grandfathered by baseline in this gate (not blocking)")
 //! and fail only on NEW violations.
 //!
-//! Fingerprints are stable and decoupled from line numbers:
-//! sha256(gate + rule + path + normalized_content_hash), so unrelated line additions or deletions
-//! do not churn the baseline.
+//! Fingerprints are stable and decoupled from line numbers. Version 2 (written since the
+//! finding registry, `crate::findings`) is `sha256("v2:" + gate/code + ":" + path + ":" +
+//! content_hash)`: the finding's code, never its title, so a reworded title keeps its
+//! baseline. Version 1 used the title in place of the code; a version-1 file still matches
+//! (with a deprecation note) until `discipline baseline --migrate` rewrites it.
 
 use crate::config::Severity;
 use crate::guards::{GateOutcome, Violation};
@@ -18,6 +20,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 pub const DEFAULT_BASELINE_FILE: &str = "discipline-baseline.toml";
+
+/// The fingerprint version `discipline baseline` writes.
+pub const FINGERPRINT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BaselineEntry {
@@ -42,7 +47,7 @@ fn default_version() -> u32 {
 impl Default for DisciplineBaseline {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: FINGERPRINT_VERSION,
             findings: Vec::new(),
         }
     }
@@ -165,8 +170,17 @@ impl SeverityTally {
     }
 }
 
-/// Compute a stable finding fingerprint decoupled from line numbers using a custom content reader.
+/// The version-2 fingerprint of a finding, reading source lines through `read_file`.
 pub fn compute_violation_fingerprint_with_content<F>(v: &Violation, read_file: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
+    fingerprint_for_version(v, read_file, FINGERPRINT_VERSION)
+}
+
+/// The fingerprint of a finding under a given baseline version: 1 keys on the title, 2 on
+/// the code.
+pub fn fingerprint_for_version<F>(v: &Violation, read_file: F, version: u32) -> String
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -187,8 +201,71 @@ where
     };
 
     let content_hash = sha256_hex(line_content.as_bytes());
-    let source = format!("{}:{}:{}:{}", v.gate, v.title, path, content_hash);
+    let source = if version >= 2 {
+        format!("v2:{}:{}:{}", v.code, path, content_hash)
+    } else {
+        format!("{}:{}:{}:{}", v.gate, v.title, path, content_hash)
+    };
     sha256_hex(source.as_bytes())
+}
+
+/// A baseline entry for a finding, in the current version.
+pub fn entry_for<F>(v: &Violation, read_file: F) -> BaselineEntry
+where
+    F: Fn(&str) -> Option<String>,
+{
+    BaselineEntry {
+        gate: v.gate.to_string(),
+        rule: v.code.clone(),
+        path: v.file.clone().unwrap_or_default(),
+        fingerprint: compute_violation_fingerprint_with_content(v, read_file),
+    }
+}
+
+/// What `discipline baseline --migrate` did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Migration {
+    /// Version-1 entries rewritten to version 2.
+    pub migrated: usize,
+    /// Version-1 entries no current finding matches: already stale, and dropped.
+    pub dropped: usize,
+}
+
+/// Rewrite a version-1 baseline to version 2: each entry that a current finding still
+/// matches (under the version-1 formula) becomes that finding's version-2 entry. Entries
+/// nothing matches are stale and are dropped, so the migrated baseline never grows.
+pub fn migrate<F>(
+    v1: &DisciplineBaseline,
+    findings: &[&Violation],
+    read_file: F,
+) -> (DisciplineBaseline, Migration)
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut available: HashMap<&str, usize> = HashMap::new();
+    for e in &v1.findings {
+        *available.entry(e.fingerprint.as_str()).or_insert(0) += 1;
+    }
+    let mut out = Vec::new();
+    for v in findings {
+        let old = fingerprint_for_version(v, &read_file, 1);
+        if let Some(n) = available.get_mut(old.as_str()).filter(|n| **n > 0) {
+            *n -= 1;
+            out.push(entry_for(v, &read_file));
+        }
+    }
+    out.sort();
+    let report = Migration {
+        migrated: out.len(),
+        dropped: v1.findings.len() - out.len(),
+    };
+    (
+        DisciplineBaseline {
+            version: FINGERPRINT_VERSION,
+            findings: out,
+        },
+        report,
+    )
 }
 
 /// Compute a stable finding fingerprint decoupled from line numbers.
@@ -259,7 +336,7 @@ where
         let mut gate_baselined = 0;
 
         for v in outcome.violations.drain(..) {
-            let fp = compute_violation_fingerprint_with_content(&v, &read_file);
+            let fp = fingerprint_for_version(&v, &read_file, baseline.version);
             if let Some(count) = available_fps.get_mut(&fp) {
                 if *count > 0 {
                     *count -= 1;
@@ -344,6 +421,91 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    fn finding(title: &str, code: &str) -> Violation {
+        Violation {
+            gate: "unsafe-safety-comment",
+            code: code.to_string(),
+            fingerprint: String::new(),
+            severity: Severity::Error,
+            title: title.to_string(),
+            file: Some("src/lib.rs".to_string()),
+            line: None,
+            message: "unsafe block".to_string(),
+            remediation: None,
+        }
+    }
+
+    #[test]
+    fn version_two_keys_on_the_code_and_version_one_on_the_title() {
+        let none = |_: &str| None;
+        let a = finding(
+            "Unsafe Without SAFETY Comment",
+            "unsafe-safety-comment/safety-comment-missing",
+        );
+        let renamed = finding(
+            "SAFETY Comment Missing",
+            "unsafe-safety-comment/safety-comment-missing",
+        );
+        let recoded = finding(
+            "Unsafe Without SAFETY Comment",
+            "unsafe-safety-comment/other",
+        );
+        assert_eq!(
+            fingerprint_for_version(&a, none, 2),
+            fingerprint_for_version(&renamed, none, 2)
+        );
+        assert_ne!(
+            fingerprint_for_version(&a, none, 2),
+            fingerprint_for_version(&recoded, none, 2)
+        );
+        assert_ne!(
+            fingerprint_for_version(&a, none, 1),
+            fingerprint_for_version(&renamed, none, 1)
+        );
+        assert_ne!(
+            fingerprint_for_version(&a, none, 1),
+            fingerprint_for_version(&a, none, 2)
+        );
+    }
+
+    #[test]
+    fn migration_keeps_matched_entries_and_drops_stale_ones() {
+        let none = |_: &str| None;
+        let live = finding(
+            "Unsafe Without SAFETY Comment",
+            "unsafe-safety-comment/safety-comment-missing",
+        );
+        let v1 = DisciplineBaseline {
+            version: 1,
+            findings: vec![
+                BaselineEntry {
+                    gate: "unsafe-safety-comment".into(),
+                    rule: live.title.clone(),
+                    path: "src/lib.rs".into(),
+                    fingerprint: fingerprint_for_version(&live, none, 1),
+                },
+                BaselineEntry {
+                    gate: "unsafe-safety-comment".into(),
+                    rule: live.title.clone(),
+                    path: "src/gone.rs".into(),
+                    fingerprint: "0".repeat(64),
+                },
+            ],
+        };
+        let (v2, report) = migrate(&v1, &[&live], none);
+        assert_eq!(
+            report,
+            Migration {
+                migrated: 1,
+                dropped: 1
+            }
+        );
+        assert_eq!(v2.version, FINGERPRINT_VERSION);
+        assert_eq!(v2.findings, vec![entry_for(&live, none)]);
+        assert_eq!(v2.findings[0].rule, live.code);
+    }
+
     use super::*;
 
     #[test]
@@ -418,6 +580,7 @@ mod tests {
         let v1 = Violation {
             gate: "pii",
             code: "pii/fixture".to_string(),
+            fingerprint: String::new(),
             severity: Severity::Error,
             title: "Host Leak".to_string(),
             file: Some("sample.txt".to_string()),
@@ -434,6 +597,7 @@ mod tests {
         let v2 = Violation {
             gate: "pii",
             code: "pii/fixture".to_string(),
+            fingerprint: String::new(),
             severity: Severity::Error,
             title: "Host Leak".to_string(),
             file: Some("sample.txt".to_string()),

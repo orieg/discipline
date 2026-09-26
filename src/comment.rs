@@ -331,6 +331,7 @@ mod tests {
         o.violations.push(Violation {
             gate: "assertion-reduction",
             code: "assertion-reduction/fixture".to_string(),
+            fingerprint: String::new(),
             severity: Severity::Error,
             title: "Assertion Reduction".into(),
             file: Some("tests/<b>|x.rs".into()),

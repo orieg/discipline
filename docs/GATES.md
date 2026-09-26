@@ -688,6 +688,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - `[directives]`: `allow_hidden` switched on, `sources` gaining `commits`, `fail_on_overrides` or `require_approval` switched off, `degrade_offline` switched on, `max_overrides` raised or removed, `allowed_override_actors` grown (subject `directives`).
   - `[tests]`: `functions` or `paths` grown (more code counted as test scope is less code the production-code gates see).
   - `Baseline Contains New Findings Without Directive`: the grandfathering baseline grows, or swaps a fingerprint one for one (subject `baseline`).
+  - `Baseline Migration Mixed With Other Changes`: a fingerprint-version migration (`discipline baseline --migrate`) in a change that also touches other files (subject `baseline`). On its own, a migration that does not grow the baseline and keeps each entry's gate and path is accepted without a directive.
 - **Self-protection:** the gate runs whenever the **base** configuration enables it, whatever the head configuration or `--disable` says, and reports at the stricter of the base and head severity. Every gate option has a declared loosening direction in `src/guards/integrity.rs::KEY_DIRECTIONS`; a unit test fails when an option is added without one.
 - **What it does NOT catch:**
   - Deleting `discipline.toml`: the run falls back to built-in defaults, and only options the base file set stricter than those defaults are reported.

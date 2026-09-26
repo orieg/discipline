@@ -329,7 +329,7 @@ fn cli_check_format_sarif_and_output_file() {
         .is_empty());
     assert_eq!(
         fail_parsed["runs"][0]["results"][0]["ruleId"],
-        "vacuous-tests"
+        "vacuous-tests/vacuous-test-added"
     );
 
     let val_fail = std::process::Command::new("python3")
@@ -392,7 +392,10 @@ fn cli_check_format_gitlab_codequality() {
     let fail_parsed: Vec<serde_json::Value> =
         serde_json::from_str(&run_fail.stdout).expect("valid code quality failure json");
     assert_eq!(fail_parsed.len(), 1);
-    assert_eq!(fail_parsed[0]["check_name"], "agent_guard::vacuous_tests");
+    assert_eq!(
+        fail_parsed[0]["check_name"],
+        "vacuous-tests/vacuous-test-added"
+    );
     assert!(fail_parsed[0]["description"]
         .as_str()
         .unwrap()
@@ -451,7 +454,10 @@ fn cli_gitlab_ci_auto_detection() {
     let cq_content = std::fs::read_to_string(&gl_cq).unwrap();
     let cq_parsed: Vec<serde_json::Value> = serde_json::from_str(&cq_content).unwrap();
     assert_eq!(cq_parsed.len(), 1);
-    assert_eq!(cq_parsed[0]["check_name"], "agent_guard::vacuous_tests");
+    assert_eq!(
+        cq_parsed[0]["check_name"],
+        "vacuous-tests/vacuous-test-added"
+    );
 
     let junit_content = std::fs::read_to_string(&gl_junit).unwrap();
     assert!(junit_content.contains("<failure message=\"Vacuous Test Added\""));
