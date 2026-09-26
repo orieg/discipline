@@ -220,6 +220,7 @@ agy\:"Antigravity CLI (\`.agents/hooks.json\`, Stop)"
 qwen\:"Qwen Code (\`.qwen/settings.json\`, PostToolUse + Stop)"
 opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit tools)"))' \
 '--user[Write the user-level hook instead (copilot\: hooks/discipline.json in the Copilot home directory, .copilot in your home or COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml]' \
+'(--user)--cloud-agent[Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0

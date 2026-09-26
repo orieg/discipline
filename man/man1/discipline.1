@@ -670,7 +670,7 @@ Write the agent\*(Aqs hook configuration at the repository root (or, with \-\-us
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-\-user\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-\-user\fR] [\fB\-\-cloud\-agent\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -703,6 +703,9 @@ opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools
 .TP
 \fB\-\-user\fR
 Write the user\-level hook instead (copilot: hooks/discipline.json in the Copilot home directory, .copilot in your home or COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml
+.TP
+\fB\-\-cloud\-agent\fR
+Also write .github/workflows/copilot\-setup\-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

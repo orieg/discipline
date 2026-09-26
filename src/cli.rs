@@ -185,6 +185,10 @@ pub struct HookInstallArgs {
     /// Write the user-level hook instead (copilot: hooks/discipline.json in the Copilot home directory, .copilot in your home or COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml
     #[arg(long)]
     pub user: bool,
+
+    /// Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
+    #[arg(long, conflicts_with = "user")]
+    pub cloud_agent: bool,
 }
 
 #[derive(Args, Debug, Clone)]

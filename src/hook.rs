@@ -651,6 +651,49 @@ pub fn install_user(agent: Agent) -> Result<Installed> {
     Ok(Installed::Written(path))
 }
 
+/// `.github/workflows/copilot-setup-steps.yml`, which Copilot cloud agent runs before it
+/// starts working: this action, pinned to this binary's release, installs `discipline`
+/// and puts it on `PATH` without running a check, so the repository's hooks find it.
+pub const COPILOT_SETUP_STEPS: &str = ".github/workflows/copilot-setup-steps.yml";
+
+/// The step that installs discipline for Copilot cloud agent, indented for a job's
+/// `steps:` list.
+pub fn copilot_setup_step() -> String {
+    format!(
+        "      # Pin to this release's commit SHA (`uses: orieg/discipline@<sha> # v{v}`):\n      # the default `ci-integrity` gate reports a tag ref as unpinned.\n      - name: Install discipline for Copilot's hooks\n        uses: orieg/discipline@v{v}\n        with:\n          install_only: 'true'\n",
+        v = env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// The whole setup-steps workflow ([`COPILOT_SETUP_STEPS`]).
+pub fn copilot_setup_steps() -> String {
+    format!(
+        "# Written by `discipline hook install --agent copilot --cloud-agent`.\n# Copilot cloud agent runs this job before it starts working: it reads the\n# repository's .github/hooks/ too, and a hook whose command is missing is skipped.\nname: \"Copilot Setup Steps\"\n\non:\n  workflow_dispatch:\n  push:\n    paths:\n      - .github/workflows/copilot-setup-steps.yml\n  pull_request:\n    paths:\n      - .github/workflows/copilot-setup-steps.yml\n\npermissions:\n  contents: read\n\njobs:\n  # The job must be called `copilot-setup-steps`, or Copilot does not run it.\n  copilot-setup-steps:\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    permissions:\n      contents: read\n    steps:\n{}",
+        copilot_setup_step()
+    )
+}
+
+/// Write [`COPILOT_SETUP_STEPS`] under `root`. A workflow that already installs
+/// discipline is left as it is; any other is refused with the step to merge into it.
+pub fn install_cloud_agent(root: &Path) -> Result<Installed> {
+    let path = root.join(COPILOT_SETUP_STEPS);
+    if path.exists() {
+        let existing = std::fs::read_to_string(&path)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        if existing.contains("orieg/discipline") {
+            return Ok(Installed::AlreadyPresent(path));
+        }
+        return Ok(Installed::Refused(path, copilot_setup_step()));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    std::fs::write(&path, copilot_setup_steps())
+        .with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(Installed::Written(path))
+}
+
 /// The repository root `install` writes under.
 pub fn repo_root() -> Result<PathBuf> {
     let repo = crate::gitctx::discover_repository(".")
@@ -765,6 +808,29 @@ mod tests {
             assert!(re.is_match(tool), "{tool} is an edit: {matcher}");
         }
         assert!(!re.is_match("view") && !re.is_match("rg"), "{matcher}");
+    }
+
+    /// The setup-steps workflow Copilot cloud agent runs: one job named
+    /// `copilot-setup-steps` whose only step installs this release without a check.
+    #[test]
+    fn copilot_setup_steps_installs_this_release_without_a_check() {
+        let doc: serde_yaml::Value = serde_yaml::from_str(&copilot_setup_steps()).unwrap();
+        let jobs = doc["jobs"].as_mapping().unwrap();
+        assert_eq!(jobs.len(), 1);
+        let steps = doc["jobs"]["copilot-setup-steps"]["steps"]
+            .as_sequence()
+            .unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(
+            steps[0]["uses"].as_str().unwrap(),
+            format!("orieg/discipline@v{}", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(steps[0]["with"]["install_only"].as_str(), Some("true"));
+        assert_eq!(
+            doc["permissions"]["contents"].as_str(),
+            Some("read"),
+            "least privilege"
+        );
     }
 
     /// Stop payloads recorded from live agy and Copilot CLI sessions (paths and ids

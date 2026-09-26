@@ -1398,33 +1398,43 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             std::process::exit(i32::from(out.code));
         }
         HookCommand::Install(a) => {
-            let installed = if a.user {
+            let mut results = vec![if a.user {
                 discipline::hook::install_user(a.agent)?
             } else {
                 discipline::hook::install(a.agent, &discipline::hook::repo_root()?)?
-            };
-            match installed {
-                Installed::Written(p) => {
-                    println!("{} wrote {}", style::green("ok:"), p.display());
-                    Ok(true)
+            }];
+            if a.cloud_agent {
+                if a.agent != discipline::hook::Agent::Copilot {
+                    bail!("`--cloud-agent` is for copilot: Copilot cloud agent runs the repository's hooks");
                 }
-                Installed::AlreadyPresent(p) => {
-                    println!(
-                        "{} {} already runs discipline for {}",
-                        style::green("ok:"),
-                        p.display(),
-                        a.agent.id()
-                    );
-                    Ok(true)
-                }
-                Installed::Refused(p, snippet) => {
-                    println!(
-                        "{} exists and was not changed. Merge this into it:\n\n{snippet}",
-                        p.display()
-                    );
-                    Ok(false)
+                results.push(discipline::hook::install_cloud_agent(
+                    &discipline::hook::repo_root()?,
+                )?);
+            }
+            let mut ok = true;
+            for installed in results {
+                match installed {
+                    Installed::Written(p) => {
+                        println!("{} wrote {}", style::green("ok:"), p.display());
+                    }
+                    Installed::AlreadyPresent(p) => {
+                        println!(
+                            "{} {} already runs discipline for {}",
+                            style::green("ok:"),
+                            p.display(),
+                            a.agent.id()
+                        );
+                    }
+                    Installed::Refused(p, snippet) => {
+                        println!(
+                            "{} exists and was not changed. Merge this into it:\n\n{snippet}",
+                            p.display()
+                        );
+                        ok = false;
+                    }
                 }
             }
+            Ok(ok)
         }
     }
 }

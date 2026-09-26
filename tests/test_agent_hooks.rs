@@ -614,3 +614,71 @@ fn copilot_installs_at_user_level_with_the_guard() {
         other.stderr
     );
 }
+
+/// `--cloud-agent` also writes the workflow Copilot cloud agent runs before it starts,
+/// which installs discipline so the repository's hooks find it; an existing workflow is
+/// never rewritten, and the flag is for copilot only.
+#[test]
+fn copilot_cloud_agent_gets_a_setup_steps_workflow() {
+    let repo = Repo::new();
+    let run = repo.run(
+        &["hook", "install", "--agent", "copilot", "--cloud-agent"],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(repo.file(".github/hooks/discipline.json").exists());
+    let workflow =
+        std::fs::read_to_string(repo.file(".github/workflows/copilot-setup-steps.yml")).unwrap();
+    assert!(workflow.contains("copilot-setup-steps:"), "{workflow}");
+    assert!(workflow.contains("install_only: 'true'"), "{workflow}");
+
+    let again = repo.run(
+        &["hook", "install", "--agent", "copilot", "--cloud-agent"],
+        &[],
+    );
+    assert_eq!(again.code, 0, "{}", again.stdout);
+    assert_eq!(
+        again.stdout.matches("already runs discipline").count(),
+        2,
+        "{}",
+        again.stdout
+    );
+
+    let other = Repo::new();
+    other.write(
+        ".github/workflows/copilot-setup-steps.yml",
+        "name: setup\non: workflow_dispatch\njobs:\n  copilot-setup-steps:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm ci\n",
+    );
+    let merged = other.run(
+        &["hook", "install", "--agent", "copilot", "--cloud-agent"],
+        &[],
+    );
+    assert_eq!(merged.code, 1, "{}", merged.stdout);
+    assert!(
+        merged.stdout.contains("Merge this into it"),
+        "{}",
+        merged.stdout
+    );
+    assert!(
+        merged.stdout.contains("install_only: 'true'"),
+        "{}",
+        merged.stdout
+    );
+    assert!(
+        std::fs::read_to_string(other.file(".github/workflows/copilot-setup-steps.yml"))
+            .unwrap()
+            .contains("npm ci"),
+        "an existing workflow is never rewritten"
+    );
+
+    let cursor = repo.run(
+        &["hook", "install", "--agent", "cursor", "--cloud-agent"],
+        &[],
+    );
+    assert_eq!(cursor.code, 2, "{}", cursor.stdout);
+    assert!(
+        cursor.stderr.contains("`--cloud-agent` is for copilot"),
+        "{}",
+        cursor.stderr
+    );
+}

@@ -1599,6 +1599,11 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       <td>Base URL of the release store, for mirrors.</td>
     </tr>
     <tr>
+      <td class="gate-id">install_only</td>
+      <td><code>false</code></td>
+      <td>Install discipline and put it on PATH for the steps that follow, without running a check. For `.github/workflows/copilot-setup-steps.yml`, so the hooks of Copilot cloud agent find the binary.</td>
+    </tr>
+    <tr>
       <td class="gate-id">baseline_file</td>
       <td><em>(none)</em></td>
       <td>Path to grandfathering baseline file (defaults to discipline-baseline.toml if present).</td>

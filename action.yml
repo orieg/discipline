@@ -93,6 +93,10 @@ inputs:
     description: 'Base URL of the release store, for mirrors.'
     required: false
     default: 'https://github.com/orieg/discipline/releases'
+  install_only:
+    description: 'Install discipline and put it on PATH for the steps that follow, without running a check. For `.github/workflows/copilot-setup-steps.yml`, so the hooks of Copilot cloud agent find the binary.'
+    required: false
+    default: 'false'
   baseline_file:
     description: 'Path to grandfathering baseline file (defaults to discipline-baseline.toml if present).'
     required: false
@@ -235,6 +239,7 @@ runs:
 
     - name: Resolve base ref
       id: base
+      if: inputs.install_only != 'true'
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:
@@ -272,6 +277,7 @@ runs:
 
     - name: Run discipline gates
       id: run
+      if: inputs.install_only != 'true'
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:

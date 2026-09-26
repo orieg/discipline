@@ -364,6 +364,7 @@ The action runs on `pull_request`, `merge_group` and `push` events (the base is 
 | `version` | *(none)* | Release to download (e.g. v0.1.0). Default: the tag this action was referenced by (`@vX.Y.Z`); for a major tag, a commit SHA or a branch, the release in the action''s own Cargo.toml; the latest release only when neither is available. |
 | `binary_path` | *(none)* | Use this discipline binary instead of downloading one (air-gapped Gitea/Forgejo runners, self-tests). |
 | `download_url` | `https://github.com/orieg/discipline/releases` | Base URL of the release store, for mirrors. |
+| `install_only` | `false` | Install discipline and put it on PATH for the steps that follow, without running a check. For `.github/workflows/copilot-setup-steps.yml`, so the hooks of Copilot cloud agent find the binary. |
 | `baseline_file` | *(none)* | Path to grandfathering baseline file (defaults to discipline-baseline.toml if present). |
 | `no_baseline` | `false` | Ignore grandfathering baseline even if present. |
 | `ci_context` | *(none)* | Rollup job only: `toJson(needs)` of the rollup job (inline JSON, or a path to a file holding it) for the ci-skip-set gate. Empty: the gate reports "not evaluated". |
@@ -537,6 +538,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 |---|---|---|---|
 | `--agent` |  |  | The agent to configure |
 | `--user` |  |  | Write the user-level hook instead (copilot: hooks/discipline.json in the Copilot home directory, .copilot in your home or COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml |
+| `--cloud-agent` |  |  | Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only) |
 
 **`discipline explain`**
 
@@ -926,7 +928,7 @@ Loop guards at the end of a turn: Claude Code, Codex, Copilot CLI and Qwen Code 
 - **In the repository** (the default, shared by the team): `discipline hook install --agent copilot`. Copilot runs a repository's hooks only in a folder it trusts: answer its trust prompt when it opens the repository (remember the choice), or list the folder in `trustedFolders` in the Copilot home directory's `config.json`. In a folder it does not trust, `.github/hooks/` is skipped without a message, in `copilot -p` too.
 - **For your user** (every repository, no per-folder trust): `discipline hook install --agent copilot --user` writes `hooks/discipline.json` in the Copilot home directory, which Copilot loads in any folder. Its command carries `--if-configured`: it checks only a git repository with a `discipline.toml` at its root and passes silently anywhere else, so folders that never adopted discipline are not gated.
 
-Copilot cloud agent reads the same `.github/hooks/*.json` from the cloned repository, but its sandbox does not have `discipline` installed: a hook whose command is missing is logged and skipped there, so the cloud agent is not gated until the binary is installed in its environment (`.github/workflows/copilot-setup-steps.yml`).
+- **For Copilot cloud agent**: `discipline hook install --agent copilot --cloud-agent` also writes `.github/workflows/copilot-setup-steps.yml`. The cloud agent reads the same `.github/hooks/*.json` from the cloned repository, and `postToolUse` and `agentStop` fire there, but its environment has no `discipline`: a hook whose command is missing is logged and skipped, so the agent works ungated. The setup-steps job, which GitHub runs before the agent starts, runs this action with `install_only: 'true'`: the pinned, checksum-verified binary is installed and put on `PATH`, and no check runs. The workflow takes effect once it is on the default branch; pin the action to the release's commit SHA, as the comment in the file says. A repository that already has the workflow gets the step to add to it, never a rewrite. Its network and runner follow GitHub's cloud agent settings (docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/customize-the-agent-environment).
 
 Live sessions (Claude Code 2.1, Copilot CLI 1.0, OpenCode 1.18, agy 1.2): in each, an agent asked to delete a test's assertions received the finding from the installed hook and restored them. Those sessions corrected two installed files (agy's `Stop` shape, Copilot's `apply_patch` edits); the recorded payloads are pinned in `src/hook.rs`'s tests. The Codex, Cursor and Qwen Code contracts are read from each tool's documentation (the module header of `src/hook.rs` cites the pages) and have not been run against a live session.
 

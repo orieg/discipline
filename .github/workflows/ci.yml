@@ -172,6 +172,27 @@ jobs:
           base_ref: main
       - run: tests/action/assert-report.sh "${{ steps.clean.outputs.report }}" pass
 
+      # Copilot cloud agent's setup steps: the binary on PATH for later steps, no check.
+      - name: "Install only: discipline on PATH, no gate run"
+        id: install_only
+        uses: ./
+        with:
+          binary_path: .ci-bin/discipline
+          install_only: 'true'
+      - name: Install-only put discipline on PATH and ran no gate
+        shell: bash
+        env:
+          BIN: ${{ steps.install_only.outputs.bin }}
+          STATUS: ${{ steps.install_only.outputs.status }}
+          REPORT: ${{ steps.install_only.outputs.report }}
+        run: |
+          set -euo pipefail
+          [ -n "${BIN}" ] || { echo "::error::install_only left no bin output"; exit 1; }
+          on_path="$(command -v discipline)" || { echo "::error::discipline is not on PATH after install_only"; exit 1; }
+          [ "${on_path}" = "${BIN}" ] || { echo "::error::discipline on PATH is '${on_path}', expected '${BIN}'"; exit 1; }
+          [ -z "${STATUS}" ] && [ -z "${REPORT}" ] || { echo "::error::install_only ran the gates (status '${STATUS}')"; exit 1; }
+          discipline --version
+
       - name: "Negative control: bad change is rejected"
         id: bad
         continue-on-error: true
