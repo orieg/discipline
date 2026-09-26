@@ -10,7 +10,7 @@
 mod common;
 
 use common::{FakeForge, Repo};
-use discipline::output_schema::{replay_schema, report_schema};
+use discipline::output_schema::{mcp_check_schema, replay_schema, report_schema};
 use serde_json::Value;
 
 /// `path: type`, `?` marking a field that may be absent. `[]` is an array element,
@@ -110,6 +110,23 @@ const REPLAY_FIELDS: &[&str] = &[
     "schema_version: const(1)",
     "warnings_by_gate: object",
     "warnings_by_gate{*}: integer",
+];
+
+const MCP_CHECK_FIELDS: &[&str] = &[
+    "findings?: array",
+    "findings[]: object",
+    "findings[].code: string",
+    "findings[].file: string|null",
+    "findings[].fingerprint: string",
+    "findings[].line: integer|null",
+    "findings[].message: string",
+    "findings[].repair: string",
+    "findings[].severity: enum(error|warning|note)",
+    "findings[].title: string",
+    "gate?: string|null",
+    "reason?: enum(configuration|baseline|repository|tool-missing|tool-timeout|toolchain-unavailable|forge|gate|internal)",
+    "schema_version: const(1)",
+    "status: enum(pass|findings|could_not_check)",
 ];
 
 fn resolve<'a>(root: &'a Value, node: &'a Value) -> &'a Value {
@@ -217,6 +234,52 @@ fn report_schema_fields_match_snapshot() {
 #[test]
 fn replay_schema_fields_match_snapshot() {
     assert_snapshot("replay", &replay_schema(), REPLAY_FIELDS);
+}
+
+#[test]
+fn mcp_check_schema_fields_match_snapshot() {
+    assert_snapshot("mcp check_diff", &mcp_check_schema(), MCP_CHECK_FIELDS);
+}
+
+/// `check_diff`'s `structuredContent` from a real `discipline mcp`, for each status.
+#[test]
+fn mcp_check_diff_conforms_to_its_output_schema() {
+    use std::io::Write;
+    let call = |repo: &Repo| -> Value {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+            .arg("mcp")
+            .current_dir(repo.path())
+            .env("DISCIPLINE_NO_NETWORK", "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        writeln!(
+            child.stdin.take().unwrap(),
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"check_diff","arguments":{{}}}}}}"#
+        )
+        .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let reply: Value = serde_json::from_slice(&out.stdout).unwrap();
+        reply["result"]["structuredContent"].clone()
+    };
+    let repo = Repo::new();
+    let pass = call(&repo);
+    assert_eq!(pass["status"], "pass", "{pass:#}");
+    assert_valid(&mcp_check_schema(), &pass);
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    let x = 1;\n    let _ = x + 1;\n}\n",
+    );
+    let found = call(&repo);
+    assert_eq!(found["status"], "findings", "{found:#}");
+    assert!(!found["findings"].as_array().unwrap().is_empty());
+    assert_valid(&mcp_check_schema(), &found);
+    repo.write("discipline.toml", "[meta\n");
+    let broken = call(&repo);
+    assert_eq!(broken["status"], "could_not_check", "{broken:#}");
+    assert_eq!(broken["reason"], "configuration", "{broken:#}");
+    assert_valid(&mcp_check_schema(), &broken);
 }
 
 #[test]

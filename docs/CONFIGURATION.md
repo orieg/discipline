@@ -1051,7 +1051,7 @@ The server checks the repository it is started in: a client that starts servers 
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `check_diff` | none | The `agent-prompt` report for the change so far (committed and uncommitted, not files never `git add`ed, against the merge base with the default branch, under the default branch's configuration, reading no directive); `structuredContent.status` is `pass`, `findings` or `could_not_check` (the last also `isError`). The agent cannot choose the base: naming `HEAD` would judge a committed change by its own configuration |
+| `check_diff` | none | The `agent-prompt` report for the change so far (committed and uncommitted, not files never `git add`ed, against the merge base with the default branch, under the default branch's configuration, reading no directive); `structuredContent` (declared as the tool's `outputSchema`, `schema_version` 1) has `status` `pass`, `findings` or `could_not_check` (the last also `isError`, with the `reason` and `gate` of the report's `could_not_check`); when the check ran, `findings` lists each finding's `code`, `severity`, `title`, `file`, `line`, `message`, `repair` (the fix the text gives) and `fingerprint`, never its remediation, which can name a waiver. The agent cannot choose the base: naming `HEAD` would judge a committed change by its own configuration |
 | `list_gates` | none | The `discipline gates` table under the repository's configuration |
 | `explain_finding` | `query`: a gate id or a finding line naming `[gate-id]` | The gate's suite, what it checks, its languages and its reference link; an unknown query suggests gate ids |
 

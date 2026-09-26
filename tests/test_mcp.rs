@@ -81,6 +81,27 @@ fn an_mcp_client_checks_a_weakened_test_and_never_sees_a_waiver() {
         text.contains("[assertion-reduction/assertions-reduced]") && text.contains("Repair:"),
         "{text}"
     );
+    // The same findings as data: the code, the location and the repair; no remediation,
+    // which can name a waiver.
+    let findings = check["structuredContent"]["findings"].as_array().unwrap();
+    let reduced = findings
+        .iter()
+        .find(|f| f["code"] == "assertion-reduction/assertions-reduced")
+        .unwrap_or_else(|| panic!("{check}"));
+    assert_eq!(reduced["file"], "tests/a.rs", "{reduced}");
+    assert_eq!(reduced["severity"], "error");
+    let repair = reduced["repair"].as_str().unwrap();
+    assert!(
+        repair.len() > 20 && text.contains(&format!("- Repair: {repair}")),
+        "the structured repair is the one the text gives: {reduced}"
+    );
+    assert!(reduced.get("remediation").is_none(), "{reduced}");
+    assert_eq!(check["structuredContent"]["schema_version"], 1);
+    let tools = replies[1]["result"]["tools"].as_array().unwrap();
+    assert_eq!(
+        tools[0]["outputSchema"]["title"], "DisciplineCheckDiff",
+        "check_diff declares its structuredContent"
+    );
 
     let gates = replies[3]["result"]["content"][0]["text"].as_str().unwrap();
     assert!(gates.contains("assertion-reduction"), "{gates}");
@@ -102,6 +123,12 @@ fn a_clean_change_passes_and_a_broken_config_is_an_error_not_a_pass() {
     let pass = session(&repo, &[call(1, "check_diff", json!({}))]);
     assert_eq!(
         pass[0]["result"]["structuredContent"]["status"], "pass",
+        "{}",
+        pass[0]
+    );
+    assert_eq!(
+        pass[0]["result"]["structuredContent"]["findings"],
+        json!([]),
         "{}",
         pass[0]
     );

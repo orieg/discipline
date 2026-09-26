@@ -17,6 +17,9 @@ pub const REPORT_SCHEMA_VERSION: u32 = 1;
 /// `schema_version` of the replay summary, under the same rule.
 pub const REPLAY_SCHEMA_VERSION: u32 = 1;
 
+/// `schema_version` of the MCP `check_diff` tool's `structuredContent`, under the same rule.
+pub const MCP_CHECK_SCHEMA_VERSION: u32 = 1;
+
 fn reasons() -> Vec<&'static str> {
     crate::could_not_check::Reason::ALL
         .iter()
@@ -128,6 +131,44 @@ pub fn report_schema() -> Value {
                         "properties": { "type": { "const": "MergedPrBody" }, "detail": { "type": "integer", "minimum": 1, "description": "Pull request number" } }
                     }
                 ]
+            }
+        }
+    })
+}
+
+/// `outputSchema` of the MCP `check_diff` tool: its `structuredContent`. A finding is the
+/// report's finding without `remediation`, which can name a waiver, and with `repair`,
+/// the fix the `agent-prompt` report gives.
+pub fn mcp_check_schema() -> Value {
+    json!({
+        "$schema": DRAFT,
+        "title": "DisciplineCheckDiff",
+        "description": "`structuredContent` of the MCP `check_diff` tool. `findings` is present when the check ran (`pass`, `findings`); `reason` and `gate` when it could not.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "status"],
+        "properties": {
+            "schema_version": { "const": MCP_CHECK_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
+            "status": { "enum": ["pass", "findings", "could_not_check"] },
+            "findings": { "type": "array", "items": { "$ref": "#/$defs/Finding" }, "description": "Every finding of the check, in report order" },
+            "reason": { "enum": reasons(), "description": "Why the check could not run (`could_not_check` only)" },
+            "gate": { "type": ["string", "null"], "description": "The gate that could not run (`could_not_check` only)" }
+        },
+        "$defs": {
+            "Finding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["code", "severity", "title", "file", "line", "message", "repair", "fingerprint"],
+                "properties": {
+                    "code": { "type": "string", "pattern": "^[a-z0-9-]+/[a-z0-9-]+$", "description": "`gate/code`, as in the check report" },
+                    "severity": { "enum": ["error", "warning", "note"] },
+                    "title": { "type": "string" },
+                    "file": { "type": ["string", "null"] },
+                    "line": { "type": ["integer", "null"], "minimum": 0 },
+                    "message": { "type": "string" },
+                    "repair": { "type": "string", "description": "The fix; never a waiver" },
+                    "fingerprint": { "type": "string", "pattern": "^([0-9a-f]{64})?$" }
+                }
             }
         }
     })
