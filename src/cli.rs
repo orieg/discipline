@@ -153,7 +153,7 @@ pub struct HookArgs {
 pub enum HookCommand {
     /// Check the change so far and answer in the agent's hook contract (reads the hook payload on stdin)
     Run(HookRunArgs),
-    /// Write the agent's hook configuration at the repository root; an existing file is never rewritten
+    /// Write the agent's hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten
     Install(HookInstallArgs),
 }
 
@@ -167,6 +167,10 @@ pub struct HookRunArgs {
     #[arg(short, long)]
     pub base: Option<String>,
 
+    /// Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)
+    #[arg(long)]
+    pub if_configured: bool,
+
     /// Files an agent appends to the command (Aider's lint-cmd); ignored, the whole change is checked
     #[arg(hide = true, trailing_var_arg = true)]
     pub files: Vec<String>,
@@ -177,6 +181,10 @@ pub struct HookInstallArgs {
     /// The agent to configure
     #[arg(long, value_enum)]
     pub agent: crate::hook::Agent,
+
+    /// Write the user-level hook instead (copilot: hooks/discipline.json in the Copilot home directory, .copilot in your home or COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml
+    #[arg(long)]
+    pub user: bool,
 }
 
 #[derive(Args, Debug, Clone)]

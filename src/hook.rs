@@ -19,8 +19,12 @@
 //!   an edit, exit 0 with `{"additionalContext": ...}` on stdout is appended to the
 //!   tool result the model reads; at the end of a turn `{"decision": "block",
 //!   "reason": ...}` forces another turn (`stop_hook_active`, and the CLI's own cap of
-//!   eight continuations). Docs: docs.github.com/en/copilot/reference/hooks-reference.
-//! * Antigravity CLI (`agy`): `.agents/hooks.json`. Only `Stop` can reach the model:
+//!   eight continuations). Repository hooks load only in a folder Copilot trusts:
+//!   elsewhere (and in `-p` mode without `COPILOT_ALLOW_ALL=true`) they are skipped
+//!   without a word. Docs: docs.github.com/en/copilot/reference/hooks-reference.
+//! * Antigravity CLI (`agy`): `.agents/hooks.json`, a named hook whose `Stop` lists
+//!   handlers directly (only tool events group them under a `matcher`). Only `Stop`
+//!   can reach the model:
 //!   `{"decision": "continue", "reason": ...}` re-enters the loop with the reason as a
 //!   system message. agy documents no loop guard, so this hook counts consecutive
 //!   blocks per conversation (under the git directory) and lets the third through.
@@ -252,6 +256,18 @@ pub fn default_base(repo: &git2::Repository) -> Option<String> {
 
 /// Runs the check for the agent and returns what the hook emits.
 pub fn run(agent: Agent, base: Option<String>, stdin: &str) -> Result<HookOutput> {
+    run_with(agent, base, stdin, false)
+}
+
+/// [`run`], and with `if_configured` a silent pass outside a git repository whose root
+/// has a `discipline.toml`: the guard of a user-level hook, which runs in every folder
+/// the agent opens.
+pub fn run_with(
+    agent: Agent,
+    base: Option<String>,
+    stdin: &str,
+    if_configured: bool,
+) -> Result<HookOutput> {
     let payload = parse_payload(stdin);
     let event = if payload.stop {
         Event::Stop
@@ -267,6 +283,9 @@ pub fn run(agent: Agent, base: Option<String>, stdin: &str) -> Result<HookOutput
         .clone()
         .filter(|d| d.is_dir())
         .unwrap_or_else(|| PathBuf::from("."));
+    if if_configured && !configured(&dir) {
+        return Ok(translate_event(agent, event, 0, "", ""));
+    }
     let base = match base {
         Some(b) => Some(b),
         None => crate::gitctx::discover_repository(&dir)
@@ -472,31 +491,15 @@ pub fn config_for(agent: Agent) -> (&'static str, String) {
             ".aider.conf.yml",
             format!("lint-cmd:\n  - \"{cmd}\"\nauto-lint: true\n"),
         ),
-        Agent::Copilot => (
-            ".github/hooks/discipline.json",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "version": 1,
-                "hooks": {
-                    "postToolUse": [{
-                        "type": "command",
-                        "matcher": "create|edit|str_replace_editor",
-                        "bash": cmd,
-                        "timeoutSec": 120
-                    }],
-                    "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": 120 }]
-                }
-            }))
-            .unwrap_or_default()
-                + "\n",
-        ),
+        Agent::Copilot => (".github/hooks/discipline.json", copilot_hooks(&cmd)),
         Agent::Agy => (
             ".agents/hooks.json",
             serde_json::to_string_pretty(&serde_json::json!({
+                // `Stop` takes handlers directly; only `PreToolUse` / `PostToolUse`
+                // group them under a `matcher` (agy's hooks guide). A grouped Stop
+                // handler has no `command` and never runs.
                 "discipline": {
-                    "Stop": [{
-                        "matcher": "",
-                        "hooks": [{ "type": "command", "command": cmd, "timeout": 120 }]
-                    }]
+                    "Stop": [{ "type": "command", "command": cmd, "timeout": 120 }]
                 }
             }))
             .unwrap_or_default()
@@ -557,6 +560,81 @@ pub enum Installed {
 pub fn install(agent: Agent, root: &Path) -> Result<Installed> {
     let (rel, content) = config_for(agent);
     let path = root.join(rel);
+    if path.exists() {
+        let existing = std::fs::read_to_string(&path)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        if existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
+            return Ok(Installed::AlreadyPresent(path));
+        }
+        return Ok(Installed::Refused(path, content));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    std::fs::write(&path, content).with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(Installed::Written(path))
+}
+
+/// Whether `dir` is in a git repository that has adopted discipline: a `discipline.toml`
+/// at its root.
+pub fn configured(dir: &Path) -> bool {
+    crate::gitctx::discover_repository(dir)
+        .ok()
+        .and_then(|r| r.workdir().map(|w| w.join("discipline.toml").is_file()))
+        .unwrap_or(false)
+}
+
+/// Copilot CLI's hook file running `cmd` after an edit and at the end of a turn.
+fn copilot_hooks(cmd: &str) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "version": 1,
+        "hooks": {
+            "postToolUse": [{
+                "type": "command",
+                // Matched as `^(?:...)$` against the tool name: every edit tool the hooks
+                // reference lists (`apply_patch` is how some models edit).
+                "matcher": "create|edit|str_replace_editor|apply_patch",
+                "bash": cmd,
+                "timeoutSec": 120
+            }],
+            "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": 120 }]
+        }
+    }))
+    .unwrap_or_default()
+        + "\n"
+}
+
+/// The user-level hook file for `agent` and its content: it runs in every folder the
+/// agent opens, so its command passes silently outside a repository with a
+/// `discipline.toml` (`--if-configured`). Copilot CLI loads it whether or not the
+/// folder is trusted, which a repository's `.github/hooks/` needs.
+pub fn user_config_for(agent: Agent) -> Result<(PathBuf, String)> {
+    match agent {
+        Agent::Copilot => {
+            let home = match std::env::var_os("COPILOT_HOME").filter(|h| !h.is_empty()) {
+                Some(h) => PathBuf::from(h),
+                None => std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .map(|h| PathBuf::from(h).join(".copilot"))
+                    .context("cannot find the home directory (set COPILOT_HOME)")?,
+            };
+            Ok((
+                home.join("hooks").join("discipline.json"),
+                copilot_hooks("discipline hook run --agent copilot --if-configured"),
+            ))
+        }
+        other => bail!(
+            "`--user` is supported for copilot; install the {} hook in the repository instead",
+            other.id()
+        ),
+    }
+}
+
+/// Write the user-level hook file ([`user_config_for`]); an existing file is never
+/// rewritten.
+pub fn install_user(agent: Agent) -> Result<Installed> {
+    let (path, content) = user_config_for(agent)?;
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
@@ -662,6 +740,46 @@ mod tests {
             broken.stderr
         );
         assert_eq!(translate(Agent::Aider, 2, "", "x").code, 1);
+    }
+
+    /// The files `hook install` writes, against each agent's contract as a live session
+    /// showed it: agy runs a `Stop` handler only when it is listed directly, and Copilot
+    /// CLI edits through `apply_patch` as well as `edit` / `create`.
+    #[test]
+    fn installed_files_follow_the_contracts_live_sessions_showed() {
+        let agy: serde_json::Value = serde_json::from_str(&config_for(Agent::Agy).1).unwrap();
+        let stop = &agy["discipline"]["Stop"][0];
+        assert_eq!(stop["command"], "discipline hook run --agent agy", "{agy}");
+        assert!(
+            stop.get("hooks").is_none() && stop.get("matcher").is_none(),
+            "{agy}"
+        );
+
+        let copilot: serde_json::Value =
+            serde_json::from_str(&config_for(Agent::Copilot).1).unwrap();
+        let matcher = copilot["hooks"]["postToolUse"][0]["matcher"]
+            .as_str()
+            .unwrap();
+        let re = regex::Regex::new(&format!("^(?:{matcher})$")).unwrap();
+        for tool in ["apply_patch", "edit", "create", "str_replace_editor"] {
+            assert!(re.is_match(tool), "{tool} is an edit: {matcher}");
+        }
+        assert!(!re.is_match("view") && !re.is_match("rg"), "{matcher}");
+    }
+
+    /// Stop payloads recorded from live agy and Copilot CLI sessions (paths and ids
+    /// replaced).
+    #[test]
+    fn recorded_stop_payloads_are_read_as_stops() {
+        let agy = parse_payload(
+            r#"{"artifactDirectoryPath":"/a","conversationId":"c-1","error":"","executionNum":0,"fullyIdle":true,"modelName":"m","terminationReason":"NO_TOOL_CALL","transcriptPath":"/t","workspacePaths":["/w"]}"#,
+        );
+        assert!(agy.stop, "{agy:?}");
+        assert_eq!(agy.conversation.as_deref(), Some("c-1"));
+        let copilot = parse_payload(
+            r#"{"cwd":"/w","sessionId":"s","stopReason":"end_turn","stop_hook_active":true,"timestamp":1,"transcriptPath":"/t"}"#,
+        );
+        assert!(copilot.stop && copilot.stop_hook_active, "{copilot:?}");
     }
 
     #[test]

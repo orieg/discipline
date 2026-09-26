@@ -1389,7 +1389,7 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     .read_to_string(&mut stdin)
                     .context("cannot read the hook payload on stdin")?;
             }
-            let out = discipline::hook::run(a.agent, a.base, &stdin)?;
+            let out = discipline::hook::run_with(a.agent, a.base, &stdin, a.if_configured)?;
             print!("{}", out.stdout);
             eprint!("{}", out.stderr);
             std::io::stdout()
@@ -1398,8 +1398,12 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             std::process::exit(i32::from(out.code));
         }
         HookCommand::Install(a) => {
-            let root = discipline::hook::repo_root()?;
-            match discipline::hook::install(a.agent, &root)? {
+            let installed = if a.user {
+                discipline::hook::install_user(a.agent)?
+            } else {
+                discipline::hook::install(a.agent, &discipline::hook::repo_root()?)?
+            };
+            match installed {
                 Installed::Written(p) => {
                     println!("{} wrote {}", style::green("ok:"), p.display());
                     Ok(true)

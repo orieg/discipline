@@ -1016,7 +1016,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__hook__subcmd__install)
-            opts="-h --agent --help"
+            opts="-h --agent --user --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1034,7 +1034,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__hook__subcmd__run)
-            opts="-b -h --agent --base --help"
+            opts="-b -h --agent --base --if-configured --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

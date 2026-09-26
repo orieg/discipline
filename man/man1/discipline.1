@@ -624,7 +624,7 @@ Check the change so far and answer in the agent\*(Aqs hook contract (reads the h
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline hook run\fR <\fB\-\-agent\fR> [\fB\-b\fR|\fB\-\-base\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILES\fR] 
+\fBdiscipline hook run\fR <\fB\-\-agent\fR> [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-if\-configured\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILES\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -658,16 +658,19 @@ opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools
 \fB\-b\fR, \fB\-\-base\fR \fI<BASE>\fR
 Base to measure the change against (default: the merge base with origin\*(Aqs default branch, else main / master)
 .TP
+\fB\-\-if\-configured\fR
+Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user\-level hook, which runs in every folder)
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS "discipline hook install"
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-Write the agent\*(Aqs hook configuration at the repository root; an existing file is never rewritten
+Write the agent\*(Aqs hook configuration at the repository root (or, with \-\-user, the user\-level one); an existing file is never rewritten
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-\-user\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -697,6 +700,9 @@ qwen: Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)
 .IP \(bu 2
 opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)
 .RE
+.TP
+\fB\-\-user\fR
+Write the user\-level hook instead (copilot: hooks/discipline.json in the Copilot home directory, .copilot in your home or COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

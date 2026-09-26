@@ -519,3 +519,98 @@ fn deleting_tracked_agent_scratch_is_not_an_instruction_change_but_deleting_the_
         unhooked.stdout
     );
 }
+
+/// A user-level hook runs in every folder the agent opens: with `--if-configured` it
+/// checks only a git repository that has a `discipline.toml`, and passes silently
+/// anywhere else (a folder with no repository, a repository that never adopted it).
+#[test]
+fn if_configured_checks_only_repositories_that_adopted_discipline() {
+    let stop = r#"{"stopReason":"end_turn","stop_hook_active":false}"#;
+    let args = ["hook", "run", "--agent", "copilot", "--if-configured"];
+
+    let repo = Repo::new();
+    weakened(&repo);
+    let unadopted = hook(&repo, &args, stop);
+    assert_eq!(
+        (
+            unadopted.code,
+            unadopted.stdout.as_str(),
+            unadopted.stderr.as_str()
+        ),
+        (0, "", ""),
+        "a repository without discipline.toml is not checked"
+    );
+    // Without the flag the same change blocks, so the silence above is the guard.
+    let plain = hook(&repo, &["hook", "run", "--agent", "copilot"], stop);
+    assert!(
+        plain.stdout.contains(r#""decision":"block""#),
+        "{}",
+        plain.stdout
+    );
+
+    repo.write("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n");
+    let adopted = hook(&repo, &args, stop);
+    let v: serde_json::Value = serde_json::from_str(&adopted.stdout).unwrap();
+    assert_eq!(v["decision"], "block", "{}", adopted.stdout);
+    assert!(v["reason"]
+        .as_str()
+        .unwrap()
+        .contains("[assertion-reduction/assertions-reduced]"));
+
+    let outside = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
+    let out = cmd
+        .args(args)
+        .current_dir(outside.path())
+        .env("DISCIPLINE_NO_NETWORK", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            c.stdin.take().unwrap().write_all(stop.as_bytes())?;
+            c.wait_with_output()
+        })
+        .unwrap();
+    assert_eq!(
+        (out.status.code(), out.stdout.is_empty()),
+        (Some(0), true),
+        "outside a repository: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `hook install --agent copilot --user` writes the user-level file Copilot CLI loads
+/// in any folder, trusted or not (`$COPILOT_HOME/hooks/`), with the `--if-configured`
+/// guard; it never rewrites a file, and other agents are installed per repository.
+#[test]
+fn copilot_installs_at_user_level_with_the_guard() {
+    let repo = Repo::new();
+    let home = tempfile::tempdir().unwrap();
+    let env = [("COPILOT_HOME", home.path().to_str().unwrap())];
+    let run = repo.run(&["hook", "install", "--agent", "copilot", "--user"], &env);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let path = home.path().join("hooks/discipline.json");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for event in ["postToolUse", "agentStop"] {
+        assert_eq!(
+            v["hooks"][event][0]["bash"], "discipline hook run --agent copilot --if-configured",
+            "{v}"
+        );
+    }
+    assert!(!repo.file(".github/hooks/discipline.json").exists());
+    let again = repo.run(&["hook", "install", "--agent", "copilot", "--user"], &env);
+    assert!(
+        again.stdout.contains("already runs discipline"),
+        "{}",
+        again.stdout
+    );
+    let other = repo.run(&["hook", "install", "--agent", "cursor", "--user"], &env);
+    assert_eq!(other.code, 2, "{}", other.stdout);
+    assert!(
+        other.stderr.contains("`--user` is supported for copilot"),
+        "{}",
+        other.stderr
+    );
+}

@@ -127,6 +127,17 @@ mod tests {
         assert!(render(bare, None).contains("no directive"));
     }
 
+    /// A directive is listed under the gate its finding's code names: `allow-nul` lifts
+    /// `assertion-reduction/nul-byte-added`, not a `vacuous-tests` finding.
+    #[test]
+    fn a_directive_is_listed_under_the_gate_that_codes_its_finding() {
+        let text = |id: &str| render(gate_for(id).unwrap(), None);
+        assert!(text("assertion-reduction").contains("allow-nul:"));
+        let vacuous = text("vacuous-tests");
+        assert!(!vacuous.contains("allow-nul:"), "{vacuous}");
+        assert!(vacuous.contains("allow-vacuous-test:"), "{vacuous}");
+    }
+
     #[test]
     fn a_finding_line_resolves_and_an_unknown_query_suggests() {
         assert_eq!(

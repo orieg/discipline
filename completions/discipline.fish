@@ -155,7 +155,7 @@ complete -c discipline -n "__fish_discipline_using_subcommand install-hooks" -s 
 complete -c discipline -n "__fish_discipline_using_subcommand install-hooks" -s h -l help -d 'Print help'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fish_seen_subcommand_from run install help" -s h -l help -d 'Print help'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fish_seen_subcommand_from run install help" -f -a "run" -d 'Check the change so far and answer in the agent\'s hook contract (reads the hook payload on stdin)'
-complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fish_seen_subcommand_from run install help" -f -a "install" -d 'Write the agent\'s hook configuration at the repository root; an existing file is never rewritten'
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fish_seen_subcommand_from run install help" -f -a "install" -d 'Write the agent\'s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fish_seen_subcommand_from run install help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l agent -d 'The agent whose hook contract to answer in' -r -f -a "claude-code\t'Claude Code (`.claude/settings.json`, PostToolUse + Stop)'
 codex\t'OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)'
@@ -166,6 +166,7 @@ agy\t'Antigravity CLI (`.agents/hooks.json`, Stop)'
 qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
 opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s b -l base -d 'Base to measure the change against (default: the merge base with origin\'s default branch, else main / master)' -r
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l if-configured -d 'Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l agent -d 'The agent to configure' -r -f -a "claude-code\t'Claude Code (`.claude/settings.json`, PostToolUse + Stop)'
 codex\t'OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)'
@@ -175,9 +176,10 @@ copilot\t'GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + age
 agy\t'Antigravity CLI (`.agents/hooks.json`, Stop)'
 qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
 opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l user -d 'Write the user-level hook instead (copilot: hooks/discipline.json in the Copilot home directory, .copilot in your home or COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "run" -d 'Check the change so far and answer in the agent\'s hook contract (reads the hook payload on stdin)'
-complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "install" -d 'Write the agent\'s hook configuration at the repository root; an existing file is never rewritten'
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "install" -d 'Write the agent\'s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c discipline -n "__fish_discipline_using_subcommand explain" -s c -l config -d 'Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand explain" -l config-override -d 'Inline TOML merged over the file (tables merge, lists append, scalars replace)' -r
@@ -224,5 +226,5 @@ complete -c discipline -n "__fish_discipline_using_subcommand help; and not __fi
 complete -c discipline -n "__fish_discipline_using_subcommand help; and not __fish_seen_subcommand_from check diff baseline init gates schema self-test completions docs install-hooks hook explain replay mcp bench doctor help" -f -a "doctor" -d 'Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check'
 complete -c discipline -n "__fish_discipline_using_subcommand help; and not __fish_seen_subcommand_from check diff baseline init gates schema self-test completions docs install-hooks hook explain replay mcp bench doctor help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c discipline -n "__fish_discipline_using_subcommand help; and __fish_seen_subcommand_from hook" -f -a "run" -d 'Check the change so far and answer in the agent\'s hook contract (reads the hook payload on stdin)'
-complete -c discipline -n "__fish_discipline_using_subcommand help; and __fish_seen_subcommand_from hook" -f -a "install" -d 'Write the agent\'s hook configuration at the repository root; an existing file is never rewritten'
+complete -c discipline -n "__fish_discipline_using_subcommand help; and __fish_seen_subcommand_from hook" -f -a "install" -d 'Write the agent\'s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten'
 complete -c discipline -n "__fish_discipline_using_subcommand help; and __fish_seen_subcommand_from bench" -f -a "derive" -d 'Derive paired-ratio noise floors and baseline ratios from repeated same-commit runs'

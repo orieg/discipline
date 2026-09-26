@@ -234,7 +234,8 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     DirectiveSpec {
         canonical: "allow-nul",
         deprecated: Some("allow-nul-byte"),
-        gate: "vacuous-tests",
+        // `assertion-reduction/nul-byte-added`: the finding's code names this gate.
+        gate: "assertion-reduction",
         subject_kind: DirectiveSubjectKind::FilePath,
         subject_doc: "Corrupt or NUL-byte fixture file path",
     },
