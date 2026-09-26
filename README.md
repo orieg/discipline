@@ -105,7 +105,7 @@ jobs:
           fail_on_warnings: true
 ```
 
-The floating `@v0` ref tracks the latest `v0.x.y` release, and moves only after that release has passed its smoke tests. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger). Pin `@v0.13.1` when a verdict must be reproducible from the workflow file alone. The default `ci-integrity` gate reports any tag ref (`@v0`, `@v0.13.1`) newly added to a workflow as an unpinned action; a repository that runs it pins a commit SHA: `uses: orieg/discipline@<commit-sha> # v0.13.1`. A SHA ref runs the binary of the release that commit's `Cargo.toml` names; `version:` under `with:` picks another release.
+The floating `@v0` ref tracks the latest `v0.x.y` release, and moves only after that release has passed its smoke tests. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger). Pin `@v0.14.0` when a verdict must be reproducible from the workflow file alone. The default `ci-integrity` gate reports any tag ref (`@v0`, `@v0.14.0`) newly added to a workflow as an unpinned action; a repository that runs it pins a commit SHA: `uses: orieg/discipline@<commit-sha> # v0.14.0`. A SHA ref runs the binary of the release that commit's `Cargo.toml` names; `version:` under `with:` picks another release.
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding an authorized override directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
 >
@@ -234,7 +234,7 @@ curl -fsSL https://orieg.github.io/discipline/install.sh | bash
 Custom destination directory or pinned release tag:
 
 ```bash
-bash install.sh --to ~/.local/bin --version v0.13.1
+bash install.sh --to ~/.local/bin --version v0.14.0
 ```
 
 ### Debian / Ubuntu (APT)
