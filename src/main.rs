@@ -316,7 +316,9 @@ fn merged_pull_bodies(
     let api = discipline::forge::HttpApi::from_env();
     for (short, _) in commits {
         // The commit list carries abbreviated ids; the forge is asked by the full one.
-        let full = git.full_oid(short)?;
+        let full = git.full_oid(short).map_err(|e| {
+            discipline::could_not_check::tag(discipline::could_not_check::Reason::Repository, e)
+        })?;
         let oid = &full;
         match discipline::forge::merged_pull_for_commit(&api, &forge, oid) {
             Ok(Some(pull)) => {
@@ -359,11 +361,14 @@ fn merged_pull_bodies(
                         "{what}; continuing without it (`directives.degrade_offline`)"
                     ));
                 } else {
-                    anyhow::bail!(
+                    return Err(discipline::could_not_check::tag(
+                        discipline::could_not_check::Reason::Forge,
+                        anyhow::anyhow!(
                         "{what}. The pull request's body may carry the directives this push needs; \
                          give the run a token that can read pull requests, or set \
                          `directives.degrade_offline = true` (the default) to continue with a note."
-                    );
+                    ),
+                    ));
                 }
             }
         }
@@ -477,7 +482,49 @@ fn write_structured_reports(
     Ok(())
 }
 
+/// The reports of a run that could not check (exit 2). The JSON report (stdout under
+/// `--format json`, `--json-out`, a JSON `--output-file`) has no outcomes and says why in
+/// `could_not_check`; JUnit, SARIF and GitLab, which have no such field, carry one
+/// `engine` finding holding the error so a dashboard shows the run as failed.
 fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyhow::Error) {
+    let empty = |outcomes, errors, could_not_check| discipline::guards::CheckSummary {
+        schema_version: discipline::output_schema::REPORT_SCHEMA_VERSION,
+        could_not_check,
+        base: base.to_string(),
+        errors,
+        warnings: 0,
+        notes: 0,
+        overrides: 0,
+        baselined: 0,
+        planned_gates: discipline::config::GATES
+            .iter()
+            .filter(|g| !g.available)
+            .map(|g| g.id)
+            .collect(),
+        outcomes,
+        policy_failures: Vec::new(),
+        deprecations: Vec::new(),
+    };
+    let json_summary = empty(
+        Vec::new(),
+        0,
+        Some(discipline::could_not_check::CouldNotCheck::from_error(err)),
+    );
+    let json = serde_json::to_string_pretty(&json_summary).unwrap_or_default();
+    if args.format == discipline::cli::OutputFormat::Json {
+        println!("{json}");
+    }
+    // The run is already failing (exit 2); a report that cannot be written is named so a
+    // missing file is not mistaken for a run that never started.
+    let write = |path: &Path, content: &str| {
+        if let Err(e) = std::fs::write(path, content) {
+            eprintln!("discipline check: could not write {}: {e}", path.display());
+        }
+    };
+    if let Some(path) = &args.json_out {
+        write(path, &json);
+    }
+
     let mut fatal_outcome = discipline::guards::GateOutcome {
         gate: "engine",
         suite: "engine",
@@ -497,39 +544,20 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
         format!("fatal error during check execution: {err}"),
         "inspect error details and ensure environment/git state is valid",
     );
-    let err_summary = discipline::guards::CheckSummary {
-        base: base.to_string(),
-        errors: 1,
-        warnings: 0,
-        notes: 0,
-        overrides: 0,
-        baselined: 0,
-        planned_gates: discipline::config::GATES
-            .iter()
-            .filter(|g| !g.available)
-            .map(|g| g.id)
-            .collect(),
-        outcomes: vec![fatal_outcome],
-        policy_failures: Vec::new(),
-        deprecations: Vec::new(),
-    };
-    if let Some(path) = &args.json_out {
-        let _ = std::fs::write(
-            path,
-            serde_json::to_string_pretty(&err_summary).unwrap_or_default(),
-        );
-    }
+    let err_summary = empty(vec![fatal_outcome], 1, None);
     if let Some(path) = &args.output_file {
-        let _ = std::fs::write(
-            path,
+        let content = if args.format == discipline::cli::OutputFormat::Json {
+            json
+        } else {
             discipline::report::format_report_content(
                 &err_summary,
                 args.format,
                 args.fail_on_warnings,
                 false,
             )
-            .unwrap_or_default(),
-        );
+            .unwrap_or_default()
+        };
+        write(path, &content);
     }
     let report_gitlab = args.report_gitlab.as_deref().or_else(|| {
         if is_gitlab {
@@ -556,10 +584,31 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
 }
 
 fn check(args: CheckArgs) -> Result<bool> {
+    let is_gitlab = is_gitlab_ci();
+    let mut progress = Progress::default();
+    let result = check_inner(&args, is_gitlab, &mut progress);
+    if let Err(err) = &result {
+        // An error after the report was written (an output file, the comment) leaves that
+        // report as it is; before it, the exit-2 report is all there is.
+        if !progress.reported {
+            emit_fatal_reports(&args, is_gitlab, &progress.base, err);
+        }
+    }
+    result
+}
+
+/// How far a check got, for the report of a run that stops.
+#[derive(Default)]
+struct Progress {
+    base: String,
+    reported: bool,
+}
+
+fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Result<bool> {
+    use discipline::could_not_check::{tag, Reason};
     if args.trust_workspace {
         std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
     }
-    let is_gitlab = is_gitlab_ci();
     let base_ref = discipline::gitctx::detect_base_ref(
         args.base.as_deref(),
         args.commit.as_deref(),
@@ -568,13 +617,11 @@ fn check(args: CheckArgs) -> Result<bool> {
     let named =
         discipline::gitctx::named_head(args.commit.as_deref(), args.commit_range.as_deref())
             .map_or(Ok(()), |n| discipline::gitctx::verify_named_head(&n));
-    let git = match named.and_then(|()| GitCtx::open(&base_ref, args.staged)) {
-        Ok(g) => g,
-        Err(err) => {
-            emit_fatal_reports(&args, is_gitlab, &base_ref, &err);
-            return Err(err);
-        }
-    };
+    progress.base = base_ref.clone();
+    let git = named
+        .and_then(|()| GitCtx::open(&base_ref, args.staged))
+        .map_err(|e| tag(Reason::Repository, e))?;
+    progress.base = git.base_label().to_string();
     let extra_fail = if args.fail_on_overrides {
         Some(true)
     } else {
@@ -590,29 +637,20 @@ fn check(args: CheckArgs) -> Result<bool> {
     } else {
         Some(non_empty_sources)
     };
-    let (config, config_path) = match load_config(
+    let (config, config_path) = load_config(
         &args.config,
         Some(git.root()),
         extra_fail,
         extra_sources.clone(),
-    ) {
-        Ok(c) => c,
-        Err(err) => {
-            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
-            return Err(err);
-        }
-    };
+    )
+    .map_err(|e| tag(Reason::Configuration, e))?;
     // `--policy-from base`: the change is judged by the base ref's configuration. Its own
     // copy is still loaded (it must parse) and kept for `config-integrity` to diff.
     let (config, head_config) = if args.policy_from == discipline::cli::PolicyFrom::Base {
         let overrides = build_overrides(&args.config, extra_fail, extra_sources);
-        match load_base_policy(&git, &config_path, &overrides) {
-            Ok(base) => (base, Some(config)),
-            Err(err) => {
-                emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
-                return Err(err);
-            }
-        }
+        let base = load_base_policy(&git, &config_path, &overrides)
+            .map_err(|e| tag(Reason::Configuration, e))?;
+        (base, Some(config))
     } else {
         (config, None)
     };
@@ -645,7 +683,8 @@ fn check(args: CheckArgs) -> Result<bool> {
         match &args.pr_body_file {
             Some(p) => Some(
                 std::fs::read_to_string(p)
-                    .with_context(|| format!("failed to read PR body file {}", p.display()))?,
+                    .with_context(|| format!("failed to read PR body file {}", p.display()))
+                    .map_err(|e| tag(Reason::Configuration, e))?,
             ),
             None => None,
         }
@@ -653,7 +692,8 @@ fn check(args: CheckArgs) -> Result<bool> {
         match &args.pr_body_file {
             Some(p) => Some(
                 std::fs::read_to_string(p)
-                    .with_context(|| format!("failed to read PR body file {}", p.display()))?,
+                    .with_context(|| format!("failed to read PR body file {}", p.display()))
+                    .map_err(|e| tag(Reason::Configuration, e))?,
             ),
             None => std::env::var("PR_BODY")
                 .ok()
@@ -662,17 +702,11 @@ fn check(args: CheckArgs) -> Result<bool> {
         }
     };
 
-    let commits = git.commits()?;
+    let commits = git.commits().map_err(|e| tag(Reason::Repository, e))?;
     // `merged-pr-body`: on a push event with no pull request body, the body of the merged
     // pull request each pushed commit arrived through is the review record that approved
     // its directives. A squash or rebase merge drops it from the commit message.
-    let merged = match merged_pull_bodies(&args, &config, &git, &commits, raw_pr_body.is_some()) {
-        Ok(m) => m,
-        Err(err) => {
-            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
-            return Err(err);
-        }
-    };
+    let merged = merged_pull_bodies(args, &config, &git, &commits, raw_pr_body.is_some())?;
     let (directives, mut directive_notes) = discipline::tokens::extract_directives_with_merged(
         raw_pr_body.as_deref(),
         &commits,
@@ -710,18 +744,14 @@ fn check(args: CheckArgs) -> Result<bool> {
     let (baseline_path_ref, loaded_baseline) = if !no_baseline {
         let baseline_path = git.root().join(&baseline_filename);
         if baseline_path.exists() {
-            let b = match discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path) {
-                Ok(b) => b,
-                Err(err) => {
-                    emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
-                    return Err(err);
-                }
-            };
+            let b = discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path)
+                .map_err(|e| tag(Reason::Baseline, e))?;
             (Some(baseline_filename), Some(b))
         } else if explicit_baseline.is_some() {
-            let err = anyhow::anyhow!("baseline file `{}` does not exist", baseline_path.display());
-            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
-            return Err(err);
+            return Err(tag(
+                Reason::Baseline,
+                anyhow::anyhow!("baseline file `{}` does not exist", baseline_path.display()),
+            ));
         } else {
             (None, None)
         }
@@ -746,13 +776,7 @@ fn check(args: CheckArgs) -> Result<bool> {
         bench_base_file: args.bench_base_file.clone(),
         bench_head_file: args.bench_head_file.clone(),
     };
-    let mut summary = match run_checks(&config, args.suite, &ctx) {
-        Ok(s) => s,
-        Err(err) => {
-            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
-            return Err(err);
-        }
-    };
+    let mut summary = run_checks(&config, args.suite, &ctx)?;
 
     // A push run reads no pull-request body. A finding whose remediation points at a
     // PR-body directive would send a maintainer to edit a body this run never reads;
@@ -807,19 +831,13 @@ fn check(args: CheckArgs) -> Result<bool> {
         }),
         _ => None,
     });
-    match discipline::override_policy::judge(
+    summary.policy_failures = discipline::override_policy::judge(
         &config.directives,
         summary.directive_overrides(),
         pull.as_ref(),
         &|| discipline::forge::detect_for(&git),
         &discipline::forge::HttpApi::from_env(),
-    ) {
-        Ok(failures) => summary.policy_failures = failures,
-        Err(err) => {
-            emit_fatal_reports(&args, is_gitlab, git.base_label(), &err);
-            return Err(err);
-        }
-    }
+    )?;
 
     let raw_fail_on_overrides = config.directives.fail_on_overrides;
     let actor = args
@@ -848,6 +866,7 @@ fn check(args: CheckArgs) -> Result<bool> {
     };
 
     let success = summary.is_success(args.fail_on_warnings, fail_on_overrides);
+    progress.reported = true;
     if !(args.quiet && success) {
         render_report(
             &summary,

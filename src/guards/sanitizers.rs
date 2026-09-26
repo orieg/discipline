@@ -83,11 +83,14 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
             // Fail-closed: a missing nightly channel or sanitizer support means
             // the run never happened; reporting it as a detected race would
             // invert the meaning of the result.
-            anyhow::bail!(
-                "sanitizer ({}) could not run: {fault}. Sanitizers need a nightly \
-                 toolchain (`cargo +nightly`) or the gate must be disabled.",
-                settings.sanitizer
-            );
+            return Err(crate::could_not_check::tag(
+                crate::could_not_check::Reason::ToolchainUnavailable,
+                anyhow::anyhow!(
+                    "sanitizer ({}) could not run: {fault}. Sanitizers need a nightly \
+                     toolchain (`cargo +nightly`) or the gate must be disabled.",
+                    settings.sanitizer
+                ),
+            ));
         }
         if let Some(ov) = ctx
             .find_override(GATE, ALLOW_SANITIZERS, "failure")

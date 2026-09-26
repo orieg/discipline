@@ -251,12 +251,16 @@ fn a_blocked_change_whose_pull_request_could_not_be_read_is_not_checked() {
     assert!(s["errors_by_gate"].as_object().unwrap().is_empty(), "{s}");
     let reasons = s["could_not_check_by_reason"].as_object().unwrap();
     assert_eq!(reasons.len(), 1, "{s}");
-    let (reason, changes) = reasons.iter().next().unwrap();
+    assert_eq!(reasons["forge"], serde_json::json!(["#2"]), "{s}");
+    let case = &s["cases_detail"][1];
+    assert_eq!(case["reason"], "forge", "{s}");
     assert!(
-        reason.contains("pull request could not be read"),
-        "{reason}"
+        case["detail"]
+            .as_str()
+            .unwrap()
+            .contains("pull request could not be read"),
+        "{s}"
     );
-    assert_eq!(changes, &serde_json::json!(["#2"]));
 }
 
 #[test]

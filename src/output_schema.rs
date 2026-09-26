@@ -10,16 +10,31 @@ use serde_json::{json, Value};
 
 const DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
 
+/// `schema_version` of the check report. Adding a field keeps it; renaming, removing or
+/// retyping one raises it.
+pub const REPORT_SCHEMA_VERSION: u32 = 1;
+
+/// `schema_version` of the replay summary, under the same rule.
+pub const REPLAY_SCHEMA_VERSION: u32 = 1;
+
+fn reasons() -> Vec<&'static str> {
+    crate::could_not_check::Reason::ALL
+        .iter()
+        .map(|r| r.as_str())
+        .collect()
+}
+
 /// Schema of `discipline check --format json` (and of `--json-out`).
 pub fn report_schema() -> Value {
     json!({
         "$schema": DRAFT,
         "title": "DisciplineReport",
-        "description": "The report `discipline check --format json` prints on stdout and `--json-out` writes. Exit 0 means no finding blocks, 1 that one does, 2 that the check could not run: then stdout carries no report, and `--json-out` gets this shape with a single `engine` outcome whose violation holds the error.",
+        "description": "The report `discipline check --format json` prints on stdout and `--json-out` writes. Exit 0 means no finding blocks, 1 that one does, 2 that the check could not run: then the report has no outcomes and `could_not_check` says why.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["base", "errors", "warnings", "notes", "overrides", "baselined", "outcomes", "planned_gates"],
+        "required": ["schema_version", "base", "errors", "warnings", "notes", "overrides", "baselined", "outcomes", "planned_gates"],
         "properties": {
+            "schema_version": { "const": REPORT_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
             "base": { "type": "string", "description": "The ref the change was measured against, as resolved (e.g. `origin/main (merge base 1a2b3c4d5e)`)" },
             "errors": { "type": "integer", "minimum": 0, "description": "Findings of severity `error` across all gates" },
             "warnings": { "type": "integer", "minimum": 0, "description": "Findings of severity `warning`" },
@@ -29,15 +44,26 @@ pub fn report_schema() -> Value {
             "outcomes": { "type": "array", "items": { "$ref": "#/$defs/GateOutcome" }, "description": "One entry per gate, in registry order" },
             "planned_gates": { "type": "array", "items": { "type": "string" }, "description": "Gate ids the roadmap plans but this binary does not ship" },
             "policy_failures": { "type": "array", "items": { "type": "string" }, "description": "Run-level refusals no single gate owns; any entry fails the run. Omitted when empty" },
-            "deprecations": { "type": "array", "items": { "type": "string" }, "description": "Deprecated configuration keys this run read, one note each; never fails the run. Omitted when empty" }
+            "deprecations": { "type": "array", "items": { "type": "string" }, "description": "Deprecated configuration keys this run read, one note each; never fails the run. Omitted when empty" },
+            "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" }
         },
         "$defs": {
+            "CouldNotCheck": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["reason", "gate", "detail"],
+                "properties": {
+                    "reason": { "enum": reasons(), "description": "What stopped the check. A new kind of failure may get a new reason in a minor release; a failure that has one keeps it" },
+                    "gate": { "type": ["string", "null"], "description": "The gate that could not run, when one did" },
+                    "detail": { "type": "string", "description": "The error, as printed on stderr" }
+                }
+            },
             "GateOutcome": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["gate", "suite", "enabled", "examined", "inline_exemptions", "baselined", "notes", "violations", "overrides"],
                 "properties": {
-                    "gate": { "type": "string", "description": "Stable kebab-case gate id (`engine` for a run that could not start)" },
+                    "gate": { "type": "string", "description": "Stable kebab-case gate id" },
                     "suite": { "type": "string", "description": "The suite the gate belongs to" },
                     "enabled": { "type": "boolean" },
                     "examined": { "type": "integer", "minimum": 0, "description": "Items the gate inspected" },
@@ -55,7 +81,7 @@ pub fn report_schema() -> Value {
                 "properties": {
                     "gate": { "type": "string" },
                     "code": { "type": "string", "pattern": "^[a-z0-9-]+/[a-z0-9-]+$", "description": "`gate/code`: the finding's stable identity, frozen from 1.0 (the registry in `src/findings.rs`)" },
-                    "fingerprint": { "type": "string", "pattern": "^([0-9a-f]{64})?$", "description": "The baseline fingerprint (version 2: sha256 of code, path and the source line or message), stable across line moves and title changes; empty for the `engine` finding of a run that could not complete" },
+                    "fingerprint": { "type": "string", "pattern": "^([0-9a-f]{64})?$", "description": "The baseline fingerprint (version 2: sha256 of code, path and the source line or message), stable across line moves and title changes" },
                     "severity": { "enum": ["error", "warning", "note"] },
                     "title": { "type": "string", "description": "Display text, free to change" },
                     "file": { "type": ["string", "null"] },
@@ -119,8 +145,9 @@ pub fn replay_schema() -> Value {
         "description": "The summary `discipline replay --json` prints: each replayed change's verdict under the configuration, and per-gate counts. Changes are labelled `#N` (pull request) or by a 10-character commit id.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["cases", "passed", "blocked", "could_not_check", "errors_by_gate", "refused_overrides_by_gate", "warnings_by_gate", "could_not_check_by_reason", "cases_detail"],
+        "required": ["schema_version", "cases", "passed", "blocked", "could_not_check", "errors_by_gate", "refused_overrides_by_gate", "warnings_by_gate", "could_not_check_by_reason", "cases_detail"],
         "properties": {
+            "schema_version": { "const": REPLAY_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
             "cases": { "type": "integer", "minimum": 0 },
             "passed": { "type": "integer", "minimum": 0 },
             "blocked": { "type": "integer", "minimum": 0 },
@@ -132,7 +159,7 @@ pub fn replay_schema() -> Value {
                 "type": "object",
                 "additionalProperties": { "type": "integer", "minimum": 0 }
             },
-            "could_not_check_by_reason": { "description": "The error a change stopped on -> the changes", "$ref": "#/$defs/ChangeLists" },
+            "could_not_check_by_reason": { "description": "The reason a change could not be checked (the report's `could_not_check.reason`) -> the changes", "$ref": "#/$defs/ChangeLists" },
             "cases_detail": { "type": "array", "items": { "$ref": "#/$defs/Case" }, "description": "Newest first" }
         },
         "$defs": {
@@ -151,6 +178,7 @@ pub fn replay_schema() -> Value {
                     "actor": { "type": ["string", "null"], "description": "The login the change was checked as: its merged pull request's author" },
                     "warning_gates": { "type": "array", "items": { "type": "string" } },
                     "directives_from": { "type": "string", "description": "`pull request body`, or why only the commit message was read" },
+                    "reason": { "enum": reasons(), "description": "Why the change could not be checked: the report's `could_not_check.reason`, or `forge` when its merged pull request could not be read. Omitted otherwise" },
                     "detail": { "type": "string", "description": "Why the change could not be checked. Omitted otherwise" }
                 }
             }

@@ -114,6 +114,8 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
 
     // Assemble summary
     let summary = CheckSummary {
+        schema_version: discipline::output_schema::REPORT_SCHEMA_VERSION,
+        could_not_check: None,
         base: "origin/main".to_string(),
         errors: 7,
         warnings: 0,

@@ -5,6 +5,7 @@ pub mod baseline;
 pub mod cli;
 pub mod comment;
 pub mod config;
+pub mod could_not_check;
 pub mod docs;
 pub mod doctor;
 pub mod explain;

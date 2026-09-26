@@ -81,10 +81,13 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
         if let Some(fault) = toolchain_unavailable(stdout, stderr) {
             // Fail-closed: the tool never ran, so this is "could not check"
             // (exit 2), never "undefined behavior detected" (exit 1).
-            anyhow::bail!(
-                "miri could not run: {fault}. Install the component \
-                 (`rustup +nightly component add miri`) or disable the `miri` gate."
-            );
+            return Err(crate::could_not_check::tag(
+                crate::could_not_check::Reason::ToolchainUnavailable,
+                anyhow::anyhow!(
+                    "miri could not run: {fault}. Install the component \
+                     (`rustup +nightly component add miri`) or disable the `miri` gate."
+                ),
+            ));
         }
         if let Some(ov) = ctx
             .find_override(GATE, ALLOW_MIRI, "failure")

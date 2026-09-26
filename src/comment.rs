@@ -341,6 +341,8 @@ mod tests {
             remediation: Some("allow-assertion-drop: adds <reason>".into()),
         });
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "main".into(),
             errors: 1,
             warnings: 0,

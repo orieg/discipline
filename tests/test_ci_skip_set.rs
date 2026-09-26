@@ -194,11 +194,20 @@ fn unreadable_context_fails_closed_with_exit_2() {
         "{}",
         bad_json.stderr
     );
+    assert_eq!(
+        bad_json.could_not_check(),
+        ("gate".to_string(), Some("ci-skip-set".to_string()))
+    );
     let missing = check(&repo, Some("does/not/exist.json"), "pull_request");
     assert_eq!(missing.code, 2, "{}\n{}", missing.stdout, missing.stderr);
     assert!(
         missing.stderr.contains("could not be read"),
         "{}",
         missing.stderr
+    );
+    // A context file that is not there is the run's input, not the gate's fault.
+    assert_eq!(
+        missing.could_not_check(),
+        ("configuration".to_string(), Some("ci-skip-set".to_string()))
     );
 }

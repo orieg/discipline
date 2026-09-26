@@ -11,10 +11,11 @@
 //! - Untrusted PR text guard: commands cannot be modified in PR diff without runner authorization
 
 use crate::config::{DisciplineConfig, GateSettings};
+use crate::could_not_check::{tag, Reason};
 use crate::guards::presets;
 use crate::guards::{Context, GateOutcome};
 use crate::tokens;
-use anyhow::{bail, Context as _, Result};
+use anyhow::{anyhow, bail, Context as _, Result};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
@@ -118,10 +119,16 @@ pub fn run_command_bounded(
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            bail!("tool `{program}` not found in PATH for command `{name}`");
+            return Err(tag(
+                Reason::ToolMissing,
+                anyhow!("tool `{program}` not found in PATH for command `{name}`"),
+            ));
         }
         Err(e) => {
-            bail!("failed to spawn tool `{program}` for command `{name}`: {e}");
+            return Err(tag(
+                Reason::ToolMissing,
+                anyhow!("failed to spawn tool `{program}` for command `{name}`: {e}"),
+            ));
         }
     };
 
@@ -169,7 +176,10 @@ pub fn run_command_bounded(
                     kill_child_group(&mut child);
                     let _ = stdout_handle.join();
                     let _ = stderr_handle.join();
-                    bail!("command `{name}` timed out after {timeout_secs}s");
+                    return Err(tag(
+                        Reason::ToolTimeout,
+                        anyhow!("command `{name}` timed out after {timeout_secs}s"),
+                    ));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }

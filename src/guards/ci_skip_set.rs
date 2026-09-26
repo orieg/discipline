@@ -1005,6 +1005,7 @@ fn load_context(raw: &str) -> Result<String> {
     }
     std::fs::read_to_string(t)
         .with_context(|| format!("{CONTEXT_ENV} names `{t}`, which could not be read"))
+        .map_err(|e| crate::could_not_check::tag(crate::could_not_check::Reason::Configuration, e))
 }
 
 /// The configured default, which only fits GitHub Actions.
@@ -1086,9 +1087,15 @@ fn evaluate_with(
     }
 
     let needs_json = load_context(raw)?;
-    let workflow_src = ctx.git.head_content(&workflow)?.with_context(|| {
-        format!("`[gates.ci-skip-set] workflow = \"{workflow}\"` is not a file at HEAD")
-    })?;
+    let workflow_src = ctx
+        .git
+        .head_content(&workflow)?
+        .with_context(|| {
+            format!("`[gates.ci-skip-set] workflow = \"{workflow}\"` is not a file at HEAD")
+        })
+        .map_err(|e| {
+            crate::could_not_check::tag(crate::could_not_check::Reason::Configuration, e)
+        })?;
     let change_job = Some(settings.change_job.as_str()).filter(|s| !s.is_empty());
     let spec = SkipSetSpec {
         change_job,

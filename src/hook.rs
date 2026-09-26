@@ -259,7 +259,8 @@ pub fn run(agent: Agent, base: Option<String>, stdin: &str) -> Result<HookOutput
             .and_then(|r| default_base(&r)),
     };
     let base = base.map(CheckSide::Base).unwrap_or(CheckSide::Default);
-    let (code, report, detail) = run_check(&dir, &base)?;
+    let run = run_check(&dir, &base)?;
+    let (code, report, detail) = (run.code, run.report, run.stderr);
     if agent == Agent::Agy {
         return Ok(agy_guarded(
             &dir,
@@ -345,11 +346,14 @@ pub enum CheckSide {
 /// `discipline.toml` does not switch its own gates off, and no directive is read (the
 /// only source left is a PR body, and none is passed), so a waiver in a commit message
 /// does not lift a finding here. CI, which reads the reviewed PR body, still can.
-pub fn run_check(dir: &Path, side: &CheckSide) -> Result<(i32, String, String)> {
+pub fn run_check(dir: &Path, side: &CheckSide) -> Result<CheckRun> {
     let exe = std::env::current_exe().context("cannot locate the discipline binary")?;
+    let tmp = crate::replay::TempDir::named("hook")?;
+    let json_out = tmp.0.join("report.json");
     let mut cmd = std::process::Command::new(exe);
     cmd.current_dir(dir)
-        .args(["check", "--format", "agent-prompt", "--quiet"])
+        .args(["check", "--format", "agent-prompt", "--quiet", "--json-out"])
+        .arg(&json_out)
         .args(["--policy-from", "base", "--directive-sources", "pr-body"])
         .env_remove("DISCIPLINE_POLICY_FROM")
         .env_remove("DISCIPLINE_DIRECTIVE_SOURCES")
@@ -367,11 +371,33 @@ pub fn run_check(dir: &Path, side: &CheckSide) -> Result<(i32, String, String)> 
         }
     }
     let out = cmd.output().context("cannot run discipline check")?;
-    Ok((
-        out.status.code().unwrap_or(2),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    ))
+    Ok(CheckRun {
+        code: out.status.code().unwrap_or(2),
+        report: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        json: std::fs::read_to_string(&json_out)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok()),
+    })
+}
+
+/// One check run by [`run_check`].
+#[derive(Debug, Clone, Default)]
+pub struct CheckRun {
+    /// 0 pass, 1 findings, 2 could not check.
+    pub code: i32,
+    /// The `agent-prompt` report.
+    pub report: String,
+    pub stderr: String,
+    /// The JSON report (`--json-out`), when the child wrote one.
+    pub json: Option<serde_json::Value>,
+}
+
+impl CheckRun {
+    /// `could_not_check` of the JSON report: the reason a run that exited 2 gives.
+    pub fn could_not_check(&self) -> Option<&serde_json::Value> {
+        self.json.as_ref().and_then(|j| j.get("could_not_check"))
+    }
 }
 
 /// The configuration file an agent reads, relative to the repository root, and the

@@ -230,6 +230,8 @@ mod tests {
     #[test]
     fn test_format_gitlab_empty() {
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "main".to_string(),
             errors: 0,
             warnings: 0,
@@ -262,6 +264,8 @@ mod tests {
         });
 
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "origin/main".to_string(),
             errors: 1,
             warnings: 0,

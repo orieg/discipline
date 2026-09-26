@@ -198,6 +198,9 @@ impl GateOutcome {
 
 #[derive(Debug, Serialize)]
 pub struct CheckSummary {
+    /// The report schema's version ([`crate::output_schema::REPORT_SCHEMA_VERSION`]). A field
+    /// is added without changing it; one renamed, removed or retyped changes it.
+    pub schema_version: u32,
     pub base: String,
     pub errors: usize,
     pub warnings: usize,
@@ -215,6 +218,9 @@ pub struct CheckSummary {
     /// Deprecated configuration keys this run read, one note each. They never fail the run.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deprecations: Vec<String>,
+    /// Why the run could not check (exit 2): only then present, and `outcomes` is empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub could_not_check: Option<crate::could_not_check::CouldNotCheck>,
 }
 
 impl CheckSummary {
@@ -511,7 +517,8 @@ pub fn run_checks(
             }
             other => bail!("gate `{other}` is marked available but has no implementation"),
         }
-        .with_context(|| format!("gate `{}` could not run", gate.id))?;
+        .with_context(|| format!("gate `{}` could not run", gate.id))
+        .map_err(|e| crate::could_not_check::tag_gate(gate.id, e))?;
         outcomes.push(outcome);
     }
 
@@ -675,6 +682,8 @@ pub fn run_checks(
     let total_overrides = outcomes.iter().map(|o| o.overrides.len()).sum();
     let total_baselined = outcomes.iter().map(|o| o.baselined).sum();
     Ok(CheckSummary {
+        schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+        could_not_check: None,
         base: ctx.git.base_label().to_string(),
         errors: count(Severity::Error),
         warnings: count(Severity::Warning),

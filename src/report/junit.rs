@@ -194,6 +194,8 @@ mod tests {
     #[test]
     fn formats_clean_summary_as_valid_junit_xml() {
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "origin/main".to_string(),
             errors: 0,
             warnings: 0,
@@ -242,6 +244,8 @@ mod tests {
     #[test]
     fn formats_failures_with_escaped_xml() {
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "origin/main".to_string(),
             errors: 1,
             warnings: 0,
@@ -291,6 +295,8 @@ mod tests {
     #[test]
     fn test_junit_warning_not_tagged_as_failure_unless_fail_on_warnings() {
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "origin/main".to_string(),
             errors: 0,
             warnings: 1,

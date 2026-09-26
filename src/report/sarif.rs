@@ -173,6 +173,8 @@ mod tests {
     #[test]
     fn formats_sarif_v2_schema_compliant() {
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "origin/main".to_string(),
             errors: 1,
             warnings: 0,
@@ -226,6 +228,8 @@ mod tests {
     #[test]
     fn sanitizes_synthetic_pr_body_uri() {
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "origin/main".to_string(),
             errors: 1,
             warnings: 0,

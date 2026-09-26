@@ -44,6 +44,21 @@ impl Run {
             .unwrap_or_else(|e| panic!("not JSON ({e}):\n{}\n{}", self.stdout, self.stderr))
     }
 
+    /// `(reason, gate)` of a run that could not check (exit 2, `--format json`).
+    pub fn could_not_check(&self) -> (String, Option<String>) {
+        let c = &self.json()["could_not_check"];
+        assert!(
+            c.is_object(),
+            "no could_not_check in the report:\n{}\n{}",
+            self.stdout,
+            self.stderr
+        );
+        (
+            c["reason"].as_str().unwrap().to_string(),
+            c["gate"].as_str().map(str::to_string),
+        )
+    }
+
     /// Titles of the violations a gate reported.
     pub fn titles(&self, gate: &str) -> Vec<String> {
         self.outcome(gate)["violations"]

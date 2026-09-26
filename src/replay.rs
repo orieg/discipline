@@ -14,6 +14,7 @@
 //!
 //! The throwaway repository is removed when the replay ends, whatever the outcome.
 
+use crate::could_not_check::Reason;
 use anyhow::{anyhow, bail, Context, Result};
 use git2::{Commit, Oid, Repository};
 use std::collections::BTreeMap;
@@ -41,6 +42,10 @@ pub struct Case {
     pub warning_gates: Vec<String>,
     /// Where the directives came from: `pull request body`, or why they did not.
     pub directives_from: String,
+    /// Why it could not be checked: the child report's `could_not_check.reason`, or
+    /// `forge` when its merged pull request could not be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Reason>,
     /// The child's stderr when it could not check.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub detail: String,
@@ -48,6 +53,8 @@ pub struct Case {
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct Summary {
+    /// [`crate::output_schema::REPLAY_SCHEMA_VERSION`].
+    pub schema_version: u32,
     pub cases: usize,
     pub passed: usize,
     pub blocked: usize,
@@ -58,7 +65,8 @@ pub struct Summary {
     pub refused_overrides_by_gate: BTreeMap<String, Vec<String>>,
     /// Gate id → the number of changes with a warning from it.
     pub warnings_by_gate: BTreeMap<String, usize>,
-    /// Why a change could not be checked → the changes (`#N`, else the short sha).
+    /// The reason code a change could not be checked for → the changes (`#N`, else the
+    /// short sha).
     pub could_not_check_by_reason: BTreeMap<String, Vec<String>>,
     pub cases_detail: Vec<Case>,
 }
@@ -75,6 +83,7 @@ impl Case {
 impl Summary {
     pub fn from_cases(cases: Vec<Case>) -> Self {
         let mut s = Summary {
+            schema_version: crate::output_schema::REPLAY_SCHEMA_VERSION,
             cases: cases.len(),
             ..Default::default()
         };
@@ -85,7 +94,7 @@ impl Summary {
                 _ => {
                     s.could_not_check += 1;
                     s.could_not_check_by_reason
-                        .entry(reason(&c.detail))
+                        .entry(c.reason.unwrap_or(Reason::Internal).as_str().to_string())
                         .or_default()
                         .push(c.label());
                 }
@@ -168,18 +177,25 @@ impl Summary {
         }
         for (r, changes) in &self.could_not_check_by_reason {
             out.push_str(&format!(
-                "  could not check {} change(s): {r}\n    {}\n",
-                changes.len(),
-                changes.join(" ")
+                "  could not check {} change(s) ({r})\n",
+                changes.len()
             ));
+            for c in self
+                .cases_detail
+                .iter()
+                .filter(|c| c.verdict == "could_not_check")
+                .filter(|c| c.reason.unwrap_or(Reason::Internal).as_str() == r)
+            {
+                out.push_str(&format!("    {:<9} {}\n", c.label(), last_line(&c.detail)));
+            }
         }
         out
     }
 }
 
-/// The reason a case could not be checked: the last line of its detail, without the
-/// `discipline check: error: ` prefix, so identical failures group together.
-fn reason(detail: &str) -> String {
+/// The error a case stopped on: the last line of its detail, without the
+/// `discipline check: error: ` prefix.
+fn last_line(detail: &str) -> String {
     let last = detail
         .lines()
         .rev()
@@ -191,6 +207,19 @@ fn reason(detail: &str) -> String {
     } else {
         r.to_string()
     }
+}
+
+/// The reason a `check --format json` report that could not check gives. A report that
+/// names none (it did not start) is [`Reason::Internal`].
+pub fn read_reason(json: &str) -> Reason {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|v| {
+            v["could_not_check"]["reason"]
+                .as_str()
+                .and_then(Reason::parse)
+        })
+        .unwrap_or(Reason::Internal)
 }
 
 /// The verdict and gates of one `check --format json` run.
@@ -265,13 +294,18 @@ pub fn pr_from_subject(subject: &str) -> Option<u64> {
 }
 
 /// A temp directory removed on drop.
-struct TempDir(PathBuf);
+pub(crate) struct TempDir(pub(crate) PathBuf);
 
 impl TempDir {
     fn new() -> Result<Self> {
+        Self::named("replay")
+    }
+
+    /// `discipline-<what>-<pid>-<n>` under the system temp directory.
+    pub(crate) fn named(what: &str) -> Result<Self> {
         let base = std::env::temp_dir();
         for i in 0..100u32 {
-            let p = base.join(format!("discipline-replay-{}-{i}", std::process::id()));
+            let p = base.join(format!("discipline-{what}-{}-{i}", std::process::id()));
             if std::fs::create_dir(&p).is_ok() {
                 return Ok(TempDir(p));
             }
@@ -286,10 +320,7 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         if let Err(e) = std::fs::remove_dir_all(&self.0) {
-            eprintln!(
-                "discipline replay: could not remove {}: {e}",
-                self.0.display()
-            );
+            eprintln!("discipline: could not remove {}: {e}", self.0.display());
         }
     }
 }
@@ -505,10 +536,13 @@ pub fn run(opts: &Options) -> Result<Summary> {
         let code = out.status.code().unwrap_or(2);
         let (mut verdict, blocking, warning) =
             read_verdict(code, &String::from_utf8_lossy(&out.stdout));
-        let mut detail = if verdict == "could_not_check" {
-            String::from_utf8_lossy(&out.stderr).trim().to_string()
+        let (mut detail, mut reason) = if verdict == "could_not_check" {
+            (
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                Some(read_reason(&String::from_utf8_lossy(&out.stdout))),
+            )
         } else {
-            String::new()
+            (String::new(), None)
         };
         let refused = if verdict == "blocked" {
             refused_overrides(
@@ -523,6 +557,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
         // body lifts these findings: the change's verdict is unknown, not blocked.
         if let (Some(e), "blocked") = (&lookup_error, verdict) {
             verdict = "could_not_check";
+            reason = Some(Reason::Forge);
             detail = format!(
                 "its merged pull request could not be read, and its body may carry directives: {e} (a forge token in DISCIPLINE_FORGE_TOKEN raises the API rate limit)"
             );
@@ -544,6 +579,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
             actor: author,
             warning_gates: warning,
             directives_from,
+            reason,
             detail,
         });
     }
@@ -598,6 +634,18 @@ mod tests {
     }
 
     #[test]
+    fn the_reason_is_read_from_the_child_report() {
+        let report = r#"{"schema_version":1,"outcomes":[],"could_not_check":{"reason":"tool-missing","gate":"miri","detail":"x"}}"#;
+        assert_eq!(read_reason(report), Reason::ToolMissing);
+        // No report (the child did not start) or a reason this binary does not know.
+        assert_eq!(read_reason(""), Reason::Internal);
+        assert_eq!(
+            read_reason(r#"{"could_not_check":{"reason":"from-the-future"}}"#),
+            Reason::Internal
+        );
+    }
+
+    #[test]
     fn the_summary_counts_verdicts_and_names_blocked_changes_per_gate() {
         let case = |pr, verdict, e: &[&str], w: &[&str]| Case {
             sha: "0123456789abcdef".into(),
@@ -609,6 +657,7 @@ mod tests {
             actor: None,
             warning_gates: w.iter().map(|s| s.to_string()).collect(),
             directives_from: String::new(),
+            reason: None,
             detail: String::new(),
         };
         let s = Summary::from_cases(vec![
@@ -623,20 +672,27 @@ mod tests {
         );
         assert_eq!(s.errors_by_gate["pii"], vec!["#1", "0123456789"]);
         assert_eq!(s.warnings_by_gate["pr-checklist"], 2);
-        assert_eq!(s.could_not_check_by_reason["no reason given"], vec!["#4"]);
+        // A child that printed no reason could not start: `internal`.
+        assert_eq!(s.could_not_check_by_reason["internal"], vec!["#4"]);
         let lockstep = |pr| Case {
             detail: "replay noise\ndiscipline check: error: gate version-lockstep could not run\n"
                 .into(),
+            reason: Some(Reason::Gate),
             ..case(Some(pr), "could_not_check", &[], &[])
         };
-        let grouped = Summary::from_cases(vec![lockstep(5), lockstep(6)]);
+        let tool = Case {
+            reason: Some(Reason::ToolMissing),
+            ..case(Some(7), "could_not_check", &[], &[])
+        };
+        let grouped = Summary::from_cases(vec![lockstep(5), lockstep(6), tool]);
+        assert_eq!(grouped.could_not_check_by_reason["gate"], vec!["#5", "#6"]);
         assert_eq!(
-            grouped.could_not_check_by_reason["gate version-lockstep could not run"],
-            vec!["#5", "#6"]
+            grouped.could_not_check_by_reason["tool-missing"],
+            vec!["#7"]
         );
         assert!(grouped.render().contains(
-            "could not check 2 change(s): gate version-lockstep could not run\n    #5 #6"
-        ));
+            "could not check 2 change(s) (gate)\n    #5        gate version-lockstep could not run\n    #6 "
+        ), "{}", grouped.render());
         assert!(s
             .render()
             .contains("4 changes: 1 passed, 2 blocked, 1 could not be checked"));

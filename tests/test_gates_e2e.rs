@@ -3,7 +3,7 @@
 //! the released interface: the binary, a real git repository, JSON output.
 
 mod common;
-use common::{FakeForge, Repo, GOOD_LIB, GOOD_TEST};
+use common::{FakeForge, Repo, Run, GOOD_LIB, GOOD_TEST};
 
 #[test]
 fn clean_change_passes_and_reports_what_it_examined() {
@@ -3739,6 +3739,7 @@ fn a_push_run_reads_the_merged_pull_requests_body() {
         "{}",
         refused.stderr
     );
+    assert_eq!(refused.could_not_check(), ("forge".to_string(), None));
 
     // Off the network (the harness sets DISCIPLINE_NO_NETWORK; only loopback is allowed):
     // a non-loopback forge is a note, never a request.
@@ -7115,6 +7116,10 @@ command = "non_existent_binary_xyz_12345"
         "missing binary must trigger exit code 2 (could not check)"
     );
     assert!(run_missing.stderr.contains("not found in PATH"));
+    assert_eq!(
+        run_missing.could_not_check(),
+        ("tool-missing".to_string(), Some("command".to_string()))
+    );
 
     // 2. Timeout triggers exit code 2
     repo.git(&["checkout", "-q", "main"]);
@@ -7138,6 +7143,64 @@ timeout_seconds = 1
         "timeout must trigger exit code 2 (could not check)"
     );
     assert!(run_timeout.stderr.contains("timed out after 1s"));
+    assert_eq!(
+        run_timeout.could_not_check(),
+        ("tool-timeout".to_string(), Some("command".to_string()))
+    );
+}
+
+/// Exit 2 names the stage that stopped the run in `could_not_check.reason`, the same
+/// report on stdout and in `--json-out`. JUnit and SARIF, which have no such field, keep
+/// one `engine` finding so a dashboard still shows the run as failed.
+#[test]
+fn exit_2_names_the_stage_that_stopped_the_run() {
+    let reason = |run: &Run| {
+        assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+        assert_eq!(run.json()["outcomes"], serde_json::json!([]));
+        run.could_not_check()
+    };
+    let cfg = "[meta]\nversion = 1\nname = \"t\"\n";
+
+    // Not a repository.
+    let dir = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+        .args(["check", "--format", "json", "--base", "main"])
+        .current_dir(dir.path())
+        .env("DISCIPLINE_NO_NETWORK", "1")
+        .output()
+        .unwrap();
+    let outside = Run {
+        code: out.status.code().unwrap(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    };
+    assert_eq!(reason(&outside), ("repository".to_string(), None));
+
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("discipline.toml", cfg);
+    repo.commit("chore: config");
+    // A base that does not resolve.
+    let no_base = repo.run(&["check", "--format", "json", "--base", "no-such-ref"], &[]);
+    assert_eq!(reason(&no_base), ("repository".to_string(), None));
+    // A named baseline that is not there.
+    let no_baseline = repo.check(&["--baseline-file", "missing.baseline.toml"]);
+    assert_eq!(reason(&no_baseline), ("baseline".to_string(), None));
+    // A configuration that does not parse; JUnit and SARIF still carry the `engine` finding.
+    repo.write("discipline.toml", "[gates.no-such-gate]\nenabled = true\n");
+    let junit = repo.file("junit.xml");
+    let sarif = repo.file("out.sarif");
+    let bad = repo.check(&[
+        "--report-junit",
+        junit.to_str().unwrap(),
+        "--report-sarif",
+        sarif.to_str().unwrap(),
+    ]);
+    assert_eq!(reason(&bad), ("configuration".to_string(), None));
+    assert!(std::fs::read_to_string(&junit).unwrap().contains("engine"));
+    assert!(std::fs::read_to_string(&sarif)
+        .unwrap()
+        .contains("engine/could-not-run"));
 }
 
 #[test]
@@ -10377,11 +10440,19 @@ enabled = true
     //    Reporting a missing component as detected UB is the defect this pins.
     let run_bad = repo.check(&[]);
     match run_bad.code {
-        2 => assert!(
-            run_bad.stderr.contains("miri could not run"),
-            "exit 2 must name the environment fault, got: {}",
-            run_bad.stderr
-        ),
+        2 => {
+            assert!(
+                run_bad.stderr.contains("miri could not run"),
+                "exit 2 must name the environment fault, got: {}",
+                run_bad.stderr
+            );
+            let (reason, gate) = run_bad.could_not_check();
+            assert!(
+                reason == "toolchain-unavailable" || reason == "tool-missing",
+                "{reason}"
+            );
+            assert_eq!(gate.as_deref(), Some("miri"));
+        }
         1 => assert!(
             !run_bad.titles("miri").is_empty(),
             "exit 1 must carry a miri finding"
@@ -10420,6 +10491,10 @@ enabled = true
         no_tool.stderr.contains("miri could not run"),
         "{}",
         no_tool.stderr
+    );
+    assert_eq!(
+        no_tool.could_not_check(),
+        ("tool-missing".to_string(), Some("miri".to_string()))
     );
 }
 
@@ -10981,8 +11056,14 @@ fn test_check_fatal_error_emits_configured_reports() {
     );
     let report_content = std::fs::read_to_string(&report_path).unwrap();
     let report_json: serde_json::Value = serde_json::from_str(&report_content).unwrap();
-    assert_eq!(report_json["errors"], 1);
-    assert_eq!(report_json["outcomes"][0]["gate"], "engine");
+    // The JSON report has no outcomes and says why; the formats above, which have no
+    // such field, keep the `engine` finding.
+    assert_eq!(report_json["errors"], 0);
+    assert_eq!(report_json["outcomes"], serde_json::json!([]));
+    assert!(
+        report_json["could_not_check"]["reason"].is_string(),
+        "{report_content}"
+    );
 }
 
 #[test]

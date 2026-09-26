@@ -646,12 +646,15 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
     }
 
     if !undecidable.is_empty() {
-        anyhow::bail!(
-            "provenance-tags: could not decide the state of issues cited by pending statements \
-             (require_open_pending_issues reads the forge's API over HTTPS, with a token for private \
-             repositories; see docs/GATES.md#forge-access): {}",
-            undecidable.join(" | ")
-        );
+        return Err(crate::could_not_check::tag(
+            crate::could_not_check::Reason::Forge,
+            anyhow::anyhow!(
+                "provenance-tags: could not decide the state of issues cited by pending statements \
+                 (require_open_pending_issues reads the forge's API over HTTPS, with a token for private \
+                 repositories; see docs/GATES.md#forge-access): {}",
+                undecidable.join(" | ")
+            ),
+        ));
     }
 
     if let Some((registry_path, figures)) = &registry {

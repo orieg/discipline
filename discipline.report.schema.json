@@ -1,5 +1,41 @@
 {
   "$defs": {
+    "CouldNotCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "description": "The error, as printed on stderr",
+          "type": "string"
+        },
+        "gate": {
+          "description": "The gate that could not run, when one did",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "What stopped the check. A new kind of failure may get a new reason in a minor release; a failure that has one keeps it",
+          "enum": [
+            "configuration",
+            "baseline",
+            "repository",
+            "tool-missing",
+            "tool-timeout",
+            "toolchain-unavailable",
+            "forge",
+            "gate",
+            "internal"
+          ]
+        }
+      },
+      "required": [
+        "reason",
+        "gate",
+        "detail"
+      ],
+      "type": "object"
+    },
     "GateOutcome": {
       "additionalProperties": false,
       "properties": {
@@ -16,7 +52,7 @@
           "type": "integer"
         },
         "gate": {
-          "description": "Stable kebab-case gate id (`engine` for a run that could not start)",
+          "description": "Stable kebab-case gate id",
           "type": "string"
         },
         "inline_exemptions": {
@@ -190,7 +226,7 @@
           ]
         },
         "fingerprint": {
-          "description": "The baseline fingerprint (version 2: sha256 of code, path and the source line or message), stable across line moves and title changes; empty for the `engine` finding of a run that could not complete",
+          "description": "The baseline fingerprint (version 2: sha256 of code, path and the source line or message), stable across line moves and title changes",
           "pattern": "^([0-9a-f]{64})?$",
           "type": "string"
         },
@@ -241,7 +277,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The report `discipline check --format json` prints on stdout and `--json-out` writes. Exit 0 means no finding blocks, 1 that one does, 2 that the check could not run: then stdout carries no report, and `--json-out` gets this shape with a single `engine` outcome whose violation holds the error.",
+  "description": "The report `discipline check --format json` prints on stdout and `--json-out` writes. Exit 0 means no finding blocks, 1 that one does, 2 that the check could not run: then the report has no outcomes and `could_not_check` says why.",
   "properties": {
     "base": {
       "description": "The ref the change was measured against, as resolved (e.g. `origin/main (merge base 1a2b3c4d5e)`)",
@@ -251,6 +287,10 @@
       "description": "Findings suppressed by the baseline file",
       "minimum": 0,
       "type": "integer"
+    },
+    "could_not_check": {
+      "$ref": "#/$defs/CouldNotCheck",
+      "description": "Why the check could not run (exit 2). Omitted otherwise"
     },
     "deprecations": {
       "description": "Deprecated configuration keys this run read, one note each; never fails the run. Omitted when empty",
@@ -295,6 +335,10 @@
       },
       "type": "array"
     },
+    "schema_version": {
+      "const": 1,
+      "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it"
+    },
     "warnings": {
       "description": "Findings of severity `warning`",
       "minimum": 0,
@@ -302,6 +346,7 @@
     }
   },
   "required": [
+    "schema_version",
     "base",
     "errors",
     "warnings",

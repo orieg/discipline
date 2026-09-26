@@ -5,8 +5,9 @@
 //! and accepting them all: a budget, and an approval read from the forge.
 
 use crate::config::DirectivesConfig;
+use crate::could_not_check::{tag, Reason};
 use crate::forge::{self, Forge, ForgeApi};
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 /// The pull request a run is checking, as the forge's event payload describes it.
@@ -53,17 +54,29 @@ pub fn judge(
     }
     if cfg.require_approval {
         if cfg.allowed_override_actors.is_empty() {
-            bail!("`directives.require_approval` is set but `allowed_override_actors` names no reviewer");
+            return Err(tag(
+                Reason::Configuration,
+                anyhow!("`directives.require_approval` is set but `allowed_override_actors` names no reviewer"),
+            ));
         }
         let pull = pull.ok_or_else(|| {
-            anyhow!(
-                "`directives.require_approval` needs a pull-request event payload \
-                 (GITHUB_EVENT_PATH or the Gitea / Forgejo equivalent); none was found"
+            tag(
+                Reason::Configuration,
+                anyhow!(
+                    "`directives.require_approval` needs a pull-request event payload \
+                     (GITHUB_EVENT_PATH or the Gitea / Forgejo equivalent); none was found"
+                ),
             )
         })?;
-        let forge = forge().map_err(|e| anyhow!("cannot identify the forge: {e}"))?;
-        let approvers = forge::pull_approvers(api, &forge, pull.number, &pull.head_sha)
-            .map_err(|e| anyhow!("cannot read reviews of pull request #{}: {e}", pull.number))?;
+        let forge =
+            forge().map_err(|e| tag(Reason::Forge, anyhow!("cannot identify the forge: {e}")))?;
+        let approvers =
+            forge::pull_approvers(api, &forge, pull.number, &pull.head_sha).map_err(|e| {
+                tag(
+                    Reason::Forge,
+                    anyhow!("cannot read reviews of pull request #{}: {e}", pull.number),
+                )
+            })?;
         let approved = approvers.iter().any(|login| {
             !login.eq_ignore_ascii_case(&pull.author)
                 && cfg
@@ -157,19 +170,45 @@ mod tests {
             ..Default::default()
         };
         let p = pull();
+        let reason = |r: Result<Vec<String>>| crate::could_not_check::classify(&r.unwrap_err()).0;
+        use crate::could_not_check::Reason;
         // No pull-request payload.
-        assert!(judge(&cfg, 1, None, &forge, &api(approved_by("lead"))).is_err());
+        assert_eq!(
+            reason(judge(&cfg, 1, None, &forge, &api(approved_by("lead")))),
+            Reason::Configuration
+        );
         // Forge cannot be reached.
-        assert!(judge(&cfg, 1, Some(&p), &forge, &CannedApi::default()).is_err());
+        assert_eq!(
+            reason(judge(&cfg, 1, Some(&p), &forge, &CannedApi::default())),
+            Reason::Forge
+        );
         // Forge cannot be identified.
         let unknown = || Err("no remote".to_string());
-        assert!(judge(&cfg, 1, Some(&p), &unknown, &api(approved_by("lead"))).is_err());
+        assert_eq!(
+            reason(judge(
+                &cfg,
+                1,
+                Some(&p),
+                &unknown,
+                &api(approved_by("lead"))
+            )),
+            Reason::Forge
+        );
         // Nobody could ever approve.
         let empty = DirectivesConfig {
             require_approval: true,
             ..Default::default()
         };
-        assert!(judge(&empty, 1, Some(&p), &forge, &api(approved_by("lead"))).is_err());
+        assert_eq!(
+            reason(judge(
+                &empty,
+                1,
+                Some(&p),
+                &forge,
+                &api(approved_by("lead"))
+            )),
+            Reason::Configuration
+        );
         // Without overrides there is nothing to approve and nothing to look up.
         assert!(judge(&cfg, 0, None, &unknown, &CannedApi::default())
             .unwrap()

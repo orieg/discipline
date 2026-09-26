@@ -551,8 +551,12 @@ const CASES: &[Case] = &[
         || {
             struct NoChild;
             impl crate::mcp::Runner for NoChild {
-                fn check(&self, _: &crate::hook::CheckSide) -> Result<(i32, String, String)> {
-                    Ok((2, String::new(), "not run in self-test".into()))
+                fn check(&self, _: &crate::hook::CheckSide) -> Result<crate::hook::CheckRun> {
+                    Ok(crate::hook::CheckRun {
+                        code: 2,
+                        stderr: "not run in self-test".into(),
+                        ..Default::default()
+                    })
                 }
                 fn gates(&self) -> Result<String> {
                     Ok(String::new())
@@ -2112,6 +2116,8 @@ command = "cargo test"
             });
 
             let summary = CheckSummary {
+                schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+                could_not_check: None,
                 base: "main".into(),
                 errors: 1,
                 warnings: 0,

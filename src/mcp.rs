@@ -23,8 +23,8 @@ pub const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05
 
 /// The child processes a tool call needs; swapped for a fake in unit tests.
 pub trait Runner {
-    /// `(exit code, agent-prompt report, stderr)` of a check.
-    fn check(&self, side: &CheckSide) -> Result<(i32, String, String)>;
+    /// A check of the change.
+    fn check(&self, side: &CheckSide) -> Result<crate::hook::CheckRun>;
     /// The `gates` table.
     fn gates(&self) -> Result<String>;
 }
@@ -33,7 +33,7 @@ pub trait Runner {
 pub struct ChildRunner;
 
 impl Runner for ChildRunner {
-    fn check(&self, side: &CheckSide) -> Result<(i32, String, String)> {
+    fn check(&self, side: &CheckSide) -> Result<crate::hook::CheckRun> {
         let side = match side {
             CheckSide::Default => crate::gitctx::discover_repository(".")
                 .ok()
@@ -140,29 +140,48 @@ fn call_tool(runner: &dyn Runner, params: &Value) -> Result<Value, (i64, String)
             // No argument chooses what is compared: an agent that could name `HEAD` as the
             // base would judge its committed change by its own configuration.
             Ok(match runner.check(&CheckSide::Default) {
-                Ok((0, report, _)) => {
-                    let text = if report.trim().is_empty() {
+                Ok(run) if run.code == 0 => {
+                    let text = if run.report.trim().is_empty() {
                         "No discipline findings in this change.".to_string()
                     } else {
-                        report
+                        run.report
                     };
                     text_result(text, false, Some(json!({ "status": "pass" })))
                 }
-                Ok((1, report, _)) => {
-                    text_result(report, false, Some(json!({ "status": "findings" })))
+                Ok(run) if run.code == 1 => {
+                    text_result(run.report, false, Some(json!({ "status": "findings" })))
                 }
-                Ok((_, _, detail)) => text_result(
-                    format!(
-                        "discipline could not check this change, so it is not known to be safe:\n{}",
-                        detail.trim()
-                    ),
-                    true,
-                    Some(json!({ "status": "could_not_check" })),
-                ),
+                Ok(run) => {
+                    // The reason is the report's `could_not_check.reason`; a child that
+                    // wrote no report did not start.
+                    let reason = run
+                        .could_not_check()
+                        .and_then(|c| c.get("reason"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(crate::could_not_check::Reason::Internal.as_str())
+                        .to_string();
+                    let gate = run
+                        .could_not_check()
+                        .and_then(|c| c.get("gate"))
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    text_result(
+                        format!(
+                            "discipline could not check this change, so it is not known to be safe:\n{}",
+                            run.stderr.trim()
+                        ),
+                        true,
+                        Some(json!({ "status": "could_not_check", "reason": reason, "gate": gate })),
+                    )
+                }
                 Err(e) => text_result(
                     format!("discipline could not check this change: {e:#}"),
                     true,
-                    Some(json!({ "status": "could_not_check" })),
+                    Some(json!({
+                        "status": "could_not_check",
+                        "reason": crate::could_not_check::Reason::Internal.as_str(),
+                        "gate": null
+                    })),
                 ),
             })
         }
@@ -240,12 +259,15 @@ mod tests {
 
     struct Fake(i32, &'static str);
     impl Runner for Fake {
-        fn check(&self, _: &CheckSide) -> Result<(i32, String, String)> {
-            Ok((
-                self.0,
-                self.1.to_string(),
-                "config does not parse".to_string(),
-            ))
+        fn check(&self, _: &CheckSide) -> Result<crate::hook::CheckRun> {
+            Ok(crate::hook::CheckRun {
+                code: self.0,
+                report: self.1.to_string(),
+                stderr: "config does not parse".to_string(),
+                json: (self.0 == 2).then(|| {
+                    json!({ "could_not_check": { "reason": "configuration", "gate": null, "detail": "config does not parse" } })
+                }),
+            })
         }
         fn gates(&self) -> Result<String> {
             Ok("GATE SUITE\nassertion-reduction agent-guard\n".to_string())
@@ -313,6 +335,10 @@ mod tests {
         assert_eq!(
             broken["result"]["structuredContent"]["status"],
             "could_not_check"
+        );
+        assert_eq!(
+            broken["result"]["structuredContent"]["reason"],
+            "configuration"
         );
         assert!(broken["result"]["content"][0]["text"]
             .as_str()

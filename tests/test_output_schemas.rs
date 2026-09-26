@@ -18,6 +18,10 @@ use serde_json::Value;
 const REPORT_FIELDS: &[&str] = &[
     "base: string",
     "baselined: integer",
+    "could_not_check?: object",
+    "could_not_check.detail: string",
+    "could_not_check.gate: string|null",
+    "could_not_check.reason: enum(configuration|baseline|repository|tool-missing|tool-timeout|toolchain-unavailable|forge|gate|internal)",
     "deprecations?: array",
     "deprecations[]: string",
     "errors: integer",
@@ -69,6 +73,7 @@ const REPORT_FIELDS: &[&str] = &[
     "planned_gates[]: string",
     "policy_failures?: array",
     "policy_failures[]: string",
+    "schema_version: const(1)",
     "warnings: integer",
 ];
 
@@ -83,6 +88,7 @@ const REPLAY_FIELDS: &[&str] = &[
     "cases_detail[].detail?: string",
     "cases_detail[].directives_from: string",
     "cases_detail[].pr: integer|null",
+    "cases_detail[].reason?: enum(configuration|baseline|repository|tool-missing|tool-timeout|toolchain-unavailable|forge|gate|internal)",
     "cases_detail[].refused_overrides: array",
     "cases_detail[].refused_overrides[]: string",
     "cases_detail[].sha: string",
@@ -101,6 +107,7 @@ const REPLAY_FIELDS: &[&str] = &[
     "refused_overrides_by_gate: object",
     "refused_overrides_by_gate{*}: array",
     "refused_overrides_by_gate{*}[]: string",
+    "schema_version: const(1)",
     "warnings_by_gate: object",
     "warnings_by_gate{*}: integer",
 ];
@@ -126,7 +133,10 @@ fn type_of(node: &Value) -> String {
         return format!("enum({})", vals.join("|"));
     }
     if let Some(c) = node.get("const") {
-        return format!("const({})", c.as_str().unwrap());
+        return match c {
+            Value::String(s) => format!("const({s})"),
+            other => format!("const({other})"),
+        };
     }
     if node.get("oneOf").is_some() {
         return "oneOf".into();
@@ -349,7 +359,7 @@ fn check_output_conforms_to_the_report_schema() {
         &serde_json::from_str(&blocked.stdout).unwrap(),
     );
 
-    // Exit 2: `--json-out` gets the report with one `engine` outcome.
+    // Exit 2: stdout and `--json-out` get the same report, with no outcomes and the reason.
     repo.write(
         "discipline.toml",
         "[meta]\nversion = 1\nname = \"t\"\n[gates.no-such-gate]\nenabled = true\n",
@@ -369,7 +379,26 @@ fn check_output_conforms_to_the_report_schema() {
     );
     assert_eq!(fatal.code, 2, "{}", fatal.stderr);
     let report: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
-    assert_eq!(report["outcomes"][0]["gate"], "engine", "{report:#}");
+    assert_eq!(report["outcomes"], serde_json::json!([]), "{report:#}");
+    assert_eq!(
+        report["could_not_check"]["reason"], "configuration",
+        "{report:#}"
+    );
+    assert!(
+        fatal.stderr.contains(
+            report["could_not_check"]["detail"]
+                .as_str()
+                .unwrap()
+                .trim_end()
+        ),
+        "the detail is the error on stderr: {report:#}\n{}",
+        fatal.stderr
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&fatal.stdout).unwrap(),
+        report,
+        "stdout carries the report --json-out writes"
+    );
     assert_valid(&report_schema(), &report);
 }
 
@@ -513,9 +542,18 @@ fn stdout_carries_only_the_requested_format() {
             run.stdout
         );
     }
-    // A run that cannot start prints nothing on stdout (the error is on stderr).
+    // A run that cannot start prints one JSON document saying why (the error is also
+    // on stderr), and nothing on stdout in a format with no such field.
     repo.write("discipline.toml", "not = [valid\n");
     let broken = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
     assert_eq!(broken.code, 2, "{}", broken.stderr);
-    assert_eq!(broken.stdout, "", "exit 2 must not print a partial report");
+    let report: Value = serde_json::from_str(&broken.stdout)
+        .unwrap_or_else(|e| panic!("exit 2 prints one JSON document: {e}\n{}", broken.stdout));
+    assert_eq!(report["could_not_check"]["reason"], "configuration");
+    assert_eq!(report["outcomes"], serde_json::json!([]));
+    for format in ["terminal", "sarif", "agent-prompt"] {
+        let run = repo.run(&["check", "--format", format, "--base", "main"], &[]);
+        assert_eq!(run.code, 2, "{format}: {}", run.stderr);
+        assert_eq!(run.stdout, "", "{format}: exit 2 prints no partial report");
+    }
 }

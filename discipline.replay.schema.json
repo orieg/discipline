@@ -33,6 +33,20 @@
             "null"
           ]
         },
+        "reason": {
+          "description": "Why the change could not be checked: the report's `could_not_check.reason`, or `forge` when its merged pull request could not be read. Omitted otherwise",
+          "enum": [
+            "configuration",
+            "baseline",
+            "repository",
+            "tool-missing",
+            "tool-timeout",
+            "toolchain-unavailable",
+            "forge",
+            "gate",
+            "internal"
+          ]
+        },
         "refused_overrides": {
           "description": "Gates whose overrides `fail_on_overrides` refused",
           "items": {
@@ -109,7 +123,7 @@
     },
     "could_not_check_by_reason": {
       "$ref": "#/$defs/ChangeLists",
-      "description": "The error a change stopped on -> the changes"
+      "description": "The reason a change could not be checked (the report's `could_not_check.reason`) -> the changes"
     },
     "errors_by_gate": {
       "$ref": "#/$defs/ChangeLists",
@@ -123,6 +137,10 @@
       "$ref": "#/$defs/ChangeLists",
       "description": "Gate id -> the changes whose override of that gate `fail_on_overrides` refused"
     },
+    "schema_version": {
+      "const": 1,
+      "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it"
+    },
     "warnings_by_gate": {
       "additionalProperties": {
         "minimum": 0,
@@ -133,6 +151,7 @@
     }
   },
   "required": [
+    "schema_version",
     "cases",
     "passed",
     "blocked",

@@ -688,6 +688,8 @@ mod tests {
         });
 
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "main".to_string(),
             errors: 5,
             warnings: 0,
@@ -750,6 +752,8 @@ mod tests {
         o3.enabled = false;
 
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "main".to_string(),
             errors: 0,
             warnings: 0,
@@ -846,6 +850,8 @@ mod tests {
     #[test]
     fn deprecations_are_reported_and_never_fail_the_run() {
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "main".to_string(),
             errors: 0,
             warnings: 0,
@@ -896,6 +902,8 @@ mod tests {
         });
 
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "main".to_string(),
             errors: 1,
             warnings: 0,
@@ -928,6 +936,8 @@ mod tests {
         o2.examined = 50;
 
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "main".to_string(),
             errors: 0,
             warnings: 0,
@@ -965,6 +975,8 @@ mod tests {
         });
 
         let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
             base: "main".to_string(),
             errors: 1,
             warnings: 0,
