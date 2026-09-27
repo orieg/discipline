@@ -6,7 +6,9 @@ target/
 Thumbs.db
 
 # Agent working files and scratch state (§2.6)
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 .gemini/
 .antigravity/
 plans/

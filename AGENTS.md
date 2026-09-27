@@ -37,6 +37,7 @@ Do not scatter notes into arbitrary files. Update canonical documents; do not pr
 | Pre-commit hook definitions | `.pre-commit-hooks.yaml` | Hook interface change |
 | CI and release pipelines | `.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/` (described in `docs/ARCHITECTURE.md` §8) | Pipeline redesign |
 | Dependency policy | `deny.toml` | License or source policy change |
+| Agent hooks for this repository | `.claude/settings.json` and `.claude/hooks/discipline-bootstrap.sh` (Claude Code), `.agents/hooks.json` (agy), `.github/hooks/discipline.json` and `.github/workflows/copilot-setup-steps.yml` (Copilot); written by `discipline hook install --observe` | Hook contract change, or the switch from observe mode to enforcing |
 
 ---
 
@@ -108,7 +109,8 @@ A gate is not done until all of these hold (full contract: `docs/ARCHITECTURE.md
 
 - Commit messages follow Conventional Commits: `type(scope): description`.
 - Atomic, purposeful commits.
-- Never commit agent scratch state (`.claude/`, `.gemini/`, `.antigravity/`, `scratch/`, `*.session.*`).
+- Never commit agent scratch state (`.claude/`, `.gemini/`, `.antigravity/`, `scratch/`, `*.session.*`). The agent hook files in §1's table are shared configuration, not scratch state, and are the only files under `.claude/` that are tracked.
+- The agent hooks run the installed discipline release in observe mode: they never block, and what would have blocked is logged to `<git dir>/discipline/hook-observe.log`. The installed release can lag `main`, so a `discipline.toml` key it does not know yet shows there as `could not check (reason: configuration)`. CI's `dogfood` job builds from source and is the gate.
 - Never leak local paths (`/Users/...`, `/home/...`) or LAN IPs in committed files or PR bodies.
 - Never name private repositories, internal hostnames, or unreleased projects in committed files.
 - Directives belong in the commit BODY. Never place directives in the commit subject line or PR title.
