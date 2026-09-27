@@ -268,15 +268,130 @@ pub(crate) fn rollup_enforces(job: &serde_yaml::Value) -> bool {
     runs_after_failure && reads_results
 }
 
+/// `# discipline:advisory <reason>` markers on a workflow's action steps, keyed by the
+/// step's address in the parsed workflow. A marker is a YAML comment on the step's
+/// `uses:` line or in the comment block directly above the step. Parsing drops
+/// comments, so each `uses:` line of the text is paired with the parsed step of the
+/// same `uses:` value in document order; when the counts differ (flow-style YAML, a
+/// `uses:` inside a script) no marker for that value is read and the FAIL stays.
+fn advisory_markers(
+    content: &str,
+    jobs: &[(String, &serde_yaml::Value)],
+) -> BTreeMap<*const serde_yaml::Value, String> {
+    let lines: Vec<&str> = content.lines().collect();
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let marker = |comment: &str| {
+        crate::tokens::workflow_marker_reason(comment, crate::tokens::ADVISORY_MARKER)
+    };
+    // `uses:` lines of the text: value -> (line, key column, whether the line opens the step).
+    let mut text_uses: BTreeMap<String, Vec<(usize, usize, bool)>> = BTreeMap::new();
+    for (i, line) in lines.iter().enumerate() {
+        let mut rest = line.trim_start();
+        let mut col = indent(line);
+        let opens = rest.starts_with("- ");
+        if opens {
+            let after = rest[1..].trim_start();
+            col += rest.len() - after.len();
+            rest = after;
+        }
+        let Some(value) = rest.strip_prefix("uses:") else {
+            continue;
+        };
+        let value = value.trim_start();
+        let value = match value.chars().next() {
+            Some(q @ ('"' | '\'')) => value[1..].split(q).next().unwrap_or(""),
+            _ => value.split([' ', '\t']).next().unwrap_or(""),
+        };
+        text_uses
+            .entry(value.to_string())
+            .or_default()
+            .push((i, col, opens));
+    }
+    let mut parsed_uses: BTreeMap<String, Vec<&serde_yaml::Value>> = BTreeMap::new();
+    for (_, job) in jobs {
+        for step in job
+            .get("steps")
+            .and_then(|s| s.as_sequence())
+            .into_iter()
+            .flatten()
+        {
+            if let Some(uses) = step.get("uses").and_then(|u| u.as_str()) {
+                parsed_uses.entry(uses.to_string()).or_default().push(step);
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    for (value, steps) in parsed_uses {
+        let Some(at) = text_uses.get(&value).filter(|t| t.len() == steps.len()) else {
+            continue;
+        };
+        for (step, &(i, col, opens)) in steps.into_iter().zip(at) {
+            // A trailing comment on the `uses:` line.
+            let trailing = lines[i].find(" #").and_then(|p| marker(&lines[i][p + 2..]));
+            // The line that opens the step: this one, or the `- ` item line above it
+            // whose key sits in the same column.
+            let mut start = opens.then_some(i);
+            let mut j = i;
+            while start.is_none() && j > 0 {
+                j -= 1;
+                let l = lines[j];
+                let t = l.trim_start();
+                if t.is_empty() || t.starts_with('#') {
+                    continue;
+                }
+                if let Some(after) = t.strip_prefix('-') {
+                    if indent(l) + 1 + (after.len() - after.trim_start().len()) == col {
+                        start = Some(j);
+                    }
+                }
+                if indent(l) < col {
+                    break;
+                }
+            }
+            // The comment block directly above the step, with no blank line between.
+            let above = start.and_then(|s| {
+                lines[..s]
+                    .iter()
+                    .rev()
+                    .map(|l| l.trim_start())
+                    .take_while(|t| t.starts_with('#'))
+                    .find_map(|t| marker(&t[1..]))
+            });
+            if let Some(reason) = trailing.or(above) {
+                out.insert(step as *const serde_yaml::Value, reason);
+            }
+        }
+    }
+    out
+}
+
+/// Why a job that runs discipline cannot fail.
+struct NonBlocking {
+    why: String,
+    /// Set when every discipline step that cannot fail is an `advisory: true` action
+    /// step marked `# discipline:advisory <reason>`: the first such reason. The job
+    /// still enforces nothing; the marker only says the advisory run is on purpose.
+    intended: Option<String>,
+}
+
+const ADVISORY_STEP: &str = "the action runs with `advisory: true`";
+
 /// Why a job that runs discipline cannot fail, if it cannot.
-fn nonblocking_reason(job: &serde_yaml::Value, self_action: bool) -> Option<String> {
+fn nonblocking_reason(
+    job: &serde_yaml::Value,
+    self_action: bool,
+    markers: &BTreeMap<*const serde_yaml::Value, String>,
+) -> Option<NonBlocking> {
     let truthy = |v: Option<&serde_yaml::Value>| match v {
         Some(serde_yaml::Value::Bool(b)) => *b,
         Some(serde_yaml::Value::String(s)) => s.trim() == "true",
         _ => false,
     };
     if truthy(job.get("continue-on-error")) {
-        return Some("the job has `continue-on-error: true`".to_string());
+        return Some(NonBlocking {
+            why: "the job has `continue-on-error: true`".to_string(),
+            intended: None,
+        });
     }
     let steps: Vec<&serde_yaml::Value> = job
         .get("steps")
@@ -286,6 +401,7 @@ fn nonblocking_reason(job: &serde_yaml::Value, self_action: bool) -> Option<Stri
     // The job can fail on discipline if any discipline step can: one that is not masked,
     // or a masked canary whose outcome a later step checks (`steps.<id>.outcome`).
     let mut first_reason = None;
+    let mut first_intended: Option<&String> = None;
     for (i, step) in steps.iter().enumerate() {
         if !step_runs_discipline(step, self_action) {
             continue;
@@ -293,7 +409,7 @@ fn nonblocking_reason(job: &serde_yaml::Value, self_action: bool) -> Option<Stri
         let reason = if truthy(step.get("continue-on-error")) {
             Some("its discipline step has `continue-on-error: true`")
         } else if truthy(step.get("with").and_then(|w| w.get("advisory"))) {
-            Some("the action runs with `advisory: true`")
+            Some(ADVISORY_STEP)
         } else if step.get("run").and_then(|r| r.as_str()).is_some_and(|run| {
             run.lines().any(|l| {
                 let l = l.trim();
@@ -317,9 +433,25 @@ fn nonblocking_reason(job: &serde_yaml::Value, self_action: bool) -> Option<Stri
         if checked_later {
             return None;
         }
+        if reason == ADVISORY_STEP {
+            if let Some(why) = markers.get(&(*step as *const serde_yaml::Value)) {
+                first_intended.get_or_insert(why);
+                continue;
+            }
+        }
         first_reason.get_or_insert(reason);
     }
-    first_reason.map(str::to_string)
+    match (first_reason, first_intended) {
+        (Some(why), _) => Some(NonBlocking {
+            why: why.to_string(),
+            intended: None,
+        }),
+        (None, Some(reason)) => Some(NonBlocking {
+            why: ADVISORY_STEP.to_string(),
+            intended: Some(reason.clone()),
+        }),
+        (None, None) => None,
+    }
 }
 
 /// `on:` of a workflow as a map from event name to its configuration.
@@ -473,6 +605,7 @@ pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> Local
         }
 
         let events = triggers(&wf);
+        let markers = advisory_markers(content, &jobs);
         let wf_perm = permission_level(wf.get("permissions"));
         // Worst token level across this workflow's discipline jobs (None = inherited).
         let mut worst: Option<Option<u8>> = None;
@@ -496,16 +629,29 @@ pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> Local
                     weak_rollups.push(job_context(other, oj));
                 }
             }
-            let nonblocking = nonblocking_reason(job, self_action);
-            if let Some(why) = &nonblocking {
-                facts.findings.push(
+            let nonblocking = nonblocking_reason(job, self_action, &markers);
+            match &nonblocking {
+                Some(NonBlocking {
+                    intended: Some(reason),
+                    ..
+                }) => facts.findings.push(Finding::new(
+                    "non-blocking",
+                    Status::Info,
+                    format!(
+                        "{path} job `{id}` runs discipline with `advisory: true` on purpose \
+                         (`# {} {reason}`); it cannot fail, so it enforces nothing",
+                        crate::tokens::ADVISORY_MARKER
+                    ),
+                )),
+                Some(NonBlocking { why, .. }) => facts.findings.push(
                     Finding::new(
                         "non-blocking",
                         Status::Fail,
                         format!("{path} job `{id}` runs discipline but cannot fail: {why}"),
                     )
-                    .fix("Remove continue-on-error, `|| true` and `advisory: true` from the discipline job."),
-                );
+                    .fix("Remove continue-on-error, `|| true` and `advisory: true` from the discipline job. A deliberate shadow step keeps `advisory: true` with `# discipline:advisory <reason>` on the line above it."),
+                ),
+                None => {}
             }
             let mut workflow_names = Vec::new();
             if let Some(n) = wf.get("name").and_then(|n| n.as_str()) {
@@ -2529,6 +2675,98 @@ jobs:
             facts.findings
         );
         assert!(!facts.jobs[0].allow_failure);
+    }
+
+    /// `WF` with a second, advisory discipline job `shadow` that the rollup also needs.
+    fn with_shadow(step: &str) -> String {
+        WF.replace(
+            "  report:\n",
+            &format!("  shadow:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n{step}  report:\n"),
+        )
+        .replace("needs: [lint, gate, report]", "needs: [lint, gate, shadow, report]")
+    }
+
+    fn non_blocking(facts: &LocalFacts) -> Vec<&Finding> {
+        facts
+            .findings
+            .iter()
+            .filter(|f| f.id == "non-blocking")
+            .collect()
+    }
+
+    #[test]
+    fn a_marked_advisory_shadow_step_is_reported_as_info() {
+        for step in [
+            // The comment line directly above the step.
+            "      # discipline:advisory shadow of scripts/lint.sh until it is retired\n      - uses: orieg/discipline@v0\n        with:\n          advisory: true\n",
+            // In a comment block above a step that opens with `name:`.
+            "      # Compared on live runs before it replaces the script.\n      # discipline:advisory shadow of scripts/lint.sh until it is retired\n      - name: Shadow\n        uses: orieg/discipline@v0\n        with:\n          advisory: true\n",
+            // On the `uses:` line.
+            "      - name: Shadow\n        uses: orieg/discipline@v0 # discipline:advisory shadow of scripts/lint.sh until it is retired\n        with:\n          advisory: true\n",
+        ] {
+            let facts = analyse_workflows(&wf(&with_shadow(step)), false);
+            let nb = non_blocking(&facts);
+            assert_eq!(nb.len(), 1, "{step}\n{nb:?}");
+            assert_eq!(nb[0].status, Status::Info, "{step}\n{nb:?}");
+            assert!(nb[0].summary.contains("job `shadow`"), "{}", nb[0].summary);
+            assert!(
+                nb[0].summary.contains("shadow of scripts/lint.sh until it is retired"),
+                "{}",
+                nb[0].summary
+            );
+            // The marker changes the report only: the shadow job still enforces nothing.
+            let shadow = facts.jobs.iter().find(|j| j.job_id == "shadow").unwrap();
+            assert!(shadow.allow_failure);
+            let gate = facts.jobs.iter().find(|j| j.job_id == "gate").unwrap();
+            assert!(!gate.allow_failure);
+        }
+    }
+
+    #[test]
+    fn an_advisory_step_without_a_usable_marker_still_fails() {
+        let advisory =
+            "      - uses: orieg/discipline@v0\n        with:\n          advisory: true\n";
+        for (label, step) in [
+            ("no marker", advisory.to_string()),
+            ("no reason", format!("      # discipline:advisory\n{advisory}")),
+            ("placeholder", format!("      # discipline:advisory <reason>\n{advisory}")),
+            ("TODO", format!("      # discipline:advisory TODO\n{advisory}")),
+            (
+                "blank line between",
+                format!("      # discipline:advisory shadow run\n\n{advisory}"),
+            ),
+            (
+                "not at the start of the comment",
+                format!("      # see discipline:advisory shadow run\n{advisory}"),
+            ),
+            (
+                "another step cannot fail",
+                format!("      # discipline:advisory shadow run\n{advisory}      - uses: orieg/discipline@v0\n        continue-on-error: true\n"),
+            ),
+        ] {
+            let facts = analyse_workflows(&wf(&with_shadow(&step)), false);
+            let nb = non_blocking(&facts);
+            assert_eq!(nb.len(), 1, "{label}: {nb:?}");
+            assert_eq!(nb[0].status, Status::Fail, "{label}: {nb:?}");
+        }
+    }
+
+    #[test]
+    fn a_marked_advisory_step_alone_leaves_the_job_not_enforcing() {
+        let variant = WF.replace(
+            "      - uses: orieg/discipline@v0\n",
+            "      # discipline:advisory shadow of scripts/lint.sh until it is retired\n      - uses: orieg/discipline@v0\n        with:\n          advisory: true\n",
+        );
+        let facts = analyse_workflows(&wf(&variant), false);
+        let nb = non_blocking(&facts);
+        assert_eq!(nb.len(), 1, "{nb:?}");
+        assert_eq!(nb[0].status, Status::Info, "{nb:?}");
+        assert!(facts.jobs[0].allow_failure);
+        let gh = github(full_rules(), serde_json::json!([]));
+        let p = github_protection(&gh, &forge(ForgeKind::GitHub), "main").unwrap();
+        let f = protection_findings(ForgeKind::GitHub, &p, &facts.jobs);
+        assert_eq!(f[0].id, "required-check", "{f:?}");
+        assert_eq!(f[0].status, Status::Fail, "{f:?}");
     }
 
     #[test]

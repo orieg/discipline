@@ -1028,6 +1028,31 @@ pub fn extract_directives_with_merged(
     (active, notes)
 }
 
+/// Markers written as a YAML comment in a workflow file rather than in a pull request
+/// body. `discipline doctor` reads them; no gate does.
+pub const WORKFLOW_MARKERS: &[&str] = &[ADVISORY_MARKER];
+
+/// `# discipline:advisory <reason>`: an action step with `advisory: true` is a shadow
+/// run on purpose. It changes how `discipline doctor` reports that step, nothing else.
+pub const ADVISORY_MARKER: &str = "discipline:advisory";
+
+/// The reason of a workflow marker `name` in `comment`, the text after a YAML `#`.
+/// The marker must begin the comment; a reason that is empty or a placeholder
+/// (`<reason>`, `TODO`, ...) arms nothing, as for a directive.
+pub fn workflow_marker_reason(comment: &str, name: &str) -> Option<String> {
+    let rest = comment.trim_start();
+    let head = rest.get(..name.len())?;
+    if !head.eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let tail = &rest[name.len()..];
+    if !(tail.is_empty() || tail.starts_with([' ', '\t'])) {
+        return None;
+    }
+    let reason = clean_reason(tail);
+    (!is_placeholder(&reason)).then_some(reason)
+}
+
 /// Reasons of every well-formed directive named in `names` found in `text`.
 pub fn directive_reasons(text: &str, names: &[&str]) -> Vec<String> {
     parse_directives_with_names(text, names, OverrideSource::PrBody)
@@ -1213,6 +1238,27 @@ removes: tests/old.rs inside a fence
 ```
 ";
         assert!(directive_reasons(body, REMOVES).is_empty());
+    }
+
+    #[test]
+    fn workflow_marker_needs_a_real_reason() {
+        let m = ADVISORY_MARKER;
+        assert_eq!(
+            workflow_marker_reason(" discipline:advisory shadow of the lint script", m).as_deref(),
+            Some("shadow of the lint script")
+        );
+        for comment in [
+            " discipline:advisory",
+            " discipline:advisory   ",
+            " discipline:advisory <reason>",
+            " discipline:advisory TODO",
+            " discipline:advisory n/a",
+            " discipline:advisoryshadow run",
+            " see discipline:advisory shadow run",
+            " discipline:allow(command) shadow run",
+        ] {
+            assert_eq!(workflow_marker_reason(comment, m), None, "{comment:?}");
+        }
     }
 
     #[test]

@@ -125,7 +125,10 @@ fn config(out: &mut BTreeMap<&'static str, BTreeSet<String>>) {
 }
 
 fn registries(out: &mut BTreeMap<&'static str, BTreeSet<String>>) {
-    for d in discipline::tokens::ALL_DIRECTIVE_NAMES {
+    for d in discipline::tokens::ALL_DIRECTIVE_NAMES
+        .iter()
+        .chain(discipline::tokens::WORKFLOW_MARKERS)
+    {
         out.entry("directives").or_default().insert(d.to_string());
     }
     for g in discipline::config::GATES.iter().filter(|g| g.available) {

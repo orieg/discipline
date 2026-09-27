@@ -811,6 +811,7 @@
       "allow-vacuous-test",
       "allow-version-mismatch",
       "deletes",
+      "discipline:advisory",
       "discipline:allow(archive-contents)",
       "discipline:allow(assertion-reduction)",
       "discipline:allow(bench-regression)",

@@ -585,6 +585,17 @@ Every option of every subcommand, generated from the binary's own definitions (`
 
 `doctor` reads branch rules through the forge's API. Without a token, a shared IP (a CI runner, an office network) soon reaches GitHub's unauthenticated rate limit, and the platform checks come back `could not check` (exit 2); set `DISCIPLINE_FORGE_TOKEN` (or `GH_TOKEN`) to a token that can read the repository.
 
+**A deliberate advisory step.** `doctor` reports a `non-blocking` FAIL for a job that runs discipline but cannot fail: `continue-on-error: true`, a masked `discipline check`, or an action step with `advisory: true`. A shadow step, run with `advisory: true` next to the real gate and compared with it on live runs before it replaces a script, is advisory on purpose. Mark it in the workflow file with a comment that begins `discipline:advisory` and gives a reason, on the line directly above the step (or in the comment block directly above it, with no blank line between) or on its `uses:` line:
+
+```yaml
+      # discipline:advisory shadow of scripts/lint.sh until the script is retired
+      - uses: orieg/discipline@v0
+        with:
+          advisory: true
+```
+
+The step is then reported as `info`, naming the reason. A marker with no reason, or a placeholder reason (`<reason>`, `TODO`, `n/a`, ...), is ignored and the FAIL stays. The marker changes only `doctor`'s report: the step still enforces nothing, and a job whose only discipline steps are marked advisory still does not count as a blocking check, so branch protection that requires only that job is still reported as not enforcing discipline. It excuses `advisory: true` only, never `continue-on-error` or a masked exit status.
+
 ### Exit Codes
 
 | Code | Status | Meaning |
