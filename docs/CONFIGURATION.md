@@ -1293,7 +1293,7 @@ Discipline produces multi-target reports from a single execution run:
 When an authorized directive is parsed and applied:
 1. **Audit Record:** The gate outcome records the override in its result structure, naming the gate, subject, and reason.
 2. **Action Outputs:** Outputs `overrides` (total count of applied overrides) and `overridden_gates` (comma-separated list of gate ids) are populated.
-3. **Machine Report:** The JSON report carries the total as top-level `overrides` and each record under `outcomes[].overrides[]` (`gate`, `subject`, `directive`, `reason`, `source`, `hidden`) for compliance logging.
+3. **Machine Report:** The JSON report carries the total as top-level `overrides` and each record under `outcomes[].overrides[]` (`gate`, `subject`, `directive`, `reason`, `source`, `hidden`) for compliance logging. `subject` is what the override lifted (a path, a test, a gate); `reason` is the directive's whole argument as written, so for a directive that names its subject (`allow-agent-instructions: AGENTS.md reviewed the new line`) it starts with that subject (`AGENTS.md reviewed the new line`), and for one that does not (`no-issue: trivial fix`) it is the text alone.
 4. **Enforced Sign-off:** Setting `directives.fail_on_overrides = true` (or passing `--fail-on-overrides`) causes Discipline to exit `1` whenever any override is present. This blocks automated merge and mandates human sign-off while preserving the audit trail.
 
 ---
