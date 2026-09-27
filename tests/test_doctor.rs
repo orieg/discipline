@@ -159,6 +159,25 @@ fn doctor_local_findings_warn_and_strict_fails_on_them() {
 }
 
 #[test]
+fn doctor_strict_ignores_the_copilot_cloud_agent_install_step() {
+    // `hook install --agent copilot --cloud-agent` writes this workflow: it only puts the
+    // binary on PATH, so its triggers and token are not a check's.
+    let repo = protected_repo();
+    repo.commit_base(
+        ".github/workflows/copilot-setup-steps.yml",
+        "on:\n  workflow_dispatch:\n  push:\n    paths: [.github/workflows/copilot-setup-steps.yml]\n  pull_request:\n    paths: [.github/workflows/copilot-setup-steps.yml]\npermissions:\n  contents: read\njobs:\n  copilot-setup-steps:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: orieg/discipline@v0\n        with:\n          install_only: 'true'\n",
+        "setup steps",
+    );
+    let run = repo.run(&["doctor", "--local-only", "--strict"], &[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(
+        !run.stdout.contains("copilot-setup-steps"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
 fn doctor_reads_gitea_protection_with_the_gitea_token_header() {
     let repo = Repo::new();
     repo.commit_base_files(

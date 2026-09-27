@@ -177,7 +177,7 @@ fn step_runs_discipline(step: &serde_yaml::Value, self_action: bool) -> bool {
             || uses.starts_with("docker://ghcr.io/orieg/discipline")
             || (self_action && (uses == "./" || uses == "."))
         {
-            return true;
+            return !installs_only(step);
         }
     }
     step.get("run").and_then(|r| r.as_str()).is_some_and(|run| {
@@ -186,6 +186,17 @@ fn step_runs_discipline(step: &serde_yaml::Value, self_action: bool) -> bool {
             !l.starts_with('#') && (l.contains("discipline check") || l.contains("discipline diff"))
         })
     })
+}
+
+/// Whether an action step sets `install_only` to a literal true: it puts the binary on
+/// `PATH` (the Copilot cloud agent's setup steps) and checks nothing. An expression is
+/// not resolved, so the step still counts as a check.
+fn installs_only(step: &serde_yaml::Value) -> bool {
+    match step.get("with").and_then(|w| w.get("install_only")) {
+        Some(serde_yaml::Value::Bool(b)) => *b,
+        Some(serde_yaml::Value::String(s)) => s.trim() == "true",
+        _ => false,
+    }
 }
 
 fn job_context(job_id: &str, job: &serde_yaml::Value) -> String {
@@ -2108,6 +2119,40 @@ jobs:
         assert_eq!(status("workflows"), Status::Pass);
         assert_eq!(status("trigger"), Status::Pass);
         assert_eq!(status("token"), Status::Pass);
+    }
+
+    #[test]
+    fn an_install_only_step_is_not_a_discipline_job() {
+        let wf = |with: &str| {
+            format!(
+                "on:\n  push:\njobs:\n  copilot-setup-steps:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: orieg/discipline@v0\n{with}"
+            )
+        };
+        let jobs = |src: String| {
+            analyse_workflows(
+                &[(".github/workflows/copilot-setup-steps.yml".into(), src)],
+                false,
+            )
+            .jobs
+            .len()
+        };
+        assert_eq!(
+            jobs(wf("        with:\n          install_only: 'true'\n")),
+            0
+        );
+        assert_eq!(jobs(wf("        with:\n          install_only: true\n")), 0);
+        // Checks: no `install_only`, a false one, or an expression the doctor cannot resolve.
+        assert_eq!(jobs(wf("")), 1);
+        assert_eq!(
+            jobs(wf("        with:\n          install_only: 'false'\n")),
+            1
+        );
+        assert_eq!(
+            jobs(wf(
+                "        with:\n          install_only: ${{ inputs.x }}\n"
+            )),
+            1
+        );
     }
 
     #[test]
