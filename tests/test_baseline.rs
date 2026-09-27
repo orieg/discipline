@@ -540,6 +540,29 @@ fn baseline_write_refuses_to_replace_an_unreadable_baseline() {
     assert_eq!(after, "this is [[[ not toml\n");
 }
 
+#[test]
+fn baseline_migrate_without_a_baseline_is_a_note_and_an_unreadable_one_fails() {
+    let repo = Repo::new();
+    repo.commit_base("README.md", "x\n", "base");
+    // No file: nothing to migrate, exit 0, and no file is created.
+    let none = repo.run(&["baseline", "--migrate"], &[]);
+    assert_eq!(none.code, 0, "{}\n{}", none.stdout, none.stderr);
+    assert!(
+        none.stdout.contains("nothing to migrate"),
+        "{}",
+        none.stdout
+    );
+    assert!(!repo.file("discipline-baseline.toml").exists());
+
+    // A file that cannot be parsed still fails closed and is left as it was.
+    repo.write("discipline-baseline.toml", "this is [[[ not toml\n");
+    let bad = repo.run(&["baseline", "--migrate"], &[]);
+    assert_eq!(bad.code, 2, "{}\n{}", bad.stdout, bad.stderr);
+    assert!(bad.stderr.contains("could not be read"), "{}", bad.stderr);
+    let after = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert_eq!(after, "this is [[[ not toml\n");
+}
+
 /// Rewrite the version-2 baseline `baseline --write` produced into the version-1 file an
 /// older release wrote: the same findings, fingerprinted on their titles.
 fn downgrade_to_v1(repo: &Repo, base: &str) {

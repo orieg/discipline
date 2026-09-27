@@ -431,7 +431,8 @@ pub struct BaselineArgs {
     /// Rewrite a fingerprint-version-1 baseline to version 2: every entry a current
     /// finding still matches is kept under its finding code, and stale entries are
     /// dropped. Commit the result in a change of its own, which `config-integrity`
-    /// accepts without a directive.
+    /// accepts without a directive. With no baseline file there is nothing to migrate:
+    /// it says so and exits 0; a file that cannot be read exits 2.
     #[arg(long, conflicts_with_all = ["write", "base", "whole_tree"])]
     pub migrate: bool,
 

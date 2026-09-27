@@ -412,7 +412,7 @@ May also be specified with the \fBDISCIPLINE_DISABLE\fR environment variable.
 Record current findings to the baseline file
 .TP
 \fB\-\-migrate\fR
-Rewrite a fingerprint\-version\-1 baseline to version 2: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which `config\-integrity` accepts without a directive
+Rewrite a fingerprint\-version\-1 baseline to version 2: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which `config\-integrity` accepts without a directive. With no baseline file there is nothing to migrate: it says so and exits 0; a file that cannot be read exits 2
 .TP
 \fB\-\-baseline\-file\fR \fI<BASELINE_FILE>\fR [default: discipline\-baseline.toml]
 Path to grandfathering baseline file (defaults to discipline\-baseline.toml)

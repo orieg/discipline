@@ -489,7 +489,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
 | `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
 | `--write` |  |  | Record current findings to the baseline file |
-| `--migrate` |  |  | Rewrite a fingerprint-version-1 baseline to version 2: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which `config-integrity` accepts without a directive |
+| `--migrate` |  |  | Rewrite a fingerprint-version-1 baseline to version 2: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which `config-integrity` accepts without a directive. With no baseline file there is nothing to migrate: it says so and exits 0; a file that cannot be read exits 2 |
 | `--baseline-file` |  | `discipline-baseline.toml` | Path to grandfathering baseline file (defaults to discipline-baseline.toml) |
 | `-b`, `--base` | `DISCIPLINE_BASE_REF` |  | Base branch or commit ref to compare against |
 | `-s`, `--suite` |  | `all` | Specific suite to run: all, agent-guard, hygiene, integrity ... |
