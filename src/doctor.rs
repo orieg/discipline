@@ -242,7 +242,7 @@ fn depends_transitively(jobs: &[(String, &serde_yaml::Value)], from: &str, targe
 /// A rollup fails when a job it needs failed: it runs regardless of that result and
 /// a step reads the results. Without `if: always()` (or `!cancelled()` / `failure()`)
 /// the rollup is skipped, and a skipped required check counts as passed.
-fn rollup_enforces(job: &serde_yaml::Value) -> bool {
+pub(crate) fn rollup_enforces(job: &serde_yaml::Value) -> bool {
     let runs_after_failure = job
         .get("if")
         .map(|v| match v {

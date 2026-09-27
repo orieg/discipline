@@ -88,6 +88,10 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         (files, None)
     };
 
+    // Steps of the jobs this change added, read once and only when a job or workflow
+    // was removed.
+    let mut added_steps: Option<Vec<serde_yaml::Value>> = None;
+
     for path in &workflow_files {
         // GitLab pipelines are a different document shape; they have their own diff.
         if super::ci_gitlab::is_gitlab_ci_path(path) {
@@ -102,11 +106,29 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                     if let Ok(base_val) = serde_yaml::from_str::<serde_yaml::Value>(&base_src) {
                         let (base_jobs, _) =
                             parse_workflow_jobs(&base_src, settings.rollup_job.as_deref());
-                        let has_verification = base_jobs.iter().any(|j| {
-                            let job_val = base_val.get("jobs").and_then(|m| m.get(j));
-                            is_verification_job(j, job_val.unwrap_or(&serde_yaml::Value::Null))
-                        });
-                        if has_verification {
+                        let verification: Vec<(&String, &serde_yaml::Value)> = base_jobs
+                            .iter()
+                            .filter_map(|j| {
+                                let job_val = base_val.get("jobs").and_then(|m| m.get(j))?;
+                                is_verification_job(j, job_val).then_some((j, job_val))
+                            })
+                            .collect();
+                        if added_steps.is_none() && !verification.is_empty() {
+                            added_steps = Some(added_job_steps(ctx, &workflow_globs, &filter)?);
+                        }
+                        let added = added_steps.as_deref().unwrap_or(&[]);
+                        if !verification.is_empty()
+                            && verification.iter().all(|(_, job)| job_moved(job, added))
+                        {
+                            out.notes.push(format!(
+                                "{path}: workflow deleted; the verification steps of its jobs ({}) are in jobs this change added, so it is treated as a move",
+                                verification
+                                    .iter()
+                                    .map(|(j, _)| j.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ));
+                        } else if !verification.is_empty() {
                             record_or_excuse(
                                 ctx,
                                 None,
@@ -346,6 +368,15 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                         let job_id = job_k.as_str().unwrap_or("");
                         if !head_jobs_map.contains_key(job_k) && is_verification_job(job_id, job_v)
                         {
+                            if added_steps.is_none() {
+                                added_steps = Some(added_job_steps(ctx, &workflow_globs, &filter)?);
+                            }
+                            if job_moved(job_v, added_steps.as_deref().unwrap_or(&[])) {
+                                out.notes.push(format!(
+                                    "{path}: job '{job_id}' was removed; its verification steps are in jobs this change added, so it is treated as a rename or split"
+                                ));
+                                continue;
+                            }
                             record_or_excuse(
                                 ctx,
                                 Some(&head_content),
@@ -491,7 +522,9 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 }
                                 _ => "",
                             };
-                            if if_cond.contains("always()") || if_cond.contains("cancelled()") {
+                            if (if_cond.contains("always()") || if_cond.contains("cancelled()"))
+                                && !crate::doctor::rollup_enforces(job_v)
+                            {
                                 let base_had_always = base_jobs_map
                                     .and_then(|m| m.get(job_k))
                                     .and_then(|b| b.get("if"))
@@ -920,21 +953,22 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 }
                             }
 
-                            // 5d. Introduction of if: always() or if: failure() on verification step
-                            if is_verification_step(step) {
+                            // 5d. An existing verification step that now runs only after a
+                            // failure (`if: failure()` without `always()`): it no longer runs
+                            // on a passing build, so what it checked goes unchecked. A new
+                            // step that runs on failure (a diagnostic) replaces nothing, and
+                            // `always()` makes a step run more often, not less.
+                            if is_verification_step(step) && base_step.is_some() {
                                 if let Some(if_cond) = step.get("if").and_then(|i| i.as_str()) {
-                                    let lower_if = if_cond.to_ascii_lowercase();
-                                    if lower_if.contains("always()")
-                                        || lower_if.contains("failure()")
-                                    {
+                                    let failure_only = |c: &str| {
+                                        let l = c.to_ascii_lowercase();
+                                        l.contains("failure()") && !l.contains("always()")
+                                    };
+                                    if failure_only(if_cond) {
                                         let base_had_it = base_step
                                             .and_then(|b| b.get("if"))
                                             .and_then(|i| i.as_str())
-                                            .map(|b| {
-                                                let bl = b.to_ascii_lowercase();
-                                                bl.contains("always()") || bl.contains("failure()")
-                                            })
-                                            .unwrap_or(false);
+                                            .is_some_and(failure_only);
                                         if !base_had_it {
                                             let if_line = find_line_after(
                                                 &head_content,
@@ -950,7 +984,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                                 &crate::findings::VERIFICATION_STEP_MASKED_BY_CONDITION,
                                                 Some(path.clone()),
                                                 if_line,
-                                                format!("Verification step carries 'if: {if_cond}', masking earlier pipeline failures."),
+                                                format!("Verification step now carries 'if: {if_cond}': it runs only after an earlier failure, so a passing build no longer runs it."),
                                                 "Remove conditional masking or excuse with allow-gate-weakening: ci-integrity <reason>.",
                                                 "if-always",
                                             );
@@ -966,9 +1000,18 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                             if is_verification_step(step) {
                                 let head_if = step.get("if").map(if_text);
                                 let base_if = base_step.and_then(|b| b.get("if")).map(if_text);
+                                // 5d's failure-only form, or a condition that only widens
+                                // when the step runs; `always() && <narrowing>` is checked.
                                 let masking = |t: &str| {
                                     let l = t.to_ascii_lowercase();
-                                    l.contains("always()") || l.contains("failure()")
+                                    let bare = l
+                                        .trim()
+                                        .trim_start_matches("${{")
+                                        .trim_end_matches("}}")
+                                        .trim()
+                                        .to_string();
+                                    matches!(bare.as_str(), "always()" | "!cancelled()")
+                                        || (l.contains("failure()") && !l.contains("always()"))
                                 };
                                 if let Some(h) = head_if.as_deref().filter(|h| !masking(h)) {
                                     if base_if.as_deref() != Some(h) {
@@ -1037,19 +1080,11 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                             // 5f. Error suppression: || true / set +e
                             if settings.forbid_or_true {
                                 if let Some(run_cmd) = run_str {
-                                    let has_mask = run_cmd
-                                        .lines()
-                                        .any(|l| l.contains("|| true") || l.contains("set +e"));
-                                    if has_mask {
+                                    if masks_exit_code(run_cmd) {
                                         let base_had_mask = base_step
                                             .and_then(|b| b.get("run"))
                                             .and_then(|r| r.as_str())
-                                            .map(|b| {
-                                                b.lines().any(|l| {
-                                                    l.contains("|| true") || l.contains("set +e")
-                                                })
-                                            })
-                                            .unwrap_or(false);
+                                            .is_some_and(masks_exit_code);
                                         if !base_had_mask {
                                             let mask_line = find_line_after(
                                                 &head_content,
@@ -1267,6 +1302,143 @@ fn deletion_reason(
         ),
         None => "no unmatched head step remains to be a rename of it".to_string(),
     }
+}
+
+/// Steps of the jobs this change added, in every workflow file in head: where a
+/// removed job's steps may have moved (a rename, a split, a move to another file).
+fn added_job_steps(
+    ctx: &Context,
+    globs: &globset::GlobSet,
+    filter: &crate::guards::PathFilter,
+) -> Result<Vec<serde_yaml::Value>> {
+    let mut paths = ctx.git.tracked_files()?;
+    paths.extend(ctx.git.changed_files()?.into_iter().map(|f| f.path));
+    paths.sort();
+    paths.dedup();
+    let mut steps = Vec::new();
+    for p in paths.iter().filter(|p| {
+        globs.is_match(p) && !filter.matches(p) && !super::ci_gitlab::is_gitlab_ci_path(p)
+    }) {
+        let Some(head) = ctx.git.head_content(p)? else {
+            continue;
+        };
+        let Ok(head) = serde_yaml::from_str::<serde_yaml::Value>(&head) else {
+            continue;
+        };
+        let base_jobs: HashSet<String> = ctx
+            .git
+            .base_content(p)
+            .ok()
+            .flatten()
+            .and_then(|b| serde_yaml::from_str::<serde_yaml::Value>(&b).ok())
+            .and_then(|b| {
+                b.get("jobs").and_then(|j| j.as_mapping()).map(|m| {
+                    m.keys()
+                        .filter_map(|k| k.as_str().map(str::to_string))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        if let Some(jobs) = head.get("jobs").and_then(|j| j.as_mapping()) {
+            for (k, job) in jobs {
+                if k.as_str().is_some_and(|k| base_jobs.contains(k)) {
+                    continue;
+                }
+                if let Some(s) = job.get("steps").and_then(|s| s.as_sequence()) {
+                    steps.extend(s.iter().cloned());
+                }
+            }
+        }
+    }
+    Ok(steps)
+}
+
+/// Whether every verification step of a removed job (every step, when none is a
+/// verification step) reappears in a job this change added: the job was renamed,
+/// split, or moved, not deleted. Steps pair by body alone (similarity at least
+/// [`STEP_RENAME_SIMILARITY`], keeping every verification marker), never by name,
+/// and each added step takes one removed step, so an added job that reuses the
+/// names over emptied bodies does not count.
+pub(crate) fn job_moved(job: &serde_yaml::Value, added: &[serde_yaml::Value]) -> bool {
+    let steps: Vec<&serde_yaml::Value> = job
+        .get("steps")
+        .and_then(|s| s.as_sequence())
+        .map(|s| s.iter().collect())
+        .unwrap_or_default();
+    let verifying: Vec<&serde_yaml::Value> = steps
+        .iter()
+        .copied()
+        .filter(|s| is_verification_step(s))
+        .collect();
+    let wanted = if verifying.is_empty() {
+        steps
+    } else {
+        verifying
+    };
+    if wanted.is_empty() {
+        return false;
+    }
+    let mut taken = vec![false; added.len()];
+    wanted.iter().all(|w| {
+        let markers = verifying_body_markers(w);
+        let best = added
+            .iter()
+            .enumerate()
+            .filter(|(i, a)| !taken[*i] && markers.is_subset(&verifying_body_markers(a)))
+            .map(|(i, a)| (step_body_similarity(w, a), i))
+            .filter(|(sim, _)| *sim >= STEP_RENAME_SIMILARITY)
+            .max_by(|x, y| x.0.total_cmp(&y.0));
+        match best {
+            Some((_, i)) => {
+                taken[i] = true;
+                true
+            }
+            None => false,
+        }
+    })
+}
+
+/// Whether a script that turns `set -e` off checks the status it stops acting on:
+/// `$?` is saved into a variable that a later line tests or exits with, or a later
+/// line tests or exits with `$?` itself. `set +e; cmd; rc=$?; set -e; [ "$rc" -eq 0 ]`
+/// is a checked negative control, not a masked failure.
+pub(crate) fn set_e_status_checked(run: &str) -> bool {
+    let lines: Vec<&str> = run.lines().collect();
+    let Some(start) = lines.iter().position(|l| l.contains("set +e")) else {
+        return false;
+    };
+    let tests = |l: &str| {
+        let l = l.trim_start();
+        ["if ", "[ ", "[[ ", "test ", "exit ", "case ", "((", "elif "]
+            .iter()
+            .any(|k| l.starts_with(k) || l.contains(&format!("; {k}")))
+    };
+    let assign = Regex::new(r#"\b([A-Za-z_][A-Za-z0-9_]*)="?\$\?"?"#).expect("static regex");
+    let mut vars: Vec<String> = Vec::new();
+    for l in &lines[start..] {
+        if tests(l) {
+            if l.contains("$?") {
+                return true;
+            }
+            if vars
+                .iter()
+                .any(|v| l.contains(&format!("${v}")) || l.contains(&format!("${{{v}}}")))
+            {
+                return true;
+            }
+        }
+        for c in assign.captures_iter(l) {
+            vars.push(c[1].to_string());
+        }
+    }
+    false
+}
+
+/// Whether a step's script masks a failure: `|| true`, or `set +e` whose status is
+/// never checked.
+fn masks_exit_code(run: &str) -> bool {
+    run.lines().any(|l| l.contains("|| true"))
+        || (run.lines().any(|l| l.contains("set +e")) && !set_e_status_checked(run))
 }
 
 /// Display label of a step: its name, else its id, else `fallback`.

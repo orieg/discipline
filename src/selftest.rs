@@ -2432,6 +2432,21 @@ jobs:
         },
     ),
     (
+        "ci-integrity: a checked `set +e` and a moved job are not weakenings, their gutted forms are",
+        || {
+            use crate::guards::ci_integrity::{job_moved, set_e_status_checked};
+            let checked = set_e_status_checked("set +e\n./smoke.sh\nrc=$?\nset -e\nif [ \"$rc\" -eq 0 ]; then exit 1; fi\n");
+            let dropped = set_e_status_checked("set +e\n./smoke.sh\nrc=$?\necho done\n");
+            let job = serde_yaml::from_str::<serde_yaml::Value>(
+                "steps:\n  - name: Run tests\n    run: cargo test --all-features --workspace\n",
+            )?;
+            let steps = |y: &str| serde_yaml::from_str::<Vec<serde_yaml::Value>>(y);
+            let moved = steps("- name: Tests\n  run: cargo test --all-features --workspace\n")?;
+            let gutted = steps("- name: Run tests\n  run: echo ok\n")?;
+            Ok(checked && !dropped && job_moved(&job, &moved) && !job_moved(&job, &gutted))
+        },
+    ),
+    (
         "ci-skip-set: skip under a true `if:` is caught, a consistent skip set passes",
         || {
             use crate::guards::ci_skip_set::{check_skip_set, FindingKind, SkipSetSpec};

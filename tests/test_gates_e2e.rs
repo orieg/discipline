@@ -13027,3 +13027,152 @@ fn a_parse_error_blocks_only_where_it_could_hide_a_test() {
     );
     assert!(!blocking.iter().any(|f| f.ends_with(".m")), "{blocking:?}");
 }
+
+/// `ci-integrity` codes a change reports, from a base set of workflow files to a head
+/// set (`None` deletes the file).
+fn ci_integrity_codes(base: &[(&str, &str)], head: &[(&str, Option<&str>)]) -> Vec<String> {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    for (path, src) in base {
+        repo.write(path, src);
+    }
+    repo.commit("ci: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    for (path, src) in head {
+        match src {
+            Some(src) => repo.write(path, src),
+            None => {
+                repo.git(&["rm", "-q", path]);
+            }
+        }
+    }
+    repo.commit("ci: change");
+    let mut codes: Vec<String> = repo
+        .check(&[])
+        .violations("ci-integrity")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    codes.sort();
+    codes
+}
+
+const CI_HEAD: &str = "name: CI\npermissions: read-all\non: [pull_request]\njobs:\n";
+
+#[test]
+fn ci_integrity_a_rollup_that_reads_its_needs_is_not_masking() {
+    const WF: &str = ".github/workflows/ci.yml";
+    let jobs = "  test:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Run tests\n        run: cargo test\n";
+    let base = format!("{CI_HEAD}{jobs}  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n");
+    let reads = format!("{CI_HEAD}{jobs}  ci-gate:\n    if: always()\n    needs: [test]\n    runs-on: ubuntu-latest\n    steps:\n      - env:\n          NEEDS: ${{{{ toJson(needs) }}}}\n        run: echo \"$NEEDS\" | jq -e 'all(.[]; .result == \"success\")'\n");
+    assert!(ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&reads))]).is_empty());
+    // Control: runs always and never reads the results, so it passes over a failure.
+    let ignores = format!("{CI_HEAD}{jobs}  ci-gate:\n    if: always()\n    needs: [test]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n");
+    assert_eq!(
+        ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&ignores))]),
+        vec!["ci-integrity/verification-job-masked-by-condition"]
+    );
+}
+
+#[test]
+fn ci_integrity_a_checked_set_plus_e_is_not_a_masked_exit_code() {
+    const WF: &str = ".github/workflows/ci.yml";
+    let wf = |run: &str| {
+        format!("{CI_HEAD}  test:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Negative control\n        run: |\n{run}")
+    };
+    let base = wf("          ./smoke.sh\n");
+    let checked = wf("          set +e\n          ./smoke.sh --plant-bug\n          rc=$?\n          set -e\n          if [ \"$rc\" -eq 0 ]; then echo 'planted bug not caught'; exit 1; fi\n");
+    assert!(ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&checked))]).is_empty());
+    // Controls: the status is dropped, or saved and never tested.
+    for masked in [
+        wf("          set +e\n          ./smoke.sh\n          set -e\n"),
+        wf("          set +e\n          ./smoke.sh\n          rc=$?\n          echo done\n"),
+    ] {
+        assert_eq!(
+            ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&masked))]),
+            vec!["ci-integrity/exit-code-masked"],
+            "{masked}"
+        );
+    }
+}
+
+#[test]
+fn ci_integrity_a_failure_only_step_masks_only_when_it_was_a_check() {
+    const WF: &str = ".github/workflows/ci.yml";
+    let test = "      - name: Run tests\n        run: cargo test\n";
+    let base = format!("{CI_HEAD}  test:\n    runs-on: ubuntu-latest\n    steps:\n{test}");
+    // A new diagnostic that runs after a failure replaces nothing.
+    let diag = format!("{base}      - name: Show the diff for any failing test\n        if: failure()\n        run: cat tests/*.diff\n");
+    assert!(ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&diag))]).is_empty());
+    // Control: the existing check now runs only after a failure.
+    let gated = base.replace(
+        "        run: cargo test\n",
+        "        if: failure()\n        run: cargo test\n",
+    );
+    assert_eq!(
+        ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&gated))]),
+        vec!["ci-integrity/verification-step-masked-by-condition"]
+    );
+    // `always()` runs the step more often; with a narrowing condition it is a narrowing.
+    let always = base.replace(
+        "        run: cargo test\n",
+        "        if: always()\n        run: cargo test\n",
+    );
+    assert!(ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&always))]).is_empty());
+    let narrowed = base.replace(
+        "        run: cargo test\n",
+        "        if: always() && github.event_name == 'push'\n        run: cargo test\n",
+    );
+    assert_eq!(
+        ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&narrowed))]),
+        vec!["ci-integrity/verification-step-narrowed"]
+    );
+}
+
+#[test]
+fn ci_integrity_a_renamed_split_or_moved_job_is_not_removed() {
+    const WF: &str = ".github/workflows/ci.yml";
+    const MOVED: &str = ".github/workflows/test-action.yml";
+    let build = "  build-research:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Build harnesses\n        run: make -C research harness && ./research/run-smoke --all --strict\n      - name: Test harnesses\n        run: cargo test --manifest-path research/Cargo.toml --all-features\n";
+    let base = format!("{CI_HEAD}{build}");
+    // Renamed, with the paths updated.
+    let renamed = format!(
+        "{CI_HEAD}{}",
+        build
+            .replace("build-research", "build-harnesses")
+            .replace("research", "tools")
+    );
+    assert!(ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&renamed))]).is_empty());
+    // Split into two jobs.
+    let split = format!("{CI_HEAD}  build:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Build harnesses\n        run: make -C research harness && ./research/run-smoke --all --strict\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Test harnesses\n        run: cargo test --manifest-path research/Cargo.toml --all-features\n");
+    assert!(ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&split))]).is_empty());
+    // A workflow folded into another file.
+    let other = format!("{CI_HEAD}  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Lint\n        run: cargo clippy -- -D warnings\n");
+    let folded = format!("{other}{}", build.replace("build-research", "test-action"));
+    assert!(ci_integrity_codes(
+        &[(WF, &other), (MOVED, &base)],
+        &[(WF, Some(&folded)), (MOVED, None)]
+    )
+    .is_empty());
+
+    // Controls. The same steps survive only in a job that was already there.
+    let twin = format!(
+        "{CI_HEAD}{build}{}",
+        build.replace("build-research", "build-windows")
+    );
+    assert_eq!(
+        ci_integrity_codes(&[(WF, &twin)], &[(WF, Some(&base))]),
+        vec!["ci-integrity/verification-job-removed"]
+    );
+    // An added job reuses the step names over emptied bodies.
+    let gutted = format!("{CI_HEAD}  build-harnesses:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Build harnesses\n        run: echo ok\n      - name: Test harnesses\n        run: echo ok\n");
+    assert_eq!(
+        ci_integrity_codes(&[(WF, &base)], &[(WF, Some(&gutted))]),
+        vec!["ci-integrity/verification-job-removed"]
+    );
+    // A workflow deleted with nothing added.
+    assert_eq!(
+        ci_integrity_codes(&[(WF, &other), (MOVED, &base)], &[(MOVED, None)]),
+        vec!["ci-integrity/verification-workflow-deleted"]
+    );
+}
