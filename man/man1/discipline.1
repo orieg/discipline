@@ -676,7 +676,7 @@ Write the agent\*(Aqs hook configuration at the repository root (or, with \-\-us
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-\-user\fR] [\fB\-\-observe\fR] [\fB\-\-cloud\-agent\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-\-user\fR] [\fB\-\-observe\fR] [\fB\-\-cloud\-agent\fR] [\fB\-\-upgrade\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -715,6 +715,9 @@ Write the hook commands in observe mode (hook run \-\-observe): the agent is nev
 .TP
 \fB\-\-cloud\-agent\fR
 Also write .github/workflows/copilot\-setup\-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
+.TP
+\fB\-\-upgrade\fR
+Rewrite a file an earlier discipline release generated (it carries the `Written by \\`discipline hook install\\`` header: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

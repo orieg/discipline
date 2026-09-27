@@ -223,6 +223,7 @@ opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit to
 '--user[Write the user-level hook instead (copilot\: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml]' \
 '--observe[Write the hook commands in observe mode (hook run --observe)\: the agent is never blocked while a hook is rolled out]' \
 '(--user)--cloud-agent[Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)]' \
+'--upgrade[Rewrite a file an earlier discipline release generated (it carries the \`Written by \\\`discipline hook install\\\`\` header\: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0

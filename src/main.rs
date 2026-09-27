@@ -1405,19 +1405,26 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             let mut results = vec![if a.user {
                 discipline::hook::install_user(a.agent)?
             } else {
-                discipline::hook::install(a.agent, &discipline::hook::repo_root()?, a.observe)?
+                discipline::hook::install_with(
+                    a.agent,
+                    &discipline::hook::repo_root()?,
+                    a.observe,
+                    a.upgrade,
+                )?
             }];
             if a.agent == discipline::hook::Agent::ClaudeCode && !a.user {
-                results.push(discipline::hook::install_claude_bootstrap(
+                results.push(discipline::hook::install_claude_bootstrap_with(
                     &discipline::hook::repo_root()?,
+                    a.upgrade,
                 )?);
             }
             if a.cloud_agent {
                 if a.agent != discipline::hook::Agent::Copilot {
                     bail!("`--cloud-agent` is for copilot: Copilot cloud agent runs the repository's hooks");
                 }
-                results.push(discipline::hook::install_cloud_agent(
+                results.push(discipline::hook::install_cloud_agent_with(
                     &discipline::hook::repo_root()?,
+                    a.upgrade,
                 )?);
             }
             let mut ok = true;
@@ -1439,6 +1446,21 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                         if let Some(why) = discipline::hook::ignored_by_git(&p) {
                             println!("{} {why}", style::yellow("warning:"));
                         }
+                    }
+                    Installed::Upgraded(p) => {
+                        println!(
+                            "{} upgraded {} to discipline {}",
+                            style::green("ok:"),
+                            p.display(),
+                            env!("CARGO_PKG_VERSION")
+                        );
+                    }
+                    Installed::Outdated(p) => {
+                        println!(
+                            "{} {} was written by an earlier discipline release and differs from this one's; run this command again with `--upgrade` to rewrite it",
+                            style::yellow("note:"),
+                            p.display()
+                        );
                     }
                     Installed::Refused(p, snippet) => {
                         println!(

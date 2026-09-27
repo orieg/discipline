@@ -528,7 +528,8 @@ pub fn run_check(dir: &Path, side: &CheckSide) -> Result<CheckRun> {
         .env_remove("DISCIPLINE_PR_BODY_FILE")
         .env_remove("PR_TITLE")
         .env_remove("DISCIPLINE_COMMENT")
-        .env_remove(crate::guards::REPLAY_CASE_ENV);
+        .env_remove(crate::guards::REPLAY_CASE_ENV)
+        .env(HOOK_RUN_ENV, "1");
     match side {
         CheckSide::Default => {}
         CheckSide::Base(b) => {
@@ -702,17 +703,73 @@ export const Discipline = async ({{ $, directory }}) => ({{
 pub enum Installed {
     Written(PathBuf),
     AlreadyPresent(PathBuf),
+    /// A file an earlier release generated, rewritten to this one (`--upgrade`).
+    Upgraded(PathBuf),
+    /// A file an earlier release generated, differing from what this one writes; left as
+    /// it is without `--upgrade`.
+    Outdated(PathBuf),
     /// The file exists without the hook; nothing was written. Carries the snippet.
     Refused(PathBuf, String),
 }
 
+/// Set by [`run_check`] for the check a hook runs: the only run in which a hook file
+/// identical to what this release generates is not reported (see [`is_generated_hook_file`]).
+pub const HOOK_RUN_ENV: &str = "DISCIPLINE_HOOK_RUN";
+
+/// Whether `content` at `path` is exactly what `hook install` of this release writes there,
+/// for any agent in either mode, or the Claude Code bootstrap. A hook has no PR body, so on
+/// the branch that adds its own files it could never lift their `instruction-smuggling`
+/// finding; an identical file changes nothing an agent is told beyond installing discipline.
+/// Any other content, an edit included, is reported as before, and CI still needs the
+/// directive.
+pub fn is_generated_hook_file(path: &str, content: &str) -> bool {
+    if path == CLAUDE_BOOTSTRAP {
+        return content == claude_bootstrap_script();
+    }
+    <Agent as clap::ValueEnum>::value_variants()
+        .iter()
+        .flat_map(|a| [config_for_mode(*a, false), config_for_mode(*a, true)])
+        .any(|(rel, generated)| rel == path && generated == content)
+}
+
+/// What every file `hook install` generates says about itself. A file carrying it and
+/// differing from what this binary writes came from an earlier release (a pinned version,
+/// a changed template); a file without it was written or merged by a person.
+pub const GENERATED_HEADER: &str = "Written by `discipline hook install";
+
+/// For an existing generated file: rewritten to `content` with `upgrade` (the mode is
+/// kept), else reported as outdated. `None` when it is not generated, or already current.
+fn refresh_generated(
+    path: &Path,
+    existing: &str,
+    content: &str,
+    upgrade: bool,
+) -> Result<Option<Installed>> {
+    if !existing.contains(GENERATED_HEADER) || existing == content {
+        return Ok(None);
+    }
+    if !upgrade {
+        return Ok(Some(Installed::Outdated(path.to_path_buf())));
+    }
+    std::fs::write(path, content).with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(Some(Installed::Upgraded(path.to_path_buf())))
+}
+
 /// Writes the agent's configuration under `root` when the file does not exist.
 pub fn install(agent: Agent, root: &Path, observe: bool) -> Result<Installed> {
+    install_with(agent, root, observe, false)
+}
+
+/// [`install`], rewriting a generated file an earlier release wrote when `upgrade`.
+pub fn install_with(agent: Agent, root: &Path, observe: bool, upgrade: bool) -> Result<Installed> {
     let (rel, content) = config_for_mode(agent, observe);
     let path = root.join(rel);
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
+        if let Some(r) = refresh_generated(&path, &existing, &content, upgrade)? {
+            return Ok(r);
+        }
         if existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
             return Ok(Installed::AlreadyPresent(path));
         }
@@ -867,10 +924,18 @@ exit 0
 
 /// Write [`CLAUDE_BOOTSTRAP`] under `root` unless a file is there.
 pub fn install_claude_bootstrap(root: &Path) -> Result<Installed> {
+    install_claude_bootstrap_with(root, false)
+}
+
+/// [`install_claude_bootstrap`], rewriting one an earlier release wrote when `upgrade`.
+pub fn install_claude_bootstrap_with(root: &Path, upgrade: bool) -> Result<Installed> {
     let path = root.join(CLAUDE_BOOTSTRAP);
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
+        if let Some(r) = refresh_generated(&path, &existing, &claude_bootstrap_script(), upgrade)? {
+            return Ok(r);
+        }
         if existing.contains("orieg/discipline/releases") {
             return Ok(Installed::AlreadyPresent(path));
         }
@@ -938,10 +1003,18 @@ pub fn copilot_setup_steps() -> String {
 /// Write [`COPILOT_SETUP_STEPS`] under `root`. A workflow that already installs
 /// discipline is left as it is; any other is refused with the step to merge into it.
 pub fn install_cloud_agent(root: &Path) -> Result<Installed> {
+    install_cloud_agent_with(root, false)
+}
+
+/// [`install_cloud_agent`], rewriting one an earlier release wrote when `upgrade`.
+pub fn install_cloud_agent_with(root: &Path, upgrade: bool) -> Result<Installed> {
     let path = root.join(COPILOT_SETUP_STEPS);
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
+        if let Some(r) = refresh_generated(&path, &existing, &copilot_setup_steps(), upgrade)? {
+            return Ok(r);
+        }
         if existing.contains("orieg/discipline") {
             return Ok(Installed::AlreadyPresent(path));
         }

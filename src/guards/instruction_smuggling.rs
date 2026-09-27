@@ -253,7 +253,16 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         out.examined += 1;
 
         // 2. Agent-instruction files. An edit is a change; a whole-tree run has none.
-        if instructs(&file.path) && !ctx.git.is_whole_tree() {
+        // In a hook's own check, a hook file identical to what `hook install` generates is
+        // a note: the hook cannot read the PR body that records it.
+        let generated_in_hook = std::env::var_os(crate::hook::HOOK_RUN_ENV).is_some()
+            && crate::hook::is_generated_hook_file(&file.path, &head);
+        if instructs(&file.path) && !ctx.git.is_whole_tree() && generated_in_hook {
+            out.notes.push(format!(
+                "`{}` is the hook file `discipline hook install` writes, unchanged; not reported in a hook's check (CI still needs `allow-agent-instructions`)",
+                file.path
+            ));
+        } else if instructs(&file.path) && !ctx.git.is_whole_tree() {
             if let Some(ov) =
                 lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
             {

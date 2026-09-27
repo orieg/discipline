@@ -542,6 +542,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--user` |  |  | Write the user-level hook instead (copilot: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml |
 | `--observe` |  |  | Write the hook commands in observe mode (hook run --observe): the agent is never blocked while a hook is rolled out |
 | `--cloud-agent` |  |  | Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only) |
+| `--upgrade` |  |  | Rewrite a file an earlier discipline release generated (it carries the `Written by \`discipline hook install\`` header: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten |
 
 **`discipline explain`**
 
@@ -581,6 +582,8 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--strict` |  |  | Treat warnings as failures |
 | `-f`, `--format` |  | `text` | Output format |
 <!-- /generated -->
+
+`doctor` reads branch rules through the forge's API. Without a token, a shared IP (a CI runner, an office network) soon reaches GitHub's unauthenticated rate limit, and the platform checks come back `could not check` (exit 2); set `DISCIPLINE_FORGE_TOKEN` (or `GH_TOKEN`) to a token that can read the repository.
 
 ### Exit Codes
 
@@ -964,6 +967,12 @@ Test `adds`: effective assertions dropped from 2 to 0.
 A check that cannot run (configuration that does not parse, a base that does not resolve) blocks with the reason, which the text names as the report's `could_not_check.reason` (`discipline could not check this change (reason: configuration)`, `(reason: tool-missing, gate miri)`); it never reads as a pass. An event that this hook already continued (`stop_hook_active`, sent by Claude Code, Codex, Copilot CLI and Qwen Code), and agy's stop after three blocks, is let through, so a finding the agent cannot fix returns control to the person instead of looping; CI still gates the change. The hook still runs the check there, and when the change has findings or could not be checked it says so on stderr (the transcript or hook log the person reads, not the model): a stop let through is never reported as clean. `discipline` must be on the agent's `PATH`.
 
 **Observe mode, for rolling a hook out.** `discipline hook install --agent <name> --observe` writes every check command as `discipline hook run --agent <name> --observe`. The check runs as usual but never blocks: the agent gets its pass, and what would have blocked (the codes of the blocking findings, not the warnings beside them, or the reason a check could not run) is said on stderr, marked "observe mode, not enforced", and appended to `<git dir>/discipline/hook-observe.log`, one JSON line per event (`time`, `agent`, `event`, `verdict`, `reason`, `codes`). Read the log to see what enforcing would have stopped, then drop `--observe` from the hook file. Observe mode is never enforcement: CI still gates the change.
+
+**A hook on the branch that adds it.** A hook's check reads no PR body, so it cannot see the `allow-agent-instructions:` lines that record its own files. In a hook's check only, a hook file identical to what `hook install` of this release writes (for any agent, observe or enforcing, or the Claude Code bootstrap) is a note, not a finding; CI still reports it until the directive is in the PR body. A hook file edited by hand is reported by the hook as well, so a hook cannot be switched off unnoticed.
+
+**Upgrading generated files.** `hook install` never rewrites an existing file. A file it generated carries a `Written by \`discipline hook install\`` header; when such a file differs from what the running release writes (the Claude Code bootstrap and the Copilot setup step pin a release), `hook install` says so, and the same command with `--upgrade` rewrites it. A file without that header, one written or merged by hand, is never rewritten. After a release, run `hook install --agent <name> [--observe] [--cloud-agent] --upgrade` for each agent, and commit the result with its `allow-agent-instructions:` lines.
+
+**Several agents on one machine.** A Homebrew upgrade removes the old binary before it links the new one, so an agent session that upgrades while another is running can leave the other with no `discipline` on `PATH` for a moment. On a machine where several sessions run, install or upgrade once before starting them, or have each session use the checksum-verified release tarball in its own scratch directory.
 
 ### Pull-Request Comments
 

@@ -86,6 +86,7 @@ impl Run {
 }
 
 pub const ISOLATED_ENV_VARS: &[&str] = &[
+    "DISCIPLINE_HOOK_RUN",
     "PR_BODY",
     "DISCIPLINE_PR_BODY_FILE",
     "PR_TITLE",

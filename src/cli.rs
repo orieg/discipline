@@ -197,6 +197,11 @@ pub struct HookInstallArgs {
     /// Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
     #[arg(long, conflicts_with = "user")]
     pub cloud_agent: bool,
+    /// Rewrite a file an earlier discipline release generated (it carries the `Written by
+    /// \`discipline hook install\`` header: the Claude Code bootstrap, the Copilot setup step,
+    /// the OpenCode plugin) to this release; a file without that header is never rewritten
+    #[arg(long)]
+    pub upgrade: bool,
 }
 
 #[derive(Args, Debug, Clone)]

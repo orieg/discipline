@@ -860,3 +860,136 @@ fn install_warns_when_git_ignores_the_file_it_wrote() {
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert!(!run.stdout.contains("warning:"), "{}", run.stdout);
 }
+
+#[test]
+fn install_upgrade_rewrites_only_files_an_earlier_release_generated() {
+    // What this release writes, from a fresh repository.
+    let fresh = Repo::new();
+    let run = fresh.run(
+        &["hook", "install", "--agent", "copilot", "--cloud-agent"],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let run = fresh.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let read = |r: &Repo, f: &str| std::fs::read_to_string(r.file(f)).unwrap();
+    let setup = ".github/workflows/copilot-setup-steps.yml";
+    let boot = ".claude/hooks/discipline-bootstrap.sh";
+    let current_setup = read(&fresh, setup);
+    let current_boot = read(&fresh, boot);
+    let v = env!("CARGO_PKG_VERSION");
+
+    // An earlier release's files: another version pinned, the header kept.
+    let old_setup = current_setup.replace(&format!("v{v}"), "v0.0.1");
+    let old_boot = current_boot.replace(&format!("v{v}"), "v0.0.1");
+    assert_ne!(old_setup, current_setup);
+    let repo = Repo::new();
+    repo.write(setup, &old_setup);
+    repo.write(boot, &old_boot);
+
+    let plain = repo.run(
+        &["hook", "install", "--agent", "copilot", "--cloud-agent"],
+        &[],
+    );
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
+    assert!(
+        plain
+            .stdout
+            .contains("was written by an earlier discipline release"),
+        "{}",
+        plain.stdout
+    );
+    assert_eq!(
+        read(&repo, setup),
+        old_setup,
+        "left as it is without --upgrade"
+    );
+
+    for args in [
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "copilot",
+            "--cloud-agent",
+            "--upgrade",
+        ][..],
+        &["hook", "install", "--agent", "claude-code", "--upgrade"][..],
+    ] {
+        let run = repo.run(args, &[]);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        assert!(run.stdout.contains("upgraded"), "{}", run.stdout);
+    }
+    assert_eq!(read(&repo, setup), current_setup);
+    assert_eq!(read(&repo, boot), current_boot);
+
+    // Control: a bootstrap a person wrote (no generated header) is never rewritten.
+    let own = Repo::new();
+    let hand = "#!/bin/bash\n# our own installer, pinned to orieg/discipline/releases v0.0.1\n";
+    own.write(boot, hand);
+    let run = own.run(
+        &["hook", "install", "--agent", "claude-code", "--upgrade"],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(read(&own, boot), hand);
+}
+
+#[test]
+fn a_hook_does_not_report_the_unchanged_hook_files_its_own_branch_adds() {
+    let repo = Repo::new();
+    for agent in ["claude-code", "agy", "copilot"] {
+        let run = repo.run(&["hook", "install", "--agent", agent, "--observe"], &[]);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+    }
+    repo.git(&["add", "-A"]);
+    repo.commit("chore(hooks): discipline hooks in observe mode");
+    // The hook's own check: the generated files are notes, not findings.
+    let clean = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(clean.code, 0, "{}", clean.stderr);
+
+    // Control: CI (a plain check) still reports every one of them.
+    let ci = repo.check(&[]);
+    assert_eq!(ci.code, 1);
+    let codes: Vec<String> = ci
+        .violations("instruction-smuggling")
+        .iter()
+        .map(|v| v["file"].as_str().unwrap_or("").to_string())
+        .collect();
+    for f in [
+        ".claude/settings.json",
+        ".claude/hooks/discipline-bootstrap.sh",
+        ".agents/hooks.json",
+        ".github/hooks/discipline.json",
+    ] {
+        assert!(
+            codes.iter().any(|c| c == f),
+            "{f} not reported in CI: {codes:?}"
+        );
+    }
+
+    // Switching to enforcing is also what `hook install` writes: still a note.
+    let path = repo.file(".agents/hooks.json");
+    let observe = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, observe.replace(" --observe", "")).unwrap();
+    let enforcing = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(enforcing.code, 0, "{}", enforcing.stderr);
+
+    // Control: a hand edit of a hook file is reported by the hook as well.
+    let edited = observe.replace(
+        "--agent agy --observe",
+        "--agent agy --observe --if-configured",
+    );
+    assert_ne!(edited, observe);
+    std::fs::write(&path, edited).unwrap();
+    let blocked = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(blocked.code, 2, "{}", blocked.stderr);
+    assert!(
+        blocked
+            .stderr
+            .contains("instruction-smuggling/agent-instructions-changed")
+            && blocked.stderr.contains(".agents/hooks.json"),
+        "{}",
+        blocked.stderr
+    );
+}
