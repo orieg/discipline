@@ -497,7 +497,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 ctx,
                                 Some(&head_content),
                                 &mut out,
-                                settings.severity,
+                                if is_verification_job(job_id, job_v) { settings.severity } else { Severity::Warning },
                                 &crate::findings::JOB_FAILURE_MASKED_CONTINUE_ON_ERROR,
                                 Some(path.clone()),
                                 coe_line,
@@ -1041,7 +1041,14 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 }
                             }
 
-                            // 5e. continue-on-error
+                            // 5e. continue-on-error. In a job that verifies nothing (a summary,
+                            // a report) no check is masked: a warning.
+                            let verifies = is_verification_job(job_id, job_v);
+                            let coe_severity = if verifies {
+                                settings.severity
+                            } else {
+                                Severity::Warning
+                            };
                             if settings.forbid_continue_on_error
                                 && step.get("continue-on-error").and_then(|c| c.as_bool())
                                     == Some(true)
@@ -1066,11 +1073,15 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                         ctx,
                                         Some(&head_content),
                                         &mut out,
-                                        settings.severity,
+                                        coe_severity,
                                         &crate::findings::STEP_FAILURE_MASKED_CONTINUE_ON_ERROR,
                                         Some(path.clone()),
                                         coe_line,
-                                        "Step carries 'continue-on-error: true', which masks failures in CI.".to_string(),
+                                        if verifies {
+                                            "Step carries 'continue-on-error: true', which masks failures in CI.".to_string()
+                                        } else {
+                                            format!("Step carries 'continue-on-error: true' in job '{job_id}', which verifies nothing (a warning: no check is masked).")
+                                        },
                                         "Remove continue-on-error or provide an allow-gate-weakening: ci-integrity <reason> directive.",
                                         step_subject,
                                     );
@@ -1649,10 +1660,66 @@ pub const FROZEN_INSTALL_FLAGS: &[&str] = &[
     "--no-update",
 ];
 
+/// Actions that report a result rather than check one: they upload, download, or post it.
+const REPORTING_ACTIONS: &[&str] = &[
+    "actions/upload-artifact",
+    "actions/download-artifact",
+    "peter-evans/create-or-update-comment",
+    "marocchino/sticky-pull-request-comment",
+    "thollander/actions-comment-pull-request",
+    "mshick/add-pr-comment",
+];
+
+/// First words of a step name that says it reports: `Comment the gate result on the PR`,
+/// `Upload test logs`, `Show the diff for any failing test`.
+const REPORTING_VERBS: &[&str] = &[
+    "comment",
+    "post",
+    "upload",
+    "download",
+    "publish",
+    "report",
+    "show",
+    "print",
+    "summarize",
+    "summarise",
+    "annotate",
+    "notify",
+    "render",
+];
+
+/// Whether a step only reports: it uses a reporting action (or `github-script` whose
+/// script cannot fail the step: no `setFailed`, no `throw`), or its name starts with a
+/// reporting verb. Such a step is not a check because its name mentions one.
+fn is_reporting_step(step: &serde_yaml::Value) -> bool {
+    if let Some(uses) = step.get("uses").and_then(|u| u.as_str()) {
+        let action = uses.split('@').next().unwrap_or(uses).trim();
+        if REPORTING_ACTIONS.contains(&action) {
+            return true;
+        }
+        if action == "actions/github-script" {
+            let script = step
+                .get("with")
+                .and_then(|w| w.get("script"))
+                .and_then(|s| s.as_str())
+                .unwrap_or("");
+            return !script.contains("setFailed") && !script.contains("throw");
+        }
+    }
+    step.get("name")
+        .and_then(|n| n.as_str())
+        .and_then(|n| n.split_whitespace().next())
+        .is_some_and(|w| REPORTING_VERBS.contains(&w.to_ascii_lowercase().as_str()))
+}
+
 fn is_verification_step(step: &serde_yaml::Value) -> bool {
     let raw_run = step.get("run").and_then(|r| r.as_str()).map(str::to_string);
     if !markers_in(step, raw_run).is_empty() {
         return true;
+    }
+    // A name that mentions a check makes a check only of a step that does not report.
+    if is_reporting_step(step) {
+        return false;
     }
     if let Some(name) = step.get("name").and_then(|n| n.as_str()) {
         let n = name.to_ascii_lowercase();

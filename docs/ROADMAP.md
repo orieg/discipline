@@ -374,6 +374,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| unreleased | `ci-integrity` | A step that reports (a reporting action, `github-script` that cannot fail, or a name starting with a reporting verb such as `Comment`) is no longer a verification step because its name mentions `gate` / `test` / `check`, so narrowing or removing it is not reported; `continue-on-error` in a job that verifies nothing is a warning, not an error. | looser (false positives removed; one error becomes a warning) | None. |
 | v0.14.2 | `version-lockstep` | Drift the base already had is a note, not `version-mismatch`, when the change touches none of the group's sources; the next change that touches one must resolve it. | looser (a change is not blamed for drift it did not cause) | None. |
 | v0.14.2 | `dependency-delta` | A `pyproject.toml` requirement on the project's own extras (`all = ["<project>[a,b]"]`) is not reported as a new or wildcard dependency. | looser (false positive removed) | None. |
 | v0.14.2 | `time-estimates` | A lookback (`the last 24 hours`, also across a soft wrap), `this <period>'s`, and `Q<n>` followed by a reporting noun (`the Q3 invoice`) are not reported. | looser (false positives removed) | None. |

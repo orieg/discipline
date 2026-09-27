@@ -13335,3 +13335,105 @@ fn time_estimates_skips_periods_of_data_and_keeps_estimates() {
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert!(hits[0].contains("5 minutes"), "{hits:?}");
 }
+
+/// `(code, severity)` of every `ci-integrity` finding from `base` to `head`.
+fn ci_integrity_findings(base: &str, head: &str) -> Vec<(String, String)> {
+    const WF: &str = ".github/workflows/ci.yml";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(WF, base);
+    repo.commit("ci: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(WF, head);
+    repo.commit("ci: change");
+    let mut out: Vec<(String, String)> = repo
+        .check(&[])
+        .violations("ci-integrity")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn ci_integrity_a_step_that_reports_is_not_a_check_because_of_its_name() {
+    let job = |step: &str| {
+        format!("{CI_HEAD}  bench:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Run benchmarks\n        run: ./bench.sh\n{step}")
+    };
+    let comment = "      - name: Comment the gate result on the PR\n        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea\n        with:\n          script: |\n            github.rest.issues.createComment({body: 'x'})\n";
+    let narrowed = comment.replace(
+        "        uses:",
+        "        if: github.event_name == 'pull_request'\n        uses:",
+    );
+    // A comment step named after the gate, restricted to pull requests: not a check.
+    assert!(ci_integrity_findings(&job(comment), &job(&narrowed)).is_empty());
+    // A step whose name says it reports, running a plain command.
+    let show =
+        "      - name: Show the diff for any failing test\n        run: cat results/*.diff\n";
+    let show_narrowed = show.replace(
+        "        run:",
+        "        if: github.event_name == 'pull_request'\n        run:",
+    );
+    assert!(ci_integrity_findings(&job(show), &job(&show_narrowed)).is_empty());
+
+    // Controls: a github-script step that can fail the job, and a named test step
+    // that runs a command, are checks, so narrowing them is reported.
+    let failing = comment.replace(
+        "github.rest.issues.createComment({body: 'x'})",
+        "if (!ok) core.setFailed('gate failed')",
+    );
+    let failing_narrowed = failing.replace(
+        "        uses:",
+        "        if: github.event_name == 'pull_request'\n        uses:",
+    );
+    assert_eq!(
+        ci_integrity_findings(&job(&failing), &job(&failing_narrowed)),
+        vec![(
+            "ci-integrity/verification-step-narrowed".into(),
+            "warning".into()
+        )]
+    );
+    let gate = "      - name: Check the gate result\n        run: ./check-gate.sh\n";
+    let gate_narrowed = gate.replace(
+        "        run:",
+        "        if: github.event_name == 'pull_request'\n        run:",
+    );
+    assert_eq!(
+        ci_integrity_findings(&job(gate), &job(&gate_narrowed)),
+        vec![(
+            "ci-integrity/verification-step-narrowed".into(),
+            "warning".into()
+        )]
+    );
+}
+
+#[test]
+fn ci_integrity_continue_on_error_in_a_job_that_verifies_nothing_is_a_warning() {
+    let summary = |coe: &str| {
+        format!("{CI_HEAD}  summary:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093\n        with:\n          path: results\n{coe}      - name: Render the summary\n        run: ./render.sh results >> \"$GITHUB_STEP_SUMMARY\"\n")
+    };
+    assert_eq!(
+        ci_integrity_findings(&summary(""), &summary("        continue-on-error: true\n")),
+        vec![(
+            "ci-integrity/step-failure-masked-continue-on-error".into(),
+            "warning".into()
+        )]
+    );
+    // Control: in a job that runs the tests it stays an error.
+    let tests = |coe: &str| {
+        format!("{CI_HEAD}  test:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Run tests\n        run: cargo test\n{coe}")
+    };
+    assert_eq!(
+        ci_integrity_findings(&tests(""), &tests("        continue-on-error: true\n")),
+        vec![(
+            "ci-integrity/step-failure-masked-continue-on-error".into(),
+            "error".into()
+        )]
+    );
+}
