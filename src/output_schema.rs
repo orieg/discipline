@@ -186,7 +186,7 @@ pub fn replay_schema() -> Value {
         "description": "The summary `discipline replay --json` prints: each replayed change's verdict under the configuration, and per-gate counts. Changes are labelled `#N` (pull request) or by a 10-character commit id.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["schema_version", "cases", "passed", "blocked", "could_not_check", "errors_by_gate", "refused_overrides_by_gate", "warnings_by_gate", "could_not_check_by_reason", "cases_detail"],
+        "required": ["schema_version", "cases", "passed", "blocked", "could_not_check", "errors_by_gate", "refused_overrides_by_gate", "warnings_by_gate", "could_not_check_by_reason", "skipped_by_gate", "cases_detail"],
         "properties": {
             "schema_version": { "const": REPLAY_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
             "cases": { "type": "integer", "minimum": 0 },
@@ -201,6 +201,7 @@ pub fn replay_schema() -> Value {
                 "additionalProperties": { "type": "integer", "minimum": 0 }
             },
             "could_not_check_by_reason": { "description": "The reason a change could not be checked (the report's `could_not_check.reason`) -> the changes", "$ref": "#/$defs/ChangeLists" },
+            "skipped_by_gate": { "description": "Gate id -> the changes that skipped part of it because the configuration names a file the change does not have yet (the configuration is newer than the change)", "$ref": "#/$defs/ChangeLists" },
             "cases_detail": { "type": "array", "items": { "$ref": "#/$defs/Case" }, "description": "Newest first" }
         },
         "$defs": {
@@ -208,7 +209,7 @@ pub fn replay_schema() -> Value {
             "Case": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["sha", "pr", "subject", "verdict", "blocking_gates", "refused_overrides", "actor", "warning_gates", "findings", "directives_from"],
+                "required": ["sha", "pr", "subject", "verdict", "blocking_gates", "refused_overrides", "actor", "warning_gates", "findings", "directives_from", "skipped_checks"],
                 "properties": {
                     "sha": { "type": "string", "description": "Full commit id of the replayed change" },
                     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from the forge or the subject's `(#N)`" },
@@ -220,8 +221,18 @@ pub fn replay_schema() -> Value {
                     "warning_gates": { "type": "array", "items": { "type": "string" } },
                     "findings": { "type": "array", "items": { "$ref": "#/$defs/CaseFinding" }, "description": "Every error and warning of the change's report, in report order; empty when the check itself could not run. The message is never included: a finding can echo secret material" },
                     "directives_from": { "type": "string", "description": "`pull request body`, or why only the commit message was read" },
+                    "skipped_checks": { "type": "array", "items": { "$ref": "#/$defs/SkippedCheck" }, "description": "Parts of gates skipped because the configuration names a file this change does not have yet; empty when the check itself could not run" },
                     "reason": { "enum": reasons(), "description": "Why the change could not be checked: the report's `could_not_check.reason`, or `forge` when its merged pull request could not be read. Omitted otherwise" },
                     "detail": { "type": "string", "description": "Why the change could not be checked. Omitted otherwise" }
+                }
+            },
+            "SkippedCheck": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["gate", "what"],
+                "properties": {
+                    "gate": { "type": "string", "description": "Gate id" },
+                    "what": { "type": "string", "description": "What was skipped, as the gate's note names it (for example ``group `versions` ``)" }
                 }
             },
             "CaseFinding": {

@@ -327,6 +327,67 @@ fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_on
     );
 }
 
+#[test]
+fn a_group_skipped_because_the_configuration_is_newer_is_in_the_summary() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    let cfg = "[meta]\nversion = 1\nname = \"t\"\n[gates.version-lockstep]\nenabled = true\ngroups = [{ name = \"v\", sources = [\n  { path = \"pyproject.toml\", regex = 'version = \"([^\"]+)\"' },\n  { path = \"server.json\", regex = '\"version\": \"([^\"]+)\"' },\n]}]\n";
+    // #2 predates `server.json`; #3 adds it.
+    repo.write("pyproject.toml", "version = \"1.0\"\n");
+    repo.commit("build: project (#2)");
+    repo.write("server.json", "{\"version\": \"1.0\"}\n");
+    repo.commit("build: server manifest (#3)");
+    let candidate = repo.file("candidate.toml");
+    std::fs::write(&candidate, cfg).unwrap();
+    let config = candidate.to_str().unwrap();
+
+    let s = replay(&repo, &["--config", config], &[]);
+    assert_eq!(
+        s["skipped_by_gate"],
+        serde_json::json!({ "version-lockstep": ["#2"] }),
+        "{s}"
+    );
+    let skipped = |pr: u64| {
+        s["cases_detail"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["pr"] == pr)
+            .unwrap()["skipped_checks"]
+            .clone()
+    };
+    assert_eq!(
+        skipped(2),
+        serde_json::json!([{ "gate": "version-lockstep", "what": "group `v`" }])
+    );
+    // Control: the change that has the file skips nothing.
+    assert_eq!(skipped(3), serde_json::json!([]));
+
+    let human = repo.run(
+        &["replay", "--last", "2", "--ref", "main", "--config", config],
+        &[],
+    );
+    assert_eq!(human.code, 0, "{}\n{}", human.stdout, human.stderr);
+    assert!(
+        human.stdout.contains(
+            "1 change(s) skipped a check whose configuration is newer than the change: version-lockstep (group `v`)\n  skipped  version-lockstep         1 change(s): #2\n"
+        ),
+        "{}",
+        human.stdout
+    );
+
+    // Control: replaying only #3, whose tree has the file, reports no skip.
+    let last = repo.run(
+        &[
+            "replay", "--last", "1", "--ref", "main", "--json", "--config", config,
+        ],
+        &[],
+    );
+    assert_eq!(last.code, 0, "{}\n{}", last.stdout, last.stderr);
+    let last: Value = serde_json::from_str(&last.stdout).unwrap();
+    assert_eq!(last["skipped_by_gate"], serde_json::json!({}), "{last}");
+}
+
 /// Since git 2.54, `git commit` ends with `git maintenance run --auto`, detached, and its
 /// repack fires when `objects/17/` holds two loose objects: a test repository's objects
 /// could be packed in the background mid-test. The harness's git commands never start it,

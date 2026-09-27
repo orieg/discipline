@@ -44,8 +44,10 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
             if !path.is_file() {
                 if ctx.predates_config(&source.path)? {
                     out.notes.push(format!(
-                        "version-lockstep group `{}` skipped: `{}` is not in this change's tree (the configuration is newer)",
-                        group.name, source.path
+                        "version-lockstep group `{}` skipped: `{}` is not in this change's tree {}",
+                        group.name,
+                        source.path,
+                        super::PREDATES_CONFIG_NOTE
                     ));
                     continue 'groups;
                 }

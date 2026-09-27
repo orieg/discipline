@@ -65,6 +65,13 @@
           "description": "Full commit id of the replayed change",
           "type": "string"
         },
+        "skipped_checks": {
+          "description": "Parts of gates skipped because the configuration names a file this change does not have yet; empty when the check itself could not run",
+          "items": {
+            "$ref": "#/$defs/SkippedCheck"
+          },
+          "type": "array"
+        },
         "subject": {
           "type": "string"
         },
@@ -92,7 +99,8 @@
         "actor",
         "warning_gates",
         "findings",
-        "directives_from"
+        "directives_from",
+        "skipped_checks"
       ],
       "type": "object"
     },
@@ -140,6 +148,24 @@
         "type": "array"
       },
       "type": "object"
+    },
+    "SkippedCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "gate": {
+          "description": "Gate id",
+          "type": "string"
+        },
+        "what": {
+          "description": "What was skipped, as the gate's note names it (for example ``group `versions` ``)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "gate",
+        "what"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -185,6 +211,10 @@
       "const": 1,
       "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it"
     },
+    "skipped_by_gate": {
+      "$ref": "#/$defs/ChangeLists",
+      "description": "Gate id -> the changes that skipped part of it because the configuration names a file the change does not have yet (the configuration is newer than the change)"
+    },
     "warnings_by_gate": {
       "additionalProperties": {
         "minimum": 0,
@@ -204,6 +234,7 @@
     "refused_overrides_by_gate",
     "warnings_by_gate",
     "could_not_check_by_reason",
+    "skipped_by_gate",
     "cases_detail"
   ],
   "title": "DisciplineReplay",

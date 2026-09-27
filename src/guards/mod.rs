@@ -340,6 +340,11 @@ pub struct Context<'a> {
 /// nothing.
 pub const REPLAY_CASE_ENV: &str = "DISCIPLINE_REPLAY_CASE";
 
+/// The end of the note a gate records when [`Context::predates_config`] skips part of
+/// it: `<what> skipped: <why> (the configuration is newer)`. `discipline replay` counts
+/// these notes per gate (`skipped_by_gate`), so every such note ends with this text.
+pub const PREDATES_CONFIG_NOTE: &str = "(the configuration is newer)";
+
 impl Context<'_> {
     /// The base side's configuration text: the file `--config` names when the base tree
     /// has it, else the base `discipline.toml`. A `--config` outside the repository is in

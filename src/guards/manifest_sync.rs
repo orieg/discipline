@@ -36,8 +36,9 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
         if !manifest_path.is_file() {
             if ctx.predates_config(&rule.manifest)? {
                 out.notes.push(format!(
-                    "manifest `{}` skipped: it is not in this change's tree (the configuration is newer)",
-                    rule.manifest
+                    "manifest `{}` skipped: it is not in this change's tree {}",
+                    rule.manifest,
+                    super::PREDATES_CONFIG_NOTE
                 ));
                 continue;
             }

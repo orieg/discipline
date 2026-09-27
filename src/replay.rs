@@ -44,6 +44,9 @@ pub struct Case {
     pub findings: Vec<CaseFinding>,
     /// Where the directives came from: `pull request body`, or why they did not.
     pub directives_from: String,
+    /// Parts of gates skipped because the configuration names a file this change does
+    /// not have yet (the configuration is newer than the change).
+    pub skipped_checks: Vec<SkippedCheck>,
     /// Why it could not be checked: the child report's `could_not_check.reason`, or
     /// `forge` when its merged pull request could not be read.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,6 +68,15 @@ pub struct CaseFinding {
     pub line: Option<u64>,
 }
 
+/// Part of a gate a replayed change skipped: its configuration names a file the change
+/// does not have (see [`crate::guards::PREDATES_CONFIG_NOTE`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SkippedCheck {
+    pub gate: String,
+    /// What was skipped, e.g. ``group `versions` ``.
+    pub what: String,
+}
+
 #[derive(Debug, Default, serde::Serialize)]
 pub struct Summary {
     /// [`crate::output_schema::REPLAY_SCHEMA_VERSION`].
@@ -82,6 +94,9 @@ pub struct Summary {
     /// The reason code a change could not be checked for → the changes (`#N`, else the
     /// short sha).
     pub could_not_check_by_reason: BTreeMap<String, Vec<String>>,
+    /// Gate id → the changes that skipped part of it because the configuration is newer
+    /// than the change.
+    pub skipped_by_gate: BTreeMap<String, Vec<String>>,
     pub cases_detail: Vec<Case>,
 }
 
@@ -132,6 +147,14 @@ impl Summary {
             }
             for g in &c.warning_gates {
                 *s.warnings_by_gate.entry(g.clone()).or_default() += 1;
+            }
+            let gates: std::collections::BTreeSet<&String> =
+                c.skipped_checks.iter().map(|k| &k.gate).collect();
+            for g in gates {
+                s.skipped_by_gate
+                    .entry(g.clone())
+                    .or_default()
+                    .push(c.label());
             }
         }
         s.cases_detail = cases;
@@ -188,6 +211,36 @@ impl Summary {
         }
         for (g, n) in &self.warnings_by_gate {
             out.push_str(&format!("  warning  {g:<24} {n} change(s)\n"));
+        }
+        let skipped: Vec<&Case> = self
+            .cases_detail
+            .iter()
+            .filter(|c| !c.skipped_checks.is_empty())
+            .collect();
+        if !skipped.is_empty() {
+            let mut what: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+            for k in skipped.iter().flat_map(|c| &c.skipped_checks) {
+                what.entry(&k.gate).or_default().insert(&k.what);
+            }
+            let named: Vec<String> = what
+                .iter()
+                .map(|(g, w)| {
+                    let w: Vec<&str> = w.iter().copied().collect();
+                    format!("{g} ({})", w.join(", "))
+                })
+                .collect();
+            out.push_str(&format!(
+                "{} change(s) skipped a check whose configuration is newer than the change: {}\n",
+                skipped.len(),
+                named.join(", ")
+            ));
+            for (g, changes) in &self.skipped_by_gate {
+                out.push_str(&format!(
+                    "  skipped  {g:<24} {} change(s): {}\n",
+                    changes.len(),
+                    changes.join(" ")
+                ));
+            }
         }
         for (r, changes) in &self.could_not_check_by_reason {
             out.push_str(&format!(
@@ -292,6 +345,38 @@ pub fn read_findings(code: i32, json: &str) -> Vec<CaseFinding> {
             })
         })
         .collect()
+}
+
+/// The parts of gates one `check --format json` run skipped because the configuration
+/// names a file the change does not have: the notes ending with
+/// [`crate::guards::PREDATES_CONFIG_NOTE`], in report order.
+pub fn read_skipped_checks(json: &str) -> Vec<SkippedCheck> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for o in v["outcomes"].as_array().into_iter().flatten() {
+        let gate = o["gate"].as_str().unwrap_or("");
+        for note in o["notes"].as_array().into_iter().flatten() {
+            let Some(note) = note.as_str() else {
+                continue;
+            };
+            if !note.ends_with(crate::guards::PREDATES_CONFIG_NOTE) {
+                continue;
+            }
+            let what = note.split(" skipped:").next().unwrap_or(note);
+            let what = what
+                .strip_prefix(gate)
+                .map(str::trim_start)
+                .filter(|w| !w.is_empty())
+                .unwrap_or(what);
+            out.push(SkippedCheck {
+                gate: gate.to_string(),
+                what: what.to_string(),
+            });
+        }
+    }
+    out
 }
 
 /// Gates that applied an override, in report order.
@@ -581,6 +666,11 @@ pub fn run(opts: &Options) -> Result<Summary> {
         let (mut verdict, blocking, warning) =
             read_verdict(code, &String::from_utf8_lossy(&out.stdout));
         let findings = read_findings(code, &String::from_utf8_lossy(&out.stdout));
+        let skipped_checks = if matches!(code, 0 | 1) {
+            read_skipped_checks(&String::from_utf8_lossy(&out.stdout))
+        } else {
+            Vec::new()
+        };
         let (mut detail, mut reason) = if verdict == "could_not_check" {
             (
                 String::from_utf8_lossy(&out.stderr).trim().to_string(),
@@ -625,6 +715,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
             warning_gates: warning,
             findings,
             directives_from,
+            skipped_checks,
             reason,
             detail,
         });
@@ -702,6 +793,29 @@ mod tests {
     }
 
     #[test]
+    fn skips_for_a_newer_configuration_are_read_from_every_gate() {
+        let report = r#"{"outcomes":[
+            {"gate":"version-lockstep","notes":["version-lockstep group `v` skipped: `server.json` is not in this change's tree (the configuration is newer)","examined 2 files"]},
+            {"gate":"manifest-sync","notes":["manifest `Cargo.toml` skipped: it is not in this change's tree (the configuration is newer)"]},
+            {"gate":"pii","notes":["the configuration is newer, said in passing"]}
+        ]}"#;
+        assert_eq!(
+            read_skipped_checks(report),
+            vec![
+                SkippedCheck {
+                    gate: "version-lockstep".into(),
+                    what: "group `v`".into()
+                },
+                SkippedCheck {
+                    gate: "manifest-sync".into(),
+                    what: "manifest `Cargo.toml`".into()
+                },
+            ]
+        );
+        assert!(read_skipped_checks("").is_empty());
+    }
+
+    #[test]
     fn a_pull_request_number_comes_from_the_squash_subject() {
         assert_eq!(pr_from_subject("fix(x): y (#1028)"), Some(1028));
         assert_eq!(pr_from_subject("no number"), None);
@@ -733,6 +847,7 @@ mod tests {
             warning_gates: w.iter().map(|s| s.to_string()).collect(),
             findings: Vec::new(),
             directives_from: String::new(),
+            skipped_checks: Vec::new(),
             reason: None,
             detail: String::new(),
         };
