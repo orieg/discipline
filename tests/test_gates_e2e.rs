@@ -13176,3 +13176,127 @@ fn ci_integrity_a_renamed_split_or_moved_job_is_not_removed() {
         vec!["ci-integrity/verification-workflow-deleted"]
     );
 }
+
+#[test]
+fn version_lockstep_does_not_blame_a_change_for_drift_the_base_already_had() {
+    let config = r#"
+[meta]
+version = 1
+name = "test-repo"
+
+[gates.version-lockstep]
+enabled = true
+
+[[gates.version-lockstep.groups]]
+name = "release"
+sources = [
+  { path = "Makefile", regex = 'VERSION := (\S+)' },
+  { path = "plugin.json", regex = '"version": "([^"]+)"' },
+]
+"#;
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("Makefile", "VERSION := 0.1.0\n"),
+            ("plugin.json", "{\"version\": \"0.3.5\"}\n"),
+            ("README.md", "hello\n"),
+        ],
+        "base: already drifted",
+    );
+    // A change to an unrelated file inherits the drift: a note, not a finding.
+    repo.write("README.md", "hello, world\n");
+    repo.commit("docs: readme");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.titles("version-lockstep").is_empty());
+    assert!(run.outcome("version-lockstep")["notes"]
+        .to_string()
+        .contains("the base already declared these versions"));
+    // Control: a change that edits a source must resolve the drift, even one that
+    // leaves its version alone.
+    repo.write("plugin.json", "{\"version\": \"0.3.5\", \"name\": \"x\"}\n");
+    repo.commit("chore: name the plugin");
+    assert_eq!(
+        repo.check(&[]).titles("version-lockstep"),
+        vec!["Version Declaration Lockstep Mismatch"]
+    );
+    repo.write("plugin.json", "{\"version\": \"0.3.6\"}\n");
+    repo.commit("chore: bump plugin");
+    assert_eq!(
+        repo.check(&[]).titles("version-lockstep"),
+        vec!["Version Declaration Lockstep Mismatch"]
+    );
+
+    // Control: drift this change introduced is reported.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("Makefile", "VERSION := 0.3.5\n"),
+            ("plugin.json", "{\"version\": \"0.3.5\"}\n"),
+        ],
+        "base: in sync",
+    );
+    repo.write("plugin.json", "{\"version\": \"0.3.6\"}\n");
+    repo.commit("chore: bump plugin only");
+    assert_eq!(repo.check(&[]).code, 1);
+}
+
+#[test]
+fn dependency_delta_ignores_a_requirement_on_the_projects_own_extras() {
+    let base = "[project]\nname = \"yaml-workflow\"\nversion = \"1.0\"\ndependencies = [\"pyyaml>=6,<7\"]\n\n[project.optional-dependencies]\nserve = [\"flask>=3,<4\"]\n";
+    let repo = Repo::new();
+    repo.commit_base_files(&[("pyproject.toml", base)], "base");
+    repo.write(
+        "pyproject.toml",
+        &format!("{base}all = [\"yaml-workflow[serve]\"]\n"),
+    );
+    repo.commit("build: an all extra");
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("dependency-delta").is_empty(),
+        "{:?}",
+        run.violations("dependency-delta")
+    );
+    // Control: another package in the same extra is a new dependency.
+    repo.write(
+        "pyproject.toml",
+        &format!("{base}all = [\"yaml-workflow[serve]\", \"jsonschema\"]\n"),
+    );
+    repo.commit("build: jsonschema");
+    let codes: Vec<String> = repo
+        .check(&[])
+        .violations("dependency-delta")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        codes.contains(&"dependency-delta/direct-dependency-added".to_string()),
+        "{codes:?}"
+    );
+}
+
+#[test]
+fn time_estimates_skips_periods_of_data_and_keeps_estimates() {
+    let repo = Repo::new();
+    repo.commit_base_files(&[("README.md", "# Tool\n")], "base");
+    repo.write(
+        "README.md",
+        "# Tool\n\n\
+         One-time setup (~5 minutes).\n\n\
+         - **Summarize my inbox** — \"Summarize the unread emails from the last\n  \
+         24 hours across all accounts, grouped by account.\"\n\
+         - **Draft a reply** — \"Find the thread with Acme about the Q3 invoice.\"\n\
+         - `duplicate_tab` copies a tab, e.g. last month's invoice tab → this month's.\n",
+    );
+    repo.commit("docs: examples");
+    let hits: Vec<String> = repo
+        .check(&[])
+        .violations("time-estimates")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].contains("5 minutes"), "{hits:?}");
+}

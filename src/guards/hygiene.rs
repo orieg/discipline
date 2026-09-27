@@ -380,6 +380,29 @@ fn is_observed_duration(clause: &str) -> bool {
     observed.is_match(clause)
 }
 
+/// A match that names a period of data rather than a span of work: a lookback
+/// (`emails from the last 24 hours`, `the past two weeks`), `this <period>'s`
+/// (`this month's invoice tab`), or a quarter followed by what it reports (`the Q3 invoice`).
+/// `before` is the text before the match, including the previous line of the
+/// paragraph; `after` is the rest of the line.
+pub(crate) fn is_period_reference(before: &str, matched: &str, after: &str) -> bool {
+    let lookback = Regex::new(r"(?i)\b(?:past|last|previous|prior|recent)\s*$").unwrap();
+    if lookback.is_match(before.trim_end_matches('~')) {
+        return true;
+    }
+    // `this month's tab` names the month's data; `a day's work` is still an estimate.
+    if matched.to_ascii_lowercase().starts_with("this ")
+        && (after.starts_with("'s") || after.starts_with("\u{2019}s"))
+    {
+        return true;
+    }
+    let quarter_noun = Regex::new(
+        r"(?i)^\s+(?:invoices?|reports?|earnings|results|revenue|sales|numbers|figures|filings?|statements?|close|financials)\b",
+    )
+    .unwrap();
+    matches!(matched, "Q1" | "Q2" | "Q3" | "Q4") && quarter_noun.is_match(after)
+}
+
 pub(crate) fn is_time_estimate_violation(
     clause: &str,
     line: &str,
@@ -520,6 +543,8 @@ pub(crate) fn scan_text_for_time_estimates(
     let mut table = MarkdownTableTracker::default();
     let allowed_spans = allow_pattern_spans(text, allowed);
 
+    // The previous line of the same paragraph: a soft-wrapped "from the last" ends it.
+    let mut prev: &str = "";
     for (idx, line) in text.lines().enumerate() {
         let trimmed = line.trim_start();
         if let Some(m) = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m)) {
@@ -528,11 +553,14 @@ pub(crate) fn scan_text_for_time_estimates(
                 Some(open) if open == m => None,
                 keep => keep,
             };
+            prev = "";
             continue;
         }
         if fence.is_some() {
             continue;
         }
+        let before_line = prev;
+        prev = if trimmed.is_empty() { "" } else { line };
 
         table.feed_line(line);
 
@@ -560,6 +588,13 @@ pub(crate) fn scan_text_for_time_estimates(
                         .iter()
                         .any(|(s, e)| !(abs_end <= *s || abs_start >= *e))
                     {
+                        continue;
+                    }
+                    if is_period_reference(
+                        &format!("{before_line} {}", &line[..abs_start]),
+                        hit.as_str(),
+                        &line[abs_end..],
+                    ) {
                         continue;
                     }
                     let in_exempt_cell = table.is_cell_exempt(line, abs_start, abs_end);
@@ -1250,6 +1285,22 @@ mod tests {
             "over the weekend",
         ] {
             assert!(any_match(&banned, bad), "missed: {bad}");
+        }
+        for (before, matched, after) in [
+            ("emails from the last", "24 hours", " across all accounts"),
+            ("the past ", "two weeks", " of logs"),
+            ("last month's invoice tab → ", "this month", "'s tab"),
+            ("the thread about the ", "Q3", " invoice"),
+        ] {
+            assert!(is_period_reference(before, matched, after), "{matched}");
+        }
+        for (before, matched, after) in [
+            ("ships in ", "2 weeks", ""),
+            ("that is ", "a day", "'s work"),
+            ("target: ", "Q2", ""),
+            ("done ", "next sprint", "'s end"),
+        ] {
+            assert!(!is_period_reference(before, matched, after), "{matched}");
         }
         for good in [
             "Phase 1 then Phase 2",

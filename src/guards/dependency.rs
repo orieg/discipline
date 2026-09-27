@@ -323,6 +323,17 @@ pub fn parse_pyproject_toml(content: &str, path: &str) -> Vec<DependencyRecord> 
         }
     }
 
+    // A requirement on the project itself (`all = ["app[serve,mcp]"]`) selects the
+    // project's own extras: it adds no package and has no version by construction.
+    if let Some(own) = root
+        .get("project")
+        .and_then(|p| p.get("name"))
+        .and_then(TomlValue::as_str)
+    {
+        let own = pep503_normalize(own);
+        records.retain(|r| pep503_normalize(r.name.split('[').next().unwrap_or(&r.name)) != own);
+    }
+
     // 2. Poetry: tool.poetry.dependencies, dev-dependencies, group.<grp>.dependencies
     if let Some(tool) = root.get("tool").and_then(TomlValue::as_table) {
         if let Some(poetry) = tool.get("poetry").and_then(TomlValue::as_table) {
@@ -347,6 +358,24 @@ pub fn parse_pyproject_toml(content: &str, path: &str) -> Vec<DependencyRecord> 
     }
 
     records
+}
+
+/// A Python package name as PEP 503 compares it: lowercase, runs of `-`, `_`, `.` as `-`.
+fn pep503_normalize(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut sep = false;
+    for c in name.trim().chars() {
+        if matches!(c, '-' | '_' | '.') {
+            sep = true;
+        } else {
+            if sep && !out.is_empty() {
+                out.push('-');
+            }
+            sep = false;
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
 }
 
 fn extract_poetry_deps(
@@ -1295,6 +1324,14 @@ flask = "*"
 "#;
         let deps = parse_pyproject_toml(sample, "pyproject.toml");
         assert_eq!(deps.len(), 4);
+
+        // The project's own extras are not a dependency; another package's are.
+        let own = "[project]\nname = \"Yaml_Workflow\"\n[project.optional-dependencies]\nall = [\"yaml-workflow[serve,mcp]\", \"other-pkg[x]\"]\n";
+        let names: Vec<String> = parse_pyproject_toml(own, "pyproject.toml")
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(names, vec!["other-pkg[x]".to_string()]);
 
         let req = deps.iter().find(|d| d.name == "requests").unwrap();
         assert!(!req.is_wildcard);

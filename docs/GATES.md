@@ -710,6 +710,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - Calendar intervals: "1-2 days", "3 weeks", "next sprint", "Q2", "Phase 2 (1 week)". <!-- discipline:allow(time-estimates) -->
   - Aggregate durations: "~10 engineer-days", "three deliverables in 2 weeks". <!-- discipline:allow(time-estimates) -->
+- **Periods of data are not estimates:** a duration after `past`, `last`, `previous`, `prior` or `recent` (a lookback, including one soft-wrapped from the previous line: `emails from the last` / `24 hours`), `this <period>'s` (`this month's invoice tab`), and a quarter followed by what it reports (`the Q3 invoice`, `Q3 results`) are not reported. `a day's work` and `target: Q2` still are.
 - **Failing diff example (rejected):**
   ```markdown
   ### Phase 2: Complete AST Parser (estimated: 2 weeks)
@@ -1019,6 +1020,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
     - `Lockfile Integrity Hash Removed`: an entry (same name and version) that carried a checksum / `integrity` on the base side and no longer does.
     - `Manifest Changed Without Lockfile`: the dependency set of a manifest changed while the tracked lockfile governing it (same directory, else the nearest ancestor's) did not. A project that tracks no lockfile is not asked for one; `go.mod` is exempt because requiring an already-indirect module leaves `go.sum` unchanged.
     - `Lockfile Deleted`.
+- **The project's own extras:** in `pyproject.toml`, a requirement on the project itself (`all = ["<project>[serve,mcp]"]`, names compared after PEP 503 normalization) adds no package and is not a dependency.
 - **Failing diff example (rejected):**
   ```diff
   // Cargo.toml
@@ -1274,6 +1276,7 @@ To port the other way, adopting the static basis instead, run `discipline check`
   - Missing source files (fails closed with exit 2). Under `discipline replay`, a source file that neither side of the replayed change has yet skips its group with a note: the configuration is newer than that change.
   - Unparseable source regexes or regexes failing to match the source file (fails closed with exit 2).
   - Mismatched extracted versions across declared files in a group (e.g., `example_lib.h` has `"2.6.0"` while `package.xml` has `"2.6.1"`). The finding points at the file that drifted from the version most sources in the group agree on (a tie goes to the version declared first), and its message lists every source with the version it declares.
+- **Inherited drift:** when a change adds, edits, renames or deletes none of a group's sources, drift the base already had is a note, not a finding: the change did not cause it. The next change that touches a source of the group must resolve it or carry `allow-version-mismatch:`.
 - **Failing diff example (rejected):**
   Bumping version in `package.xml` to `2.6.1` while `#define EXAMPLE_VERSION` in `example_lib.h` remains `2.6.0`.
 - **Passing PR description (accepted):**

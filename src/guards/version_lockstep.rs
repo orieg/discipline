@@ -108,6 +108,15 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
             .collect();
 
         if let Some(first_drifted) = drifted.first().copied() {
+            if inherited_drift(ctx, group)? {
+                out.notes.push(format!(
+                    "version-lockstep group `{}`: the base already declared these versions and this change touches none of the group's sources, so the drift ({} from `{}`) is not reported against it; the next change that edits a source must resolve it",
+                    group.name,
+                    drifted.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(", "),
+                    reference
+                ));
+                continue;
+            }
             let allowed = ctx
                 .find_override(GATE, tokens::ALLOW_VERSION_MISMATCH, &group.name)
                 .or_else(|| {
@@ -157,6 +166,18 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
 
     out.examined = total_examined;
     Ok(out)
+}
+
+/// Whether the drift was already in the base and this change left it alone: no
+/// source of the group is added, edited, renamed or deleted, so every source declares
+/// on the base side the version it declares now.
+fn inherited_drift(ctx: &Context, group: &crate::config::VersionGroup) -> Result<bool> {
+    let changed = ctx.git.changed_files()?;
+    Ok(!group.sources.iter().any(|s| {
+        changed
+            .iter()
+            .any(|f| f.path == s.path || f.old_path == s.path)
+    }))
 }
 
 /// The version most sources in a group agree on; a tie goes to the version
