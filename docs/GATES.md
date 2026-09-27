@@ -710,7 +710,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - Calendar intervals: "1-2 days", "3 weeks", "next sprint", "Q2", "Phase 2 (1 week)". <!-- discipline:allow(time-estimates) -->
   - Aggregate durations: "~10 engineer-days", "three deliverables in 2 weeks". <!-- discipline:allow(time-estimates) -->
-- **Periods of data are not estimates:** a duration after `past`, `last`, `previous`, `prior` or `recent` (a lookback, including one soft-wrapped from the previous line: `emails from the last` / `24 hours`), `this <period>'s` (`this month's invoice tab`), and a quarter followed by what it reports (`the Q3 invoice`, `Q3 results`) are not reported. `a day's work` and `target: Q2` still are.
+- **Periods of data are not estimates:** a duration after `past`, `last`, `previous`, `prior` or `recent` (a lookback, including one soft-wrapped from the previous line: `emails from the last` / `24 hours`), `this <period>'s` (`this month's invoice tab`), and a quarter followed by what it reports (`the Q3 invoice`, `Q3 results`) are not reported. `a day's work` and `target: Q2` still are. <!-- discipline:allow(time-estimates) -->
 - **Failing diff example (rejected):**
   ```markdown
   ### Phase 2: Complete AST Parser (estimated: 2 weeks)

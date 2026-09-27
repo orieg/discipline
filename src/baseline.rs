@@ -260,10 +260,15 @@ where
         if distinct.len() < 2 {
             continue;
         }
-        collided.push((
-            violations[idx[0]].code.clone(),
-            violations[idx[0]].file.clone().unwrap_or_default(),
-        ));
+        // Two hits on one line (`2 weeks, target Q2`) have distinct messages: the
+        // message fallback below keeps them apart, and it is stable. Only a repeat with
+        // no line is a missing anchor.
+        if violations[idx[0]].line.is_none() {
+            collided.push((
+                violations[idx[0]].code.clone(),
+                violations[idx[0]].file.clone().unwrap_or_default(),
+            ));
+        }
         for &i in &idx {
             let v = &mut *violations[i];
             let source = format!(
@@ -603,6 +608,23 @@ mod tests {
             ..finding("t", "c/x")
         };
         fill_fingerprints(&mut [&mut a, &mut b], |_| None);
+    }
+
+    /// Two hits on one line (`2 weeks, target Q2`) are kept apart by their messages
+    /// and are not a missing anchor.
+    #[test]
+    fn two_findings_on_one_line_are_separated_without_an_anchor() {
+        let mut a = Violation {
+            line: Some(3),
+            ..finding("t", "c/x")
+        };
+        let mut b = Violation {
+            line: Some(3),
+            message: "another".into(),
+            ..finding("t", "c/x")
+        };
+        fill_fingerprints(&mut [&mut a, &mut b], |_| Some("x\ny\nz\n".to_string()));
+        assert_ne!(a.fingerprint, b.fingerprint);
     }
 
     #[test]
