@@ -150,6 +150,9 @@ pub struct DisciplineJob {
     pub workflow_names: Vec<String>,
     /// GitLab `allow_failure: true`: the job can fail without failing the pipeline.
     pub allow_failure: bool,
+    /// The job's token is granted `pull-requests: read` or `write` (or `read-all` /
+    /// `write-all`), by the job's `permissions:` or, when it has none, the workflow's.
+    pub reads_pull_requests: bool,
 }
 
 /// What the local files say.
@@ -423,6 +426,18 @@ fn permission_level(value: Option<&serde_yaml::Value>) -> Option<u8> {
     })
 }
 
+/// Whether a `permissions:` value lets the token read pull requests.
+fn grants_pull_requests_read(value: Option<&serde_yaml::Value>) -> bool {
+    match value {
+        Some(serde_yaml::Value::String(s)) => s == "read-all" || s == "write-all",
+        Some(serde_yaml::Value::Mapping(m)) => m
+            .get("pull-requests")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v == "read" || v == "write"),
+        _ => false,
+    }
+}
+
 /// Analyse workflow files: `(path, content)` pairs. `self_action` is true when the
 /// repository is discipline itself (a `uses: ./` step runs it).
 pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> LocalFacts {
@@ -508,6 +523,10 @@ pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> Local
                 weak_rollups,
                 workflow_names,
                 allow_failure: nonblocking.is_some(),
+                // A job's `permissions:` replaces the workflow's, it does not add to it.
+                reads_pull_requests: grants_pull_requests_read(
+                    job.get("permissions").or(wf.get("permissions")),
+                ),
             });
             let level = permission_level(job.get("permissions")).or(wf_perm);
             let rank = |l: Option<u8>| l.unwrap_or(3);
@@ -789,6 +808,7 @@ pub fn analyse_gitlab_ci(content: &str) -> LocalFacts {
                     weak_rollups: Vec::new(),
                     workflow_names: Vec::new(),
                     allow_failure: allow,
+                    reads_pull_requests: false,
                 });
             }
         }
@@ -840,6 +860,7 @@ pub fn analyse_gitlab_ci(content: &str) -> LocalFacts {
                     weak_rollups: Vec::new(),
                     workflow_names: Vec::new(),
                     allow_failure: gitlab_job_can_fail_silently(job),
+                    reads_pull_requests: false,
                 });
             }
         }
@@ -1755,6 +1776,16 @@ fn read(root: &Path, rel: &str) -> Option<String> {
     std::fs::read_to_string(root.join(rel)).ok()
 }
 
+/// `push-trigger` when `merged-pr-body` is on and every push-run discipline job is granted
+/// `pull-requests: read` (or `write`): the push run reads the merged pull request's body.
+fn pr_read_granted(jobs: &str, when: &str) -> Finding {
+    Finding::new(
+        "push-trigger",
+        Status::Pass,
+        format!("{jobs} run(s) discipline {when}; `merged-pr-body` is enabled and the workflow grants `pull-requests: read`, so the push run reads a merged pull request's body"),
+    )
+}
+
 /// Run every check.
 pub fn run(input: &DoctorInput) -> Report {
     let root = input.root;
@@ -1842,14 +1873,19 @@ pub fn run(input: &DoctorInput) -> Report {
     let mut repository = None;
     let mut branch = input.branch.clone();
     if input.local_only {
-        let on_push: Vec<String> = local
+        let push_jobs: Vec<&DisciplineJob> = local
             .jobs
             .iter()
             .filter(|j| j.push_branches.is_some())
+            .collect();
+        let on_push: Vec<String> = push_jobs
+            .iter()
             .map(|j| format!("{} job `{}`", j.workflow, j.job_id))
             .collect();
         if !on_push.is_empty() {
-            findings.push(if merged_source_on {
+            findings.push(if merged_source_on && push_jobs.iter().all(|j| j.reads_pull_requests) {
+                pr_read_granted(&on_push.join(", "), "on push events")
+            } else if merged_source_on {
                 Finding::new(
                     "push-trigger",
                     Status::Info,
@@ -1916,8 +1952,13 @@ pub fn run(input: &DoctorInput) -> Report {
                             .collect();
                         let jobs = jobs.join(", ");
                         let fix = "Restrict the discipline step to pull_request, or keep the `merged-pr-body` directive source with a token that can read pull requests, or put every directive in a commit message as well.";
+                        // The workflow grants the token the push run needs: the review
+                        // record reaches it whatever the merge method.
+                        let granted =
+                            merged_source_on && on_push.iter().all(|j| j.reads_pull_requests);
                         findings.push(match merge_methods(input.api, forge) {
                             Ok(m) => match m.drops_pr_body() {
+                                Some(true) if granted => pr_read_granted(&jobs, &format!("on push to `{b}`")),
                                 Some(true) if merged_source_on => Finding::new(
                                     "push-trigger",
                                     Status::Info,
@@ -1938,6 +1979,7 @@ pub fn run(input: &DoctorInput) -> Report {
                                 // GitHub shows the merge methods to push or admin tokens only.
                                 // With `merged-pr-body` on, the method does not decide whether
                                 // the review record reaches the push run; the token does.
+                                None if granted => pr_read_granted(&jobs, &format!("on push to `{b}`")),
                                 None if merged_source_on => Finding::new(
                                     "push-trigger",
                                     Status::Info,
@@ -2895,6 +2937,82 @@ test:
             api: &NoApi,
         });
         assert_eq!(other.exit_code(false), 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_granted_pull_requests_permission_satisfies_the_push_trigger_check() {
+        let dir =
+            std::env::temp_dir().join(format!("discipline-doctor-prread-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".github/workflows")).unwrap();
+        let mut squash = CannedApi::default();
+        squash.responses.insert(
+            "github:repos/o/r".into(),
+            serde_json::json!({"allow_squash_merge": true, "allow_rebase_merge": false}),
+        );
+        let mut hidden = CannedApi::default();
+        hidden.responses.insert(
+            "github:repos/o/r".into(),
+            serde_json::json!({"default_branch": "main"}),
+        );
+        // The push-trigger status locally, on a squash-merge forge, and on a forge that
+        // hides its merge methods from the token.
+        let statuses = |wf_perm: &str, job_perm: &str| -> Vec<Status> {
+            std::fs::write(
+                dir.join(".github/workflows/ci.yml"),
+                format!(
+                    "on:\n  push:\n    branches: [main]\n  pull_request:\n    types: [opened, synchronize, reopened, edited]\n{wf_perm}jobs:\n  gate:\n{job_perm}    runs-on: ubuntu-latest\n    steps:\n      - uses: orieg/discipline@v0\n"
+                ),
+            )
+            .unwrap();
+            let status = |local_only: bool, api: &dyn ForgeApi| {
+                run(&DoctorInput {
+                    root: &dir,
+                    forge: Ok(forge(ForgeKind::GitHub)),
+                    branch: Some("main".into()),
+                    local_only,
+                    api,
+                })
+                .findings
+                .iter()
+                .find(|f| f.id == "push-trigger")
+                .map(|f| f.status)
+                .unwrap()
+            };
+            vec![
+                status(true, &NoApi),
+                status(false, &squash),
+                status(false, &hidden),
+            ]
+        };
+        let info = vec![Status::Info; 3];
+        let pass = vec![Status::Pass; 3];
+        // Without the permission the push run's token may not read pull requests.
+        assert_eq!(statuses("permissions:\n  contents: read\n", ""), info);
+        assert_eq!(statuses("", ""), info);
+        // Granted at workflow level, at job level, or by `read-all`.
+        assert_eq!(
+            statuses(
+                "permissions:\n  contents: read\n  pull-requests: read\n",
+                ""
+            ),
+            pass
+        );
+        assert_eq!(
+            statuses("", "    permissions:\n      pull-requests: write\n"),
+            pass
+        );
+        assert_eq!(statuses("permissions: read-all\n", ""), pass);
+        // A job's `permissions:` replaces the workflow's: the grant no longer applies.
+        assert_eq!(
+            statuses(
+                "permissions:\n  pull-requests: read\n",
+                "    permissions:\n      contents: read\n"
+            ),
+            info
+        );
+        // `pull-requests: none` grants nothing.
+        assert_eq!(statuses("permissions:\n  pull-requests: none\n", ""), info);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
