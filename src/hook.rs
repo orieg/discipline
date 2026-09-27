@@ -369,7 +369,7 @@ fn observed(
     if run.code == 0 {
         return out;
     }
-    let codes: Vec<String> = run
+    let findings: Vec<&serde_json::Value> = run
         .json
         .as_ref()
         .and_then(|j| j.get("outcomes"))
@@ -377,6 +377,17 @@ fn observed(
         .into_iter()
         .flatten()
         .flat_map(|o| o["violations"].as_array().into_iter().flatten())
+        .collect();
+    // What would have blocked: the errors. A warning blocks only when no error does
+    // (warnings made fatal), so it is named then and not otherwise.
+    let errors: Vec<&serde_json::Value> = findings
+        .iter()
+        .copied()
+        .filter(|v| v["severity"] == "error")
+        .collect();
+    let blocking = if errors.is_empty() { findings } else { errors };
+    let codes: Vec<String> = blocking
+        .iter()
         .filter_map(|v| v["code"].as_str().map(str::to_string))
         .collect();
     let verdict = if run.code == 1 {
@@ -833,6 +844,17 @@ mkdir -p "${{dir}}/x" "${{HOME}}/.local/bin"
 if tar -xzf "${{dir}}/${{asset}}" -C "${{dir}}/x" \
   && install -m 0755 "${{dir}}/x/discipline" "${{HOME}}/.local/bin/discipline"; then
   say "installed $("${{HOME}}/.local/bin/discipline" --version)"
+  # The hooks call `discipline` by name: put its directory on PATH for the session.
+  case ":${{PATH}}:" in
+    *":${{HOME}}/.local/bin:"*) ;;
+    *)
+      if [ -n "${{CLAUDE_ENV_FILE:-}}" ]; then
+        echo "export PATH=\"${{HOME}}/.local/bin:\${{PATH}}\"" >> "${{CLAUDE_ENV_FILE}}"
+      else
+        say "${{HOME}}/.local/bin is not on PATH; the hooks cannot find discipline"
+      fi
+      ;;
+  esac
 else
   say "could not unpack ${{asset}}; the hooks cannot check this session"
 fi
@@ -876,9 +898,31 @@ pub const COPILOT_SETUP_STEPS: &str = ".github/workflows/copilot-setup-steps.yml
 /// The step that installs discipline for Copilot cloud agent, indented for a job's
 /// `steps:` list.
 pub fn copilot_setup_step() -> String {
+    setup_step_for(release_sha())
+}
+
+/// The commit a release binary was built from: the release pipeline sets
+/// `DISCIPLINE_RELEASE_SHA` to the tagged commit. A build from source has none.
+pub fn release_sha() -> Option<&'static str> {
+    option_env!("DISCIPLINE_RELEASE_SHA")
+        .map(str::trim)
+        .filter(|s| s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// The setup step, pinned to `sha` when the binary knows its release commit (the
+/// default `ci-integrity` gate reports a tag ref as unpinned), else to the tag with a
+/// note to pin it.
+fn setup_step_for(sha: Option<&str>) -> String {
+    let v = env!("CARGO_PKG_VERSION");
+    let (note, reference) = match sha {
+        Some(sha) => (String::new(), format!("{sha} # v{v}")),
+        None => (
+            format!("      # Pin to this release's commit SHA (`uses: orieg/discipline@<sha> # v{v}`):\n      # the default `ci-integrity` gate reports a tag ref as unpinned.\n"),
+            format!("v{v}"),
+        ),
+    };
     format!(
-        "      # Pin to this release's commit SHA (`uses: orieg/discipline@<sha> # v{v}`):\n      # the default `ci-integrity` gate reports a tag ref as unpinned.\n      - name: Install discipline for Copilot's hooks\n        uses: orieg/discipline@v{v}\n        with:\n          install_only: 'true'\n",
-        v = env!("CARGO_PKG_VERSION")
+        "{note}      - name: Install discipline for Copilot's hooks\n        uses: orieg/discipline@{reference}\n        with:\n          install_only: 'true'\n"
     )
 }
 
@@ -909,6 +953,26 @@ pub fn install_cloud_agent(root: &Path) -> Result<Installed> {
     std::fs::write(&path, copilot_setup_steps())
         .with_context(|| format!("cannot write {}", path.display()))?;
     Ok(Installed::Written(path))
+}
+
+/// Why git would not commit a hook file `install` wrote: it is ignored. `None` when
+/// it is tracked or committable, or outside any repository (a user-level file).
+pub fn ignored_by_git(path: &Path) -> Option<String> {
+    let repo = git2::Repository::discover(path.parent()?).ok()?;
+    let root = repo.workdir()?.canonicalize().ok()?;
+    let rel = path
+        .canonicalize()
+        .ok()?
+        .strip_prefix(&root)
+        .ok()?
+        .to_path_buf();
+    if !repo.is_path_ignored(&rel).ok()? {
+        return None;
+    }
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    Some(format!(
+        "{rel} is ignored by git, so it will not be committed and other sessions of the agent will not run the hook. Un-ignore it in .gitignore: add `!{rel}` after the rule that ignores it (a rule that ignores its whole directory, such as `.claude/`, must become `.claude/*` first)."
+    ))
 }
 
 /// The repository root `install` writes under.
@@ -1115,9 +1179,12 @@ mod tests {
             .as_sequence()
             .unwrap();
         assert_eq!(steps.len(), 1);
+        let reference = release_sha()
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("v{}", env!("CARGO_PKG_VERSION")));
         assert_eq!(
             steps[0]["uses"].as_str().unwrap(),
-            format!("orieg/discipline@v{}", env!("CARGO_PKG_VERSION"))
+            format!("orieg/discipline@{reference}")
         );
         assert_eq!(steps[0]["with"]["install_only"].as_str(), Some("true"));
         assert_eq!(
@@ -1125,6 +1192,68 @@ mod tests {
             Some("read"),
             "least privilege"
         );
+    }
+
+    /// Observe mode names what would have blocked: the errors, not the warnings beside
+    /// them; a warning only when warnings are what blocked.
+    #[test]
+    fn observe_mode_names_only_the_blocking_codes() {
+        let dir = std::env::temp_dir();
+        let run = |findings: serde_json::Value| CheckRun {
+            code: 1,
+            json: Some(serde_json::json!({"outcomes": [{"violations": findings}]})),
+            ..CheckRun::default()
+        };
+        let mixed = observed(
+            Agent::ClaudeCode,
+            Event::Edit,
+            &dir,
+            &run(serde_json::json!([
+                {"code": "assertion-reduction/assertions-reduced", "severity": "error"},
+                {"code": "time-estimates/time-estimate", "severity": "warning"}
+            ])),
+            None,
+        );
+        assert!(
+            mixed
+                .stderr
+                .contains("1 finding(s): assertion-reduction/assertions-reduced"),
+            "{}",
+            mixed.stderr
+        );
+        assert!(!mixed.stderr.contains("time-estimates"), "{}", mixed.stderr);
+        let fatal = observed(
+            Agent::ClaudeCode,
+            Event::Edit,
+            &dir,
+            &run(serde_json::json!([
+                {"code": "time-estimates/time-estimate", "severity": "warning"}
+            ])),
+            None,
+        );
+        assert!(
+            fatal.stderr.contains("time-estimates/time-estimate"),
+            "{}",
+            fatal.stderr
+        );
+    }
+
+    /// A release binary pins the step to its commit, with the version as a comment, and
+    /// drops the note to pin it; a build from source keeps the tag and the note.
+    #[test]
+    fn the_setup_step_is_pinned_when_the_release_commit_is_known() {
+        let sha = "712239d775a189ce87a90ec9dd0395315146d5eb";
+        let pinned = setup_step_for(Some(sha));
+        let step: Vec<serde_yaml::Value> = serde_yaml::from_str(&pinned).unwrap();
+        assert_eq!(
+            step[0]["uses"].as_str().unwrap(),
+            format!("orieg/discipline@{sha}")
+        );
+        assert!(pinned.contains(&format!("# v{}", env!("CARGO_PKG_VERSION"))));
+        assert!(!pinned.contains("Pin to"));
+        let tagged = setup_step_for(None);
+        assert!(tagged.contains(&format!("orieg/discipline@v{}", env!("CARGO_PKG_VERSION"))));
+        assert!(tagged.contains("Pin to this release's commit SHA"));
     }
 
     /// Stop payloads recorded from live agy and Copilot CLI sessions (paths and ids

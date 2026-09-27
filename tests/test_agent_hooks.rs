@@ -835,3 +835,28 @@ fn install_observe_writes_observe_commands() {
         "{settings}"
     );
 }
+
+#[test]
+fn install_warns_when_git_ignores_the_file_it_wrote() {
+    let repo = Repo::new();
+    repo.write(".gitignore", ".claude/\n");
+    let run = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stdout
+            .contains("warning: .claude/settings.json is ignored by git"),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains("`.claude/*`"), "{}", run.stdout);
+
+    // Control: the carve-out the warning names makes both files committable.
+    let repo = Repo::new();
+    repo.write(
+        ".gitignore",
+        ".claude/*\n!.claude/settings.json\n!.claude/hooks/\n",
+    );
+    let run = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(!run.stdout.contains("warning:"), "{}", run.stdout);
+}

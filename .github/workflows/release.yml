@@ -93,13 +93,17 @@ jobs:
       - name: Install musl toolchain
         if: matrix.static
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # The tagged commit, so `hook install --cloud-agent` pins the action to it.
       - run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          DISCIPLINE_RELEASE_SHA: ${{ github.sha }}
       - name: Verify the binary
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           STATIC: ${{ matrix.static }}
           VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           bin="target/${TARGET}/release/discipline"
@@ -114,6 +118,11 @@ jobs:
             grep -q "discipline ${VERSION}" version.txt || {
               echo "::error::binary reports '$(cat version.txt)', expected ${VERSION}"; exit 1; }
             "${bin}" self-test
+            probe="$(mktemp -d)"
+            git -C "${probe}" init -q
+            (cd "${probe}" && "${GITHUB_WORKSPACE}/${bin}" hook install --agent copilot --cloud-agent > /dev/null)
+            grep -q "uses: orieg/discipline@${RELEASE_SHA} # v${VERSION}" "${probe}/.github/workflows/copilot-setup-steps.yml" || {
+              echo "::error::hook install --cloud-agent does not pin the release commit ${RELEASE_SHA}"; exit 1; }
           elif [ "${TARGET}" = "x86_64-apple-darwin" ]; then
             echo "::notice::x86_64-apple-darwin could not execute on this runner; self-test NOT run for this target"
           else

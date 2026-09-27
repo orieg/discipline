@@ -578,7 +578,9 @@ fn test_harness_isolates_every_environment_variable_the_binary_reads() {
     )
     .unwrap();
     // Set explicitly by the harness rather than removed.
-    let set_by_harness = ["DISCIPLINE_NO_NETWORK"];
+    // Read when the binary is compiled (`option_env!`), not when it runs: the release
+    // pipeline sets it, and no run of the binary sees it.
+    let set_by_harness = ["DISCIPLINE_NO_NETWORK", "DISCIPLINE_RELEASE_SHA"];
     let mut missing = std::collections::BTreeSet::new();
     let mut stack = vec![std::path::PathBuf::from("src")];
     while let Some(dir) = stack.pop() {

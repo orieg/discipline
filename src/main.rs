@@ -1422,6 +1422,9 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                 match installed {
                     Installed::Written(p) => {
                         println!("{} wrote {}", style::green("ok:"), p.display());
+                        if let Some(why) = discipline::hook::ignored_by_git(&p) {
+                            println!("{} {why}", style::yellow("warning:"));
+                        }
                     }
                     Installed::AlreadyPresent(p) => {
                         println!(
@@ -1430,6 +1433,9 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                             p.display(),
                             a.agent.id()
                         );
+                        if let Some(why) = discipline::hook::ignored_by_git(&p) {
+                            println!("{} {why}", style::yellow("warning:"));
+                        }
                     }
                     Installed::Refused(p, snippet) => {
                         println!(
