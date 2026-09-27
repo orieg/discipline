@@ -208,7 +208,7 @@ pub fn replay_schema() -> Value {
             "Case": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["sha", "pr", "subject", "verdict", "blocking_gates", "refused_overrides", "actor", "warning_gates", "directives_from"],
+                "required": ["sha", "pr", "subject", "verdict", "blocking_gates", "refused_overrides", "actor", "warning_gates", "findings", "directives_from"],
                 "properties": {
                     "sha": { "type": "string", "description": "Full commit id of the replayed change" },
                     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from the forge or the subject's `(#N)`" },
@@ -218,9 +218,21 @@ pub fn replay_schema() -> Value {
                     "refused_overrides": { "type": "array", "items": { "type": "string" }, "description": "Gates whose overrides `fail_on_overrides` refused" },
                     "actor": { "type": ["string", "null"], "description": "The login the change was checked as: its merged pull request's author" },
                     "warning_gates": { "type": "array", "items": { "type": "string" } },
+                    "findings": { "type": "array", "items": { "$ref": "#/$defs/CaseFinding" }, "description": "Every error and warning of the change's report, in report order; empty when the check itself could not run. The message is never included: a finding can echo secret material" },
                     "directives_from": { "type": "string", "description": "`pull request body`, or why only the commit message was read" },
                     "reason": { "enum": reasons(), "description": "Why the change could not be checked: the report's `could_not_check.reason`, or `forge` when its merged pull request could not be read. Omitted otherwise" },
                     "detail": { "type": "string", "description": "Why the change could not be checked. Omitted otherwise" }
+                }
+            },
+            "CaseFinding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["code", "severity", "file", "line"],
+                "properties": {
+                    "code": { "type": "string", "pattern": "^[a-z0-9-]+/[a-z0-9-]+$", "description": "`gate/code`, as in the check report" },
+                    "severity": { "enum": ["error", "warning"] },
+                    "file": { "type": ["string", "null"] },
+                    "line": { "type": ["integer", "null"], "minimum": 0 }
                 }
             }
         }

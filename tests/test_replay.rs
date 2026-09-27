@@ -71,6 +71,26 @@ fn replay_reports_what_the_configuration_would_have_blocked() {
         .as_str()
         .unwrap()
         .starts_with("commit message only"));
+    // The blocked case says what blocked it, by code and location, without a message.
+    let findings = s["cases_detail"][1]["findings"].as_array().unwrap();
+    let blocking = findings
+        .iter()
+        .find(|f| f["severity"] == "error")
+        .unwrap_or_else(|| panic!("{s:#}"));
+    assert!(
+        blocking["code"]
+            .as_str()
+            .unwrap()
+            .starts_with("assertion-reduction/"),
+        "{blocking}"
+    );
+    assert_eq!(blocking["file"], "tests/a.rs", "{blocking}");
+    assert!(
+        blocking["line"].as_u64().is_some_and(|l| l > 0),
+        "{blocking}"
+    );
+    assert!(blocking.get("message").is_none(), "{blocking}");
+    assert_eq!(s["cases_detail"][0]["findings"], serde_json::json!([]));
 
     // A candidate configuration without the gate would have let #2 through.
     let cfg = repo.file("candidate.toml");

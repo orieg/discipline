@@ -25,6 +25,13 @@
           "description": "`pull request body`, or why only the commit message was read",
           "type": "string"
         },
+        "findings": {
+          "description": "Every error and warning of the change's report, in report order; empty when the check itself could not run. The message is never included: a finding can echo secret material",
+          "items": {
+            "$ref": "#/$defs/CaseFinding"
+          },
+          "type": "array"
+        },
         "pr": {
           "description": "Pull request number, from the forge or the subject's `(#N)`",
           "minimum": 1,
@@ -84,7 +91,44 @@
         "refused_overrides",
         "actor",
         "warning_gates",
+        "findings",
         "directives_from"
+      ],
+      "type": "object"
+    },
+    "CaseFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "description": "`gate/code`, as in the check report",
+          "pattern": "^[a-z0-9-]+/[a-z0-9-]+$",
+          "type": "string"
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "file",
+        "line"
       ],
       "type": "object"
     },

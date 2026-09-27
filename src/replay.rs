@@ -40,6 +40,8 @@ pub struct Case {
     pub actor: Option<String>,
     /// Gates with a `warning` finding.
     pub warning_gates: Vec<String>,
+    /// Every error and warning of the change's report, by code and location.
+    pub findings: Vec<CaseFinding>,
     /// Where the directives came from: `pull request body`, or why they did not.
     pub directives_from: String,
     /// Why it could not be checked: the child report's `could_not_check.reason`, or
@@ -49,6 +51,18 @@ pub struct Case {
     /// The child's stderr when it could not check.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub detail: String,
+}
+
+/// One error or warning of a replayed change. Its message is never carried: a finding
+/// can echo secret material, and the code with its location says what blocked.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CaseFinding {
+    /// `gate/code`, as in the check report.
+    pub code: String,
+    /// `error` or `warning`.
+    pub severity: String,
+    pub file: Option<String>,
+    pub line: Option<u64>,
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -249,6 +263,35 @@ pub fn read_verdict(code: i32, json: &str) -> (&'static str, Vec<String>, Vec<St
         }
     }
     (verdict, errors, warnings)
+}
+
+/// The errors and warnings of one `check --format json` run, in report order: code,
+/// severity and location only, never the message. A run that could not check has none.
+pub fn read_findings(code: i32, json: &str) -> Vec<CaseFinding> {
+    if !matches!(code, 0 | 1) {
+        return Vec::new();
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    v["outcomes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|o| o["violations"].as_array().into_iter().flatten())
+        .filter_map(|x| {
+            let severity = x["severity"].as_str()?;
+            if !matches!(severity, "error" | "warning") {
+                return None;
+            }
+            Some(CaseFinding {
+                code: x["code"].as_str().unwrap_or("").to_string(),
+                severity: severity.to_string(),
+                file: x["file"].as_str().map(str::to_string),
+                line: x["line"].as_u64(),
+            })
+        })
+        .collect()
 }
 
 /// Gates that applied an override, in report order.
@@ -537,6 +580,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
         let code = out.status.code().unwrap_or(2);
         let (mut verdict, blocking, warning) =
             read_verdict(code, &String::from_utf8_lossy(&out.stdout));
+        let findings = read_findings(code, &String::from_utf8_lossy(&out.stdout));
         let (mut detail, mut reason) = if verdict == "could_not_check" {
             (
                 String::from_utf8_lossy(&out.stderr).trim().to_string(),
@@ -579,6 +623,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
             refused_overrides: refused,
             actor: author,
             warning_gates: warning,
+            findings,
             directives_from,
             reason,
             detail,
@@ -608,6 +653,35 @@ mod tests {
         );
         assert_eq!(read_verdict(0, "{}").0, "passed");
         assert_eq!(read_verdict(2, json), ("could_not_check", vec![], vec![]));
+    }
+
+    #[test]
+    fn findings_are_read_by_code_and_location_without_their_message() {
+        let json = r#"{"outcomes":[
+            {"gate":"pii","violations":[{"code":"pii/secret","severity":"error","file":"a.rs","line":3,"message":"AKIA-SECRET"}]},
+            {"gate":"pr-checklist","violations":[
+                {"code":"pr-checklist/unchecked","severity":"warning","file":null,"line":null,"message":"m"},
+                {"code":"pr-checklist/info","severity":"note","file":"b.md","line":1,"message":"m"}]}]}"#;
+        let f = read_findings(1, json);
+        assert_eq!(
+            f,
+            vec![
+                CaseFinding {
+                    code: "pii/secret".into(),
+                    severity: "error".into(),
+                    file: Some("a.rs".into()),
+                    line: Some(3),
+                },
+                CaseFinding {
+                    code: "pr-checklist/unchecked".into(),
+                    severity: "warning".into(),
+                    file: None,
+                    line: None,
+                },
+            ]
+        );
+        assert!(!serde_json::to_string(&f).unwrap().contains("AKIA"));
+        assert!(read_findings(2, json).is_empty());
     }
 
     #[test]
@@ -657,6 +731,7 @@ mod tests {
             refused_overrides: Vec::new(),
             actor: None,
             warning_gates: w.iter().map(|s| s.to_string()).collect(),
+            findings: Vec::new(),
             directives_from: String::new(),
             reason: None,
             detail: String::new(),
