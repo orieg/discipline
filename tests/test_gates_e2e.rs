@@ -3571,6 +3571,41 @@ fn unreachable_assertions_do_not_count() {
 }
 
 #[test]
+fn the_pr_body_file_can_be_named_by_discipline_pr_body_file() {
+    let repo = Repo::new();
+    repo.commit_base("AGENTS.md", "# Rules\n\nRun the tests.\n", "docs: rules");
+    repo.write(
+        "AGENTS.md",
+        "# Rules\n\nRun the tests.\n\nNever skip a failing test.\n",
+    );
+    repo.commit("docs: rules");
+    // Outside the work tree, so the file is not part of the change.
+    let body = repo.path().join(".git").join("pr-body.txt");
+    std::fs::write(&body, "allow-agent-instructions: AGENTS.md reviewed\n").unwrap();
+    let args = ["check", "--base", "main", "--format", "json"];
+
+    let without = repo.run(&args, &[]);
+    assert_eq!(without.code, 1, "{}", without.stdout);
+    assert_eq!(
+        without.violations("instruction-smuggling").len(),
+        1,
+        "{}",
+        without.stdout
+    );
+
+    let with = repo.run(
+        &args,
+        &[("DISCIPLINE_PR_BODY_FILE", body.to_str().unwrap())],
+    );
+    assert_eq!(with.code, 0, "{}\n{}", with.stdout, with.stderr);
+    assert!(
+        with.violations("instruction-smuggling").is_empty(),
+        "{}",
+        with.stdout
+    );
+}
+
+#[test]
 fn a_push_run_says_why_a_pr_body_waiver_is_out_of_scope() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);

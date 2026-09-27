@@ -87,6 +87,7 @@ impl Run {
 
 pub const ISOLATED_ENV_VARS: &[&str] = &[
     "PR_BODY",
+    "DISCIPLINE_PR_BODY_FILE",
     "PR_TITLE",
     "GITHUB_STEP_SUMMARY",
     "GITHUB_BASE_REF",

@@ -525,6 +525,7 @@ pub fn run_check(dir: &Path, side: &CheckSide) -> Result<CheckRun> {
         .env_remove("DISCIPLINE_POLICY_FROM")
         .env_remove("DISCIPLINE_DIRECTIVE_SOURCES")
         .env_remove("PR_BODY")
+        .env_remove("DISCIPLINE_PR_BODY_FILE")
         .env_remove("PR_TITLE")
         .env_remove("DISCIPLINE_COMMENT")
         .env_remove(crate::guards::REPLAY_CASE_ENV);

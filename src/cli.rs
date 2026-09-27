@@ -261,8 +261,13 @@ pub struct CheckArgs {
     pub staged: bool,
 
     /// File holding the PR body or commit message (override directives, hygiene scanning).
-    /// Falls back to the PR_BODY environment variable
-    #[arg(long, visible_alias = "commit-msg-file")]
+    /// With neither this flag nor DISCIPLINE_PR_BODY_FILE, the body is read from the PR_BODY
+    /// environment variable
+    #[arg(
+        long,
+        visible_alias = "commit-msg-file",
+        env = "DISCIPLINE_PR_BODY_FILE"
+    )]
     pub pr_body_file: Option<PathBuf>,
 
     /// PR title for PR-level hygiene checks (e.g. issue-link).

@@ -435,7 +435,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--commit` |  |  | Specific commit to inspect, against its parent &lt;sha&gt;~1; it must be the commit checked out (exit 2 otherwise) |
 | `--commit-range` |  |  | Commit range to inspect (&lt;before&gt;..&lt;after&gt; or &lt;before&gt;...&lt;after&gt;); &lt;after&gt;, when given, must be the commit checked out (exit 2 otherwise) |
 | `--staged` |  |  | Inspect the index against HEAD instead (pre-commit hook mode) |
-| `--pr-body-file` |  |  | File holding the PR body or commit message (override directives, hygiene scanning). Falls back to the PR_BODY environment variable |
+| `--pr-body-file` | `DISCIPLINE_PR_BODY_FILE` |  | File holding the PR body or commit message (override directives, hygiene scanning). With neither this flag nor DISCIPLINE_PR_BODY_FILE, the body is read from the PR_BODY environment variable |
 | `--pr-title` | `PR_TITLE` |  | PR title for PR-level hygiene checks (e.g. issue-link). Falls back to the PR_TITLE environment variable |
 | `--fail-on-warnings` | `DISCIPLINE_FAIL_ON_WARNINGS` |  | Treat warnings as failures |
 | `--fail-on-overrides` | `DISCIPLINE_FAIL_ON_OVERRIDES` |  | Treat applied overrides as failures (requires human sign-off) |

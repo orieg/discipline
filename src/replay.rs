@@ -516,6 +516,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
                 || matches!(
                     k.as_str(),
                     "PR_BODY"
+                        | "DISCIPLINE_PR_BODY_FILE"
                         | "PR_TITLE"
                         | "DISCIPLINE_BASE_REF"
                         | "DISCIPLINE_COMMENT"
