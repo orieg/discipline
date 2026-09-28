@@ -650,6 +650,7 @@ pub const SCALA_WRAPPER: super::WrapperSpec = super::WrapperSpec {
     through: &["block", "return_expression"],
     calls: &["call_expression"],
     arguments: &["arguments"],
+    references: &[],
     plain: &["this"],
     skip: &["comment", "block_comment"],
 };

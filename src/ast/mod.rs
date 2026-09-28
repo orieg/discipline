@@ -370,9 +370,12 @@ pub struct WrapperSpec {
     pub through: &'static [&'static str],
     /// Call nodes.
     pub calls: &'static [&'static str],
-    /// A call's argument containers and argument nodes looked through to their parts
-    /// (`(a, b)`, `name: a`, `&a`).
+    /// A call's argument containers and argument nodes, and collection literals,
+    /// looked through to their parts (`(a, b)`, `name: a`, `&a`, `[]`, `[a, 1]`).
     pub arguments: &'static [&'static str],
+    /// Unary kinds looked through to their operand only when their first token is
+    /// the given operator: taking a reference (`&a`), not negating or receiving.
+    pub references: &'static [(&'static str, &'static str)],
     /// Argument kinds besides identifiers and `*literal` kinds: a pass-through
     /// name or a literal (`true`, `None`, `self`).
     pub plain: &'static [&'static str],
@@ -430,7 +433,11 @@ fn wrapper_parts<'t>(
 
 fn plain_argument(node: tree_sitter::Node, spec: &WrapperSpec) -> bool {
     let kind = node.kind();
-    if spec.arguments.contains(&kind) {
+    let reference = spec
+        .references
+        .iter()
+        .any(|&(k, op)| k == kind && node.child(0).is_some_and(|c| c.kind() == op));
+    if reference || spec.arguments.contains(&kind) {
         return wrapper_parts(node, spec)
             .into_iter()
             .all(|c| plain_argument(c, spec));
@@ -951,15 +958,95 @@ mod tests {
         assert_eq!(callee("{ check(x, true) }", &["check"]), check);
         assert_eq!(callee("{ return check(x, &y, 1); }", &["check"]), check);
         assert_eq!(callee("{ check(x)? } // forwarded", &["check"]), check);
+        // References to names and literals, and collection literals of them.
+        assert_eq!(callee("{ check(x, &[]) }", &["check"]), check);
+        assert_eq!(
+            callee("{ check(&[1, 2], &\"x\", &mut x) }", &["check"]),
+            check
+        );
+        assert_eq!(callee("{ check((x, 1), (), [x; 3]) }", &["check"]), check);
         // Other work besides the call, even with no other call.
         assert_eq!(callee("{ let y = x; check(y) }", &["check"]), None);
         // A computed argument, a closure argument, a callee that calls.
         assert_eq!(callee("{ check(x + 1) }", &["check"]), None);
         assert_eq!(callee("{ check(x, || true) }", &["check"]), None);
+        // A collection or reference built from a computed value; a macro, which can
+        // expand to anything.
+        assert_eq!(callee("{ check(x, &[g()]) }", &["check"]), None);
+        assert_eq!(callee("{ check(&(x + 1)) }", &["check"]), None);
+        assert_eq!(callee("{ check(x, vec![]) }", &["check"]), None);
         assert_eq!(callee("{ make().check(x) }", &["make"]), None);
         // A call the pack did not collect as a same-file call.
         assert_eq!(callee("{ other.check(x) }", &[]), None);
         assert_eq!(callee("{}", &[]), None);
+    }
+
+    /// A wrapper forwarding a reference or a collection literal (`&x`, `[]`, `{a: 1}`)
+    /// is thin in every pack whose grammar has one; a collection holding a call, or a
+    /// unary operator other than `&`, is work. C/C++ and Python follow ordinary calls
+    /// three levels, so there the wrapper sits under two busy helpers: its hop is free
+    /// only when it is thin.
+    #[test]
+    fn a_wrapper_forwarding_a_reference_or_collection_literal_is_thin() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "tests/t.rs",
+                "fn checked(x: u32, env: &[(&str, &str)]) { if x != env.len() as u32 { panic!(\"x\"); } }\nfn forwarded(x: u32) { checked(x, &[]) }\nfn computed(x: u32) { checked(x, &[g()]) }\n#[test]\nfn t_forwarded() { forwarded(1); }\n#[test]\nfn t_computed() { computed(1); }\n",
+            ),
+            (
+                "tests/t_test.cc",
+                "namespace {\nvoid Checked(int* x, std::vector<int> v) { if (*x != 1) std::abort(); }\nvoid Forwarded(int x) { Checked(&x, {}); }\nvoid Computed(int x) { Checked(&x, {G()}); }\nvoid B1(int x) { Setup(); Forwarded(x); }\nvoid A1(int x) { Setup(); B1(x); }\nvoid B2(int x) { Setup(); Computed(x); }\nvoid A2(int x) { Setup(); B2(x); }\n}  // namespace\nTEST(T, Forwarded) { A1(1); }\nTEST(T, Computed) { A2(1); }\n",
+            ),
+            (
+                "tests/test_t.py",
+                "def checked(x, *opts):\n    if x != 1:\n        raise ValueError(\"x\")\n\ndef forwarded(x):\n    return checked(x, [], (x, 1), {\"a\": x}, {1})\n\ndef computed(x):\n    return checked(x, [g()])\n\ndef b1(x):\n    setup()\n    forwarded(x)\n\ndef a1(x):\n    setup()\n    b1(x)\n\ndef b2(x):\n    setup()\n    computed(x)\n\ndef a2(x):\n    setup()\n    b2(x)\n\ndef test_forwarded():\n    a1(1)\n\ndef test_computed():\n    a2(1)\n",
+            ),
+            (
+                "test/t.test.js",
+                "function checked(x, ...opts) { if (x !== 1) { throw new Error('x'); } }\nfunction forwarded(x) { return checked(x, [], [1, x], { strict: true, x }); }\nfunction computed(x) { return checked(x, [g()]); }\ntest('forwarded', () => { forwarded(1); });\ntest('computed', () => { computed(1); });\n",
+            ),
+            (
+                "pkg/t_test.go",
+                "package a\n\nimport \"testing\"\n\nfunc checked(x *int, n int) {\n\tif *x != 1 {\n\t\tpanic(\"x\")\n\t}\n}\nfunc forwarded(x int) { checked(&x, 1) }\nfunc computed(x int, ch chan int) { checked(&x, <-ch) }\nfunc TestForwarded(t *testing.T) { forwarded(1) }\nfunc TestComputed(t *testing.T) { computed(1, nil) }\n",
+            ),
+            (
+                "test/t_test.rb",
+                "class TTest < Minitest::Test\n  def checked(x, *opts)\n    raise ArgumentError, 'x' if x != 1\n  end\n\n  def forwarded(x)\n    checked(x, [], [1, x], { strict: true })\n  end\n\n  def computed(x)\n    checked(x, [g(1)])\n  end\n\n  def test_forwarded\n    forwarded(1)\n  end\n\n  def test_computed\n    computed(1)\n  end\nend\n",
+            ),
+            (
+                "tests/TTest.php",
+                "<?php\nclass TTest extends TestCase {\n    private function checked(int $x, array $o): void { if ($x !== 1) { throw new RuntimeException('x'); } }\n    private function forwarded(int $x): void { $this->checked($x, [], ['strict' => true, $x]); }\n    private function computed(int $x): void { $this->checked($x, [g()]); }\n    public function testForwarded(): void { $this->forwarded(1); }\n    public function testComputed(): void { $this->computed(1); }\n}\n",
+            ),
+            (
+                "Tests/TTests.swift",
+                "import XCTest\n\nfinal class TTests: XCTestCase {\n    func checked(_ x: inout Int, _ n: Int) { if x != 1 { fatalError(\"x\") } }\n    func forwarded(_ x: inout Int) { checked(&x, 1) }\n    func computed(_ x: inout Int) { checked(&x, -x) }\n    func testForwarded() { var v = 1; forwarded(&v) }\n    func testComputed() { var v = 1; computed(&v) }\n}\n",
+            ),
+            (
+                "Tests/TTests.m",
+                "#import <XCTest/XCTest.h>\n@interface TTests : XCTestCase\n@end\n@implementation TTests\n- (void)checked:(int *)x n:(int)n {\n    if (*x != 1) { XCTFail(@\"x\"); }\n}\n- (void)forwarded:(int)x {\n    [self checked:&x n:1];\n}\n- (void)computed:(int)x {\n    [self checked:&x n:-x];\n}\n- (void)testForwarded {\n    [self forwarded:1];\n}\n- (void)testComputed {\n    [self computed:1];\n}\n@end\n",
+            ),
+        ];
+        let reg = default_registry();
+        let vocab = AssertVocabulary::default();
+        let mut ran = 0;
+        for (path, src) in cases {
+            let Some(pack) = reg.find_pack(path) else {
+                continue;
+            };
+            ran += 1;
+            let facts = pack.extract(path, src, &vocab).expect(path);
+            let counts = |marker: &str| {
+                let t = facts
+                    .tests
+                    .iter()
+                    .find(|t| t.name.to_lowercase().contains(marker))
+                    .unwrap_or_else(|| panic!("{path}: no `{marker}` test in {:?}", facts.tests));
+                (t.total_asserts, t.helper_checks)
+            };
+            assert_eq!(counts("forwarded"), (1, 1), "{path}");
+            assert_eq!(counts("computed"), (0, 0), "{path}");
+        }
+        assert!(ran > 0, "no pack compiled in");
     }
 
     /// Helpers named in a dispatch table and run in a loop resolve like direct calls.

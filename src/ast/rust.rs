@@ -1126,9 +1126,15 @@ pub const RS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
         "await_expression",
     ],
     calls: &["call_expression"],
-    arguments: &["arguments", "reference_expression"],
-    plain: &["self"],
-    skip: &["line_comment", "block_comment"],
+    arguments: &[
+        "arguments",
+        "reference_expression",
+        "array_expression",
+        "tuple_expression",
+    ],
+    references: &[],
+    plain: &["self", "unit_expression"],
+    skip: &["line_comment", "block_comment", "mutable_specifier"],
 };
 
 #[cfg(test)]

@@ -12509,7 +12509,13 @@ fn a_helper_refactored_into_a_thin_wrapper_is_not_an_assertion_reduction() {
     let helper = "use std::path::Path;\n\npub fn install(root: &Path, observe: bool) -> Result<u32> {\n    let a = write(root, observe)?;\n    let b = write(root, observe)?;\n    Ok(a + b)\n}\n\n";
     let wrapped = "use std::path::Path;\n\npub fn install(root: &Path, observe: bool) -> Result<u32> {\n    install_with(root, observe, false)\n}\n\npub fn install_with(root: &Path, observe: bool, force: bool) -> Result<u32> {\n    let a = write(root, observe || force)?;\n    let b = write(root, observe)?;\n    Ok(a + b)\n}\n\n";
     let hollow = "use std::path::Path;\n\npub fn install(root: &Path, observe: bool) -> Result<u32> {\n    install_with(root, observe, false)\n}\n\npub fn install_with(root: &Path, observe: bool, force: bool) -> Result<u32> {\n    Ok(2)\n}\n\n";
-    for (before, after, reported) in [(helper, wrapped, false), (wrapped, hollow, true)] {
+    // The wrapper forwards an empty slice instead of a named constant.
+    let forwarded = "use std::path::Path;\n\npub fn install(root: &Path, observe: bool) -> Result<u32> {\n    install_with(root, observe, &[])\n}\n\npub fn install_with(root: &Path, observe: bool, env: &[(&str, &str)]) -> Result<u32> {\n    let a = write(root, observe || !env.is_empty())?;\n    let b = write(root, observe)?;\n    Ok(a + b)\n}\n\n";
+    for (before, after, reported) in [
+        (helper, wrapped, false),
+        (wrapped, hollow, true),
+        (helper, forwarded, false),
+    ] {
         let repo = Repo::new();
         repo.git(&["checkout", "-q", "main"]);
         repo.write("src/install.rs", &format!("{before}{test}"));

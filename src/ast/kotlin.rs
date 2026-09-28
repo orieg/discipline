@@ -790,6 +790,7 @@ pub const KOTLIN_WRAPPER: super::WrapperSpec = super::WrapperSpec {
     through: &["function_body", "block", "statements", "return_expression"],
     calls: &["call_expression"],
     arguments: &["value_arguments", "value_argument"],
+    references: &[],
     plain: &["this_expression"],
     skip: &["line_comment", "block_comment", "multiline_comment"],
 };

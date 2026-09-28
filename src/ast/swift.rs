@@ -601,6 +601,7 @@ pub const SWIFT_WRAPPER: super::WrapperSpec = super::WrapperSpec {
         "value_argument",
         "value_argument_label",
     ],
+    references: &[("prefix_expression", "&")],
     plain: &["self_expression"],
     skip: &["comment", "multiline_comment", "try_operator"],
 };
