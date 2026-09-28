@@ -356,7 +356,7 @@ Third-party GitHub Actions are pinned by full commit SHA. Tooling binaries (`act
 
 ### 8.2 Release Pipeline (`.github/workflows/release.yml`)
 
-The release bump before the tag moves every version string, including `CITATION.cff`'s `version` (a `version-lockstep` source) and its `date-released`.
+How a release is cut is under [Cutting a release](#cutting-a-release); the repository settings the pipeline relies on are in §8.4.
 
 Releases are triggered exclusively by pushing a `vX.Y.Z` tag:
 1. **Verify:** Asserts tag matches `Cargo.toml` version, tagged commit resides on `main`, and tests/lints/deny pass.
@@ -372,6 +372,15 @@ Supply-chain controls around these steps:
 - **Credentials:** every checkout sets `persist-credentials: false`; the one push (`move-major-tag`) is handed its credential for that command. The release checks run without a build cache, so a cache written by CI cannot reach them.
 - **Egress:** `publish`, `promote` and `move-major-tag` run `step-security/harden-runner` with `egress-policy: block` and telemetry off, allowing only GitHub, Sigstore and the registries the image build pulls from. The macOS build legs and `smoke` hold no secret and no write token and run without it. The two container images `publish` pulls to build the release image, `tonistiigi/binfmt` (QEMU) and `moby/buildkit` (the buildx builder), are pinned by digest: their action defaults are moving tags.
 - **Consumers:** the action checks the archive against `SHA256SUMS` and, on github.com with the default release store and `gh` on the runner, verifies its build provenance attestation: signed by `release.yml`, for the requested tag (`gh attestation verify --signer-workflow --source-ref`). A replaced asset with a matching replaced `SHA256SUMS` fails there.
+
+#### Cutting a release
+
+1. **Bump PR** (`chore(release): bump version to X.Y.Z with its ledger rows`): `Cargo.toml`, discipline's entry in `Cargo.lock`, and every install instruction that names a release (the `version-lockstep` `release` group in `discipline.toml` lists them: README, docs, templates, man pages, `.pre-commit-hooks.yaml`, `CITATION.cff`'s `version`). Set `CITATION.cff`'s `date-released` by hand; nothing checks it. Relabel the `unreleased` rows of both ledger tables in `docs/ROADMAP.md` to `vX.Y.Z` (they become the notes' "Upgrading" section), then `discipline docs --write`. Leave this repository's own agent-hook files alone (`.claude/hooks/discipline-bootstrap.sh`, `.github/workflows/copilot-setup-steps.yml`): they pin a *published* release, and move to the new one in a follow-up once it is out.
+2. **Replay before tagging:** run `discipline replay` over the recent history of downstream repositories under the current release and under the candidate, each with that repository's own `discipline.toml`, and report every changed verdict or newly blocking gate before the tag.
+3. **Tag:** `git tag -s vX.Y.Z <merge-sha> -m "vX.Y.Z"` (annotated and signed, on the bump's merge commit), then `git push origin vX.Y.Z`. The pipeline above does the rest, including `latest`, the floating image tags, the Homebrew tap, the package repositories and `v0`.
+4. **Release notes** come from GitHub's generator, given only the new tag: it compares against the previous **published** release and skips drafts (measured with the `v0.15.0-rc.2` draft present: the range for `v0.15.0` was `v0.14.4...v0.15.0`), so release candidates do not shorten a release's notes. The ledger rows labelled with the version are prepended as "Upgrading".
+5. **After:** Zenodo archives the published release (see §8.4). After the first archived release, a follow-up records the concept and version DOIs in `CITATION.cff` and the README badge.
+6. **A failed release is not re-run from a moved tag:** the tag cannot move (`release tags` ruleset), and a re-run uses the workflow as it was at the tag. Fix `main` and release the next patch version. A release candidate first (below) finds most pipeline failures without spending a version.
 
 #### Release candidates
 
@@ -414,6 +423,27 @@ Static security analysis runs on pull requests, pushes to `main`, and on a sched
   1. **Triage:** Review all open alerts in GitHub Advanced Security across `rust`, `actions`, and `python`.
   2. **True Positives:** Classified as blocking security defects. Remediated immediately via prioritized patches with dedicated unit and end-to-end regression tests.
   3. **False Positives / Heuristic Flags:** Must be audited against engine behavior. An alert may only be dismissed if accompanied by a documented justification and pinned by executable regression tests (e.g., `tests/test_report_redaction.rs` verifying cross-format secret redaction across all 7 supported report formats).
+
+### 8.4 Repository Settings the Pipelines Rely On
+
+These live in the forge, not in the tree, so a review of the workflows alone does not show them. Check them with the `gh api` calls named in each row; `discipline doctor` reads branch protection.
+
+| Setting | Value | Why | Read with |
+|---|---|---|---|
+| Immutable releases | on | A published release's tag and assets cannot be replaced: a consumer pinned to a version keeps getting the bytes that were attested. Applies to releases published after it was turned on. | `gh api repos/orieg/discipline/immutable-releases` |
+| Actions policy | `allowed_actions: selected`, `sha_pinning_required: true`, GitHub-owned actions plus an explicit allow-list | A workflow cannot run an action outside the list, or any action by tag. **Adding a third-party action to a workflow means adding it to the allow-list first**, or the job fails at start. | `.../actions/permissions`, `.../actions/permissions/selected-actions` |
+| Default workflow token | `read`; cannot approve pull requests | Write scopes are granted per job. | `.../actions/permissions/workflow` |
+| Ruleset `main protection` | required signed commits, required status check `ci-gate`, no force-push, no deletion, changes through pull requests | Only a green, signed pull request reaches `main`. A pull request is rebased locally (a server-side rebase drops the signatures) and squash-merged. | `.../rulesets` |
+| Ruleset `release tags` | `refs/tags/v*.*.*`: no update, no deletion, no bypass | A release tag, candidate tags included, names one commit forever. | `.../rulesets` |
+| Ruleset `major tags` | `refs/tags/v0`, `refs/tags/v1`: no update, no deletion; bypass: deploy keys | Only `move-major-tag`, pushing with `MAJOR_TAG_DEPLOY_KEY`, moves a floating tag. (The GitHub Actions app cannot be a bypass actor on a user-owned repository, hence the deploy key.) | `.../rulesets` |
+| Environment `release` | deployment policy: tags `v*.*.*`; secrets `HOMEBREW_TAP_DEPLOY_KEY`, `MAJOR_TAG_DEPLOY_KEY` | Read by `promote` and `move-major-tag` only, and only from a release tag. | `.../environments/release`, `gh secret list --env release` |
+| Environment `package-signing` | deployment policy: branch `main`; secrets `REPO_SIGNING_KEY` (passphrase-protected, armoured), `REPO_SIGNING_PASSPHRASE` | Read by `pages.yml` `sign` only. The key's public halves are published with the APT and RPM repositories, so replacing the key breaks every installed source until users fetch the new key; extend its expiry instead. | `.../environments/package-signing` |
+| Environment `github-pages` | branches `main`, `gh-pages` | `pages.yml` `deploy`. Pages source: GitHub Actions. | `.../pages` |
+| Repository secrets | none | Every secret is scoped to the environment of the one job that reads it. | `gh secret list` |
+| Deploy keys | this repository: `release: move major tag` (write); `orieg/homebrew-tap`: `discipline release (release environment)` (write) | The private halves exist only as the `release` environment secrets above. Rotating one: add a new key, set the secret, delete the old key. | `gh repo deploy-key list` |
+| Zenodo integration | webhook on `release` events | Every *published* release is archived with a DOI; drafts are skipped (its receiver reads `draft`, never `prerelease`), which is why candidates stay drafts. | `.../hooks` |
+| `ratified-paths` | `protected_paths` in `discipline.toml` (workflows, `action.yml`, `discipline.toml`, agent guides and hooks); ratifier `orieg` | A pull request that edits a protected path passes `dogfood` only when an issue it closes carries an unedited comment by the ratifier naming the path (`Owner-ratified-paths:` block, see `docs/GATES.md`). A comment posted after `dogfood` ran needs a re-run of that job. | `discipline.toml` |
+| Auto-merge | allowed | Squash auto-merge pinned to the head that went green (`gh pr merge --squash --auto --match-head-commit <sha>`). | `gh api repos/orieg/discipline` |
 
 ---
 
