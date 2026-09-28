@@ -3738,7 +3738,7 @@ fn a_push_run_reads_the_merged_pull_requests_body() {
     // A squash commit: the message carries the branch's subject, not the PR body.
     repo.commit("docs: never skip (#12)");
     let head = |repo: &Repo| {
-        let out = std::process::Command::new("git")
+        let out = common::git_command()
             .args(["rev-parse", "HEAD"])
             .current_dir(repo.dir.path())
             .output()
@@ -5054,7 +5054,7 @@ fn discipline_toml_with_nul_byte_fails_closed_exit_2() {
 fn empty_tree_first_commit_staged_mode_passes() {
     let dir = tempfile::tempdir().unwrap();
     let repo_path = dir.path();
-    std::process::Command::new("git")
+    common::git_command()
         .args(["init", "-q", "-b", "main"])
         .current_dir(repo_path)
         .status()
@@ -5071,7 +5071,7 @@ fn empty_tree_first_commit_staged_mode_passes() {
         std::os::unix::fs::symlink("AGENTS.md", repo_path.join("GEMINI.md")).unwrap();
     }
 
-    std::process::Command::new("git")
+    common::git_command()
         .args(["add", "-A"])
         .current_dir(repo_path)
         .status()
@@ -5116,7 +5116,7 @@ fn empty_tree_first_commit_staged_mode_passes() {
 fn empty_repo_unstaged_mode_fails_closed_exit_2() {
     let dir = tempfile::tempdir().unwrap();
     let repo_path = dir.path();
-    std::process::Command::new("git")
+    common::git_command()
         .args(["init", "-q", "-b", "main"])
         .current_dir(repo_path)
         .status()
@@ -11329,7 +11329,7 @@ fn submodule_gitlink_entries_do_not_break_the_run() {
 
     // Build a real mode-160000 index entry without needing a second clone.
     let head = {
-        let out = std::process::Command::new("git")
+        let out = common::git_command()
             .args(["rev-parse", "HEAD"])
             .current_dir(repo.path())
             .output()

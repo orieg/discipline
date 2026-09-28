@@ -15,7 +15,10 @@ fn session(repo: &Repo, messages: &[Value]) -> Vec<Value> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("DISCIPLINE_NO_NETWORK", "1");
-    for var in common::ISOLATED_ENV_VARS {
+    for var in common::ISOLATED_ENV_VARS
+        .iter()
+        .chain(common::GIT_REPOSITORY_ENV_VARS)
+    {
         cmd.env_remove(var);
     }
     for (k, _) in std::env::vars() {

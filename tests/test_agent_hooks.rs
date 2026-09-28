@@ -29,7 +29,10 @@ fn hook_env(repo: &Repo, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Ho
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("DISCIPLINE_NO_NETWORK", "1");
-    for var in common::ISOLATED_ENV_VARS {
+    for var in common::ISOLATED_ENV_VARS
+        .iter()
+        .chain(common::GIT_REPOSITORY_ENV_VARS)
+    {
         cmd.env_remove(var);
     }
     for (k, _) in std::env::vars() {
@@ -1186,5 +1189,56 @@ fn a_hook_does_not_report_the_unchanged_hook_files_its_own_branch_adds() {
             && blocked.stderr.contains(".agents/hooks.json"),
         "{}",
         blocked.stderr
+    );
+}
+
+/// Run only by [`fixtures_never_touch_an_inherited_git_dir`], in a child whose environment
+/// carries `GIT_DIR`: builds a fixture repository, commits, and runs a hook check.
+#[test]
+#[ignore = "run by fixtures_never_touch_an_inherited_git_dir"]
+fn inherited_git_dir_probe() {
+    let repo = Repo::new();
+    weakened(&repo);
+    repo.commit("test: weaken");
+    let run = hook(&repo, &["hook", "run", "--agent", "copilot"], POST_EDIT);
+    assert!(run.stdout.contains("additionalContext"), "{}", run.stdout);
+}
+
+/// `git rebase --exec` (and a git hook) exports `GIT_DIR` to what it runs. A fixture's
+/// `git init` that inherits it re-initialises that repository as bare instead of creating
+/// its own: every git call the tests make must drop it.
+#[test]
+fn fixtures_never_touch_an_inherited_git_dir() {
+    let sentinel = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = common::git_command()
+            .args(args)
+            .current_dir(sentinel.path())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    let git_dir = sentinel.path().join(".git");
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "inherited_git_dir_probe"])
+        .env("GIT_DIR", &git_dir)
+        .env("GIT_WORK_TREE", sentinel.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(git(&["config", "core.bare"]), "false");
+    assert_eq!(
+        git(&["rev-list", "--all"]),
+        "",
+        "no commit reached the sentinel"
+    );
+    assert!(
+        !sentinel.path().join("AGENTS.md").exists(),
+        "no fixture file reached the sentinel"
     );
 }
