@@ -1023,6 +1023,8 @@ pub fn claude_bootstrap_script() -> String {
 # A Claude Code cloud session starts on a fresh VM without discipline. This installs
 # the pinned release, checksum-verified, so the hooks in .claude/settings.json can
 # check the change. Locally it does nothing: install discipline yourself.
+# Claude Code cloud sessions run only on repositories hosted on GitHub; elsewhere this
+# script never runs in the cloud.
 set -u
 [ "${{CLAUDE_CODE_REMOTE:-}}" = "true" ] || exit 0
 command -v discipline >/dev/null 2>&1 && exit 0
@@ -1179,6 +1181,38 @@ pub fn install_cloud_agent_with(root: &Path, upgrade: bool) -> Result<Installed>
     Ok(Installed::Written(path))
 }
 
+/// The hosts of `root`'s remotes when none of them is on GitHub, which Copilot cloud agent
+/// and Claude Code cloud sessions require; `None` when one is, or when the repository has
+/// no remote to judge by. An SSH host alias is resolved through `~/.ssh/config` first.
+pub fn non_github_remote_hosts(root: &Path) -> Option<Vec<String>> {
+    let repo = git2::Repository::open(root).ok()?;
+    let mut hosts = Vec::new();
+    for name in repo.remotes().ok()?.iter().flatten().flatten() {
+        let Some(url) = repo
+            .find_remote(name)
+            .ok()
+            .and_then(|r| r.url().ok().map(str::to_string))
+        else {
+            continue;
+        };
+        let url =
+            crate::forge::resolve_ssh_alias(&url, &|a| crate::forge::ssh_hostname_from_home(a));
+        if let Some(r) = crate::forge::parse_remote(&url) {
+            hosts.push(crate::forge::host_of(&r.url));
+        }
+    }
+    if hosts.is_empty()
+        || hosts
+            .iter()
+            .any(|h| crate::forge::kind_from_host(h) == Some(crate::forge::ForgeKind::GitHub))
+    {
+        return None;
+    }
+    hosts.sort();
+    hosts.dedup();
+    Some(hosts)
+}
+
 /// Why git would not commit a hook file `install` wrote: it is ignored. `None` when
 /// it is tracked or committable, or outside any repository (a user-level file).
 pub fn ignored_by_git(path: &Path) -> Option<String> {
@@ -1329,6 +1363,11 @@ mod tests {
             format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}")
         );
         let script = claude_bootstrap_script();
+        assert!(
+            script
+                .contains("# Claude Code cloud sessions run only on repositories hosted on GitHub"),
+            "{script}"
+        );
         let lines: Vec<&str> = script.lines().collect();
         let guard = lines
             .iter()

@@ -78,7 +78,8 @@ impl Forge {
     }
 }
 
-fn host_of(url: &str) -> String {
+/// The lower-cased host of a URL (`https://host:port/path` → `host`).
+pub fn host_of(url: &str) -> String {
     let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
     rest.split(['/', ':'])
         .next()

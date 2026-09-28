@@ -831,6 +831,47 @@ fn copilot_cloud_agent_gets_a_setup_steps_workflow() {
     );
 }
 
+/// Copilot cloud agent runs only on GitHub: in a repository none of whose remotes is on
+/// GitHub, `--cloud-agent` writes no setup-steps workflow and says why (the repository
+/// hook is still written). A GitHub remote under any name, or no remote, writes it.
+#[test]
+fn cloud_agent_setup_steps_are_written_only_for_a_github_repository() {
+    let args = ["hook", "install", "--agent", "copilot", "--cloud-agent"];
+    let setup = ".github/workflows/copilot-setup-steps.yml";
+
+    let gitea = Repo::new();
+    gitea.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://gitea.example.invalid/o/r.git",
+    ]);
+    let run = gitea.run(&args, &[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(!gitea.file(setup).exists(), "{}", run.stdout);
+    assert!(gitea.file(".github/hooks/discipline.json").exists());
+    assert!(
+        run.stdout
+            .contains("Copilot cloud agent runs only on GitHub")
+            && run.stdout.contains("gitea.example.invalid")
+            && !run.stdout.contains("o/r"),
+        "names the host, never the repository: {}",
+        run.stdout
+    );
+
+    let mirrored = Repo::new();
+    mirrored.git(&[
+        "remote",
+        "add",
+        "origin",
+        "git@gitea.example.invalid:o/r.git",
+    ]);
+    mirrored.git(&["remote", "add", "github", "git@github.com:o/r.git"]);
+    let run = mirrored.run(&args, &[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(mirrored.file(setup).exists(), "{}", run.stdout);
+}
+
 /// `hook install --agent claude-code` writes the settings and the executable bootstrap
 /// their `SessionStart` hook runs; neither is ever rewritten.
 #[test]

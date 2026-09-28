@@ -1419,14 +1419,22 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     a.upgrade,
                 )?);
             }
+            let mut cloud_note = None;
             if a.cloud_agent {
                 if a.agent != discipline::hook::Agent::Copilot {
                     bail!("`--cloud-agent` is for copilot: Copilot cloud agent runs the repository's hooks");
                 }
-                results.push(discipline::hook::install_cloud_agent_with(
-                    &discipline::hook::repo_root()?,
-                    a.upgrade,
-                )?);
+                let root = discipline::hook::repo_root()?;
+                match discipline::hook::non_github_remote_hosts(&root) {
+                    Some(hosts) => cloud_note = Some(format!(
+                        "`--cloud-agent` wrote nothing: Copilot cloud agent runs only on GitHub, and no remote of this repository is ({}), so {} would never run.",
+                        hosts.join(", "),
+                        discipline::hook::COPILOT_SETUP_STEPS
+                    )),
+                    None => results.push(discipline::hook::install_cloud_agent_with(
+                        &root, a.upgrade,
+                    )?),
+                }
             }
             let untrusted = (a.agent == discipline::hook::Agent::Copilot && !a.user)
                 .then(|| {
@@ -1480,6 +1488,9 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                         ok = false;
                     }
                 }
+            }
+            if let Some(note) = cloud_note {
+                println!("{} {note}", style::yellow("note:"));
             }
             if let Some(note) = untrusted {
                 println!("{} {note}", style::yellow("note:"));
