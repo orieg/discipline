@@ -1343,6 +1343,28 @@ pub struct IssueLinkGate {
     pub exempt_paths: Vec<String>,
     pub pattern: Option<String>,
     pub require_in_commit_if_no_pr: bool,
+    /// Look each reference up on the forge: at least one must be an issue of this
+    /// repository (or of `reference_repos`). Needs forge access.
+    pub verify_references: bool,
+    /// With `verify_references`: a closed issue does not satisfy the gate.
+    pub require_open_issue: bool,
+    /// With `verify_references`: other repositories (`owner/repo`, a GitLab project path)
+    /// a reference may resolve in.
+    pub reference_repos: Vec<String>,
+    /// With `verify_references`: a reference to a pull or merge request satisfies the gate.
+    pub accept_pull_references: bool,
+    /// Whether `no-issue: <reason>` is accepted.
+    pub waiver: IssueWaiver,
+}
+
+/// Whether the `issue-link` waiver directive is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueWaiver {
+    /// `no-issue: <reason>` lifts the finding.
+    Directive,
+    /// No waiver: every pull request references an issue.
+    None,
 }
 
 /// Checks `CITATION.cff` and `.zenodo.json` at the repository root; with neither
@@ -1418,6 +1440,11 @@ impl Default for IssueLinkGate {
             exempt_paths: Vec::new(),
             pattern: None,
             require_in_commit_if_no_pr: false,
+            verify_references: false,
+            require_open_issue: true,
+            reference_repos: Vec::new(),
+            accept_pull_references: false,
+            waiver: IssueWaiver::Directive,
         }
     }
 }

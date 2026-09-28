@@ -333,6 +333,17 @@ pub struct Context<'a> {
     pub allow_cross_host_bench: bool,
     pub bench_base_file: Option<std::path::PathBuf>,
     pub bench_head_file: Option<std::path::PathBuf>,
+    /// The forge, for the gates that read facts from it (`issue-link` with
+    /// `verify_references`). `None` where a run has no forge to ask (a baseline write).
+    pub forge: Option<ForgeAccess<'a>>,
+}
+
+/// A gate's way to the forge: the API client, how the forge is identified, and the pull
+/// request being checked when the run has one.
+pub struct ForgeAccess<'a> {
+    pub api: &'a dyn crate::forge::ForgeApi,
+    pub identify: &'a dyn Fn() -> std::result::Result<crate::forge::Forge, String>,
+    pub pull: Option<crate::override_policy::PullContext>,
 }
 
 /// Set by `discipline replay` on each case's `check`: the configuration under test is

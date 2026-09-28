@@ -759,6 +759,8 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         (None, None)
     };
 
+    let forge_api = discipline::forge::HttpApi::from_env();
+    let identify_forge = || discipline::forge::detect_for(&git);
     let ctx = Context {
         config: &config,
         head_config: head_config.as_ref(),
@@ -775,6 +777,11 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         allow_cross_host_bench: args.allow_cross_host_bench,
         bench_base_file: args.bench_base_file.clone(),
         bench_head_file: args.bench_head_file.clone(),
+        forge: Some(discipline::guards::ForgeAccess {
+            api: &forge_api,
+            identify: &identify_forge,
+            pull: detect_pull_context_from_ci(),
+        }),
     };
     let mut summary = run_checks(&config, args.suite, &ctx)?;
 
@@ -1121,6 +1128,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         allow_cross_host_bench: false,
         bench_base_file: None,
         bench_head_file: None,
+        forge: None,
     };
 
     let summary = run_checks(&config, args.suite, &ctx)?;

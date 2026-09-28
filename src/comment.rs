@@ -144,10 +144,11 @@ pub fn find_existing(
 ) -> Result<Option<u64>, String> {
     let mut seen = std::collections::BTreeSet::new();
     for page in 1..=MAX_PAGES {
-        let (list, total) = api
-            .get_counted(forge, &comments_path(forge, number, page))?
-            .unwrap_or((serde_json::Value::Array(Vec::new()), None));
-        let items = list.as_array().cloned().unwrap_or_default();
+        let (items, total) = match api.get_page(forge, &comments_path(forge, number, page)) {
+            Ok(p) => (p.items, p.total),
+            Err(e) if e.kind == crate::forge::ForgeErrorKind::NotFound => (Vec::new(), None),
+            Err(e) => return Err(e.detail()),
+        };
         let mut fresh = 0;
         for c in &items {
             let id = c.get("id").and_then(|i| i.as_u64());
@@ -351,10 +352,13 @@ mod tests {
             serde_json::json!(all),
         );
         let key = format!("gitea:{}", comments_path(&f, 5, 1));
-        api.totals.insert(key.clone(), 60);
+        api.responses.insert(
+            key.clone(),
+            serde_json::json!({"__status": 200, "__headers": {"X-Total-Count": "60"}, "__body": all}),
+        );
         assert_eq!(find_existing(&api, &f, 5), Ok(None));
         // Without the count, a page that repeats every id already seen ends the read.
-        api.totals.remove(&key);
+        api.responses.insert(key.clone(), serde_json::json!(all));
         api.responses.insert(
             format!("gitea:{}", comments_path(&f, 5, 2)),
             serde_json::json!(all),

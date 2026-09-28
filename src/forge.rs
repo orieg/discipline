@@ -1,9 +1,13 @@
 //! Which forge hosts the repository, and a read-only way to ask it questions.
 //!
-//! Three opt-in features need platform data that is not in the repository: the open-issue
-//! check of `provenance-tags` (`require_open_pending_issues`), bench-regression citation
-//! freshness, and the branch-protection checks of `discipline doctor`. They go through
-//! this module. No gate needs the network otherwise.
+//! Opt-in features need platform data that is not in the repository: the open-issue check
+//! of `provenance-tags` (`require_open_pending_issues`), `issue-link` reference
+//! verification, bench-regression citation freshness, `require_approval`, the
+//! `merged-pr-body` directive source, and the branch-protection checks of `discipline
+//! doctor`. They go through this module. No gate needs the network otherwise.
+//!
+//! Reads are retried a bounded number of times ([`MAX_ATTEMPTS`]) and a failure keeps its
+//! class ([`ForgeErrorKind`]), so a caller can name it instead of guessing from a message.
 //!
 //! Requests are made in-process over HTTPS (rustls, no OpenSSL), so the static binary and
 //! the container need no external tool. The client:
@@ -377,47 +381,499 @@ pub fn ssh_hostname(config: &str, alias: &str) -> Option<String> {
     None
 }
 
+/// The class of a failed forge read. The label is the verdict a report carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgeErrorKind {
+    /// HTTP 404, or a GraphQL `NOT_FOUND`.
+    NotFound,
+    /// HTTP 401 / 403 that is not a rate limit: the token cannot read this.
+    Denied,
+    /// HTTP 429, or a 403 carrying rate-limit headers, still limited after the bounded wait.
+    RateLimited,
+    /// No answer (connection, timeout) or a 5xx, after the bounded retries.
+    Unavailable,
+    /// An answer this client cannot use: not JSON, a missing field, an unexpected status.
+    Malformed,
+    /// A list whose pages could not be read to the end.
+    Partial,
+}
+
+impl ForgeErrorKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ForgeErrorKind::NotFound => "forge-not-found",
+            ForgeErrorKind::Denied => "forge-denied",
+            ForgeErrorKind::RateLimited => "forge-rate-limited",
+            ForgeErrorKind::Unavailable => "forge-unavailable",
+            ForgeErrorKind::Malformed => "forge-malformed",
+            ForgeErrorKind::Partial => "forge-partial-list",
+        }
+    }
+}
+
+/// A failed forge read: its class, what happened, and how many attempts were made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForgeError {
+    pub kind: ForgeErrorKind,
+    pub message: String,
+    pub attempts: u32,
+}
+
+impl ForgeError {
+    pub fn new(kind: ForgeErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            attempts: 1,
+        }
+    }
+
+    /// The message, with the attempt count when the read was retried.
+    pub fn detail(&self) -> String {
+        if self.attempts > 1 {
+            format!("{} (after {} attempts)", self.message, self.attempts)
+        } else {
+            self.message.clone()
+        }
+    }
+}
+
+impl std::fmt::Display for ForgeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.kind.label(), self.detail())
+    }
+}
+
+impl std::error::Error for ForgeError {}
+
+/// The class of an HTTP answer, `None` for a success. A 403 is a rate limit only when
+/// the forge says so in a header: a body that says "rate limit" is not evidence.
+pub fn classify_status(status: u16, headers: &[(String, String)]) -> Option<ForgeErrorKind> {
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.trim())
+    };
+    match status {
+        200..=299 => None,
+        404 => Some(ForgeErrorKind::NotFound),
+        429 => Some(ForgeErrorKind::RateLimited),
+        403 if header("x-ratelimit-remaining") == Some("0") || header("retry-after").is_some() => {
+            Some(ForgeErrorKind::RateLimited)
+        }
+        401 | 403 => Some(ForgeErrorKind::Denied),
+        500 | 502 | 503 | 504 => Some(ForgeErrorKind::Unavailable),
+        _ => Some(ForgeErrorKind::Malformed),
+    }
+}
+
+/// Attempts made for one read, the first included.
+pub const MAX_ATTEMPTS: u32 = 3;
+
+/// Wait before the second and third attempt of a read the forge could not answer.
+pub const RETRY_BACKOFF_MS: [u64; 2] = [500, 1500];
+
+/// Longest wait a rate limit may ask for before the read is given up instead.
+pub const MAX_RATE_LIMIT_WAIT_SECS: u64 = 60;
+
+/// Most HTTP requests one process makes, retries included. A body naming hundreds of
+/// issues cannot turn a check into a crawl.
+pub const MAX_REQUESTS: usize = 500;
+
+/// How long to wait before attempt `attempt + 1` of a read that failed with `kind`;
+/// `None` when it is not retried. `now` is Unix seconds, for reset-time headers.
+pub fn retry_delay(
+    kind: ForgeErrorKind,
+    headers: &[(String, String)],
+    attempt: u32,
+    now: u64,
+) -> Option<std::time::Duration> {
+    if attempt >= MAX_ATTEMPTS {
+        return None;
+    }
+    let backoff = std::time::Duration::from_millis(
+        RETRY_BACKOFF_MS[(attempt as usize - 1).min(RETRY_BACKOFF_MS.len() - 1)],
+    );
+    match kind {
+        ForgeErrorKind::Unavailable => Some(backoff),
+        ForgeErrorKind::RateLimited => {
+            let header = |name: &str| {
+                headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                    .and_then(|(_, v)| v.trim().parse::<u64>().ok())
+            };
+            // Retry-After is seconds; GitHub's x-ratelimit-reset and GitLab's
+            // RateLimit-Reset are a Unix time.
+            let wait = header("retry-after").or_else(|| {
+                header("x-ratelimit-reset")
+                    .or_else(|| header("ratelimit-reset"))
+                    .map(|reset| reset.saturating_sub(now))
+            });
+            match wait {
+                Some(w) if w > MAX_RATE_LIMIT_WAIT_SECS => None,
+                Some(w) => Some(std::time::Duration::from_secs(w).max(backoff)),
+                None => Some(backoff),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// One page of a list.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Page {
+    pub items: Vec<serde_json::Value>,
+    /// The size of the whole list, when the forge states it (`X-Total-Count` on Gitea and
+    /// Forgejo, `x-total` on GitLab).
+    pub total: Option<u64>,
+    /// The forge says a further page exists (`Link: rel="next"`, GitLab `x-next-page`).
+    pub has_next: bool,
+}
+
+impl Page {
+    fn from_answer(body: serde_json::Value, headers: &[(String, String)]) -> Result<Page, String> {
+        let items = match body {
+            serde_json::Value::Array(items) => items,
+            other => return Err(format!("expected a list, got {}", kind_of(&other))),
+        };
+        let header = |name: &str| {
+            headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.trim().to_string())
+        };
+        Ok(Page {
+            items,
+            total: header("x-total-count")
+                .or_else(|| header("x-total"))
+                .and_then(|v| v.parse().ok()),
+            has_next: header("link").is_some_and(|l| l.contains("rel=\"next\""))
+                || header("x-next-page").is_some_and(|p| !p.is_empty()),
+        })
+    }
+}
+
+fn kind_of(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "a list",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
 /// Read-only access to a forge's REST API.
 pub trait ForgeApi {
     /// GET `path` (relative to the forge's API base) parsed as JSON. `Ok(None)` for 404.
     fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String>;
 
-    /// [`ForgeApi::get`] with the `X-Total-Count` header, when the forge sent one: the
-    /// size of the whole list a paged response is part of.
-    fn get_counted(&self, forge: &Forge, path: &str) -> Result<Option<Counted>, String> {
-        Ok(self.get(forge, path)?.map(|v| (v, None)))
+    /// GET `path` as JSON, a failure classified ([`ForgeErrorKind::NotFound`] for 404).
+    fn fetch(&self, forge: &Forge, path: &str) -> Result<serde_json::Value, ForgeError> {
+        match self.get(forge, path) {
+            Ok(Some(v)) => Ok(v),
+            Ok(None) => Err(ForgeError::new(
+                ForgeErrorKind::NotFound,
+                format!("`{path}` does not exist or is not visible"),
+            )),
+            Err(e) => Err(ForgeError::new(ForgeErrorKind::Unavailable, e)),
+        }
+    }
+
+    /// GET one page of a list, with the paging headers the forge sent.
+    fn get_page(&self, forge: &Forge, path: &str) -> Result<Page, ForgeError> {
+        match self.get(forge, path) {
+            Ok(Some(v)) => {
+                Page::from_answer(v, &[]).map_err(|e| ForgeError::new(ForgeErrorKind::Malformed, e))
+            }
+            Ok(None) => Err(ForgeError::new(
+                ForgeErrorKind::NotFound,
+                format!("`{path}` does not exist or is not visible"),
+            )),
+            Err(e) => Err(ForgeError::new(ForgeErrorKind::Unavailable, e)),
+        }
+    }
+
+    /// A read-only GitHub GraphQL query: its `data`, or the class of its failure.
+    fn graphql(
+        &self,
+        forge: &Forge,
+        query: &str,
+        variables: &serde_json::Value,
+    ) -> Result<serde_json::Value, ForgeError> {
+        let _ = (query, variables);
+        Err(ForgeError::new(
+            ForgeErrorKind::Malformed,
+            format!("GraphQL is not available for {}", forge.kind.label()),
+        ))
     }
 }
 
-/// A response body and the `X-Total-Count` that came with it.
-pub type Counted = (serde_json::Value, Option<u64>);
+/// The paging query for `page` (1-based) of a list endpoint. Gitea and Forgejo read
+/// `limit` and ignore `per_page`; their largest page is 50 unless the instance says
+/// otherwise.
+pub fn page_query(kind: ForgeKind, page: usize) -> String {
+    match kind {
+        ForgeKind::Gitea | ForgeKind::Forgejo => format!("limit=50&page={page}"),
+        ForgeKind::GitHub | ForgeKind::GitLab => format!("per_page=100&page={page}"),
+    }
+}
+
+/// Most pages [`read_all`] reads before it refuses the list as partial.
+pub const MAX_PAGES: usize = 20;
+
+/// Every item of a list, or an error: never part of one.
+///
+/// `path` is the endpoint without a query; the paging query of [`page_query`] is added.
+/// With a stated total (`X-Total-Count`, GitLab `x-total`), pages are read until the
+/// items reach it: a page that brings nothing new before then, more items than the
+/// total, or a total that changes between pages is [`ForgeErrorKind::Partial`]. A short
+/// page is not an end, since a server may clamp the page size. An endpoint that ignores
+/// paging (Gitea's and Forgejo's issue comments) answers the whole list on page 1 and is
+/// complete there. Without a total, GitHub and GitLab end where no further page is stated
+/// (`Link: rel="next"`, `x-next-page`); Gitea and Forgejo end at an empty page, and a page
+/// that only repeats is refused, since it cannot tell a complete list from a server that
+/// ignores `page`.
+pub fn read_all(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    path: &str,
+) -> Result<Vec<serde_json::Value>, ForgeError> {
+    let partial = |why: String| {
+        ForgeError::new(
+            ForgeErrorKind::Partial,
+            format!("`{path}`: {why}; refusing to judge a partial list"),
+        )
+    };
+    let identity = |v: &serde_json::Value| match v.get("id") {
+        Some(id) if !id.is_null() => id.to_string(),
+        _ => v.to_string(),
+    };
+    let sep = if path.contains('?') { '&' } else { '?' };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut items = Vec::new();
+    let mut total = None;
+    for page in 1..=MAX_PAGES {
+        let p = api.get_page(
+            forge,
+            &format!("{path}{sep}{}", page_query(forge.kind, page)),
+        )?;
+        if page == 1 {
+            total = p.total;
+        } else if p.total != total {
+            return Err(partial("the list changed while it was read".into()));
+        }
+        let empty = p.items.is_empty();
+        let before = items.len();
+        for item in p.items {
+            if seen.insert(identity(&item)) {
+                items.push(item);
+            }
+        }
+        let added = items.len() - before;
+        let n = items.len() as u64;
+        match total {
+            Some(t) if n > t => {
+                return Err(partial(format!(
+                    "the pages hold {n} but the forge counts {t}"
+                )))
+            }
+            Some(t) if n == t => return Ok(items),
+            Some(t) if added == 0 => {
+                return Err(partial(format!("the pages ended after {n} of {t}")))
+            }
+            Some(_) => {}
+            None if empty => return Ok(items),
+            None if added == 0 => {
+                return Err(partial(
+                    "a page repeated the items before it and the forge states no total".into(),
+                ))
+            }
+            None if matches!(forge.kind, ForgeKind::GitHub | ForgeKind::GitLab) && !p.has_next => {
+                return Ok(items)
+            }
+            None => {}
+        }
+    }
+    Err(partial(format!("more than {MAX_PAGES} pages")))
+}
 
 /// Answers from canned responses keyed by `"<forge label>:<path>"`.
+///
+/// A value is the JSON body of a 200, `null` for a 404, `{"__error": "..."}` for a failure
+/// of `get`, `{"__status": N, "__headers": {...}, "__body": ...}` for any status with
+/// headers, and `{"__sequence": [v1, v2, ...]}` for answers given in turn (the last one
+/// repeats). A GraphQL query is keyed `"<forge>:graphql:<operation name> <variables>"`.
+/// Every key asked for is logged, in order.
 #[derive(Debug, Clone, Default)]
 pub struct CannedApi {
     pub responses: std::collections::BTreeMap<String, serde_json::Value>,
-    /// `X-Total-Count` sent with the response of the same key.
-    pub totals: std::collections::BTreeMap<String, u64>,
+    log: std::cell::RefCell<Vec<String>>,
+    served: std::cell::RefCell<std::collections::BTreeMap<String, usize>>,
+}
+
+/// A canned answer: status, headers, body.
+type CannedAnswer = (u16, Vec<(String, String)>, serde_json::Value);
+
+impl CannedApi {
+    /// Keys asked for so far, in order.
+    pub fn log(&self) -> Vec<String> {
+        self.log.borrow().clone()
+    }
+
+    /// Whether `key` (`"<forge>:<path>"`) was asked for.
+    pub fn was_called(&self, key: &str) -> bool {
+        self.log.borrow().iter().any(|k| k == key)
+    }
+
+    fn answer(&self, key: &str) -> Result<CannedAnswer, String> {
+        self.log.borrow_mut().push(key.to_string());
+        let mut v = self
+            .responses
+            .get(key)
+            .cloned()
+            .ok_or_else(|| format!("no recorded response for `{key}`"))?;
+        if let Some(seq) = v.get("__sequence").and_then(|s| s.as_array()).cloned() {
+            let mut served = self.served.borrow_mut();
+            let n = served.entry(key.to_string()).or_default();
+            v = seq
+                .get(*n)
+                .or_else(|| seq.last())
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            *n += 1;
+        }
+        if v.is_null() {
+            return Ok((404, Vec::new(), serde_json::Value::Null));
+        }
+        if let Some(e) = v.get("__error") {
+            return Err(e.as_str().unwrap_or("error").to_string());
+        }
+        if let Some(status) = v.get("__status").and_then(|s| s.as_u64()) {
+            let headers = v
+                .get("__headers")
+                .and_then(|h| h.as_object())
+                .map(|h| {
+                    h.iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let body = v.get("__body").cloned().unwrap_or(serde_json::Value::Null);
+            return Ok((status as u16, headers, body));
+        }
+        Ok((200, Vec::new(), v))
+    }
 }
 
 impl ForgeApi for CannedApi {
     fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String> {
         let key = format!("{}:{path}", forge.kind.label());
-        match self.responses.get(&key) {
-            Some(serde_json::Value::Null) => Ok(None),
-            Some(v) if v.get("__error").is_some() => {
-                Err(v["__error"].as_str().unwrap_or("error").to_string())
-            }
-            Some(v) => Ok(Some(v.clone())),
-            None => Err(format!("no recorded response for `{key}`")),
+        let (status, _, body) = self.answer(&key)?;
+        match status {
+            200..=299 => Ok(Some(body)),
+            404 => Ok(None),
+            s => Err(format!("canned forge answered HTTP {s}")),
         }
     }
 
-    fn get_counted(&self, forge: &Forge, path: &str) -> Result<Option<Counted>, String> {
+    fn fetch(&self, forge: &Forge, path: &str) -> Result<serde_json::Value, ForgeError> {
         let key = format!("{}:{path}", forge.kind.label());
-        Ok(self
-            .get(forge, path)?
-            .map(|v| (v, self.totals.get(&key).copied())))
+        let (status, headers, body) = self
+            .answer(&key)
+            .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
+        match classify_status(status, &headers) {
+            None => Ok(body),
+            Some(kind) => Err(ForgeError::new(
+                kind,
+                format!("canned forge answered HTTP {status} for `{path}`"),
+            )),
+        }
+    }
+
+    fn get_page(&self, forge: &Forge, path: &str) -> Result<Page, ForgeError> {
+        let key = format!("{}:{path}", forge.kind.label());
+        let (status, headers, body) = self
+            .answer(&key)
+            .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
+        if let Some(kind) = classify_status(status, &headers) {
+            return Err(ForgeError::new(
+                kind,
+                format!("canned forge answered HTTP {status} for `{path}`"),
+            ));
+        }
+        Page::from_answer(body, &headers).map_err(|e| ForgeError::new(ForgeErrorKind::Malformed, e))
+    }
+
+    fn graphql(
+        &self,
+        forge: &Forge,
+        query: &str,
+        variables: &serde_json::Value,
+    ) -> Result<serde_json::Value, ForgeError> {
+        let key = format!(
+            "{}:graphql:{} {variables}",
+            forge.kind.label(),
+            graphql_operation(query)
+        );
+        let (status, headers, body) = self
+            .answer(&key)
+            .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
+        if let Some(kind) = classify_status(status, &headers) {
+            return Err(ForgeError::new(
+                kind,
+                format!("canned forge answered HTTP {status} for GraphQL"),
+            ));
+        }
+        graphql_data(body)
+    }
+}
+
+/// The operation name of a GraphQL document (`query Name(...)`), or `anonymous`.
+pub fn graphql_operation(query: &str) -> &str {
+    query
+        .trim_start()
+        .strip_prefix("query")
+        .map(|rest| rest.trim_start())
+        .and_then(|rest| {
+            rest.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .next()
+        })
+        .filter(|name| !name.is_empty())
+        .unwrap_or("anonymous")
+}
+
+/// The `data` of a GraphQL answer; an `errors` entry is classified like an HTTP status.
+pub fn graphql_data(body: serde_json::Value) -> Result<serde_json::Value, ForgeError> {
+    if let Some(first) = body
+        .get("errors")
+        .and_then(|e| e.as_array())
+        .and_then(|e| e.first())
+    {
+        let message = first
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("GraphQL error")
+            .chars()
+            .take(200)
+            .collect::<String>();
+        let kind = match first.get("type").and_then(|t| t.as_str()) {
+            Some("NOT_FOUND") => ForgeErrorKind::NotFound,
+            Some("RATE_LIMITED") => ForgeErrorKind::RateLimited,
+            Some("FORBIDDEN") | Some("INSUFFICIENT_SCOPES") => ForgeErrorKind::Denied,
+            _ => ForgeErrorKind::Malformed,
+        };
+        return Err(ForgeError::new(kind, message));
+    }
+    match body.get("data") {
+        Some(d) if !d.is_null() => Ok(d.clone()),
+        _ => Err(ForgeError::new(
+            ForgeErrorKind::Malformed,
+            "GraphQL answer carries no `data`",
+        )),
     }
 }
 
@@ -683,45 +1139,72 @@ impl ForgeWrite for HttpApi<'_> {
     }
 }
 
-impl ForgeApi for HttpApi<'_> {
-    fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String> {
-        Ok(self.get_counted(forge, path)?.map(|(v, _)| v))
-    }
+/// Requests made by this process, retries included (see [`MAX_REQUESTS`]).
+static REQUESTS_MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-    fn get_counted(&self, forge: &Forge, path: &str) -> Result<Option<Counted>, String> {
-        let (base, base_host, insecure_ok) = self.guard(forge, path)?;
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(API_TIMEOUT_SECS)))
-            .max_redirects(0)
-            .http_status_as_error(false)
-            .https_only(!insecure_ok)
-            .proxy(ureq::Proxy::try_from_env())
-            .user_agent(concat!("discipline/", env!("CARGO_PKG_VERSION")))
-            .tls_config(
-                ureq::tls::TlsConfig::builder()
-                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                    .build(),
-            )
-            .build();
-        let agent = ureq::Agent::new_with_config(config);
+/// One HTTP answer.
+struct Answer {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+impl HttpApi<'_> {
+    /// One request, redirects followed within the same scheme and host (a GET only),
+    /// and the answer read. A transport failure is [`ForgeErrorKind::Unavailable`].
+    fn exchange(
+        &self,
+        forge: &Forge,
+        url: &str,
+        base_host: &str,
+        insecure_ok: bool,
+        post: Option<&serde_json::Value>,
+    ) -> Result<Answer, ForgeError> {
+        let agent = self.agent(insecure_ok);
         let headers = self.headers(forge.kind);
-
-        let mut url = format!("{base}/{path}");
+        let mut url = url.to_string();
         for _ in 0..=MAX_REDIRECTS {
-            let mut req = agent.get(&url);
-            for (k, v) in &headers {
-                req = req.header(*k, v);
-            }
-            let mut resp = req
-                .call()
-                .map_err(|e| format!("request to {base_host} failed: {e}"))?;
+            let sent = match post {
+                Some(body) => {
+                    let mut req = agent.post(&url);
+                    for (k, v) in &headers {
+                        req = req.header(*k, v);
+                    }
+                    req.header("Content-Type", "application/json")
+                        .send(body.to_string().as_str())
+                }
+                None => {
+                    let mut req = agent.get(&url);
+                    for (k, v) in &headers {
+                        req = req.header(*k, v);
+                    }
+                    req.call()
+                }
+            };
+            let mut resp = sent.map_err(|e| {
+                ForgeError::new(
+                    ForgeErrorKind::Unavailable,
+                    format!("request to {base_host} failed: {e}"),
+                )
+            })?;
             let status = resp.status().as_u16();
             if matches!(status, 301 | 302 | 303 | 307 | 308) {
+                if post.is_some() {
+                    return Err(ForgeError::new(
+                        ForgeErrorKind::Malformed,
+                        format!("{base_host} redirected a query (HTTP {status}); not following"),
+                    ));
+                }
                 let location = resp
                     .headers()
                     .get("location")
                     .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| format!("{base_host} redirected without a location"))?;
+                    .ok_or_else(|| {
+                        ForgeError::new(
+                            ForgeErrorKind::Malformed,
+                            format!("{base_host} redirected without a location"),
+                        )
+                    })?;
                 let next = if location.starts_with('/') {
                     let origin_end = url.find("://").map(|i| i + 3).unwrap_or(0);
                     let origin_end = url[origin_end..]
@@ -734,48 +1217,215 @@ impl ForgeApi for HttpApi<'_> {
                 };
                 let same_scheme = next.split("://").next() == url.split("://").next();
                 if authority_of(&next) != authority_of(&url) || !same_scheme {
-                    return Err(format!(
-                        "{base_host} redirected to another host or scheme; not following with credentials"
+                    return Err(ForgeError::new(
+                        ForgeErrorKind::Malformed,
+                        format!(
+                            "{base_host} redirected to another host or scheme; not following with credentials"
+                        ),
                     ));
                 }
                 url = next;
                 continue;
             }
-            if status == 404 {
-                return Ok(None);
-            }
-            let total = resp
+            let answer_headers = resp
                 .headers()
-                .get("x-total-count")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse::<u64>().ok());
+                .iter()
+                .filter_map(|(k, v)| {
+                    Some((
+                        k.as_str().to_ascii_lowercase(),
+                        v.to_str().ok()?.to_string(),
+                    ))
+                })
+                .collect();
             let body = resp
                 .body_mut()
                 .with_config()
                 .limit(MAX_BODY_BYTES)
                 .read_to_string()
-                .map_err(|e| format!("reading the response from {base_host} failed: {e}"))?;
-            if !(200..300).contains(&status) {
-                let message = serde_json::from_str::<serde_json::Value>(&body)
-                    .ok()
-                    .and_then(|v| {
-                        v.get("message")
-                            .and_then(|m| m.as_str())
-                            .map(str::to_string)
-                    })
-                    .map(|m| m.chars().take(200).collect::<String>())
-                    .unwrap_or_default();
-                return Err(format!("{base_host} answered HTTP {status} {message}")
-                    .trim_end()
-                    .to_string());
-            }
-            return serde_json::from_str(&body)
-                .map(|v| Some((v, total)))
-                .map_err(|e| format!("{base_host} returned non-JSON: {e}"));
+                .map_err(|e| {
+                    ForgeError::new(
+                        ForgeErrorKind::Unavailable,
+                        format!("reading the response from {base_host} failed: {e}"),
+                    )
+                })?;
+            return Ok(Answer {
+                status,
+                headers: answer_headers,
+                body,
+            });
         }
-        Err(format!(
-            "{base_host} redirected more than {MAX_REDIRECTS} times"
+        Err(ForgeError::new(
+            ForgeErrorKind::Malformed,
+            format!("{base_host} redirected more than {MAX_REDIRECTS} times"),
         ))
+    }
+
+    /// A read with bounded retries: a transport failure or a 5xx is retried after
+    /// [`RETRY_BACKOFF_MS`], a rate limit after the wait it asks for when that is at most
+    /// [`MAX_RATE_LIMIT_WAIT_SECS`]. Anything else is answered at once.
+    fn read(
+        &self,
+        forge: &Forge,
+        url: &str,
+        base_host: &str,
+        insecure_ok: bool,
+        post: Option<&serde_json::Value>,
+    ) -> Result<Answer, ForgeError> {
+        let mut attempt = 1;
+        loop {
+            if REQUESTS_MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= MAX_REQUESTS {
+                return Err(ForgeError {
+                    kind: ForgeErrorKind::Unavailable,
+                    message: format!(
+                        "more than {MAX_REQUESTS} forge requests in one run; stopping"
+                    ),
+                    attempts: attempt,
+                });
+            }
+            let (kind, message, headers) =
+                match self.exchange(forge, url, base_host, insecure_ok, post) {
+                    Ok(a) => match classify_status(a.status, &a.headers) {
+                        None => return Ok(a),
+                        Some(kind) => {
+                            let message = serde_json::from_str::<serde_json::Value>(&a.body)
+                                .ok()
+                                .and_then(|v| {
+                                    v.get("message")
+                                        .and_then(|m| m.as_str())
+                                        .map(str::to_string)
+                                })
+                                .map(|m| m.chars().take(200).collect::<String>())
+                                .unwrap_or_default();
+                            let text = format!("{base_host} answered HTTP {} {message}", a.status)
+                                .trim_end()
+                                .to_string();
+                            (kind, text, a.headers)
+                        }
+                    },
+                    Err(e) if e.kind == ForgeErrorKind::Unavailable => {
+                        (e.kind, e.message, Vec::new())
+                    }
+                    Err(mut e) => {
+                        e.attempts = attempt;
+                        return Err(e);
+                    }
+                };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            match retry_delay(kind, &headers, attempt, now) {
+                Some(wait) => {
+                    std::thread::sleep(wait);
+                    attempt += 1;
+                }
+                None => {
+                    return Err(ForgeError {
+                        kind,
+                        message,
+                        attempts: attempt,
+                    })
+                }
+            }
+        }
+    }
+
+    /// The GraphQL endpoint of a GitHub API base: `<root>/api/graphql` on GitHub
+    /// Enterprise Server (whose REST base is `<root>/api/v3`), `<base>/graphql` otherwise.
+    pub fn graphql_url(&self, forge: &Forge) -> Result<String, String> {
+        let base = self.api_base(forge)?;
+        Ok(match base.strip_suffix("/api/v3") {
+            Some(root) => format!("{root}/api/graphql"),
+            None => format!("{base}/graphql"),
+        })
+    }
+}
+
+impl ForgeApi for HttpApi<'_> {
+    fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String> {
+        let (base, base_host, insecure_ok) = self.guard(forge, path)?;
+        match self.read(
+            forge,
+            &format!("{base}/{path}"),
+            &base_host,
+            insecure_ok,
+            None,
+        ) {
+            Ok(a) => serde_json::from_str(&a.body)
+                .map(Some)
+                .map_err(|e| format!("{base_host} returned non-JSON: {e}")),
+            Err(e) if e.kind == ForgeErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.detail()),
+        }
+    }
+
+    fn fetch(&self, forge: &Forge, path: &str) -> Result<serde_json::Value, ForgeError> {
+        let (base, base_host, insecure_ok) = self
+            .guard(forge, path)
+            .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
+        let a = self.read(
+            forge,
+            &format!("{base}/{path}"),
+            &base_host,
+            insecure_ok,
+            None,
+        )?;
+        serde_json::from_str(&a.body).map_err(|e| {
+            ForgeError::new(
+                ForgeErrorKind::Malformed,
+                format!("{base_host} returned non-JSON: {e}"),
+            )
+        })
+    }
+
+    fn get_page(&self, forge: &Forge, path: &str) -> Result<Page, ForgeError> {
+        let (base, base_host, insecure_ok) = self
+            .guard(forge, path)
+            .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
+        let a = self.read(
+            forge,
+            &format!("{base}/{path}"),
+            &base_host,
+            insecure_ok,
+            None,
+        )?;
+        let body = serde_json::from_str(&a.body).map_err(|e| {
+            ForgeError::new(
+                ForgeErrorKind::Malformed,
+                format!("{base_host} returned non-JSON: {e}"),
+            )
+        })?;
+        Page::from_answer(body, &a.headers)
+            .map_err(|e| ForgeError::new(ForgeErrorKind::Malformed, format!("{base_host}: {e}")))
+    }
+
+    fn graphql(
+        &self,
+        forge: &Forge,
+        query: &str,
+        variables: &serde_json::Value,
+    ) -> Result<serde_json::Value, ForgeError> {
+        if forge.kind != ForgeKind::GitHub {
+            return Err(ForgeError::new(
+                ForgeErrorKind::Malformed,
+                format!("GraphQL is not available for {}", forge.kind.label()),
+            ));
+        }
+        let (_, base_host, insecure_ok) = self
+            .guard(forge, "graphql")
+            .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
+        let url = self
+            .graphql_url(forge)
+            .map_err(|e| ForgeError::new(ForgeErrorKind::Malformed, e))?;
+        let body = serde_json::json!({"query": query, "variables": variables});
+        let a = self.read(forge, &url, &base_host, insecure_ok, Some(&body))?;
+        let answer = serde_json::from_str(&a.body).map_err(|e| {
+            ForgeError::new(
+                ForgeErrorKind::Malformed,
+                format!("{base_host} returned non-JSON: {e}"),
+            )
+        })?;
+        graphql_data(answer)
     }
 }
 
@@ -967,72 +1617,19 @@ fn gitlab_approvers(
 /// The most reviews one GitHub request returns; a full page means there may be more.
 const REVIEWS_PAGE: usize = 100;
 
-/// Reviews asked for per Gitea or Forgejo request. They read `limit` (not `per_page`)
-/// and clamp it to the server's `MAX_RESPONSE_ITEMS`, so a page can be shorter than
-/// this while more reviews remain.
-const GITEA_REVIEWS_LIMIT: usize = 50;
-
-/// Pages of Gitea or Forgejo reviews read before refusing to judge.
-const GITEA_REVIEW_PAGES: usize = 20;
-
 /// Every review of Gitea or Forgejo pull request `number`, in order, or an error when
-/// the whole list cannot be read.
-///
-/// Pages are read until the count reaches `X-Total-Count`, or, when the forge sends no
-/// count, until a page comes back empty. A short page is not an end: the server may
-/// have clamped the page size.
+/// the whole list cannot be read ([`read_all`]: `limit` paging to `X-Total-Count`).
 fn gitea_reviews(
     api: &dyn ForgeApi,
     forge: &Forge,
     number: u64,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let partial = |why: String| {
-        format!("reviews of pull request #{number}: {why}; refusing to judge a partial list")
-    };
-    let mut reviews = Vec::new();
-    let mut total: Option<u64> = None;
-    for page in 1..=GITEA_REVIEW_PAGES {
-        let path = format!(
-            "repos/{}/pulls/{number}/reviews?limit={GITEA_REVIEWS_LIMIT}&page={page}",
-            forge.repo
-        );
-        let (list, count) = api
-            .get_counted(forge, &path)?
-            .ok_or_else(|| format!("pull request #{number} does not exist or is not visible"))?;
-        let items = list
-            .as_array()
-            .ok_or_else(|| format!("reviews of pull request #{number} are not a list"))?;
-        if page == 1 {
-            total = count;
-        } else if count != total {
-            return Err(partial("the list changed while it was read".into()));
-        }
-        match total {
-            Some(t) => {
-                if items.is_empty() && (reviews.len() as u64) < t {
-                    return Err(partial(format!(
-                        "the pages ended after {} of {t}",
-                        reviews.len()
-                    )));
-                }
-                reviews.extend(items.iter().cloned());
-                if reviews.len() as u64 > t {
-                    return Err(partial(format!(
-                        "the pages hold {} but the forge counts {t}",
-                        reviews.len()
-                    )));
-                }
-                if reviews.len() as u64 == t {
-                    return Ok(reviews);
-                }
-            }
-            None if items.is_empty() => return Ok(reviews),
-            None => reviews.extend(items.iter().cloned()),
-        }
-    }
-    Err(partial(format!(
-        "more than {GITEA_REVIEW_PAGES} pages of {GITEA_REVIEWS_LIMIT}"
-    )))
+    read_all(
+        api,
+        forge,
+        &format!("repos/{}/pulls/{number}/reviews", forge.repo),
+    )
+    .map_err(|e| format!("reviews of pull request #{number}: {e}"))
 }
 
 /// Logins whose **latest** review of pull request `number` approves `head_sha`.
@@ -1145,19 +1742,22 @@ mod tests {
         first.extend((0..29).map(|i| review(&format!("c{i}"), "COMMENT")));
         let withdrawn = vec![review("lead", "REQUEST_CHANGES")];
         let page = |n: usize| format!("gitea:repos/o/r/pulls/7/reviews?limit=50&page={n}");
-        let mut api = CannedApi::default();
-        // Gitea ignores `per_page` and answers with its default page of 30.
-        api.responses.insert(
-            "gitea:repos/o/r/pulls/7/reviews?per_page=100".into(),
-            serde_json::json!(first),
-        );
-        // A server whose MAX_RESPONSE_ITEMS is 30 clamps `limit=50` to 30: page 1 is short.
-        api.responses.insert(page(1), serde_json::json!(first));
-        api.responses.insert(page(2), serde_json::json!(withdrawn));
-        api.responses.insert(page(3), serde_json::json!([]));
-        for n in 1..=3 {
-            api.totals.insert(page(n), 31);
-        }
+        // Sent with X-Total-Count, as Gitea and Forgejo do.
+        let counted = |v: &Vec<serde_json::Value>, total: u64| serde_json::json!({"__status": 200, "__headers": {"X-Total-Count": total.to_string()}, "__body": v});
+        let pages = |total: u64, p2: &Vec<serde_json::Value>| {
+            let mut api = CannedApi::default();
+            // Gitea ignores `per_page` and answers with its default page of 30.
+            api.responses.insert(
+                "gitea:repos/o/r/pulls/7/reviews?per_page=100".into(),
+                serde_json::json!(first),
+            );
+            // A server whose MAX_RESPONSE_ITEMS is 30 clamps `limit=50` to 30: page 1 is short.
+            api.responses.insert(page(1), counted(&first, total));
+            api.responses.insert(page(2), counted(p2, total));
+            api.responses.insert(page(3), counted(&vec![], total));
+            api
+        };
+        let api = pages(31, &withdrawn);
         assert_eq!(
             pull_approvers(&api, &forge, 7, "head").unwrap(),
             Vec::<String>::new(),
@@ -1165,54 +1765,55 @@ mod tests {
         );
 
         // Without X-Total-Count, pages are read until one comes back empty.
-        let mut uncounted = api.clone();
-        uncounted.totals.clear();
+        let mut uncounted = CannedApi::default();
+        uncounted
+            .responses
+            .insert(page(1), serde_json::json!(first));
+        uncounted
+            .responses
+            .insert(page(2), serde_json::json!(withdrawn));
+        uncounted.responses.insert(page(3), serde_json::json!([]));
         assert!(pull_approvers(&uncounted, &forge, 7, "head")
             .unwrap()
             .is_empty());
 
         // Pages that end before the count, or overshoot it, or a count that moves: refused.
-        let mut short = api.clone();
-        short.responses.insert(page(2), serde_json::json!([]));
+        let short = pages(31, &vec![]);
         assert!(pull_approvers(&short, &forge, 7, "head")
             .unwrap_err()
             .contains("ended after 30 of 31"));
-        let mut over = api.clone();
-        for n in 1..=3 {
-            over.totals.insert(page(n), 29);
-        }
+        let over = pages(29, &withdrawn);
         assert!(pull_approvers(&over, &forge, 7, "head")
             .unwrap_err()
             .contains("forge counts 29"));
-        let mut moved = api.clone();
-        moved.totals.insert(page(2), 32);
+        let mut moved = pages(31, &withdrawn);
+        moved.responses.insert(page(2), counted(&withdrawn, 32));
         assert!(pull_approvers(&moved, &forge, 7, "head")
             .unwrap_err()
             .contains("changed while it was read"));
 
-        // A forge that ignores `page` never ends: refused at the page cap.
+        // A forge that ignores `page` and states no total repeats page 1: refused, on
+        // Gitea and Forgejo alike.
         let mut endless = CannedApi::default();
-        for n in 1..=GITEA_REVIEW_PAGES {
+        for n in 1..=MAX_PAGES {
             endless.responses.insert(page(n), serde_json::json!(first));
         }
         let forgejo = Forge {
             kind: ForgeKind::Forgejo,
             ..forge.clone()
         };
-        let endless_forgejo = CannedApi {
-            responses: endless
+        let mut endless_forgejo = CannedApi::default();
+        for (k, v) in &endless.responses {
+            endless_forgejo
                 .responses
-                .iter()
-                .map(|(k, v)| (k.replacen("gitea:", "forgejo:", 1), v.clone()))
-                .collect(),
-            ..Default::default()
-        };
+                .insert(k.replacen("gitea:", "forgejo:", 1), v.clone());
+        }
         assert!(pull_approvers(&endless, &forge, 7, "head")
             .unwrap_err()
-            .contains("more than 20 pages"));
+            .contains("refusing to judge a partial list"));
         assert!(pull_approvers(&endless_forgejo, &forgejo, 7, "head")
             .unwrap_err()
-            .contains("more than 20 pages"));
+            .contains("refusing to judge a partial list"));
     }
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -1701,5 +2302,215 @@ mod tests {
         assert!(pull_approvers(&api, &forge, 8, "abc123")
             .unwrap_err()
             .contains("!8"));
+    }
+
+    fn gitea() -> Forge {
+        Forge {
+            kind: ForgeKind::Gitea,
+            url: "https://git.example.com".into(),
+            repo: "o/r".into(),
+        }
+    }
+
+    fn h(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn statuses_are_classified_by_what_the_forge_can_prove() {
+        use ForgeErrorKind::*;
+        assert_eq!(classify_status(200, &[]), None);
+        assert_eq!(classify_status(404, &[]), Some(NotFound));
+        assert_eq!(classify_status(401, &[]), Some(Denied));
+        assert_eq!(classify_status(403, &[]), Some(Denied));
+        // A 403 is a rate limit only when a header says so.
+        assert_eq!(
+            classify_status(403, &h(&[("X-RateLimit-Remaining", "0")])),
+            Some(RateLimited)
+        );
+        assert_eq!(
+            classify_status(403, &h(&[("retry-after", "5")])),
+            Some(RateLimited)
+        );
+        assert_eq!(classify_status(429, &[]), Some(RateLimited));
+        for s in [500, 502, 503, 504] {
+            assert_eq!(classify_status(s, &[]), Some(Unavailable), "{s}");
+        }
+        assert_eq!(classify_status(422, &[]), Some(Malformed));
+    }
+
+    #[test]
+    fn retries_are_bounded_and_rate_limits_are_waited_only_when_short() {
+        use ForgeErrorKind::*;
+        let ms = |kind, headers: &[(String, String)], attempt, now| {
+            retry_delay(kind, headers, attempt, now).map(|d| d.as_millis() as u64)
+        };
+        assert_eq!(ms(Unavailable, &[], 1, 0), Some(RETRY_BACKOFF_MS[0]));
+        assert_eq!(ms(Unavailable, &[], 2, 0), Some(RETRY_BACKOFF_MS[1]));
+        assert_eq!(ms(Unavailable, &[], MAX_ATTEMPTS, 0), None);
+        for kind in [NotFound, Denied, Malformed, Partial] {
+            assert_eq!(ms(kind, &[], 1, 0), None, "{kind:?}");
+        }
+        assert_eq!(
+            ms(RateLimited, &h(&[("Retry-After", "3")]), 1, 0),
+            Some(3000)
+        );
+        assert_eq!(
+            ms(RateLimited, &h(&[("x-ratelimit-reset", "1010")]), 1, 1000),
+            Some(10_000)
+        );
+        assert_eq!(
+            ms(RateLimited, &h(&[("RateLimit-Reset", "5000")]), 1, 1000),
+            None,
+            "a wait past the cap gives up at once"
+        );
+    }
+
+    #[test]
+    fn read_all_stops_at_the_stated_total_and_refuses_a_partial_list() {
+        let f = gitea();
+        let comment = |id: u64| serde_json::json!({"id": id});
+        let page = |ids: &[u64], total: &str| {
+            serde_json::json!({
+                "__status": 200,
+                "__headers": {"X-Total-Count": total},
+                "__body": ids.iter().map(|i| comment(*i)).collect::<Vec<_>>(),
+            })
+        };
+        // An endpoint that ignores paging answers the whole list on page 1: one read.
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "gitea:repos/o/r/issues/1/comments?limit=50&page=1".into(),
+            page(&[1, 2, 3], "3"),
+        );
+        let all = read_all(&api, &f, "repos/o/r/issues/1/comments").unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(api.log().len(), 1);
+
+        // Paged: two pages to reach the total.
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "gitea:repos/o/r/pulls/1/reviews?limit=50&page=1".into(),
+            page(&[1, 2], "3"),
+        );
+        api.responses.insert(
+            "gitea:repos/o/r/pulls/1/reviews?limit=50&page=2".into(),
+            page(&[3], "3"),
+        );
+        assert_eq!(
+            read_all(&api, &f, "repos/o/r/pulls/1/reviews")
+                .unwrap()
+                .len(),
+            3
+        );
+
+        // The total cannot be reached: the same page comes back.
+        let mut api = CannedApi::default();
+        for n in 1..=2 {
+            api.responses.insert(
+                format!("gitea:repos/o/r/issues/2/comments?limit=50&page={n}"),
+                page(&[1, 2], "5"),
+            );
+        }
+        let err = read_all(&api, &f, "repos/o/r/issues/2/comments").unwrap_err();
+        assert_eq!(err.kind, ForgeErrorKind::Partial, "{err}");
+
+        // GitHub: no total; the Link header says whether more pages exist.
+        let gh = Forge {
+            kind: ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "github:repos/o/r/issues/3/comments?per_page=100&page=1".into(),
+            serde_json::json!({"__status": 200,
+                "__headers": {"Link": "<https://api.github.com/x?page=2>; rel=\"next\""},
+                "__body": [comment(1)]}),
+        );
+        api.responses.insert(
+            "github:repos/o/r/issues/3/comments?per_page=100&page=2".into(),
+            serde_json::json!([comment(2)]),
+        );
+        assert_eq!(
+            read_all(&api, &gh, "repos/o/r/issues/3/comments")
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // A failure of any page is the failure of the list.
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "gitea:repos/o/r/issues/4/comments?limit=50&page=1".into(),
+            serde_json::json!({"__status": 500}),
+        );
+        let err = read_all(&api, &f, "repos/o/r/issues/4/comments").unwrap_err();
+        assert_eq!(err.kind, ForgeErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn canned_sequences_and_graphql_answers() {
+        let f = gitea();
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "gitea:repos/o/r".into(),
+            serde_json::json!({"__sequence": [{"__status": 502}, {"id": 1}]}),
+        );
+        assert!(api.get(&f, "repos/o/r").is_err());
+        assert_eq!(api.get(&f, "repos/o/r").unwrap().unwrap()["id"], 1);
+        assert_eq!(api.get(&f, "repos/o/r").unwrap().unwrap()["id"], 1);
+        assert!(api.was_called("gitea:repos/o/r"));
+
+        assert_eq!(
+            graphql_operation("query Closing($n: Int!) { x }"),
+            "Closing"
+        );
+        assert_eq!(graphql_operation("{ viewer { login } }"), "anonymous");
+        assert_eq!(
+            graphql_data(serde_json::json!({"data": {"a": 1}})).unwrap(),
+            serde_json::json!({"a": 1})
+        );
+        let err = graphql_data(serde_json::json!({"data": null,
+            "errors": [{"type": "NOT_FOUND", "message": "Could not resolve"}]}))
+        .unwrap_err();
+        assert_eq!(err.kind, ForgeErrorKind::NotFound);
+        assert!(graphql_data(serde_json::json!({"data": null})).is_err());
+    }
+
+    #[test]
+    fn graphql_endpoint_follows_the_rest_base() {
+        let gh = |url: &str| Forge {
+            kind: ForgeKind::GitHub,
+            url: url.into(),
+            repo: "o/r".into(),
+        };
+        let none = |_: &str| None;
+        let api = HttpApi { env: &none };
+        assert_eq!(
+            api.graphql_url(&gh("https://github.com")).unwrap(),
+            "https://api.github.com/graphql"
+        );
+        assert_eq!(
+            api.graphql_url(&gh("https://ghe.example.com")).unwrap(),
+            "https://ghe.example.com/api/graphql"
+        );
+        let err = api.graphql(&gitea(), "query X { y }", &serde_json::json!({}));
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn forge_errors_are_labelled() {
+        let mut e = ForgeError::new(ForgeErrorKind::Unavailable, "host answered HTTP 502");
+        e.attempts = 3;
+        assert_eq!(
+            e.to_string(),
+            "forge-unavailable: host answered HTTP 502 (after 3 attempts)"
+        );
+        assert_eq!(page_query(ForgeKind::Forgejo, 2), "limit=50&page=2");
+        assert_eq!(page_query(ForgeKind::GitLab, 1), "per_page=100&page=1");
     }
 }

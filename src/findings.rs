@@ -145,6 +145,8 @@ findings! {
     ISSUE_LINK_MISSING_IN_COMMIT_MESSAGE = ["issue-link"], "issue-link-missing-in-commit-message", "Tracking Issue Link Missing In Commit Message", Was("Missing Tracking Issue Link in Commit Message");
     ISSUE_LINK_MISSING_IN_COMMITS = ["issue-link"], "issue-link-missing-in-commits", "Tracking Issue Link Missing In Commits", Was("Missing Tracking Issue Link in Commits");
     ISSUE_LINK_MISSING = ["issue-link"], "issue-link-missing", "Tracking Issue Link Missing", Was("Missing Tracking Issue Link");
+    ISSUE_REFERENCE_NOT_FOUND = ["issue-link"], "issue-reference-not-found", "Tracking Issue Reference Not Found", Same;
+    ISSUE_REFERENCE_CLOSED = ["issue-link"], "issue-reference-closed", "Tracking Issue Reference Closed", Same;
 
     // citation-metadata
     CFF_INVALID = ["citation-metadata"], "cff-invalid", "CITATION.cff Is Not Valid", Same;

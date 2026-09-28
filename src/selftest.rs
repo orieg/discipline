@@ -220,6 +220,41 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "issue-link: a missing issue is a verdict, an outage is an error, never a pass",
+        || {
+            use crate::forge::{CannedApi, Forge, ForgeErrorKind, ForgeKind};
+            use crate::references::{parse, resolve_all, Verdict};
+            let forge = Forge {
+                kind: ForgeKind::Gitea,
+                url: "https://git.example.com".into(),
+                repo: "o/r".into(),
+            };
+            let mut api = CannedApi::default();
+            api.responses
+                .insert("gitea:repos/o/r".into(), serde_json::json!({"id": 1}));
+            api.responses
+                .insert("gitea:repos/o/r/issues/1162".into(), serde_json::Value::Null);
+            api.responses.insert(
+                "gitea:repos/o/r/issues/12".into(),
+                serde_json::json!({"state": "open"}),
+            );
+            api.responses.insert(
+                "gitea:repos/o/r/issues/13".into(),
+                serde_json::json!({"__status": 500}),
+            );
+            let verdicts = |text: &str| {
+                resolve_all(&api, &forge, &parse(text, ForgeKind::Gitea, &[]), &[])
+                    .map(|r| r.iter().map(|x| x.verdict).collect::<Vec<_>>())
+            };
+            Ok(
+                verdicts("which fixes #1162. Closes #12")
+                    == Ok(vec![Verdict::NotFound, Verdict::Issue])
+                    && verdicts("Closes #13").map_err(|e| e.kind)
+                        == Err(ForgeErrorKind::Unavailable),
+            )
+        },
+    ),
+    (
         "overrides: the budget refuses the override past it, not the one at it",
         || {
             use crate::config::DirectivesConfig;

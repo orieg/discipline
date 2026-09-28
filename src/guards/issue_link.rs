@@ -8,11 +8,16 @@
 //!   - `discipline:allow(issue-link) <reason>`
 //! - When running locally without PR metadata, records truthful `examined: 0` and note
 //!   to avoid false-positive failures during pre-commit.
+//! - With `verify_references`, looks every reference up on the forge
+//!   ([`crate::references`]): at least one must be an issue of this repository. A forge
+//!   that cannot be read is exit 2, never a pass.
 
-use crate::config::GateSettings;
+use crate::config::{GateSettings, IssueLinkGate, IssueWaiver};
+use crate::could_not_check::{tag, Reason};
 use crate::guards::{exempt_filter, Context, GateOutcome};
+use crate::references::{self, Verdict};
 use crate::tokens::{self, OverrideRecord};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use regex::Regex;
 
 pub const GATE: &str = "issue-link";
@@ -115,7 +120,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             if has_issue_reference(msg, &re_issue) {
                 return Ok(out);
             }
-            if let Some(waiver) = find_no_issue_directive(&ctx.directives) {
+            if let Some(waiver) = waiver(settings, &ctx.directives) {
                 out.overrides.push(waiver);
                 return Ok(out);
             }
@@ -161,7 +166,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             }
             if !found {
                 // Check if any directive waived it
-                if let Some(waiver) = find_no_issue_directive(&ctx.directives) {
+                if let Some(waiver) = waiver(settings, &ctx.directives) {
                     out.overrides.push(waiver);
                 } else {
                     out.push(
@@ -190,13 +195,17 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
 
     out.examined = 1;
 
+    if settings.verify_references {
+        return verify_references(ctx, settings, pr_title, pr_body, out);
+    }
+
     // 1. Check PR title or PR body for issue reference
     if has_issue_reference(pr_title, &re_issue) || has_issue_reference(pr_body, &re_issue) {
         return Ok(out);
     }
 
     // 2. Check for waiver directive `no-issue: <reason>`
-    if let Some(waiver) = find_no_issue_directive(&ctx.directives) {
+    if let Some(waiver) = waiver(settings, &ctx.directives) {
         out.overrides.push(waiver);
         return Ok(out);
     }
@@ -212,6 +221,125 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
         "Reference a tracking issue (#123, Fixes #123) in the PR title or body, or add 'no-issue: <reason>' to the PR body.",
     );
 
+    Ok(out)
+}
+
+/// The accepted `no-issue:` waiver, unless `waiver = "none"`.
+fn waiver(
+    settings: &IssueLinkGate,
+    directives: &[tokens::ParsedDirective],
+) -> Option<OverrideRecord> {
+    match settings.waiver {
+        IssueWaiver::Directive => find_no_issue_directive(directives),
+        IssueWaiver::None => None,
+    }
+}
+
+/// Whether a resolved reference tracks this change under `settings`.
+pub fn qualifies(settings: &IssueLinkGate, verdict: Verdict) -> bool {
+    match verdict {
+        Verdict::Issue => true,
+        Verdict::Closed => !settings.require_open_issue,
+        Verdict::IsPull => settings.accept_pull_references,
+        Verdict::NotFound | Verdict::CrossRepo => false,
+    }
+}
+
+/// `verify_references`: every reference in the title and body is looked up, and at least
+/// one must be an issue of this repository (or of `reference_repos`). A number that
+/// resolves nowhere is a note while another reference qualifies; a forge that cannot be
+/// read is exit 2, never a pass.
+fn verify_references(
+    ctx: &Context,
+    settings: &IssueLinkGate,
+    pr_title: &str,
+    pr_body: &str,
+    mut out: GateOutcome,
+) -> Result<GateOutcome> {
+    if settings.pattern.is_some() {
+        return Err(tag(
+            Reason::Configuration,
+            anyhow!("`gates.issue-link.verify_references` looks up forge issue numbers and cannot verify a custom `pattern`; set one or the other"),
+        ));
+    }
+    let access = ctx.forge.as_ref().ok_or_else(|| {
+        tag(
+            Reason::Forge,
+            anyhow!("`gates.issue-link.verify_references` needs the forge, and this run has no forge access"),
+        )
+    })?;
+    let forge = (access.identify)().map_err(|e| {
+        tag(
+            Reason::Forge,
+            anyhow!("issue-link cannot identify the forge: {e}"),
+        )
+    })?;
+    let refs = references::parse(&format!("{pr_title}\n{pr_body}"), forge.kind, &[]);
+    if !refs.is_empty() {
+        let resolved =
+            references::resolve_all(access.api, &forge, &refs, &settings.reference_repos).map_err(
+                |e| {
+                    tag(
+                        Reason::Forge,
+                        anyhow!("issue-link could not verify the pull request's references: {e}"),
+                    )
+                },
+            )?;
+        out.notes.push(format!(
+            "references: {}",
+            resolved
+                .iter()
+                .map(|r| r.describe())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+        if resolved.iter().any(|r| qualifies(settings, r.verdict)) {
+            return Ok(out);
+        }
+        if let Some(w) = waiver(settings, &ctx.directives) {
+            out.overrides.push(w);
+            return Ok(out);
+        }
+        let closed = resolved.iter().any(|r| r.verdict == Verdict::Closed);
+        let listed = resolved
+            .iter()
+            .map(|r| r.describe())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if closed && settings.require_open_issue {
+            out.push(
+                settings.severity(),
+                &crate::findings::ISSUE_REFERENCE_CLOSED,
+                None,
+                None,
+                format!("Every issue this pull request references is closed ({listed})."),
+                "Reference the open issue this change tracks, or add 'no-issue: <reason>' to the PR body.",
+            );
+        } else {
+            out.push(
+                settings.severity(),
+                &crate::findings::ISSUE_REFERENCE_NOT_FOUND,
+                None,
+                None,
+                format!("No reference in the pull request is an issue of this repository ({listed})."),
+                "Reference an existing issue of this repository (#123), or add 'no-issue: <reason>' to the PR body.",
+            );
+        }
+        return Ok(out);
+    }
+    if let Some(w) = waiver(settings, &ctx.directives) {
+        out.overrides.push(w);
+        return Ok(out);
+    }
+    out.push(
+        settings.severity(),
+        &crate::findings::ISSUE_LINK_MISSING,
+        None,
+        None,
+        "Pull request title and body do not reference any tracking issue (#123, Fixes #123) and lack a no-issue waiver."
+            .to_string(),
+        "Reference a tracking issue (#123, Fixes #123) in the PR title or body, or add 'no-issue: <reason>' to the PR body.",
+    );
     Ok(out)
 }
 

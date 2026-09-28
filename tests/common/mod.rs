@@ -408,6 +408,15 @@ impl Repo {
 type Routes = std::sync::Arc<
     std::sync::Mutex<std::collections::HashMap<String, (u16, Vec<(String, String)>, String)>>,
 >;
+/// Answers given once each, in order, before a path falls back to its route.
+type Queued = std::sync::Arc<
+    std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            std::collections::VecDeque<(u16, Vec<(String, String)>, String)>,
+        >,
+    >,
+>;
 /// Recorded requests: path and lower-cased headers.
 type Requests = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<(String, String)>)>>>;
 /// Recorded writes: method, path and body.
@@ -418,6 +427,7 @@ type Writes = std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>;
 pub struct FakeForge {
     addr: std::net::SocketAddr,
     routes: Routes,
+    queued: Queued,
     requests: Requests,
     writes: Writes,
 }
@@ -428,9 +438,15 @@ impl FakeForge {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let routes: Routes = Default::default();
+        let queued: Queued = Default::default();
         let requests: Requests = Default::default();
         let writes: Writes = Default::default();
-        let (r, q, w) = (routes.clone(), requests.clone(), writes.clone());
+        let (r, qd, q, w) = (
+            routes.clone(),
+            queued.clone(),
+            requests.clone(),
+            writes.clone(),
+        );
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -467,11 +483,18 @@ impl FakeForge {
                     ));
                 }
                 q.lock().unwrap().push((path.clone(), headers));
-                let (status, extra, body) = r.lock().unwrap().get(&path).cloned().unwrap_or((
-                    403,
-                    Vec::new(),
-                    r#"{"message":"API rate limit exceeded"}"#.to_string(),
-                ));
+                let once = qd
+                    .lock()
+                    .unwrap()
+                    .get_mut(&path)
+                    .and_then(|answers| answers.pop_front());
+                let (status, extra, body) = once.unwrap_or_else(|| {
+                    r.lock().unwrap().get(&path).cloned().unwrap_or((
+                        403,
+                        Vec::new(),
+                        r#"{"message":"API rate limit exceeded"}"#.to_string(),
+                    ))
+                });
                 let mut resp = format!(
                     "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
                     body.len()
@@ -487,6 +510,7 @@ impl FakeForge {
         Self {
             addr,
             routes,
+            queued,
             requests,
             writes,
         }
@@ -514,6 +538,24 @@ impl FakeForge {
                 body.to_string(),
             ),
         );
+    }
+
+    /// Answer `path` once with `status`, `headers` and `body`, before any earlier queued
+    /// answer is used up and the path falls back to its route.
+    pub fn queue(&self, path: &str, status: u16, headers: &[(&str, &str)], body: &str) {
+        self.queued
+            .lock()
+            .unwrap()
+            .entry(path.trim_start_matches('/').to_string())
+            .or_default()
+            .push_back((
+                status,
+                headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                body.to_string(),
+            ));
     }
 
     /// Writes received so far: method, path and body.

@@ -191,11 +191,16 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.instruction-smuggling.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.instruction-smuggling.instruction_files` | list | `[]` | Globs of the repository's own agent-instruction files (a prompt an MCP server loads, a runtime context file), reported like AGENTS.md (default: []) |
 | `gates.instruction-smuggling.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.issue-link.accept_pull_references` | boolean | `false` | With verify_references: a reference to a pull or merge request satisfies the gate |
 | `gates.issue-link.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.issue-link.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.issue-link.pattern` | string | *(unset)* | Custom regex pattern required in PR title or body |
+| `gates.issue-link.reference_repos` | list | `[]` | With verify_references: other repositories a reference may resolve in |
 | `gates.issue-link.require_in_commit_if_no_pr` | boolean | `false` | Require issue link in commit messages when no PR metadata is supplied |
+| `gates.issue-link.require_open_issue` | boolean | `true` | With verify_references: a closed issue does not satisfy the gate (default: true) |
 | `gates.issue-link.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.issue-link.verify_references` | boolean | `false` | Look each reference up on the forge; at least one must be an issue of this repository or of reference_repos (needs forge access) |
+| `gates.issue-link.waiver` | string | `"directive"` | Whether `no-issue: &lt;reason&gt;` is accepted (default: directive) |
 | `gates.manifest-sync.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.manifest-sync.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.manifest-sync.rules` | array of tables | `[]` | Rules reconciling packaging manifests against git-tracked files |
