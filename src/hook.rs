@@ -307,6 +307,11 @@ pub fn run_with(
     if if_configured && !configured(&dir) {
         return Ok(translate_event(agent, event, 0, "", ""));
     }
+    // Copilot CLI runs the repository's `.github/hooks/` too in a folder it trusts, for the
+    // same event: the user-level run is left to it, so the change is checked once.
+    if if_configured && agent == Agent::Copilot && copilot_repo_hook_runs(&dir) {
+        return Ok(translate_event(agent, event, 0, "", ""));
+    }
     let base = match base {
         Some(b) => Some(b),
         None => crate::gitctx::discover_repository(&dir)
@@ -577,11 +582,37 @@ pub fn config_for(agent: Agent) -> (&'static str, String) {
 
 /// [`config_for`], with every check command in observe mode (`hook run --observe`).
 pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
-    let cmd = format!(
+    config_for_opts(agent, observe, None)
+}
+
+/// The check timeout, in seconds, of the agents whose hook file carries one; `None` for
+/// the others. agy's `Stop` gets more than the rest: a check under heavy load outlived
+/// 120 s and agy killed it.
+pub fn default_timeout(agent: Agent) -> Option<u32> {
+    match agent {
+        Agent::Agy => Some(300),
+        Agent::Qwen | Agent::Copilot => Some(120),
+        _ => None,
+    }
+}
+
+/// [`config_for_mode`], with `timeout` (seconds) in place of [`default_timeout`].
+pub fn config_for_opts(
+    agent: Agent,
+    observe: bool,
+    timeout: Option<u32>,
+) -> (&'static str, String) {
+    let secs = timeout.or(default_timeout(agent)).unwrap_or(0);
+    let run = format!(
         "discipline hook run --agent {}{}",
         agent.id(),
         if observe { " --observe" } else { "" }
     );
+    // Aider and OpenCode do not run the command through a POSIX shell.
+    let cmd = match agent {
+        Agent::Aider | Agent::Opencode => run,
+        _ => guarded(agent, &run),
+    };
     match agent {
         Agent::ClaudeCode => (
             ".claude/settings.json",
@@ -639,7 +670,10 @@ pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
             ".aider.conf.yml",
             format!("lint-cmd:\n  - \"{cmd}\"\nauto-lint: true\n"),
         ),
-        Agent::Copilot => (".github/hooks/discipline.json", copilot_hooks(&cmd)),
+        Agent::Copilot => (
+            ".github/hooks/discipline.json",
+            copilot_hooks(&cmd, secs),
+        ),
         Agent::Agy => (
             ".agents/hooks.json",
             serde_json::to_string_pretty(&serde_json::json!({
@@ -648,9 +682,10 @@ pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
                 // handler has no `command` and never runs.
                 "discipline": {
                     // agy runs a `SessionStart` handler and injects its `injectSteps`
-                    // (seen live with agy 1.2; the event is not in its hooks guide).
+                    // (seen live with agy 1.2 and 1.2.12, where a made-up event name did not
+                    // run; the event is not in its hooks guide, so it is not dead configuration).
                     "SessionStart": [{ "type": "command", "command": AGY_MISSING_BINARY, "timeout": 10 }],
-                    "Stop": [{ "type": "command", "command": cmd, "timeout": 120 }]
+                    "Stop": [{ "type": "command", "command": cmd, "timeout": secs }]
                 }
             }))
             .unwrap_or_default()
@@ -662,10 +697,10 @@ pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
                 "hooks": {
                     "PostToolUse": [{
                         "matcher": "^(write_file|edit)$",
-                        "hooks": [{ "type": "command", "command": cmd, "timeout": 120 }]
+                        "hooks": [{ "type": "command", "command": cmd, "timeout": secs }]
                     }],
                     "Stop": [{
-                        "hooks": [{ "type": "command", "command": cmd, "timeout": 120 }]
+                        "hooks": [{ "type": "command", "command": cmd, "timeout": secs }]
                     }]
                 }
             }))
@@ -675,6 +710,26 @@ pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
         Agent::Opencode => (".opencode/plugins/discipline.js", opencode_plugin(&cmd)),
     }
 }
+
+/// `run` behind a check that `discipline` is on `PATH`: without it the command says so on
+/// stderr, which the agent shows its user, and answers the agent's pass, instead of a shell's
+/// exit 127. A hook that cannot find the binary checks nothing either way; this way the
+/// person is told why, and CI still gates the change.
+pub fn guarded(agent: Agent, run: &str) -> String {
+    let pass = translate_event(agent, Event::Stop, 0, "", "").stdout;
+    format!(
+        "command -v discipline >/dev/null 2>&1 || {{ echo '{MISSING_BINARY}' >&2; {}exit 0; }}; {run}",
+        if pass.trim().is_empty() {
+            String::new()
+        } else {
+            format!("echo '{}'; ", pass.trim())
+        }
+    )
+}
+
+/// What a guarded hook command says when `discipline` is not on `PATH`.
+pub const MISSING_BINARY: &str =
+    "discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)";
 
 /// The OpenCode plugin: after an edit tool, run the hook and append a failure to the
 /// tool's output, which is the text the model reads.
@@ -710,6 +765,9 @@ pub enum Installed {
     Outdated(PathBuf),
     /// The file exists without the hook; nothing was written. Carries the snippet.
     Refused(PathBuf, String),
+    /// A bootstrap pinned to release digests, kept: without `--pin-sums` it would be
+    /// replaced by one that trusts the release's own `SHA256SUMS`.
+    PinKept(PathBuf),
 }
 
 /// Set by [`run_check`] for the check a hook runs: the only run in which a hook file
@@ -724,13 +782,53 @@ pub const HOOK_RUN_ENV: &str = "DISCIPLINE_HOOK_RUN";
 /// directive.
 pub fn is_generated_hook_file(path: &str, content: &str) -> bool {
     if path == CLAUDE_BOOTSTRAP {
-        return content == claude_bootstrap_script();
+        return content == claude_bootstrap_script()
+            || pinned_digests(content)
+                .is_some_and(|d| content == claude_bootstrap_script_with(Some(&d)));
     }
+    // A longer timeout is what `hook install --timeout` writes; a shorter one can kill the
+    // hook before it answers, so only the default or more is recognised.
+    let timeouts: Vec<u32> = TIMEOUT_VALUE
+        .captures_iter(content)
+        .filter_map(|c| c[1].parse().ok())
+        .collect();
     <Agent as clap::ValueEnum>::value_variants()
         .iter()
-        .flat_map(|a| [config_for_mode(*a, false), config_for_mode(*a, true)])
+        .flat_map(|a| {
+            let longer = timeouts
+                .iter()
+                .copied()
+                .filter(|t| default_timeout(*a).is_some_and(|d| *t > d))
+                .map(Some);
+            std::iter::once(None)
+                .chain(longer)
+                .flat_map(move |t| [config_for_opts(*a, false, t), config_for_opts(*a, true, t)])
+        })
         .any(|(rel, generated)| rel == path && generated == content)
 }
+
+/// [`is_generated_hook_file`] for a change from `base` to `head`. A pinned bootstrap is
+/// generated output whatever its digests, but this release writes one version line, so a
+/// base already pinned to it with other digests means the digests were edited: that change
+/// is not recognised.
+pub fn is_generated_hook_change(path: &str, base: Option<&str>, head: &str) -> bool {
+    if !is_generated_hook_file(path, head) {
+        return false;
+    }
+    let version = |s: &str| {
+        s.lines()
+            .find(|l| l.starts_with("version=\"v"))
+            .map(str::to_string)
+    };
+    match (base.and_then(pinned_digests), pinned_digests(head)) {
+        (Some(b), Some(h)) => b == h || base.and_then(version) != version(head),
+        _ => true,
+    }
+}
+
+/// A timeout value in a hook file (`"timeout": 300`, `"timeoutSec": 120`).
+static TIMEOUT_VALUE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r#""timeout(?:Sec)?": (\d+)"#).unwrap());
 
 /// What every file `hook install` generates says about itself. A file carrying it and
 /// differing from what this binary writes came from an earlier release (a pinned version,
@@ -757,12 +855,19 @@ fn refresh_generated(
 
 /// Writes the agent's configuration under `root` when the file does not exist.
 pub fn install(agent: Agent, root: &Path, observe: bool) -> Result<Installed> {
-    install_with(agent, root, observe, false)
+    install_with(agent, root, observe, false, None)
 }
 
 /// [`install`], rewriting a generated file an earlier release wrote when `upgrade`.
-pub fn install_with(agent: Agent, root: &Path, observe: bool, upgrade: bool) -> Result<Installed> {
-    let (rel, content) = config_for_mode(agent, observe);
+/// `timeout` replaces [`default_timeout`] in the agents whose file carries one.
+pub fn install_with(
+    agent: Agent,
+    root: &Path,
+    observe: bool,
+    upgrade: bool,
+    timeout: Option<u32>,
+) -> Result<Installed> {
+    let (rel, content) = config_for_opts(agent, observe, timeout);
     let path = root.join(rel);
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
@@ -792,8 +897,9 @@ pub fn configured(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Copilot CLI's hook file running `cmd` after an edit and at the end of a turn.
-fn copilot_hooks(cmd: &str) -> String {
+/// Copilot CLI's hook file running `cmd` after an edit and at the end of a turn, each
+/// with `timeout` seconds.
+fn copilot_hooks(cmd: &str, timeout: u32) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "hooks": {
@@ -803,9 +909,9 @@ fn copilot_hooks(cmd: &str) -> String {
                 // reference lists (`apply_patch` is how some models edit).
                 "matcher": "create|edit|str_replace_editor|apply_patch",
                 "bash": cmd,
-                "timeoutSec": 120
+                "timeoutSec": timeout
             }],
-            "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": 120 }]
+            "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": timeout }]
         }
     }))
     .unwrap_or_default()
@@ -815,20 +921,29 @@ fn copilot_hooks(cmd: &str) -> String {
 /// The user-level hook file for `agent` and its content: it runs in every folder the
 /// agent opens, so its command passes silently outside a repository with a
 /// `discipline.toml` (`--if-configured`). Copilot CLI loads it whether or not the
-/// folder is trusted, which a repository's `.github/hooks/` needs.
-pub fn user_config_for(agent: Agent) -> Result<(PathBuf, String)> {
+/// folder is trusted, which a repository's `.github/hooks/` needs. With `observe`, the
+/// command is in observe mode (`--observe`), as [`config_for_mode`] writes it.
+pub fn user_config_for(
+    agent: Agent,
+    observe: bool,
+    timeout: Option<u32>,
+) -> Result<(PathBuf, String)> {
     match agent {
         Agent::Copilot => {
-            let home = match std::env::var_os("COPILOT_HOME").filter(|h| !h.is_empty()) {
-                Some(h) => PathBuf::from(h),
-                None => std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .map(|h| PathBuf::from(h).join(".copilot"))
-                    .context("cannot find the home directory (set COPILOT_HOME)")?,
-            };
+            let home =
+                copilot_home().context("cannot find the home directory (set COPILOT_HOME)")?;
             Ok((
                 home.join("hooks").join("discipline.json"),
-                copilot_hooks("discipline hook run --agent copilot --if-configured"),
+                copilot_hooks(
+                    &guarded(
+                        Agent::Copilot,
+                        &format!(
+                            "discipline hook run --agent copilot --if-configured{}",
+                            if observe { " --observe" } else { "" }
+                        ),
+                    ),
+                    timeout.or(default_timeout(Agent::Copilot)).unwrap_or(0),
+                ),
             ))
         }
         other => bail!(
@@ -838,10 +953,156 @@ pub fn user_config_for(agent: Agent) -> Result<(PathBuf, String)> {
     }
 }
 
+/// Copilot CLI's home directory: `COPILOT_HOME`, else `.copilot` in the user's home.
+pub fn copilot_home() -> Option<PathBuf> {
+    match std::env::var_os("COPILOT_HOME").filter(|h| !h.is_empty()) {
+        Some(h) => Some(PathBuf::from(h)),
+        None => std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|h| !h.is_empty())
+            .map(|h| PathBuf::from(h).join(".copilot")),
+    }
+}
+
+/// JSON as a person or a tool edits it: `//` and `/* */` comments and trailing commas are
+/// dropped before parsing. Copilot CLI's `config.json` opens with comment lines, so a strict
+/// parser rejects it.
+pub fn parse_lenient_json(text: &str) -> Option<serde_json::Value> {
+    // Two passes, each tracking strings: comments first, so that a comma followed by a
+    // comment and then the closing bracket is still seen as trailing.
+    let uncommented = scan_json(text, |chars, i, out| match (chars[i], chars.get(i + 1)) {
+        ('/', Some('/')) => chars[i..]
+            .iter()
+            .position(|c| *c == '\n')
+            .map_or(chars.len(), |n| i + n),
+        ('/', Some('*')) => chars[i + 2..]
+            .windows(2)
+            .position(|w| w == ['*', '/'])
+            .map_or(chars.len(), |n| i + 2 + n + 2),
+        (c, _) => {
+            out.push(c);
+            i + 1
+        }
+    });
+    let trimmed = scan_json(&uncommented, |chars, i, out| {
+        let closes = chars[i + 1..]
+            .iter()
+            .find(|n| !n.is_whitespace())
+            .is_some_and(|n| matches!(n, '}' | ']'));
+        if !(chars[i] == ',' && closes) {
+            out.push(chars[i]);
+        }
+        i + 1
+    });
+    serde_json::from_str(&trimmed).ok()
+}
+
+/// Copies `text`, handing every character outside a string to `outside`, which appends
+/// what it keeps and returns the index to continue from.
+fn scan_json(text: &str, outside: impl Fn(&[char], usize, &mut String) -> usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let (mut i, mut in_string) = (0, false);
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            out.push(c);
+            if c == '\\' {
+                if let Some(next) = chars.get(i + 1) {
+                    out.push(*next);
+                    i += 1;
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+            i += 1;
+        } else if c == '"' {
+            in_string = true;
+            out.push(c);
+            i += 1;
+        } else {
+            i = outside(&chars, i, &mut out);
+        }
+    }
+    out
+}
+
+/// Whether Copilot CLI trusts `dir`: it, or a folder above it, is in `trustedFolders` of
+/// `<home>/config.json`. `None` when that file is missing or unreadable (Copilot CLI has
+/// not run here, or writes a shape this release does not know).
+pub fn copilot_trusts(home: &Path, dir: &Path) -> Option<bool> {
+    let config = parse_lenient_json(&std::fs::read_to_string(home.join("config.json")).ok()?)?;
+    let folders = config
+        .get("trustedFolders")
+        .or_else(|| config.get("trusted_folders"))
+        .and_then(|f| f.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    Some(folders.iter().filter_map(|f| f.as_str()).any(|f| {
+        let f = Path::new(f);
+        dir.starts_with(f.canonicalize().unwrap_or_else(|_| f.to_path_buf()))
+    }))
+}
+
+/// The repository hook file under `root` that runs discipline for Copilot CLI: a
+/// `.github/hooks/*.json` whose content names `hook run --agent copilot`.
+pub fn copilot_repo_hook(root: &Path) -> Option<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(root.join(".github").join("hooks"))
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
+    files.into_iter().find(|p| {
+        std::fs::read_to_string(p).is_ok_and(|c| c.contains("discipline hook run --agent copilot"))
+    })
+}
+
+/// The user-level hook file under Copilot CLI's `home` that runs discipline in every
+/// adopted repository (`hook run --agent copilot --if-configured`).
+pub fn copilot_user_hook(home: &Path) -> Option<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(home.join("hooks"))
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
+    files.into_iter().find(|p| {
+        std::fs::read_to_string(p)
+            .is_ok_and(|c| c.contains("discipline hook run --agent copilot --if-configured"))
+    })
+}
+
+/// Why Copilot CLI will not run a repository hook under `root`, naming both ways out;
+/// `None` when it trusts the folder or has no configuration under `home`.
+pub fn copilot_untrusted_note(home: &Path, root: &Path) -> Option<String> {
+    (!copilot_trusts(home, root)?).then(|| {
+        format!(
+            "Copilot CLI does not trust {}, so it skips the repository's .github/hooks/ there without a message and this hook does not run. Trust the folder (accept Copilot's trust prompt when it opens the folder, or add it to `trustedFolders` in {}), or install the user-level hook, which Copilot runs in every folder: `discipline hook install --agent copilot --user`.",
+            root.display(),
+            home.join("config.json").display()
+        )
+    })
+}
+
+/// Whether Copilot CLI also runs the repository's own discipline hook in `dir`: the
+/// repository has one and the folder is trusted.
+fn copilot_repo_hook_runs(dir: &Path) -> bool {
+    let Some(root) = crate::gitctx::discover_repository(dir)
+        .ok()
+        .and_then(|r| r.workdir().map(Path::to_path_buf))
+    else {
+        return false;
+    };
+    copilot_repo_hook(&root).is_some()
+        && copilot_home().and_then(|h| copilot_trusts(&h, dir)) == Some(true)
+}
+
 /// Write the user-level hook file ([`user_config_for`]); an existing file is never
 /// rewritten.
-pub fn install_user(agent: Agent) -> Result<Installed> {
-    let (path, content) = user_config_for(agent)?;
+pub fn install_user(agent: Agent, observe: bool, timeout: Option<u32>) -> Result<Installed> {
+    let (path, content) = user_config_for(agent, observe, timeout)?;
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
@@ -867,13 +1128,98 @@ pub const CLAUDE_BOOTSTRAP: &str = ".claude/hooks/discipline-bootstrap.sh";
 /// discipline is already there, and always exits 0: a failure is a notice to the person,
 /// never a blocked session.
 pub fn claude_bootstrap_script() -> String {
+    claude_bootstrap_script_with(None)
+}
+
+/// The two linux-musl digests of a release, which a pinned bootstrap checks the download
+/// against instead of the release's own `SHA256SUMS`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseDigests {
+    pub x86_64: String,
+    pub aarch64: String,
+}
+
+/// What a pinned bootstrap says about itself.
+pub const PINNED_HEADER: &str = "# Pinned by `discipline hook install --pin-sums`";
+
+/// The linux-musl digests in a release's `SHA256SUMS` (`<sha256>  <asset>`, or `*<asset>`).
+pub fn parse_release_sums(text: &str) -> Result<ReleaseDigests> {
+    let find = |arch: &str| -> Result<String> {
+        let asset = format!("discipline-{arch}-unknown-linux-musl.tar.gz");
+        text.lines()
+            .filter_map(|l| l.split_once(char::is_whitespace))
+            .find(|(_, name)| name.trim().trim_start_matches('*') == asset)
+            .map(|(digest, _)| digest.to_ascii_lowercase())
+            .filter(|d| d.len() == 64 && d.chars().all(|c| c.is_ascii_hexdigit()))
+            .with_context(|| format!("the sums file has no SHA-256 digest for {asset}"))
+    };
+    Ok(ReleaseDigests {
+        x86_64: find("x86_64")?,
+        aarch64: find("aarch64")?,
+    })
+}
+
+/// The digests a pinned bootstrap carries; `None` for an unpinned one.
+fn pinned_digests(script: &str) -> Option<ReleaseDigests> {
+    static PINNED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?m)^  (x86_64|aarch64)\) want="([0-9a-f]{64})" ;;$"#).unwrap()
+    });
+    let mut d = ReleaseDigests {
+        x86_64: String::new(),
+        aarch64: String::new(),
+    };
+    for c in PINNED.captures_iter(script) {
+        match &c[1] {
+            "x86_64" => d.x86_64 = c[2].to_string(),
+            _ => d.aarch64 = c[2].to_string(),
+        }
+    }
+    (!d.x86_64.is_empty() && !d.aarch64.is_empty()).then_some(d)
+}
+
+/// [`claude_bootstrap_script`], pinned to `pin` when given: the download is checked against
+/// those digests and the release's `SHA256SUMS` is never fetched, so a replaced release
+/// asset (and its replaced `SHA256SUMS`) is refused.
+pub fn claude_bootstrap_script_with(pin: Option<&ReleaseDigests>) -> String {
+    let (pin_note, fetch) = match pin {
+        Some(d) => (
+            format!(
+                "{PINNED_HEADER}: the digests below are this release's\n# linux-musl assets, each a subject of its SLSA provenance\n# (`gh attestation verify <asset> --repo orieg/discipline`).\n"
+            ),
+            format!(
+                r#"if ! curl -fsSL --retry 3 -o "${{dir}}/${{asset}}" "${{base}}/${{asset}}"; then
+  say "could not download ${{version}} (network access level?); the hooks cannot check this session"
+  exit 0
+fi
+case "${{arch}}" in
+  x86_64) want="{}" ;;
+  aarch64) want="{}" ;;
+esac
+"#,
+                d.x86_64, d.aarch64
+            ),
+        ),
+        None => (
+            String::new(),
+            r#"if ! curl -fsSL --retry 3 -o "${dir}/${asset}" "${base}/${asset}" \
+  || ! curl -fsSL --retry 3 -o "${dir}/SHA256SUMS" "${base}/SHA256SUMS"; then
+  say "could not download ${version} (network access level?); the hooks cannot check this session"
+  exit 0
+fi
+want="$(awk -v f="${asset}" '$2 == f || $2 == "*" f { print $1 }' "${dir}/SHA256SUMS")"
+"#
+            .to_string(),
+        ),
+    };
     format!(
         r#"#!/bin/bash
 # Written by `discipline hook install --agent claude-code`.
 # A Claude Code cloud session starts on a fresh VM without discipline. This installs
 # the pinned release, checksum-verified, so the hooks in .claude/settings.json can
 # check the change. Locally it does nothing: install discipline yourself.
-set -u
+# Claude Code cloud sessions run only on repositories hosted on GitHub; elsewhere this
+# script never runs in the cloud.
+{pin_note}set -u
 [ "${{CLAUDE_CODE_REMOTE:-}}" = "true" ] || exit 0
 command -v discipline >/dev/null 2>&1 && exit 0
 
@@ -887,13 +1233,8 @@ esac
 asset="discipline-${{arch}}-unknown-linux-musl.tar.gz"
 base="https://github.com/orieg/discipline/releases/download/${{version}}"
 dir="$(mktemp -d)"
-if ! curl -fsSL --retry 3 -o "${{dir}}/${{asset}}" "${{base}}/${{asset}}" \
-  || ! curl -fsSL --retry 3 -o "${{dir}}/SHA256SUMS" "${{base}}/SHA256SUMS"; then
-  say "could not download ${{version}} (network access level?); the hooks cannot check this session"
-  exit 0
-fi
-want="$(awk -v f="${{asset}}" '$2 == f || $2 == "*" f {{ print $1 }}' "${{dir}}/SHA256SUMS")"
-got="$(sha256sum "${{dir}}/${{asset}}" | awk '{{ print $1 }}')"
+trap 'rm -rf "${{dir}}"' EXIT
+{fetch}got="$(sha256sum "${{dir}}/${{asset}}" | awk '{{ print $1 }}')"
 if [ -z "${{want}}" ] || [ "${{want}}" != "${{got}}" ]; then
   say "checksum mismatch for ${{asset}}; not installed"
   exit 0
@@ -924,29 +1265,43 @@ exit 0
 
 /// Write [`CLAUDE_BOOTSTRAP`] under `root` unless a file is there.
 pub fn install_claude_bootstrap(root: &Path) -> Result<Installed> {
-    install_claude_bootstrap_with(root, false)
+    install_claude_bootstrap_with(root, false, None)
 }
 
 /// [`install_claude_bootstrap`], rewriting one an earlier release wrote when `upgrade`.
-pub fn install_claude_bootstrap_with(root: &Path, upgrade: bool) -> Result<Installed> {
+/// With `pin`, the script checks the download against those digests ([`claude_bootstrap_script_with`]).
+pub fn install_claude_bootstrap_with(
+    root: &Path,
+    upgrade: bool,
+    pin: Option<&ReleaseDigests>,
+) -> Result<Installed> {
     let path = root.join(CLAUDE_BOOTSTRAP);
+    let script = claude_bootstrap_script_with(pin);
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
-        if let Some(r) = refresh_generated(&path, &existing, &claude_bootstrap_script(), upgrade)? {
+        if pin.is_none() && existing.contains(PINNED_HEADER) {
+            // This release's pinned script is current; an earlier release's needs the
+            // new release's digests, never an unpinned rewrite.
+            return Ok(if is_generated_hook_file(CLAUDE_BOOTSTRAP, &existing) {
+                Installed::AlreadyPresent(path)
+            } else {
+                Installed::PinKept(path)
+            });
+        }
+        if let Some(r) = refresh_generated(&path, &existing, &script, upgrade)? {
             return Ok(r);
         }
         if existing.contains("orieg/discipline/releases") {
             return Ok(Installed::AlreadyPresent(path));
         }
-        return Ok(Installed::Refused(path, claude_bootstrap_script()));
+        return Ok(Installed::Refused(path, script));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
-    std::fs::write(&path, claude_bootstrap_script())
-        .with_context(|| format!("cannot write {}", path.display()))?;
+    std::fs::write(&path, script).with_context(|| format!("cannot write {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1027,6 +1382,38 @@ pub fn install_cloud_agent_with(root: &Path, upgrade: bool) -> Result<Installed>
     std::fs::write(&path, copilot_setup_steps())
         .with_context(|| format!("cannot write {}", path.display()))?;
     Ok(Installed::Written(path))
+}
+
+/// The hosts of `root`'s remotes when none of them is on GitHub, which Copilot cloud agent
+/// and Claude Code cloud sessions require; `None` when one is, or when the repository has
+/// no remote to judge by. An SSH host alias is resolved through `~/.ssh/config` first.
+pub fn non_github_remote_hosts(root: &Path) -> Option<Vec<String>> {
+    let repo = git2::Repository::open(root).ok()?;
+    let mut hosts = Vec::new();
+    for name in repo.remotes().ok()?.iter().flatten().flatten() {
+        let Some(url) = repo
+            .find_remote(name)
+            .ok()
+            .and_then(|r| r.url().ok().map(str::to_string))
+        else {
+            continue;
+        };
+        let url =
+            crate::forge::resolve_ssh_alias(&url, &|a| crate::forge::ssh_hostname_from_home(a));
+        if let Some(r) = crate::forge::parse_remote(&url) {
+            hosts.push(crate::forge::host_of(&r.url));
+        }
+    }
+    if hosts.is_empty()
+        || hosts
+            .iter()
+            .any(|h| crate::forge::kind_from_host(h) == Some(crate::forge::ForgeKind::GitHub))
+    {
+        return None;
+    }
+    hosts.sort();
+    hosts.dedup();
+    Some(hosts)
 }
 
 /// Why git would not commit a hook file `install` wrote: it is ignored. `None` when
@@ -1147,7 +1534,11 @@ mod tests {
     fn installed_files_follow_the_contracts_live_sessions_showed() {
         let agy: serde_json::Value = serde_json::from_str(&config_for(Agent::Agy).1).unwrap();
         let stop = &agy["discipline"]["Stop"][0];
-        assert_eq!(stop["command"], "discipline hook run --agent agy", "{agy}");
+        assert_eq!(
+            stop["command"],
+            guarded(Agent::Agy, "discipline hook run --agent agy"),
+            "{agy}"
+        );
         assert!(
             stop.get("hooks").is_none() && stop.get("matcher").is_none(),
             "{agy}"
@@ -1179,6 +1570,11 @@ mod tests {
             format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}")
         );
         let script = claude_bootstrap_script();
+        assert!(
+            script
+                .contains("# Claude Code cloud sessions run only on repositories hosted on GitHub"),
+            "{script}"
+        );
         let lines: Vec<&str> = script.lines().collect();
         let guard = lines
             .iter()
@@ -1204,6 +1600,200 @@ mod tests {
         );
     }
 
+    /// The bootstrap removes its download directory on every exit: here a download that
+    /// fails, in a cloud session without discipline, must leave `TMPDIR` empty.
+    #[cfg(unix)]
+    #[test]
+    fn the_bootstrap_leaves_no_temporary_directory_behind() {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = tempfile::tempdir().unwrap();
+        let curl = bin.path().join("curl");
+        std::fs::write(&curl, "#!/bin/sh\nexit 22\n").unwrap();
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // macOS `mktemp -d` ignores TMPDIR: this one creates its directory there everywhere.
+        let mktemp = bin.path().join("mktemp");
+        std::fs::write(
+            &mktemp,
+            "#!/bin/sh\nd=\"$TMPDIR/bootstrap.$$\"\nmkdir \"$d\" && echo \"$d\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&mktemp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("/bin/bash")
+            .args(["-c", &claude_bootstrap_script()])
+            .env_clear()
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+            .env("TMPDIR", tmp.path())
+            .env("HOME", home.path())
+            .env("CLAUDE_CODE_REMOTE", "true")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("could not download"),
+            "{out:?}"
+        );
+        let left: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().collect();
+        assert!(left.is_empty(), "left behind: {left:?}");
+    }
+
+    /// Every check command a generated hook file runs through a shell, in both modes and at
+    /// user level: `(agent, command)`.
+    fn generated_shell_commands() -> Vec<(Agent, String)> {
+        let mut out = Vec::new();
+        for observe in [false, true] {
+            for agent in [
+                Agent::ClaudeCode,
+                Agent::Codex,
+                Agent::Cursor,
+                Agent::Copilot,
+                Agent::Agy,
+                Agent::Qwen,
+            ] {
+                let v: serde_json::Value =
+                    serde_json::from_str(&config_for_mode(agent, observe).1).unwrap();
+                let found: Vec<String> = match agent {
+                    Agent::Cursor => vec![v["hooks"]["stop"][0]["command"].clone()],
+                    Agent::Copilot => vec![
+                        v["hooks"]["postToolUse"][0]["bash"].clone(),
+                        v["hooks"]["agentStop"][0]["bash"].clone(),
+                    ],
+                    Agent::Agy => vec![v["discipline"]["Stop"][0]["command"].clone()],
+                    _ => vec![
+                        v["hooks"]["PostToolUse"][0]["hooks"][0]["command"].clone(),
+                        v["hooks"]["Stop"][0]["hooks"][0]["command"].clone(),
+                    ],
+                }
+                .into_iter()
+                .map(|c| c.as_str().unwrap().to_string())
+                .collect();
+                out.extend(found.into_iter().map(|c| (agent, c)));
+            }
+            let user: serde_json::Value = serde_json::from_str(&copilot_hooks(
+                &guarded(
+                    Agent::Copilot,
+                    &format!(
+                        "discipline hook run --agent copilot --if-configured{}",
+                        if observe { " --observe" } else { "" }
+                    ),
+                ),
+                120,
+            ))
+            .unwrap();
+            out.push((
+                Agent::Copilot,
+                user["hooks"]["agentStop"][0]["bash"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            ));
+        }
+        out
+    }
+
+    /// A hook whose `discipline` is missing is not a crash (exit 127) the agent reports
+    /// without saying why: it says discipline is not on PATH, and answers the agent's pass
+    /// (`{}` for the agents whose pass is JSON). With discipline present it runs it.
+    #[cfg(unix)]
+    #[test]
+    fn generated_hook_commands_say_so_when_discipline_is_missing() {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = tempfile::tempdir().unwrap();
+        let fake = bin.path().join("discipline");
+        std::fs::write(&fake, "#!/bin/sh\necho \"ran $*\"\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let sh = |cmd: &str, path: &str| {
+            std::process::Command::new("/bin/sh")
+                .args(["-c", cmd])
+                .env_clear()
+                .env("PATH", path)
+                .output()
+                .unwrap()
+        };
+        let commands = generated_shell_commands();
+        assert_eq!(commands.len(), 22);
+        for (agent, cmd) in commands {
+            let missing = sh(&cmd, "/nonexistent");
+            assert_eq!(
+                missing.status.code(),
+                Some(0),
+                "{agent:?} {cmd}: {missing:?}"
+            );
+            assert!(
+                String::from_utf8_lossy(&missing.stderr).contains("discipline is not on PATH"),
+                "{agent:?} {cmd}: {missing:?}"
+            );
+            let pass = translate_event(agent, Event::Stop, 0, "", "").stdout;
+            assert_eq!(
+                String::from_utf8_lossy(&missing.stdout),
+                pass,
+                "{agent:?} {cmd}"
+            );
+            let present = sh(&cmd, bin.path().to_str().unwrap());
+            assert!(
+                String::from_utf8_lossy(&present.stdout)
+                    .starts_with(&format!("ran hook run --agent {}", agent.id())),
+                "{agent:?} {cmd}: {present:?}"
+            );
+        }
+    }
+
+    /// A pinned bootstrap checks the download against the digest written in it: it never
+    /// fetches `SHA256SUMS`, refuses a mismatch, and goes on to unpack on a match. `curl`,
+    /// `uname` and `sha256sum` are stubs, so the test is the script's logic, not the network.
+    #[cfg(unix)]
+    #[test]
+    fn a_pinned_bootstrap_verifies_against_its_own_digests() {
+        use std::os::unix::fs::PermissionsExt;
+        let (good, other) = ("e".repeat(64), "f".repeat(64));
+        let run = |pinned_x86: &str| {
+            let bin = tempfile::tempdir().unwrap();
+            let log = bin.path().join("curl.log");
+            let stub = |name: &str, body: String| {
+                let p = bin.path().join(name);
+                std::fs::write(&p, format!("#!/bin/sh\n{body}")).unwrap();
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            };
+            stub(
+                "curl",
+                format!(
+                    "for a; do case \"$prev\" in -o) out=\"$a\";; esac; prev=\"$a\"; url=\"$a\"; done\necho \"$url\" >> {}\necho asset > \"$out\"\n",
+                    log.display()
+                ),
+            );
+            stub("uname", "echo x86_64\n".into());
+            stub("sha256sum", format!("echo \"{good}  $1\"\n"));
+            let home = tempfile::tempdir().unwrap();
+            let digests = ReleaseDigests {
+                x86_64: pinned_x86.to_string(),
+                aarch64: "0".repeat(64),
+            };
+            let out = std::process::Command::new("/bin/bash")
+                .args(["-c", &claude_bootstrap_script_with(Some(&digests))])
+                .env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+                .env("HOME", home.path())
+                .env("CLAUDE_CODE_REMOTE", "true")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            (
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+                std::fs::read_to_string(&log).unwrap_or_default(),
+            )
+        };
+        let (mismatch, fetched) = run(&other);
+        assert!(mismatch.contains("checksum mismatch"), "{mismatch}");
+        assert!(!fetched.contains("SHA256SUMS"), "{fetched}");
+        assert_eq!(fetched.lines().count(), 1, "only the asset: {fetched}");
+        let (matched, _) = run(&good);
+        assert!(
+            !matched.contains("checksum mismatch") && matched.contains("could not unpack"),
+            "verified, then unpacking the stub asset fails: {matched}"
+        );
+    }
+
     /// agy's `SessionStart` handler tells the agent to warn the person when `discipline`
     /// is not on `PATH`, and is silent (`{}`) when it is; agy's `Stop` is unchanged.
     #[cfg(unix)]
@@ -1214,7 +1804,7 @@ mod tests {
         assert_eq!(start["command"], AGY_MISSING_BINARY);
         assert_eq!(
             agy["discipline"]["Stop"][0]["command"],
-            "discipline hook run --agent agy"
+            guarded(Agent::Agy, "discipline hook run --agent agy")
         );
         let run = |path: &str| -> serde_json::Value {
             let out = std::process::Command::new("/bin/sh")
@@ -1357,6 +1947,48 @@ mod tests {
         );
         assert_eq!(parse_payload(""), Payload::default());
         assert_eq!(parse_payload("[1]"), Payload::default());
+    }
+
+    /// Copilot CLI's `config.json` opens with comment lines; a hand edit can leave a
+    /// trailing comma. Comment markers and commas inside strings are text.
+    #[test]
+    fn lenient_json_reads_comments_and_trailing_commas_but_not_inside_strings() {
+        let v = parse_lenient_json(
+            "// managed\n{\n  /* a */ \"trustedFolders\": [\"/a//b\", \"x,]\\\"/*\",],\n  \"n\": 1, // one\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"trustedFolders": ["/a//b", "x,]\"/*"], "n": 1})
+        );
+        assert_eq!(parse_lenient_json("{\"a\": }"), None);
+    }
+
+    #[test]
+    fn copilot_trust_covers_a_listed_folder_and_what_is_below_it_only() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let repo = work.path().join("repo");
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        assert_eq!(copilot_trusts(home.path(), &repo), None, "no config");
+        std::fs::write(
+            home.path().join("config.json"),
+            format!(
+                "// x\n{{\"trustedFolders\": [{}]}}",
+                serde_json::json!(repo.to_str().unwrap())
+            ),
+        )
+        .unwrap();
+        assert_eq!(copilot_trusts(home.path(), &repo), Some(true));
+        assert_eq!(copilot_trusts(home.path(), &repo.join("sub")), Some(true));
+        assert_eq!(copilot_trusts(home.path(), work.path()), Some(false));
+        let sibling = work.path().join("repo2");
+        std::fs::create_dir_all(&sibling).unwrap();
+        assert_eq!(
+            copilot_trusts(home.path(), &sibling),
+            Some(false),
+            "a prefix is not a parent"
+        );
     }
 
     #[test]

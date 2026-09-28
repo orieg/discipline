@@ -163,6 +163,8 @@
       "hook install --agent",
       "hook install --cloud-agent",
       "hook install --observe",
+      "hook install --pin-sums",
+      "hook install --timeout",
       "hook install --upgrade",
       "hook install --user",
       "hook run --agent",

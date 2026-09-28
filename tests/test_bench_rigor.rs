@@ -7,7 +7,6 @@ use common::*;
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 // ---- helpers --------------------------------------------------------------------------
 
@@ -17,7 +16,7 @@ type FakeGh = FakeForge;
 fn commit_at(repo: &Repo, message: &str, epoch: i64) {
     repo.git(&["add", "-A"]);
     let date = format!("{epoch} +0000");
-    let out = Command::new("git")
+    let out = common::git_command()
         .args(["-c", "user.email=t@example.invalid", "-c", "user.name=t"])
         .args([
             "-c",

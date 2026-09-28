@@ -202,6 +202,14 @@ pub struct HookInstallArgs {
     /// the OpenCode plugin) to this release; a file without that header is never rewritten
     #[arg(long)]
     pub upgrade: bool,
+
+    /// Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long
+    #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u32).range(1..=86400))]
+    pub timeout: Option<u32>,
+
+    /// A release's SHA256SUMS, verified (`gh attestation verify`): the Claude Code bootstrap checks its download against the linux-musl digests in it instead of fetching SHA256SUMS from the release (claude-code only)
+    #[arg(long, value_name = "FILE", conflicts_with = "user")]
+    pub pin_sums: Option<std::path::PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]

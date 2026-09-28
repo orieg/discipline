@@ -1286,6 +1286,7 @@ fn doctor(args: discipline::cli::DoctorArgs) -> Result<bool> {
         branch: args.branch.clone(),
         local_only: args.local_only,
         api: &api,
+        copilot_home: discipline::hook::copilot_home(),
     });
     match args.format {
         discipline::cli::DoctorFormat::Text => print!("{}", report.render_text()),
@@ -1402,31 +1403,66 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             std::process::exit(i32::from(out.code));
         }
         HookCommand::Install(a) => {
+            let pin = match &a.pin_sums {
+                Some(_) if a.agent != discipline::hook::Agent::ClaudeCode => bail!(
+                    "`--pin-sums` is for claude-code: it pins the digests the Claude Code bootstrap checks"
+                ),
+                Some(f) => Some(discipline::hook::parse_release_sums(
+                    &std::fs::read_to_string(f)
+                        .with_context(|| format!("cannot read {}", f.display()))?,
+                )?),
+                None => None,
+            };
+            if a.timeout.is_some() && discipline::hook::default_timeout(a.agent).is_none() {
+                bail!(
+                    "`--timeout` is for agy, qwen and copilot, whose hook files carry a check timeout; the {} file does not",
+                    a.agent.id()
+                );
+            }
             let mut results = vec![if a.user {
-                discipline::hook::install_user(a.agent)?
+                discipline::hook::install_user(a.agent, a.observe, a.timeout)?
             } else {
                 discipline::hook::install_with(
                     a.agent,
                     &discipline::hook::repo_root()?,
                     a.observe,
                     a.upgrade,
+                    a.timeout,
                 )?
             }];
             if a.agent == discipline::hook::Agent::ClaudeCode && !a.user {
                 results.push(discipline::hook::install_claude_bootstrap_with(
                     &discipline::hook::repo_root()?,
                     a.upgrade,
+                    pin.as_ref(),
                 )?);
             }
+            let mut cloud_note = None;
             if a.cloud_agent {
                 if a.agent != discipline::hook::Agent::Copilot {
                     bail!("`--cloud-agent` is for copilot: Copilot cloud agent runs the repository's hooks");
                 }
-                results.push(discipline::hook::install_cloud_agent_with(
-                    &discipline::hook::repo_root()?,
-                    a.upgrade,
-                )?);
+                let root = discipline::hook::repo_root()?;
+                match discipline::hook::non_github_remote_hosts(&root) {
+                    Some(hosts) => cloud_note = Some(format!(
+                        "`--cloud-agent` wrote nothing: Copilot cloud agent runs only on GitHub, and no remote of this repository is ({}), so {} would never run.",
+                        hosts.join(", "),
+                        discipline::hook::COPILOT_SETUP_STEPS
+                    )),
+                    None => results.push(discipline::hook::install_cloud_agent_with(
+                        &root, a.upgrade,
+                    )?),
+                }
             }
+            let untrusted = (a.agent == discipline::hook::Agent::Copilot && !a.user)
+                .then(|| {
+                    let home = discipline::hook::copilot_home()?;
+                    discipline::hook::copilot_untrusted_note(
+                        &home,
+                        &discipline::hook::repo_root().ok()?,
+                    )
+                })
+                .flatten();
             let mut ok = true;
             for installed in results {
                 match installed {
@@ -1462,6 +1498,14 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                             p.display()
                         );
                     }
+                    Installed::PinKept(p) => {
+                        println!(
+                            "{} {} pins an earlier release's digests and was kept: rewriting it without them would trust the release's own SHA256SUMS. Run this command again with `--upgrade --pin-sums <SHA256SUMS of v{}>` to move it to this release",
+                            style::yellow("note:"),
+                            p.display(),
+                            env!("CARGO_PKG_VERSION")
+                        );
+                    }
                     Installed::Refused(p, snippet) => {
                         println!(
                             "{} exists and was not changed. Merge this into it:\n\n{snippet}",
@@ -1470,6 +1514,12 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                         ok = false;
                     }
                 }
+            }
+            if let Some(note) = cloud_note {
+                println!("{} {note}", style::yellow("note:"));
+            }
+            if let Some(note) = untrusted {
+                println!("{} {note}", style::yellow("note:"));
             }
             Ok(ok)
         }

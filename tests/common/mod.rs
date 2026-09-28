@@ -85,6 +85,32 @@ impl Run {
     }
 }
 
+/// `COPILOT_HOME` for a test that does not set its own: a directory that does not exist.
+pub const NO_COPILOT_HOME: &str = "/nonexistent/discipline-test-copilot-home";
+
+/// Variables that point git at a repository other than the one in the working directory.
+/// `git rebase --exec` and git hooks export them; a fixture that inherits `GIT_DIR` would
+/// re-initialise or commit to that repository instead of its own.
+pub const GIT_REPOSITORY_ENV_VARS: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+];
+
+/// `git` with [`GIT_REPOSITORY_ENV_VARS`] removed: every git command a test runs.
+pub fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    for var in GIT_REPOSITORY_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 pub const ISOLATED_ENV_VARS: &[&str] = &[
     "DISCIPLINE_HOOK_RUN",
     "PR_BODY",
@@ -221,7 +247,7 @@ impl Repo {
     }
 
     pub fn git(&self, args: &[&str]) {
-        let out = Command::new("git")
+        let out = git_command()
             .args(["-c", "user.email=t@example.invalid", "-c", "user.name=t"])
             .args(HARNESS_GIT_CONFIG)
             .args(args)
@@ -236,7 +262,7 @@ impl Repo {
     }
 
     pub fn git_output(&self, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = git_command()
             .args(["-c", "user.email=t@example.invalid", "-c", "user.name=t"])
             .args(HARNESS_GIT_CONFIG)
             .args(args)
@@ -327,7 +353,7 @@ impl Repo {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
         cmd.args(args).current_dir(self.path());
         // Inherit nothing that could change the verdict.
-        for var in ISOLATED_ENV_VARS {
+        for var in ISOLATED_ENV_VARS.iter().chain(GIT_REPOSITORY_ENV_VARS) {
             cmd.env_remove(var);
         }
         // Prefix-built names too (`DISCIPLINE_COMMAND_<GATE>`, ...).
@@ -338,6 +364,8 @@ impl Repo {
         }
         // No test reaches a real forge: only a loopback FakeForge is allowed.
         cmd.env("DISCIPLINE_NO_NETWORK", "1");
+        // Nor reads this machine's Copilot CLI configuration (trusted folders, hooks).
+        cmd.env("COPILOT_HOME", NO_COPILOT_HOME);
         let has_pr_body = env.iter().any(|(k, _)| *k == "PR_BODY");
         let has_pr_title = env.iter().any(|(k, _)| *k == "PR_TITLE");
         if has_pr_body && !has_pr_title {
@@ -355,7 +383,7 @@ impl Repo {
     pub fn run_in_dir(&self, rel_dir: &str, args: &[&str], env: &[(&str, &str)]) -> Run {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
         cmd.args(args).current_dir(self.file(rel_dir));
-        for var in ISOLATED_ENV_VARS {
+        for var in ISOLATED_ENV_VARS.iter().chain(GIT_REPOSITORY_ENV_VARS) {
             cmd.env_remove(var);
         }
         // Prefix-built names too (`DISCIPLINE_COMMAND_<GATE>`, ...).
@@ -365,6 +393,7 @@ impl Repo {
             }
         }
         cmd.env("DISCIPLINE_NO_NETWORK", "1");
+        cmd.env("COPILOT_HOME", NO_COPILOT_HOME);
         cmd.envs(env.iter().copied());
         let out = cmd.output().unwrap();
         Run {

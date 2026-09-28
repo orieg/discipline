@@ -267,7 +267,10 @@ fn mcp_check_diff_conforms_to_its_output_schema() {
             .stdout(std::process::Stdio::piped());
         // A CI run's event payload names its own pull request, whose body the check
         // would read: the fixture repository is judged on its own.
-        for var in common::ISOLATED_ENV_VARS {
+        for var in common::ISOLATED_ENV_VARS
+            .iter()
+            .chain(common::GIT_REPOSITORY_ENV_VARS)
+        {
             cmd.env_remove(var);
         }
         let mut child = cmd.spawn().unwrap();
