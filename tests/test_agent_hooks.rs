@@ -4,6 +4,7 @@
 mod common;
 
 use common::Repo;
+use discipline::hook::{guarded, Agent};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -207,11 +208,11 @@ fn install_writes_the_agent_config_once_and_leaves_an_existing_file_alone() {
     let v: serde_json::Value = serde_json::from_str(&written).unwrap();
     assert_eq!(
         v["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
-        "discipline hook run --agent claude-code"
+        guarded(Agent::ClaudeCode, "discipline hook run --agent claude-code")
     );
     assert_eq!(
         v["hooks"]["Stop"][0]["hooks"][0]["command"],
-        "discipline hook run --agent claude-code"
+        guarded(Agent::ClaudeCode, "discipline hook run --agent claude-code")
     );
     let again = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
     assert_eq!(again.code, 0);
@@ -709,7 +710,11 @@ fn copilot_installs_at_user_level_with_the_guard() {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     for event in ["postToolUse", "agentStop"] {
         assert_eq!(
-            v["hooks"][event][0]["bash"], "discipline hook run --agent copilot --if-configured",
+            v["hooks"][event][0]["bash"],
+            guarded(
+                Agent::Copilot,
+                "discipline hook run --agent copilot --if-configured"
+            ),
             "{v}"
         );
     }
@@ -753,11 +758,12 @@ fn copilot_user_install_keeps_observe_mode() {
     )
     .unwrap();
     for event in ["postToolUse", "agentStop"] {
-        assert!(
-            v["hooks"][event][0]["bash"]
-                .as_str()
-                .unwrap()
-                .ends_with("discipline hook run --agent copilot --if-configured --observe"),
+        assert_eq!(
+            v["hooks"][event][0]["bash"],
+            guarded(
+                Agent::Copilot,
+                "discipline hook run --agent copilot --if-configured --observe"
+            ),
             "{v}"
         );
     }

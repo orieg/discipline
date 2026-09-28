@@ -582,11 +582,16 @@ pub fn config_for(agent: Agent) -> (&'static str, String) {
 
 /// [`config_for`], with every check command in observe mode (`hook run --observe`).
 pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
-    let cmd = format!(
+    let run = format!(
         "discipline hook run --agent {}{}",
         agent.id(),
         if observe { " --observe" } else { "" }
     );
+    // Aider and OpenCode do not run the command through a POSIX shell.
+    let cmd = match agent {
+        Agent::Aider | Agent::Opencode => run,
+        _ => guarded(agent, &run),
+    };
     match agent {
         Agent::ClaudeCode => (
             ".claude/settings.json",
@@ -680,6 +685,26 @@ pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
         Agent::Opencode => (".opencode/plugins/discipline.js", opencode_plugin(&cmd)),
     }
 }
+
+/// `run` behind a check that `discipline` is on `PATH`: without it the command says so on
+/// stderr, which the agent shows its user, and answers the agent's pass, instead of a shell's
+/// exit 127. A hook that cannot find the binary checks nothing either way; this way the
+/// person is told why, and CI still gates the change.
+pub fn guarded(agent: Agent, run: &str) -> String {
+    let pass = translate_event(agent, Event::Stop, 0, "", "").stdout;
+    format!(
+        "command -v discipline >/dev/null 2>&1 || {{ echo '{MISSING_BINARY}' >&2; {}exit 0; }}; {run}",
+        if pass.trim().is_empty() {
+            String::new()
+        } else {
+            format!("echo '{}'; ", pass.trim())
+        }
+    )
+}
+
+/// What a guarded hook command says when `discipline` is not on `PATH`.
+pub const MISSING_BINARY: &str =
+    "discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)";
 
 /// The OpenCode plugin: after an edit tool, run the hook and append a failure to the
 /// tool's output, which is the text the model reads.
@@ -829,9 +854,12 @@ pub fn user_config_for(agent: Agent, observe: bool) -> Result<(PathBuf, String)>
                 copilot_home().context("cannot find the home directory (set COPILOT_HOME)")?;
             Ok((
                 home.join("hooks").join("discipline.json"),
-                copilot_hooks(&format!(
-                    "discipline hook run --agent copilot --if-configured{}",
-                    if observe { " --observe" } else { "" }
+                copilot_hooks(&guarded(
+                    Agent::Copilot,
+                    &format!(
+                        "discipline hook run --agent copilot --if-configured{}",
+                        if observe { " --observe" } else { "" }
+                    ),
                 )),
             ))
         }
@@ -1332,7 +1360,11 @@ mod tests {
     fn installed_files_follow_the_contracts_live_sessions_showed() {
         let agy: serde_json::Value = serde_json::from_str(&config_for(Agent::Agy).1).unwrap();
         let stop = &agy["discipline"]["Stop"][0];
-        assert_eq!(stop["command"], "discipline hook run --agent agy", "{agy}");
+        assert_eq!(
+            stop["command"],
+            guarded(Agent::Agy, "discipline hook run --agent agy"),
+            "{agy}"
+        );
         assert!(
             stop.get("hooks").is_none() && stop.get("matcher").is_none(),
             "{agy}"
@@ -1432,6 +1464,104 @@ mod tests {
         assert!(left.is_empty(), "left behind: {left:?}");
     }
 
+    /// Every check command a generated hook file runs through a shell, in both modes and at
+    /// user level: `(agent, command)`.
+    fn generated_shell_commands() -> Vec<(Agent, String)> {
+        let mut out = Vec::new();
+        for observe in [false, true] {
+            for agent in [
+                Agent::ClaudeCode,
+                Agent::Codex,
+                Agent::Cursor,
+                Agent::Copilot,
+                Agent::Agy,
+                Agent::Qwen,
+            ] {
+                let v: serde_json::Value =
+                    serde_json::from_str(&config_for_mode(agent, observe).1).unwrap();
+                let found: Vec<String> = match agent {
+                    Agent::Cursor => vec![v["hooks"]["stop"][0]["command"].clone()],
+                    Agent::Copilot => vec![
+                        v["hooks"]["postToolUse"][0]["bash"].clone(),
+                        v["hooks"]["agentStop"][0]["bash"].clone(),
+                    ],
+                    Agent::Agy => vec![v["discipline"]["Stop"][0]["command"].clone()],
+                    _ => vec![
+                        v["hooks"]["PostToolUse"][0]["hooks"][0]["command"].clone(),
+                        v["hooks"]["Stop"][0]["hooks"][0]["command"].clone(),
+                    ],
+                }
+                .into_iter()
+                .map(|c| c.as_str().unwrap().to_string())
+                .collect();
+                out.extend(found.into_iter().map(|c| (agent, c)));
+            }
+            let user: serde_json::Value = serde_json::from_str(&copilot_hooks(&guarded(
+                Agent::Copilot,
+                &format!(
+                    "discipline hook run --agent copilot --if-configured{}",
+                    if observe { " --observe" } else { "" }
+                ),
+            )))
+            .unwrap();
+            out.push((
+                Agent::Copilot,
+                user["hooks"]["agentStop"][0]["bash"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            ));
+        }
+        out
+    }
+
+    /// A hook whose `discipline` is missing is not a crash (exit 127) the agent reports
+    /// without saying why: it says discipline is not on PATH, and answers the agent's pass
+    /// (`{}` for the agents whose pass is JSON). With discipline present it runs it.
+    #[cfg(unix)]
+    #[test]
+    fn generated_hook_commands_say_so_when_discipline_is_missing() {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = tempfile::tempdir().unwrap();
+        let fake = bin.path().join("discipline");
+        std::fs::write(&fake, "#!/bin/sh\necho \"ran $*\"\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let sh = |cmd: &str, path: &str| {
+            std::process::Command::new("/bin/sh")
+                .args(["-c", cmd])
+                .env_clear()
+                .env("PATH", path)
+                .output()
+                .unwrap()
+        };
+        let commands = generated_shell_commands();
+        assert_eq!(commands.len(), 22);
+        for (agent, cmd) in commands {
+            let missing = sh(&cmd, "/nonexistent");
+            assert_eq!(
+                missing.status.code(),
+                Some(0),
+                "{agent:?} {cmd}: {missing:?}"
+            );
+            assert!(
+                String::from_utf8_lossy(&missing.stderr).contains("discipline is not on PATH"),
+                "{agent:?} {cmd}: {missing:?}"
+            );
+            let pass = translate_event(agent, Event::Stop, 0, "", "").stdout;
+            assert_eq!(
+                String::from_utf8_lossy(&missing.stdout),
+                pass,
+                "{agent:?} {cmd}"
+            );
+            let present = sh(&cmd, bin.path().to_str().unwrap());
+            assert!(
+                String::from_utf8_lossy(&present.stdout)
+                    .starts_with(&format!("ran hook run --agent {}", agent.id())),
+                "{agent:?} {cmd}: {present:?}"
+            );
+        }
+    }
+
     /// agy's `SessionStart` handler tells the agent to warn the person when `discipline`
     /// is not on `PATH`, and is silent (`{}`) when it is; agy's `Stop` is unchanged.
     #[cfg(unix)]
@@ -1442,7 +1572,7 @@ mod tests {
         assert_eq!(start["command"], AGY_MISSING_BINARY);
         assert_eq!(
             agy["discipline"]["Stop"][0]["command"],
-            "discipline hook run --agent agy"
+            guarded(Agent::Agy, "discipline hook run --agent agy")
         );
         let run = |path: &str| -> serde_json::Value {
             let out = std::process::Command::new("/bin/sh")
