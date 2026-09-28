@@ -28,6 +28,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`agent-scratch`](#agent-scratch) | hygiene | **shipped** | any | agent scratch state is never tracked |
 | [`shell-secrets`](#shell-secrets) | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
+| [`citation-metadata`](#citation-metadata) | hygiene | **shipped** | any | CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI |
 | [`commit-provenance`](#commit-provenance) | hygiene | **shipped** | any | commits carry the required trailers; an agent-produced commit carries a review by someone else |
 | [`config-integrity`](#config-integrity) | integrity | **shipped** | any | a change cannot weaken its own discipline.toml without a token |
 | [`stub-bodies`](#stub-bodies) | agent-guard | **shipped** | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
@@ -109,6 +110,11 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `issue-link/issue-link-missing-in-commit-message` | Tracking Issue Link Missing In Commit Message |
 | `issue-link/issue-link-missing-in-commits` | Tracking Issue Link Missing In Commits |
 | `issue-link/issue-link-missing` | Tracking Issue Link Missing |
+| `citation-metadata/cff-invalid` | CITATION.cff Is Not Valid |
+| `citation-metadata/zenodo-invalid` | Zenodo Metadata Is Not Valid |
+| `citation-metadata/doi-malformed` | Malformed DOI In Citation Record |
+| `citation-metadata/doi-not-concept` | Citation DOI Is Not The Concept DOI |
+| `citation-metadata/records-disagree` | Citation Records Disagree |
 | `commit-provenance/commit-trailer-missing` | Commit Trailer Missing |
 | `commit-provenance/agent-commit-without-review` | Agent Commit Without Review |
 | `commit-provenance/agent-commit-reviewed-by-author` | Agent Commit Reviewed By Its Author |
@@ -348,6 +354,7 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `suppression-delta` | on, **`warning`** | Syntactically high, semantically low: `#[allow(...)]` is the reviewed escape hatch from `clippy -D warnings`, and `# noqa` / `// nolint` are routine. | False block at `error`: 78 findings (measured) across one consumer's last 100 merged pull requests, nearly all reviewed and intended. Miss at `warning`: none; the finding is still reported. | The flagged construct is a normal reviewed practice, so blocking by default fails ordinary changes. Repositories that treat every new suppression as a defect set `severity = "error"` (this repository does). |
 | `time-estimates` | on, `warning` | Heuristic prose match over the whole tree (`diff_only = false`). | False block at `error`: at v0.4.2, 51 findings (measured) in one consumer repository and 26 (measured) in another, nearly all pre-existing documentation. | Prose context decides whether a duration is an estimate. |
 | `bench-regression` | on, `warning` | Depends on the adapter: deterministic counts are high, wall-clock intervals are hardware-sensitive. | False block: runner jitter on wall-clock benchmarks. Miss: a real regression, still reported. | Projects with deterministic counters set `severity = "error"`. |
+| `citation-metadata` | on, `error` | High: both files are parsed and their shape is checked against the Citation File Format 1.2.0 and Zenodo's deposit vocabulary; ORCID check digits are computed. The concept-DOI rule relies on how `identifiers` describes each DOI. | False block: none known; a CFF 1.2.0 feature outside the checked subset is ignored, not rejected. Miss: a DOI that is well formed but does not resolve, or names another work. | A repository with neither file examines nothing, and only a change that edits one is judged, so enabling it costs nothing elsewhere. |
 | `agents-md` | on, `warning` | High, but the finding is documentation hygiene, not a code defect. | False block: a repository without an agent guide fails every change. | Missing or forked guidance does not make a change unsafe. |
 
 **Default-off gates** (`issue-link`, `commit-provenance`, `provenance-tags`, `pr-checklist`, `scope-confinement`, `archive-contents`, `manifest-sync`, `version-lockstep`, `sanitizers`, `miri`, `unsafe-budget`, `msrv`) need repository-specific input (a tracker convention, archive path, manifest rules, version sources, toolchain) or encode a policy most repositories do not hold. They default to `error` so that enabling one is a single `enabled = true` line that blocks.
@@ -830,6 +837,41 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Lifting directive:** `allow-commit-provenance: <sha> <reason>` (7 or 40 characters).
 - **Default:** off (which trailers a repository requires is its own policy), severity `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `required_trailers`, `agent_markers`, `review_trailer`.
+
+#### `citation-metadata`
+- **Rule:** The repository's citation record is valid and consistent: `CITATION.cff` (Citation File Format 1.2.0, rendered by GitHub under "Cite this repository") and `.zenodo.json` (read by Zenodo's GitHub integration when it archives a published release), each checked when it exists at the repository root. A problem is reported only when the change adds or edits one of the two files; one the base already had in files the change leaves alone is a note, which the next change to either file must resolve.
+- **Languages:** Any (repository metadata).
+- **What it catches:**
+  - `CITATION.cff Is Not Valid` (`cff-invalid`): not YAML or not a mapping; a missing `cff-version`, `message`, `title` or `authors`; `cff-version` other than `1.2.0`; `type` other than `software` / `dataset`; a `date-released` that is not a real `YYYY-MM-DD` date; a `repository-code` / `repository` / `repository-artifact` / `url` that is not a URL; an author with no `family-names`, `given-names` or `name`; an `orcid` not written `https://orcid.org/<iD>` or with a wrong check digit; `keywords` or `license` of the wrong shape; an `identifiers` entry without `type` and `value`, or with a type other than `doi` / `url` / `swh` / `other`.
+  - `Zenodo Metadata Is Not Valid` (`zenodo-invalid`): not JSON or not an object; no `creators`, or a creator without `name`; an `upload_type` or `access_right` outside Zenodo's vocabulary; an `orcid` with a wrong check digit (the bare iD and the URL form are both accepted); `keywords` that are not strings; a `related_identifiers` entry without `identifier` and `relation`.
+  - `Malformed DOI In Citation Record` (`doi-malformed`): a `doi`, a `doi` identifier or a DOI-scheme related identifier that is not `10.<registrant>/<suffix>` (a `https://doi.org/` URL where the bare DOI belongs is reported).
+  - `Citation DOI Is Not The Concept DOI` (`doi-not-concept`): `CITATION.cff`'s `doi` is described under `identifiers` as a version DOI, or `identifiers` describes another DOI as the concept DOI. A version DOI as `doi` pins every citation to one release.
+  - `Citation Records Disagree` (`records-disagree`): with both files present, the title, the set of authors (`.zenodo.json` names a person `Family, Given`), an author's ORCID, the keywords, or the licence (`.zenodo.json`'s single licence must be one of `CITATION.cff`'s) differ. A key one file leaves out is not compared.
+- **Failing change (rejected):**
+  ```yaml
+  # CITATION.cff
+  cff-version: 1.2.0
+  doi: "10.5281/zenodo.101"
+  identifiers:
+    - type: doi
+      value: "10.5281/zenodo.100"
+      description: "Concept DOI (all versions)"
+    - type: doi
+      value: "10.5281/zenodo.101"
+      description: "Version DOI (v1.0.0)"
+  ```
+- **Passing PR body (accepted):**
+  ```text
+  allow-citation-metadata: CITATION.cff this release is cited by its version DOI on purpose
+  ```
+- **What it does NOT catch:**
+  - Whether a DOI or an ORCID iD exists or names the right work: that needs the network, and no gate reaches it. A well-formed DOI for another record passes.
+  - Whether `version` matches the release: that is `version-lockstep`'s rule; add `CITATION.cff` to the release group.
+  - The full CFF 1.2.0 schema: references, preferred citation and the `license` SPDX list are not validated.
+  - A citation record outside the repository root.
+- **Lifting directive:** `allow-citation-metadata: <file> <reason>`, the file being `CITATION.cff` or `.zenodo.json`; it lifts every finding reported against that file.
+- **Default:** on, severity `error`. A repository with neither file examines nothing.
+- **Config keys:** `enabled`, `severity`, `exempt_paths` (a matching file is not read).
 
 #### `issue-link`
 - **Rule:** Every pull request title or description must reference a tracking issue (`#123`, `Fixes #123`, `Closes #123`), or carry an explicit `no-issue:` rationale.

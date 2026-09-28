@@ -486,6 +486,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("shell-secrets", true, Severity::Error),
     ("issue-link", false, Severity::Error),
     ("commit-provenance", false, Severity::Error),
+    ("citation-metadata", true, Severity::Error),
     ("provenance-tags", false, Severity::Error),
     ("pr-checklist", false, Severity::Error),
     ("config-integrity", true, Severity::Error),

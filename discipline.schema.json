@@ -281,6 +281,22 @@
       },
       "type": "object"
     },
+    "CitationMetadataGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "CommandEntry": {
       "additionalProperties": false,
       "properties": {
@@ -1324,6 +1340,14 @@
             }
           ],
           "description": "rollup skip set matches each job's `if:` under the observed filter outputs"
+        },
+        "citation-metadata": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CitationMetadataGate"
+            }
+          ],
+          "description": "CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI"
         },
         "command": {
           "allOf": [

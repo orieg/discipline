@@ -36,6 +36,7 @@ pub fn generate_schema() -> Value {
             "shell-secrets" => "#/$defs/ShellSecretsGate",
             "issue-link" => "#/$defs/IssueLinkGate",
             "commit-provenance" => "#/$defs/CommitProvenanceGate",
+            "citation-metadata" => "#/$defs/CitationMetadataGate",
             "provenance-tags" => "#/$defs/ProvenanceTagsGate",
             "archive-contents" => "#/$defs/ArchiveContentsGate",
             "manifest-sync" => "#/$defs/ManifestSyncGate",
@@ -449,6 +450,15 @@ pub fn generate_schema() -> Value {
                     "extra_secret_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional custom regex patterns for sensitive secret variable names" },
                     "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Custom regex patterns exempted from violation" },
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" }
+                }
+            },
+            "CitationMetadataGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" }
                 }
             },
             "CommitProvenanceGate": {

@@ -183,6 +183,7 @@ Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java
 | [`agent-scratch`](docs/GATES.md#agent-scratch) | hygiene | any | agent scratch state is never tracked |
 | [`shell-secrets`](docs/GATES.md#shell-secrets) | hygiene | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](docs/GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
+| [`citation-metadata`](docs/GATES.md#citation-metadata) | hygiene | any | CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI |
 | [`commit-provenance`](docs/GATES.md#commit-provenance) | hygiene | any | commits carry the required trailers; an agent-produced commit carries a review by someone else |
 | [`config-integrity`](docs/GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
 | [`stub-bodies`](docs/GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |

@@ -52,6 +52,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | [`agent-scratch`](GATES.md#agent-scratch) | hygiene | any | agent scratch state is never tracked |
 | [`shell-secrets`](GATES.md#shell-secrets) | hygiene | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
+| [`citation-metadata`](GATES.md#citation-metadata) | hygiene | any | CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI |
 | [`commit-provenance`](GATES.md#commit-provenance) | hygiene | any | commits carry the required trailers; an agent-produced commit carries a review by someone else |
 | [`config-integrity`](GATES.md#config-integrity) | integrity | any | a change cannot weaken its own discipline.toml without a token |
 | [`stub-bodies`](GATES.md#stub-bodies) | agent-guard | Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C | added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null |
@@ -350,6 +351,7 @@ Default enablement and severity are part of the compatibility contract (`docs/AR
 
 | Release | Gate | Old default | New default | Direction | Reason | Restore previous behaviour |
 |---|---|---|---|---|---|---|
+| unreleased | `citation-metadata` | (new gate) | on, `error` | stricter | A change that adds or edits `CITATION.cff` or `.zenodo.json` is checked: each file parses and carries its format's required keys with well-formed values (ORCID check digits, dates, URLs, Zenodo's vocabularies), DOIs are syntactically DOIs, `doi` is the concept DOI when `identifiers` says which is which, and the two files agree on title, authors, ORCIDs, keywords and licence. A repository with neither file examines nothing; problems in files a change leaves alone are notes. | `[gates.citation-metadata]` `enabled = false` |
 | v0.14.0 | `agent-scratch` | `exempt_paths` without the bootstrap | `exempt_paths` gains `.claude/hooks/discipline-bootstrap.sh` | looser | The script `hook install --agent claude-code` writes is shared project configuration, like `.claude/settings.json`; `instruction-smuggling` still reports a change to it. | `[gates.agent-scratch]` `exempt_paths = [".claude/settings.json", ".cursor/hooks.json", ".cursor/mcp.json", ".aider.conf.yml"]` |
 | v0.14.0 | `pii` | every `~/.<agent>` path reported | a tool's own configuration location allowed (`agent_config_standard_paths = true`) | looser | Documenting where a tool reads its settings or hooks is not a leak of a maintainer's setup; the personal content under the same directory is still reported. | `[gates.pii]` `agent_config_standard_paths = false` |
 | v0.9.0 | `build-hooks` | (new gate) | on, `error` | stricter | A new or changed `package.json` lifecycle script, a build script gaining process / network / shell access, or any edit to package-manager configuration (`.npmrc`, `.pypirc`, `pip.conf`, `.cargo/config.toml`, `.env*`) is reported. | `[gates.build-hooks]` `enabled = false` |

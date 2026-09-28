@@ -124,6 +124,9 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.ci-skip-set.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ci-skip-set.unconditional_jobs` | list | `[]` | Jobs that must never be skipped, whatever their dependencies did |
 | `gates.ci-skip-set.workflow` | string | `".github/workflows/ci.yml"` | Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT). Left at the default, the running workflow (GITHUB_WORKFLOW_REF) or the first ci.yml under .github/, .gitea/ or .forgejo/workflows/ is used |
+| `gates.citation-metadata.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.citation-metadata.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.citation-metadata.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.command.allow_zero` | boolean | `false` | Whether zero items selected is allowed |
 | `gates.command.canary_command` | string | *(unset)* | Optional negative-control canary command |
 | `gates.command.canary_expected_diagnostic` | string | *(unset)* | Expected diagnostic string that canary must produce |
@@ -646,6 +649,7 @@ Directives must begin on their own line. Mentions mid-sentence or inside markdow
 | `allow-swallow:` / `discipline:allow(error-swallowing)` / `allow(error-swallowing)` | `error-swallowing` | File path, or `path:line` of the handler |
 | `allow-agent-instructions:` / `discipline:allow(instruction-smuggling)` / `allow(instruction-smuggling)` | `instruction-smuggling` | File path, or `path:line` |
 | `allow-commit-provenance:` / `discipline:allow(commit-provenance)` / `allow(commit-provenance)` | `commit-provenance` | Commit SHA (7 or 40 characters) |
+| `allow-citation-metadata:` / `discipline:allow(citation-metadata)` / `allow(citation-metadata)` | `citation-metadata` | `CITATION.cff` or `.zenodo.json` |
 | `allow-build-hook:` / `discipline:allow(build-hooks)` / `allow(build-hooks)` | `build-hooks` | Hook name (`postinstall`) or file path |
 | `allow-regression:` / `discipline:allow(bench-regression)` / `allow(bench-regression)` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
 | `allow-command:` / `discipline:allow(command)` / `allow(command)` | `command` | Subcommand or command line invocation, plus non-empty rationale |

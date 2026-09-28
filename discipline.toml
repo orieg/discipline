@@ -39,6 +39,10 @@ enabled = true
 [gates.provenance-tags]
 enabled = true
 
+# CITATION.cff and .zenodo.json are valid and agree (on by default; stated for the record).
+[gates.citation-metadata]
+enabled = true
+
 # An agent-produced commit (by trailer or authorship) carries a review by someone else.
 [gates.commit-provenance]
 enabled = true

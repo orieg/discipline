@@ -6,6 +6,7 @@ pub mod build_hooks;
 pub mod ci_gitlab;
 pub mod ci_integrity;
 pub mod ci_skip_set;
+pub mod citation_metadata;
 pub mod claim_registry;
 pub mod command;
 pub mod commit_provenance;
@@ -495,6 +496,7 @@ pub fn run_checks(
             "shell-secrets" => shell_secrets::evaluate_shell_secrets(ctx),
             "issue-link" => issue_link::evaluate_issue_link(ctx),
             "commit-provenance" => commit_provenance::commit_provenance(ctx),
+            "citation-metadata" => citation_metadata::citation_metadata(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
             "toolchain-config" => toolchain_config::toolchain_config(ctx),
             "stub-bodies" => stub_bodies::stub_bodies(ctx),
@@ -596,6 +598,8 @@ pub fn run_checks(
             "build-hooks"
         } else if note.contains("allow-commit-provenance") {
             "commit-provenance"
+        } else if note.contains("allow-citation-metadata") {
+            "citation-metadata"
         } else if note.contains("allow-agent-instructions") {
             "instruction-smuggling"
         } else if note.contains("allow-swallow") {
@@ -636,6 +640,7 @@ pub fn run_checks(
                         | "error-swallowing"
                         | "instruction-smuggling"
                         | "commit-provenance"
+                        | "citation-metadata"
                         | "build-hooks"
                         | "golden-output"
                         | "bench-regression"

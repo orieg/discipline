@@ -5163,9 +5163,13 @@ fn override_record_audit_trail_and_step_outputs() {
     assert!(run
         .stdout
         .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
-    assert!(run
-        .stdout
-        .contains("gates:  23 passed, 0 failed, 13 disabled, 1 not evaluated (22 items examined)"));
+    assert!(
+        run.stdout.contains(
+            "gates:  24 passed, 0 failed, 13 disabled, 1 not evaluated (22 items examined)"
+        ),
+        "{}",
+        run.stdout
+    );
     assert!(run.stdout.contains("overrides: 1"));
 
     // Check GITHUB_OUTPUT contents
@@ -5176,14 +5180,14 @@ fn override_record_audit_trail_and_step_outputs() {
         "{step_output}"
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
-    assert!(step_output.contains("passed_gates=23"), "{step_output}");
+    assert!(step_output.contains("passed_gates=24"), "{step_output}");
     assert!(step_output.contains("examined_items=22"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 23 passed, 0 failed, 13 disabled, 1 not evaluated (22 items examined)"
+            "**Summary:** 24 passed, 0 failed, 13 disabled, 1 not evaluated (22 items examined)"
         ),
         "{step_summary}"
     );
@@ -12526,6 +12530,147 @@ fn a_helper_refactored_into_a_thin_wrapper_is_not_an_assertion_reduction() {
             run.stdout
         );
     }
+}
+
+const CITATION_CFF: &str = "cff-version: 1.2.0\nmessage: \"Cite it.\"\ntitle: \"Tool: a thing\"\ntype: software\ndate-released: 2026-09-28\nauthors:\n  - family-names: \"Doe\"\n    given-names: \"Jane\"\n    orcid: \"https://orcid.org/0000-0002-1825-0097\"\nlicense:\n  - MIT\n  - Apache-2.0\nkeywords:\n  - ci\ndoi: \"10.5281/zenodo.100\"\nidentifiers:\n  - type: doi\n    value: \"10.5281/zenodo.100\"\n    description: \"Concept DOI (all versions)\"\n  - type: doi\n    value: \"10.5281/zenodo.101\"\n    description: \"Version DOI (v1.0.0)\"\n";
+const ZENODO_JSON: &str = r#"{"title": "Tool: a thing", "upload_type": "software", "creators": [{"name": "Doe, Jane", "orcid": "0000-0002-1825-0097"}], "license": "mit", "keywords": ["ci"]}"#;
+
+/// `citation-metadata` codes a check reports.
+fn citation_codes(run: &common::Run) -> Vec<String> {
+    run.violations("citation-metadata")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// A repository whose `main` has `base` and whose `work` branch has `head`, each a list
+/// of `(path, content)`; `message` is the work commit's message.
+fn citation_repo(base: &[(&str, &str)], head: &[(&str, &str)], message: &str) -> Repo {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    for (path, content) in base {
+        repo.write(path, content);
+    }
+    repo.commit("chore: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    for (path, content) in head {
+        repo.write(path, content);
+    }
+    repo.commit(message);
+    repo
+}
+
+#[test]
+fn citation_metadata_judges_a_change_to_the_citation_record() {
+    let good = [
+        ("CITATION.cff", CITATION_CFF),
+        (".zenodo.json", ZENODO_JSON),
+    ];
+
+    // No citation record: nothing to examine, and the gate says so.
+    let repo = citation_repo(&[], &[("README.md", "x\n")], "docs: readme");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.outcome("citation-metadata")["examined"],
+        0,
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("no citation record to check"),
+        "{}",
+        run.stdout
+    );
+
+    // A valid record added: both files examined, nothing reported.
+    let repo = citation_repo(&[], &good, "docs: citation");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.outcome("citation-metadata")["examined"],
+        2,
+        "{}",
+        run.stdout
+    );
+    assert_eq!(citation_codes(&run), Vec::<String>::new(), "{}", run.stdout);
+
+    // The version DOI moved into `doi`, and `.zenodo.json` retitled: one finding each.
+    let version_doi = CITATION_CFF.replacen(
+        "doi: \"10.5281/zenodo.100\"",
+        "doi: \"10.5281/zenodo.101\"",
+        1,
+    );
+    let retitled = ZENODO_JSON.replace("Tool: a thing", "Tool");
+    let repo = citation_repo(
+        &good,
+        &[("CITATION.cff", &version_doi), (".zenodo.json", &retitled)],
+        "docs: citation",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(
+        citation_codes(&run),
+        [
+            "citation-metadata/doi-not-concept",
+            "citation-metadata/records-disagree"
+        ],
+        "{}",
+        run.stdout
+    );
+    assert_eq!(run.code, 1, "{}", run.stdout);
+
+    // The directive lifts the findings on the file it names, and only those.
+    let repo = citation_repo(
+        &good,
+        &[("CITATION.cff", &version_doi), (".zenodo.json", &retitled)],
+        "docs: citation\n\nallow-citation-metadata: CITATION.cff this release is cited by its version DOI on purpose",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(
+        citation_codes(&run),
+        ["citation-metadata/records-disagree"],
+        "{}",
+        run.stdout
+    );
+
+    // A broken record the base already had, in a change that edits neither file: a note.
+    let broken = CITATION_CFF.replace("cff-version: 1.2.0", "cff-version: 1.1.0");
+    let repo = citation_repo(
+        &[("CITATION.cff", &broken)],
+        &[("README.md", "x\n")],
+        "docs: readme",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(citation_codes(&run), Vec::<String>::new(), "{}", run.stdout);
+    assert!(
+        run.stdout.contains("the base already has this"),
+        "{}",
+        run.stdout
+    );
+    // The next change that edits it must resolve it.
+    let repo = citation_repo(
+        &[("CITATION.cff", &broken)],
+        &[(
+            "CITATION.cff",
+            &broken.replace("Cite it.", "Cite it, please."),
+        )],
+        "docs: citation",
+    );
+    assert_eq!(
+        citation_codes(&repo.check(&[])),
+        ["citation-metadata/cff-invalid"]
+    );
+
+    // An exempt file is not read, so it is neither checked nor compared.
+    let exempt = "[gates.citation-metadata]\nexempt_paths = [\".zenodo.json\"]\n";
+    let base = [good[0], good[1], ("discipline.toml", exempt)];
+    let repo = citation_repo(&base, &[(".zenodo.json", &retitled)], "docs: citation");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.outcome("citation-metadata")["examined"],
+        1,
+        "{}",
+        run.stdout
+    );
+    assert_eq!(citation_codes(&run), Vec::<String>::new(), "{}", run.stdout);
 }
 
 #[test]

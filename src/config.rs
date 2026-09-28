@@ -132,6 +132,13 @@ pub const GATES: &[GateInfo] = &[
         available: true,
     },
     GateInfo {
+        id: "citation-metadata",
+        suite: Suite::Hygiene,
+        summary: "CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI",
+        languages: "any",
+        available: true,
+    },
+    GateInfo {
         id: "commit-provenance",
         suite: Suite::Hygiene,
         summary: "commits carry the required trailers; an agent-produced commit carries a review by someone else",
@@ -550,6 +557,7 @@ pub struct Gates {
     pub shell_secrets: ShellSecretsGate,
     pub issue_link: IssueLinkGate,
     pub commit_provenance: CommitProvenanceGate,
+    pub citation_metadata: CitationMetadataGate,
     pub provenance_tags: ProvenanceTagsGate,
     pub archive_contents: ArchiveContentsGate,
     pub manifest_sync: ManifestSyncGate,
@@ -625,6 +633,7 @@ impl_gate_settings!(
     ShellSecretsGate,
     IssueLinkGate,
     CommitProvenanceGate,
+    CitationMetadataGate,
     ProvenanceTagsGate,
     ArchiveContentsGate,
     ManifestSyncGate,
@@ -1336,6 +1345,26 @@ pub struct IssueLinkGate {
     pub require_in_commit_if_no_pr: bool,
 }
 
+/// Checks `CITATION.cff` and `.zenodo.json` at the repository root; with neither
+/// present it examines nothing, so it ships enabled.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CitationMetadataGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+}
+
+impl Default for CitationMetadataGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CommitProvenanceGate {
@@ -1773,6 +1802,7 @@ impl Gates {
             "shell-secrets" => &self.shell_secrets,
             "issue-link" => &self.issue_link,
             "commit-provenance" => &self.commit_provenance,
+            "citation-metadata" => &self.citation_metadata,
             "config-integrity" => &self.config_integrity,
             "toolchain-config" => &self.toolchain_config,
             "stub-bodies" => &self.stub_bodies,

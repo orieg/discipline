@@ -330,6 +330,25 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "citation-metadata: a version DOI as `doi`, a bad ORCID check digit and disagreeing titles are reported",
+        || {
+            use crate::guards::citation_metadata::check;
+            let cff = "cff-version: 1.2.0\nmessage: m\ntitle: T\nauthors:\n  - family-names: Doe\n    given-names: Jane\n    orcid: https://orcid.org/0000-0002-1825-0097\ndoi: 10.5281/zenodo.101\nidentifiers:\n  - type: doi\n    value: 10.5281/zenodo.100\n    description: Concept DOI\n";
+            let zenodo = r#"{"title": "T", "creators": [{"name": "Doe, Jane"}]}"#;
+            let codes = |c: &str, z: &str| {
+                check(Some(c), Some(z))
+                    .iter()
+                    .map(|p| p.kind.code)
+                    .collect::<Vec<_>>()
+            };
+            let fixed = cff.replace("zenodo.101", "zenodo.100");
+            Ok(codes(cff, zenodo) == ["doi-not-concept"]
+                && codes(&fixed, zenodo).is_empty()
+                && codes(&fixed.replace("0097", "0098"), zenodo) == ["cff-invalid"]
+                && codes(&fixed, &zenodo.replace("\"T\"", "\"U\"")) == ["records-disagree"])
+        },
+    ),
+    (
         "commit-provenance: the subject is never a trailer, the last paragraph is",
         || {
             use crate::guards::commit_provenance::trailers;

@@ -176,6 +176,13 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_doc: "File path, or `path:line`",
     },
     DirectiveSpec {
+        canonical: "allow-citation-metadata",
+        deprecated: None,
+        gate: "citation-metadata",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "`CITATION.cff` or `.zenodo.json`",
+    },
+    DirectiveSpec {
         canonical: "allow-commit-provenance",
         deprecated: None,
         gate: "commit-provenance",
@@ -340,9 +347,9 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     },
 ];
 
-/// The 41 named directives recognized by discipline (31 canonical + 10 deprecated aliases).
+/// The 42 named directives recognized by discipline (32 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 31 Canonical
+    // 32 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
@@ -352,6 +359,7 @@ pub const KNOWN_DIRECTIVES: &[&str] = &[
     "allow-swallow",
     "allow-agent-instructions",
     "allow-commit-provenance",
+    "allow-citation-metadata",
     "allow-build-hook",
     "allow-golden-update",
     "allow-regression",
@@ -427,6 +435,11 @@ pub const ALLOW_SMUGGLING: &[&str] = &[
     "allow-agent-instructions",
     "discipline:allow(instruction-smuggling)",
     "allow(instruction-smuggling)",
+];
+pub const ALLOW_CITATION_METADATA: &[&str] = &[
+    "allow-citation-metadata",
+    "discipline:allow(citation-metadata)",
+    "allow(citation-metadata)",
 ];
 pub const ALLOW_COMMIT_PROVENANCE: &[&str] = &[
     "allow-commit-provenance",
@@ -582,6 +595,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-swallow" => ALLOW_SWALLOW,
         "allow-agent-instructions" => ALLOW_SMUGGLING,
         "allow-commit-provenance" => ALLOW_COMMIT_PROVENANCE,
+        "allow-citation-metadata" => ALLOW_CITATION_METADATA,
         "allow-build-hook" => ALLOW_BUILD_HOOK,
         "allow-regression" => ALLOW_REGRESSION,
         "allow-command" => ALLOW_COMMAND,
@@ -617,7 +631,7 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 31 Canonical
+    // 32 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
@@ -627,6 +641,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-swallow",
     "allow-agent-instructions",
     "allow-commit-provenance",
+    "allow-citation-metadata",
     "allow-build-hook",
     "allow-golden-update",
     "allow-regression",
@@ -679,6 +694,8 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow(instruction-smuggling)",
     "discipline:allow(commit-provenance)",
     "allow(commit-provenance)",
+    "discipline:allow(citation-metadata)",
+    "allow(citation-metadata)",
     "discipline:allow(build-hooks)",
     "allow(build-hooks)",
     "discipline:allow(golden-output)",

@@ -146,6 +146,13 @@ findings! {
     ISSUE_LINK_MISSING_IN_COMMITS = ["issue-link"], "issue-link-missing-in-commits", "Tracking Issue Link Missing In Commits", Was("Missing Tracking Issue Link in Commits");
     ISSUE_LINK_MISSING = ["issue-link"], "issue-link-missing", "Tracking Issue Link Missing", Was("Missing Tracking Issue Link");
 
+    // citation-metadata
+    CFF_INVALID = ["citation-metadata"], "cff-invalid", "CITATION.cff Is Not Valid", Same;
+    ZENODO_INVALID = ["citation-metadata"], "zenodo-invalid", "Zenodo Metadata Is Not Valid", Same;
+    DOI_MALFORMED = ["citation-metadata"], "doi-malformed", "Malformed DOI In Citation Record", Same;
+    DOI_NOT_CONCEPT = ["citation-metadata"], "doi-not-concept", "Citation DOI Is Not The Concept DOI", Same;
+    RECORDS_DISAGREE = ["citation-metadata"], "records-disagree", "Citation Records Disagree", Same;
+
     // commit-provenance
     COMMIT_TRAILER_MISSING = ["commit-provenance"], "commit-trailer-missing", "Commit Trailer Missing", Same;
     AGENT_COMMIT_WITHOUT_REVIEW = ["commit-provenance"], "agent-commit-without-review", "Agent Commit Without Review", Same;
