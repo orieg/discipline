@@ -2004,7 +2004,11 @@ pub fn agent_permission(
 ) -> Result<(String, bool), String> {
     match forge.kind {
         ForgeKind::GitLab => {
-            let users = get(api, forge, &format!("users?username={login}"))?;
+            let users = get(
+                api,
+                forge,
+                &format!("users?username={}", crate::forge::encode_segment(login)),
+            )?;
             let Some(user) = users.as_array().and_then(|u| u.first()) else {
                 return Ok(("none".into(), false));
             };
@@ -2031,7 +2035,11 @@ pub fn agent_permission(
         }
         _ => match api.get(
             forge,
-            &format!("repos/{}/collaborators/{login}/permission", forge.repo),
+            &format!(
+                "repos/{}/collaborators/{}/permission",
+                forge.repo,
+                crate::forge::encode_segment(login)
+            ),
         )? {
             None => Ok(("none".into(), false)),
             Some(v) => {

@@ -285,6 +285,51 @@ fn doctor_checks_what_owner_ratification_relies_on_gitea() {
     assert!(statuses(&admin.stdout).contains(&("agent-permission".into(), "fail".into())));
 }
 
+/// Bot logins carry brackets (`renovate[bot]`): the login is percent-encoded into the
+/// API path, which the client otherwise refuses, leaving the check undecided.
+#[test]
+fn a_bot_agent_login_is_looked_up_not_refused() {
+    let config = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.ratified-paths]\nenabled = true\nprotected_paths = [\"scripts/**\"]\nratifiers = [\"owner\"]\nagent_logins = [\"renovate[bot]\"]\n";
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (".gitea/workflows/ci.yml", WORKFLOW),
+            (
+                ".gitea/CODEOWNERS",
+                CODEOWNERS.replace(".github", ".gitea").as_str(),
+            ),
+            ("discipline.toml", config),
+        ],
+        "base",
+    );
+    let rule = r#"[{"rule_name":"main","enable_push":false,"enable_status_check":true,"status_check_contexts":["CI / ci-gate (pull_request)"],"block_on_outdated_branch":true,"block_admin_merge_override":true,"protected_file_patterns":".gitea/workflows/*"}]"#;
+    let api = FakeForge::start();
+    api.serve_raw("repos/o/r/branch_protections", 200, &[], rule);
+    api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));
+    // An app account is not a collaborator: 404.
+    api.serve_raw(
+        "repos/o/r/collaborators/renovate%5Bbot%5D/permission",
+        404,
+        &[],
+        r#"{"message":"Not Found"}"#,
+    );
+    let url = api.url();
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("DISCIPLINE_FORGE", "gitea"),
+        ("DISCIPLINE_FORGE_URL", "https://git.example.com"),
+        ("DISCIPLINE_FORGE_REPO", "o/r"),
+        ("GITEA_TOKEN", "t"),
+    ];
+    let run = repo.run(&["doctor", "--format", "json"], &env);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(
+        statuses(&run.stdout).contains(&("agent-permission".into(), "pass".into())),
+        "{}",
+        run.stdout
+    );
+}
+
 #[test]
 fn redirects_to_another_host_are_not_followed_with_the_token() {
     let repo = protected_repo();

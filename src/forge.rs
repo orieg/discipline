@@ -999,6 +999,21 @@ fn is_loopback(host: &str) -> bool {
     h == "localhost" || h == "::1" || h.starts_with("127.")
 }
 
+/// `value` as one API path segment or query value: every byte other than ASCII letters,
+/// digits and `-_.~` percent-encoded (a bot login `renovate[bot]` is
+/// `renovate%5Bbot%5D`), so it can neither add a segment nor fail [`check_api_path`].
+pub fn encode_segment(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 /// An API path must be plain segments: no empty, `.` or `..` segment, no query tricks.
 pub fn check_api_path(path: &str) -> Result<(), String> {
     let (p, query) = path.split_once('?').map_or((path, ""), |(p, q)| (p, q));
@@ -2500,6 +2515,27 @@ mod tests {
         );
         let err = api.graphql(&gitea(), "query X { y }", &serde_json::json!({}));
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn a_segment_is_encoded_so_it_passes_the_path_check_and_adds_no_segment() {
+        assert_eq!(encode_segment("renovate[bot]"), "renovate%5Bbot%5D");
+        assert_eq!(encode_segment("a/b"), "a%2Fb");
+        assert_eq!(encode_segment("plain-login_1.x~"), "plain-login_1.x~");
+        // A value that would start a segment with `.` is still refused, never sent.
+        assert!(check_api_path(&format!(
+            "repos/o/r/collaborators/{}/permission",
+            encode_segment("../admin")
+        ))
+        .is_err());
+        for login in ["renovate[bot]", "a/b", "x?y=z", "é"] {
+            let path = format!(
+                "repos/o/r/collaborators/{}/permission",
+                encode_segment(login)
+            );
+            assert!(check_api_path(&path).is_ok(), "{path}");
+            assert_eq!(path.split('/').count(), 6, "{path}");
+        }
     }
 
     #[test]
