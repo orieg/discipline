@@ -8,8 +8,22 @@ use super::mocks::MockSpec;
 use super::TestFn;
 use tree_sitter::Node;
 
+/// Call names a test gate counts, and how a bare entry (`sleep(`, no `.` or `::`) matches.
+#[derive(Clone, Copy)]
+pub struct Vocab {
+    pub entries: &'static [&'static str],
+    /// A bare entry names the whole callee or its last segment: `delay(` counts
+    /// `delay(` and `this.delay(`, never `retry_delay(`. Qualified entries match anywhere.
+    pub whole_name: bool,
+}
+
 /// A hard-coded delay in a test: the shape of a race "fixed" by waiting.
-pub const SLEEP_VOCAB: &[&str] = &[
+pub const SLEEP_VOCAB: Vocab = Vocab {
+    entries: SLEEP_CALLS,
+    whole_name: true,
+};
+
+const SLEEP_CALLS: &[&str] = &[
     "thread::sleep(",
     "std::thread::sleep(",
     "tokio::time::sleep(",
@@ -28,8 +42,14 @@ pub const SLEEP_VOCAB: &[&str] = &[
 ];
 
 /// An assertion that holds for nearly any value: it counts as an assertion and fails
-/// almost nothing.
-pub const TRIVIAL_ASSERT_VOCAB: &[&str] = &[
+/// almost nothing. Entries match as substrings: `NotNil(` is meant to count
+/// `XCTAssertNotNil(`.
+pub const TRIVIAL_ASSERT_VOCAB: Vocab = Vocab {
+    entries: TRIVIAL_ASSERTS,
+    whole_name: false,
+};
+
+const TRIVIAL_ASSERTS: &[&str] = &[
     // Python
     "assertIsNotNone(",
     "is not None",
@@ -61,6 +81,30 @@ fn text<'a>(node: Node, src: &'a str) -> &'a str {
     node.utf8_text(src.as_bytes()).unwrap_or("")
 }
 
+/// Whether `entry` occurs in `hay` as a name of its own: not preceded by an identifier
+/// character, so `delay(` is found in `this.delay(` and `delay(` but not `retry_delay(`.
+fn at_name_start(hay: &str, entry: &str) -> bool {
+    hay.match_indices(entry).any(|(i, _)| {
+        !hay[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
+}
+
+/// Whether a call with this callee and call prefix is one `vocab` names.
+fn names(vocab: Vocab, callee: &str, head: &str) -> bool {
+    let tail = format!("{callee}(");
+    vocab.entries.iter().any(|v| {
+        let bare = vocab.whole_name && !v.contains(['.', ':']);
+        if bare {
+            at_name_start(callee, v) || at_name_start(head, v) || at_name_start(&tail, v)
+        } else {
+            callee.contains(v) || head.contains(v) || tail.ends_with(v)
+        }
+    })
+}
+
 /// Count calls whose callee or call prefix contains a `vocab` entry, per test, into the
 /// field `pick` selects. A matching chain counts once.
 pub fn count(
@@ -68,7 +112,7 @@ pub fn count(
     src: &str,
     tests: &mut [TestFn],
     spec: &MockSpec,
-    vocab: &[&str],
+    vocab: Vocab,
     pick: fn(&mut TestFn) -> &mut usize,
 ) {
     if tests.is_empty() {
@@ -92,12 +136,9 @@ pub fn count(
                 whole.find(['(', '{']).map_or(whole.len(), |i| i + 1)
             };
             let head = &whole[..cut.min(whole.len())];
-            // `sleep(` alone would match `Thread.sleep(`; judge the callee's tail so a
-            // bare `sleep(` needs the callee to end there.
-            let hit = vocab.iter().any(|v| {
-                callee.contains(v) || head.contains(v) || format!("{callee}(").ends_with(v)
-            });
-            if hit {
+            // The callee's tail is judged too: a chain's head (`a.b(`) stops before the
+            // `sleep(` it ends in.
+            if names(vocab, callee, head) {
                 let line = node.start_position().row + 1;
                 if let Some(t) = tests
                     .iter_mut()
@@ -195,5 +236,57 @@ mod tests {
         );
         assert_eq!((rs[0].sleeps, rs[0].trivial_asserts), (1, 1), "{:?}", rs[0]);
         assert_eq!((rs[1].sleeps, rs[1].trivial_asserts), (0, 0));
+    }
+
+    #[test]
+    fn a_bare_sleep_entry_names_the_whole_callee_or_its_last_segment() {
+        use super::{names, SLEEP_VOCAB, TRIVIAL_ASSERT_VOCAB};
+        // (callee, call prefix up to the first argument list)
+        for (callee, head) in [
+            ("retry_delay", "retry_delay("),
+            ("compute_delay", "compute_delay("),
+            ("nosleep", "nosleep("),
+            ("self.no_usleep", "self.no_usleep("),
+        ] {
+            assert!(!names(SLEEP_VOCAB, callee, head), "{callee}");
+        }
+        for (callee, head) in [
+            ("delay", "delay("),
+            ("sleep", "sleep("),
+            ("usleep", "usleep("),
+            ("std::thread::sleep", "std::thread::sleep("),
+            ("Task.Delay", "Task.Delay("),
+            ("this.delay", "this.delay("),
+            ("$this->sleep", "$this->sleep("),
+            ("Kernel::sleep", "Kernel::sleep("),
+            ("a.b(x).sleep", "a.b("),
+        ] {
+            assert!(names(SLEEP_VOCAB, callee, head), "{callee}");
+        }
+        // Trivial-assertion entries still match inside a longer name.
+        assert!(names(
+            TRIVIAL_ASSERT_VOCAB,
+            "XCTAssertNotNil",
+            "XCTAssertNotNil("
+        ));
+    }
+
+    #[test]
+    fn a_sleep_is_the_callee_itself_not_a_name_ending_in_it() {
+        let rs = tests_of(
+            "src/lib.rs",
+            "#[test]\nfn a() { retry_delay(1); compute_delay(); nosleep(); no_sleep(2); }\n\
+             #[test]\nfn b() { delay(10); sleep(1); std::thread::sleep(d); Self::sleep(2); }\n",
+        );
+        assert_eq!(rs[0].sleeps, 0, "{:?}", rs[0]);
+        assert_eq!(rs[1].sleeps, 4, "{:?}", rs[1]);
+
+        let ts = tests_of(
+            "src/a.test.ts",
+            "test('a', async () => {\n  retry_delay(1);\n  api.compute_delay();\n  expect(nosleep()).toEqual(3);\n});\n\
+             test('b', async () => {\n  await this.delay(5);\n  await Task.Delay(5);\n  await sleep(1);\n  expect(run()).toEqual(3);\n});\n",
+        );
+        assert_eq!(ts[0].sleeps, 0, "{:?}", ts[0]);
+        assert_eq!(ts[1].sleeps, 3, "{:?}", ts[1]);
     }
 }
