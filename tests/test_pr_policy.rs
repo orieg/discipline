@@ -230,3 +230,260 @@ fn verify_references_with_a_custom_pattern_is_a_configuration_error() {
     assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
     assert_eq!(run.could_not_check().0, "configuration");
 }
+
+// ---- ratified-paths ----------------------------------------------------------------
+
+const RATIFY: &str = "[gates.ratified-paths]\nenabled = true\nprotected_paths = [\"scripts/check_*.py\", \"discipline.toml\"]\nratifiers = [\"owner\"]\nagent_logins = [\"agent\"]\n";
+
+/// A comment newer than any commit the test makes.
+const LATER: &str = "2099-01-01T00:00:00Z";
+
+/// A repository whose base carries the policy and a protected script, and whose change
+/// edits the files in `edits`.
+fn protected_change(policy: &str, edits: &[(&str, &str)]) -> (Repo, std::path::PathBuf) {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", policy),
+            ("scripts/check_x.py", "print('check')\n"),
+        ],
+        "chore: policy",
+    );
+    for (path, content) in edits {
+        repo.write(path, content);
+    }
+    repo.commit("chore: edit");
+    let event = repo.path().join("..").join(format!(
+        "event-{}.json",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::write(
+        &event,
+        r#"{"pull_request":{"number":7,"user":{"login":"agent"},"head":{"sha":"abc"}}}"#,
+    )
+    .unwrap();
+    (repo, event)
+}
+
+fn ratify_check(
+    repo: &Repo,
+    event: &std::path::Path,
+    api: &FakeForge,
+    body: &str,
+    policy_from: &str,
+) -> common::Run {
+    let url = api.url();
+    repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--format",
+            "json",
+            "--policy-from",
+            policy_from,
+        ],
+        &[
+            ("GITEA_ACTIONS", "true"),
+            ("GITHUB_SERVER_URL", "https://git.example.com"),
+            ("GITHUB_REPOSITORY", "o/r"),
+            ("GITHUB_EVENT_PATH", event.to_str().unwrap()),
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ("GITEA_TOKEN", "t"),
+            ("PR_BODY", body),
+            ("PR_TITLE", "chore: edit"),
+        ],
+    )
+}
+
+/// A loopback Gitea: issue 12 open with `comments`; issue 1162 missing, and its comments
+/// answer 500 as Gitea 1.24 does.
+fn gitea_with(comments: serde_json::Value) -> FakeForge {
+    let api = gitea();
+    api.serve_raw(
+        "repos/o/r/issues/1162",
+        404,
+        &[],
+        r#"{"message":"issue does not exist"}"#,
+    );
+    api.serve_raw(
+        "repos/o/r/issues/1162/comments?limit=50&page=1",
+        500,
+        &[],
+        r#"{"message":"issue does not exist [id: 0, repo_id: 1, index: 1162]"}"#,
+    );
+    api.serve(
+        "repos/o/r/issues/12",
+        serde_json::json!({"number": 12, "state": "open"}),
+    );
+    let n = comments
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0)
+        .to_string();
+    api.serve_raw(
+        "repos/o/r/issues/12/comments?limit=50&page=1",
+        200,
+        &[("X-Total-Count", n.as_str())],
+        &comments.to_string(),
+    );
+    api
+}
+
+fn comment(login: &str, body: &str, created: &str, updated: &str) -> serde_json::Value {
+    serde_json::json!({"id": 5, "user": {"login": login}, "body": body,
+        "created_at": created, "updated_at": updated, "original_author": ""})
+}
+
+const BLOCK: &str = "Owner-ratified-paths:\n- scripts/check_x.py\n";
+
+fn codes(run: &common::Run, gate: &str) -> Vec<String> {
+    run.violations(gate)
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_protected_edit_without_a_ratification_fails() {
+    let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('weaker')\n")]);
+    let api = gitea_with(serde_json::json!([comment("owner", "LGTM", LATER, LATER)]));
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        codes(&run, "ratified-paths"),
+        vec!["ratified-paths/protected-path-unratified"]
+    );
+}
+
+/// The motivating defect, through the binary: the prose number resolves to nothing and is
+/// never asked for its comments (which would answer 500); the real closing issue ratifies.
+#[test]
+fn a_missing_issue_in_the_body_does_not_crash_the_ratification() {
+    let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
+    let api = gitea_with(serde_json::json!([comment("owner", BLOCK, LATER, LATER)]));
+    let run = ratify_check(
+        &repo,
+        &event,
+        &api,
+        "Closes #12\n\nThis is the change which fixes #1162 upstream.",
+        "base",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let notes = notes(&run, "ratified-paths");
+    assert!(notes.contains("#1162 → ref-not-found"), "{notes}");
+    assert!(notes.contains("ratified in"), "{notes}");
+    assert!(!api
+        .requests()
+        .iter()
+        .any(|(p, _)| p.contains("1162/comments")));
+}
+
+#[test]
+fn a_ratification_by_an_agent_login_does_not_count() {
+    let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
+    let api = gitea_with(serde_json::json!([comment("agent", BLOCK, LATER, LATER)]));
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let c = codes(&run, "ratified-paths");
+    assert!(
+        c.contains(&"ratified-paths/protected-path-unratified".to_string())
+            && c.contains(&"ratified-paths/ratification-author-not-accepted".to_string()),
+        "{c:?}"
+    );
+}
+
+#[test]
+fn a_glob_in_owner_ratified_paths_is_refused() {
+    let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
+    let body = "Owner-ratified-paths:\n- scripts/*.py\n- scripts/check_x.py\n";
+    let api = gitea_with(serde_json::json!([comment("owner", body, LATER, LATER)]));
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let c = codes(&run, "ratified-paths");
+    assert!(
+        c.contains(&"ratified-paths/ratification-entry-malformed".to_string())
+            && c.contains(&"ratified-paths/protected-path-unratified".to_string()),
+        "the glob voids the whole block: {c:?}"
+    );
+}
+
+#[test]
+fn an_edited_owner_comment_does_not_ratify() {
+    let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
+    let api = gitea_with(serde_json::json!([comment(
+        "owner",
+        BLOCK,
+        LATER,
+        "2099-01-01T00:05:00Z"
+    )]));
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(codes(&run, "ratified-paths")
+        .contains(&"ratified-paths/ratification-comment-edited".to_string()));
+}
+
+#[test]
+fn a_ratification_older_than_the_paths_last_change_lapses() {
+    let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
+    let old = "2000-01-01T00:00:00Z";
+    let api = gitea_with(serde_json::json!([comment("owner", BLOCK, old, old)]));
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(codes(&run, "ratified-paths")
+        .contains(&"ratified-paths/ratification-outside-window".to_string()));
+}
+
+#[test]
+fn a_workflow_edit_fails_even_when_ratified() {
+    let (repo, event) = protected_change(
+        RATIFY,
+        &[(".gitea/workflows/ci.yml", "on: push\njobs: {}\n")],
+    );
+    let body = "Owner-ratified-paths:\n- .gitea/workflows/ci.yml\n";
+    let api = gitea_with(serde_json::json!([comment("owner", body, LATER, LATER)]));
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(codes(&run, "ratified-paths")
+        .contains(&"ratified-paths/never-ratifiable-path-changed".to_string()));
+}
+
+#[test]
+fn the_policy_must_come_from_the_base() {
+    let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
+    let api = gitea_with(serde_json::json!([comment("owner", BLOCK, LATER, LATER)]));
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "head");
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.could_not_check().0, "configuration");
+}
+
+#[test]
+fn an_unreachable_forge_is_a_labelled_failure_never_a_pass() {
+    let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
+    let api = gitea();
+    api.serve(
+        "repos/o/r/issues/12",
+        serde_json::json!({"number": 12, "state": "open"}),
+    );
+    api.serve_raw(
+        "repos/o/r/issues/12/comments?limit=50&page=1",
+        502,
+        &[],
+        "{}",
+    );
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.could_not_check().0, "forge");
+    let detail = run.json()["could_not_check"]["detail"].to_string();
+    assert!(detail.contains("forge-unavailable"), "{detail}");
+}
+
+#[test]
+fn an_unprotected_change_asks_the_forge_nothing() {
+    let (repo, event) = protected_change(RATIFY, &[("docs/notes.md", "# Notes\n")]);
+    let api = FakeForge::start();
+    // The body closes an issue: a gate that looked anything up would ask for it.
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(api.requests().is_empty(), "{:?}", api.requests());
+}

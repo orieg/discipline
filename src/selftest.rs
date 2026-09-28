@@ -255,6 +255,71 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ratified-paths: an owner's unedited block ratifies; an agent's, an edited one and a glob do not",
+        || {
+            use crate::config::{RatificationWindow, RatifiedPathsGate};
+            use crate::forge::{CannedApi, Forge, ForgeKind};
+            use crate::ratification::{judge, Finding, Input};
+            let forge = Forge {
+                kind: ForgeKind::Gitea,
+                url: "https://git.example.com".into(),
+                repo: "o/r".into(),
+            };
+            let cfg = RatifiedPathsGate {
+                enabled: true,
+                protected_paths: vec!["scripts/check_*.py".into()],
+                ratifiers: vec!["owner".into()],
+                agent_logins: vec!["agent".into()],
+                ratification_valid_from: RatificationWindow::Any,
+                ..Default::default()
+            };
+            let t = "2026-09-27T10:00:00Z";
+            let unratified = |login: &str, body: &str, updated: &str| -> Result<bool> {
+                let mut api = CannedApi::default();
+                api.responses
+                    .insert("gitea:repos/o/r".into(), serde_json::json!({"id": 1}));
+                api.responses.insert(
+                    "gitea:repos/o/r/issues/12".into(),
+                    serde_json::json!({"state": "open"}),
+                );
+                api.responses.insert(
+                    "gitea:repos/o/r/issues/12/comments?limit=50&page=1".into(),
+                    serde_json::json!({"__status": 200, "__headers": {"X-Total-Count": "1"},
+                        "__body": [{"id": 1, "user": {"login": login}, "body": body,
+                        "created_at": t, "updated_at": updated, "original_author": ""}]}),
+                );
+                let protected = vec!["scripts/check_x.py".to_string()];
+                let never = crate::guards::PathFilter::new(&cfg.never_ratifiable)?;
+                let last = |_: &str| Ok(None);
+                let j = judge(
+                    &api,
+                    &forge,
+                    &cfg,
+                    &Input {
+                        pull_number: 7,
+                        pull_body: "Closes #12",
+                        protected: &protected,
+                        never_ratifiable: &never,
+                        last_change: &last,
+                        now: 1_790_600_000,
+                    },
+                )?;
+                Ok(j.findings
+                    .iter()
+                    .any(|f| matches!(f, Finding::Unratified { .. })))
+            };
+            let block = "Owner-ratified-paths:\n- scripts/check_x.py\n";
+            Ok(!unratified("owner", block, t)?
+                && unratified("agent", block, t)?
+                && unratified("owner", block, "2026-09-27T10:00:01Z")?
+                && unratified(
+                    "owner",
+                    "Owner-ratified-paths:\n- scripts/*.py\n- scripts/check_x.py\n",
+                    t
+                )?)
+        },
+    ),
+    (
         "overrides: the budget refuses the override past it, not the one at it",
         || {
             use crate::config::DirectivesConfig;

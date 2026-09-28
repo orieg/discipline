@@ -39,6 +39,8 @@ pub enum Direction {
     Evidence,
     /// Mode switch whose named value is the stricter check.
     StrictMode(&'static str),
+    /// Mode switch with values ordered strictest first: a later value is looser.
+    Ordered(&'static [&'static str]),
     /// `error` > `warning` > `note`.
     Severity,
     /// Does not move the bar, or is judged as part of its enclosing list entry.
@@ -144,6 +146,21 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("accept_pull_references", Direction::LooserWhenTrue),
     ("reference_repos", Direction::Grown),
     ("waiver", Direction::StrictMode("none")),
+    ("protected_paths", Direction::Shrunk),
+    ("never_ratifiable", Direction::Shrunk),
+    ("ratifiers", Direction::Grown),
+    ("agent_logins", Direction::Shrunk),
+    ("marker", Direction::Evidence),
+    ("closing_source", Direction::Neutral),
+    ("closing_keywords", Direction::Evidence),
+    ("ratification_repos", Direction::Grown),
+    (
+        "ratification_valid_from",
+        Direction::Ordered(&["pull-created", "path-last-changed", "any"]),
+    ),
+    ("ratification_max_age_days", Direction::Cap),
+    ("accept_edited", Direction::StrictMode("never")),
+    ("accept_email_replies", Direction::LooserWhenTrue),
     ("pin_actions", Direction::LooserWhenFalse),
     ("forbid_continue_on_error", Direction::LooserWhenFalse),
     ("forbid_or_true", Direction::LooserWhenFalse),
@@ -926,6 +943,16 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                         }
                     }
                 }
+                Direction::Ordered(order) => {
+                    if let (Value::String(bs), Value::String(hs)) = (bv, hv) {
+                        let rank = |v: &str| order.iter().position(|o| *o == v);
+                        if let (Some(b), Some(h)) = (rank(bs), rank(hs)) {
+                            if h > b {
+                                note(format!("`{key}` changed from {bs} to {hs}"));
+                            }
+                        }
+                    }
+                }
                 Direction::LooserWhenFalse
                     if matches!((bv, hv), (Value::Boolean(true), Value::Boolean(false))) =>
                 {
@@ -994,6 +1021,44 @@ mod tests {
     fn cfg(body: &str) -> DisciplineConfig {
         DisciplineConfig::from_toml_str(&format!("[meta]\nversion = 1\nname = \"t\"\n{body}"))
             .unwrap()
+    }
+
+    #[test]
+    fn ratification_policy_loosening_is_a_weakening_and_tightening_is_not() {
+        use crate::config::{AcceptEdited, RatificationWindow};
+        let mut base = DisciplineConfig::default_for_repo("t");
+        base.gates.ratified_paths.enabled = true;
+        base.gates.ratified_paths.protected_paths = vec!["scripts/**".into()];
+        base.gates.ratified_paths.ratifiers = vec!["owner".into()];
+        base.gates.ratified_paths.ratification_max_age_days = Some(30);
+        let weaker = |edit: &dyn Fn(&mut crate::config::RatifiedPathsGate)| {
+            let mut head = base.clone();
+            edit(&mut head.gates.ratified_paths);
+            diff_configs(&base, &head).unwrap()
+        };
+        // The window is ordered: pull-created, path-last-changed, any.
+        assert_eq!(
+            weaker(&|g| g.ratification_valid_from = RatificationWindow::Any).len(),
+            1
+        );
+        assert!(
+            weaker(&|g| g.ratification_valid_from = RatificationWindow::PullCreated).is_empty()
+        );
+        assert_eq!(weaker(&|g| g.ratification_max_age_days = None).len(), 1);
+        assert_eq!(weaker(&|g| g.ratification_max_age_days = Some(90)).len(), 1);
+        assert!(weaker(&|g| g.ratification_max_age_days = Some(7)).is_empty());
+        assert_eq!(weaker(&|g| g.ratifiers.push("helper".into())).len(), 1);
+        assert_eq!(weaker(&|g| g.protected_paths.clear()).len(), 1);
+        assert_eq!(
+            weaker(&|g| g.never_ratifiable.pop().map(|_| ()).unwrap_or(())).len(),
+            1
+        );
+        assert_eq!(
+            weaker(&|g| g.accept_edited = AcceptEdited::ByAuthor).len(),
+            1
+        );
+        assert_eq!(weaker(&|g| g.require_open_issue = false).len(), 1);
+        assert!(weaker(&|g| g.agent_logins.push("bot".into())).is_empty());
     }
 
     #[test]

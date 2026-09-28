@@ -856,6 +856,36 @@ impl GitCtx {
         Ok(newest)
     }
 
+    /// Committer time of the newest commit on the base's first-parent history that
+    /// changed `path`: on a branch whose changes arrive through a forge's merge, squash or
+    /// rebase button, the time the forge wrote the commit that brought the change in.
+    /// `Ok(None)` when no commit there ever changed it, or when there is no base commit.
+    pub fn last_change_on_base(&self, path: &str) -> Result<Option<i64>> {
+        let Some(base) = self.base else {
+            return Ok(None);
+        };
+        let entry_id = |tree: &Tree<'_>| -> Option<Oid> {
+            tree.get_path(std::path::Path::new(path.trim_matches('/')))
+                .ok()
+                .map(|e| e.id())
+        };
+        let mut walk = self.repo.revwalk()?;
+        walk.simplify_first_parent()?;
+        walk.push(base)?;
+        for oid in walk {
+            let commit = self.repo.find_commit(oid?)?;
+            let here = entry_id(&commit.tree()?);
+            let before = match commit.parent(0) {
+                Ok(p) => entry_id(&p.tree()?),
+                Err(_) => None,
+            };
+            if here != before {
+                return Ok(Some(commit.committer().when().seconds()));
+            }
+        }
+        Ok(None)
+    }
+
     /// Commits between the base and `HEAD` as `(short_oid, message)` (empty when staged).
     /// The full object id of a commit named by an abbreviated id or any revision.
     pub fn full_oid(&self, rev: &str) -> Result<String> {

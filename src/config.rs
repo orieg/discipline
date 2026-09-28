@@ -132,6 +132,13 @@ pub const GATES: &[GateInfo] = &[
         available: true,
     },
     GateInfo {
+        id: "ratified-paths",
+        suite: Suite::AgentGuard,
+        summary: "edits to protected paths carry an owner's ratification on an issue the pull request closes",
+        languages: "any",
+        available: true,
+    },
+    GateInfo {
         id: "citation-metadata",
         suite: Suite::Hygiene,
         summary: "CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI",
@@ -556,6 +563,7 @@ pub struct Gates {
     pub ci_skip_set: CiSkipSetGate,
     pub shell_secrets: ShellSecretsGate,
     pub issue_link: IssueLinkGate,
+    pub ratified_paths: RatifiedPathsGate,
     pub commit_provenance: CommitProvenanceGate,
     pub citation_metadata: CitationMetadataGate,
     pub provenance_tags: ProvenanceTagsGate,
@@ -632,6 +640,7 @@ impl_gate_settings!(
     CiSkipSetGate,
     ShellSecretsGate,
     IssueLinkGate,
+    RatifiedPathsGate,
     CommitProvenanceGate,
     CitationMetadataGate,
     ProvenanceTagsGate,
@@ -1357,6 +1366,105 @@ pub struct IssueLinkGate {
     pub waiver: IssueWaiver,
 }
 
+/// Edits to protected paths need an owner's ratification: a comment, by a listed human
+/// login, on an issue the pull request closes, naming each path exactly. Off by default:
+/// who ratifies and what is protected are the repository's own policy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RatifiedPathsGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Globs of the paths whose edits need a ratification.
+    pub protected_paths: Vec<String>,
+    /// Globs of paths no ratification can cover (the CI workflow directories).
+    pub never_ratifiable: Vec<String>,
+    /// Logins whose comments ratify.
+    pub ratifiers: Vec<String>,
+    /// Logins that never ratify, even when also listed in `ratifiers`.
+    pub agent_logins: Vec<String>,
+    /// The line that starts a ratification block.
+    pub marker: String,
+    /// Where the closing references come from.
+    pub closing_source: ClosingSource,
+    /// Closing keywords for `closing_source = "body"`; empty means the forge's own.
+    pub closing_keywords: Vec<String>,
+    /// A closed issue carries no ratification.
+    pub require_open_issue: bool,
+    /// Other repositories whose issues may carry a ratification.
+    pub ratification_repos: Vec<String>,
+    /// How old a ratification may be.
+    pub ratification_valid_from: RatificationWindow,
+    /// Most days a ratification stays valid; unset means no cap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ratification_max_age_days: Option<u64>,
+    /// Whether an edited comment can still ratify.
+    pub accept_edited: AcceptEdited,
+    /// Whether a comment created by an email reply (GitHub) can ratify.
+    pub accept_email_replies: bool,
+}
+
+impl Default for RatifiedPathsGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            protected_paths: Vec::new(),
+            never_ratifiable: vec![
+                ".github/**".to_string(),
+                ".gitea/**".to_string(),
+                ".forgejo/**".to_string(),
+                ".gitlab-ci.yml".to_string(),
+                ".gitlab/**".to_string(),
+            ],
+            ratifiers: Vec::new(),
+            agent_logins: Vec::new(),
+            marker: "Owner-ratified-paths:".to_string(),
+            closing_source: ClosingSource::Server,
+            closing_keywords: Vec::new(),
+            require_open_issue: true,
+            ratification_repos: Vec::new(),
+            ratification_valid_from: RatificationWindow::PathLastChanged,
+            ratification_max_age_days: None,
+            accept_edited: AcceptEdited::Never,
+            accept_email_replies: false,
+        }
+    }
+}
+
+/// Where `ratified-paths` reads the issues a pull request closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClosingSource {
+    /// The forge's own list where it has one (GitHub `closingIssuesReferences`, GitLab
+    /// `closes_issues`); the body elsewhere.
+    Server,
+    /// The pull request's body, parsed with the closing keywords.
+    Body,
+}
+
+/// How old a ratification may be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RatificationWindow {
+    /// Newer than the last change to the path on the base branch.
+    PathLastChanged,
+    /// Newer than the pull request.
+    PullCreated,
+    /// Any age.
+    Any,
+}
+
+/// Whether an edited comment can ratify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AcceptEdited {
+    Never,
+    /// Only when the forge names the editor and it is the author (GitHub).
+    ByAuthor,
+}
+
 /// Whether the `issue-link` waiver directive is accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1828,6 +1936,7 @@ impl Gates {
             "agent-scratch" => &self.agent_scratch,
             "shell-secrets" => &self.shell_secrets,
             "issue-link" => &self.issue_link,
+            "ratified-paths" => &self.ratified_paths,
             "commit-provenance" => &self.commit_provenance,
             "citation-metadata" => &self.citation_metadata,
             "config-integrity" => &self.config_integrity,

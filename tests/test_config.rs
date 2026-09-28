@@ -12,6 +12,7 @@ fn dogfood_config_loads_with_every_available_gate_on() {
             || gate.id == "manifest-sync"
             || gate.id == "version-lockstep"
             || gate.id == "scope-confinement"
+            || gate.id == "ratified-paths"
             || gate.id == "pr-checklist"
             || gate.id == "unsafe-budget"
             || gate.id == "msrv"
@@ -289,6 +290,7 @@ name = "my-test-proj"
             || g.id == "manifest-sync"
             || g.id == "version-lockstep"
             || g.id == "scope-confinement"
+            || g.id == "ratified-paths"
             || g.id == "pr-checklist"
             || g.id == "unsafe-budget"
             || g.id == "msrv"
@@ -485,6 +487,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("agent-scratch", true, Severity::Error),
     ("shell-secrets", true, Severity::Error),
     ("issue-link", false, Severity::Error),
+    ("ratified-paths", false, Severity::Error),
     ("commit-provenance", false, Severity::Error),
     ("citation-metadata", true, Severity::Error),
     ("provenance-tags", false, Severity::Error),

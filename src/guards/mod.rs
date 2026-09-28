@@ -24,6 +24,7 @@ pub mod perf;
 pub mod pr_checklist;
 pub mod presets;
 pub mod provenance_tags;
+pub mod ratified_paths;
 pub mod sanitizers;
 pub mod scope_confinement;
 pub mod shell_secrets;
@@ -468,6 +469,7 @@ pub fn run_checks(
         "error-swallowing",
         "stub-bodies",
         "scope-confinement",
+        "ratified-paths",
         "commit-provenance",
         "bench-regression",
     ];
@@ -506,6 +508,7 @@ pub fn run_checks(
             "agent-scratch" => hygiene::agent_scratch(ctx),
             "shell-secrets" => shell_secrets::evaluate_shell_secrets(ctx),
             "issue-link" => issue_link::evaluate_issue_link(ctx),
+            "ratified-paths" => ratified_paths::evaluate_ratified_paths(ctx),
             "commit-provenance" => commit_provenance::commit_provenance(ctx),
             "citation-metadata" => citation_metadata::citation_metadata(ctx),
             "config-integrity" => integrity::config_integrity(ctx),

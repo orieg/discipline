@@ -883,6 +883,88 @@
       },
       "type": "object"
     },
+    "RatifiedPathsGate": {
+      "additionalProperties": false,
+      "properties": {
+        "accept_edited": {
+          "description": "Whether an edited comment ratifies: never (default), or when the forge names the author as editor (GitHub only)",
+          "enum": [
+            "never",
+            "by-author"
+          ],
+          "type": "string"
+        },
+        "accept_email_replies": {
+          "description": "Whether a GitHub comment created by an email reply ratifies (default: false)",
+          "type": "boolean"
+        },
+        "agent_logins": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Logins that never ratify, even when also listed in ratifiers"
+        },
+        "closing_keywords": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Closing keywords for closing_source = body; empty means the forge's own"
+        },
+        "closing_source": {
+          "description": "Where the closing issues come from: the forge's own list where it has one (GitHub, GitLab), or the pull request's body",
+          "enum": [
+            "server",
+            "body"
+          ],
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "marker": {
+          "description": "The line that starts a ratification block (default: Owner-ratified-paths:)",
+          "type": "string"
+        },
+        "never_ratifiable": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Globs of paths no ratification covers (default: the CI workflow directories)"
+        },
+        "protected_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Globs of the paths whose edits need an owner's ratification"
+        },
+        "ratification_max_age_days": {
+          "description": "Most days a ratification stays valid (default: no cap)",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ratification_repos": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Other repositories whose issues may carry a ratification"
+        },
+        "ratification_valid_from": {
+          "description": "How old a ratification may be: newer than the path's last change on the base branch (default), newer than the pull request, or any age",
+          "enum": [
+            "path-last-changed",
+            "pull-created",
+            "any"
+          ],
+          "type": "string"
+        },
+        "ratifiers": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Logins whose comments ratify"
+        },
+        "require_open_issue": {
+          "description": "A closed issue carries no ratification (default: true)",
+          "type": "boolean"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "SanitizersGate": {
       "additionalProperties": false,
       "properties": {
@@ -1500,6 +1582,14 @@
             }
           ],
           "description": "published numerics carry (measured|target|projected)"
+        },
+        "ratified-paths": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/RatifiedPathsGate"
+            }
+          ],
+          "description": "edits to protected paths carry an owner's ratification on an issue the pull request closes"
         },
         "sanitizers": {
           "allOf": [

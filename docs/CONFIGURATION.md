@@ -252,6 +252,22 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.provenance-tags.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.provenance-tags.superseded_json_paths` | list | `[]` | Globs of tracked JSON datasets swept for registered figures |
 | `gates.provenance-tags.superseded_registry` | string | *(unset)* | Path (read at HEAD) of a JSON registry of withdrawn figures; a registered figure may be republished only next to a retraction marker |
+| `gates.ratified-paths.accept_edited` | string | `"never"` | Whether an edited comment ratifies: never (default), or when the forge names the author as editor (GitHub only) |
+| `gates.ratified-paths.accept_email_replies` | boolean | `false` | Whether a GitHub comment created by an email reply ratifies (default: false) |
+| `gates.ratified-paths.agent_logins` | list | `[]` | Logins that never ratify, even when also listed in ratifiers |
+| `gates.ratified-paths.closing_keywords` | list | `[]` | Closing keywords for closing_source = body; empty means the forge's own |
+| `gates.ratified-paths.closing_source` | string | `"server"` | Where the closing issues come from: the forge's own list where it has one (GitHub, GitLab), or the pull request's body |
+| `gates.ratified-paths.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.ratified-paths.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.ratified-paths.marker` | string | `"Owner-ratified-paths:"` | The line that starts a ratification block (default: Owner-ratified-paths:) |
+| `gates.ratified-paths.never_ratifiable` | list | *(5 entries)* | Globs of paths no ratification covers (default: the CI workflow directories) |
+| `gates.ratified-paths.protected_paths` | list | `[]` | Globs of the paths whose edits need an owner's ratification |
+| `gates.ratified-paths.ratification_max_age_days` | integer | *(per entry)* | Most days a ratification stays valid (default: no cap) |
+| `gates.ratified-paths.ratification_repos` | list | `[]` | Other repositories whose issues may carry a ratification |
+| `gates.ratified-paths.ratification_valid_from` | string | `"path-last-changed"` | How old a ratification may be: newer than the path's last change on the base branch (default), newer than the pull request, or any age |
+| `gates.ratified-paths.ratifiers` | list | `[]` | Logins whose comments ratify |
+| `gates.ratified-paths.require_open_issue` | boolean | `true` | A closed issue carries no ratification (default: true) |
+| `gates.ratified-paths.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.sanitizers.canary` | boolean | `false` | Whether to verify a negative-control race canary before main tests |
 | `gates.sanitizers.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.sanitizers.exempt_paths` | list | `[]` | File path globs exempted from this gate |

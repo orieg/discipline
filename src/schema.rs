@@ -35,6 +35,7 @@ pub fn generate_schema() -> Value {
             "ci-skip-set" => "#/$defs/CiSkipSetGate",
             "shell-secrets" => "#/$defs/ShellSecretsGate",
             "issue-link" => "#/$defs/IssueLinkGate",
+            "ratified-paths" => "#/$defs/RatifiedPathsGate",
             "commit-provenance" => "#/$defs/CommitProvenanceGate",
             "citation-metadata" => "#/$defs/CitationMetadataGate",
             "provenance-tags" => "#/$defs/ProvenanceTagsGate",
@@ -487,6 +488,28 @@ pub fn generate_schema() -> Value {
                     "reference_repos": { "$ref": "#/$defs/StringListOrReset", "description": "With verify_references: other repositories a reference may resolve in" },
                     "accept_pull_references": { "type": "boolean", "description": "With verify_references: a reference to a pull or merge request satisfies the gate" },
                     "waiver": { "type": "string", "enum": ["directive", "none"], "description": "Whether `no-issue: <reason>` is accepted (default: directive)" }
+                }
+            },
+            "RatifiedPathsGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "protected_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs of the paths whose edits need an owner's ratification" },
+                    "never_ratifiable": { "$ref": "#/$defs/StringListOrReset", "description": "Globs of paths no ratification covers (default: the CI workflow directories)" },
+                    "ratifiers": { "$ref": "#/$defs/StringListOrReset", "description": "Logins whose comments ratify" },
+                    "agent_logins": { "$ref": "#/$defs/StringListOrReset", "description": "Logins that never ratify, even when also listed in ratifiers" },
+                    "marker": { "type": "string", "description": "The line that starts a ratification block (default: Owner-ratified-paths:)" },
+                    "closing_source": { "type": "string", "enum": ["server", "body"], "description": "Where the closing issues come from: the forge's own list where it has one (GitHub, GitLab), or the pull request's body" },
+                    "closing_keywords": { "$ref": "#/$defs/StringListOrReset", "description": "Closing keywords for closing_source = body; empty means the forge's own" },
+                    "require_open_issue": { "type": "boolean", "description": "A closed issue carries no ratification (default: true)" },
+                    "ratification_repos": { "$ref": "#/$defs/StringListOrReset", "description": "Other repositories whose issues may carry a ratification" },
+                    "ratification_valid_from": { "type": "string", "enum": ["path-last-changed", "pull-created", "any"], "description": "How old a ratification may be: newer than the path's last change on the base branch (default), newer than the pull request, or any age" },
+                    "ratification_max_age_days": { "type": "integer", "minimum": 1, "description": "Most days a ratification stays valid (default: no cap)" },
+                    "accept_edited": { "type": "string", "enum": ["never", "by-author"], "description": "Whether an edited comment ratifies: never (default), or when the forge names the author as editor (GitHub only)" },
+                    "accept_email_replies": { "type": "boolean", "description": "Whether a GitHub comment created by an email reply ratifies (default: false)" }
                 }
             },
             "TestFloorGate": {
