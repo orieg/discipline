@@ -658,7 +658,8 @@ pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
                 // handler has no `command` and never runs.
                 "discipline": {
                     // agy runs a `SessionStart` handler and injects its `injectSteps`
-                    // (seen live with agy 1.2; the event is not in its hooks guide).
+                    // (seen live with agy 1.2 and 1.2.12, where a made-up event name did not
+                    // run; the event is not in its hooks guide, so it is not dead configuration).
                     "SessionStart": [{ "type": "command", "command": AGY_MISSING_BINARY, "timeout": 10 }],
                     "Stop": [{ "type": "command", "command": cmd, "timeout": 120 }]
                 }
