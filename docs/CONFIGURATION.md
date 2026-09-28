@@ -105,7 +105,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.build-hooks.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.build-hooks.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.build-hooks.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.ci-integrity.diff_only` | boolean | `true` | When true, scans only modified workflow files rather than all workflows |
+| `gates.ci-integrity.diff_only` | boolean | `true` | When true, scans only modified workflow files rather than all workflows, and pins only references new relative to the base; false reports every unpinned reference, pre-existing ones included |
 | `gates.ci-integrity.documented_job_count_path` | string | *(unset)* | Path to catalog documentation stating job count |
 | `gates.ci-integrity.documented_job_count_pattern` | string | *(unset)* | Regex pattern to extract job count from documentation |
 | `gates.ci-integrity.enabled` | boolean | `true` | Whether this gate is active |
@@ -114,10 +114,10 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.ci-integrity.first_party_action_prefixes` | list | `["actions/","github/"]` | Action prefixes considered first-party and excused from commit SHA pinning |
 | `gates.ci-integrity.forbid_continue_on_error` | boolean | `true` | Forbid continue-on-error: true in workflow jobs or steps |
 | `gates.ci-integrity.forbid_or_true` | boolean | `true` | Forbid \|\| true and set +e error masking in run commands |
-| `gates.ci-integrity.pin_actions` | boolean | `true` | Ensure third-party GitHub actions are pinned by 40-character commit SHA |
+| `gates.ci-integrity.pin_actions` | boolean | `true` | Ensure third-party actions and reusable workflows are pinned by 40-character commit SHA, and container images by sha256 digest |
 | `gates.ci-integrity.rollup_job` | string | `"ci-gate"` | Name of the rollup job that must depend on all jobs |
 | `gates.ci-integrity.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.ci-integrity.workflows` | list | *(9 entries)* | Workflow file patterns to inspect |
+| `gates.ci-integrity.workflows` | list | *(13 entries)* | Workflow file patterns to inspect; an action.yml / action.yaml outside a workflow directory is read as a composite action (its nested uses: only) |
 | `gates.ci-skip-set.change_job` | string | `"detect-changes"` | Change-detection job whose outputs gate the conditional jobs; it must have succeeded. Empty string = no such job |
 | `gates.ci-skip-set.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.ci-skip-set.exempt_paths` | list | `[]` | File path globs exempted from this gate |

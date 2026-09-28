@@ -185,6 +185,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `ci-integrity/step-failure-masked-continue-on-error` | Verification Step Failure Masked (continue-on-error) |
 | `ci-integrity/verification-job-masked-by-condition` | Verification Job Masked By Condition |
 | `ci-integrity/unpinned-action` | Unpinned Third-Party Action |
+| `ci-integrity/unpinned-container-image` | Unpinned Container Image |
 | `ci-integrity/discipline-action-policy-from-weakened` | Discipline Action Weakened (policy_from) |
 | `ci-integrity/discipline-version-changed` | Discipline Version Chosen By The Change |
 | `ci-integrity/discipline-action-disable-input` | Discipline Action Weakened (disable input) |
@@ -1169,10 +1170,12 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 
 #### `ci-integrity`
 - **Rule:** CI/CD workflow integrity and rollup sentinel. Enforces complete rollup jobs (`ci-gate` must `needs:` all verification jobs), pins third-party actions by 40-character commit SHA, bans masked failures (`continue-on-error: true`), and bans exit-code suppression (`|| true`, `set +e`).
-- **Languages:** Actions workflow files (`*.yml` / `*.yaml` under `.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/`) and GitLab pipelines (`.gitlab-ci.yml`, `.gitlab/ci/*.yml`).
+- **Languages:** Actions workflow files (`*.yml` / `*.yaml` under `.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/`), composite action metadata (`.github/actions/**/action.yml`, a root `action.yml`; `.yaml` too) and GitLab pipelines (`.gitlab-ci.yml`, `.gitlab/ci/*.yml`).
 - **What it catches:**
   - Rollup job missing a dependency on verification jobs defined in the workflow (`Rollup Job Needs Incomplete`).
-  - Third-party GitHub actions unpinned or pinned to mutable tags/branches (`@v4`, `@main`) instead of 40-character commit SHA. Only a `uses:` new relative to the base side is checked; `first_party_action_prefixes` (default `actions/`, `github/`) are exempt.
+  - `Unpinned Third-Party Action` (`ci-integrity/unpinned-action`): a step `uses:` or a job-level `uses:` calling a remote reusable workflow (`owner/repo/.github/workflows/x.yml@main`) at a mutable tag or branch (`@v4`, `@main`) instead of a 40-character commit SHA. The nested `runs.steps[*].uses` of a composite action's `action.yml` / `action.yaml` are held to the same rule; such a file gets no rollup, job or step-weakening checks, only this one. `first_party_action_prefixes` (default `actions/`, `github/`) and local references (`./...`) are exempt.
+  - `Unpinned Container Image` (`ci-integrity/unpinned-container-image`): a job `container:` (string or `image:`), a `services.<name>.image`, or a `uses: docker://...` step without an `@sha256:<64 hex>` digest. First-party prefixes do not exempt an image. An image written as an expression (`${{ matrix.image }}`) cannot be resolved: it is a gate note naming the file and line, neither a pass nor a finding.
+  - Which references are judged: with `diff_only = true` (the default) only one new relative to the base side (a tag ref already in the base file is not reported, so adoption does not block). With `diff_only = false` every reference in every scanned file is, and the message says whether it was `added by this change` or is `pre-existing`; record today's pre-existing ones with `discipline baseline --write --base <ref>` (a `--whole-tree` baseline does not evaluate this gate) so the list only shrinks. All of these respect `pin_actions`, `exempt_paths`, an inline `discipline:allow(ci-integrity)` on the reference or on its step's line, and `allow-ci-weakening: <ref or action> <reason>` / `allow-gate-weakening: ci-integrity <reason>`.
   - Steps carrying `continue-on-error: true`. In a job that verifies nothing (no verification step, and an id that names no check: a summary or report job) it is a warning, since no check is masked.
   - **Verification steps** are those whose body runs a check (`cargo test`, a linter, ...), or whose name says it checks (`test`, `lint`, `gate`, `check`, ...) unless the step reports: a reporting action (`actions/upload-artifact`, `actions/download-artifact`, PR-comment actions, `actions/github-script` whose script has no `setFailed` or `throw`), or a name that starts with a reporting verb (`Comment`, `Upload`, `Show`, `Summarize`, ...). `Comment the gate result on the PR` is not a check.
   - Commands masking exit codes (`|| true`, `set +e`). A `set +e` whose `$?` is saved and later tested or exited with (`set +e; cmd; rc=$?; set -e; if [ "$rc" -eq 0 ]; then exit 1; fi`), or tested directly, is a checked negative control and is not reported.
@@ -1193,7 +1196,9 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   allow-ci-weakening: ci-gate temporary rollup relaxation during migration
   ```
 - **What it does NOT catch:**
-  - Local actions (`./...`) and docker actions (`docker://...`).
+  - Local actions and local reusable workflows (`./...`); what a local action pulls in is checked only when its `action.yml` matches the `workflows` globs.
+  - The `runs.image` of a Docker container action (`using: docker`), a `Dockerfile`'s `FROM`, and images a `run:` script pulls (`docker run`, `docker pull`).
+  - A reference whose tag was re-pointed while the ref text stayed the same, in default diff mode: that needs `diff_only = false`.
   - A job listed in `excluded_jobs` (default `detect-changes`) missing from the rollup's `needs`.
 - **Lifting directive:** `allow-ci-weakening: <subject> <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `workflows`, `rollup_job`, `excluded_jobs`, `pin_actions`, `forbid_continue_on_error`, `forbid_or_true`, `diff_only`, `documented_job_count_path`, `documented_job_count_pattern`, `first_party_action_prefixes`.

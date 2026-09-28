@@ -3,9 +3,14 @@
 //! Enforces:
 //! - Rollup jobs (`ci-gate`) depend on every verification job in the workflow (`needs:`).
 //! - Rollup jobs cannot drop previously depended-on jobs without an override.
-//! - Third-party GitHub actions introduced or modified in diff are pinned by a 40-character commit SHA
-//!   (excluding first-party action prefixes like `actions/` and `github/`).
-//! - Existing unpinned actions from base ref are grandfathered in and not flagged as new findings.
+//! - Third-party actions (step `uses:`, including the nested steps of a composite action's
+//!   `action.yml`) and remote reusable workflows (job-level `uses:`) are pinned by a
+//!   40-character commit SHA (excluding first-party prefixes like `actions/` and `github/`);
+//!   container images (`container:`, `services.*.image`, `uses: docker://`) carry an
+//!   `@sha256:` digest.
+//! - With `diff_only = true` (the default) only a reference new relative to the base side is
+//!   judged; with `diff_only = false` every reference is, pre-existing ones adopted through
+//!   the baseline.
 //! - Masked failures (`continue-on-error: true`) and error suppression (`|| true`, `set +e`) are forbidden.
 //! - Verification jobs and steps (testing, linting, gates) cannot be deleted without an override;
 //!   a step renamed with a similar body is paired with its base form, not reported as deleted.
@@ -98,6 +103,12 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
             evaluate_gitlab_file(ctx, path, &mut out)?;
             continue;
         }
+        // A composite action's metadata file carries steps, not jobs: only its nested
+        // `uses:` are checked, never the rollup and job rules.
+        if is_action_metadata_path(path) {
+            evaluate_action_file(ctx, path, &mut out)?;
+            continue;
+        }
         let head_content = match ctx.git.head_content(path)? {
             Some(c) => c,
             None => {
@@ -181,18 +192,17 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
             }
         }
 
-        let mut base_actions = HashSet::new();
-        if let Some(base_doc) = &base_val {
-            if let Some(b_jobs) = base_doc.get("jobs").and_then(|j| j.as_mapping()) {
-                for (_, b_job) in b_jobs {
-                    if let Some(b_steps) = b_job.get("steps").and_then(|s| s.as_sequence()) {
-                        for b_step in b_steps {
-                            if let Some(u) = b_step.get("uses").and_then(|u| u.as_str()) {
-                                base_actions.insert(u.to_string());
-                            }
-                        }
-                    }
-                }
+        // Pinning: every remote reference the workflow pulls in (step and job-level
+        // `uses:`, `container:`, `services.*.image`, `docker://`), compared against the
+        // base side's references.
+        if settings.pin_actions {
+            if let Some(head_doc) = &head_val {
+                let head_refs = workflow_pin_refs(head_doc, &head_content);
+                let base_refs =
+                    base_pin_set(base_val.as_ref().map(|b| {
+                        workflow_pin_refs(b, base_content.as_deref().unwrap_or_default())
+                    }));
+                check_pins(ctx, path, &head_content, &head_refs, &base_refs, &mut out);
             }
         }
 
@@ -645,50 +655,8 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 }
                             }
 
-                            // 5a. Action pinning
-                            if settings.pin_actions {
-                                if let Some(uses) = uses_str {
-                                    let base_had_action = base_actions.contains(uses);
-
-                                    if !base_had_action
-                                        && !uses.starts_with("./")
-                                        && !uses.starts_with("docker://")
-                                    {
-                                        if let Some((action, ref_str)) = uses.split_once('@') {
-                                            let is_first_party = settings
-                                                .first_party_action_prefixes
-                                                .iter()
-                                                .any(|prefix| action.starts_with(prefix));
-                                            if !is_first_party {
-                                                let is_sha = ref_str.len() == 40
-                                                    && ref_str
-                                                        .chars()
-                                                        .all(|c| c.is_ascii_hexdigit());
-                                                if !is_sha {
-                                                    let uses_line = find_line_after(
-                                                        &head_content,
-                                                        uses,
-                                                        approx_line.unwrap_or(1),
-                                                    )
-                                                    .or(approx_line);
-                                                    record_or_excuse(
-                                                        ctx,
-                                                        Some(&head_content),
-                                                        &mut out,
-                                                        settings.severity,
-                                                        &crate::findings::UNPINNED_ACTION,
-                                                        Some(path.clone()),
-                                                        uses_line,
-                                                        format!("Third-party action '{action}' is unpinned ('@{ref_str}'). Must be pinned by a 40-character commit SHA."),
-                                                        "Pin the action by its immutable 40-character commit SHA, or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                                        uses,
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            // 5a. Action pinning is checked for the whole file above
+                            // (`check_pins`).
 
                             // 5b. Check orieg/discipline action inputs
                             if let Some(uses) = uses_str {
@@ -2135,6 +2103,350 @@ fn find_step_line(
     None
 }
 
+/// What a pinned reference points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PinKind {
+    /// A step's `uses:` action (`owner/repo@ref`), in a workflow or a composite action.
+    Action,
+    /// A job-level `uses:` calling a reusable workflow (`owner/repo/.github/workflows/x.yml@ref`).
+    ReusableWorkflow,
+    /// A container image: `container:`, `services.<name>.image` or `uses: docker://`.
+    Image,
+}
+
+/// One remote reference a workflow or composite action pulls in, and where it is.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PinRef {
+    pub kind: PinKind,
+    /// The reference as written (`docker://alpine:latest`, `node:20`, `owner/repo@v1`).
+    pub value: String,
+    /// Where it sits, for the message (`job 'build' container`).
+    pub site: String,
+    /// 1-based line of the reference in the file, when found.
+    pub line: Option<usize>,
+    /// The step's own line (its name or id), whose inline exemption also covers the
+    /// reference, as it always has for step-level `uses:`.
+    pub step_line: Option<usize>,
+}
+
+/// How a reference fares against the pinning rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PinVerdict {
+    /// Pinned, local, first-party, or not a remote reference: nothing to report.
+    Pinned,
+    /// A mutable reference: an action or reusable workflow not at a 40-hex commit SHA, or
+    /// an image without an `@sha256:<64 hex>` digest.
+    Unpinned,
+    /// An expression (`${{ matrix.image }}`) the gate cannot resolve: a note, never a pass.
+    Expression,
+}
+
+/// The image name of a `docker://` reference, or `None` for any other `uses:`.
+fn docker_image(uses: &str) -> Option<&str> {
+    uses.strip_prefix("docker://")
+}
+
+/// Whether an image reference carries an immutable `@sha256:<64 hex>` digest.
+pub(crate) fn image_has_digest(image: &str) -> bool {
+    image.rsplit_once("@sha256:").is_some_and(|(name, digest)| {
+        !name.is_empty() && digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+/// Whether a git ref is a full 40-character commit SHA.
+fn is_commit_sha(r: &str) -> bool {
+    r.len() == 40 && r.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Judges one reference against the pinning rule. `first_party` prefixes exempt an
+/// action or a reusable workflow; local (`./`) references are exempt.
+pub(crate) fn pin_verdict(kind: PinKind, value: &str, first_party: &[String]) -> PinVerdict {
+    let value = value.trim();
+    if value.is_empty() {
+        return PinVerdict::Pinned;
+    }
+    if value.contains("${{") {
+        return PinVerdict::Expression;
+    }
+    match kind {
+        PinKind::Image => {
+            if image_has_digest(docker_image(value).unwrap_or(value)) {
+                PinVerdict::Pinned
+            } else {
+                PinVerdict::Unpinned
+            }
+        }
+        PinKind::Action | PinKind::ReusableWorkflow => {
+            if value.starts_with("./") {
+                return PinVerdict::Pinned;
+            }
+            let Some((target, r)) = value.split_once('@') else {
+                return PinVerdict::Pinned;
+            };
+            if first_party.iter().any(|p| target.starts_with(p.as_str())) || is_commit_sha(r) {
+                PinVerdict::Pinned
+            } else {
+                PinVerdict::Unpinned
+            }
+        }
+    }
+}
+
+/// The line of a YAML mapping key (`key:` at the start of a line, optionally quoted)
+/// at or after `start`.
+fn find_key_line(content: &str, key: &str, start: usize) -> Option<usize> {
+    let spellings = [key.to_string(), format!("'{key}'"), format!("\"{key}\"")];
+    content.lines().enumerate().find_map(|(idx, line)| {
+        let t = line.trim_start();
+        let hit = spellings.iter().any(|k| {
+            t.strip_prefix(k.as_str())
+                .and_then(|r| r.strip_prefix(':'))
+                .is_some_and(|r| r.is_empty() || r.starts_with([' ', '\t']))
+        });
+        (idx + 1 >= start && hit).then_some(idx + 1)
+    })
+}
+
+/// A step's `uses:`, as an action or, for `docker://`, an image. `cursor` is the line
+/// the search starts from; it moves past each reference found, so a reference repeated
+/// in later steps is located at its own line.
+fn step_ref(
+    step: &serde_yaml::Value,
+    site: String,
+    content: &str,
+    cursor: &mut usize,
+) -> Option<PinRef> {
+    let uses = step.get("uses").and_then(|u| u.as_str())?;
+    let name = step.get("name").and_then(|n| n.as_str()).unwrap_or("");
+    let id = step.get("id").and_then(|i| i.as_str()).unwrap_or("");
+    let run = step.get("run").and_then(|r| r.as_str());
+    let line = find_line_after(content, uses, *cursor);
+    if let Some(l) = line {
+        *cursor = l + 1;
+    }
+    Some(PinRef {
+        kind: if docker_image(uses).is_some() {
+            PinKind::Image
+        } else {
+            PinKind::Action
+        },
+        value: uses.to_string(),
+        site,
+        line,
+        step_line: find_step_line(content, name, id, Some(uses), run),
+    })
+}
+
+/// Every remote reference of a workflow: step and job-level `uses:`, `container:`
+/// (string or `image:`) and `services.<name>.image`.
+pub(crate) fn workflow_pin_refs(doc: &serde_yaml::Value, content: &str) -> Vec<PinRef> {
+    let mut refs = Vec::new();
+    let Some(jobs) = doc.get("jobs").and_then(|j| j.as_mapping()) else {
+        return refs;
+    };
+    let jobs_line = find_key_line(content, "jobs", 1).unwrap_or(1);
+    for (job_k, job) in jobs {
+        let job_id = job_k.as_str().unwrap_or("");
+        let job_line = find_key_line(content, job_id, jobs_line).unwrap_or(jobs_line);
+        let at = |value: &str| find_line_after(content, value, job_line);
+        if let Some(uses) = job.get("uses").and_then(|u| u.as_str()) {
+            refs.push(PinRef {
+                kind: PinKind::ReusableWorkflow,
+                value: uses.to_string(),
+                site: format!("job '{job_id}' reusable workflow"),
+                line: at(uses),
+                step_line: None,
+            });
+        }
+        let container = match job.get("container") {
+            Some(serde_yaml::Value::String(s)) => Some(s.as_str()),
+            Some(m) => m.get("image").and_then(|i| i.as_str()),
+            None => None,
+        };
+        if let Some(image) = container {
+            refs.push(PinRef {
+                kind: PinKind::Image,
+                value: image.to_string(),
+                site: format!("job '{job_id}' container"),
+                line: at(image),
+                step_line: None,
+            });
+        }
+        if let Some(services) = job.get("services").and_then(|s| s.as_mapping()) {
+            for (svc_k, svc) in services {
+                let svc_id = svc_k.as_str().unwrap_or("");
+                if let Some(image) = svc.get("image").and_then(|i| i.as_str()) {
+                    refs.push(PinRef {
+                        kind: PinKind::Image,
+                        value: image.to_string(),
+                        site: format!("job '{job_id}' service '{svc_id}'"),
+                        line: at(image),
+                        step_line: None,
+                    });
+                }
+            }
+        }
+        if let Some(steps) = job.get("steps").and_then(|s| s.as_sequence()) {
+            let mut cursor = job_line;
+            for step in steps {
+                let site = format!("job '{job_id}' step");
+                if let Some(r) = step_ref(step, site, content, &mut cursor) {
+                    refs.push(r);
+                }
+            }
+        }
+    }
+    refs
+}
+
+/// The nested `runs.steps[*].uses` of a composite action's metadata file.
+pub(crate) fn action_pin_refs(doc: &serde_yaml::Value, content: &str) -> Vec<PinRef> {
+    let Some(steps) = doc
+        .get("runs")
+        .and_then(|r| r.get("steps"))
+        .and_then(|s| s.as_sequence())
+    else {
+        return Vec::new();
+    };
+    let mut cursor = find_key_line(content, "runs", 1).unwrap_or(1);
+    steps
+        .iter()
+        .filter_map(|step| step_ref(step, "composite step".to_string(), content, &mut cursor))
+        .collect()
+}
+
+/// The base side's references, for telling an added reference from a pre-existing one.
+fn base_pin_set(refs: Option<Vec<PinRef>>) -> HashSet<(PinKind, String)> {
+    refs.unwrap_or_default()
+        .into_iter()
+        .map(|r| (r.kind, r.value))
+        .collect()
+}
+
+/// Whether `path` is an action metadata file (`action.yml` / `action.yaml`) rather than
+/// a workflow: named so, and outside every workflow directory.
+pub(crate) fn is_action_metadata_path(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    (name == "action.yml" || name == "action.yaml")
+        && !crate::doctor::WORKFLOW_DIRS
+            .iter()
+            .any(|dir| path.starts_with(&format!("{dir}/")))
+}
+
+/// Reports the unpinned references of one file. With `diff_only` (the default) only a
+/// reference new relative to the base side is judged; with `diff_only = false` every
+/// reference is, and the message says whether this change added it or it was already
+/// there (existing ones are adopted through the baseline).
+fn check_pins(
+    ctx: &Context,
+    path: &str,
+    content: &str,
+    refs: &[PinRef],
+    base: &HashSet<(PinKind, String)>,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    for r in refs {
+        let pre_existing = base.contains(&(r.kind, r.value.clone()));
+        if pre_existing && settings.diff_only {
+            continue;
+        }
+        let verdict = pin_verdict(r.kind, &r.value, &settings.first_party_action_prefixes);
+        if verdict == PinVerdict::Pinned {
+            continue;
+        }
+        if r.step_line
+            .and_then(|l| content.lines().nth(l.saturating_sub(1)))
+            .is_some_and(|l| line_allows(l, GATE))
+        {
+            continue;
+        }
+        let at = r.line.map(|l| format!(":{l}")).unwrap_or_default();
+        if verdict == PinVerdict::Expression {
+            out.notes.push(format!(
+                "{path}{at}: {} reference '{}' is an expression; its pin cannot be checked (not a pass)",
+                r.site, r.value
+            ));
+            continue;
+        }
+        let origin = if pre_existing {
+            "pre-existing: already on the base side"
+        } else {
+            "added by this change"
+        };
+        let (kind, message, remediation) = match r.kind {
+            PinKind::Image => (
+                &crate::findings::UNPINNED_CONTAINER_IMAGE,
+                format!(
+                    "Container image '{}' ({}) has no digest ({origin}). Must be pinned by '@sha256:<64-hex digest>'.",
+                    r.value, r.site
+                ),
+                "Pin the image by its immutable digest (`image:tag@sha256:<digest>`), or excuse with allow-gate-weakening: ci-integrity <reason>.",
+            ),
+            PinKind::Action | PinKind::ReusableWorkflow => {
+                let (target, rf) = r.value.split_once('@').unwrap_or((r.value.as_str(), ""));
+                let what = if r.kind == PinKind::Action {
+                    "Third-party action"
+                } else {
+                    "Reusable workflow"
+                };
+                (
+                    &crate::findings::UNPINNED_ACTION,
+                    format!(
+                        "{what} '{target}' ({}) is unpinned ('@{rf}', {origin}). Must be pinned by a 40-character commit SHA.",
+                        r.site
+                    ),
+                    "Pin the reference by its immutable 40-character commit SHA, or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                )
+            }
+        };
+        let before = out.violations.len();
+        record_or_excuse(
+            ctx,
+            Some(content),
+            out,
+            settings.severity,
+            kind,
+            Some(path.to_string()),
+            r.line,
+            message,
+            remediation,
+            &r.value,
+        );
+        if r.line.is_none() && out.violations.len() > before {
+            out.anchor_last(format!("{}:{}", r.site, r.value));
+        }
+    }
+}
+
+/// `ci-integrity` for a composite action's metadata file: pinning of its nested
+/// `uses:` only.
+fn evaluate_action_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Result<()> {
+    let settings = &ctx.config.gates.ci_integrity;
+    let Some(head) = ctx.git.head_content(path)? else {
+        return Ok(());
+    };
+    out.examined += 1;
+    if !settings.pin_actions {
+        return Ok(());
+    }
+    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&head) else {
+        out.notes.push(format!(
+            "{path}: action metadata does not parse as YAML; its nested `uses:` were not checked"
+        ));
+        return Ok(());
+    };
+    let base = ctx.git.base_content(path).unwrap_or(None);
+    let base_refs = base_pin_set(base.as_deref().and_then(|b| {
+        serde_yaml::from_str::<serde_yaml::Value>(b)
+            .ok()
+            .map(|d| action_pin_refs(&d, b))
+    }));
+    let refs = action_pin_refs(&doc, &head);
+    check_pins(ctx, path, &head, &refs, &base_refs, out);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn record_or_excuse(
     ctx: &Context,
@@ -2542,5 +2854,145 @@ jobs:
         let s = steps("- name: Step\n  run: |\n    # run the lint pass\n    ./ci.sh\n");
         assert!(is_verification_step(&s[0]));
         assert!(verifying_body_markers(&s[0]).is_empty());
+    }
+
+    const SHA: &str = "b4ffde65f46336ab88eb53be808477a3936bae11";
+    const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn first_party() -> Vec<String> {
+        vec!["actions/".to_string(), "github/".to_string()]
+    }
+
+    #[test]
+    fn reusable_workflow_needs_a_commit_sha_unless_local_or_first_party() {
+        let v = |r: &str| pin_verdict(PinKind::ReusableWorkflow, r, &first_party());
+        assert_eq!(
+            v("evil/reusable/.github/workflows/x.yml@main"),
+            PinVerdict::Unpinned
+        );
+        assert_eq!(
+            v("evil/reusable/.github/workflows/x.yml@v1.2.3"),
+            PinVerdict::Unpinned
+        );
+        assert_eq!(
+            v(&format!("evil/reusable/.github/workflows/x.yml@{SHA}")),
+            PinVerdict::Pinned
+        );
+        assert_eq!(v("./.github/workflows/local.yml"), PinVerdict::Pinned);
+        assert_eq!(
+            v("actions/reusable/.github/workflows/x.yml@main"),
+            PinVerdict::Pinned
+        );
+        // A SHA one character short is not a SHA.
+        assert_eq!(
+            v(&format!("evil/r/.github/workflows/x.yml@{}", &SHA[1..])),
+            PinVerdict::Unpinned
+        );
+    }
+
+    #[test]
+    fn container_image_needs_a_sha256_digest() {
+        let v = |r: &str| pin_verdict(PinKind::Image, r, &first_party());
+        assert_eq!(v("node:latest"), PinVerdict::Unpinned);
+        assert_eq!(v("node"), PinVerdict::Unpinned);
+        assert_eq!(v("docker://alpine:latest"), PinVerdict::Unpinned);
+        assert_eq!(v(&format!("node:20@sha256:{DIGEST}")), PinVerdict::Pinned);
+        assert_eq!(
+            v(&format!("docker://alpine@sha256:{DIGEST}")),
+            PinVerdict::Pinned
+        );
+        assert_eq!(
+            v(&format!("ghcr.io/o/i:1@sha256:{}", &DIGEST[1..])),
+            PinVerdict::Unpinned
+        );
+        assert_eq!(v("node@sha256:not-a-digest"), PinVerdict::Unpinned);
+        // A first-party prefix does not exempt an image.
+        assert_eq!(v("actions/runner:latest"), PinVerdict::Unpinned);
+        assert_eq!(v("${{ matrix.image }}"), PinVerdict::Expression);
+        assert_eq!(v("node:${{ matrix.v }}"), PinVerdict::Expression);
+    }
+
+    #[test]
+    fn workflow_refs_cover_steps_jobs_containers_services_and_docker_steps() {
+        let wf = format!(
+            "on: push\njobs:\n  triage:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions-cool/issues-helper@v2.2.1\n  r:\n    uses: evil/reusable/.github/workflows/x.yml@main\n  build:\n    runs-on: ubuntu-latest\n    container:\n      image: node:latest\n    services:\n      db:\n        image: postgres@sha256:{DIGEST}\n    steps:\n      - uses: docker://alpine:latest\n      - uses: docker://alpine:latest\n"
+        );
+        let doc: serde_yaml::Value = serde_yaml::from_str(&wf).unwrap();
+        let refs = workflow_pin_refs(&doc, &wf);
+        let got: Vec<(PinKind, &str, Option<usize>)> = refs
+            .iter()
+            .map(|r| (r.kind, r.value.as_str(), r.line))
+            .collect();
+        let db = format!("postgres@sha256:{DIGEST}");
+        assert_eq!(
+            got,
+            vec![
+                (
+                    PinKind::Action,
+                    "actions-cool/issues-helper@v2.2.1",
+                    Some(6)
+                ),
+                (
+                    PinKind::ReusableWorkflow,
+                    "evil/reusable/.github/workflows/x.yml@main",
+                    Some(8)
+                ),
+                (PinKind::Image, "node:latest", Some(12)),
+                (PinKind::Image, db.as_str(), Some(15)),
+                // A repeated reference is located at its own line.
+                (PinKind::Image, "docker://alpine:latest", Some(17)),
+                (PinKind::Image, "docker://alpine:latest", Some(18)),
+            ]
+        );
+        // The string form of `container:`.
+        let wf = "jobs:\n  b:\n    container: node:20\n";
+        let doc: serde_yaml::Value = serde_yaml::from_str(wf).unwrap();
+        let refs = workflow_pin_refs(&doc, wf);
+        assert_eq!(refs.len(), 1);
+        assert_eq!((refs[0].kind, refs[0].line), (PinKind::Image, Some(3)));
+        assert_eq!(refs[0].value, "node:20");
+        // No jobs: nothing.
+        let doc: serde_yaml::Value = serde_yaml::from_str("name: x\n").unwrap();
+        assert!(workflow_pin_refs(&doc, "name: x\n").is_empty());
+    }
+
+    #[test]
+    fn composite_action_refs_are_its_nested_step_uses() {
+        let action = "name: setup\nruns:\n  using: composite\n  steps:\n    - uses: evil/thing@v1\n    - run: echo hi\n      shell: bash\n    - uses: docker://alpine:3\n";
+        let doc: serde_yaml::Value = serde_yaml::from_str(action).unwrap();
+        let got: Vec<(PinKind, String, Option<usize>)> = action_pin_refs(&doc, action)
+            .into_iter()
+            .map(|r| (r.kind, r.value, r.line))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (PinKind::Action, "evil/thing@v1".to_string(), Some(5)),
+                (PinKind::Image, "docker://alpine:3".to_string(), Some(8)),
+            ]
+        );
+        let docker = "runs:\n  using: docker\n  image: Dockerfile\n";
+        let doc: serde_yaml::Value = serde_yaml::from_str(docker).unwrap();
+        assert!(action_pin_refs(&doc, docker).is_empty());
+    }
+
+    #[test]
+    fn action_metadata_paths_are_told_from_workflows() {
+        assert!(is_action_metadata_path("action.yml"));
+        assert!(is_action_metadata_path("action.yaml"));
+        assert!(is_action_metadata_path(".github/actions/setup/action.yml"));
+        assert!(!is_action_metadata_path(".github/workflows/action.yml"));
+        assert!(!is_action_metadata_path(".gitea/workflows/action.yaml"));
+        assert!(!is_action_metadata_path(".github/workflows/ci.yml"));
+        assert!(!is_action_metadata_path("my-action.yml"));
+    }
+
+    #[test]
+    fn key_lines_match_whole_keys_only() {
+        let c = "jobs:\n  rr:\n    runs-on: x\n  r:\n    uses: a/b@v1\n  'q':\n";
+        assert_eq!(find_key_line(c, "r", 1), Some(4));
+        assert_eq!(find_key_line(c, "q", 1), Some(6));
+        assert_eq!(find_key_line(c, "jobs", 1), Some(1));
+        assert_eq!(find_key_line(c, "rr", 3), None);
     }
 }

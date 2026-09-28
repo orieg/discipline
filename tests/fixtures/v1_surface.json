@@ -1004,6 +1004,7 @@
       "ci-integrity/rollup-needs-removed",
       "ci-integrity/step-failure-masked-continue-on-error",
       "ci-integrity/unpinned-action",
+      "ci-integrity/unpinned-container-image",
       "ci-integrity/verification-job-made-manual",
       "ci-integrity/verification-job-masked-by-condition",
       "ci-integrity/verification-job-narrowed",

@@ -2585,6 +2585,28 @@ jobs:
         },
     ),
     (
+        "ci-integrity: reusable workflows need a commit SHA, container images a digest",
+        || {
+            use crate::guards::ci_integrity::{pin_verdict, workflow_pin_refs, PinKind, PinVerdict};
+            let fp = vec!["actions/".to_string()];
+            let digest = "0123456789abcdef".repeat(4);
+            let wf = "jobs:\n  r:\n    uses: evil/reusable/.github/workflows/x.yml@main\n  b:\n    container: node:latest\n    steps:\n      - uses: docker://alpine:latest\n";
+            let doc: serde_yaml::Value = serde_yaml::from_str(wf)?;
+            let kinds: Vec<PinKind> = workflow_pin_refs(&doc, wf).iter().map(|r| r.kind).collect();
+            let found = kinds == vec![PinKind::ReusableWorkflow, PinKind::Image, PinKind::Image];
+            let reusable = pin_verdict(PinKind::ReusableWorkflow, "evil/r/.github/workflows/x.yml@main", &fp)
+                == PinVerdict::Unpinned
+                && pin_verdict(PinKind::ReusableWorkflow, "./.github/workflows/x.yml", &fp)
+                    == PinVerdict::Pinned;
+            let image = pin_verdict(PinKind::Image, "node:latest", &fp) == PinVerdict::Unpinned
+                && pin_verdict(PinKind::Image, &format!("node@sha256:{digest}"), &fp)
+                    == PinVerdict::Pinned
+                && pin_verdict(PinKind::Image, "${{ matrix.image }}", &fp)
+                    == PinVerdict::Expression;
+            Ok(found && reusable && image)
+        },
+    ),
+    (
         "ci-integrity: renamed step pairs by run body, renamed-and-rewritten step does not",
         || {
             use crate::guards::ci_integrity::{pair_steps, StepMatch};

@@ -1761,7 +1761,9 @@ jobs:
 
 #[test]
 fn ci_integrity_flags_a_change_that_picks_an_older_or_movable_discipline() {
-    // The Gitea job-container recipe: the binary comes from the job's image.
+    // The Gitea job-container recipe: the binary comes from the job's image, pinned by
+    // tag and digest as docs/CONFIGURATION.md prescribes (a tag-only image is also an
+    // unpinned container image). The tag names the version this check compares.
     const GITEA: &str = r#"name: CI
 permissions: read-all
 on: [pull_request]
@@ -1770,7 +1772,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: ghcr.io/orieg/discipline:v0.14.4
+      image: ghcr.io/orieg/discipline:v0.14.4@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     steps:
       - name: Run discipline
         run: discipline check --policy-from base
@@ -13824,5 +13826,205 @@ fn ci_integrity_continue_on_error_in_a_job_that_verifies_nothing_is_a_warning() 
             "ci-integrity/step-failure-masked-continue-on-error".into(),
             "error".into()
         )]
+    );
+}
+
+// ---- ci-integrity: full-tree pinning, reusable workflows, images, composite actions ----
+
+const PIN_BASE_WF: &str = "name: triage\non:\n  schedule:\n    - cron: '0 0 * * *'\npermissions: read-all\njobs:\n  triage:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions-cool/issues-helper@v2.2.1\n";
+
+/// The reproduction of the re-activated-tag incident: the base already runs a tag ref;
+/// the change touches the cron and adds a remote reusable workflow, a container and a
+/// docker step, none pinned. A digest-pinned service and a SHA-pinned reusable workflow
+/// are the positive controls.
+fn pin_head_wf() -> String {
+    PIN_BASE_WF.replace("'0 0 * * *'", "'0 6 * * *'")
+        + "  r:\n    uses: evil/reusable/.github/workflows/x.yml@main\n  r2:\n    uses: good/reusable/.github/workflows/x.yml@b4ffde65f46336ab88eb53be808477a3936bae11\n  build:\n    runs-on: ubuntu-latest\n    container: node:latest\n    services:\n      db:\n        image: postgres:16@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n    steps:\n      - uses: docker://alpine:latest\n"
+}
+
+fn ci_codes(run: &Run) -> Vec<(String, String)> {
+    run.violations("ci-integrity")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["message"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn ci_integrity_pins_reusable_workflows_images_and_reports_pre_existing_refs_in_full_tree_mode() {
+    const FULL_TREE: &str = "[gates.ci-integrity]\ndiff_only = false\n";
+    for full_tree in [false, true] {
+        let repo = Repo::new();
+        let mut base = vec![(".github/workflows/triage.yml", PIN_BASE_WF)];
+        if full_tree {
+            base.push(("discipline.toml", FULL_TREE));
+        }
+        repo.commit_base_files(&base, "ci: triage workflow");
+
+        // Negative control: the untouched base reports nothing in diff mode.
+        if !full_tree {
+            assert!(repo.check(&[]).titles("ci-integrity").is_empty());
+        }
+
+        repo.write(".github/workflows/triage.yml", &pin_head_wf());
+        repo.commit("ci: more jobs");
+        let run = repo.check(&[]);
+        let found = ci_codes(&run);
+        let has = |code: &str, needle: &str| {
+            found
+                .iter()
+                .any(|(c, m)| c == code && m.contains(needle) && m.contains("added by this change"))
+        };
+        assert!(
+            has(
+                "ci-integrity/unpinned-action",
+                "evil/reusable/.github/workflows/x.yml"
+            ),
+            "{found:?}"
+        );
+        assert!(
+            has("ci-integrity/unpinned-container-image", "node:latest"),
+            "{found:?}"
+        );
+        assert!(
+            has(
+                "ci-integrity/unpinned-container-image",
+                "docker://alpine:latest"
+            ),
+            "{found:?}"
+        );
+        let pre_existing: Vec<_> = found
+            .iter()
+            .filter(|(_, m)| m.contains("actions-cool/issues-helper"))
+            .collect();
+        if full_tree {
+            assert_eq!(pre_existing.len(), 1, "{found:?}");
+            assert!(pre_existing[0].1.contains("pre-existing"), "{found:?}");
+            assert_eq!(pre_existing[0].0, "ci-integrity/unpinned-action");
+            assert_eq!(found.len(), 4, "{found:?}");
+        } else {
+            assert!(pre_existing.is_empty(), "{found:?}");
+            assert_eq!(found.len(), 3, "{found:?}");
+        }
+        assert_eq!(run.code, 1, "{}", run.stdout);
+
+        // The directive lifts every pin finding, as it does for step actions.
+        let lifted = repo.check_with_pr(
+            &[],
+            "allow-gate-weakening: ci-integrity migrating these jobs, pins follow",
+        );
+        assert!(
+            lifted.titles("ci-integrity").is_empty(),
+            "{}",
+            lifted.stdout
+        );
+    }
+}
+
+#[test]
+fn ci_integrity_full_tree_pin_debt_is_adopted_through_the_baseline() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (".github/workflows/triage.yml", PIN_BASE_WF),
+            (
+                "discipline.toml",
+                "[gates.ci-integrity]\ndiff_only = false\n",
+            ),
+        ],
+        "ci: triage workflow",
+    );
+    // Record today's debt: the pre-existing tag ref.
+    let written = repo.run(&["baseline", "--write", "--base", "main"], &[]);
+    assert_eq!(written.code, 0, "{}{}", written.stdout, written.stderr);
+    let baseline = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert!(baseline.contains("unpinned-action"), "{baseline}");
+    repo.remove("discipline-baseline.toml");
+    repo.commit_base(
+        "discipline-baseline.toml",
+        &baseline,
+        "chore: adopt baseline",
+    );
+
+    repo.write(".github/workflows/triage.yml", &pin_head_wf());
+    repo.commit("ci: more jobs");
+    let run = repo.check(&[]);
+    let found = ci_codes(&run);
+    assert!(
+        !found
+            .iter()
+            .any(|(_, m)| m.contains("actions-cool/issues-helper")),
+        "a baselined pre-existing ref is reported: {found:?}"
+    );
+    assert_eq!(found.len(), 3, "{found:?}");
+    assert!(
+        run.json()["baselined"].as_u64().unwrap() >= 1,
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn ci_integrity_checks_composite_action_uses_but_not_its_jobs() {
+    let repo = Repo::new();
+    let pinned = "name: setup\ndescription: d\nruns:\n  using: composite\n  steps:\n    - uses: evil/thing@b4ffde65f46336ab88eb53be808477a3936bae11\n    - run: echo ok\n      shell: bash\n";
+    repo.commit_base(
+        ".github/actions/setup/action.yml",
+        pinned,
+        "ci: setup action",
+    );
+
+    // Positive control: an unrelated edit of a pinned composite action.
+    repo.write(
+        ".github/actions/setup/action.yml",
+        &pinned.replace("echo ok", "echo fine"),
+    );
+    repo.commit("ci: reword");
+    let quiet = repo.check(&[]);
+    assert!(quiet.titles("ci-integrity").is_empty(), "{}", quiet.stdout);
+    assert_eq!(quiet.outcome("ci-integrity")["examined"], 1);
+
+    // Negative control: a tag ref and an undigested docker step added to it, and the
+    // same at the root `action.yml`, which has no jobs and no rollup to report.
+    let unpinned = pinned.replace(
+        "    - run: echo ok\n",
+        "    - uses: evil/other@v2\n    - uses: docker://alpine:3\n    - run: echo ok\n",
+    );
+    repo.write(".github/actions/setup/action.yml", &unpinned);
+    repo.write("action.yml", &unpinned);
+    repo.commit("ci: more steps");
+    let run = repo.check(&[]);
+    let found = ci_codes(&run);
+    let codes: Vec<&str> = found.iter().map(|(c, _)| c.as_str()).collect();
+    assert_eq!(
+        codes,
+        vec![
+            "ci-integrity/unpinned-action",
+            "ci-integrity/unpinned-container-image",
+            "ci-integrity/unpinned-action",
+            "ci-integrity/unpinned-container-image",
+        ],
+        "{found:?}"
+    );
+    assert!(found[0].1.contains("composite step"), "{found:?}");
+
+    // An expression image in a workflow is a note naming its location, not a pass.
+    repo.write(
+        ".github/workflows/m.yml",
+        "on: push\njobs:\n  m:\n    runs-on: ubuntu-latest\n    container: ${{ matrix.image }}\n    steps:\n      - run: echo\n",
+    );
+    repo.commit("ci: matrix container");
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert!(run.titles("ci-integrity").is_empty(), "{}", run.stdout);
+    assert!(
+        notes_of(&run, "ci-integrity")
+            .iter()
+            .any(|n| n.contains(".github/workflows/m.yml:5") && n.contains("expression")),
+        "{:?}",
+        notes_of(&run, "ci-integrity")
     );
 }

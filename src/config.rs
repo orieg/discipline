@@ -1647,9 +1647,18 @@ impl Default for CiIntegrityGate {
                 .iter()
                 .flat_map(|dir| [format!("{dir}/*.yml"), format!("{dir}/*.yaml")])
                 .chain(
-                    [".gitlab-ci.yml", ".gitlab/ci/*.yml", ".gitlab/ci/*.yaml"]
-                        .iter()
-                        .map(|s| s.to_string()),
+                    [
+                        ".gitlab-ci.yml",
+                        ".gitlab/ci/*.yml",
+                        ".gitlab/ci/*.yaml",
+                        // Composite action metadata: only their nested `uses:` are checked.
+                        ".github/actions/**/action.yml",
+                        ".github/actions/**/action.yaml",
+                        "action.yml",
+                        "action.yaml",
+                    ]
+                    .iter()
+                    .map(|s| s.to_string()),
                 )
                 .collect(),
             rollup_job: Some("ci-gate".to_string()),

@@ -201,7 +201,7 @@
       "additionalProperties": false,
       "properties": {
         "diff_only": {
-          "description": "When true, scans only modified workflow files rather than all workflows",
+          "description": "When true, scans only modified workflow files rather than all workflows, and pins only references new relative to the base; false reports every unpinned reference, pre-existing ones included",
           "type": "boolean"
         },
         "documented_job_count_path": {
@@ -236,7 +236,7 @@
           "type": "boolean"
         },
         "pin_actions": {
-          "description": "Ensure third-party GitHub actions are pinned by 40-character commit SHA",
+          "description": "Ensure third-party actions and reusable workflows are pinned by 40-character commit SHA, and container images by sha256 digest",
           "type": "boolean"
         },
         "rollup_job": {
@@ -248,7 +248,7 @@
         },
         "workflows": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Workflow file patterns to inspect"
+          "description": "Workflow file patterns to inspect; an action.yml / action.yaml outside a workflow directory is read as a composite action (its nested uses: only)"
         }
       },
       "type": "object"
