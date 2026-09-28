@@ -111,7 +111,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.ci-integrity.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.ci-integrity.excluded_jobs` | list | `["detect-changes"]` | Job names excluded from rollup dependency requirements |
 | `gates.ci-integrity.exempt_paths` | list | `[]` | File path globs exempted from this gate |
-| `gates.ci-integrity.first_party_action_prefixes` | list | `["actions/","github/"]` | Action prefixes considered first-party and excused from commit SHA pinning |
+| `gates.ci-integrity.first_party_action_prefixes` | list | `[]` | Action owner prefixes (for example `actions/`) excused from commit SHA pinning; empty by default, so every remote action needs a SHA |
 | `gates.ci-integrity.forbid_continue_on_error` | boolean | `true` | Forbid continue-on-error: true in workflow jobs or steps |
 | `gates.ci-integrity.forbid_or_true` | boolean | `true` | Forbid \|\| true and set +e error masking in run commands |
 | `gates.ci-integrity.pin_actions` | boolean | `true` | Ensure third-party actions and reusable workflows are pinned by 40-character commit SHA, and container images by sha256 digest |

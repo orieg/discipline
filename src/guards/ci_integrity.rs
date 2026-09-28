@@ -5,7 +5,8 @@
 //! - Rollup jobs cannot drop previously depended-on jobs without an override.
 //! - Third-party actions (step `uses:`, including the nested steps of a composite action's
 //!   `action.yml`) and remote reusable workflows (job-level `uses:`) are pinned by a
-//!   40-character commit SHA (excluding first-party prefixes like `actions/` and `github/`);
+//!   40-character commit SHA (`actions/` and `github/` included, unless a repository lists
+//!   them in `first_party_action_prefixes`);
 //!   container images (`container:`, `services.*.image`, `uses: docker://`) carry an
 //!   `@sha256:` digest.
 //! - With `diff_only = true` (the default) only a reference new relative to the base side is
@@ -2976,6 +2977,21 @@ jobs:
         assert_eq!(
             v(&format!("evil/r/.github/workflows/x.yml@{}", &SHA[1..])),
             PinVerdict::Unpinned
+        );
+    }
+
+    #[test]
+    fn default_prefixes_exempt_no_owner_from_the_sha_rule() {
+        let defaults = crate::config::CiIntegrityGate::default();
+        assert!(defaults.first_party_action_prefixes.is_empty());
+        let v = |r: &str| pin_verdict(PinKind::Action, r, &defaults.first_party_action_prefixes);
+        assert_eq!(v("actions/checkout@v4"), PinVerdict::Unpinned);
+        assert_eq!(v("github/codeql-action/init@v3"), PinVerdict::Unpinned);
+        assert_eq!(v(&format!("actions/checkout@{SHA}")), PinVerdict::Pinned);
+        // A repository that opts back in still exempts the prefix it lists.
+        assert_eq!(
+            pin_verdict(PinKind::Action, "actions/checkout@v4", &first_party()),
+            PinVerdict::Pinned
         );
     }
 

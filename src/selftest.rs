@@ -2607,6 +2607,20 @@ jobs:
         },
     ),
     (
+        "ci-integrity: actions/ and github/ tag refs are held to the SHA rule by default",
+        || {
+            use crate::guards::ci_integrity::{pin_verdict, PinKind, PinVerdict};
+            let fp = crate::config::CiIntegrityGate::default().first_party_action_prefixes;
+            let sha = "b4ffde65f46336ab88eb53be808477a3936bae11";
+            Ok(fp.is_empty()
+                && pin_verdict(PinKind::Action, "actions/checkout@v4", &fp) == PinVerdict::Unpinned
+                && pin_verdict(PinKind::Action, "github/codeql-action/init@v3", &fp)
+                    == PinVerdict::Unpinned
+                && pin_verdict(PinKind::Action, &format!("actions/checkout@{sha}"), &fp)
+                    == PinVerdict::Pinned)
+        },
+    ),
+    (
         "ci-integrity: renamed step pairs by run body, renamed-and-rewritten step does not",
         || {
             use crate::guards::ci_integrity::{pair_steps, StepMatch};

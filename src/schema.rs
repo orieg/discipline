@@ -553,7 +553,7 @@ pub fn generate_schema() -> Value {
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified workflow files rather than all workflows, and pins only references new relative to the base; false reports every unpinned reference, pre-existing ones included" },
                     "documented_job_count_path": { "type": "string", "description": "Path to catalog documentation stating job count" },
                     "documented_job_count_pattern": { "type": "string", "description": "Regex pattern to extract job count from documentation" },
-                    "first_party_action_prefixes": { "$ref": "#/$defs/StringListOrReset", "description": "Action prefixes considered first-party and excused from commit SHA pinning" }
+                    "first_party_action_prefixes": { "$ref": "#/$defs/StringListOrReset", "description": "Action owner prefixes (for example `actions/`) excused from commit SHA pinning; empty by default, so every remote action needs a SHA" }
                 }
             },
             "CiSkipSetGate": {

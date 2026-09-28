@@ -1633,6 +1633,9 @@ pub struct CiIntegrityGate {
     pub diff_only: bool,
     pub documented_job_count_path: Option<String>,
     pub documented_job_count_pattern: Option<String>,
+    /// Action owners exempt from the commit-SHA rule. Empty by default: GitHub's
+    /// "require actions to be pinned to a full-length commit SHA" policy exempts no
+    /// owner, so `actions/` and `github/` tag refs are reported like any other.
     pub first_party_action_prefixes: Vec<String>,
 }
 
@@ -1669,7 +1672,7 @@ impl Default for CiIntegrityGate {
             diff_only: true,
             documented_job_count_path: None,
             documented_job_count_pattern: None,
-            first_party_action_prefixes: vec!["actions/".to_string(), "github/".to_string()],
+            first_party_action_prefixes: Vec::new(),
         }
     }
 }

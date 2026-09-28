@@ -9288,12 +9288,13 @@ fn ci_integrity_gate_e2e() {
     );
     repo.commit("ci: unpinned action");
     let run_unpinned = repo.check(&["--base", "HEAD~1"]);
+    // Both tag refs: `actions/` is held to the SHA rule by default.
     assert_eq!(
         run_unpinned.titles("ci-integrity"),
-        vec!["Unpinned Third-Party Action"]
+        vec!["Unpinned Third-Party Action", "Unpinned Third-Party Action"]
     );
 
-    // Pinned action with SHA -> passes (actions/checkout@v4 allowed via first_party_action_prefixes)
+    // Pinned action with SHA -> passes (actions/checkout@v4 is already on the base side)
     repo.write(
         ".github/workflows/ci.yml",
         "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: codecov/codecov-action@b4ffde65f46336ab88eb53be808477a3936bae11\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n",
@@ -14118,4 +14119,51 @@ fn ci_integrity_checks_composite_action_uses_but_not_its_jobs() {
         "{:?}",
         notes_of(&run, "ci-integrity")
     );
+}
+
+#[test]
+fn ci_integrity_holds_actions_and_github_refs_to_the_sha_rule_by_default() {
+    const WF: &str = ".github/workflows/ci.yml";
+    let sha = "b4ffde65f46336ab88eb53be808477a3936bae11";
+    let base = "on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n";
+    let head = format!(
+        "on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: github/codeql-action/init@v3\n      - uses: actions/setup-node@{sha}\n      - run: echo\n"
+    );
+    for opt_back_in in [false, true] {
+        let repo = Repo::new();
+        let mut files = vec![(WF, base)];
+        if opt_back_in {
+            files.push((
+                "discipline.toml",
+                "[gates.ci-integrity]\nfirst_party_action_prefixes = [\"actions/\", \"github/\"]\n",
+            ));
+        }
+        repo.commit_base_files(&files, "ci: base");
+        repo.write(WF, &head);
+        repo.commit("ci: steps");
+        let found = ci_codes(&repo.check(&[]));
+        if opt_back_in {
+            // The key is kept: a repository can still exempt these owners.
+            assert!(found.is_empty(), "{found:?}");
+        } else {
+            // Default: both tag refs are reported; the SHA-pinned one is not.
+            let msgs: Vec<&str> = found.iter().map(|(_, m)| m.as_str()).collect();
+            assert_eq!(found.len(), 2, "{found:?}");
+            assert!(
+                found
+                    .iter()
+                    .all(|(c, _)| c == "ci-integrity/unpinned-action"),
+                "{found:?}"
+            );
+            assert!(
+                msgs.iter().any(|m| m.contains("'actions/checkout'")),
+                "{msgs:?}"
+            );
+            assert!(
+                msgs.iter()
+                    .any(|m| m.contains("'github/codeql-action/init'")),
+                "{msgs:?}"
+            );
+        }
+    }
 }
