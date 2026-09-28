@@ -886,3 +886,78 @@ fn doctor_reports_the_repository_settings_that_let_mutable_code_run() {
     let strict = repo.run(&["doctor", "--repo", "o/r", "--strict"], &env);
     assert_eq!(strict.code, 1, "{}\n{}", strict.stdout, strict.stderr);
 }
+
+#[test]
+fn doctor_fails_an_imposter_pin_and_warns_on_a_tag_pinned_nested_action() {
+    use base64::Engine as _;
+    const GOOD: &str = "1111111111111111111111111111111111111111";
+    const BAD: &str = "2222222222222222222222222222222222222222";
+    let repo = protected_repo();
+    let api = github_api(GOOD_RULES);
+    let url = api.url();
+    let env = [("DISCIPLINE_FORGE_API_URL", url.as_str())];
+    api.serve("repos/a/act", serde_json::json!({"default_branch": "main"}));
+    api.serve(
+        &format!("repos/a/act/compare/main...{GOOD}"),
+        serde_json::json!({"status": "behind"}),
+    );
+    api.serve(
+        &format!("repos/a/act/compare/main...{BAD}"),
+        serde_json::json!({"status": "diverged"}),
+    );
+    api.serve(
+        "repos/a/act/branches?per_page=100&page=1",
+        serde_json::json!([{"name": "main", "commit": {"sha": "a".repeat(40)}}]),
+    );
+    api.serve(
+        "repos/a/act/tags?per_page=100&page=1",
+        serde_json::json!([]),
+    );
+    let meta = |yml: &str| {
+        serde_json::json!({"encoding": "base64",
+            "content": base64::engine::general_purpose::STANDARD.encode(yml)})
+    };
+    let composite =
+        |uses: &str| format!("runs:\n  using: composite\n  steps:\n    - uses: {uses}\n");
+    api.serve(
+        &format!("repos/a/act/contents/action.yml?ref={GOOD}"),
+        meta(&composite("x/y@v1")),
+    );
+    api.serve(
+        &format!("repos/a/act/contents/action.yml?ref={BAD}"),
+        meta(&composite(&format!("x/y@{GOOD}"))),
+    );
+    let pinned = |sha: &str| {
+        format!("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: a/act@{sha}\n")
+    };
+
+    // A commit on `a/act`'s default branch, whose action uses a tag.
+    repo.commit_base(".github/workflows/pins.yml", &pinned(GOOD), "pin");
+    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let st = statuses(&run.stdout);
+    assert!(
+        st.contains(&("imposter-commit".into(), "pass".into())),
+        "{st:?}"
+    );
+    assert!(
+        st.contains(&("nested-action-pins".into(), "warn".into())),
+        "{st:?}"
+    );
+    assert!(run.stdout.contains("`x/y@v1`"), "{}", run.stdout);
+
+    // A commit on no branch or tag of `a/act`: it resolved through a fork.
+    repo.commit_base(".github/workflows/pins.yml", &pinned(BAD), "imposter");
+    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    let st = statuses(&run.stdout);
+    assert!(
+        st.contains(&("imposter-commit".into(), "fail".into())),
+        "{st:?}"
+    );
+    assert!(
+        st.contains(&("nested-action-pins".into(), "pass".into())),
+        "{st:?}"
+    );
+    assert!(run.stdout.contains(BAD), "{}", run.stdout);
+}

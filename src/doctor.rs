@@ -2120,6 +2120,32 @@ fn read(root: &Path, rel: &str) -> Option<String> {
     std::fs::read_to_string(root.join(rel)).ok()
 }
 
+/// The files whose `uses:` references `doctor_pins` reads: the workflows, the repository's
+/// own action metadata (`action.yml` / `action.yaml`) and local actions under
+/// `.github/actions/<name>/`.
+fn pin_sources(root: &Path, workflows: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out = workflows.to_vec();
+    let mut add = |rel: String| {
+        if let Some(c) = read(root, &rel) {
+            out.push((rel, c));
+        }
+    };
+    add("action.yml".into());
+    add("action.yaml".into());
+    if let Ok(entries) = std::fs::read_dir(root.join(".github/actions")) {
+        let mut dirs: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        dirs.sort();
+        for d in dirs {
+            add(format!(".github/actions/{d}/action.yml"));
+            add(format!(".github/actions/{d}/action.yaml"));
+        }
+    }
+    out
+}
+
 /// `push-trigger` when `merged-pr-body` is on and every push-run discipline job is granted
 /// `pull-requests: read` (or `write`): the push run reads the merged pull request's body.
 fn pr_read_granted(jobs: &str, when: &str) -> Finding {
@@ -2542,6 +2568,13 @@ pub fn run(input: &DoctorInput) -> Report {
                     // Repository settings that decide whether mutable action refs,
                     // moved release tags or replaced release assets can run.
                     findings.extend(crate::doctor_settings::findings(input.api, forge, &files));
+                    // What a SHA pin does not prove: that the commit belongs to the pinned
+                    // repository, and that the action pins what it runs in turn.
+                    findings.extend(crate::doctor_pins::findings(
+                        input.api,
+                        forge,
+                        &pin_sources(root, &files),
+                    ));
                     // `ratified-paths` trusts comment authorship: an agent login with
                     // administrator rights could act as, or edit the comments of, the owner.
                     if let Some(rp) = repo_config
