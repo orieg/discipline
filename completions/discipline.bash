@@ -148,6 +148,12 @@ _discipline() {
             discipline__subcmd__help__subcmd__lease,check)
                 cmd="discipline__subcmd__help__subcmd__lease__subcmd__check"
                 ;;
+            discipline__subcmd__help__subcmd__lease,guard)
+                cmd="discipline__subcmd__help__subcmd__lease__subcmd__guard"
+                ;;
+            discipline__subcmd__help__subcmd__lease,install-guard)
+                cmd="discipline__subcmd__help__subcmd__lease__subcmd__install__subcmd__guard"
+                ;;
             discipline__subcmd__help__subcmd__lease,list)
                 cmd="discipline__subcmd__help__subcmd__lease__subcmd__list"
                 ;;
@@ -178,8 +184,14 @@ _discipline() {
             discipline__subcmd__lease,check)
                 cmd="discipline__subcmd__lease__subcmd__check"
                 ;;
+            discipline__subcmd__lease,guard)
+                cmd="discipline__subcmd__lease__subcmd__guard"
+                ;;
             discipline__subcmd__lease,help)
                 cmd="discipline__subcmd__lease__subcmd__help"
+                ;;
+            discipline__subcmd__lease,install-guard)
+                cmd="discipline__subcmd__lease__subcmd__install__subcmd__guard"
                 ;;
             discipline__subcmd__lease,list)
                 cmd="discipline__subcmd__lease__subcmd__list"
@@ -193,8 +205,14 @@ _discipline() {
             discipline__subcmd__lease__subcmd__help,check)
                 cmd="discipline__subcmd__lease__subcmd__help__subcmd__check"
                 ;;
+            discipline__subcmd__lease__subcmd__help,guard)
+                cmd="discipline__subcmd__lease__subcmd__help__subcmd__guard"
+                ;;
             discipline__subcmd__lease__subcmd__help,help)
                 cmd="discipline__subcmd__lease__subcmd__help__subcmd__help"
+                ;;
+            discipline__subcmd__lease__subcmd__help,install-guard)
+                cmd="discipline__subcmd__lease__subcmd__help__subcmd__install__subcmd__guard"
                 ;;
             discipline__subcmd__lease__subcmd__help,list)
                 cmd="discipline__subcmd__lease__subcmd__help__subcmd__list"
@@ -938,7 +956,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__help__subcmd__lease)
-            opts="take release list check"
+            opts="take release list check install-guard guard"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -952,6 +970,34 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__help__subcmd__lease__subcmd__check)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        discipline__subcmd__help__subcmd__lease__subcmd__guard)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        discipline__subcmd__help__subcmd__lease__subcmd__install__subcmd__guard)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1222,7 +1268,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__lease)
-            opts="-h --help take release list check help"
+            opts="-h --help take release list check install-guard guard help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1253,8 +1299,22 @@ _discipline() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        discipline__subcmd__lease__subcmd__guard)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         discipline__subcmd__lease__subcmd__help)
-            opts="take release list check help"
+            opts="take release list check install-guard guard help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1281,7 +1341,35 @@ _discipline() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        discipline__subcmd__lease__subcmd__help__subcmd__guard)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         discipline__subcmd__lease__subcmd__help__subcmd__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        discipline__subcmd__lease__subcmd__help__subcmd__install__subcmd__guard)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1326,6 +1414,20 @@ _discipline() {
         discipline__subcmd__lease__subcmd__help__subcmd__take)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        discipline__subcmd__lease__subcmd__install__subcmd__guard)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

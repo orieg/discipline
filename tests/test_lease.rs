@@ -168,3 +168,179 @@ fn a_corrupt_lease_file_could_not_check() {
         check.stderr
     );
 }
+
+/// Plain `git` in `dir` with the installed hooks (the harness's own git runs without
+/// hooks), `discipline` first on `PATH`.
+fn git_with_hooks(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    let bin = std::path::Path::new(env!("CARGO_BIN_EXE_discipline"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut cmd = std::process::Command::new("git");
+    // An explicit identity: the runner has no global one, and GIT_* is cleared below.
+    cmd.args([
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=discipline test",
+        "-c",
+        "user.email=test@example.invalid",
+    ])
+    .args(args)
+    .current_dir(dir)
+    .env("PATH", path);
+    for (k, _) in std::env::vars() {
+        if k.starts_with("GIT_") || k.starts_with("DISCIPLINE_") {
+            cmd.env_remove(k);
+        }
+    }
+    cmd.output().unwrap()
+}
+
+#[test]
+fn the_ref_guard_refuses_moving_a_branch_another_worktree_leased() {
+    let repo = two_worktrees();
+    let install = repo.run(&["lease", "install-guard"], &[]);
+    assert_eq!(install.code, 0, "{}{}", install.stdout, install.stderr);
+    assert!(repo
+        .path()
+        .join(".git/hooks/reference-transaction")
+        .is_file());
+    let take = repo.run(
+        &[
+            "lease",
+            "take",
+            "--agent",
+            "claude-code",
+            "--session",
+            "s1",
+            "--branch",
+            "feat/stack",
+        ],
+        &[],
+    );
+    assert_eq!(take.code, 0, "{}", take.stderr);
+
+    let wt2 = repo.path().join("wt2");
+    // From the second worktree: moving, resetting to, or deleting the leased branch is refused.
+    for args in [
+        vec!["branch", "-f", "feat/stack", "HEAD"],
+        vec!["update-ref", "refs/heads/feat/stack", "HEAD"],
+        vec!["branch", "-D", "feat/stack"],
+    ] {
+        let out = git_with_hooks(&wt2, &args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{args:?} was allowed: {err}");
+        assert!(
+            err.contains("`feat/stack` is leased by worktree `main` (claude-code session s1"),
+            "{args:?}: {err}"
+        );
+    }
+    // Its own branch, and the holder's own update, go through.
+    assert!(
+        git_with_hooks(&wt2, &["commit", "-q", "--allow-empty", "-m", "wt2 work"])
+            .status
+            .success()
+    );
+    assert!(
+        git_with_hooks(repo.path(), &["branch", "-f", "feat/stack", "HEAD"])
+            .status
+            .success()
+    );
+
+    // Released, the second worktree may move it.
+    assert_eq!(repo.run(&["lease", "release"], &[]).code, 0);
+    let out = git_with_hooks(&wt2, &["branch", "-f", "feat/stack", "HEAD"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Installing twice is a no-op; a foreign hook is never rewritten.
+    assert!(repo
+        .run(&["lease", "install-guard"], &[])
+        .stdout
+        .contains("already installed"));
+    std::fs::write(
+        repo.path().join(".git/hooks/reference-transaction"),
+        "#!/bin/sh\nexit 0\n",
+    )
+    .unwrap();
+    let foreign = repo.run(&["lease", "install-guard"], &[]);
+    assert_ne!(foreign.code, 0);
+    assert!(
+        foreign.stderr.contains("is not the lease guard"),
+        "{}",
+        foreign.stderr
+    );
+}
+
+/// The failure the guard exists for: a rebase with `--update-refs` in one worktree would
+/// rewrite a stacked branch that another worktree's session leased.
+#[test]
+fn a_rebase_that_would_update_a_leased_stacked_branch_is_refused() {
+    let repo = two_worktrees();
+    assert_eq!(repo.run(&["lease", "install-guard"], &[]).code, 0);
+    let wt2 = repo.path().join("wt2");
+    // feat/b carries two commits; feat/stack points at the first (a stacked branch).
+    std::fs::write(wt2.join("one.txt"), "1\n").unwrap();
+    assert!(git_with_hooks(&wt2, &["add", "one.txt"]).status.success());
+    assert!(git_with_hooks(&wt2, &["commit", "-q", "-m", "one"])
+        .status
+        .success());
+    assert!(
+        git_with_hooks(&wt2, &["branch", "-f", "feat/stack", "HEAD"])
+            .status
+            .success()
+    );
+    std::fs::write(wt2.join("two.txt"), "2\n").unwrap();
+    assert!(git_with_hooks(&wt2, &["add", "two.txt"]).status.success());
+    assert!(git_with_hooks(&wt2, &["commit", "-q", "-m", "two"])
+        .status
+        .success());
+    // The base moves; the main worktree's session leases the stacked branch.
+    std::fs::write(repo.path().join("base.txt"), "b\n").unwrap();
+    assert!(git_with_hooks(repo.path(), &["add", "base.txt"])
+        .status
+        .success());
+    assert!(
+        git_with_hooks(repo.path(), &["commit", "-q", "-m", "base moves"])
+            .status
+            .success()
+    );
+    assert_eq!(
+        repo.run(
+            &[
+                "lease",
+                "take",
+                "--agent",
+                "copilot",
+                "--branch",
+                "feat/stack"
+            ],
+            &[]
+        )
+        .code,
+        0
+    );
+    let before = git_with_hooks(&wt2, &["rev-parse", "feat/stack"]).stdout;
+
+    let out = git_with_hooks(&wt2, &["rebase", "-q", "--update-refs", "work"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("`feat/stack` is leased by worktree `main`"),
+        "{err}"
+    );
+    // Whatever git did with the rest of the rebase, the leased branch did not move.
+    let _ = git_with_hooks(&wt2, &["rebase", "--abort"]);
+    assert_eq!(
+        git_with_hooks(&wt2, &["rev-parse", "feat/stack"]).stdout,
+        before
+    );
+}

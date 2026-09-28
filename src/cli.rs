@@ -168,6 +168,17 @@ pub enum LeaseCommand {
     List(LeaseListArgs),
     /// Whether a branch is claimed by another worktree's live lease. Exit 0 = free (or ours), 1 = claimed by another worktree, 2 = could not check
     Check(LeaseCheckArgs),
+    /// Install the reference-transaction git hook that refuses a branch update another worktree's live lease claims (an existing hook is never rewritten)
+    InstallGuard,
+    /// The reference-transaction hook's body: reads the updates on stdin and exits 1, aborting the transaction, when one moves a branch another worktree's live lease claims
+    #[command(hide = true)]
+    Guard(LeaseGuardArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct LeaseGuardArgs {
+    /// The transaction state git passes (prepared, committed, aborted); only `prepared` is checked
+    pub state: String,
 }
 
 #[derive(Args, Debug)]

@@ -400,6 +400,19 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(install-guard)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(guard)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':state -- The transaction state git passes (prepared, committed, aborted); only `prepared` is checked:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_discipline__subcmd__lease__subcmd__help_commands" \
@@ -425,6 +438,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install-guard)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(guard)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -577,6 +598,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install-guard)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(guard)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -808,6 +837,8 @@ _discipline__subcmd__help__subcmd__lease_commands() {
 'release:Remove this worktree'\''s lease' \
 'list:List every worktree'\''s lease and whether it is live' \
 'check:Whether a branch is claimed by another worktree'\''s live lease. Exit 0 = free (or ours), 1 = claimed by another worktree, 2 = could not check' \
+'install-guard:Install the reference-transaction git hook that refuses a branch update another worktree'\''s live lease claims (an existing hook is never rewritten)' \
+'guard:The reference-transaction hook'\''s body\: reads the updates on stdin and exits 1, aborting the transaction, when one moves a branch another worktree'\''s live lease claims' \
     )
     _describe -t commands 'discipline help lease commands' commands "$@"
 }
@@ -815,6 +846,16 @@ _discipline__subcmd__help__subcmd__lease_commands() {
 _discipline__subcmd__help__subcmd__lease__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'discipline help lease check commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__lease__subcmd__guard_commands] )) ||
+_discipline__subcmd__help__subcmd__lease__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help lease guard commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__lease__subcmd__install-guard_commands] )) ||
+_discipline__subcmd__help__subcmd__lease__subcmd__install-guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help lease install-guard commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__help__subcmd__lease__subcmd__list_commands] )) ||
 _discipline__subcmd__help__subcmd__lease__subcmd__list_commands() {
@@ -911,6 +952,8 @@ _discipline__subcmd__lease_commands() {
 'release:Remove this worktree'\''s lease' \
 'list:List every worktree'\''s lease and whether it is live' \
 'check:Whether a branch is claimed by another worktree'\''s live lease. Exit 0 = free (or ours), 1 = claimed by another worktree, 2 = could not check' \
+'install-guard:Install the reference-transaction git hook that refuses a branch update another worktree'\''s live lease claims (an existing hook is never rewritten)' \
+'guard:The reference-transaction hook'\''s body\: reads the updates on stdin and exits 1, aborting the transaction, when one moves a branch another worktree'\''s live lease claims' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline lease commands' commands "$@"
@@ -920,6 +963,11 @@ _discipline__subcmd__lease__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'discipline lease check commands' commands "$@"
 }
+(( $+functions[_discipline__subcmd__lease__subcmd__guard_commands] )) ||
+_discipline__subcmd__lease__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease guard commands' commands "$@"
+}
 (( $+functions[_discipline__subcmd__lease__subcmd__help_commands] )) ||
 _discipline__subcmd__lease__subcmd__help_commands() {
     local commands; commands=(
@@ -927,6 +975,8 @@ _discipline__subcmd__lease__subcmd__help_commands() {
 'release:Remove this worktree'\''s lease' \
 'list:List every worktree'\''s lease and whether it is live' \
 'check:Whether a branch is claimed by another worktree'\''s live lease. Exit 0 = free (or ours), 1 = claimed by another worktree, 2 = could not check' \
+'install-guard:Install the reference-transaction git hook that refuses a branch update another worktree'\''s live lease claims (an existing hook is never rewritten)' \
+'guard:The reference-transaction hook'\''s body\: reads the updates on stdin and exits 1, aborting the transaction, when one moves a branch another worktree'\''s live lease claims' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline lease help commands' commands "$@"
@@ -936,10 +986,20 @@ _discipline__subcmd__lease__subcmd__help__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'discipline lease help check commands' commands "$@"
 }
+(( $+functions[_discipline__subcmd__lease__subcmd__help__subcmd__guard_commands] )) ||
+_discipline__subcmd__lease__subcmd__help__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease help guard commands' commands "$@"
+}
 (( $+functions[_discipline__subcmd__lease__subcmd__help__subcmd__help_commands] )) ||
 _discipline__subcmd__lease__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'discipline lease help help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__help__subcmd__install-guard_commands] )) ||
+_discipline__subcmd__lease__subcmd__help__subcmd__install-guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease help install-guard commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__lease__subcmd__help__subcmd__list_commands] )) ||
 _discipline__subcmd__lease__subcmd__help__subcmd__list_commands() {
@@ -955,6 +1015,11 @@ _discipline__subcmd__lease__subcmd__help__subcmd__release_commands() {
 _discipline__subcmd__lease__subcmd__help__subcmd__take_commands() {
     local commands; commands=()
     _describe -t commands 'discipline lease help take commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__install-guard_commands] )) ||
+_discipline__subcmd__lease__subcmd__install-guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease install-guard commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__lease__subcmd__list_commands] )) ||
 _discipline__subcmd__lease__subcmd__list_commands() {

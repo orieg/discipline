@@ -1340,6 +1340,61 @@ fn lease(args: discipline::cli::LeaseArgs) -> Result<bool> {
             }
             Ok(true)
         }
+        LeaseCommand::InstallGuard => {
+            let repo = discipline::gitctx::discover_repository(".")?;
+            let hooks = match repo
+                .config()
+                .ok()
+                .and_then(|c| c.get_path("core.hooksPath").ok())
+            {
+                Some(p) if p.is_absolute() => p,
+                Some(p) => here.root.join(p),
+                None => repo.commondir().join("hooks"),
+            };
+            let path = hooks.join("reference-transaction");
+            match std::fs::read_to_string(&path) {
+                Ok(existing) if existing.contains(discipline::lease::GUARD_MARKER) => {
+                    println!("lease: the guard is already installed at {}", path.display());
+                    return Ok(true);
+                }
+                Ok(_) => anyhow::bail!(
+                    "{} already exists and is not the lease guard; add `discipline lease guard \"$1\"` to it (when $1 is `prepared`, a non-zero exit aborts the update)",
+                    path.display()
+                ),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+            std::fs::create_dir_all(&hooks)?;
+            std::fs::write(&path, discipline::lease::guard_hook())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+            }
+            println!("lease: installed the guard at {}", path.display());
+            Ok(true)
+        }
+        LeaseCommand::Guard(a) => {
+            if a.state != "prepared" {
+                return Ok(true);
+            }
+            let mut stdin = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut stdin)?;
+            let refused = discipline::lease::refused_updates(&store, &here.key, &stdin, t)?;
+            for r in &refused {
+                eprintln!(
+                    "discipline lease guard: `{}` is leased by worktree `{}` ({} session {}, heartbeat {}s ago); this worktree (`{}`) may not move it. Hand the work over to that session, or take the branch with `discipline lease take --branch {} --steal`.",
+                    r.branch,
+                    r.holder,
+                    r.lease.agent,
+                    if r.lease.session.is_empty() { "-" } else { &r.lease.session },
+                    t - r.lease.heartbeat,
+                    here.key,
+                    r.branch
+                );
+            }
+            Ok(refused.is_empty())
+        }
         LeaseCommand::Check(a) => match store.holder(&a.branch, &here.key, t)? {
             None => Ok(true),
             Some((other, l)) => {

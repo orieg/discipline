@@ -315,6 +315,53 @@ impl Store {
     }
 }
 
+/// A branch update the guard refuses: the branch, and the worktree whose live lease
+/// claims it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    pub branch: String,
+    pub holder: String,
+    pub lease: Lease,
+}
+
+/// The branch updates in a `reference-transaction` hook's stdin (`<old> <new> <ref>` per
+/// line) that another worktree's live lease claims. Only `refs/heads/` counts: remote
+/// tracking refs, tags and `HEAD` move freely. A deletion is an update too.
+pub fn refused_updates(store: &Store, here: &str, stdin: &str, now: i64) -> Result<Vec<Refusal>> {
+    let branches: Vec<&str> = stdin
+        .lines()
+        .filter_map(|l| l.split_whitespace().nth(2))
+        .filter_map(|r| r.strip_prefix("refs/heads/"))
+        .collect();
+    if branches.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for b in branches {
+        if let Some((holder, lease)) = store.holder(b, here, now)? {
+            out.push(Refusal {
+                branch: b.to_string(),
+                holder,
+                lease,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The first line of the hook `install-guard` writes, by which it recognises its own file.
+pub const GUARD_MARKER: &str = "# Written by `discipline lease install-guard`";
+
+/// The `reference-transaction` hook: git runs it with the transaction's state and the
+/// updates on stdin, and a non-zero exit in the `prepared` state aborts the transaction.
+/// Without `discipline` on `PATH` it says so and lets the update through: a guard that
+/// refused every ref update would stop the repository, and the leases are cooperative.
+pub fn guard_hook() -> String {
+    format!(
+        "#!/bin/sh\n{GUARD_MARKER}: refuses a branch update that another worktree's\n# live lease claims (docs/ROADMAP.md, Phase 13 Step 1).\n[ \"$1\" = prepared ] || exit 0\nif ! command -v discipline >/dev/null 2>&1; then\n  echo \"discipline is not on PATH; the lease guard did not run\" >&2\n  exit 0\nfi\nexec discipline lease guard \"$1\"\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +474,37 @@ mod tests {
         std::fs::write(s.dir.join("wt-a.json"), "not json").unwrap();
         assert!(s.list().is_err());
         assert!(s.holder("x", "wt-b", 0).is_err());
+    }
+
+    #[test]
+    fn only_branch_updates_claimed_elsewhere_are_refused() {
+        let (_d, s) = store();
+        s.take("wt-a", lease(&["feat/stack"], 0), 1000, false)
+            .unwrap();
+        let z = "0000000000000000000000000000000000000000";
+        let a = "1111111111111111111111111111111111111111";
+        let stdin = format!(
+            "{a} {z} refs/heads/feat/stack\n{z} {a} refs/heads/feat/free\n{a} {a} refs/remotes/origin/feat/stack\n{a} {a} refs/tags/feat/stack\n"
+        );
+        let r = refused_updates(&s, "wt-b", &stdin, 1000).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(
+            (r[0].branch.as_str(), r[0].holder.as_str()),
+            ("feat/stack", "wt-a")
+        );
+        assert!(
+            refused_updates(&s, "wt-a", &stdin, 1000)
+                .unwrap()
+                .is_empty(),
+            "the holder moves its own branch"
+        );
+        assert!(
+            refused_updates(&s, "wt-b", &stdin, 1200)
+                .unwrap()
+                .is_empty(),
+            "a stale lease claims nothing"
+        );
+        assert!(guard_hook().starts_with(&format!("#!/bin/sh\n{GUARD_MARKER}")));
     }
 
     #[test]

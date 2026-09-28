@@ -60,6 +60,8 @@
       "install-hooks",
       "lease",
       "lease check",
+      "lease guard",
+      "lease install-guard",
       "lease list",
       "lease release",
       "lease take",
