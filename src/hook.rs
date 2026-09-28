@@ -1039,6 +1039,7 @@ esac
 asset="discipline-${{arch}}-unknown-linux-musl.tar.gz"
 base="https://github.com/orieg/discipline/releases/download/${{version}}"
 dir="$(mktemp -d)"
+trap 'rm -rf "${{dir}}"' EXIT
 if ! curl -fsSL --retry 3 -o "${{dir}}/${{asset}}" "${{base}}/${{asset}}" \
   || ! curl -fsSL --retry 3 -o "${{dir}}/SHA256SUMS" "${{base}}/SHA256SUMS"; then
   say "could not download ${{version}} (network access level?); the hooks cannot check this session"
@@ -1391,6 +1392,44 @@ mod tests {
                 .all(|l| l.trim() == "exit 0"),
             "a bootstrap failure never fails the session"
         );
+    }
+
+    /// The bootstrap removes its download directory on every exit: here a download that
+    /// fails, in a cloud session without discipline, must leave `TMPDIR` empty.
+    #[cfg(unix)]
+    #[test]
+    fn the_bootstrap_leaves_no_temporary_directory_behind() {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = tempfile::tempdir().unwrap();
+        let curl = bin.path().join("curl");
+        std::fs::write(&curl, "#!/bin/sh\nexit 22\n").unwrap();
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // macOS `mktemp -d` ignores TMPDIR: this one creates its directory there everywhere.
+        let mktemp = bin.path().join("mktemp");
+        std::fs::write(
+            &mktemp,
+            "#!/bin/sh\nd=\"$TMPDIR/bootstrap.$$\"\nmkdir \"$d\" && echo \"$d\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&mktemp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("/bin/bash")
+            .args(["-c", &claude_bootstrap_script()])
+            .env_clear()
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+            .env("TMPDIR", tmp.path())
+            .env("HOME", home.path())
+            .env("CLAUDE_CODE_REMOTE", "true")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("could not download"),
+            "{out:?}"
+        );
+        let left: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().collect();
+        assert!(left.is_empty(), "left behind: {left:?}");
     }
 
     /// agy's `SessionStart` handler tells the agent to warn the person when `discipline`
