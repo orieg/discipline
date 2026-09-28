@@ -18,6 +18,7 @@ pub mod lease;
 pub mod mcp;
 pub mod output_schema;
 pub mod override_policy;
+pub mod pretool;
 pub mod ratification;
 pub mod references;
 pub mod replay;

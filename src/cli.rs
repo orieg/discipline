@@ -240,9 +240,22 @@ pub struct HookRunArgs {
     #[arg(long)]
     pub observe: bool,
 
+    /// The hook event: `pre-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); the default checks the change so far
+    #[arg(long, value_enum, default_value_t = HookEvent::Check)]
+    pub event: HookEvent,
+
     /// Files an agent appends to the command (Aider's lint-cmd); ignored, the whole change is checked
     #[arg(hide = true, trailing_var_arg = true)]
     pub files: Vec<String>,
+}
+
+/// Which hook event `hook run` answers.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookEvent {
+    /// After an edit or at the end of a turn: check the change so far
+    Check,
+    /// Before a tool runs: refuse an edit outside this session's worktree
+    PreTool,
 }
 
 #[derive(Args, Debug)]

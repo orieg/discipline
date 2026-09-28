@@ -176,6 +176,7 @@
       "hook install --user",
       "hook run --agent",
       "hook run --base",
+      "hook run --event",
       "hook run --if-configured",
       "hook run --observe",
       "hook run -b",
@@ -256,7 +257,9 @@
       "hook run --agent=copilot",
       "hook run --agent=cursor",
       "hook run --agent=opencode",
-      "hook run --agent=qwen"
+      "hook run --agent=qwen",
+      "hook run --event=check",
+      "hook run --event=pre-tool"
     ],
     "config.keys": [
       "directives",

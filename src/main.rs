@@ -1553,8 +1553,11 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     .read_to_string(&mut stdin)
                     .context("cannot read the hook payload on stdin")?;
             }
-            let out =
-                discipline::hook::run_with(a.agent, a.base, &stdin, a.if_configured, a.observe)?;
+            let out = if a.event == discipline::cli::HookEvent::PreTool {
+                discipline::pretool::run(a.agent, &stdin, a.observe)
+            } else {
+                discipline::hook::run_with(a.agent, a.base, &stdin, a.if_configured, a.observe)?
+            };
             print!("{}", out.stdout);
             eprint!("{}", out.stderr);
             std::io::stdout()

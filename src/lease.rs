@@ -95,6 +95,11 @@ fn safe_key(name: &str) -> String {
     }
 }
 
+/// The lease key of the linked worktree named `name`, as [`open`] names it.
+pub fn key_of(name: &str) -> String {
+    safe_key(name)
+}
+
 /// The lease store of the repository at `path` and the worktree `path` is in.
 pub fn open(path: &Path) -> Result<(Store, Worktree)> {
     let repo = crate::gitctx::discover_repository(path)?;
@@ -302,6 +307,25 @@ impl Store {
         lease.heartbeat = now;
         self.write(key, &lease)?;
         Ok(Taken { lease, stolen })
+    }
+
+    /// Refresh `key`'s heartbeat when it holds a lease that names no session or names
+    /// `session`. `Ok(false)` when there is nothing to refresh.
+    pub fn touch(&self, key: &str, session: Option<&str>, now: i64) -> Result<bool> {
+        if !self.path(key).exists() {
+            return Ok(false);
+        }
+        let _lock = self.lock()?;
+        let Some((_, mut lease)) = self.list()?.into_iter().find(|(k, _)| k == key) else {
+            return Ok(false);
+        };
+        let ours = lease.session.is_empty() || session.is_some_and(|s| s == lease.session);
+        if !ours {
+            return Ok(false);
+        }
+        lease.heartbeat = now;
+        self.write(key, &lease)?;
+        Ok(true)
     }
 
     /// Remove `key`'s lease. `Ok(false)` when it had none.

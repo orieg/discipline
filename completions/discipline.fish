@@ -167,6 +167,8 @@ agy\t'Antigravity CLI (`.agents/hooks.json`, Stop)'
 qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
 opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s b -l base -d 'Base to measure the change against (default: the merge base with origin\'s default branch, else main / master)' -r
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l event -d 'The hook event: `pre-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); the default checks the change so far' -r -f -a "check\t'After an edit or at the end of a turn: check the change so far'
+pre-tool\t'Before a tool runs: refuse an edit outside this session\'s worktree'"
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l if-configured -d 'Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l observe -d 'Observe mode: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook-observe.log'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s h -l help -d 'Print help (see more with \'--help\')'
