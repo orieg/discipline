@@ -307,6 +307,11 @@ pub fn run_with(
     if if_configured && !configured(&dir) {
         return Ok(translate_event(agent, event, 0, "", ""));
     }
+    // Copilot CLI runs the repository's `.github/hooks/` too in a folder it trusts, for the
+    // same event: the user-level run is left to it, so the change is checked once.
+    if if_configured && agent == Agent::Copilot && copilot_repo_hook_runs(&dir) {
+        return Ok(translate_event(agent, event, 0, "", ""));
+    }
     let base = match base {
         Some(b) => Some(b),
         None => crate::gitctx::discover_repository(&dir)
@@ -820,13 +825,8 @@ fn copilot_hooks(cmd: &str) -> String {
 pub fn user_config_for(agent: Agent, observe: bool) -> Result<(PathBuf, String)> {
     match agent {
         Agent::Copilot => {
-            let home = match std::env::var_os("COPILOT_HOME").filter(|h| !h.is_empty()) {
-                Some(h) => PathBuf::from(h),
-                None => std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .map(|h| PathBuf::from(h).join(".copilot"))
-                    .context("cannot find the home directory (set COPILOT_HOME)")?,
-            };
+            let home =
+                copilot_home().context("cannot find the home directory (set COPILOT_HOME)")?;
             Ok((
                 home.join("hooks").join("discipline.json"),
                 copilot_hooks(&format!(
@@ -840,6 +840,125 @@ pub fn user_config_for(agent: Agent, observe: bool) -> Result<(PathBuf, String)>
             other.id()
         ),
     }
+}
+
+/// Copilot CLI's home directory: `COPILOT_HOME`, else `.copilot` in the user's home.
+pub fn copilot_home() -> Option<PathBuf> {
+    match std::env::var_os("COPILOT_HOME").filter(|h| !h.is_empty()) {
+        Some(h) => Some(PathBuf::from(h)),
+        None => std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|h| !h.is_empty())
+            .map(|h| PathBuf::from(h).join(".copilot")),
+    }
+}
+
+/// JSON as a person or a tool edits it: `//` and `/* */` comments and trailing commas are
+/// dropped before parsing. Copilot CLI's `config.json` opens with comment lines, so a strict
+/// parser rejects it.
+pub fn parse_lenient_json(text: &str) -> Option<serde_json::Value> {
+    // Two passes, each tracking strings: comments first, so that a comma followed by a
+    // comment and then the closing bracket is still seen as trailing.
+    let uncommented = scan_json(text, |chars, i, out| match (chars[i], chars.get(i + 1)) {
+        ('/', Some('/')) => chars[i..]
+            .iter()
+            .position(|c| *c == '\n')
+            .map_or(chars.len(), |n| i + n),
+        ('/', Some('*')) => chars[i + 2..]
+            .windows(2)
+            .position(|w| w == ['*', '/'])
+            .map_or(chars.len(), |n| i + 2 + n + 2),
+        (c, _) => {
+            out.push(c);
+            i + 1
+        }
+    });
+    let trimmed = scan_json(&uncommented, |chars, i, out| {
+        let closes = chars[i + 1..]
+            .iter()
+            .find(|n| !n.is_whitespace())
+            .is_some_and(|n| matches!(n, '}' | ']'));
+        if !(chars[i] == ',' && closes) {
+            out.push(chars[i]);
+        }
+        i + 1
+    });
+    serde_json::from_str(&trimmed).ok()
+}
+
+/// Copies `text`, handing every character outside a string to `outside`, which appends
+/// what it keeps and returns the index to continue from.
+fn scan_json(text: &str, outside: impl Fn(&[char], usize, &mut String) -> usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let (mut i, mut in_string) = (0, false);
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            out.push(c);
+            if c == '\\' {
+                if let Some(next) = chars.get(i + 1) {
+                    out.push(*next);
+                    i += 1;
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+            i += 1;
+        } else if c == '"' {
+            in_string = true;
+            out.push(c);
+            i += 1;
+        } else {
+            i = outside(&chars, i, &mut out);
+        }
+    }
+    out
+}
+
+/// Whether Copilot CLI trusts `dir`: it, or a folder above it, is in `trustedFolders` of
+/// `<home>/config.json`. `None` when that file is missing or unreadable (Copilot CLI has
+/// not run here, or writes a shape this release does not know).
+pub fn copilot_trusts(home: &Path, dir: &Path) -> Option<bool> {
+    let config = parse_lenient_json(&std::fs::read_to_string(home.join("config.json")).ok()?)?;
+    let folders = config
+        .get("trustedFolders")
+        .or_else(|| config.get("trusted_folders"))
+        .and_then(|f| f.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    Some(folders.iter().filter_map(|f| f.as_str()).any(|f| {
+        let f = Path::new(f);
+        dir.starts_with(f.canonicalize().unwrap_or_else(|_| f.to_path_buf()))
+    }))
+}
+
+/// The repository hook file under `root` that runs discipline for Copilot CLI: a
+/// `.github/hooks/*.json` whose content names `hook run --agent copilot`.
+pub fn copilot_repo_hook(root: &Path) -> Option<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(root.join(".github").join("hooks"))
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
+    files.into_iter().find(|p| {
+        std::fs::read_to_string(p).is_ok_and(|c| c.contains("discipline hook run --agent copilot"))
+    })
+}
+
+/// Whether Copilot CLI also runs the repository's own discipline hook in `dir`: the
+/// repository has one and the folder is trusted.
+fn copilot_repo_hook_runs(dir: &Path) -> bool {
+    let Some(root) = crate::gitctx::discover_repository(dir)
+        .ok()
+        .and_then(|r| r.workdir().map(Path::to_path_buf))
+    else {
+        return false;
+    };
+    copilot_repo_hook(&root).is_some()
+        && copilot_home().and_then(|h| copilot_trusts(&h, dir)) == Some(true)
 }
 
 /// Write the user-level hook file ([`user_config_for`]); an existing file is never
@@ -1361,6 +1480,48 @@ mod tests {
         );
         assert_eq!(parse_payload(""), Payload::default());
         assert_eq!(parse_payload("[1]"), Payload::default());
+    }
+
+    /// Copilot CLI's `config.json` opens with comment lines; a hand edit can leave a
+    /// trailing comma. Comment markers and commas inside strings are text.
+    #[test]
+    fn lenient_json_reads_comments_and_trailing_commas_but_not_inside_strings() {
+        let v = parse_lenient_json(
+            "// managed\n{\n  /* a */ \"trustedFolders\": [\"/a//b\", \"x,]\\\"/*\",],\n  \"n\": 1, // one\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"trustedFolders": ["/a//b", "x,]\"/*"], "n": 1})
+        );
+        assert_eq!(parse_lenient_json("{\"a\": }"), None);
+    }
+
+    #[test]
+    fn copilot_trust_covers_a_listed_folder_and_what_is_below_it_only() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let repo = work.path().join("repo");
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        assert_eq!(copilot_trusts(home.path(), &repo), None, "no config");
+        std::fs::write(
+            home.path().join("config.json"),
+            format!(
+                "// x\n{{\"trustedFolders\": [{}]}}",
+                serde_json::json!(repo.to_str().unwrap())
+            ),
+        )
+        .unwrap();
+        assert_eq!(copilot_trusts(home.path(), &repo), Some(true));
+        assert_eq!(copilot_trusts(home.path(), &repo.join("sub")), Some(true));
+        assert_eq!(copilot_trusts(home.path(), work.path()), Some(false));
+        let sibling = work.path().join("repo2");
+        std::fs::create_dir_all(&sibling).unwrap();
+        assert_eq!(
+            copilot_trusts(home.path(), &sibling),
+            Some(false),
+            "a prefix is not a parent"
+        );
     }
 
     #[test]

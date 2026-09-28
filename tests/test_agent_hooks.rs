@@ -13,7 +13,14 @@ struct HookRun {
     stderr: String,
 }
 
+/// No environment beyond the isolated default.
+const NO_ENV: &[(&str, &str)] = &[];
+
 fn hook(repo: &Repo, args: &[&str], stdin: &str) -> HookRun {
+    hook_env(repo, args, stdin, NO_ENV)
+}
+
+fn hook_env(repo: &Repo, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> HookRun {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
     cmd.args(args)
         .current_dir(repo.path())
@@ -29,6 +36,7 @@ fn hook(repo: &Repo, args: &[&str], stdin: &str) -> HookRun {
             cmd.env_remove(k);
         }
     }
+    cmd.envs(env.iter().copied());
     let mut child = cmd.spawn().unwrap();
     child
         .stdin
@@ -578,6 +586,78 @@ fn if_configured_checks_only_repositories_that_adopted_discipline() {
         "outside a repository: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// Copilot CLI's `config.json` as 1.0.88 writes it (a comment line before the object),
+/// with a trailing comma a hand edit can leave, trusting `folders`.
+fn copilot_config(home: &std::path::Path, folders: &[&std::path::Path]) {
+    let list: Vec<String> = folders
+        .iter()
+        .map(|f| format!("    {},\n", serde_json::json!(f.to_str().unwrap())))
+        .collect();
+    std::fs::write(
+        home.join("config.json"),
+        format!(
+            "// User settings belong in settings.json.\n{{\n  \"trustedFolders\": [\n{}  ],\n}}\n",
+            list.concat()
+        ),
+    )
+    .unwrap();
+}
+
+/// Copilot CLI runs the user-level hook in every folder and the repository's
+/// `.github/hooks/` only in a trusted one, both for the same event (seen live with 1.0.88).
+/// The user-level run (`--if-configured`) therefore passes silently where the repository's
+/// own hook runs: a trusted folder whose repository has one. An untrusted folder, or a
+/// repository without the hook, is still checked by it.
+#[test]
+fn the_user_level_copilot_hook_leaves_a_trusted_repository_to_its_own_hook() {
+    let stop = r#"{"stopReason":"end_turn","stop_hook_active":false}"#;
+    let args = ["hook", "run", "--agent", "copilot", "--if-configured"];
+    let home = tempfile::tempdir().unwrap();
+    let env = [("COPILOT_HOME", home.path().to_str().unwrap())];
+    let repo = Repo::new();
+    repo.write("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n");
+    weakened(&repo);
+    let root = repo.path().canonicalize().unwrap();
+    let blocks = |run: &HookRun| run.stdout.contains(r#""decision":"block""#);
+
+    copilot_config(home.path(), &[&root]);
+    let no_repo_hook = hook_env(&repo, &args, stop, &env);
+    assert!(
+        blocks(&no_repo_hook),
+        "no repository hook: {}",
+        no_repo_hook.stdout
+    );
+
+    let installed = repo.run(&["hook", "install", "--agent", "copilot"], &env);
+    assert_eq!(installed.code, 0, "{}", installed.stderr);
+    let trusted = hook_env(&repo, &args, stop, &env);
+    assert_eq!(
+        (
+            trusted.code,
+            trusted.stdout.as_str(),
+            trusted.stderr.as_str()
+        ),
+        (0, "", ""),
+        "trusted, with the repository hook"
+    );
+    // A parent folder in the list trusts the repository too.
+    copilot_config(home.path(), &[root.parent().unwrap()]);
+    let parent = hook_env(&repo, &args, stop, &env);
+    assert_eq!(
+        (parent.code, parent.stdout.as_str()),
+        (0, ""),
+        "trusted parent"
+    );
+
+    copilot_config(home.path(), &[]);
+    let untrusted = hook_env(&repo, &args, stop, &env);
+    assert!(blocks(&untrusted), "untrusted: {}", untrusted.stdout);
+    // The repository's own hook (no `--if-configured`) always checks.
+    copilot_config(home.path(), &[&root]);
+    let own = hook_env(&repo, &["hook", "run", "--agent", "copilot"], stop, &env);
+    assert!(blocks(&own), "the repository hook: {}", own.stdout);
 }
 
 /// `hook install --agent copilot --user` writes the user-level file Copilot CLI loads
