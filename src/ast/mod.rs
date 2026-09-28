@@ -439,8 +439,16 @@ fn plain_argument(node: tree_sitter::Node, spec: &WrapperSpec) -> bool {
     let closure = ["lambda", "func", "block", "closure"]
         .iter()
         .any(|k| kind.contains(k));
-    !closure
-        && (kind.ends_with("identifier") || kind.ends_with("literal") || spec.plain.contains(&kind))
+    if closure {
+        return false;
+    }
+    if kind.ends_with("literal") {
+        // A composite literal (`[]int{f()}`, `[f()]`, `@[f()]`) or an interpolated
+        // string (`"\(f())"`, `"${f()}"`) can hold a call, which is work. A string's own
+        // parts (`string_content`, `escape_sequence`) are not held to `plain_argument`.
+        return !makes_a_call(node, spec);
+    }
+    kind.ends_with("identifier") || spec.plain.contains(&kind)
 }
 
 /// Failure exits in a helper body: nodes of one of `kinds` whose text starts with one of
@@ -960,6 +968,60 @@ mod tests {
         // A call the pack did not collect as a same-file call.
         assert_eq!(callee("{ other.check(x) }", &[]), None);
         assert_eq!(callee("{}", &[]), None);
+    }
+
+    /// A literal forwarded by a wrapper is plain only when nothing in it calls: a
+    /// composite literal (`[]int{f()}`, `[f()]`, `@[f()]`) or an interpolated string
+    /// (`"\(f())"`, `"${f()}"`) holding a call is work, so its helper is not a wrapper.
+    /// The same literals holding names, numbers and escapes stay plain. Each source's
+    /// `plain` wrapper forwards the second kind and `calls` the first; one-level packs
+    /// give a test calling a non-wrapper helper no credit.
+    #[test]
+    fn a_wrapper_forwarding_a_literal_that_calls_is_not_thin() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "pkg/wrap_test.go",
+                "package a\nimport \"testing\"\nfunc checked(x int, xs []int, s string) { if x != 1 { panic(\"x\") } }\nfunc plain(x int) { checked(x, []int{1, x}, \"s\\n\") }\nfunc calls(x int) { checked(x, []int{f()}, \"s\") }\nfunc TestPlain(t *testing.T) { plain(1) }\nfunc TestCalls(t *testing.T) { calls(1) }\n",
+            ),
+            (
+                "Tests/WrapTests.swift",
+                "import XCTest\nfinal class WrapTests: XCTestCase {\n    func checked(_ x: Int, _ a: Any, _ s: String) { if x != 1 { fatalError(\"x\") } }\n    func plain(_ x: Int) { checked(x, [1, x], \"a\\(x)\\n\") }\n    func calls(_ x: Int) { checked(x, [f()], \"a\") }\n    func callsInDictionary(_ x: Int) { checked(x, [\"k\": f()], \"a\") }\n    func callsInString(_ x: Int) { checked(x, [x], \"a\\(f())\") }\n    func testPlain() { plain(1) }\n    func testCalls() { calls(1) }\n    func testCallsInDictionary() { callsInDictionary(1) }\n    func testCallsInString() { callsInString(1) }\n}\n",
+            ),
+            (
+                "Tests/WrapTests.m",
+                "@interface WrapTests : XCTestCase\n@end\n@implementation WrapTests\n- (void)checked:(int)x with:(id)a s:(id)s {\n    if (x != 1) { XCTFail(@\"x\"); }\n}\n- (void)plain:(int)x {\n    [self checked:x with:@[@1] s:@\"s\\n\"];\n}\n- (void)calls:(int)x {\n    [self checked:x with:@[f()] s:@\"s\"];\n}\n- (void)callsInDictionary:(int)x {\n    [self checked:x with:@{@\"k\": f()} s:@\"s\"];\n}\n- (void)testPlain {\n    [self plain:1];\n}\n- (void)testCalls {\n    [self calls:1];\n}\n- (void)testCallsInDictionary {\n    [self callsInDictionary:1];\n}\n@end\n",
+            ),
+            (
+                "src/test/kotlin/WrapTest.kt",
+                "class WrapTest {\n    private fun checked(x: Int, s: String) { if (x != 1) throw IllegalStateException(\"x\") }\n    private fun plain(x: Int) = checked(x, \"a$x\\n\")\n    private fun calls(x: Int) = checked(x, \"a${f()}\")\n    @Test\n    fun testPlain() { plain(1) }\n    @Test\n    fun testCalls() { calls(1) }\n}\n",
+            ),
+        ];
+        let reg = default_registry();
+        let vocab = AssertVocabulary::default();
+        let mut wrong = Vec::new();
+        for (path, src) in cases {
+            let Some(pack) = reg.find_pack(path) else {
+                continue;
+            };
+            let facts = pack.extract(path, src, &vocab).expect(path);
+            let mut seen = 0;
+            for t in &facts.tests {
+                let name = t.name.to_lowercase();
+                let want = if name.contains("plain") {
+                    (1, 1)
+                } else if name.contains("calls") {
+                    (0, 0)
+                } else {
+                    continue;
+                };
+                seen += 1;
+                if (t.total_asserts, t.helper_checks) != want {
+                    wrong.push(format!("{path} {}: {t:?}", t.name));
+                }
+            }
+            assert!(seen >= 2, "{path}: {:?}", facts.tests);
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// Helpers named in a dispatch table and run in a loop resolve like direct calls.
