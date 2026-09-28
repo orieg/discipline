@@ -192,6 +192,17 @@ pub fn generate_schema() -> Value {
                     }
                 ]
             },
+            "BannedAction": {
+                "description": "A banned action or reusable workflow: `owner/repo`, `owner/repo/path`, optionally `@ref`; as a string, or a table with `uses` and an optional `reason`.",
+                "type": ["string", "object"],
+                "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+(@[A-Za-z0-9_./+-]+)?$",
+                "additionalProperties": false,
+                "required": ["uses"],
+                "properties": {
+                    "uses": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+(@[A-Za-z0-9_./+-]+)?$", "description": "`owner/repo`, `owner/repo/path`, optionally `@ref`; without a ref every ref is banned" },
+                    "reason": { "type": "string", "description": "Why the action is banned; echoed in the finding" }
+                }
+            },
             "BasicGate": {
                 "type": "object",
                 "additionalProperties": false,
@@ -553,7 +564,12 @@ pub fn generate_schema() -> Value {
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified workflow files rather than all workflows, and pins only references new relative to the base; false reports every unpinned reference, pre-existing ones included" },
                     "documented_job_count_path": { "type": "string", "description": "Path to catalog documentation stating job count" },
                     "documented_job_count_pattern": { "type": "string", "description": "Regex pattern to extract job count from documentation" },
-                    "first_party_action_prefixes": { "$ref": "#/$defs/StringListOrReset", "description": "Action owner prefixes (for example `actions/`) excused from commit SHA pinning; empty by default, so every remote action needs a SHA" }
+                    "first_party_action_prefixes": { "$ref": "#/$defs/StringListOrReset", "description": "Action owner prefixes (for example `actions/`) excused from commit SHA pinning; empty by default, so every remote action needs a SHA" },
+                    "banned_actions": {
+                        "type": "array",
+                        "description": "Actions and reusable workflows that must not be referenced anywhere in the scanned files, whatever diff_only says: `owner/repo` (every ref), `owner/repo@ref`, or { uses, reason }. No directive lifts the finding",
+                        "items": { "$ref": "#/$defs/BannedAction" }
+                    }
                 }
             },
             "CiSkipSetGate": {

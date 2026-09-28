@@ -1637,6 +1637,97 @@ pub struct CiIntegrityGate {
     /// "require actions to be pinned to a full-length commit SHA" policy exempts no
     /// owner, so `actions/` and `github/` tag refs are reported like any other.
     pub first_party_action_prefixes: Vec<String>,
+    /// Actions and reusable workflows that must not be referenced anywhere in the tree:
+    /// `owner/repo` (every ref), `owner/repo@ref`, or a table `{ uses = "...", reason =
+    /// "..." }`. Checked against every scanned file whatever `diff_only` says; no
+    /// directive lifts the finding.
+    pub banned_actions: Vec<BannedAction>,
+}
+
+/// One `banned_actions` entry. Written as a string (`"owner/repo@ref"`) or a table with
+/// `uses` and an optional `reason`; both read to this.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BannedAction {
+    /// `owner/repo`, `owner/repo/path`, optionally `@ref`.
+    pub uses: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl BannedAction {
+    /// The entry split into its target (`owner/repo[/path]`) and its ref, if one is named.
+    pub fn target_and_ref(&self) -> (&str, Option<&str>) {
+        match self.uses.split_once('@') {
+            Some((t, r)) => (t, Some(r)),
+            None => (self.uses.as_str(), None),
+        }
+    }
+}
+
+/// Why a `banned_actions` value is not a remote action reference, or `None` when it is.
+pub fn banned_action_problem(uses: &str) -> Option<&'static str> {
+    let segment = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    if uses.starts_with("./") || uses.starts_with("docker://") {
+        return Some("a local path or a docker:// image is not a remote action");
+    }
+    let (target, r) = match uses.split_once('@') {
+        Some((t, r)) => (t, Some(r)),
+        None => (uses, None),
+    };
+    let parts: Vec<&str> = target.split('/').collect();
+    if parts.len() < 2 || !parts.iter().all(|p| segment(p)) {
+        return Some("expected `owner/repo` or `owner/repo/path`, optionally followed by `@ref`");
+    }
+    if let Some(r) = r {
+        if r.is_empty()
+            || !r
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '+'))
+        {
+            return Some("the ref after `@` is empty or holds characters a git ref cannot");
+        }
+    }
+    None
+}
+
+impl<'de> Deserialize<'de> for BannedAction {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Entry {
+            uses: String,
+            #[serde(default)]
+            reason: Option<String>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Ref(String),
+            Entry(Entry),
+        }
+        let entry = match Raw::deserialize(d).map_err(|_| {
+            serde::de::Error::custom(
+                "a banned_actions entry is a string \"owner/repo[@ref]\" or a table { uses = \"owner/repo[@ref]\", reason = \"...\" }",
+            )
+        })? {
+            Raw::Ref(uses) => BannedAction { uses, reason: None },
+            Raw::Entry(e) => BannedAction {
+                uses: e.uses,
+                reason: e.reason,
+            },
+        };
+        if let Some(why) = banned_action_problem(&entry.uses) {
+            return Err(serde::de::Error::custom(format!(
+                "banned_actions entry `{}`: {why}",
+                entry.uses
+            )));
+        }
+        Ok(entry)
+    }
 }
 
 impl Default for CiIntegrityGate {
@@ -1673,6 +1764,7 @@ impl Default for CiIntegrityGate {
             documented_job_count_path: None,
             documented_job_count_pattern: None,
             first_party_action_prefixes: Vec::new(),
+            banned_actions: Vec::new(),
         }
     }
 }

@@ -90,6 +90,29 @@
       },
       "type": "object"
     },
+    "BannedAction": {
+      "additionalProperties": false,
+      "description": "A banned action or reusable workflow: `owner/repo`, `owner/repo/path`, optionally `@ref`; as a string, or a table with `uses` and an optional `reason`.",
+      "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+(@[A-Za-z0-9_./+-]+)?$",
+      "properties": {
+        "reason": {
+          "description": "Why the action is banned; echoed in the finding",
+          "type": "string"
+        },
+        "uses": {
+          "description": "`owner/repo`, `owner/repo/path`, optionally `@ref`; without a ref every ref is banned",
+          "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+(@[A-Za-z0-9_./+-]+)?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uses"
+      ],
+      "type": [
+        "string",
+        "object"
+      ]
+    },
     "BasicGate": {
       "additionalProperties": false,
       "properties": {
@@ -200,6 +223,13 @@
     "CiIntegrityGate": {
       "additionalProperties": false,
       "properties": {
+        "banned_actions": {
+          "description": "Actions and reusable workflows that must not be referenced anywhere in the scanned files, whatever diff_only says: `owner/repo` (every ref), `owner/repo@ref`, or { uses, reason }. No directive lifts the finding",
+          "items": {
+            "$ref": "#/$defs/BannedAction"
+          },
+          "type": "array"
+        },
         "diff_only": {
           "description": "When true, scans only modified workflow files rather than all workflows, and pins only references new relative to the base; false reports every unpinned reference, pre-existing ones included",
           "type": "boolean"

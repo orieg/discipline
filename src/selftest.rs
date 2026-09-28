@@ -2621,6 +2621,24 @@ jobs:
         },
     ),
     (
+        "ci-integrity: a banned_actions entry matches every ref, one ref, or the paths under it",
+        || {
+            use crate::config::BannedAction;
+            use crate::guards::ci_integrity::banned_entry_for;
+            let list = vec![
+                BannedAction { uses: "actions-cool/issues-helper".into(), reason: None },
+                BannedAction { uses: "evil/thing@v2".into(), reason: None },
+            ];
+            let hit = |u: &str| banned_entry_for(u, &list).is_some();
+            Ok(hit("actions-cool/issues-helper@v3")
+                && hit("actions-cool/issues-helper/sub@b4ffde65f46336ab88eb53be808477a3936bae11")
+                && hit("evil/thing@v2")
+                && !hit("evil/thing@v3")
+                && !hit("actions-cool/issues-helper-v2@v3")
+                && !hit("./actions-cool/issues-helper"))
+        },
+    ),
+    (
         "ci-integrity: renamed step pairs by run body, renamed-and-rewritten step does not",
         || {
             use crate::guards::ci_integrity::{pair_steps, StepMatch};

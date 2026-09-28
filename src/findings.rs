@@ -249,6 +249,7 @@ findings! {
     VERIFICATION_JOB_MASKED_BY_CONDITION = ["ci-integrity"], "verification-job-masked-by-condition", "Verification Job Masked By Condition", Was("Conditional Masking on Verification Job");
     UNPINNED_ACTION = ["ci-integrity"], "unpinned-action", "Unpinned Third-Party Action", Same;
     UNPINNED_CONTAINER_IMAGE = ["ci-integrity"], "unpinned-container-image", "Unpinned Container Image", Same;
+    BANNED_ACTION = ["ci-integrity"], "banned-action", "Banned Action Referenced", Same;
     DISCIPLINE_ACTION_POLICY_FROM = ["ci-integrity"], "discipline-action-policy-from-weakened", "Discipline Action Weakened (policy_from)", Same;
     DISCIPLINE_VERSION_CHANGED = ["ci-integrity"], "discipline-version-changed", "Discipline Version Chosen By The Change", Same;
     DISCIPLINE_ACTION_DISABLE_INPUT = ["ci-integrity"], "discipline-action-disable-input", "Discipline Action Weakened (disable input)", Same;

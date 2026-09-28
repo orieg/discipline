@@ -105,6 +105,9 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.build-hooks.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.build-hooks.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.build-hooks.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.ci-integrity.banned_actions` | array of tables | `[]` | Actions and reusable workflows that must not be referenced anywhere in the scanned files, whatever diff_only says: `owner/repo` (every ref), `owner/repo@ref`, or { uses, reason }. No directive lifts the finding |
+| `gates.ci-integrity.banned_actions[].reason` | string | *(per entry)* | Why the action is banned; echoed in the finding |
+| `gates.ci-integrity.banned_actions[].uses` | string | *(required)* | `owner/repo`, `owner/repo/path`, optionally `@ref`; without a ref every ref is banned |
 | `gates.ci-integrity.diff_only` | boolean | `true` | When true, scans only modified workflow files rather than all workflows, and pins only references new relative to the base; false reports every unpinned reference, pre-existing ones included |
 | `gates.ci-integrity.documented_job_count_path` | string | *(unset)* | Path to catalog documentation stating job count |
 | `gates.ci-integrity.documented_job_count_pattern` | string | *(unset)* | Regex pattern to extract job count from documentation |
@@ -1644,6 +1647,45 @@ With the standalone binary instead of the action:
 ```
 
 To verify the gate evaluated rather than passed on a missing context, assert its `examined` count in the JSON report: `jq -e '.outcomes[] | select(.gate == "ci-skip-set") | .examined > 0' report.json`.
+
+### Banned Actions on a Schedule (`ci-integrity`)
+
+When an action is known to be compromised, list it under `banned_actions`. Every `uses:` in the files `ci-integrity` scans (steps, job-level reusable workflows, composite actions' nested steps) is compared with the list on every run, whether or not the change touched it, and a match is `ci-integrity/banned-action`. No directive or inline allow lifts it: remove the reference, or remove the entry (which `config-integrity` reports as a loosening).
+
+```toml
+[gates.ci-integrity]
+banned_actions = [
+  "actions-cool/issues-helper",                                   # every ref, and paths under it
+  "some-owner/some-action@v2",                                    # one ref
+  { uses = "some-owner/reusable", reason = "compromised upstream" },
+]
+```
+
+A compromised action can run with no change to the consuming repository, so a pull-request check alone may never see it. Run the check on a schedule too; with `base_ref: HEAD` there is no diff, and the banned list is still compared against the whole tree:
+
+```yaml
+name: Banned actions
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  banned-actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: orieg/discipline@v0
+        with:
+          suite: integrity
+          base_ref: HEAD
+```
+
+Pin `orieg/discipline` by commit SHA as in [GitHub Actions](#github-actions). The list is configuration, never fetched: a new entry takes effect on the next run that reads it.
 
 ### Polyglot Monorepo: Rust Core + TypeScript Frontend + Python Tooling
 

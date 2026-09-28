@@ -14202,3 +14202,101 @@ fn ci_integrity_holds_actions_and_github_refs_to_the_sha_rule_by_default() {
         }
     }
 }
+
+#[test]
+fn ci_integrity_banned_actions_are_reported_across_the_whole_tree() {
+    let sha = "b4ffde65f46336ab88eb53be808477a3936bae11";
+    // Already on the base side, SHA-pinned, and untouched by the change.
+    let triage = format!(
+        "on: schedule\njobs:\n  triage:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions-cool/issues-helper@{sha} # discipline:allow(ci-integrity)\n  reuse:\n    uses: evil/reusable/.github/workflows/x.yml@{sha}\n"
+    );
+    let action = format!(
+        "name: setup\ndescription: d\nruns:\n  using: composite\n  steps:\n    - uses: evil/thing@{sha}\n    - uses: evil/thing@v2 # discipline:allow(ci-integrity)\n"
+    );
+    let banned_cfg = "[gates.ci-integrity]\nbanned_actions = [\"actions-cool/issues-helper\", { uses = \"evil/reusable\", reason = \"compromised\" }, \"evil/thing@v2\"]\n";
+    for with_list in [false, true] {
+        let repo = Repo::new();
+        let mut files = vec![
+            (".github/workflows/triage.yml", triage.as_str()),
+            (".github/actions/setup/action.yml", action.as_str()),
+        ];
+        if with_list {
+            files.push(("discipline.toml", banned_cfg));
+        }
+        repo.commit_base_files(&files, "ci: base");
+        // The change touches no workflow.
+        repo.write("README.md", "hello\n");
+        repo.commit("docs: readme");
+        // Neither directive lifts the finding.
+        let run = repo.check_with_pr(
+            &[],
+            "allow-gate-weakening: ci-integrity trying to lift\nallow-ci-weakening: actions-cool/issues-helper trying to lift",
+        );
+        let found = ci_codes(&run);
+        if !with_list {
+            // Negative control: no list, nothing reported.
+            assert!(found.is_empty(), "{found:?}");
+            continue;
+        }
+        let codes: Vec<&str> = found.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(
+            codes,
+            vec![
+                "ci-integrity/banned-action",
+                "ci-integrity/banned-action",
+                "ci-integrity/banned-action"
+            ],
+            "{found:?}"
+        );
+        assert!(
+            found[0].1.contains("'actions-cool/issues-helper'")
+                || found[1].1.contains("'actions-cool/issues-helper'"),
+            "{found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|(_, m)| m.contains("evil/reusable/.github/workflows/x.yml")
+                    && m.contains(": compromised")),
+            "{found:?}"
+        );
+        // `evil/thing@v2` names one ref: the composite step at a SHA is not reported,
+        // the one at `@v2` is.
+        let thing: Vec<_> = found
+            .iter()
+            .filter(|(_, m)| m.contains("evil/thing"))
+            .collect();
+        assert_eq!(thing.len(), 1, "{found:?}");
+        assert!(
+            thing[0].1.contains("'evil/thing@v2' (composite step)"),
+            "{found:?}"
+        );
+        assert_eq!(run.code, 1, "{}", run.stdout);
+        // Four references were compared (two workflow, two composite).
+        assert!(
+            run.outcome("ci-integrity")["examined"].as_u64().unwrap() >= 4,
+            "{}",
+            run.stdout
+        );
+        assert_eq!(run.json()["overrides"].as_array().map_or(0, |a| a.len()), 0);
+        // The scheduled recipe: no diff at all, the list is still compared.
+        let scheduled = repo.check(&["--base", "HEAD"]);
+        assert_eq!(ci_codes(&scheduled).len(), 3, "{}", scheduled.stdout);
+        assert_eq!(scheduled.code, 1, "{}", scheduled.stdout);
+    }
+
+    // A malformed entry is a configuration error (exit 2), never an empty list.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[(
+            "discipline.toml",
+            "[gates.ci-integrity]\nbanned_actions = [\"not-a-repo\"]\n",
+        )],
+        "ci: base",
+    );
+    repo.write("README.md", "hello\n");
+    repo.commit("docs: readme");
+    let bad = repo.check(&[]);
+    assert_eq!(bad.code, 2, "{}{}", bad.stdout, bad.stderr);
+    assert!(bad.stderr.contains("not-a-repo"), "{}", bad.stderr);
+}

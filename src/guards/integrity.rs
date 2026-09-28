@@ -100,6 +100,8 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("mock_assert_fns", Direction::Shrunk),
     ("rules", Direction::Shrunk),
     ("groups", Direction::Shrunk),
+    // A lost entry lets a banned action back in; a gained one bans more.
+    ("banned_actions", Direction::Shrunk),
     // Numbers.
     ("tolerance_pct", Direction::Tolerance),
     ("ratio_tolerance_pct", Direction::Tolerance),
@@ -200,6 +202,9 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("pinned_version", Direction::Neutral),
     ("args", Direction::Neutral),
     ("name", Direction::Neutral),
+    // `banned_actions` entry fields: an edited entry is a lost one.
+    ("uses", Direction::Neutral),
+    ("reason", Direction::Neutral),
     ("job", Direction::Neutral),
     ("guard", Direction::Neutral),
 ];
@@ -1089,6 +1094,30 @@ mod tests {
         assert!(has("vacuous-tests", "`enabled` changed from true to false"));
         assert!(has("agent-scratch", "`severity` lowered"));
         assert_eq!(found.len(), 5, "{found:?}");
+    }
+
+    #[test]
+    fn a_dropped_or_edited_banned_action_is_a_loosening_and_an_added_one_is_not() {
+        let base = cfg(
+            "[gates.ci-integrity]\nbanned_actions = [\"a/b\", { uses = \"c/d@v1\", reason = \"x\" }]\n",
+        );
+        let dropped = cfg("[gates.ci-integrity]\nbanned_actions = [\"a/b\"]\n");
+        let narrowed = cfg(
+            "[gates.ci-integrity]\nbanned_actions = [\"a/b@v1\", { uses = \"c/d@v1\", reason = \"x\" }]\n",
+        );
+        let added = cfg(
+            "[gates.ci-integrity]\nbanned_actions = [\"a/b\", { uses = \"c/d@v1\", reason = \"x\" }, \"e/f\"]\n",
+        );
+        let lost = |head: &DisciplineConfig| {
+            diff_configs(&base, head)
+                .unwrap()
+                .iter()
+                .any(|w| w.gate == "ci-integrity" && w.what.contains("`banned_actions` lost"))
+        };
+        assert!(lost(&dropped));
+        assert!(lost(&narrowed));
+        assert!(diff_configs(&base, &added).unwrap().is_empty());
+        assert!(diff_configs(&base, &base).unwrap().is_empty());
     }
 
     #[test]
