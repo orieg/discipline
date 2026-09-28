@@ -1572,7 +1572,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">token</td>
       <td><code>${{ github.token }}</code></td>
-      <td>Token used to post the comment. Passed to discipline only when `comment` is true.</td>
+      <td>Forge token handed to discipline: read by the gates that ask the forge (issue-link verify_references, ratified-paths, review-threads, require_approval; GitHub GraphQL needs a token), and used to post the comment when `comment` is true.</td>
     </tr>
     <tr>
       <td class="gate-id">policy_from</td>

@@ -54,7 +54,7 @@ inputs:
     required: false
     default: 'false'
   token:
-    description: 'Token used to post the comment. Passed to discipline only when `comment` is true.'
+    description: 'Forge token handed to discipline: read by the gates that ask the forge (issue-link verify_references, ratified-paths, review-threads, require_approval; GitHub GraphQL needs a token), and used to post the comment when `comment` is true.'
     required: false
     default: ${{ github.token }}
   policy_from:
@@ -314,7 +314,7 @@ runs:
         DISCIPLINE_FAIL_ON_OVERRIDES: ${{ inputs.fail_on_overrides == 'true' && 'true' || 'false' }}
         DISCIPLINE_ADVISORY: ${{ inputs.advisory == 'true' && 'true' || 'false' }}
         DISCIPLINE_COMMENT: ${{ inputs.comment == 'true' && 'true' || 'false' }}
-        DISCIPLINE_FORGE_TOKEN: ${{ inputs.comment == 'true' && inputs.token || '' }}
+        DISCIPLINE_FORGE_TOKEN: ${{ inputs.token }}
         DISCIPLINE_POLICY_FROM: ${{ inputs.policy_from || 'head' }}
         DISCIPLINE_ACTOR: ${{ inputs.actor || github.event.pull_request.user.login || github.actor }}
         DISCIPLINE_DIRECTIVE_SOURCES: ${{ inputs.directive_sources }}

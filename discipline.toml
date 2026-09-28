@@ -39,6 +39,42 @@ enabled = true
 [gates.provenance-tags]
 enabled = true
 
+# An edit to the agent contract, the gate policy, the action or a workflow needs an
+# owner ratification on an issue the pull request closes. The workflow files are
+# ratifiable here: with the default never_ratifiable list they could only change by an
+# administrator merge, which this repository does not use.
+[gates.ratified-paths]
+enabled = true
+protected_paths = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+  "discipline.toml",
+  "action.yml",
+  "deny.toml",
+  ".github/workflows/**",
+  ".gitea/workflows/**",
+  ".forgejo/workflows/**",
+  ".github/hooks/**",
+  ".claude/settings.json",
+  ".claude/hooks/**",
+  ".agents/hooks.json",
+]
+never_ratifiable = []
+ratifiers = ["orieg"]
+agent_logins = [
+  "github-actions[bot]",
+  "dependabot[bot]",
+  "renovate[bot]",
+  "Copilot",
+  "copilot-swe-agent[bot]",
+  "github-advanced-security[bot]",
+]
+
+# The pull request has no unresolved review thread.
+[gates.review-threads]
+enabled = true
+
 # CITATION.cff and .zenodo.json are valid and agree (on by default; stated for the record).
 [gates.citation-metadata]
 enabled = true

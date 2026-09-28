@@ -12,8 +12,6 @@ fn dogfood_config_loads_with_every_available_gate_on() {
             || gate.id == "manifest-sync"
             || gate.id == "version-lockstep"
             || gate.id == "scope-confinement"
-            || gate.id == "ratified-paths"
-            || gate.id == "review-threads"
             || gate.id == "pr-checklist"
             || gate.id == "unsafe-budget"
             || gate.id == "msrv"

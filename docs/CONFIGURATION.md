@@ -382,7 +382,7 @@ The action runs on `pull_request`, `merge_group` and `push` events (the base is 
 | `fail_on_overrides` | `false` | Treat applied overrides as failures (requires human sign-off). |
 | `advisory` | `false` | Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur. |
 | `comment` | `false` | Post the report as one pull-request comment, edited on every run. Needs `pull-requests: write` (GitHub) or a token that can comment; a fork's read-only token is reported, not failed. |
-| `token` | `${{ github.token }}` | Token used to post the comment. Passed to discipline only when `comment` is true. |
+| `token` | `${{ github.token }}` | Forge token handed to discipline: read by the gates that ask the forge (issue-link verify_references, ratified-paths, review-threads, require_approval; GitHub GraphQL needs a token), and used to post the comment when `comment` is true. |
 | `policy_from` | `head` | Which side's discipline.toml judges the change: 'head' (the change's own copy) or 'base' (the base ref's, so a policy edit takes effect once merged; config-integrity still reports it). |
 | `actor` | `${{ github.event.pull_request.user.login || github.actor }}` | Login judged against allowed_override_actors. Default: the pull request author (github.event.pull_request.user.login), which the server sets; otherwise github.actor or the forge equivalent. The triggering login is not used on a pull request, since whoever edits the description must not be able to authorize their own override. |
 | `directive_sources` | *(none)* | Comma-separated list of allowed directive sources (pr-body, commits, merged-pr-body). merged-pr-body reads, on a push event, the body of the merged pull request each pushed commit arrived through. |
