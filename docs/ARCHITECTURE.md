@@ -356,6 +356,8 @@ Third-party GitHub Actions are pinned by full commit SHA. Tooling binaries (`act
 
 ### 8.2 Release Pipeline (`.github/workflows/release.yml`)
 
+The release bump before the tag moves every version string, including `CITATION.cff`'s `version` (a `version-lockstep` source) and its `date-released`.
+
 Releases are triggered exclusively by pushing a `vX.Y.Z` tag:
 1. **Verify:** Asserts tag matches `Cargo.toml` version, tagged commit resides on `main`, and tests/lints/deny pass.
 2. **Build:** Compiles 4 release targets (`x86_64-musl` and `aarch64-musl`, asserted static; `x86_64-darwin`, `aarch64-darwin`) and executes `self-test` on each target that can run on its runner: `x86_64-darwin` is cross-built on Apple Silicon, and when it cannot execute there its self-test is skipped with a notice. The musl legs also build the `.deb` and `.rpm` packages, which are checksummed into `SHA256SUMS`, attested and uploaded with the archives.

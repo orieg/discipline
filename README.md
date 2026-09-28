@@ -336,6 +336,10 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 
 Every gate requires a unit test, an end-to-end test through the binary, a mutation test that kills the mutant, and a `self-test` case; see [`AGENTS.md`](AGENTS.md) §3.4.
 
+## Citing
+
+Citation metadata is in [`CITATION.cff`](CITATION.cff); GitHub renders it under **Cite this repository**. [`.zenodo.json`](.zenodo.json) holds the same record for Zenodo's archive.
+
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

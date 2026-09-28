@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use Discipline, please cite it using the metadata in this file."
+title: "Discipline: universal CI/CD gatekeeper and AI coding agent diff sentinel"
+type: software
+version: 0.14.4
+date-released: 2026-09-28
+abstract: "Discipline is a CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. One static binary runs the same declarative gates in GitHub Actions, GitLab CI/CD, Forgejo and Gitea Actions, Argo Workflows, pre-commit hooks, and a coding agent's local loop. Its gates read changes through tree-sitter syntax trees: weakened or deleted assertions, vacuous tests, unsafe blocks without a SAFETY justification, unexplained deletions of tests and benchmarks, and CPU cycle and instruction regressions judged with confidence intervals."
+authors:
+  - family-names: "Brousse"
+    given-names: "Nicolas"
+    orcid: "https://orcid.org/0000-0001-7649-1668"
+license:
+  - MIT
+  - Apache-2.0
+repository-code: "https://github.com/orieg/discipline"
+url: "https://orieg.github.io/discipline/"
+keywords:
+  - ci
+  - testing
+  - ai-agents
+  - tree-sitter
+  - quality-gate

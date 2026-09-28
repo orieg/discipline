@@ -37,6 +37,7 @@ Do not scatter notes into arbitrary files. Update canonical documents; do not pr
 | Pre-commit hook definitions | `.pre-commit-hooks.yaml` | Hook interface change |
 | CI and release pipelines | `.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/` (described in `docs/ARCHITECTURE.md` §8) | Pipeline redesign |
 | Dependency policy | `deny.toml` | License or source policy change |
+| Citation metadata | `CITATION.cff` (GitHub's "Cite this repository"), `.zenodo.json` (read by Zenodo when a release is published) | Title, author, abstract or keyword change; `version` / `date-released` move with each release bump |
 | Agent hooks for this repository | `.claude/settings.json` and `.claude/hooks/discipline-bootstrap.sh` (Claude Code), `.agents/hooks.json` (agy), `.github/hooks/discipline.json` and `.github/workflows/copilot-setup-steps.yml` (Copilot); written by `discipline hook install --observe` | Hook contract change, or the switch from observe mode to enforcing |
 
 ---

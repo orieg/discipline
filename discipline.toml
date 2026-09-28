@@ -70,6 +70,10 @@ path = "Cargo.toml"
 regex = '''(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"'''
 
 [[gates.version-lockstep.groups.sources]]
+path = "CITATION.cff"
+regex = '''(?m)^version: ([0-9]+\.[0-9]+\.[0-9]+)$'''
+
+[[gates.version-lockstep.groups.sources]]
 path = "README.md"
 regex = '''install\.sh --to ~/\.local/bin --version v([0-9]+\.[0-9]+\.[0-9]+)'''
 
