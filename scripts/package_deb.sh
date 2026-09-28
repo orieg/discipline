@@ -8,6 +8,12 @@ set -euo pipefail
 
 VERSION=${1:?version required}
 VERSION="${VERSION#v}"
+# A pre-release (0.15.0-rc.1) is packaged as 0.15.0~rc.1: `-` is not allowed in an
+# RPM version and separates the revision in a Debian one; `~` sorts before 0.15.0.
+# File names keep `-`: GitHub renames release assets whose names carry `~`, and
+# SHA256SUMS must name the assets as the release stores them.
+FILE_VERSION="${VERSION}"
+VERSION="$(printf '%s' "${VERSION}" | sed 's/-/~/')"
 DEB_ARCH=${2:?architecture required (amd64|arm64)}
 BIN_PATH=${3:?binary path required}
 OUT_DIR=${4:-dist}
@@ -76,7 +82,7 @@ Description: Universal CI/CD gatekeeper and AI coding agent diff sentinel
 EOF
 
 mkdir -p "${OUT_DIR}"
-DEB_NAME="discipline_${VERSION}_${DEB_ARCH}.deb"
+DEB_NAME="discipline_${FILE_VERSION}_${DEB_ARCH}.deb"
 
 if command -v dpkg-deb >/dev/null 2>&1; then
   dpkg-deb --build --root-owner-group "${STAGE}" "${OUT_DIR}/${DEB_NAME}"

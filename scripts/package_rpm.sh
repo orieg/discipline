@@ -8,6 +8,11 @@ set -euo pipefail
 
 VERSION=${1:?version required}
 VERSION="${VERSION#v}"
+# A pre-release (0.15.0-rc.1) is packaged as 0.15.0~rc.1: `-` is not allowed in an
+# RPM version and separates the revision in a Debian one; `~` sorts before 0.15.0.
+# The built file name keeps `-` (see the copy below): GitHub renames release assets
+# whose names carry `~`, and SHA256SUMS must name them as the release stores them.
+VERSION="$(printf '%s' "${VERSION}" | sed 's/-/~/')"
 RPM_ARCH=${2:?architecture required (x86_64|aarch64)}
 BIN_PATH=${3:?binary path required}
 OUT_DIR=${4:-dist}
@@ -89,6 +94,8 @@ EOF
 rpmbuild --define "_topdir ${TOPDIR}" --target "${RPM_ARCH}" -bb "${SPEC_FILE}"
 
 mkdir -p "${OUT_DIR}"
-cp "${TOPDIR}/RPMS/${RPM_ARCH}"/*.rpm "${OUT_DIR}/"
+for rpm_file in "${TOPDIR}/RPMS/${RPM_ARCH}"/*.rpm; do
+  cp "${rpm_file}" "${OUT_DIR}/$(basename "${rpm_file}" | tr '~' '-')"
+done
 
 echo "Built RPM packages in ${OUT_DIR}"

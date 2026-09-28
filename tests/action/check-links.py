@@ -213,6 +213,15 @@ def check_container_tags():
 
     major = current_version.split(".")[0]
     allowed_tags = {"latest", f"v{major}", f"v{current_version}", "test"}
+    if "-" in current_version:
+        # A release candidate: install instructions keep naming the latest stable
+        # release, which CITATION.cff's `version:` records until the final bump.
+        citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
+        m = re.search(r"^version: ([0-9]+\.[0-9]+\.[0-9]+)$", citation, re.M)
+        if not m:
+            print("FAILED: pre-release Cargo.toml version, and no stable version in CITATION.cff", file=sys.stderr)
+            return False
+        allowed_tags.add(f"v{m.group(1)}")
 
     check_files = [ROOT / "README.md", ROOT / "AGENTS.md"]
     docs_dir = ROOT / "docs"
