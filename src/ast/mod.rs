@@ -395,13 +395,83 @@ pub fn thin_wrapper_callee(
     spec: &WrapperSpec,
     callees: &[String],
 ) -> Option<String> {
+    wrapper_call(body, spec, &[])?;
+    callees.first().cloned()
+}
+
+/// How a pack's grammar spells a local a wrapper computes before its call:
+/// `let bin = locate(dir);`.
+pub struct LocalSpec {
+    /// Binding statements.
+    pub kinds: &'static [&'static str],
+    /// The field holding what is bound, which must be one identifier.
+    pub pattern: &'static str,
+    /// The field holding the value; a binding without one computes nothing.
+    pub value: &'static str,
+    /// Fields that make a binding more than a local (`let x = y else { .. }`).
+    pub refused: &'static [&'static str],
+}
+
+/// A [`thin_wrapper_callee`] that may first compute locals and forward them with its
+/// own parameters: `{ let bin = locate(dir).unwrap(); run_in(dir, &bin) }`. Before
+/// the call the body holds only bindings of one name each, and every name bound is
+/// forwarded to the call or used by a later binding; a binding nothing reads, or any
+/// other statement, is work, and the body is not a wrapper. The call is then the last
+/// one in the body, so the last of `callees` names it, provided the pack collected
+/// every call in the body.
+pub fn forwarding_wrapper_callee(
+    body: tree_sitter::Node,
+    spec: &WrapperSpec,
+    locals: &LocalSpec,
+    callees: &[String],
+    src: &[u8],
+) -> Option<String> {
+    let (call, bindings) = wrapper_call(body, spec, locals.kinds)?;
+    if bindings.is_empty() {
+        return callees.first().cloned();
+    }
+    for (i, binding) in bindings.iter().enumerate() {
+        let pattern = binding.child_by_field_name(locals.pattern)?;
+        let plain = pattern.kind() == "identifier"
+            && binding.child_by_field_name(locals.value).is_some()
+            && !locals
+                .refused
+                .iter()
+                .any(|f| binding.child_by_field_name(f).is_some());
+        let name = pattern.utf8_text(src).ok()?;
+        let mut readers = bindings[i + 1..]
+            .iter()
+            .filter_map(|b| b.child_by_field_name(locals.value))
+            .chain([call]);
+        if !plain || !readers.any(|n| reads_name(n, name, src)) {
+            return None;
+        }
+    }
+    (callees.len() == count_calls(body, spec))
+        .then(|| callees.last().cloned())
+        .flatten()
+}
+
+/// The call a wrapper body comes down to, with the bindings of `binding_kinds` that
+/// precede it; `None` when the body is not one call forwarding names and literals.
+fn wrapper_call<'t>(
+    body: tree_sitter::Node<'t>,
+    spec: &WrapperSpec,
+    binding_kinds: &[&str],
+) -> Option<(tree_sitter::Node<'t>, Vec<tree_sitter::Node<'t>>)> {
     let mut node = body;
+    let mut bindings = Vec::new();
     while !spec.calls.contains(&node.kind()) {
         if !spec.through.contains(&node.kind()) {
             return None;
         }
         let parts = wrapper_parts(node, spec);
-        let [only] = parts.as_slice() else {
+        let bound = parts
+            .iter()
+            .take_while(|p| binding_kinds.contains(&p.kind()))
+            .count();
+        bindings.extend_from_slice(&parts[..bound]);
+        let [only] = &parts[bound..] else {
             return None;
         };
         node = *only;
@@ -409,7 +479,26 @@ pub fn thin_wrapper_callee(
     let parts = wrapper_parts(node, spec);
     let (callee, rest) = parts.split_first()?;
     let thin = !makes_a_call(*callee, spec) && rest.iter().all(|c| plain_argument(*c, spec));
-    thin.then(|| callees.first().cloned()).flatten()
+    thin.then_some((node, bindings))
+}
+
+fn reads_name(node: tree_sitter::Node, name: &str, src: &[u8]) -> bool {
+    if node.kind() == "identifier" && node.utf8_text(src).is_ok_and(|t| t == name) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).any(|c| reads_name(c, name, src));
+    found
+}
+
+fn count_calls(node: tree_sitter::Node, spec: &WrapperSpec) -> usize {
+    let own = usize::from(spec.calls.contains(&node.kind()));
+    let mut cursor = node.walk();
+    let nested: usize = node
+        .named_children(&mut cursor)
+        .map(|c| count_calls(c, spec))
+        .sum();
+    own + nested
 }
 
 fn makes_a_call(node: tree_sitter::Node, spec: &WrapperSpec) -> bool {
@@ -987,6 +1076,81 @@ mod tests {
         // A call the pack did not collect as a same-file call.
         assert_eq!(callee("{ other.check(x) }", &[]), None);
         assert_eq!(callee("{}", &[]), None);
+    }
+
+    /// What `forwarding_wrapper_callee` reads as a wrapper on Rust bodies: one call
+    /// after bindings of one name each, every name read by the call or a later binding.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn a_forwarding_wrapper_computes_only_the_locals_it_forwards() {
+        let callee = |body: &str, callees: &[&str]| {
+            let src = format!("fn w(x: u32) {body}");
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_rust::LANGUAGE.into())
+                .unwrap();
+            let tree = parser.parse(&src, None).unwrap();
+            let f = tree.root_node().named_child(0).unwrap();
+            let callees: Vec<String> = callees.iter().map(|c| c.to_string()).collect();
+            forwarding_wrapper_callee(
+                f.child_by_field_name("body").unwrap(),
+                &rust::RS_WRAPPER,
+                &rust::RS_LOCALS,
+                &callees,
+                src.as_bytes(),
+            )
+        };
+        let check = Some("check".to_string());
+        // No binding: the thin-wrapper rule.
+        assert_eq!(callee("{ check(x, true) }", &["check"]), check);
+        assert_eq!(callee("{ check(x + 1) }", &["check"]), None);
+        // Locals computed (calls included) and forwarded, directly or through another.
+        assert_eq!(
+            callee(
+                "{ let y = g(x).unwrap(); check(x, &y) }",
+                &["g", "unwrap", "check"]
+            ),
+            check
+        );
+        assert_eq!(
+            callee(
+                "{ let a = g(x); let mut b: u32 = a.h(); return check(x, b); }",
+                &["g", "h", "check"]
+            ),
+            check
+        );
+        // A local nothing reads, a pattern, a `let`-`else`, a binding with no value.
+        assert_eq!(callee("{ let y = g(x); check(x) }", &["g", "check"]), None);
+        assert_eq!(
+            callee("{ let (a, b) = g(x); check(a, b) }", &["g", "check"]),
+            None
+        );
+        assert_eq!(
+            callee(
+                "{ let Some(y) = g(x) else { return }; check(y) }",
+                &["g", "check"]
+            ),
+            None
+        );
+        assert_eq!(
+            callee(
+                "{ let y = g(x) else { return }; check(y) }",
+                &["g", "check"]
+            ),
+            None
+        );
+        assert_eq!(callee("{ let y; check(y) }", &["check"]), None);
+        // Other work before the call, or a call computing an argument.
+        assert_eq!(
+            callee("{ g(x); let y = h(x); check(y) }", &["g", "h", "check"]),
+            None
+        );
+        assert_eq!(
+            callee("{ let y = g(x); check(y.len()) }", &["g", "check", "len"]),
+            None
+        );
+        // A final call the pack did not collect: the last collected one is not it.
+        assert_eq!(callee("{ let y = g(x); other.check(y) }", &["g"]), None);
     }
 
     /// A literal forwarded by a wrapper is plain only when nothing in it calls: a

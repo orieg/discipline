@@ -12775,7 +12775,42 @@ fn a_helper_refactored_into_a_thin_wrapper_is_not_an_assertion_reduction() {
     }
 }
 
-const CITATION_CFF: &str = "cff-version: 1.2.0\nmessage: \"Cite it.\"\ntitle: \"Tool: a thing\"\ntype: software\ndate-released: 2026-09-28\nauthors:\n  - family-names: \"Doe\"\n    given-names: \"Jane\"\n    orcid: \"https://orcid.org/0000-0002-1825-0097\"\nlicense:\n  - MIT\n  - Apache-2.0\nkeywords:\n  - ci\ndoi: \"10.5281/zenodo.100\"\nidentifiers:\n  - type: doi\n    value: \"10.5281/zenodo.100\"\n    description: \"Concept DOI (all versions)\"\n  - type: doi\n    value: \"10.5281/zenodo.101\"\n    description: \"Version DOI (v1.0.0)\"\n";
+/// `git_with_hooks` in `tests/test_lease.rs` kept computing `bin` and forwarded it, with
+/// its own parameters, to a new `git_with_discipline_in` holding the rest of its body; a
+/// test calling it three times outside a macro lost the three `unwrap`s that moved,
+/// although no assertion changed. A wrapper that does other work before the call is
+/// still not a wrapper, and the checks it hides still count as removed.
+#[test]
+fn a_helper_forwarding_its_parameters_plus_a_local_is_not_an_assertion_reduction() {
+    let test = "#[test]\nfn a_rebase_is_refused() {\n    let dir = Path::new(\".\");\n    let before = git_with_hooks(dir, &[\"rev-parse\", \"x\"]).stdout;\n    let out = git_with_hooks(dir, &[\"rebase\"]);\n    assert!(!out.status.success());\n    let _ = git_with_hooks(dir, &[\"rebase\", \"--abort\"]);\n    assert_eq!(before, out.stdout);\n}\n";
+    let inline = "use std::path::Path;\nuse std::process::{Command, Output};\n\nfn git_with_hooks(dir: &Path, args: &[&str]) -> Output {\n    let bin = Path::new(env!(\"CARGO_BIN_EXE_discipline\")).parent().unwrap().to_path_buf();\n    let path = format!(\"{}:{}\", bin.display(), std::env::var(\"PATH\").unwrap_or_default());\n    let mut cmd = Command::new(\"git\");\n    cmd.current_dir(dir).args(args).env(\"PATH\", path);\n    cmd.output().unwrap()\n}\n\n";
+    let body = "fn git_with_discipline_in(dir: &Path, args: &[&str], bin: &Path) -> Output {\n    let path = format!(\"{}:{}\", bin.display(), std::env::var(\"PATH\").unwrap_or_default());\n    let mut cmd = Command::new(\"git\");\n    cmd.current_dir(dir).args(args).env(\"PATH\", path);\n    cmd.output().unwrap()\n}\n\n";
+    let forwarding = format!("use std::path::Path;\nuse std::process::{{Command, Output}};\n\nfn git_with_hooks(dir: &Path, args: &[&str]) -> Output {{\n    let bin = Path::new(env!(\"CARGO_BIN_EXE_discipline\")).parent().unwrap().to_path_buf();\n    git_with_discipline_in(dir, args, &bin)\n}}\n\n{body}");
+    let busy = format!("use std::path::Path;\nuse std::process::{{Command, Output}};\n\nfn git_with_hooks(dir: &Path, args: &[&str]) -> Output {{\n    std::fs::create_dir_all(dir).ok();\n    let bin = Path::new(env!(\"CARGO_BIN_EXE_discipline\")).parent().unwrap().to_path_buf();\n    git_with_discipline_in(dir, args, &bin)\n}}\n\n{body}");
+    for (after, reported) in [(forwarding.as_str(), false), (busy.as_str(), true)] {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("tests/test_lease.rs", &format!("{inline}{test}"));
+        repo.commit("test: lease");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("tests/test_lease.rs", &format!("{after}{test}"));
+        repo.commit("refactor: lease helper");
+        let run = repo.check(&[]);
+        let expected: Vec<&str> = if reported {
+            vec!["Assertion Count Decreased In Existing Test"]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            run.titles("assertion-reduction"),
+            expected,
+            "{}",
+            run.stdout
+        );
+    }
+}
+
+const CITATION_CFF: &str ="cff-version: 1.2.0\nmessage: \"Cite it.\"\ntitle: \"Tool: a thing\"\ntype: software\ndate-released: 2026-09-28\nauthors:\n  - family-names: \"Doe\"\n    given-names: \"Jane\"\n    orcid: \"https://orcid.org/0000-0002-1825-0097\"\nlicense:\n  - MIT\n  - Apache-2.0\nkeywords:\n  - ci\ndoi: \"10.5281/zenodo.100\"\nidentifiers:\n  - type: doi\n    value: \"10.5281/zenodo.100\"\n    description: \"Concept DOI (all versions)\"\n  - type: doi\n    value: \"10.5281/zenodo.101\"\n    description: \"Version DOI (v1.0.0)\"\n";
 const ZENODO_JSON: &str = r#"{"title": "Tool: a thing", "upload_type": "software", "creators": [{"name": "Doe, Jane", "orcid": "0000-0002-1825-0097"}], "license": "mit", "keywords": ["ci"]}"#;
 
 /// `citation-metadata` codes a check reports.

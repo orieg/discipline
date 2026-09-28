@@ -262,9 +262,15 @@ impl<'a> Extractor<'a> {
                         strong_asserts: helper_test.strong_asserts,
                         tautologies: helper_test.tautologies,
                         fatal_asserts: helper_test.fatal_asserts,
-                        wraps: node
-                            .child_by_field_name("body")
-                            .and_then(|b| super::thin_wrapper_callee(b, &RS_WRAPPER, &dummy_calls)),
+                        wraps: node.child_by_field_name("body").and_then(|b| {
+                            super::forwarding_wrapper_callee(
+                                b,
+                                &RS_WRAPPER,
+                                &RS_LOCALS,
+                                &dummy_calls,
+                                self.src,
+                            )
+                        }),
                     };
                     self.helpers.insert(fn_name, facts);
                 }
@@ -1137,6 +1143,14 @@ pub const RS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
     skip: &["line_comment", "block_comment", "mutable_specifier"],
 };
 
+/// A local a Rust wrapper computes and forwards: `let bin = locate(dir).unwrap();`.
+pub const RS_LOCALS: super::LocalSpec = super::LocalSpec {
+    kinds: &["let_declaration"],
+    pattern: "pattern",
+    value: "value",
+    refused: &["alternative"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1191,6 +1205,95 @@ fn wrapper_cycle() {
         assert_eq!(
             crate::ast::thin_wrapper_counts(&RustPack, "tests/wrap.rs", src),
             crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
+
+    /// A wrapper that computes locals and forwards them, with its own parameters, to one
+    /// same-file call keeps the credit of that call's checks (the `tests/test_lease.rs`
+    /// refactor): its own `unwrap` counts once and `run_in`'s once, beside the test's
+    /// `assert!`. A wrapper that does
+    /// other work first, binds a local it never forwards, computes an argument in the
+    /// call, or ends without the call is not a wrapper and keeps only its own check.
+    #[test]
+    fn a_wrapper_forwarding_its_parameters_and_locals_resolves_to_the_call() {
+        let src = r##"fn run_in(dir: &Path, args: &[&str], bin: &Path) -> Output {
+    let mut cmd = Command::new(bin);
+    cmd.current_dir(dir).args(args);
+    cmd.output().unwrap()
+}
+fn forwards(dir: &Path, args: &[&str]) -> Output {
+    let bin = Path::new(env!("BIN")).parent().unwrap().to_path_buf();
+    run_in(dir, args, &bin)
+}
+fn chained(dir: &Path, args: &[&str]) -> Output {
+    let base = Path::new(env!("BIN")).parent().unwrap().to_path_buf();
+    let bin = base.join("x");
+    run_in(dir, args, &bin)
+}
+fn busy(dir: &Path, args: &[&str]) -> Output {
+    std::fs::create_dir_all(dir).ok();
+    let bin = Path::new(env!("BIN")).parent().unwrap().to_path_buf();
+    run_in(dir, args, &bin)
+}
+fn unforwarded(dir: &Path, args: &[&str]) -> Output {
+    let bin = Path::new(env!("BIN")).parent().unwrap().to_path_buf();
+    run_in(dir, args, dir)
+}
+fn computed(dir: &Path, args: &[&str]) -> Output {
+    let bin = Path::new(env!("BIN")).parent().unwrap().to_path_buf();
+    run_in(dir, args, &bin.join("x"))
+}
+fn dropped(dir: &Path, args: &[&str]) -> PathBuf {
+    let bin = Path::new(env!("BIN")).parent().unwrap().to_path_buf();
+    bin
+}
+#[test]
+fn t_forwards() {
+    let out = forwards(Path::new("."), &[]);
+    assert!(out.status.success());
+}
+#[test]
+fn t_chained() {
+    let out = chained(Path::new("."), &[]);
+    assert!(out.status.success());
+}
+#[test]
+fn t_busy() {
+    let out = busy(Path::new("."), &[]);
+    assert!(out.status.success());
+}
+#[test]
+fn t_unforwarded() {
+    let out = unforwarded(Path::new("."), &[]);
+    assert!(out.status.success());
+}
+#[test]
+fn t_computed() {
+    let out = computed(Path::new("."), &[]);
+    assert!(out.status.success());
+}
+#[test]
+fn t_dropped() {
+    let bin = dropped(Path::new("."), &[]);
+    assert!(bin.exists());
+}
+"##;
+        let f = facts(src);
+        let counts: Vec<(&str, usize, usize)> = f
+            .tests
+            .iter()
+            .map(|t| (t.name.as_str(), t.total_asserts, t.helper_checks))
+            .collect();
+        assert_eq!(
+            counts,
+            vec![
+                ("t_forwards", 3, 1),
+                ("t_chained", 3, 1),
+                ("t_busy", 2, 1),
+                ("t_unforwarded", 2, 1),
+                ("t_computed", 2, 1),
+                ("t_dropped", 2, 1),
+            ]
         );
     }
 
