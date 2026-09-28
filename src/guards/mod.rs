@@ -3,6 +3,7 @@ pub mod archive_contents;
 pub mod archive_formats;
 pub mod archive_presets;
 pub mod build_hooks;
+pub mod ci_exposure;
 pub mod ci_gitlab;
 pub mod ci_integrity;
 pub mod ci_skip_set;

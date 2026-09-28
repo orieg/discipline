@@ -250,6 +250,11 @@ findings! {
     UNPINNED_ACTION = ["ci-integrity"], "unpinned-action", "Unpinned Third-Party Action", Same;
     UNPINNED_CONTAINER_IMAGE = ["ci-integrity"], "unpinned-container-image", "Unpinned Container Image", Same;
     BANNED_ACTION = ["ci-integrity"], "banned-action", "Banned Action Referenced", Same;
+    TEMPLATE_INJECTION = ["ci-integrity"], "template-injection", "Untrusted Expression Interpolated Into A Run Script", Same;
+    SECRETS_INHERIT = ["ci-integrity"], "secrets-inherit", "Reusable Workflow Inherits Every Secret", Same;
+    CHECKOUT_PERSISTS_CREDENTIALS = ["ci-integrity"], "checkout-persists-credentials", "Checkout Persists Credentials In A Job That Can Write", Same;
+    SECRETS_WITH_THIRD_PARTY_ACTION = ["ci-integrity"], "secrets-with-third-party-action", "Job Reading Secrets Runs A Third-Party Action", Same;
+    SCHEDULE_TRIGGER_WITH_SECRETS = ["ci-integrity"], "schedule-trigger-with-secrets", "Scheduled Workflow Reads Secrets", Same;
     DISCIPLINE_ACTION_POLICY_FROM = ["ci-integrity"], "discipline-action-policy-from-weakened", "Discipline Action Weakened (policy_from)", Same;
     DISCIPLINE_VERSION_CHANGED = ["ci-integrity"], "discipline-version-changed", "Discipline Version Chosen By The Change", Same;
     DISCIPLINE_ACTION_DISABLE_INPUT = ["ci-integrity"], "discipline-action-disable-input", "Discipline Action Weakened (disable input)", Same;

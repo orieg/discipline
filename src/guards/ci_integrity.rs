@@ -14,6 +14,9 @@
 //!   the baseline.
 //! - A `uses:` matching a `banned_actions` entry is reported in every scanned file of the
 //!   head tree, whatever `diff_only` says; no directive lifts it.
+//! - Exposure of secrets or a write token (`ci_exposure`): template injection in `run:`,
+//!   `secrets: inherit`, persisted checkout credentials in a job that can write, secrets
+//!   beside a third-party action, a scheduled workflow reading secrets.
 //! - Masked failures (`continue-on-error: true`) and error suppression (`|| true`, `set +e`) are forbidden.
 //! - Verification jobs and steps (testing, linting, gates) cannot be deleted without an override;
 //!   a step renamed with a similar body is paired with its base form, not reported as deleted.
@@ -214,6 +217,25 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                     }));
                 check_pins(ctx, path, &head_content, &head_refs, &base_refs, &mut out);
             }
+        }
+
+        // Exposure: secrets or a write token handed to code the workflow does not
+        // control (template injection, `secrets: inherit`, persisted credentials, a
+        // third-party action beside secrets, a scheduled workflow reading secrets).
+        if let Some(head_doc) = &head_val {
+            let fp = &settings.first_party_action_prefixes;
+            let head_x = super::ci_exposure::workflow_exposures(head_doc, &head_content, fp);
+            let base_x = base_val
+                .as_ref()
+                .map(|b| {
+                    super::ci_exposure::workflow_exposures(
+                        b,
+                        base_content.as_deref().unwrap_or_default(),
+                        fp,
+                    )
+                })
+                .unwrap_or_default();
+            report_exposures(ctx, path, &head_content, head_x, &base_x, &mut out);
         }
 
         let _added_lines = added_lines_map.as_ref().and_then(|m| m.get(path));
@@ -2078,7 +2100,7 @@ fn is_verification_job(job_id: &str, job: &serde_yaml::Value) -> bool {
     false
 }
 
-fn workflow_has_trigger(val: &serde_yaml::Value, trigger: &str) -> bool {
+pub(crate) fn workflow_has_trigger(val: &serde_yaml::Value, trigger: &str) -> bool {
     if let Some(on_val) = val.get("on") {
         if let Some(s) = on_val.as_str() {
             return s == trigger;
@@ -2129,7 +2151,7 @@ fn find_line_number(content: &str, needle: &str) -> Option<usize> {
     None
 }
 
-fn find_line_after(content: &str, needle: &str, start_line: usize) -> Option<usize> {
+pub(crate) fn find_line_after(content: &str, needle: &str, start_line: usize) -> Option<usize> {
     for (idx, line) in content.lines().enumerate() {
         let line_no = idx + 1;
         if line_no >= start_line && line.contains(needle) {
@@ -2263,7 +2285,7 @@ pub(crate) fn pin_verdict(kind: PinKind, value: &str, first_party: &[String]) ->
 
 /// The line of a YAML mapping key (`key:` at the start of a line, optionally quoted)
 /// at or after `start`.
-fn find_key_line(content: &str, key: &str, start: usize) -> Option<usize> {
+pub(crate) fn find_key_line(content: &str, key: &str, start: usize) -> Option<usize> {
     let spellings = [key.to_string(), format!("'{key}'"), format!("\"{key}\"")];
     content.lines().enumerate().find_map(|(idx, line)| {
         let t = line.trim_start();
@@ -2591,24 +2613,75 @@ fn evaluate_action_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
         return Ok(());
     };
     out.examined += 1;
-    if !settings.pin_actions {
-        return Ok(());
-    }
     let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&head) else {
         out.notes.push(format!(
-            "{path}: action metadata does not parse as YAML; its nested `uses:` were not checked"
+            "{path}: action metadata does not parse as YAML; its nested `uses:` and `run:` steps were not checked"
         ));
         return Ok(());
     };
     let base = ctx.git.base_content(path).unwrap_or(None);
-    let base_refs = base_pin_set(base.as_deref().and_then(|b| {
-        serde_yaml::from_str::<serde_yaml::Value>(b)
-            .ok()
-            .map(|d| action_pin_refs(&d, b))
-    }));
-    let refs = action_pin_refs(&doc, &head);
-    check_pins(ctx, path, &head, &refs, &base_refs, out);
+    let base_doc = base
+        .as_deref()
+        .and_then(|b| serde_yaml::from_str::<serde_yaml::Value>(b).ok());
+    if settings.pin_actions {
+        let base_refs = base_pin_set(
+            base_doc
+                .as_ref()
+                .map(|d| action_pin_refs(d, base.as_deref().unwrap_or_default())),
+        );
+        let refs = action_pin_refs(&doc, &head);
+        check_pins(ctx, path, &head, &refs, &base_refs, out);
+    }
+    let base_x = base_doc
+        .as_ref()
+        .map(|d| super::ci_exposure::action_exposures(d, base.as_deref().unwrap_or_default()))
+        .unwrap_or_default();
+    let head_x = super::ci_exposure::action_exposures(&doc, &head);
+    report_exposures(ctx, path, &head, head_x, &base_x, out);
     Ok(())
+}
+
+/// Reports the exposures of one file (`ci_exposure`). With `diff_only` (the default)
+/// only an exposure new relative to the base side is reported; with `diff_only = false`
+/// every one is, and the message says whether this change added it.
+fn report_exposures(
+    ctx: &Context,
+    path: &str,
+    content: &str,
+    head: Vec<super::ci_exposure::Exposure>,
+    base: &[super::ci_exposure::Exposure],
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let base_keys: HashSet<(&str, &str)> =
+        base.iter().map(|x| (x.kind.code, x.key.as_str())).collect();
+    for x in head {
+        let pre_existing = base_keys.contains(&(x.kind.code, x.key.as_str()));
+        if pre_existing && settings.diff_only {
+            continue;
+        }
+        let origin = if pre_existing {
+            "pre-existing: already on the base side"
+        } else {
+            "added by this change"
+        };
+        let before = out.violations.len();
+        record_or_excuse(
+            ctx,
+            Some(content),
+            out,
+            settings.severity,
+            x.kind,
+            Some(path.to_string()),
+            x.line,
+            format!("{} ({origin})", x.message),
+            x.remediation,
+            &x.subject,
+        );
+        if x.line.is_none() && out.violations.len() > before {
+            out.anchor_last(x.key.replace('\u{1f}', ":"));
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

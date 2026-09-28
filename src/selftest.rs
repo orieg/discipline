@@ -2639,6 +2639,30 @@ jobs:
         },
     ),
     (
+        "ci-integrity: injection, secrets: inherit, persisted credentials, secrets beside a third-party action, schedule with secrets",
+        || {
+            use crate::guards::ci_exposure::{untrusted_expressions, workflow_exposures};
+            let codes = |wf: &str| -> Result<Vec<&'static str>> {
+                let doc: serde_yaml::Value = serde_yaml::from_str(wf)?;
+                let mut c: Vec<_> = workflow_exposures(&doc, wf, &[]).into_iter().map(|x| x.kind.code).collect();
+                c.sort();
+                Ok(c)
+            };
+            let exposed = "on:\n  schedule:\n    - cron: '0 0 * * *'\npermissions:\n  contents: write\njobs:\n  t:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@v4\n      - run: echo ${{ github.head_ref }}\n      - uses: evil/a@v1\n        with:\n          t: ${{ secrets.T }}\n  c:\n    uses: ./r.yml\n    secrets: inherit\n";
+            let safe = "on: push\npermissions: read-all\njobs:\n  t:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@v4\n      - env:\n          REF: ${{ github.head_ref }}\n        run: echo \"$REF\"\n";
+            Ok(codes(exposed)?
+                == vec![
+                    "checkout-persists-credentials",
+                    "schedule-trigger-with-secrets",
+                    "secrets-inherit",
+                    "secrets-with-third-party-action",
+                    "template-injection",
+                ]
+                && codes(safe)?.is_empty()
+                && untrusted_expressions("echo ${{ github.sha }} ${{ 'inputs.x' }}").is_empty())
+        },
+    ),
+    (
         "ci-integrity: renamed step pairs by run body, renamed-and-rewritten step does not",
         || {
             use crate::guards::ci_integrity::{pair_steps, StepMatch};
