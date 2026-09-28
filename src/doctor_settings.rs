@@ -1067,24 +1067,18 @@ jobs:
         let uses = secret_uses(&wf);
         // DEPLOY_TOKEN is read by two environment-bound jobs only (names match without case).
         let f = secret_scoping_finding(&names(&["DEPLOY_TOKEN", "BUILD_KEY", "EVERYWHERE"]), &uses);
-        assert_eq!(f.status, Status::Warn, "{f:?}");
-        assert!(
-            f.summary
-                .contains("`DEPLOY_TOKEN` (environment github-pages, production)"),
-            "{}",
-            f.summary
-        );
-        assert!(!f.summary.contains("BUILD_KEY"), "{}", f.summary);
-        assert!(!f.summary.contains("EVERYWHERE"), "{}", f.summary);
+        assert_eq!(f.status, Status::Warn);
+        assert!(f
+            .summary
+            .contains("`DEPLOY_TOKEN` (environment github-pages, production)"));
+        assert!(!f.summary.contains("BUILD_KEY"));
+        assert!(!f.summary.contains("EVERYWHERE"));
         // Read by a job outside an environment: nothing to move.
         let f = secret_scoping_finding(&names(&["BUILD_KEY", "UNUSED"]), &uses);
-        assert_eq!(f.status, Status::Pass, "{f:?}");
-        assert!(
-            f.summary
-                .contains("not read by any workflow here: `UNUSED`"),
-            "{}",
-            f.summary
-        );
+        assert_eq!(f.status, Status::Pass);
+        assert!(f
+            .summary
+            .contains("not read by any workflow here: `UNUSED`"));
         // `secrets: inherit` outside an environment may pass any secret on.
         let inherit = "on: push\njobs:\n  call:\n    uses: o/r/.github/workflows/x.yml@0123456789012345678901234567890123456789\n    secrets: inherit\n";
         let mut wf2 = wf.clone();
