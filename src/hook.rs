@@ -613,6 +613,17 @@ pub fn config_for_opts(
         Agent::Aider | Agent::Opencode => run,
         _ => guarded(agent, &run),
     };
+    // Before an edit tool runs (docs/ROADMAP.md, Phase 13 Step 3b): refuse an edit into
+    // another worktree, a worktree another session leases, or forbidden_paths.
+    let pre_run = format!(
+        "discipline hook run --agent {} --event pre-tool{}",
+        agent.id(),
+        if observe { " --observe" } else { "" }
+    );
+    let pre = match agent {
+        Agent::Opencode => pre_run,
+        _ => guarded_pretool(&pre_run),
+    };
     match agent {
         Agent::ClaudeCode => (
             ".claude/settings.json",
@@ -626,6 +637,10 @@ pub fn config_for_opts(
                             "type": "command",
                             "command": format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}")
                         }]
+                    }],
+                    "PreToolUse": [{
+                        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+                        "hooks": [{ "type": "command", "command": pre }]
                     }],
                     "PostToolUse": [{
                         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
@@ -672,7 +687,7 @@ pub fn config_for_opts(
         ),
         Agent::Copilot => (
             ".github/hooks/discipline.json",
-            copilot_hooks(&cmd, secs),
+            copilot_hooks(&cmd, secs, Some(&pre)),
         ),
         Agent::Agy => (
             ".agents/hooks.json",
@@ -685,6 +700,11 @@ pub fn config_for_opts(
                     // (seen live with agy 1.2 and 1.2.12, where a made-up event name did not
                     // run; the event is not in its hooks guide, so it is not dead configuration).
                     "SessionStart": [{ "type": "command", "command": AGY_MISSING_BINARY, "timeout": 10 }],
+                    // agy sends every tool call; the check refuses only edits.
+                    "PreToolUse": [{
+                        "matcher": ".*",
+                        "hooks": [{ "type": "command", "command": pre, "timeout": 30 }]
+                    }],
                     "Stop": [{ "type": "command", "command": cmd, "timeout": secs }]
                 }
             }))
@@ -707,7 +727,10 @@ pub fn config_for_opts(
             .unwrap_or_default()
                 + "\n",
         ),
-        Agent::Opencode => (".opencode/plugins/discipline.js", opencode_plugin(&cmd)),
+        Agent::Opencode => (
+            ".opencode/plugins/discipline.js",
+            opencode_plugin(&cmd, &pre),
+        ),
     }
 }
 
@@ -727,20 +750,37 @@ pub fn guarded(agent: Agent, run: &str) -> String {
     )
 }
 
+/// [`guarded`] for a pre-tool entry: without `discipline` on `PATH` the call passes with
+/// an empty answer, which every agent's pre-tool contract reads as "allow" (the edit is
+/// still checked after it runs, if that hook can run at all).
+pub fn guarded_pretool(run: &str) -> String {
+    format!("command -v discipline >/dev/null 2>&1 || {{ echo '{MISSING_BINARY}' >&2; exit 0; }}; {run}")
+}
+
 /// What a guarded hook command says when `discipline` is not on `PATH`.
 pub const MISSING_BINARY: &str =
     "discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)";
 
 /// The OpenCode plugin: after an edit tool, run the hook and append a failure to the
 /// tool's output, which is the text the model reads.
-fn opencode_plugin(cmd: &str) -> String {
+fn opencode_plugin(cmd: &str, pre: &str) -> String {
     format!(
         "// Written by `discipline hook install --agent opencode`.
-// After an edit tool, runs the discipline check and, when it fails, appends the report
-// to the tool's output so the model reads it and repairs the change.
+// Before an edit tool, refuses an edit outside this session's worktree (the tool call
+// is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
+// the discipline check and, when it fails, appends the report to the tool's output so
+// the model reads it and repairs the change.
 const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
 
 export const Discipline = async ({{ $, directory }}) => ({{
+  \"tool.execute.before\": async (input, output) => {{
+    if (!EDIT_TOOLS.includes(input.tool)) return
+    const call = new Response(JSON.stringify({{ input, output, cwd: directory }}))
+    const r = await $`{pre} < ${{call}}`.cwd(directory).nothrow().quiet()
+    if (r.exitCode !== 0) {{
+      throw new Error(r.stdout.toString() + r.stderr.toString())
+    }}
+  }},
   \"tool.execute.after\": async (input, output) => {{
     if (!EDIT_TOOLS.includes(input.tool)) return
     const r = await $`{cmd}`.cwd(directory).nothrow().quiet()
@@ -899,22 +939,28 @@ pub fn configured(dir: &Path) -> bool {
 
 /// Copilot CLI's hook file running `cmd` after an edit and at the end of a turn, each
 /// with `timeout` seconds.
-fn copilot_hooks(cmd: &str, timeout: u32) -> String {
-    serde_json::to_string_pretty(&serde_json::json!({
-        "version": 1,
-        "hooks": {
-            "postToolUse": [{
-                "type": "command",
-                // Matched as `^(?:...)$` against the tool name: every edit tool the hooks
-                // reference lists (`apply_patch` is how some models edit).
-                "matcher": "create|edit|str_replace_editor|apply_patch",
-                "bash": cmd,
-                "timeoutSec": timeout
-            }],
-            "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": timeout }]
-        }
-    }))
-    .unwrap_or_default()
+fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<&str>) -> String {
+    let mut hooks = serde_json::json!({
+        "postToolUse": [{
+            "type": "command",
+            // Matched as `^(?:...)$` against the tool name: every edit tool the hooks
+            // reference lists (`apply_patch` is how some models edit).
+            "matcher": "create|edit|str_replace_editor|apply_patch",
+            "bash": cmd,
+            "timeoutSec": timeout
+        }],
+        "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": timeout }]
+    });
+    if let Some(pre) = pre {
+        hooks["preToolUse"] = serde_json::json!([{
+            "type": "command",
+            "matcher": "create|edit|str_replace_editor|apply_patch",
+            "bash": pre,
+            "timeoutSec": 30
+        }]);
+    }
+    serde_json::to_string_pretty(&serde_json::json!({ "version": 1, "hooks": hooks }))
+        .unwrap_or_default()
         + "\n"
 }
 
@@ -943,6 +989,9 @@ pub fn user_config_for(
                         ),
                     ),
                     timeout.or(default_timeout(Agent::Copilot)).unwrap_or(0),
+                    // The user-level hook runs in every folder; the pre-tool check
+                    // does not yet honour --if-configured, so it stays repository-level.
+                    None,
                 ),
             ))
         }
@@ -1679,6 +1728,7 @@ mod tests {
                     ),
                 ),
                 120,
+                None,
             ))
             .unwrap();
             out.push((
@@ -2006,6 +2056,65 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&foreign).unwrap(),
             "{\"version\":1}"
+        );
+    }
+
+    #[test]
+    fn the_observed_agents_get_a_pre_tool_entry_and_the_others_do_not() {
+        let pre = |agent: Agent, observe: bool| -> Option<String> {
+            let (_, text) = config_for_opts(agent, observe, None);
+            if agent == Agent::Opencode {
+                return text
+                    .contains("\"tool.execute.before\"")
+                    .then(|| text.clone());
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let entry = match agent {
+                Agent::ClaudeCode => v.pointer("/hooks/PreToolUse/0/hooks/0/command"),
+                Agent::Copilot => v.pointer("/hooks/preToolUse/0/bash"),
+                Agent::Agy => v.pointer("/discipline/PreToolUse/0/hooks/0/command"),
+                _ => v
+                    .pointer("/hooks/PreToolUse/0/hooks/0/command")
+                    .or_else(|| v.pointer("/hooks/preToolUse/0/bash")),
+            };
+            entry.and_then(|c| c.as_str()).map(str::to_string)
+        };
+        for agent in [
+            Agent::ClaudeCode,
+            Agent::Copilot,
+            Agent::Agy,
+            Agent::Opencode,
+        ] {
+            let cmd =
+                pre(agent, false).unwrap_or_else(|| panic!("{agent:?} has no pre-tool entry"));
+            assert!(
+                cmd.contains(&format!(
+                    "discipline hook run --agent {} --event pre-tool",
+                    agent.id()
+                )),
+                "{agent:?}: {cmd}"
+            );
+            assert!(!cmd.contains("--observe"), "{agent:?}");
+            assert!(
+                pre(agent, true)
+                    .unwrap()
+                    .contains("--event pre-tool --observe"),
+                "{agent:?}"
+            );
+        }
+        // Contracts not yet observed live get no entry.
+        for agent in [Agent::Codex, Agent::Qwen, Agent::Cursor, Agent::Aider] {
+            assert!(pre(agent, false).is_none(), "{agent:?}");
+        }
+        // Without discipline on PATH a pre-tool entry passes with an empty answer.
+        let claude = pre(Agent::ClaudeCode, false).unwrap();
+        assert!(
+            claude.starts_with("command -v discipline >/dev/null 2>&1 || {"),
+            "{claude}"
+        );
+        assert!(
+            claude.contains("exit 0; }; discipline hook run"),
+            "{claude}"
         );
     }
 }
