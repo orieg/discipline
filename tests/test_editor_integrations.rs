@@ -124,7 +124,18 @@ fn the_renovate_preset_groups_every_pin_and_reads_the_documented_gitlab_include(
         .map(|c| c["currentValue"].to_string())
         .collect();
     assert!(!found.is_empty(), "no GitLab include in the docs");
-    let current = format!("v{}", env!("CARGO_PKG_VERSION"));
+    // A release candidate on main keeps documenting the latest stable release, which
+    // CITATION.cff names until the final bump.
+    let current = if env!("CARGO_PKG_VERSION").contains('-') {
+        let citation = std::fs::read_to_string(root.join("CITATION.cff")).unwrap();
+        let stable = citation
+            .lines()
+            .find_map(|l| l.strip_prefix("version: "))
+            .expect("CITATION.cff has no version");
+        format!("v{stable}")
+    } else {
+        format!("v{}", env!("CARGO_PKG_VERSION"))
+    };
     assert!(
         found.iter().all(|v| *v == current),
         "{found:?} vs {current}"
