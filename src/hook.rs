@@ -948,6 +948,33 @@ pub fn copilot_repo_hook(root: &Path) -> Option<PathBuf> {
     })
 }
 
+/// The user-level hook file under Copilot CLI's `home` that runs discipline in every
+/// adopted repository (`hook run --agent copilot --if-configured`).
+pub fn copilot_user_hook(home: &Path) -> Option<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(home.join("hooks"))
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
+    files.into_iter().find(|p| {
+        std::fs::read_to_string(p)
+            .is_ok_and(|c| c.contains("discipline hook run --agent copilot --if-configured"))
+    })
+}
+
+/// Why Copilot CLI will not run a repository hook under `root`, naming both ways out;
+/// `None` when it trusts the folder or has no configuration under `home`.
+pub fn copilot_untrusted_note(home: &Path, root: &Path) -> Option<String> {
+    (!copilot_trusts(home, root)?).then(|| {
+        format!(
+            "Copilot CLI does not trust {}, so it skips the repository's .github/hooks/ there without a message and this hook does not run. Trust the folder (accept Copilot's trust prompt when it opens the folder, or add it to `trustedFolders` in {}), or install the user-level hook, which Copilot runs in every folder: `discipline hook install --agent copilot --user`.",
+            root.display(),
+            home.join("config.json").display()
+        )
+    })
+}
+
 /// Whether Copilot CLI also runs the repository's own discipline hook in `dir`: the
 /// repository has one and the folder is trusted.
 fn copilot_repo_hook_runs(dir: &Path) -> bool {

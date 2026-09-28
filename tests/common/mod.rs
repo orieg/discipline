@@ -85,6 +85,9 @@ impl Run {
     }
 }
 
+/// `COPILOT_HOME` for a test that does not set its own: a directory that does not exist.
+pub const NO_COPILOT_HOME: &str = "/nonexistent/discipline-test-copilot-home";
+
 pub const ISOLATED_ENV_VARS: &[&str] = &[
     "DISCIPLINE_HOOK_RUN",
     "PR_BODY",
@@ -338,6 +341,8 @@ impl Repo {
         }
         // No test reaches a real forge: only a loopback FakeForge is allowed.
         cmd.env("DISCIPLINE_NO_NETWORK", "1");
+        // Nor reads this machine's Copilot CLI configuration (trusted folders, hooks).
+        cmd.env("COPILOT_HOME", NO_COPILOT_HOME);
         let has_pr_body = env.iter().any(|(k, _)| *k == "PR_BODY");
         let has_pr_title = env.iter().any(|(k, _)| *k == "PR_TITLE");
         if has_pr_body && !has_pr_title {
@@ -365,6 +370,7 @@ impl Repo {
             }
         }
         cmd.env("DISCIPLINE_NO_NETWORK", "1");
+        cmd.env("COPILOT_HOME", NO_COPILOT_HOME);
         cmd.envs(env.iter().copied());
         let out = cmd.output().unwrap();
         Run {

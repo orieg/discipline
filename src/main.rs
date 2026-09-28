@@ -1286,6 +1286,7 @@ fn doctor(args: discipline::cli::DoctorArgs) -> Result<bool> {
         branch: args.branch.clone(),
         local_only: args.local_only,
         api: &api,
+        copilot_home: discipline::hook::copilot_home(),
     });
     match args.format {
         discipline::cli::DoctorFormat::Text => print!("{}", report.render_text()),
@@ -1427,6 +1428,15 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     a.upgrade,
                 )?);
             }
+            let untrusted = (a.agent == discipline::hook::Agent::Copilot && !a.user)
+                .then(|| {
+                    let home = discipline::hook::copilot_home()?;
+                    discipline::hook::copilot_untrusted_note(
+                        &home,
+                        &discipline::hook::repo_root().ok()?,
+                    )
+                })
+                .flatten();
             let mut ok = true;
             for installed in results {
                 match installed {
@@ -1470,6 +1480,9 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                         ok = false;
                     }
                 }
+            }
+            if let Some(note) = untrusted {
+                println!("{} {note}", style::yellow("note:"));
             }
             Ok(ok)
         }

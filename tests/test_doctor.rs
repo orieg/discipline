@@ -551,3 +551,57 @@ fn doctor_reports_a_push_trigger_when_squash_or_rebase_merges_drop_the_pr_body()
         .iter()
         .any(|(id, _)| id == "push-trigger"));
 }
+
+/// A repository Copilot hook in a folder Copilot CLI does not trust never runs: `doctor`
+/// warns and names the fixes; a user-level hook covering the folder makes it information,
+/// a trusted folder a pass, and a machine without Copilot CLI configuration no finding.
+#[test]
+fn doctor_warns_when_copilot_does_not_trust_the_repository_hook() {
+    let repo = protected_repo();
+    let installed = repo.run(&["hook", "install", "--agent", "copilot"], &[]);
+    assert_eq!(installed.code, 0, "{}", installed.stderr);
+    let home = tempfile::tempdir().unwrap();
+    let env = [("COPILOT_HOME", home.path().to_str().unwrap())];
+    let trust = |folders: &[String]| {
+        std::fs::write(
+            home.path().join("config.json"),
+            format!(
+                "// managed\n{{\"trustedFolders\": {}}}\n",
+                serde_json::json!(folders)
+            ),
+        )
+        .unwrap()
+    };
+    let finding = || {
+        let run = repo.run(&["doctor", "--local-only", "--format", "json"], &env);
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+        v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == "copilot-trust")
+            .cloned()
+    };
+    assert_eq!(finding(), None, "no Copilot CLI configuration");
+
+    trust(&[]);
+    let warn = finding().expect("untrusted");
+    assert_eq!(warn["status"], "warn", "{warn}");
+    let fix = warn["remediation"].as_str().unwrap_or_default();
+    assert!(
+        fix.contains("trustedFolders") && fix.contains("--agent copilot --user"),
+        "{warn}"
+    );
+
+    let user = repo.run(&["hook", "install", "--agent", "copilot", "--user"], &env);
+    assert_eq!(user.code, 0, "{}", user.stderr);
+    assert_eq!(finding().unwrap()["status"], "info");
+
+    trust(&[repo
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()]);
+    assert_eq!(finding().unwrap()["status"], "pass");
+}

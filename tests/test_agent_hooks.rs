@@ -36,6 +36,7 @@ fn hook_env(repo: &Repo, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Ho
             cmd.env_remove(k);
         }
     }
+    cmd.env("COPILOT_HOME", common::NO_COPILOT_HOME);
     cmd.envs(env.iter().copied());
     let mut child = cmd.spawn().unwrap();
     child
@@ -658,6 +659,39 @@ fn the_user_level_copilot_hook_leaves_a_trusted_repository_to_its_own_hook() {
     copilot_config(home.path(), &[&root]);
     let own = hook_env(&repo, &["hook", "run", "--agent", "copilot"], stop, &env);
     assert!(blocks(&own), "the repository hook: {}", own.stdout);
+}
+
+/// Copilot CLI skips a repository's `.github/hooks/` in a folder it does not trust, without
+/// a word: `hook install --agent copilot` says so and names both ways out. A trusted
+/// folder, or a machine where Copilot CLI has no configuration, gets no note.
+#[test]
+fn copilot_install_notes_a_folder_copilot_does_not_trust() {
+    let home = tempfile::tempdir().unwrap();
+    let env = [("COPILOT_HOME", home.path().to_str().unwrap())];
+    let args = ["hook", "install", "--agent", "copilot"];
+    let unconfigured = Repo::new();
+    let run = unconfigured.run(&args, &env);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(!run.stdout.contains("does not trust"), "{}", run.stdout);
+
+    let untrusted = Repo::new();
+    copilot_config(home.path(), &[]);
+    let run = untrusted.run(&args, &env);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stdout.contains("Copilot CLI does not trust")
+            && run.stdout.contains("trustedFolders")
+            && run
+                .stdout
+                .contains("discipline hook install --agent copilot --user"),
+        "{}",
+        run.stdout
+    );
+
+    let trusted = Repo::new();
+    copilot_config(home.path(), &[&trusted.path().canonicalize().unwrap()]);
+    let run = trusted.run(&args, &env);
+    assert!(!run.stdout.contains("does not trust"), "{}", run.stdout);
 }
 
 /// `hook install --agent copilot --user` writes the user-level file Copilot CLI loads

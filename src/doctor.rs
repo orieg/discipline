@@ -1916,6 +1916,8 @@ pub struct DoctorInput<'a> {
     pub branch: Option<String>,
     pub local_only: bool,
     pub api: &'a dyn ForgeApi,
+    /// Copilot CLI's home directory (its `config.json` lists the folders it trusts).
+    pub copilot_home: Option<std::path::PathBuf>,
 }
 
 fn read(root: &Path, rel: &str) -> Option<String> {
@@ -1929,6 +1931,46 @@ fn pr_read_granted(jobs: &str, when: &str) -> Finding {
         "push-trigger",
         Status::Pass,
         format!("{jobs} run(s) discipline {when}; `merged-pr-body` is enabled and the workflow grants `pull-requests: read`, so the push run reads a merged pull request's body"),
+    )
+}
+
+/// `copilot-trust`: whether Copilot CLI on this machine runs the repository's Copilot
+/// discipline hook, which it skips without a message in a folder it does not trust. `None`
+/// without a repository hook or without Copilot CLI configuration (a CI runner, or a
+/// machine where Copilot CLI has not run).
+pub fn copilot_trust_finding(root: &Path, home: Option<&Path>) -> Option<Finding> {
+    let hook = crate::hook::copilot_repo_hook(root)?;
+    let hook = hook
+        .strip_prefix(root)
+        .unwrap_or(&hook)
+        .display()
+        .to_string();
+    let home = home?;
+    if crate::hook::copilot_trusts(home, root)? {
+        return Some(Finding::new(
+            "copilot-trust",
+            Status::Pass,
+            format!("Copilot CLI trusts this folder, so it runs {hook}"),
+        ));
+    }
+    if let Some(user) = crate::hook::copilot_user_hook(home) {
+        return Some(Finding::new(
+            "copilot-trust",
+            Status::Info,
+            format!(
+                "Copilot CLI does not trust this folder, so it skips {hook}; the user-level hook {} checks it instead",
+                user.display()
+            ),
+        ));
+    }
+    let note = crate::hook::copilot_untrusted_note(home, root)?;
+    Some(
+        Finding::new(
+            "copilot-trust",
+            Status::Warn,
+            format!("Copilot CLI does not trust this folder, so {hook} never runs"),
+        )
+        .fix(note),
     )
 }
 
@@ -2013,6 +2055,10 @@ pub fn run(input: &DoctorInput) -> Report {
         )
         .fix("Run `discipline init` to pin the configuration in the repository.")
     });
+
+    if let Some(f) = copilot_trust_finding(root, input.copilot_home.as_deref()) {
+        findings.push(f);
+    }
 
     let mut platform_name = "local".to_string();
     let mut gitea_version: Option<String> = None;
@@ -3154,6 +3200,7 @@ test:
         std::fs::create_dir_all(dir.join(".github/workflows")).unwrap();
         std::fs::write(dir.join(".github/workflows/ci.yml"), WF).unwrap();
         let input = DoctorInput {
+            copilot_home: None,
             root: &dir,
             forge: Ok(forge(ForgeKind::GitHub)),
             branch: None,
@@ -3163,11 +3210,13 @@ test:
         let r = run(&input);
         assert_eq!(r.exit_code(false), 2, "{r:?}");
         let local = run(&DoctorInput {
+            copilot_home: None,
             local_only: true,
             ..input
         });
         assert!(local.findings.iter().all(|f| f.id != "platform"));
         let other = run(&DoctorInput {
+            copilot_home: None,
             root: &dir,
             forge: Err("set DISCIPLINE_FORGE".into()),
             branch: None,
@@ -3205,6 +3254,7 @@ test:
             .unwrap();
             let status = |local_only: bool, api: &dyn ForgeApi| {
                 run(&DoctorInput {
+                    copilot_home: None,
                     root: &dir,
                     forge: Ok(forge(ForgeKind::GitHub)),
                     branch: Some("main".into()),
