@@ -58,7 +58,7 @@ pub struct Finding {
 }
 
 impl Finding {
-    fn new(id: &'static str, status: Status, summary: impl Into<String>) -> Self {
+    pub(crate) fn new(id: &'static str, status: Status, summary: impl Into<String>) -> Self {
         Self {
             id,
             status,
@@ -67,7 +67,7 @@ impl Finding {
         }
     }
 
-    fn fix(mut self, remediation: impl Into<String>) -> Self {
+    pub(crate) fn fix(mut self, remediation: impl Into<String>) -> Self {
         self.remediation = Some(remediation.into());
         self
     }
@@ -2305,10 +2305,11 @@ pub fn run(input: &DoctorInput) -> Report {
     let gitlab =
         kind == Some(ForgeKind::GitLab) || (kind.is_none() && root.join(".gitlab-ci.yml").exists());
 
+    // Actions workflow files (path, content); empty on GitLab.
+    let mut files = Vec::new();
     let local = if gitlab {
         analyse_gitlab_ci(&read(root, ".gitlab-ci.yml").unwrap_or_default())
     } else {
-        let mut files = Vec::new();
         for dir in WORKFLOW_DIRS {
             let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
                 continue;
@@ -2538,6 +2539,9 @@ pub fn run(input: &DoctorInput) -> Report {
                             .fix(access_hint(forge.kind, &e)),
                         ),
                     }
+                    // Repository settings that decide whether mutable action refs,
+                    // moved release tags or replaced release assets can run.
+                    findings.extend(crate::doctor_settings::findings(input.api, forge, &files));
                     // `ratified-paths` trusts comment authorship: an agent login with
                     // administrator rights could act as, or edit the comments of, the owner.
                     if let Some(rp) = repo_config
@@ -2626,7 +2630,7 @@ fn qualify_token_findings(findings: &mut [Finding], gitea: bool, version: Option
     }
 }
 
-fn access_hint(kind: ForgeKind, error: &str) -> &'static str {
+pub(crate) fn access_hint(kind: ForgeKind, error: &str) -> &'static str {
     // A transport failure is about the address, not the credentials.
     if error.contains("request to ") && error.contains(" failed") {
         return "Check the forge's web address: set DISCIPLINE_FORGE_URL (for example https://git.example.com) when the remote's host is not where the API is served, or use --local-only.";

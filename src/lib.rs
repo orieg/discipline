@@ -8,6 +8,7 @@ pub mod config;
 pub mod could_not_check;
 pub mod docs;
 pub mod doctor;
+pub mod doctor_settings;
 pub mod explain;
 pub mod findings;
 pub mod forge;

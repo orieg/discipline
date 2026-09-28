@@ -247,6 +247,7 @@ From 1.0, a `stable` surface below changes incompatibly only in a new major vers
 | `src/style.rs` | Zero-dependency ANSI terminal styling |
 | `src/forge.rs` | The in-process HTTPS client for forge REST APIs (reads, and the one write: `check --comment`), with the path, https, redirect and `DISCIPLINE_NO_NETWORK` checks |
 | `src/doctor.rs` | `discipline doctor`: workflow, CODEOWNERS and branch-protection checks |
+| `src/doctor_settings.rs` | `discipline doctor`: repository settings (Actions policy, default workflow token, immutable releases, tag rulesets or protected tags, secret scoping) |
 | `src/override_policy.rs` | `max_overrides` and `require_approval`: whether a run's directive overrides stand |
 | `src/baseline.rs` | Grandfathering baseline read / write and fingerprints |
 | `src/hook.rs` | `discipline hook run` / `install`: the agent-facing check (base policy, no directives) translated into each agent's hook contract |
@@ -426,7 +427,7 @@ Static security analysis runs on pull requests, pushes to `main`, and on a sched
 
 ### 8.4 Repository Settings the Pipelines Rely On
 
-These live in the forge, not in the tree, so a review of the workflows alone does not show them. Check them with the `gh api` calls named in each row; `discipline doctor` reads branch protection.
+These live in the forge, not in the tree, so a review of the workflows alone does not show them. Check them with the `gh api` calls named in each row; `discipline doctor` reads branch protection, the Actions policy, the default workflow token, immutable releases, the tag rulesets and whether a repository-level secret is read only from environment-bound jobs (the admin-only settings need an admin token; under the workflow's read token they are reported as not visible).
 
 | Setting | Value | Why | Read with |
 |---|---|---|---|

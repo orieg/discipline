@@ -39,8 +39,47 @@ fn github_api(rules: &str) -> FakeForge {
         "repos/o/r/branches/main",
         serde_json::json!({"protected": true, "protection": {"enabled": false}}),
     );
-    api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));
+    api.serve(
+        "repos/o/r",
+        serde_json::json!({"default_branch": "main", "permissions": {"admin": true}}),
+    );
+    serve_safe_settings(&api);
     api
+}
+
+/// The repository settings `doctor` reads (Actions policy, immutable releases, tag
+/// rulesets, secrets), each at its safe value.
+fn serve_safe_settings(api: &FakeForge) {
+    api.serve(
+        "repos/o/r/actions/permissions",
+        serde_json::json!({"enabled": true, "allowed_actions": "selected", "sha_pinning_required": true}),
+    );
+    api.serve(
+        "repos/o/r/actions/permissions/workflow",
+        serde_json::json!({"default_workflow_permissions": "read", "can_approve_pull_request_reviews": false}),
+    );
+    api.serve(
+        "repos/o/r/immutable-releases",
+        serde_json::json!({"enabled": true, "enforced_by_owner": false}),
+    );
+    api.serve(
+        "repos/o/r/rulesets?targets=tag&includes_parents=true&per_page=100&page=1",
+        serde_json::json!([{"id": 9, "target": "tag", "enforcement": "active"}]),
+    );
+    api.serve(
+        "repos/o/r/rulesets/9",
+        serde_json::json!({"name": "release tags", "target": "tag", "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["refs/tags/v*.*.*"], "exclude": []}},
+            "rules": [{"type": "update"}, {"type": "deletion"}]}),
+    );
+    api.serve(
+        "repos/o/r/releases/latest",
+        serde_json::json!({"tag_name": "v1.0.0"}),
+    );
+    api.serve(
+        "repos/o/r/actions/secrets?per_page=100&page=1",
+        serde_json::json!({"total_count": 0, "secrets": []}),
+    );
 }
 
 const GOOD_RULES: &str = r#"[{"type":"required_status_checks","ruleset_id":1,"parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"ci-gate"}]}},{"type":"non_fast_forward","ruleset_id":1},{"type":"deletion","ruleset_id":1},{"type":"pull_request","ruleset_id":1,"parameters":{"required_approving_review_count":1,"require_code_owner_review":true,"dismiss_stale_reviews_on_push":true}}]"#;
@@ -773,4 +812,77 @@ fn doctor_reports_what_several_agents_in_one_repository_rely_on() {
     assert_eq!(install.code, 0, "{}", install.stderr);
     let (_, st) = local(&repo);
     assert_eq!(status_of(&st, "pretool-hook"), vec!["pass"], "{st:?}");
+}
+
+#[test]
+fn doctor_reports_the_repository_settings_that_let_mutable_code_run() {
+    let repo = protected_repo();
+    let api = github_api(GOOD_RULES);
+    let url = api.url();
+    let env = [("DISCIPLINE_FORGE_API_URL", url.as_str())];
+    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let st = statuses(&run.stdout);
+    for id in [
+        "actions-sha-pinning",
+        "allowed-actions",
+        "default-token",
+        "actions-approve-prs",
+        "immutable-releases",
+        "tag-protection",
+        "secret-scoping",
+    ] {
+        assert!(st.contains(&(id.into(), "pass".into())), "{id}: {st:?}");
+    }
+
+    // The settings this repository had before they were changed, and a secret that only
+    // an environment-bound job reads.
+    api.serve(
+        "repos/o/r/actions/permissions",
+        serde_json::json!({"enabled": true, "allowed_actions": "all", "sha_pinning_required": false}),
+    );
+    api.serve(
+        "repos/o/r/actions/permissions/workflow",
+        serde_json::json!({"default_workflow_permissions": "write", "can_approve_pull_request_reviews": true}),
+    );
+    api.serve_raw(
+        "repos/o/r/immutable-releases",
+        404,
+        &[],
+        r#"{"message":"Not Found"}"#,
+    );
+    api.serve(
+        "repos/o/r/rulesets?targets=tag&includes_parents=true&per_page=100&page=1",
+        serde_json::json!([]),
+    );
+    api.serve(
+        "repos/o/r/actions/secrets?per_page=100&page=1",
+        serde_json::json!({"total_count": 1, "secrets": [{"name": "DEPLOY_KEY"}]}),
+    );
+    repo.commit_base(
+        ".github/workflows/deploy.yml",
+        "on: push\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    environment: production\n    steps:\n      - run: deploy\n        env:\n          KEY: ${{ secrets.DEPLOY_KEY }}\n",
+        "deploy",
+    );
+    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let st = statuses(&run.stdout);
+    for id in [
+        "actions-sha-pinning",
+        "allowed-actions",
+        "default-token",
+        "actions-approve-prs",
+        "immutable-releases",
+        "tag-protection",
+        "secret-scoping",
+    ] {
+        assert!(st.contains(&(id.into(), "warn".into())), "{id}: {st:?}");
+    }
+    assert!(
+        run.stdout.contains("`DEPLOY_KEY` (environment production)"),
+        "{}",
+        run.stdout
+    );
+    let strict = repo.run(&["doctor", "--repo", "o/r", "--strict"], &env);
+    assert_eq!(strict.code, 1, "{}\n{}", strict.stdout, strict.stderr);
 }
