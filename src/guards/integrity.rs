@@ -18,7 +18,8 @@ use toml::Value;
 pub enum Direction {
     /// List: a gained entry is looser.
     Grown,
-    /// List: a lost entry is looser. An edited entry counts as lost.
+    /// List: a lost entry is looser. An edited entry counts as lost, unless the option is
+    /// in [`ENTRY_SHAPES`] and the edit only tightens the entry.
     Shrunk,
     /// Allow-list: a gained entry is looser, and so is emptying it (an empty allow-list
     /// switches the restriction off).
@@ -166,7 +167,8 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("archive_path", Direction::Evidence),
     ("mode", Direction::StrictMode("paired-ratio")),
     // Output shaping, run limits that can only fail a run sooner, and fields of list
-    // entries (an edited entry already counts as a lost one).
+    // entries (judged with their entry: an edited entry counts as a lost one unless
+    // `ENTRY_SHAPES` finds it only tightened).
     ("redact_lan_ips", Direction::Neutral),
     ("timeout_seconds", Direction::Neutral),
     ("strip_components", Direction::Neutral),
@@ -179,6 +181,100 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("job", Direction::Neutral),
     ("guard", Direction::Neutral),
 ];
+
+/// A list-of-tables option whose entries are matched across base and head by identity, so
+/// an entry that only tightened is not counted as lost.
+pub struct EntryShape {
+    /// The option under `[gates.<id>]`; it is classified `Shrunk`.
+    pub key: &'static str,
+    /// Fields that name the entry. The same values must name exactly one entry on each side.
+    pub identity: &'static [&'static str],
+    /// List fields where a gained item is stricter: every base item must stay.
+    pub stricter_when_grown: &'static [&'static str],
+    /// List fields where a lost item is stricter: no item may be gained.
+    pub stricter_when_shrunk: &'static [&'static str],
+}
+
+/// Every other field of a matched entry must be unchanged. `citation_measurement_jobs` is
+/// absent: both of its fields name what is checked, so any edit repoints the check.
+pub const ENTRY_SHAPES: &[EntryShape] = &[
+    // version-lockstep: one more source is one more place held to the same version.
+    EntryShape {
+        key: "groups",
+        identity: &["name"],
+        stricter_when_grown: &["sources"],
+        stricter_when_shrunk: &[],
+    },
+    // manifest-sync: more watched paths require the manifest to move more often; fewer
+    // exclusions leave less outside the rule.
+    EntryShape {
+        key: "rules",
+        identity: &["manifest", "extract_regex"],
+        stricter_when_grown: &["watched_paths"],
+        stricter_when_shrunk: &["exclude_paths"],
+    },
+    // command: one more forbidden output pattern is one more way the command fails.
+    EntryShape {
+        key: "commands",
+        identity: &["name"],
+        stricter_when_grown: &["forbid_output"],
+        stricter_when_shrunk: &[],
+    },
+];
+
+/// Whether `entry`, a base entry of `key` missing from head as written, is on head under the
+/// same identity with only tightening edits. Anything ambiguous reads as lost.
+fn entry_tightened(key: &str, entry: &Value, base: &[Value], head: &[Value]) -> bool {
+    let Some(shape) = ENTRY_SHAPES.iter().find(|s| s.key == key) else {
+        return false;
+    };
+    let Some(b) = entry.as_table() else {
+        return false;
+    };
+    let id = |t: &toml::Table| -> Vec<Option<Value>> {
+        shape.identity.iter().map(|f| t.get(*f).cloned()).collect()
+    };
+    let wanted = id(b);
+    if wanted.iter().any(Option::is_none) {
+        return false;
+    }
+    let named = |list: &[Value]| -> Vec<toml::Table> {
+        list.iter()
+            .filter_map(Value::as_table)
+            .filter(|t| id(t) == wanted)
+            .cloned()
+            .collect()
+    };
+    let (on_base, on_head) = (named(base), named(head));
+    let ([_], [h]) = (on_base.as_slice(), on_head.as_slice()) else {
+        return false;
+    };
+    b.keys().chain(h.keys()).all(|field| {
+        let (bv, hv) = (b.get(field), h.get(field));
+        if shape.stricter_when_grown.contains(&field.as_str()) {
+            within(bv, hv)
+        } else if shape.stricter_when_shrunk.contains(&field.as_str()) {
+            within(hv, bv)
+        } else {
+            bv == hv
+        }
+    })
+}
+
+/// Every item of the list `small` is in the list `big`; an absent list reads as empty.
+fn within(small: Option<&Value>, big: Option<&Value>) -> bool {
+    fn items(v: Option<&Value>) -> Option<&[Value]> {
+        match v {
+            None => Some(&[]),
+            Some(Value::Array(a)) => Some(a),
+            Some(_) => None,
+        }
+    }
+    match (items(small), items(big)) {
+        (Some(s), Some(g)) => s.iter().all(|x| g.contains(x)),
+        _ => false,
+    }
+}
 
 pub fn direction_of(key: &str) -> Option<Direction> {
     KEY_DIRECTIONS
@@ -863,7 +959,10 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                         continue;
                     };
                     let gained = ha.iter().filter(|x| !ba.contains(x)).count();
-                    let lost = ba.iter().filter(|x| !ha.contains(x)).count();
+                    let lost = ba
+                        .iter()
+                        .filter(|x| !ha.contains(x) && !entry_tightened(key, x, ba, ha))
+                        .count();
                     if dir == Direction::Allowlist && !ba.is_empty() && ha.is_empty() {
                         note(format!(
                             "`{key}` emptied, which switches the allow-list off"
@@ -1012,6 +1111,157 @@ mod tests {
         // Adopting the registry or the stricter mode is not a weakening.
         let plain = cfg("");
         assert!(diff_configs(&plain, &base).unwrap().is_empty());
+    }
+
+    fn lockstep(group: &str, sources: &[(&str, &str)]) -> DisciplineConfig {
+        let mut body = format!("[[gates.version-lockstep.groups]]\nname = \"{group}\"\n");
+        for (path, regex) in sources {
+            body.push_str(&format!(
+                "[[gates.version-lockstep.groups.sources]]\npath = \"{path}\"\nregex = '{regex}'\n"
+            ));
+        }
+        cfg(&body)
+    }
+
+    #[test]
+    fn a_list_entry_is_matched_by_identity_and_only_a_tightening_edit_passes() {
+        let base = lockstep(
+            "release",
+            &[("Cargo.toml", "v(.+)"), ("README.md", "@v(.+)")],
+        );
+        let whats = |head: &DisciplineConfig| -> Vec<String> {
+            diff_configs(&base, head)
+                .unwrap()
+                .into_iter()
+                .map(|w| format!("{}: {}", w.gate, w.what))
+                .collect()
+        };
+        let lost = vec!["version-lockstep: `groups` lost 1 entr(y/ies)".to_string()];
+        // A source added to the same group, every base source kept: a tightening.
+        let added = lockstep(
+            "release",
+            &[
+                ("Cargo.toml", "v(.+)"),
+                ("CITATION.cff", "version: (.+)"),
+                ("README.md", "@v(.+)"),
+            ],
+        );
+        assert!(whats(&added).is_empty(), "{:?}", whats(&added));
+        // A source removed.
+        assert_eq!(
+            whats(&lockstep("release", &[("Cargo.toml", "v(.+)")])),
+            lost
+        );
+        // A source's regex edited, even alongside an added source.
+        let edited = lockstep(
+            "release",
+            &[
+                ("Cargo.toml", "v(.+)"),
+                ("README.md", "(.+)"),
+                ("CITATION.cff", "version: (.+)"),
+            ],
+        );
+        assert_eq!(whats(&edited), lost);
+        // The group renamed: the base group is gone.
+        let renamed = lockstep(
+            "rel",
+            &[
+                ("Cargo.toml", "v(.+)"),
+                ("README.md", "@v(.+)"),
+                ("CITATION.cff", "version: (.+)"),
+            ],
+        );
+        assert_eq!(whats(&renamed), lost);
+        // Two head groups under the base name: which one kept the sources is ambiguous.
+        // Two groups, one grows: each base group is found by its name, not its position.
+        let mut two = base.clone();
+        let mut docs = lockstep("docs", &[("a.md", "(.+)"), ("b.md", "(.+)")])
+            .gates
+            .version_lockstep
+            .groups;
+        two.gates.version_lockstep.groups.splice(0..0, docs.clone());
+        docs.extend(added.gates.version_lockstep.groups.clone());
+        let mut two_added = base.clone();
+        two_added.gates.version_lockstep.groups = docs;
+        assert!(diff_configs(&two, &two_added).unwrap().is_empty());
+        let mut dup = added.clone();
+        dup.gates
+            .version_lockstep
+            .groups
+            .push(added.gates.version_lockstep.groups[0].clone());
+        assert_eq!(whats(&dup), lost);
+    }
+
+    #[test]
+    fn manifest_sync_rules_and_command_entries_follow_the_same_identity_rule() {
+        let rules = |watched: &str, exclude: &str, regex: &str| {
+            cfg(&format!(
+                "[[gates.manifest-sync.rules]]\nmanifest = \"m.json\"\nextract_regex = '{regex}'\n\
+                 watched_paths = [{watched}]\nexclude_paths = [{exclude}]\n"
+            ))
+        };
+        let base = rules("\"src/**\"", "\"src/gen/**\", \"src/x/**\"", "n(.+)");
+        let count = |head: &DisciplineConfig| diff_configs(&base, head).unwrap().len();
+        // A watched path added and an exclusion dropped: both tighten.
+        assert_eq!(
+            count(&rules("\"src/**\", \"lib/**\"", "\"src/gen/**\"", "n(.+)")),
+            0
+        );
+        // A watched path dropped, an exclusion added, the regex edited: each loosens.
+        assert_eq!(
+            count(&rules("", "\"src/gen/**\", \"src/x/**\"", "n(.+)")),
+            1
+        );
+        assert_eq!(
+            count(&rules(
+                "\"src/**\"",
+                "\"src/gen/**\", \"src/x/**\", \"a/**\"",
+                "n(.+)"
+            )),
+            1
+        );
+        assert_eq!(
+            count(&rules("\"src/**\"", "\"src/gen/**\", \"src/x/**\"", "(.+)")),
+            1
+        );
+
+        let cmd = |forbid: &str, min: u64| {
+            cfg(&format!(
+                "[[gates.command.commands]]\nname = \"t\"\ncommand = \"cargo test\"\n\
+                 min_count = {min}\nforbid_output = [{forbid}]\n"
+            ))
+        };
+        let base = cmd("\"panicked\"", 5);
+        let count = |head: &DisciplineConfig| diff_configs(&base, head).unwrap().len();
+        assert_eq!(count(&cmd("\"panicked\", \"ignored\"", 5)), 0);
+        assert_eq!(count(&cmd("", 5)), 1);
+        // A field outside the list is judged whole: even a raised floor reads as lost.
+        assert_eq!(count(&cmd("\"panicked\"", 9)), 1);
+    }
+
+    #[test]
+    fn every_entry_shape_names_a_shrunk_option_and_its_real_fields() {
+        let schema = serde_json::to_string(&crate::schema::generate_schema()).unwrap();
+        for shape in ENTRY_SHAPES {
+            assert_eq!(
+                direction_of(shape.key),
+                Some(Direction::Shrunk),
+                "{}",
+                shape.key
+            );
+            for field in shape
+                .identity
+                .iter()
+                .chain(shape.stricter_when_grown)
+                .chain(shape.stricter_when_shrunk)
+            {
+                assert!(
+                    schema.contains(&format!("\"{field}\"")),
+                    "{}.{field}",
+                    shape.key
+                );
+            }
+        }
     }
 
     /// Every option name a gate table accepts, from the published schema and from the

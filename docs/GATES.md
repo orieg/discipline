@@ -897,6 +897,15 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Lowering severity (`severity = "error"` -> `severity = "warning"`).
   - Growing loosening lists (`exempt_paths`, `allowed_users`, `allow_patterns`, `assert_helper_fns`, `allowed_suppressions`).
   - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`, `workflows`, `forbidden_paths`, `deny_dependencies`), and emptying an allow-list (`allow_dependencies`, `allowed_paths`).
+  - Removing or editing an entry of a list of tables (`groups`, `rules`, `commands`, `citation_measurement_jobs`). An entry of `groups`, `rules` or `commands` is matched across base and head by its identity, and an entry whose only edits tighten it is not a loss:
+
+    | Option | Identity | Stricter edits | Every other field |
+    |---|---|---|---|
+    | `version-lockstep` `groups` | `name` | `sources` gains a source, every base source kept unchanged | unchanged |
+    | `manifest-sync` `rules` | `manifest` and `extract_regex` | `watched_paths` gains a path; `exclude_paths` loses one | unchanged |
+    | `command` `commands` | `name` | `forbid_output` gains a pattern | unchanged |
+
+    A removed or edited source, path or pattern, a renamed entry, any other changed field, or an identity naming more than one entry on either side counts as one lost entry. `citation_measurement_jobs` has no identity rule: both of its fields (`job`, `guard`) name what the gate checks, so any edit is a lost entry.
   - Lowering or removing a floor (`min_tests`, `min_count`, `min_assertions_per_test`); raising or removing a cap (`max_unsafe`, `max_increase`); raising a tolerance.
   - Changing or removing what a gate runs or checks against (`command`, `test_command`, `preset`, `count_pattern`, `ratio_baseline`, ...).
   - `[meta] mode = "advisory"` introduced by the change. It is reported under the subject `meta` and **not honoured** for that run: the exit code stays enforcing until the setting is on the base side.
@@ -907,7 +916,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Self-protection:** the gate runs whenever the **base** configuration enables it, whatever the head configuration or `--disable` says, and reports at the stricter of the base and head severity. Every gate option has a declared loosening direction in `src/guards/integrity.rs::KEY_DIRECTIONS`; a unit test fails when an option is added without one.
 - **What it does NOT catch:**
   - Deleting `discipline.toml`: the run falls back to built-in defaults, and only options the base file set stricter than those defaults are reported.
-  - A loosening expressed by editing an entry of `commands`, `rules` or `groups` in a way that keeps the entry count: it is reported as one lost entry, without naming the field.
+  - Which field of an edited `groups`, `rules`, `commands` or `citation_measurement_jobs` entry loosened it: the finding reports one lost entry, without naming the field. An edit that tightens a field outside the lists above (a raised `min_count` in a `commands` entry) is reported the same way.
   - A repointed `command` is reported in both directions; the gate cannot tell which command is the stronger check.
 - **Failing diff example (rejected):**
   ```diff

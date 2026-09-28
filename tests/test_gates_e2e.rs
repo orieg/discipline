@@ -1457,6 +1457,70 @@ fn a_change_cannot_switch_its_own_run_to_advisory() {
     assert_eq!(run.code, 0);
 }
 
+/// A `version-lockstep` configuration with one group `name` holding `sources`.
+fn lockstep_config(name: &str, sources: &[(&str, &str)]) -> String {
+    let mut cfg = format!(
+        "{CONFIG_HEAD}[gates.version-lockstep]\nenabled = true\n\
+         [[gates.version-lockstep.groups]]\nname = \"{name}\"\n"
+    );
+    for (path, regex) in sources {
+        cfg.push_str(&format!(
+            "[[gates.version-lockstep.groups.sources]]\npath = \"{path}\"\nregex = '{regex}'\n"
+        ));
+    }
+    cfg
+}
+
+#[test]
+fn a_source_added_to_a_version_group_is_not_a_weakening() {
+    let cargo = ("Cargo.toml", r#"version = "([^"]+)""#);
+    let readme = ("README.md", "--version v([0-9.]+)");
+    let citation = ("CITATION.cff", "version: ([0-9.]+)");
+    let repo = repo_with_base_config(&lockstep_config("release", &[cargo, readme]));
+    repo.write("Cargo.toml", "version = \"1.2.3\"\n");
+    repo.write("README.md", "install.sh --version v1.2.3\n");
+    repo.write("CITATION.cff", "version: 1.2.3\n");
+    repo.commit("chore: versioned files");
+
+    // One more source in the same group, the base source unchanged: a tightening.
+    repo.write(
+        "discipline.toml",
+        &lockstep_config("release", &[cargo, readme, citation]),
+    );
+    repo.commit("chore: hold CITATION.cff to the release version");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("config-integrity").is_empty(),
+        "stdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(run.titles("version-lockstep").is_empty());
+
+    // A base source's regex edited or a base source removed, each alongside the added
+    // source, and the group renamed: each is still reported.
+    let loose = ("Cargo.toml", "([0-9.]+)");
+    for head in [
+        lockstep_config("release", &[loose, readme, citation]),
+        lockstep_config("release", &[cargo, citation]),
+        lockstep_config("rel", &[cargo, readme, citation]),
+    ] {
+        repo.write("discipline.toml", &head);
+        repo.git(&["commit", "-q", "-am", "chore: tune", "--amend"]);
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 1, "{head}\n{}\n{}", run.stdout, run.stderr);
+        let v = run.violations("config-integrity");
+        assert_eq!(v.len(), 1, "{head}");
+        assert!(
+            v[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("`groups` lost 1 entr(y/ies)"),
+            "{v:?}"
+        );
+    }
+}
+
 #[test]
 fn a_change_cannot_disable_or_demote_the_gate_that_judges_its_config() {
     // Disabling config-integrity in the same change that weakens another gate.
