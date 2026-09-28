@@ -1242,3 +1242,89 @@ fn fixtures_never_touch_an_inherited_git_dir() {
         "no fixture file reached the sentinel"
     );
 }
+
+/// agy's `Stop` gets 300 s by default (a check under heavy load took 131 s and agy killed it
+/// at the old 120 s). `--timeout` sets every check timeout of the agents whose files carry one
+/// (agy, Qwen Code, Copilot CLI, also at user level), and is refused for the others. A hook's
+/// own check still recognises such a file as generated, unless the timeout is below the
+/// default: a shortened timeout can kill the hook, so it is reported.
+#[test]
+fn install_timeout_sets_the_check_timeout_and_stays_recognised() {
+    let read = |repo: &Repo, rel: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(repo.file(rel)).unwrap()).unwrap()
+    };
+    let default = Repo::new();
+    assert_eq!(
+        default
+            .run(&["hook", "install", "--agent", "agy"], &[])
+            .code,
+        0
+    );
+    assert_eq!(
+        read(&default, ".agents/hooks.json")["discipline"]["Stop"][0]["timeout"],
+        300
+    );
+
+    let repo = Repo::new();
+    let install = |agent: &str, extra: &[&str], env: &[(&str, &str)]| {
+        let mut args = vec!["hook", "install", "--agent", agent, "--timeout"];
+        args.extend_from_slice(extra);
+        let run = repo.run(&args, env);
+        assert_eq!(run.code, 0, "{agent}: {}\n{}", run.stdout, run.stderr);
+    };
+    install("agy", &["600"], &[]);
+    install("qwen", &["200"], &[]);
+    install("copilot", &["200"], &[]);
+    let agy = read(&repo, ".agents/hooks.json");
+    assert_eq!(agy["discipline"]["Stop"][0]["timeout"], 600, "{agy}");
+    assert_eq!(agy["discipline"]["SessionStart"][0]["timeout"], 10, "{agy}");
+    let qwen = read(&repo, ".qwen/settings.json");
+    for event in ["PostToolUse", "Stop"] {
+        assert_eq!(
+            qwen["hooks"][event][0]["hooks"][0]["timeout"], 200,
+            "{qwen}"
+        );
+    }
+    let copilot = read(&repo, ".github/hooks/discipline.json");
+    for event in ["postToolUse", "agentStop"] {
+        assert_eq!(copilot["hooks"][event][0]["timeoutSec"], 200, "{copilot}");
+    }
+    let home = tempfile::tempdir().unwrap();
+    install(
+        "copilot",
+        &["200", "--user"],
+        &[("COPILOT_HOME", home.path().to_str().unwrap())],
+    );
+    let user: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.path().join("hooks/discipline.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(user["hooks"]["agentStop"][0]["timeoutSec"], 200, "{user}");
+
+    let cursor = repo.run(
+        &["hook", "install", "--agent", "cursor", "--timeout", "60"],
+        &[],
+    );
+    assert_eq!(cursor.code, 2, "{}", cursor.stdout);
+    assert!(
+        cursor.stderr.contains("`--timeout` is for"),
+        "{}",
+        cursor.stderr
+    );
+
+    // The hook's own check: files with a longer timeout are what `hook install` writes.
+    repo.commit("chore(hooks): longer timeouts");
+    let clean = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(clean.code, 0, "{}", clean.stderr);
+    // Control: a timeout below the default can kill the hook, and is reported.
+    let path = repo.file(".agents/hooks.json");
+    let longer = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, longer.replace("\"timeout\": 600", "\"timeout\": 1")).unwrap();
+    let short = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(short.code, 2, "{}", short.stderr);
+    assert!(
+        short.stderr.contains(".agents/hooks.json"),
+        "{}",
+        short.stderr
+    );
+}

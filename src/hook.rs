@@ -582,6 +582,27 @@ pub fn config_for(agent: Agent) -> (&'static str, String) {
 
 /// [`config_for`], with every check command in observe mode (`hook run --observe`).
 pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
+    config_for_opts(agent, observe, None)
+}
+
+/// The check timeout, in seconds, of the agents whose hook file carries one; `None` for
+/// the others. agy's `Stop` gets more than the rest: a check under heavy load outlived
+/// 120 s and agy killed it.
+pub fn default_timeout(agent: Agent) -> Option<u32> {
+    match agent {
+        Agent::Agy => Some(300),
+        Agent::Qwen | Agent::Copilot => Some(120),
+        _ => None,
+    }
+}
+
+/// [`config_for_mode`], with `timeout` (seconds) in place of [`default_timeout`].
+pub fn config_for_opts(
+    agent: Agent,
+    observe: bool,
+    timeout: Option<u32>,
+) -> (&'static str, String) {
+    let secs = timeout.or(default_timeout(agent)).unwrap_or(0);
     let run = format!(
         "discipline hook run --agent {}{}",
         agent.id(),
@@ -649,7 +670,10 @@ pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
             ".aider.conf.yml",
             format!("lint-cmd:\n  - \"{cmd}\"\nauto-lint: true\n"),
         ),
-        Agent::Copilot => (".github/hooks/discipline.json", copilot_hooks(&cmd)),
+        Agent::Copilot => (
+            ".github/hooks/discipline.json",
+            copilot_hooks(&cmd, secs),
+        ),
         Agent::Agy => (
             ".agents/hooks.json",
             serde_json::to_string_pretty(&serde_json::json!({
@@ -661,7 +685,7 @@ pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
                     // (seen live with agy 1.2 and 1.2.12, where a made-up event name did not
                     // run; the event is not in its hooks guide, so it is not dead configuration).
                     "SessionStart": [{ "type": "command", "command": AGY_MISSING_BINARY, "timeout": 10 }],
-                    "Stop": [{ "type": "command", "command": cmd, "timeout": 120 }]
+                    "Stop": [{ "type": "command", "command": cmd, "timeout": secs }]
                 }
             }))
             .unwrap_or_default()
@@ -673,10 +697,10 @@ pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
                 "hooks": {
                     "PostToolUse": [{
                         "matcher": "^(write_file|edit)$",
-                        "hooks": [{ "type": "command", "command": cmd, "timeout": 120 }]
+                        "hooks": [{ "type": "command", "command": cmd, "timeout": secs }]
                     }],
                     "Stop": [{
-                        "hooks": [{ "type": "command", "command": cmd, "timeout": 120 }]
+                        "hooks": [{ "type": "command", "command": cmd, "timeout": secs }]
                     }]
                 }
             }))
@@ -757,11 +781,30 @@ pub fn is_generated_hook_file(path: &str, content: &str) -> bool {
     if path == CLAUDE_BOOTSTRAP {
         return content == claude_bootstrap_script();
     }
+    // A longer timeout is what `hook install --timeout` writes; a shorter one can kill the
+    // hook before it answers, so only the default or more is recognised.
+    let timeouts: Vec<u32> = TIMEOUT_VALUE
+        .captures_iter(content)
+        .filter_map(|c| c[1].parse().ok())
+        .collect();
     <Agent as clap::ValueEnum>::value_variants()
         .iter()
-        .flat_map(|a| [config_for_mode(*a, false), config_for_mode(*a, true)])
+        .flat_map(|a| {
+            let longer = timeouts
+                .iter()
+                .copied()
+                .filter(|t| default_timeout(*a).is_some_and(|d| *t > d))
+                .map(Some);
+            std::iter::once(None)
+                .chain(longer)
+                .flat_map(move |t| [config_for_opts(*a, false, t), config_for_opts(*a, true, t)])
+        })
         .any(|(rel, generated)| rel == path && generated == content)
 }
+
+/// A timeout value in a hook file (`"timeout": 300`, `"timeoutSec": 120`).
+static TIMEOUT_VALUE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r#""timeout(?:Sec)?": (\d+)"#).unwrap());
 
 /// What every file `hook install` generates says about itself. A file carrying it and
 /// differing from what this binary writes came from an earlier release (a pinned version,
@@ -788,12 +831,19 @@ fn refresh_generated(
 
 /// Writes the agent's configuration under `root` when the file does not exist.
 pub fn install(agent: Agent, root: &Path, observe: bool) -> Result<Installed> {
-    install_with(agent, root, observe, false)
+    install_with(agent, root, observe, false, None)
 }
 
 /// [`install`], rewriting a generated file an earlier release wrote when `upgrade`.
-pub fn install_with(agent: Agent, root: &Path, observe: bool, upgrade: bool) -> Result<Installed> {
-    let (rel, content) = config_for_mode(agent, observe);
+/// `timeout` replaces [`default_timeout`] in the agents whose file carries one.
+pub fn install_with(
+    agent: Agent,
+    root: &Path,
+    observe: bool,
+    upgrade: bool,
+    timeout: Option<u32>,
+) -> Result<Installed> {
+    let (rel, content) = config_for_opts(agent, observe, timeout);
     let path = root.join(rel);
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
@@ -823,8 +873,9 @@ pub fn configured(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Copilot CLI's hook file running `cmd` after an edit and at the end of a turn.
-fn copilot_hooks(cmd: &str) -> String {
+/// Copilot CLI's hook file running `cmd` after an edit and at the end of a turn, each
+/// with `timeout` seconds.
+fn copilot_hooks(cmd: &str, timeout: u32) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "hooks": {
@@ -834,9 +885,9 @@ fn copilot_hooks(cmd: &str) -> String {
                 // reference lists (`apply_patch` is how some models edit).
                 "matcher": "create|edit|str_replace_editor|apply_patch",
                 "bash": cmd,
-                "timeoutSec": 120
+                "timeoutSec": timeout
             }],
-            "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": 120 }]
+            "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": timeout }]
         }
     }))
     .unwrap_or_default()
@@ -848,20 +899,27 @@ fn copilot_hooks(cmd: &str) -> String {
 /// `discipline.toml` (`--if-configured`). Copilot CLI loads it whether or not the
 /// folder is trusted, which a repository's `.github/hooks/` needs. With `observe`, the
 /// command is in observe mode (`--observe`), as [`config_for_mode`] writes it.
-pub fn user_config_for(agent: Agent, observe: bool) -> Result<(PathBuf, String)> {
+pub fn user_config_for(
+    agent: Agent,
+    observe: bool,
+    timeout: Option<u32>,
+) -> Result<(PathBuf, String)> {
     match agent {
         Agent::Copilot => {
             let home =
                 copilot_home().context("cannot find the home directory (set COPILOT_HOME)")?;
             Ok((
                 home.join("hooks").join("discipline.json"),
-                copilot_hooks(&guarded(
-                    Agent::Copilot,
-                    &format!(
-                        "discipline hook run --agent copilot --if-configured{}",
-                        if observe { " --observe" } else { "" }
+                copilot_hooks(
+                    &guarded(
+                        Agent::Copilot,
+                        &format!(
+                            "discipline hook run --agent copilot --if-configured{}",
+                            if observe { " --observe" } else { "" }
+                        ),
                     ),
-                )),
+                    timeout.or(default_timeout(Agent::Copilot)).unwrap_or(0),
+                ),
             ))
         }
         other => bail!(
@@ -1019,8 +1077,8 @@ fn copilot_repo_hook_runs(dir: &Path) -> bool {
 
 /// Write the user-level hook file ([`user_config_for`]); an existing file is never
 /// rewritten.
-pub fn install_user(agent: Agent, observe: bool) -> Result<Installed> {
-    let (path, content) = user_config_for(agent, observe)?;
+pub fn install_user(agent: Agent, observe: bool, timeout: Option<u32>) -> Result<Installed> {
+    let (path, content) = user_config_for(agent, observe, timeout)?;
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
@@ -1497,13 +1555,16 @@ mod tests {
                 .collect();
                 out.extend(found.into_iter().map(|c| (agent, c)));
             }
-            let user: serde_json::Value = serde_json::from_str(&copilot_hooks(&guarded(
-                Agent::Copilot,
-                &format!(
-                    "discipline hook run --agent copilot --if-configured{}",
-                    if observe { " --observe" } else { "" }
+            let user: serde_json::Value = serde_json::from_str(&copilot_hooks(
+                &guarded(
+                    Agent::Copilot,
+                    &format!(
+                        "discipline hook run --agent copilot --if-configured{}",
+                        if observe { " --observe" } else { "" }
+                    ),
                 ),
-            )))
+                120,
+            ))
             .unwrap();
             out.push((
                 Agent::Copilot,

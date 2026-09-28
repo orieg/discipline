@@ -202,6 +202,10 @@ pub struct HookInstallArgs {
     /// the OpenCode plugin) to this release; a file without that header is never rewritten
     #[arg(long)]
     pub upgrade: bool,
+
+    /// Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long
+    #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u32).range(1..=86400))]
+    pub timeout: Option<u32>,
 }
 
 #[derive(Args, Debug, Clone)]

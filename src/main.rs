@@ -1403,14 +1403,21 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             std::process::exit(i32::from(out.code));
         }
         HookCommand::Install(a) => {
+            if a.timeout.is_some() && discipline::hook::default_timeout(a.agent).is_none() {
+                bail!(
+                    "`--timeout` is for agy, qwen and copilot, whose hook files carry a check timeout; the {} file does not",
+                    a.agent.id()
+                );
+            }
             let mut results = vec![if a.user {
-                discipline::hook::install_user(a.agent, a.observe)?
+                discipline::hook::install_user(a.agent, a.observe, a.timeout)?
             } else {
                 discipline::hook::install_with(
                     a.agent,
                     &discipline::hook::repo_root()?,
                     a.observe,
                     a.upgrade,
+                    a.timeout,
                 )?
             }];
             if a.agent == discipline::hook::Agent::ClaudeCode && !a.user {

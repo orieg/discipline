@@ -546,6 +546,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--observe` |  |  | Write the hook commands in observe mode (hook run --observe): the agent is never blocked while a hook is rolled out |
 | `--cloud-agent` |  |  | Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only) |
 | `--upgrade` |  |  | Rewrite a file an earlier discipline release generated (it carries the `Written by \`discipline hook install\`` header: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten |
+| `--timeout` |  |  | Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long |
 
 **`discipline explain`**
 
@@ -941,6 +942,8 @@ The hook file is project configuration: commit it so every contributor's agent r
 | Antigravity CLI (`agy`) | `.agents/hooks.json` (a named hook whose `Stop` lists its handler directly) | `Stop` (a `PostToolUse` hook's output does not reach agy's model); a `SessionStart` handler warns when `discipline` is missing (below) | `{"decision": "continue", "reason": <report>}`, which re-enters the loop with the report as a system message |
 | Qwen Code | `.qwen/settings.json` | `PostToolUse` (`write_file`, `edit`) and `Stop` | exit 2, the report on stderr (Claude Code's contract) |
 | OpenCode | `.opencode/plugins/discipline.js` | a plugin on `tool.execute.after` for `edit`, `write`, `apply_patch` | the plugin appends the report to the tool's output; `hook run --agent opencode` exits 1 with the report on stdout |
+
+**Check timeouts.** The files for agy, Qwen Code and Copilot CLI give each check a timeout, after which the agent kills it: 300 s for agy's `Stop`, 120 s for the others. `hook install --timeout <seconds>` writes a longer one (or a shorter one, for an agent that should not wait) for those agents, the Copilot user-level file included, and is refused for the others. A hook's own check recognises a file with a longer timeout as generated; a timeout below the default is reported, since it can kill the hook before it answers.
 
 Loop guards at the end of a turn: Claude Code, Codex, Copilot CLI and Qwen Code send `stop_hook_active` on a turn a hook already continued, and the hook lets it through (Copilot CLI and Qwen Code also stop after eight continuations); Cursor's `loop_limit` is 3. agy documents no guard, so discipline counts consecutive blocks for each conversation in `<git dir>/discipline/agy-stop-<id>` (never tracked) and lets the stop through after three; a pass resets the count. OpenCode's plugin runs after edit tools only.
 
