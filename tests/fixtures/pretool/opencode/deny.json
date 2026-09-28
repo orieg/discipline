@@ -1,0 +1,12 @@
+{
+  "agent": "OpenCode 1.18.25",
+  "event": "tool.execute.before (plugin)",
+  "observed": "RUN 2026-09-28",
+  "answers": [
+    {
+      "throw": "new Error(\"<reason>\")",
+      "result": "write blocked; the model reads `Error: <reason>`"
+    }
+  ],
+  "note": "The hook sees every tool, reads included (glob, read): the plugin filters on input.tool."
+}

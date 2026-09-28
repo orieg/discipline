@@ -1,0 +1,16 @@
+{
+  "agent": "GitHub Copilot CLI 1.0.88",
+  "event": "preToolUse",
+  "observed": "RUN 2026-09-28",
+  "answers": [
+    {
+      "exit_code": 0,
+      "stdout": {
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "<reason>"
+      },
+      "result": "create blocked: `Denied by preToolUse hook: <reason>`"
+    }
+  ],
+  "note": "A repository's .github/hooks/ run only in a folder Copilot trusts (probed with an isolated COPILOT_HOME trusting only the probe repository)."
+}

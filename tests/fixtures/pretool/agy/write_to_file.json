@@ -1,0 +1,21 @@
+{
+  "artifactDirectoryPath": "/home/user/.agent/transcript",
+  "conversationId": "00000000-0000-0000-0000-000000000000",
+  "modelName": "model",
+  "stepIdx": 2,
+  "toolCall": {
+    "args": {
+      "CodeContent": "hi",
+      "Description": "Create a.txt containing hi",
+      "Overwrite": true,
+      "TargetFile": "/work/repo/a.txt",
+      "toolAction": "Creating a.txt",
+      "toolSummary": "Create a.txt"
+    },
+    "name": "write_to_file"
+  },
+  "transcriptPath": "/home/user/.agent/transcript",
+  "workspacePaths": [
+    "/work/repo"
+  ]
+}

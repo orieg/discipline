@@ -1,0 +1,21 @@
+{
+  "agent": "agy 1.2.12",
+  "event": "PreToolUse",
+  "observed": "RUN 2026-09-28",
+  "answers": [
+    {
+      "exit_code": 0,
+      "stdout": {
+        "decision": "deny",
+        "reason": "<reason>"
+      },
+      "result": "write_to_file blocked: `tool call denied by pre-tool hook: <reason>`"
+    },
+    {
+      "exit_code": 2,
+      "stderr": "<reason>",
+      "stdout": null,
+      "result": "blocked as a failed hook: `JSON hook ... failed: command failed: exit status 2, stderr: <reason>`"
+    }
+  ]
+}

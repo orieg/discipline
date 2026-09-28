@@ -1,0 +1,10 @@
+{
+  "cwd": "/work/repo",
+  "sessionId": "00000000-0000-0000-0000-000000000000",
+  "timestamp": 0,
+  "toolArgs": {
+    "file_text": "hi",
+    "path": "/work/repo/a.txt"
+  },
+  "toolName": "create"
+}

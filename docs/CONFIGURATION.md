@@ -991,6 +991,18 @@ Loop guards at the end of a turn: Claude Code, Codex, Copilot CLI and Qwen Code 
 
 Live sessions (Claude Code 2.1, Copilot CLI 1.0, OpenCode 1.18, agy 1.2): in each, an agent asked to delete a test's assertions received the finding from the installed hook and restored them. Those sessions corrected two installed files (agy's `Stop` shape, Copilot's `apply_patch` edits); the recorded payloads are pinned in `src/hook.rs`'s tests. The Codex, Cursor and Qwen Code contracts are read from each tool's documentation (the module header of `src/hook.rs` cites the pages) and have not been run against a live session.
 
+
+**What each agent can block before a tool runs.** `hook install` writes no pre-tool hook yet (docs/ROADMAP.md, Phase 13). The contracts a pre-tool check would use, recorded live on 2026-09-28 unless the row says otherwise. The payloads and deny answers are in `tests/fixtures/pretool/`, and `tests/test_pretool_fixtures.rs` pins the fields:
+
+| Agent | Event | Payload: tool, edit target, session | Deny that blocked the call |
+|---|---|---|---|
+| Claude Code 2.1.282 | `PreToolUse` | `tool_name` (`Write`, `Bash`, ...), `tool_input.file_path` (absolute) or `tool_input.command`, `session_id`, `cwd` | exit 2 with the reason on stderr, or exit 0 with `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": ...}}` |
+| Copilot CLI 1.0.88 | `preToolUse` | `toolName` (`create`, ...), `toolArgs.path` (absolute), `sessionId`, `cwd` | exit 0 with `{"permissionDecision": "deny", "permissionDecisionReason": ...}`; a repository's hooks run only in a folder Copilot trusts |
+| agy 1.2.12 | `PreToolUse` (under a `matcher`) | `toolCall.name` (`write_to_file`, ...), `toolCall.args.TargetFile` (absolute), `conversationId`, `workspacePaths` | exit 0 with `{"decision": "deny", "reason": ...}` (`tool call denied by pre-tool hook`); exit 2 also blocks, reported as a failed hook |
+| OpenCode 1.18.25 | plugin `tool.execute.before` | `input.tool` (`write`, ...; reads such as `glob` too), `output.args.filePath` (absolute), `input.sessionID` | the plugin throws; the model reads the error |
+| Cursor (`cursor-agent`) | not observed | the CLI was not logged in on the probing machine | not observed |
+| Codex, Qwen Code, Aider | not observed | not installed on the probing machine; Aider has no pre-tool hook | not observed |
+
 The report is the `agent-prompt` format: each finding with its code, its location and the repair, never the directive that would waive it (every form the directive parser reads is redacted, whatever its case or spacing). The problem is quoted in a fenced block one backtick longer than any backtick run in it, because it can repeat text from the change; titles and paths are kept to one line. The findings that block the change come first as the issues to fix; warnings follow under `## Warnings (not blocking)`, with the instruction to fix one only if the change caused it, since a warning is often in a file the change never touched (`--fail-on-warnings` makes them issues like the rest). For a weakened test, a Claude Code agent reads on stderr, with exit 2:
 
 ````text
