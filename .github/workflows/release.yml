@@ -230,6 +230,14 @@ jobs:
           [ "${count}" -eq 4 ] || { echo "::error::expected 4 archives, found ${count}"; exit 1; }
           sha256sum discipline-*.tar.gz discipline_*.deb discipline-*.rpm > SHA256SUMS
           cat SHA256SUMS
+      # `smoke` serves a pre-release's archives with this file: a draft's assets
+      # cannot be downloaded without a token that can write the repository.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-checksums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 3
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -297,7 +305,22 @@ jobs:
             gh release create "${TAG}" --draft "${flags[@]}"
           fi
           gh release upload "${TAG}" dist/discipline-*.tar.gz dist/discipline_*.deb dist/discipline-*.rpm dist/discipline.rb dist/Portfile dist/SHA256SUMS --clobber
-          gh release edit "${TAG}" --draft=false --latest=false
+
+          # What the release holds is what SHA256SUMS lists, read back from GitHub.
+          check="$(mktemp -d)"
+          gh release download "${TAG}" --dir "${check}" \
+            --pattern 'discipline-*.tar.gz' --pattern 'discipline_*.deb' --pattern 'discipline-*.rpm' --pattern SHA256SUMS
+          (cd "${check}" && sha256sum --check --strict SHA256SUMS)
+
+          # A pre-release stays a draft: Zenodo archives every published release,
+          # pre-releases included, and only skips drafts (invenio-github's release
+          # receiver reads `draft`, never `prerelease`). A release candidate is
+          # proven by `smoke` from this run's artifacts and never gets a DOI.
+          if [ "${PRERELEASE}" = "true" ]; then
+            echo "::notice::${TAG} is a pre-release: kept as a draft, not published"
+          else
+            gh release edit "${TAG}" --draft=false --latest=false
+          fi
       - name: Prepare container image binaries
         shell: bash
         run: |
@@ -343,10 +366,13 @@ jobs:
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
 
-  # Consume the release exactly as a user does: download, verify the checksum,
-  # run. Uses the action at the tagged commit with no `binary_path`.
+  # Consume the release exactly as a user does: download, verify the checksum
+  # and the provenance attestation, run. Uses the action at the tagged commit with
+  # no `binary_path`. A pre-release is a draft whose assets are not public: the
+  # action downloads the same archives and SHA256SUMS from this run's artifacts,
+  # served locally, and each archive's attestation is verified directly.
   smoke:
-    needs: publish
+    needs: [verify, publish]
     strategy:
       fail-fast: false
       matrix:
@@ -361,11 +387,46 @@ jobs:
         run: |
           tests/action/make-fixture.sh "${RUNNER_TEMP}/fx-clean" clean
           tests/action/make-fixture.sh "${RUNNER_TEMP}/fx-bad" bad
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/artifacts
+          pattern: discipline-*
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-checksums
+          path: ${{ runner.temp }}/artifacts
+      - name: Release store the action downloads from
+        id: store
+        shell: bash
+        env:
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "${PRERELEASE}" != "true" ]; then
+            # The action's default: the public release, attestation checked.
+            echo "url=https://github.com/${GITHUB_REPOSITORY}/releases" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          dest="${RUNNER_TEMP}/store/download/${TAG}"
+          mkdir -p "${dest}"
+          cp "${RUNNER_TEMP}"/artifacts/discipline-*.tar.gz "${RUNNER_TEMP}/artifacts/SHA256SUMS" "${dest}/"
+          (cd "${RUNNER_TEMP}/store" && nohup python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &)
+          for _ in 1 2 3 4 5; do
+            if curl --fail --silent --output /dev/null "http://127.0.0.1:8765/download/${TAG}/SHA256SUMS"; then
+              echo "url=http://127.0.0.1:8765" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::the pre-release store did not come up"; exit 1
       - name: Published binary accepts the clean change
         id: clean
         uses: ./
         with:
           version: ${{ github.ref_name }}
+          download_url: ${{ steps.store.outputs.url }}
           working_directory: ${{ runner.temp }}/fx-clean
           base_ref: main
       - run: tests/action/assert-report.sh "${{ steps.clean.outputs.report }}" pass
@@ -375,6 +436,7 @@ jobs:
         uses: ./
         with:
           version: ${{ github.ref_name }}
+          download_url: ${{ steps.store.outputs.url }}
           working_directory: ${{ runner.temp }}/fx-bad
           base_ref: main
       - name: Rejection names the expected gates
@@ -392,13 +454,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: |
           set -euo pipefail
-          dir="$(mktemp -d)"
-          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir "${dir}" --pattern 'discipline-*.tar.gz'
+          if [ "${PRERELEASE}" = "true" ]; then
+            dir="${RUNNER_TEMP}/artifacts"
+          else
+            dir="$(mktemp -d)"
+            gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir "${dir}" --pattern 'discipline-*.tar.gz'
+          fi
+          count=0
           for f in "${dir}"/discipline-*.tar.gz; do
-            gh attestation verify "${f}" --repo "${GITHUB_REPOSITORY}"
+            gh attestation verify "${f}" --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+              --source-ref "refs/tags/${TAG}"
+            count=$((count + 1))
           done
+          [ "${count}" -eq 4 ] || { echo "::error::expected 4 attested archives, found ${count}"; exit 1; }
 
   # Everything a floating reference resolves to moves here, after `smoke`:
   # the `latest` release, the floating container tags and the Homebrew tap.
