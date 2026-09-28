@@ -441,6 +441,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `mcp` | Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding) |
 | `bench` | Benchmark tooling for the bench-regression gate |
 | `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
+| `lease` | Claim this worktree's branches for one agent session, so other worktrees' sessions do not move them (kept in the common git directory, never committed) |
 <!-- /generated -->
 
 ### Options
@@ -610,6 +611,28 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--local-only` |  |  | Check only local files; skip the platform API |
 | `--strict` |  |  | Treat warnings as failures |
 | `-f`, `--format` |  | `text` | Output format |
+
+**`discipline lease take`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `--branch` |  |  | A branch to claim (repeatable; default: the branch checked out here) |
+| `--agent` |  | `unknown` | The agent working here (claude-code, copilot, agy, ...) |
+| `--session` |  | `` | The agent's session id |
+| `--ttl` |  | `7200` | Seconds the lease stays live without a refresh |
+| `--steal` |  |  | Take branches another worktree's live lease claims, removing them from that lease (it is said, never silent) |
+
+**`discipline lease list`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `--json` |  |  | Print the leases as JSON |
+
+**`discipline lease check`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `--branch` |  |  | The branch to check |
 <!-- /generated -->
 
 `doctor` reads branch rules through the forge's API. Without a token, a shared IP (a CI runner, an office network) soon reaches GitHub's unauthenticated rate limit, and the platform checks come back `could not check` (exit 2); set `DISCIPLINE_FORGE_TOKEN` (or `GH_TOKEN`) to a token that can read the repository.

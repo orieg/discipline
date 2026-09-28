@@ -127,6 +127,7 @@ fn run_command(command: Commands) -> Result<bool> {
         }
         Commands::Bench(args) => discipline::guards::perf::paired_ratio::cli_bench(args),
         Commands::Doctor(args) => doctor(args),
+        Commands::Lease(args) => lease(args),
     }
 }
 
@@ -1257,6 +1258,102 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             args.baseline_file.display()
         );
         Ok(true)
+    }
+}
+
+fn lease(args: discipline::cli::LeaseArgs) -> Result<bool> {
+    use discipline::cli::LeaseCommand;
+    use discipline::lease::{now, open, Lease};
+    let (store, here) = open(Path::new("."))?;
+    let t = now();
+    match args.command {
+        LeaseCommand::Take(a) => {
+            let branches = if a.branches.is_empty() {
+                vec![here.branch.clone().ok_or_else(|| {
+                    anyhow::anyhow!("no branch is checked out here; name one with --branch")
+                })?]
+            } else {
+                a.branches
+            };
+            let taken = store.take(
+                &here.key,
+                Lease {
+                    agent: a.agent,
+                    session: a.session,
+                    worktree: here.root.display().to_string(),
+                    branches,
+                    taken_at: t,
+                    heartbeat: t,
+                    ttl_secs: a.ttl,
+                },
+                t,
+                a.steal,
+            )?;
+            for (other, branch) in &taken.stolen {
+                eprintln!("lease: took `{branch}` from worktree `{other}` (--steal)");
+            }
+            println!(
+                "lease: worktree `{}` holds {} for {} (live {}s without a refresh)",
+                here.key,
+                taken.lease.branches.join(", "),
+                taken.lease.agent,
+                taken.lease.ttl_secs
+            );
+            Ok(true)
+        }
+        LeaseCommand::Release => {
+            if store.release(&here.key)? {
+                println!("lease: released worktree `{}`", here.key);
+            } else {
+                println!("lease: worktree `{}` held no lease", here.key);
+            }
+            Ok(true)
+        }
+        LeaseCommand::List(a) => {
+            let all = store.list()?;
+            if a.json {
+                let rows: Vec<serde_json::Value> = all
+                    .iter()
+                    .map(|(k, l)| {
+                        let mut v = serde_json::to_value(l).unwrap_or_default();
+                        v["key"] = serde_json::json!(k);
+                        v["live"] = serde_json::json!(l.is_live(t));
+                        v["here"] = serde_json::json!(*k == here.key);
+                        v
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if all.is_empty() {
+                println!("lease: no leases");
+            } else {
+                for (k, l) in &all {
+                    println!(
+                        "{:<8} {}{:<24} {:<14} {}  heartbeat {}s ago",
+                        if l.is_live(t) { "live" } else { "stale" },
+                        if *k == here.key { "*" } else { " " },
+                        k,
+                        l.agent,
+                        l.branches.join(","),
+                        t - l.heartbeat
+                    );
+                }
+            }
+            Ok(true)
+        }
+        LeaseCommand::Check(a) => match store.holder(&a.branch, &here.key, t)? {
+            None => Ok(true),
+            Some((other, l)) => {
+                eprintln!(
+                    "lease: `{}` is leased by worktree `{other}` ({} session {}, heartbeat {}s ago); hand the work over to that session, or take it with `discipline lease take --branch {} --steal`",
+                    a.branch,
+                    l.agent,
+                    if l.session.is_empty() { "-" } else { &l.session },
+                    t - l.heartbeat,
+                    a.branch
+                );
+                Ok(false)
+            }
+        },
     }
 }
 

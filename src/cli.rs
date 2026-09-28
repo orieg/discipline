@@ -45,6 +45,8 @@ pub enum Commands {
     Bench(BenchArgs),
     /// Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check
     Doctor(DoctorArgs),
+    /// Claim this worktree's branches for one agent session, so other worktrees' sessions do not move them (kept in the common git directory, never committed)
+    Lease(LeaseArgs),
 }
 
 #[derive(Args, Debug)]
@@ -97,6 +99,7 @@ impl Commands {
             Commands::Explain(_) => "explain",
             Commands::Bench(_) => "bench",
             Commands::Doctor(_) => "doctor",
+            Commands::Lease(_) => "lease",
         }
     }
 }
@@ -147,6 +150,57 @@ pub struct ExplainArgs {
 pub struct HookArgs {
     #[command(subcommand)]
     pub command: HookCommand,
+}
+
+#[derive(Args, Debug)]
+pub struct LeaseArgs {
+    #[command(subcommand)]
+    pub command: LeaseCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LeaseCommand {
+    /// Take or refresh this worktree's lease. A branch another worktree's live lease claims is refused unless --steal
+    Take(LeaseTakeArgs),
+    /// Remove this worktree's lease
+    Release,
+    /// List every worktree's lease and whether it is live
+    List(LeaseListArgs),
+    /// Whether a branch is claimed by another worktree's live lease. Exit 0 = free (or ours), 1 = claimed by another worktree, 2 = could not check
+    Check(LeaseCheckArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct LeaseTakeArgs {
+    /// A branch to claim (repeatable; default: the branch checked out here)
+    #[arg(long = "branch")]
+    pub branches: Vec<String>,
+    /// The agent working here (claude-code, copilot, agy, ...)
+    #[arg(long, default_value = "unknown")]
+    pub agent: String,
+    /// The agent's session id
+    #[arg(long, default_value = "")]
+    pub session: String,
+    /// Seconds the lease stays live without a refresh
+    #[arg(long, default_value_t = crate::lease::DEFAULT_TTL_SECS)]
+    pub ttl: u64,
+    /// Take branches another worktree's live lease claims, removing them from that lease (it is said, never silent)
+    #[arg(long)]
+    pub steal: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct LeaseListArgs {
+    /// Print the leases as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct LeaseCheckArgs {
+    /// The branch to check
+    #[arg(long)]
+    pub branch: String,
 }
 
 #[derive(Subcommand, Debug)]

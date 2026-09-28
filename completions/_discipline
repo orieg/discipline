@@ -355,6 +355,91 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(lease)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_discipline__subcmd__lease_commands" \
+"*::: :->lease" \
+&& ret=0
+
+    case $state in
+    (lease)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-lease-command-$line[1]:"
+        case $line[1] in
+            (take)
+_arguments "${_arguments_options[@]}" : \
+'*--branch=[A branch to claim (repeatable; default\: the branch checked out here)]:BRANCHES:_default' \
+'--agent=[The agent working here (claude-code, copilot, agy, ...)]:AGENT:_default' \
+'--session=[The agent'\''s session id]:SESSION:_default' \
+'--ttl=[Seconds the lease stays live without a refresh]:TTL:_default' \
+'--steal[Take branches another worktree'\''s live lease claims, removing them from that lease (it is said, never silent)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(release)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the leases as JSON]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(check)
+_arguments "${_arguments_options[@]}" : \
+'--branch=[The branch to check]:BRANCH:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_discipline__subcmd__lease__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-lease-help-command-$line[1]:"
+        case $line[1] in
+            (take)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(release)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_discipline__subcmd__help_commands" \
@@ -467,6 +552,38 @@ esac
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(lease)
+_arguments "${_arguments_options[@]}" : \
+":: :_discipline__subcmd__help__subcmd__lease_commands" \
+"*::: :->lease" \
+&& ret=0
+
+    case $state in
+    (lease)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:discipline-help-lease-command-$line[1]:"
+        case $line[1] in
+            (take)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(release)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -499,6 +616,7 @@ _discipline_commands() {
 'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
+'lease:Claim this worktree'\''s branches for one agent session, so other worktrees'\'' sessions do not move them (kept in the common git directory, never committed)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline commands' commands "$@"
@@ -593,6 +711,7 @@ _discipline__subcmd__help_commands() {
 'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
+'lease:Claim this worktree'\''s branches for one agent session, so other worktrees'\'' sessions do not move them (kept in the common git directory, never committed)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline help commands' commands "$@"
@@ -682,6 +801,36 @@ _discipline__subcmd__help__subcmd__install-hooks_commands() {
     local commands; commands=()
     _describe -t commands 'discipline help install-hooks commands' commands "$@"
 }
+(( $+functions[_discipline__subcmd__help__subcmd__lease_commands] )) ||
+_discipline__subcmd__help__subcmd__lease_commands() {
+    local commands; commands=(
+'take:Take or refresh this worktree'\''s lease. A branch another worktree'\''s live lease claims is refused unless --steal' \
+'release:Remove this worktree'\''s lease' \
+'list:List every worktree'\''s lease and whether it is live' \
+'check:Whether a branch is claimed by another worktree'\''s live lease. Exit 0 = free (or ours), 1 = claimed by another worktree, 2 = could not check' \
+    )
+    _describe -t commands 'discipline help lease commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__lease__subcmd__check_commands] )) ||
+_discipline__subcmd__help__subcmd__lease__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help lease check commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__lease__subcmd__list_commands] )) ||
+_discipline__subcmd__help__subcmd__lease__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help lease list commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__lease__subcmd__release_commands] )) ||
+_discipline__subcmd__help__subcmd__lease__subcmd__release_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help lease release commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__lease__subcmd__take_commands] )) ||
+_discipline__subcmd__help__subcmd__lease__subcmd__take_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help lease take commands' commands "$@"
+}
 (( $+functions[_discipline__subcmd__help__subcmd__mcp_commands] )) ||
 _discipline__subcmd__help__subcmd__mcp_commands() {
     local commands; commands=()
@@ -754,6 +903,73 @@ _discipline__subcmd__init_commands() {
 _discipline__subcmd__install-hooks_commands() {
     local commands; commands=()
     _describe -t commands 'discipline install-hooks commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease_commands] )) ||
+_discipline__subcmd__lease_commands() {
+    local commands; commands=(
+'take:Take or refresh this worktree'\''s lease. A branch another worktree'\''s live lease claims is refused unless --steal' \
+'release:Remove this worktree'\''s lease' \
+'list:List every worktree'\''s lease and whether it is live' \
+'check:Whether a branch is claimed by another worktree'\''s live lease. Exit 0 = free (or ours), 1 = claimed by another worktree, 2 = could not check' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'discipline lease commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__check_commands] )) ||
+_discipline__subcmd__lease__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease check commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__help_commands] )) ||
+_discipline__subcmd__lease__subcmd__help_commands() {
+    local commands; commands=(
+'take:Take or refresh this worktree'\''s lease. A branch another worktree'\''s live lease claims is refused unless --steal' \
+'release:Remove this worktree'\''s lease' \
+'list:List every worktree'\''s lease and whether it is live' \
+'check:Whether a branch is claimed by another worktree'\''s live lease. Exit 0 = free (or ours), 1 = claimed by another worktree, 2 = could not check' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'discipline lease help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__help__subcmd__check_commands] )) ||
+_discipline__subcmd__lease__subcmd__help__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease help check commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__help__subcmd__help_commands] )) ||
+_discipline__subcmd__lease__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease help help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__help__subcmd__list_commands] )) ||
+_discipline__subcmd__lease__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease help list commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__help__subcmd__release_commands] )) ||
+_discipline__subcmd__lease__subcmd__help__subcmd__release_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease help release commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__help__subcmd__take_commands] )) ||
+_discipline__subcmd__lease__subcmd__help__subcmd__take_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease help take commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__list_commands] )) ||
+_discipline__subcmd__lease__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease list commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__release_commands] )) ||
+_discipline__subcmd__lease__subcmd__release_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease release commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__lease__subcmd__take_commands] )) ||
+_discipline__subcmd__lease__subcmd__take_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline lease take commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__mcp_commands] )) ||
 _discipline__subcmd__mcp_commands() {

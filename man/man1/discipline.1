@@ -893,6 +893,102 @@ json
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS "discipline lease"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Claim this worktree\*(Aqs branches for one agent session, so other worktrees\*(Aq sessions do not move them (kept in the common git directory, never committed)
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline lease\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline lease take"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Take or refresh this worktree\*(Aqs lease. A branch another worktree\*(Aqs live lease claims is refused unless \-\-steal
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline lease take\fR [\fB\-\-branch\fR] [\fB\-\-agent\fR] [\fB\-\-session\fR] [\fB\-\-ttl\fR] [\fB\-\-steal\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-branch\fR \fI<BRANCHES>\fR
+A branch to claim (repeatable; default: the branch checked out here)
+.TP
+\fB\-\-agent\fR \fI<AGENT>\fR [default: unknown]
+The agent working here (claude\-code, copilot, agy, ...)
+.TP
+\fB\-\-session\fR \fI<SESSION>\fR [default: ]
+The agent\*(Aqs session id
+.TP
+\fB\-\-ttl\fR \fI<TTL>\fR [default: 7200]
+Seconds the lease stays live without a refresh
+.TP
+\fB\-\-steal\fR
+Take branches another worktree\*(Aqs live lease claims, removing them from that lease (it is said, never silent)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline lease release"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Remove this worktree\*(Aqs lease
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline lease release\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline lease list"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+List every worktree\*(Aqs lease and whether it is live
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline lease list\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-json\fR
+Print the leases as JSON
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS "discipline lease check"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Whether a branch is claimed by another worktree\*(Aqs live lease. Exit 0 = free (or ours), 1 = claimed by another worktree, 2 = could not check
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline lease check\fR <\fB\-\-branch\fR> [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+The branch to check
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SH EXIT STATUS
 .TP
 .B 0
