@@ -615,6 +615,40 @@ fn copilot_installs_at_user_level_with_the_guard() {
     );
 }
 
+/// `--user --observe` writes observe-mode commands: a rollout meant to be non-blocking
+/// must not install an enforcing hook in every adopted repository on the machine.
+#[test]
+fn copilot_user_install_keeps_observe_mode() {
+    let repo = Repo::new();
+    let home = tempfile::tempdir().unwrap();
+    let env = [("COPILOT_HOME", home.path().to_str().unwrap())];
+    let run = repo.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "copilot",
+            "--user",
+            "--observe",
+        ],
+        &env,
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let v: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.path().join("hooks/discipline.json")).unwrap(),
+    )
+    .unwrap();
+    for event in ["postToolUse", "agentStop"] {
+        assert!(
+            v["hooks"][event][0]["bash"]
+                .as_str()
+                .unwrap()
+                .ends_with("discipline hook run --agent copilot --if-configured --observe"),
+            "{v}"
+        );
+    }
+}
+
 /// `--cloud-agent` also writes the workflow Copilot cloud agent runs before it starts,
 /// which installs discipline so the repository's hooks find it; an existing workflow is
 /// never rewritten, and the flag is for copilot only.

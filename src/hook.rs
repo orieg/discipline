@@ -815,8 +815,9 @@ fn copilot_hooks(cmd: &str) -> String {
 /// The user-level hook file for `agent` and its content: it runs in every folder the
 /// agent opens, so its command passes silently outside a repository with a
 /// `discipline.toml` (`--if-configured`). Copilot CLI loads it whether or not the
-/// folder is trusted, which a repository's `.github/hooks/` needs.
-pub fn user_config_for(agent: Agent) -> Result<(PathBuf, String)> {
+/// folder is trusted, which a repository's `.github/hooks/` needs. With `observe`, the
+/// command is in observe mode (`--observe`), as [`config_for_mode`] writes it.
+pub fn user_config_for(agent: Agent, observe: bool) -> Result<(PathBuf, String)> {
     match agent {
         Agent::Copilot => {
             let home = match std::env::var_os("COPILOT_HOME").filter(|h| !h.is_empty()) {
@@ -828,7 +829,10 @@ pub fn user_config_for(agent: Agent) -> Result<(PathBuf, String)> {
             };
             Ok((
                 home.join("hooks").join("discipline.json"),
-                copilot_hooks("discipline hook run --agent copilot --if-configured"),
+                copilot_hooks(&format!(
+                    "discipline hook run --agent copilot --if-configured{}",
+                    if observe { " --observe" } else { "" }
+                )),
             ))
         }
         other => bail!(
@@ -840,8 +844,8 @@ pub fn user_config_for(agent: Agent) -> Result<(PathBuf, String)> {
 
 /// Write the user-level hook file ([`user_config_for`]); an existing file is never
 /// rewritten.
-pub fn install_user(agent: Agent) -> Result<Installed> {
-    let (path, content) = user_config_for(agent)?;
+pub fn install_user(agent: Agent, observe: bool) -> Result<Installed> {
+    let (path, content) = user_config_for(agent, observe)?;
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;

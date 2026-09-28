@@ -1403,7 +1403,7 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
         }
         HookCommand::Install(a) => {
             let mut results = vec![if a.user {
-                discipline::hook::install_user(a.agent)?
+                discipline::hook::install_user(a.agent, a.observe)?
             } else {
                 discipline::hook::install_with(
                     a.agent,
