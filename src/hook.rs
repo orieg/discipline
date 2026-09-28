@@ -624,6 +624,16 @@ pub fn config_for_opts(
         Agent::Opencode => pre_run,
         _ => guarded_pretool(&pre_run),
     };
+    // When a session starts: take this worktree's lease for it (Phase 13). It never
+    // blocks the session; without discipline on PATH it passes.
+    let start_run = format!(
+        "discipline hook run --agent {} --event session-start",
+        agent.id()
+    );
+    let start = match agent {
+        Agent::Opencode => start_run,
+        _ => guarded_pretool(&start_run),
+    };
     match agent {
         Agent::ClaudeCode => (
             ".claude/settings.json",
@@ -633,10 +643,13 @@ pub fn config_for_opts(
                     // installs it there before the first edit ([`CLAUDE_BOOTSTRAP`]).
                     "SessionStart": [{
                         "matcher": "startup|resume",
-                        "hooks": [{
-                            "type": "command",
-                            "command": format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}")
-                        }]
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}")
+                            },
+                            { "type": "command", "command": start }
+                        ]
                     }],
                     "PreToolUse": [{
                         "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
@@ -687,7 +700,7 @@ pub fn config_for_opts(
         ),
         Agent::Copilot => (
             ".github/hooks/discipline.json",
-            copilot_hooks(&cmd, secs, Some(&pre)),
+            copilot_hooks(&cmd, secs, Some((&pre, &start))),
         ),
         Agent::Agy => (
             ".agents/hooks.json",
@@ -699,7 +712,10 @@ pub fn config_for_opts(
                     // agy runs a `SessionStart` handler and injects its `injectSteps`
                     // (seen live with agy 1.2 and 1.2.12, where a made-up event name did not
                     // run; the event is not in its hooks guide, so it is not dead configuration).
-                    "SessionStart": [{ "type": "command", "command": AGY_MISSING_BINARY, "timeout": 10 }],
+                    "SessionStart": [
+                        { "type": "command", "command": AGY_MISSING_BINARY, "timeout": 10 },
+                        { "type": "command", "command": start, "timeout": 30 }
+                    ],
                     // agy sends every tool call; the check refuses only edits.
                     "PreToolUse": [{
                         "matcher": ".*",
@@ -729,7 +745,7 @@ pub fn config_for_opts(
         ),
         Agent::Opencode => (
             ".opencode/plugins/discipline.js",
-            opencode_plugin(&cmd, &pre),
+            opencode_plugin(&cmd, &pre, &start),
         ),
     }
 }
@@ -761,18 +777,25 @@ pub fn guarded_pretool(run: &str) -> String {
 pub const MISSING_BINARY: &str =
     "discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)";
 
-/// The OpenCode plugin: after an edit tool, run the hook and append a failure to the
+/// The OpenCode plugin: when a session is created, take the worktree's lease; before an
+/// edit or shell tool, the pre-tool check; after an edit tool, run the hook and append a failure to the
 /// tool's output, which is the text the model reads.
-fn opencode_plugin(cmd: &str, pre: &str) -> String {
+fn opencode_plugin(cmd: &str, pre: &str, start: &str) -> String {
     format!(
         "// Written by `discipline hook install --agent opencode`.
-// Before an edit tool, refuses an edit outside this session's worktree (the tool call
+// When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
 // the model reads it and repairs the change.
 const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
 
 export const Discipline = async ({{ $, directory }}) => ({{
+  // A new session takes this worktree's lease; it never blocks the session.
+  event: async ({{ event }}) => {{
+    if (event.type !== \"session.created\") return
+    const start = new Response(JSON.stringify({{ input: {{ sessionID: event.properties?.sessionID }}, cwd: event.properties?.info?.directory ?? directory }}))
+    await $`{start} < ${{start}}`.nothrow().quiet()
+  }},
   \"tool.execute.before\": async (input, output) => {{
     if (!EDIT_TOOLS.includes(input.tool) && input.tool !== \"bash\") return
     const call = new Response(JSON.stringify({{ input, output, cwd: directory }}))
@@ -939,7 +962,7 @@ pub fn configured(dir: &Path) -> bool {
 
 /// Copilot CLI's hook file running `cmd` after an edit and at the end of a turn, each
 /// with `timeout` seconds.
-fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<&str>) -> String {
+fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<(&str, &str)>) -> String {
     let mut hooks = serde_json::json!({
         "postToolUse": [{
             "type": "command",
@@ -951,7 +974,12 @@ fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<&str>) -> String {
         }],
         "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": timeout }]
     });
-    if let Some(pre) = pre {
+    if let Some((pre, start)) = pre {
+        hooks["sessionStart"] = serde_json::json!([{
+            "type": "command",
+            "bash": start,
+            "timeoutSec": 30
+        }]);
         hooks["preToolUse"] = serde_json::json!([{
             "type": "command",
             "matcher": "create|edit|str_replace_editor|apply_patch|bash",
@@ -2125,6 +2153,70 @@ mod tests {
         }
         // Without discipline on PATH a pre-tool entry passes with an empty answer.
         let claude = pre(Agent::ClaudeCode, false).unwrap();
+        assert!(
+            claude.starts_with("command -v discipline >/dev/null 2>&1 || {"),
+            "{claude}"
+        );
+        assert!(
+            claude.contains("exit 0; }; discipline hook run"),
+            "{claude}"
+        );
+    }
+
+    #[test]
+    fn the_observed_agents_take_a_lease_when_a_session_starts() {
+        let start = |agent: Agent| -> Option<String> {
+            let (_, text) = config_for_opts(agent, false, None);
+            if agent == Agent::Opencode {
+                return text
+                    .contains(r#"event.type !== "session.created""#)
+                    .then(|| text.clone());
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let entries = match agent {
+                Agent::ClaudeCode => v.pointer("/hooks/SessionStart/0/hooks"),
+                Agent::Copilot => v.pointer("/hooks/sessionStart"),
+                Agent::Agy => v.pointer("/discipline/SessionStart"),
+                _ => v
+                    .pointer("/hooks/SessionStart")
+                    .or_else(|| v.pointer("/hooks/sessionStart")),
+            }?;
+            entries
+                .as_array()?
+                .iter()
+                .filter_map(|e| e.get("command").or_else(|| e.get("bash")))
+                .filter_map(|c| c.as_str())
+                .find(|c| c.contains("--event session-start"))
+                .map(str::to_string)
+        };
+        for agent in [
+            Agent::ClaudeCode,
+            Agent::Copilot,
+            Agent::Agy,
+            Agent::Opencode,
+        ] {
+            let cmd =
+                start(agent).unwrap_or_else(|| panic!("{agent:?} has no session-start entry"));
+            assert!(
+                cmd.contains(&format!(
+                    "discipline hook run --agent {} --event session-start",
+                    agent.id()
+                )),
+                "{agent:?}: {cmd}"
+            );
+        }
+        // The Claude bootstrap still runs first in its group.
+        let (_, claude) = config_for_opts(Agent::ClaudeCode, false, None);
+        let v: serde_json::Value = serde_json::from_str(&claude).unwrap();
+        assert!(v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains(CLAUDE_BOOTSTRAP));
+        for agent in [Agent::Codex, Agent::Qwen, Agent::Cursor, Agent::Aider] {
+            assert!(start(agent).is_none(), "{agent:?}");
+        }
+        // Without discipline on PATH the entry passes silently.
+        let claude = start(Agent::ClaudeCode).unwrap();
         assert!(
             claude.starts_with("command -v discipline >/dev/null 2>&1 || {"),
             "{claude}"

@@ -240,7 +240,7 @@ pub struct HookRunArgs {
     #[arg(long)]
     pub observe: bool,
 
-    /// The hook event: `pre-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); the default checks the change so far
+    /// The hook event: `pre-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); `session-start` takes this worktree's lease for the session on stdin (never blocks); the default checks the change so far
     #[arg(long, value_enum, default_value_t = HookEvent::Check)]
     pub event: HookEvent,
 
@@ -256,6 +256,8 @@ pub enum HookEvent {
     Check,
     /// Before a tool runs: refuse an edit outside this session's worktree
     PreTool,
+    /// When a session starts: take this worktree's lease for it (never blocks)
+    SessionStart,
 }
 
 #[derive(Args, Debug)]

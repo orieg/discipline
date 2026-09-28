@@ -1557,6 +1557,8 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             }
             let out = if a.event == discipline::cli::HookEvent::PreTool {
                 discipline::pretool::run(a.agent, &stdin, a.observe)
+            } else if a.event == discipline::cli::HookEvent::SessionStart {
+                discipline::pretool::session_start(a.agent, &stdin)
             } else {
                 discipline::hook::run_with(a.agent, a.base, &stdin, a.if_configured, a.observe)?
             };
