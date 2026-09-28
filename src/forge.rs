@@ -381,12 +381,23 @@ pub fn ssh_hostname(config: &str, alias: &str) -> Option<String> {
 pub trait ForgeApi {
     /// GET `path` (relative to the forge's API base) parsed as JSON. `Ok(None)` for 404.
     fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String>;
+
+    /// [`ForgeApi::get`] with the `X-Total-Count` header, when the forge sent one: the
+    /// size of the whole list a paged response is part of.
+    fn get_counted(&self, forge: &Forge, path: &str) -> Result<Option<Counted>, String> {
+        Ok(self.get(forge, path)?.map(|v| (v, None)))
+    }
 }
+
+/// A response body and the `X-Total-Count` that came with it.
+pub type Counted = (serde_json::Value, Option<u64>);
 
 /// Answers from canned responses keyed by `"<forge label>:<path>"`.
 #[derive(Debug, Clone, Default)]
 pub struct CannedApi {
     pub responses: std::collections::BTreeMap<String, serde_json::Value>,
+    /// `X-Total-Count` sent with the response of the same key.
+    pub totals: std::collections::BTreeMap<String, u64>,
 }
 
 impl ForgeApi for CannedApi {
@@ -400,6 +411,13 @@ impl ForgeApi for CannedApi {
             Some(v) => Ok(Some(v.clone())),
             None => Err(format!("no recorded response for `{key}`")),
         }
+    }
+
+    fn get_counted(&self, forge: &Forge, path: &str) -> Result<Option<Counted>, String> {
+        let key = format!("{}:{path}", forge.kind.label());
+        Ok(self
+            .get(forge, path)?
+            .map(|v| (v, self.totals.get(&key).copied())))
     }
 }
 
@@ -667,6 +685,10 @@ impl ForgeWrite for HttpApi<'_> {
 
 impl ForgeApi for HttpApi<'_> {
     fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String> {
+        Ok(self.get_counted(forge, path)?.map(|(v, _)| v))
+    }
+
+    fn get_counted(&self, forge: &Forge, path: &str) -> Result<Option<Counted>, String> {
         let (base, base_host, insecure_ok) = self.guard(forge, path)?;
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(API_TIMEOUT_SECS)))
@@ -722,6 +744,11 @@ impl ForgeApi for HttpApi<'_> {
             if status == 404 {
                 return Ok(None);
             }
+            let total = resp
+                .headers()
+                .get("x-total-count")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
             let body = resp
                 .body_mut()
                 .with_config()
@@ -743,7 +770,7 @@ impl ForgeApi for HttpApi<'_> {
                     .to_string());
             }
             return serde_json::from_str(&body)
-                .map(Some)
+                .map(|v| Some((v, total)))
                 .map_err(|e| format!("{base_host} returned non-JSON: {e}"));
         }
         Err(format!(
@@ -937,41 +964,114 @@ fn gitlab_approvers(
         .collect())
 }
 
-/// The most reviews one request returns; a full page means there may be more.
+/// The most reviews one GitHub request returns; a full page means there may be more.
 const REVIEWS_PAGE: usize = 100;
+
+/// Reviews asked for per Gitea or Forgejo request. They read `limit` (not `per_page`)
+/// and clamp it to the server's `MAX_RESPONSE_ITEMS`, so a page can be shorter than
+/// this while more reviews remain.
+const GITEA_REVIEWS_LIMIT: usize = 50;
+
+/// Pages of Gitea or Forgejo reviews read before refusing to judge.
+const GITEA_REVIEW_PAGES: usize = 20;
+
+/// Every review of Gitea or Forgejo pull request `number`, in order, or an error when
+/// the whole list cannot be read.
+///
+/// Pages are read until the count reaches `X-Total-Count`, or, when the forge sends no
+/// count, until a page comes back empty. A short page is not an end: the server may
+/// have clamped the page size.
+fn gitea_reviews(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    number: u64,
+) -> Result<Vec<serde_json::Value>, String> {
+    let partial = |why: String| {
+        format!("reviews of pull request #{number}: {why}; refusing to judge a partial list")
+    };
+    let mut reviews = Vec::new();
+    let mut total: Option<u64> = None;
+    for page in 1..=GITEA_REVIEW_PAGES {
+        let path = format!(
+            "repos/{}/pulls/{number}/reviews?limit={GITEA_REVIEWS_LIMIT}&page={page}",
+            forge.repo
+        );
+        let (list, count) = api
+            .get_counted(forge, &path)?
+            .ok_or_else(|| format!("pull request #{number} does not exist or is not visible"))?;
+        let items = list
+            .as_array()
+            .ok_or_else(|| format!("reviews of pull request #{number} are not a list"))?;
+        if page == 1 {
+            total = count;
+        } else if count != total {
+            return Err(partial("the list changed while it was read".into()));
+        }
+        match total {
+            Some(t) => {
+                if items.is_empty() && (reviews.len() as u64) < t {
+                    return Err(partial(format!(
+                        "the pages ended after {} of {t}",
+                        reviews.len()
+                    )));
+                }
+                reviews.extend(items.iter().cloned());
+                if reviews.len() as u64 > t {
+                    return Err(partial(format!(
+                        "the pages hold {} but the forge counts {t}",
+                        reviews.len()
+                    )));
+                }
+                if reviews.len() as u64 == t {
+                    return Ok(reviews);
+                }
+            }
+            None if items.is_empty() => return Ok(reviews),
+            None => reviews.extend(items.iter().cloned()),
+        }
+    }
+    Err(partial(format!(
+        "more than {GITEA_REVIEW_PAGES} pages of {GITEA_REVIEWS_LIMIT}"
+    )))
+}
 
 /// Logins whose **latest** review of pull request `number` approves `head_sha`.
 ///
 /// An approval of an earlier commit does not count: the head it approved is not the head
 /// being checked. A later review by the same login (changes requested, dismissed)
-/// withdraws an earlier approval.
+/// withdraws an earlier approval, so the whole list is read or the lookup fails.
 pub fn pull_approvers(
     api: &dyn ForgeApi,
     forge: &Forge,
     number: u64,
     head_sha: &str,
 ) -> Result<Vec<String>, String> {
-    if forge.kind == ForgeKind::GitLab {
-        return gitlab_approvers(api, forge, number, head_sha);
-    }
-    let path = format!(
-        "repos/{}/pulls/{number}/reviews?per_page={REVIEWS_PAGE}",
-        forge.repo
-    );
-    let reviews = api
-        .get(forge, &path)?
-        .ok_or_else(|| format!("pull request #{number} does not exist or is not visible"))?;
-    let reviews = reviews
-        .as_array()
-        .ok_or_else(|| format!("reviews of pull request #{number} are not a list"))?;
-    if reviews.len() >= REVIEWS_PAGE {
-        return Err(format!(
-            "pull request #{number} has {REVIEWS_PAGE} or more reviews; refusing to judge a partial list"
-        ));
-    }
+    let reviews = match forge.kind {
+        ForgeKind::GitLab => return gitlab_approvers(api, forge, number, head_sha),
+        ForgeKind::Gitea | ForgeKind::Forgejo => gitea_reviews(api, forge, number)?,
+        ForgeKind::GitHub => {
+            let path = format!(
+                "repos/{}/pulls/{number}/reviews?per_page={REVIEWS_PAGE}",
+                forge.repo
+            );
+            let list = api.get(forge, &path)?.ok_or_else(|| {
+                format!("pull request #{number} does not exist or is not visible")
+            })?;
+            let reviews = list
+                .as_array()
+                .ok_or_else(|| format!("reviews of pull request #{number} are not a list"))?
+                .clone();
+            if reviews.len() >= REVIEWS_PAGE {
+                return Err(format!(
+                    "pull request #{number} has {REVIEWS_PAGE} or more reviews; refusing to judge a partial list"
+                ));
+            }
+            reviews
+        }
+    };
     // The list is chronological; the last entry per login is that login's standing.
     let mut latest: std::collections::BTreeMap<String, (String, String)> = Default::default();
-    for r in reviews {
+    for r in &reviews {
         let field = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or_default();
         let login = r
             .get("user")
@@ -1030,6 +1130,89 @@ mod tests {
             ..forge.clone()
         };
         assert!(pull_approvers(&api, &gitlab, 7, "head").is_err());
+    }
+
+    #[test]
+    fn gitea_reviews_are_paged_by_limit_so_a_later_withdrawal_counts() {
+        let forge = Forge {
+            kind: ForgeKind::Gitea,
+            url: "https://gitea.example".into(),
+            repo: "o/r".into(),
+        };
+        let review = |login: &str, state: &str| serde_json::json!({"user": {"login": login}, "state": state, "commit_id": "head"});
+        // `lead` approves first; 29 comments follow; `lead` then requests changes as review 31.
+        let mut first: Vec<_> = vec![review("lead", "APPROVED")];
+        first.extend((0..29).map(|i| review(&format!("c{i}"), "COMMENT")));
+        let withdrawn = vec![review("lead", "REQUEST_CHANGES")];
+        let page = |n: usize| format!("gitea:repos/o/r/pulls/7/reviews?limit=50&page={n}");
+        let mut api = CannedApi::default();
+        // Gitea ignores `per_page` and answers with its default page of 30.
+        api.responses.insert(
+            "gitea:repos/o/r/pulls/7/reviews?per_page=100".into(),
+            serde_json::json!(first),
+        );
+        // A server whose MAX_RESPONSE_ITEMS is 30 clamps `limit=50` to 30: page 1 is short.
+        api.responses.insert(page(1), serde_json::json!(first));
+        api.responses.insert(page(2), serde_json::json!(withdrawn));
+        api.responses.insert(page(3), serde_json::json!([]));
+        for n in 1..=3 {
+            api.totals.insert(page(n), 31);
+        }
+        assert_eq!(
+            pull_approvers(&api, &forge, 7, "head").unwrap(),
+            Vec::<String>::new(),
+            "an approval withdrawn past the first page still counted"
+        );
+
+        // Without X-Total-Count, pages are read until one comes back empty.
+        let mut uncounted = api.clone();
+        uncounted.totals.clear();
+        assert!(pull_approvers(&uncounted, &forge, 7, "head")
+            .unwrap()
+            .is_empty());
+
+        // Pages that end before the count, or overshoot it, or a count that moves: refused.
+        let mut short = api.clone();
+        short.responses.insert(page(2), serde_json::json!([]));
+        assert!(pull_approvers(&short, &forge, 7, "head")
+            .unwrap_err()
+            .contains("ended after 30 of 31"));
+        let mut over = api.clone();
+        for n in 1..=3 {
+            over.totals.insert(page(n), 29);
+        }
+        assert!(pull_approvers(&over, &forge, 7, "head")
+            .unwrap_err()
+            .contains("forge counts 29"));
+        let mut moved = api.clone();
+        moved.totals.insert(page(2), 32);
+        assert!(pull_approvers(&moved, &forge, 7, "head")
+            .unwrap_err()
+            .contains("changed while it was read"));
+
+        // A forge that ignores `page` never ends: refused at the page cap.
+        let mut endless = CannedApi::default();
+        for n in 1..=GITEA_REVIEW_PAGES {
+            endless.responses.insert(page(n), serde_json::json!(first));
+        }
+        let forgejo = Forge {
+            kind: ForgeKind::Forgejo,
+            ..forge.clone()
+        };
+        let endless_forgejo = CannedApi {
+            responses: endless
+                .responses
+                .iter()
+                .map(|(k, v)| (k.replacen("gitea:", "forgejo:", 1), v.clone()))
+                .collect(),
+            ..Default::default()
+        };
+        assert!(pull_approvers(&endless, &forge, 7, "head")
+            .unwrap_err()
+            .contains("more than 20 pages"));
+        assert!(pull_approvers(&endless_forgejo, &forgejo, 7, "head")
+            .unwrap_err()
+            .contains("more than 20 pages"));
     }
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {

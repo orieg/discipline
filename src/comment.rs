@@ -133,25 +133,37 @@ fn comments_path(forge: &Forge, number: u64, page: usize) -> String {
 }
 
 /// The id of this tool's comment on the pull request, if one exists.
+///
+/// Gitea and Forgejo do not page issue comments: every page is the whole list. Reading
+/// stops when a page brings no comment not already seen, or when the comments seen reach
+/// the forge's `X-Total-Count`.
 pub fn find_existing(
     api: &dyn ForgeApi,
     forge: &Forge,
     number: u64,
 ) -> Result<Option<u64>, String> {
+    let mut seen = std::collections::BTreeSet::new();
     for page in 1..=MAX_PAGES {
-        let list = api
-            .get(forge, &comments_path(forge, number, page))?
-            .unwrap_or(serde_json::Value::Array(Vec::new()));
+        let (list, total) = api
+            .get_counted(forge, &comments_path(forge, number, page))?
+            .unwrap_or((serde_json::Value::Array(Vec::new()), None));
         let items = list.as_array().cloned().unwrap_or_default();
+        let mut fresh = 0;
         for c in &items {
+            let id = c.get("id").and_then(|i| i.as_u64());
+            if let Some(id) = id {
+                if seen.insert(id) {
+                    fresh += 1;
+                }
+            }
             let body = c.get("body").and_then(|b| b.as_str()).unwrap_or("");
             if body.trim_start().starts_with(MARKER) {
-                if let Some(id) = c.get("id").and_then(|i| i.as_u64()) {
+                if let Some(id) = id {
                     return Ok(Some(id));
                 }
             }
         }
-        if items.is_empty() || items.len() < 50 {
+        if items.len() < 50 || fresh == 0 || total.is_some_and(|t| seen.len() as u64 >= t) {
             break;
         }
     }
@@ -323,6 +335,31 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(upsert(&api, &rec, &f, 5, "x"), Ok(Posted::Created));
+    }
+
+    #[test]
+    fn an_unpaged_gitea_comment_list_is_read_once_not_per_page() {
+        // Gitea answers every page with the whole list; page 2 onward is unrecorded, so
+        // a lookup that asks for it fails.
+        let f = forge(ForgeKind::Gitea);
+        let all: Vec<_> = (1..=60)
+            .map(|i| serde_json::json!({"id": i, "body": "LGTM"}))
+            .collect();
+        let mut api = canned(
+            ForgeKind::Gitea,
+            &comments_path(&f, 5, 1),
+            serde_json::json!(all),
+        );
+        let key = format!("gitea:{}", comments_path(&f, 5, 1));
+        api.totals.insert(key.clone(), 60);
+        assert_eq!(find_existing(&api, &f, 5), Ok(None));
+        // Without the count, a page that repeats every id already seen ends the read.
+        api.totals.remove(&key);
+        api.responses.insert(
+            format!("gitea:{}", comments_path(&f, 5, 2)),
+            serde_json::json!(all),
+        );
+        assert_eq!(find_existing(&api, &f, 5), Ok(None));
     }
 
     #[test]
