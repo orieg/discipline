@@ -209,6 +209,7 @@ jobs:
             registry-1.docker.io:443
             auth.docker.io:443
             production.cloudflare.docker.com:443
+            production.cloudfront.docker.com:443
             dl-cdn.alpinelinux.org:443
             dl-cdn.alpinelinux.org:80
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -330,8 +331,15 @@ jobs:
           tar -xzf dist/discipline-aarch64-unknown-linux-musl.tar.gz -C bin-arm64
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.6.0
+        with:
+          # Pinned: the action defaults to `tonistiigi/binfmt:latest`, a tag anyone with
+          # push access to that image can move, run with root in a job that writes the release.
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.10.0
+        with:
+          # Pinned: the default builder image is `moby/buildkit:buildx-stable-1`, a moving tag.
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.4.0
         with:
@@ -506,6 +514,7 @@ jobs:
             registry-1.docker.io:443
             auth.docker.io:443
             production.cloudflare.docker.com:443
+            production.cloudfront.docker.com:443
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -523,6 +532,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.10.0
+        with:
+          # Pinned: the default builder image is `moby/buildkit:buildx-stable-1`, a moving tag.
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Image provenance verifies
         shell: bash
         env:
