@@ -14302,6 +14302,42 @@ fn ci_integrity_banned_actions_are_reported_across_the_whole_tree() {
 }
 
 #[test]
+fn ci_integrity_a_third_party_action_in_a_job_with_secrets_warns_without_failing() {
+    const WF: &str = ".github/workflows/w.yml";
+    let sha = "b4ffde65f46336ab88eb53be808477a3936bae11";
+    let base = format!(
+        "on:\n  push:\npermissions:\n  contents: read\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@{sha}\n        with:\n          persist-credentials: false\n"
+    );
+    let head = format!(
+        "{base}      - uses: docker/login-action@{sha}\n        with:\n          password: ${{{{ secrets.REGISTRY }}}}\n"
+    );
+    let repo = Repo::new();
+    repo.commit_base(WF, &base, "ci: base");
+    repo.write(WF, &head);
+    repo.commit("ci: log in to the registry");
+    let run = repo.check(&[]);
+    let found = run.violations("ci-integrity");
+    assert_eq!(found.len(), 1, "{}", run.stdout);
+    assert_eq!(
+        found[0]["code"],
+        "ci-integrity/secrets-with-third-party-action"
+    );
+    assert_eq!(found[0]["severity"], "warning");
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    // `fail_on_warnings` still makes it block, like any warning.
+    let strict = repo.check(&["--fail-on-warnings"]);
+    assert_eq!(strict.code, 1, "{}", strict.stdout);
+    // A gate configured quieter than a warning stays that quiet.
+    let quiet = repo.check(&[
+        "--config-override",
+        "[gates.ci-integrity]\nseverity = \"note\"\n",
+    ]);
+    let found = quiet.violations("ci-integrity");
+    assert_eq!(found.len(), 1, "{}", quiet.stdout);
+    assert_eq!(found[0]["severity"], "note");
+}
+
+#[test]
 fn ci_integrity_reports_workflow_changes_that_expose_secrets_or_a_write_token() {
     const WF: &str = ".github/workflows/w.yml";
     const ACTION: &str = ".github/actions/greet/action.yml";
@@ -14365,6 +14401,16 @@ fn ci_integrity_reports_workflow_changes_that_expose_secrets_or_a_write_token() 
         injection.contains(&(ACTION.to_string(), Some(9))),
         "{injection:?}"
     );
+    // A third-party action in a job that reads secrets is often there by design (a
+    // registry login): a warning. The other patterns block at the gate's severity.
+    for v in run.violations("ci-integrity") {
+        let want = if v["code"] == "ci-integrity/secrets-with-third-party-action" {
+            "warning"
+        } else {
+            "error"
+        };
+        assert_eq!(v["severity"], want, "{v}");
+    }
     assert_eq!(run.code, 1, "{}", run.stdout);
 
     // A scoped directive lifts its own pattern only; the gate-wide one lifts all.

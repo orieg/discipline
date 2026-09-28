@@ -2665,12 +2665,21 @@ fn report_exposures(
         } else {
             "added by this change"
         };
+        // A third-party action in a job that reads secrets is often there by design (a
+        // registry login, a deploy): a warning, never louder than the gate is set to.
+        let severity = if x.kind.code == crate::findings::SECRETS_WITH_THIRD_PARTY_ACTION.code
+            && settings.severity == Severity::Error
+        {
+            Severity::Warning
+        } else {
+            settings.severity
+        };
         let before = out.violations.len();
         record_or_excuse(
             ctx,
             Some(content),
             out,
-            settings.severity,
+            severity,
             x.kind,
             Some(path.to_string()),
             x.line,
