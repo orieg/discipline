@@ -4658,6 +4658,70 @@ fn required_approval_is_read_from_the_forge_for_the_checked_head() {
 }
 
 #[test]
+fn gitea_required_approval_reads_every_review_page_to_the_total_count() {
+    let repo = repo_with_two_self_granted_overrides(
+        "require_approval = true\nallowed_override_actors = [\"lead\"]\n",
+    );
+    let event_dir = tempfile::tempdir().unwrap();
+    let event = event_dir.path().join("event.json");
+    std::fs::write(
+        &event,
+        r#"{"pull_request": {"number": 7, "user": {"login": "agent"}, "head": {"sha": "abc123"}}}"#,
+    )
+    .unwrap();
+    let event = event.to_str().unwrap().to_string();
+    let review = |login: &str, state: &str| serde_json::json!({"user": {"login": login}, "state": state, "commit_id": "abc123"});
+    // `lead` approves on page 1; page 2 holds the review that decides.
+    let check = |second: Option<serde_json::Value>| {
+        let api = FakeForge::start();
+        let page = |n: u32| format!("repos/o/r/pulls/7/reviews?limit=50&page={n}");
+        let one = serde_json::json!([review("lead", "APPROVED")]).to_string();
+        api.serve_raw(&page(1), 200, &[("X-Total-Count", "2")], &one);
+        if let Some(r) = second {
+            let two = serde_json::json!([r]).to_string();
+            api.serve_raw(&page(2), 200, &[("X-Total-Count", "2")], &two);
+        }
+        let url = api.url();
+        repo.run(
+            &["check", "--format", "json", "--base", "main"],
+            &[
+                ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+                ("GITEA_ACTIONS", "true"),
+                ("GITHUB_SERVER_URL", "https://gitea.example"),
+                ("GITHUB_REPOSITORY", "o/r"),
+                ("GITHUB_EVENT_PATH", event.as_str()),
+            ],
+        )
+    };
+
+    // A later comment by someone else leaves the approval standing.
+    let ok = check(Some(review("c0", "COMMENT")));
+    assert_eq!(ok.code, 0, "stdout: {}\nstderr: {}", ok.stdout, ok.stderr);
+
+    // The approval withdrawn on page 2: refused.
+    let run = check(Some(review("lead", "REQUEST_CHANGES")));
+    assert_eq!(
+        run.code, 1,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    let refusals = run.json()["policy_failures"].as_array().unwrap().clone();
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert!(refusals[0]
+        .as_str()
+        .unwrap()
+        .contains("await an approving review"));
+
+    // Page 2 of the counted list cannot be read: could not check, not a pass.
+    let run = check(None);
+    assert_eq!(
+        run.code, 2,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+}
+
+#[test]
 fn policy_from_base_judges_a_change_by_the_configuration_it_did_not_write() {
     // The change adds a vacuous test and switches off the gate that would report it,
     // excusing the switch from its own commit body.
