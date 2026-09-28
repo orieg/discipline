@@ -1366,7 +1366,9 @@ const CASES: &[Case] = &[
             use crate::ast::LanguagePack;
             let py_pack = crate::ast::python::PythonPack;
             let vocab = AssertVocabulary::default();
-            let src = "def check(x):\n    if x != 1:\n        raise AssertionError(x)\n\ndef outer(x):\n    check(x)\n\ndef two(x):\n    outer(x)\n\ndef three(x):\n    two(x)\n\ndef test_direct():\n    check(f())\n\ndef test_nested():\n    outer(f())\n\ndef test_too_deep():\n    three(f())\n";
+            // The chain's helpers also call `log`: a thin wrapper would be followed without
+            // spending a level.
+            let src = "def check(x):\n    if x != 1:\n        raise AssertionError(x)\n\ndef outer(x):\n    log(x)\n    check(x)\n\ndef two(x):\n    log(x)\n    outer(x)\n\ndef three(x):\n    log(x)\n    two(x)\n\ndef test_direct():\n    check(f())\n\ndef test_nested():\n    outer(f())\n\ndef test_too_deep():\n    three(f())\n";
             let facts = py_pack.extract("tests/test_mod.py", src, &vocab)?;
             let by = |n: &str| facts.tests.iter().find(|t| t.name == n);
             Ok(by("test_direct").is_some_and(|t| t.total_asserts == 1)
@@ -2071,6 +2073,26 @@ command = "cargo test"
                 && lcov.policy_files.contains(&"lcov.info");
 
             Ok(mutants_ok && deny_ok && loom_ok && lcov_ok)
+        },
+    ),
+    (
+        "assertion-reduction: a thin wrapper stands for the helper it wraps; a hollow one and a cycle count nothing",
+        || {
+            use crate::ast::LanguagePack;
+            let vocab = AssertVocabulary::default();
+            let src = "fn check(x: u32, strict: bool) { if strict && x != 1 { panic!(\"x\"); } }\nfn noop(_x: u32, _n: u32) {}\nfn via(x: u32) { check(x, true) }\nfn hollow(x: u32) { noop(x, 1) }\nfn ping(x: u32) { pong(x, 1) }\nfn pong(x: u32, _n: u32) { ping(x) }\n#[test]\nfn direct() { check(1, true); }\n#[test]\nfn wrapped() { via(1); }\n#[test]\nfn hollowed() { hollow(1); }\n#[test]\nfn cycled() { ping(1); }\n";
+            let facts = crate::ast::rust::RustPack.extract("tests/wrap.rs", src, &vocab)?;
+            let count = |n: &str| {
+                facts
+                    .tests
+                    .iter()
+                    .find(|t| t.name == n)
+                    .map(|t| (t.total_asserts, t.helper_checks))
+            };
+            Ok(count("direct") == Some((1, 1))
+                && count("wrapped") == Some((1, 1))
+                && count("hollowed") == Some((0, 0))
+                && count("cycled") == Some((0, 0)))
         },
     ),
     (

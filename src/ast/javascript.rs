@@ -423,7 +423,8 @@ impl<'a> JsExtractor<'a> {
 
     /// Adds the failure paths of each same-file helper a test calls: its `expect` /
     /// `assert` calls and its `throw` statements. One level: a helper's own callees
-    /// are not followed, so helpers calling each other cannot recurse.
+    /// are not followed, except through a thin wrapper (`super::helper_through_wrappers`,
+    /// bounded and cycle-safe).
     fn resolve_same_file_helpers(&mut self, root: Node) {
         let mut named = Vec::new();
         self.named_functions(root, &mut named);
@@ -435,7 +436,11 @@ impl<'a> JsExtractor<'a> {
             }
             let mut h = TestFn::default();
             self.scan_test_body(func, &mut h);
+            let mut wraps = None;
             if let Some(body) = func.child_by_field_name("body") {
+                let mut calls = Vec::new();
+                self.collect_calls(body, &mut calls);
+                wraps = super::thin_wrapper_callee(body, &JS_WRAPPER, &calls);
                 h.total_asserts += super::count_failure_exits(
                     body,
                     self.src,
@@ -451,12 +456,13 @@ impl<'a> JsExtractor<'a> {
                     strong_asserts: h.strong_asserts,
                     tautologies: h.tautologies,
                     fatal_asserts: h.fatal_asserts,
+                    wraps,
                 },
             );
         }
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
             for call in calls {
-                let Some(h) = helpers.get(call) else {
+                let Some(h) = super::helper_through_wrappers(call, &helpers) else {
                     continue;
                 };
                 // A configured assertion helper was already counted at the call.
@@ -809,9 +815,60 @@ pub const JS_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     references: &[],
 };
 
+/// A JS / TS helper whose body is one call: `{ return check(x, true); }`, `(x) => check(x)`.
+pub const JS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &[
+        "statement_block",
+        "expression_statement",
+        "return_statement",
+        "await_expression",
+        "parenthesized_expression",
+    ],
+    calls: &["call_expression"],
+    arguments: &["arguments"],
+    plain: &[
+        "true",
+        "false",
+        "null",
+        "undefined",
+        "this",
+        "number",
+        "string",
+    ],
+    skip: &["comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"function checked(x, strict) {
+  if (strict && x !== 1) { throw new Error('x'); }
+}
+function noop(x, n) {}
+const via = (x) => checked(x, true);
+function hollow(x) { return noop(x, 1); }
+function busy(x) {
+  checked(x, true);
+  prepare(x);
+}
+function ping(x) { pong(x, 1); }
+function pong(x, n) { ping(x); }
+test('direct', () => { checked(1, true); });
+test('via wrapper', () => { via(1); });
+test('hollow wrapper', () => { hollow(1); });
+test('busy helper', () => { busy(1); });
+test('wrapper cycle', () => { ping(1); });
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&JavaScriptPack, "test/wrap.test.js", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     #[test]
     fn parses_nested_describe_and_it_blocks() {

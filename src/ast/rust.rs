@@ -262,6 +262,9 @@ impl<'a> Extractor<'a> {
                         strong_asserts: helper_test.strong_asserts,
                         tautologies: helper_test.tautologies,
                         fatal_asserts: helper_test.fatal_asserts,
+                        wraps: node
+                            .child_by_field_name("body")
+                            .and_then(|b| super::thin_wrapper_callee(b, &RS_WRAPPER, &dummy_calls)),
                     };
                     self.helpers.insert(fn_name, facts);
                 }
@@ -341,7 +344,7 @@ impl<'a> Extractor<'a> {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
                 for call in calls {
-                    if let Some(h) = self.helpers.get(call) {
+                    if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {
                             test.total_asserts = test.total_asserts.saturating_sub(1);
                         }
@@ -1113,9 +1116,77 @@ pub const RS_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     references: &[],
 };
 
+/// A Rust helper whose body is one call: `{ install_with(agent, root, false) }`.
+pub const RS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &[
+        "block",
+        "expression_statement",
+        "return_expression",
+        "try_expression",
+        "await_expression",
+    ],
+    calls: &["call_expression"],
+    arguments: &["arguments", "reference_expression"],
+    plain: &["self"],
+    skip: &["line_comment", "block_comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"fn checked(x: u32, strict: bool) {
+    if strict && x != 1 {
+        panic!("x");
+    }
+}
+fn noop(_x: u32, _n: u32) {}
+fn via(x: u32) {
+    checked(x, true)
+}
+fn hollow(x: u32) {
+    noop(x, 1)
+}
+fn busy(x: u32) {
+    checked(x, true);
+    prepare(x)
+}
+fn ping(x: u32) {
+    pong(x, 1)
+}
+fn pong(x: u32, _n: u32) {
+    ping(x)
+}
+#[test]
+fn direct() {
+    checked(1, true);
+}
+#[test]
+fn via_wrapper() {
+    via(1);
+}
+#[test]
+fn hollow_wrapper() {
+    hollow(1);
+}
+#[test]
+fn busy_helper() {
+    busy(1);
+}
+#[test]
+fn wrapper_cycle() {
+    ping(1);
+}
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&RustPack, "tests/wrap.rs", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     fn facts(src: &str) -> ParsedFileFacts {
         RustPack

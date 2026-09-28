@@ -489,6 +489,7 @@ impl<'a> CCppExtractor<'a> {
                                 strong_asserts: helper_fn.strong_asserts,
                                 tautologies: helper_fn.tautologies,
                                 fatal_asserts: helper_fn.fatal_asserts,
+                                wraps: super::thin_wrapper_callee(body, &C_WRAPPER, &dummy_calls),
                             },
                         );
                         self.helper_calls.insert(fn_name.to_string(), dummy_calls);
@@ -1107,9 +1108,60 @@ pub const C_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     terminators: &["return", "abort()", "exit(", "_exit(", "throw"],
 };
 
+/// A C / C++ helper whose body is one call: `{ return check(x, 1); }`.
+pub const C_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &[
+        "compound_statement",
+        "expression_statement",
+        "return_statement",
+    ],
+    calls: &["call_expression"],
+    arguments: &["argument_list"],
+    plain: &["true", "false", "null", "this"],
+    skip: &["comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"namespace {
+void Checked(int x, bool strict) {
+  if (strict && x != 1) std::abort();
+}
+void Noop(int x, int n) {}
+void Via(int x) { Checked(x, true); }
+void Hollow(int x) { Noop(x, 1); }
+void Busy(int x) {
+  Checked(x, true);
+  Prepare(x);
+}
+void Pong(int x, int n);
+void Ping(int x) { Pong(x, 1); }
+void Pong(int x, int n) { Ping(x); }
+}  // namespace
+TEST(Wrap, Direct) { Checked(1, true); }
+TEST(Wrap, ViaWrapper) { Via(1); }
+TEST(Wrap, HollowWrapper) { Hollow(1); }
+TEST(Wrap, BusyHelper) { Busy(1); }
+TEST(Wrap, WrapperCycle) { Ping(1); }
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&CppPack, "tests/wrap_test.cc", src),
+            crate::ast::TRANSITIVE_WRAPPER_COUNTS
+        );
+        // `outer -> w1 -> w2 -> inner -> checked`: `outer` and `inner` spend two of the
+        // three levels and the wrapper hops cost none, so `inner` still reaches the check.
+        let deep = CppPack
+            .extract("tests/deep_test.cc", "void Checked(int x, bool strict) {\n  if (strict && x != 1) std::abort();\n}\nvoid Inner(int x) {\n  Setup();\n  Checked(x, true);\n}\nvoid W2(int x) { Inner(x); }\nvoid W1(int x) { W2(x); }\nvoid Outer(int x) {\n  Setup();\n  W1(x);\n}\nTEST(Wrap, Deep) { Outer(1); }\n", &AssertVocabulary::default())
+            .unwrap();
+        let t = &deep.tests[0];
+        assert_eq!((t.total_asserts, t.helper_checks), (1, 1), "{t:?}");
+    }
 
     #[test]
     fn test_c_cpp_pack_registration_and_extension_matching() {
@@ -1528,10 +1580,11 @@ int main() {
         // main -> CheckA -> Require: the checks moved two levels down still count.
         let two = format!("{require}void CheckA() {{ Require(f()); Require(g()); }}\n}}  // namespace\nint main() {{ CheckA(); return 0; }}\n");
         assert_eq!(asserts(&two), 2);
-        // Three levels is the limit; a fourth is not followed.
-        let three = format!("{require}void CheckA() {{ Require(f()); }}\nvoid Suite() {{ CheckA(); }}\n}}\nint main() {{ Suite(); return 0; }}\n");
+        // Three levels is the limit; a fourth is not followed. `Suite` and `All` do other
+        // work, so they are not thin wrappers followed for free.
+        let three = format!("{require}void CheckA() {{ Require(f()); }}\nvoid Suite() {{ Setup(); CheckA(); }}\n}}\nint main() {{ Suite(); return 0; }}\n");
         assert_eq!(asserts(&three), 1);
-        let four = format!("{require}void CheckA() {{ Require(f()); }}\nvoid Suite() {{ CheckA(); }}\nvoid All() {{ Suite(); }}\n}}\nint main() {{ All(); return 0; }}\n");
+        let four = format!("{require}void CheckA() {{ Require(f()); }}\nvoid Suite() {{ Setup(); CheckA(); }}\nvoid All() {{ Setup(); Suite(); }}\n}}\nint main() {{ All(); return 0; }}\n");
         assert_eq!(asserts(&four), 0);
         // Mutual recursion terminates and counts each helper once per path.
         let cycle = "void A(int n);\nvoid B(int n) { if (n) A(n - 1); assert(n >= 0); }\nvoid A(int n) { if (n) B(n - 1); }\nint main() { A(3); return 0; }\n";

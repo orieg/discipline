@@ -338,6 +338,7 @@ impl<'a> SwiftExtractor<'a> {
                     strong_asserts: helper_fn.strong_asserts,
                     tautologies: helper_fn.tautologies,
                     fatal_asserts: helper_fn.fatal_asserts,
+                    wraps: super::thin_wrapper_callee(body, &SWIFT_WRAPPER, &dummy_calls),
                 });
         }
     }
@@ -501,7 +502,7 @@ impl<'a> SwiftExtractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
             for call in calls {
-                let Some(h) = self.helpers.get(call) else {
+                let Some(h) = super::helper_through_wrappers(call, &self.helpers) else {
                     continue;
                 };
                 if self.vocab.helper_fns.iter().any(|n| n == call) {
@@ -584,9 +585,79 @@ pub const SWIFT_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     references: &[],
 };
 
+/// A Swift helper whose body is one call: `{ check(x, flag: true) }`, `{ return try check(x) }`.
+pub const SWIFT_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &[
+        "function_body",
+        "statements",
+        "control_transfer_statement",
+        "try_expression",
+        "await_expression",
+    ],
+    calls: &["call_expression"],
+    arguments: &[
+        "call_suffix",
+        "value_arguments",
+        "value_argument",
+        "value_argument_label",
+    ],
+    plain: &["self_expression"],
+    skip: &["comment", "multiline_comment", "try_operator"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"import XCTest
+
+final class WrapTests: XCTestCase {
+    func checked(_ x: Int, strict: Bool) {
+        if strict && x != 1 { fatalError("x") }
+    }
+    func noop(_ x: Int, _ n: Int) {}
+    func via(_ x: Int) {
+        checked(x, strict: true)
+    }
+    func hollow(_ x: Int) {
+        noop(x, 1)
+    }
+    func busy(_ x: Int) {
+        checked(x, strict: true)
+        prepare(x)
+    }
+    func ping(_ x: Int) {
+        pong(x, 1)
+    }
+    func pong(_ x: Int, _ n: Int) {
+        ping(x)
+    }
+    func testDirect() {
+        checked(1, strict: true)
+    }
+    func testViaWrapper() {
+        via(1)
+    }
+    func testHollowWrapper() {
+        hollow(1)
+    }
+    func testBusyHelper() {
+        busy(1)
+    }
+    func testWrapperCycle() {
+        ping(1)
+    }
+}
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&SwiftPack, "Tests/WrapTests/WrapTests.swift", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     fn facts(path: &str, src: &str) -> ParsedFileFacts {
         SwiftPack

@@ -12433,6 +12433,37 @@ fn a_dispatch_table_of_helpers_in_rust_and_js_is_a_refactor_and_a_removed_entry_
     }
 }
 
+/// PR #241: `install` became a thin wrapper around `install_with`, and a test calling
+/// `install` lost the checks it inherits from the helper although it was unchanged.
+#[test]
+fn a_helper_refactored_into_a_thin_wrapper_is_not_an_assertion_reduction() {
+    let test = "#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn install_writes_once() {\n        let n = install(Path::new(\"x\"), true).unwrap();\n        assert_eq!(n, 2);\n    }\n}\n";
+    let helper = "use std::path::Path;\n\npub fn install(root: &Path, observe: bool) -> Result<u32> {\n    let a = write(root, observe)?;\n    let b = write(root, observe)?;\n    Ok(a + b)\n}\n\n";
+    let wrapped = "use std::path::Path;\n\npub fn install(root: &Path, observe: bool) -> Result<u32> {\n    install_with(root, observe, false)\n}\n\npub fn install_with(root: &Path, observe: bool, force: bool) -> Result<u32> {\n    let a = write(root, observe || force)?;\n    let b = write(root, observe)?;\n    Ok(a + b)\n}\n\n";
+    let hollow = "use std::path::Path;\n\npub fn install(root: &Path, observe: bool) -> Result<u32> {\n    install_with(root, observe, false)\n}\n\npub fn install_with(root: &Path, observe: bool, force: bool) -> Result<u32> {\n    Ok(2)\n}\n\n";
+    for (before, after, reported) in [(helper, wrapped, false), (wrapped, hollow, true)] {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("src/install.rs", &format!("{before}{test}"));
+        repo.commit("feat: install");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("src/install.rs", &format!("{after}{test}"));
+        repo.commit("refactor: install");
+        let run = repo.check(&[]);
+        let expected: Vec<&str> = if reported {
+            vec!["Assertion Count Decreased In Existing Test"]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            run.titles("assertion-reduction"),
+            expected,
+            "{}",
+            run.stdout
+        );
+    }
+}
+
 #[test]
 fn swift_source_files_are_analysed_by_the_swift_pack() {
     let repo = Repo::new();

@@ -332,6 +332,7 @@ impl<'a> ObjcExtractor<'a> {
             strong_asserts: helper.strong_asserts,
             tautologies: helper.tautologies,
             fatal_asserts: helper.fatal_asserts,
+            wraps: super::thin_wrapper_callee(body, &OBJC_WRAPPER, &dummy),
         });
     }
 
@@ -430,7 +431,7 @@ impl<'a> ObjcExtractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
             for call in calls {
-                let Some(h) = self.helpers.get(call) else {
+                let Some(h) = super::helper_through_wrappers(call, &self.helpers) else {
                     continue;
                 };
                 if self.vocab.helper_fns.iter().any(|n| n == call) {
@@ -510,9 +511,73 @@ pub const OBJC_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     terminators: &["return", "@throw", "abort("],
 };
 
+/// An Objective-C helper whose body is one call: `{ [self check:x flag:YES]; }`.
+pub const OBJC_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &[
+        "compound_statement",
+        "expression_statement",
+        "return_statement",
+    ],
+    calls: &["message_expression", "call_expression"],
+    arguments: &["argument_list"],
+    plain: &["true", "false", "null", "self"],
+    skip: &["comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"@interface WrapTests : XCTestCase
+@end
+@implementation WrapTests
+- (void)checked:(int)x strict:(BOOL)strict {
+    if (strict && x != 1) { XCTFail(@"x"); }
+}
+- (void)noop:(int)x n:(int)n {
+}
+- (void)via:(int)x {
+    [self checked:x strict:YES];
+}
+- (void)hollow:(int)x {
+    [self noop:x n:1];
+}
+- (void)busy:(int)x {
+    [self checked:x strict:YES];
+    prepare(x);
+}
+- (void)ping:(int)x {
+    [self pong:x n:1];
+}
+- (void)pong:(int)x n:(int)n {
+    [self ping:x];
+}
+- (void)testDirect {
+    [self checked:1 strict:YES];
+}
+- (void)testViaWrapper {
+    [self via:1];
+}
+- (void)testHollowWrapper {
+    [self hollow:1];
+}
+- (void)testBusyHelper {
+    [self busy:1];
+}
+- (void)testWrapperCycle {
+    [self ping:1];
+}
+@end
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&ObjcPack, "AppTests/WrapTests.m", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     fn facts(path: &str, src: &str) -> ParsedFileFacts {
         ObjcPack

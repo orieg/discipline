@@ -358,6 +358,7 @@ impl<'a> JavaExtractor<'a> {
                     strong_asserts: helper_fn.strong_asserts,
                     tautologies: helper_fn.tautologies,
                     fatal_asserts: helper_fn.fatal_asserts,
+                    wraps: super::thin_wrapper_callee(body, &JAVA_WRAPPER, &dummy_calls),
                 };
                 self.helpers.insert(method_name.to_string(), facts);
             }
@@ -573,7 +574,7 @@ impl<'a> JavaExtractor<'a> {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
                 for call in calls {
-                    if let Some(h) = self.helpers.get(call) {
+                    if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {
                             test.total_asserts = test.total_asserts.saturating_sub(1);
                             test.strong_asserts = test.strong_asserts.saturating_sub(1);
@@ -668,9 +669,48 @@ pub const JAVA_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     references: &["method_reference"],
 };
 
+/// A Java helper whose body is one call: `{ return check(x, true); }`.
+pub const JAVA_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &["block", "expression_statement", "return_statement"],
+    calls: &["method_invocation"],
+    arguments: &["argument_list"],
+    plain: &["true", "false", "this", "super"],
+    skip: &["line_comment", "block_comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"class WrapTest {
+  void checked(int x, boolean strict) {
+    if (strict && x != 1) { throw new IllegalStateException("x"); }
+  }
+  void noop(int x, int n) {}
+  void via(int x) { checked(x, true); }
+  void hollow(int x) { this.noop(x, 1); }
+  void busy(int x) {
+    checked(x, true);
+    prepare(x);
+  }
+  void ping(int x) { pong(x, 1); }
+  void pong(int x, int n) { ping(x); }
+  @Test void direct() { checked(1, true); }
+  @Test void viaWrapper() { via(1); }
+  @Test void hollowWrapper() { hollow(1); }
+  @Test void busyHelper() { busy(1); }
+  @Test void wrapperCycle() { ping(1); }
+}
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&JavaPack, "src/test/java/WrapTest.java", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     #[test]
     fn test_junit5_test_extraction_and_assertion_counting() {

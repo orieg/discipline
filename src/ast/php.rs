@@ -250,7 +250,12 @@ impl<'a> PhpExtractor<'a> {
             return;
         }
         let mut h = TestFn::default();
+        let mut wraps = None;
         if let Some(body) = node.child_by_field_name("body") {
+            let class_name = key.rsplit_once("::").map_or("", |(c, _)| c);
+            let mut calls = Vec::new();
+            self.collect_calls(body, class_name, &mut calls);
+            wraps = super::thin_wrapper_callee(body, &PHP_WRAPPER, &calls);
             self.scan_block(body, &mut h);
             h.total_asserts += super::count_failure_exits(
                 body,
@@ -267,6 +272,7 @@ impl<'a> PhpExtractor<'a> {
                 strong_asserts: h.strong_asserts,
                 tautologies: h.tautologies,
                 fatal_asserts: h.fatal_asserts,
+                wraps,
             },
         );
     }
@@ -318,11 +324,11 @@ impl<'a> PhpExtractor<'a> {
     }
 
     /// Adds each called helper's failure paths to the test. One level: a helper's
-    /// own callees are not followed.
+    /// own callees are not followed, except through a thin wrapper.
     fn resolve_same_file_helpers(&mut self) {
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
             for call in calls {
-                let Some(h) = self.helpers.get(call) else {
+                let Some(h) = super::helper_through_wrappers(call, &self.helpers) else {
                     continue;
                 };
                 let leaf = call.rsplit("::").next().unwrap_or(call);
@@ -745,9 +751,75 @@ pub const PHP_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     terminators: &["return", "throw", "exit(", "die("],
 };
 
+/// A PHP helper whose body is one call: `{ return $this->check($x, true); }`.
+pub const PHP_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &[
+        "compound_statement",
+        "expression_statement",
+        "return_statement",
+    ],
+    calls: &[
+        "member_call_expression",
+        "scoped_call_expression",
+        "function_call_expression",
+    ],
+    arguments: &["arguments", "argument", "variable_name"],
+    plain: &["name", "boolean", "null", "integer", "float", "string"],
+    skip: &["comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"<?php
+class WrapTest extends TestCase {
+    private function checked(int $x, bool $strict): void {
+        if ($strict && $x !== 1) { throw new RuntimeException('x'); }
+    }
+    private function noop(int $x, int $n): void {}
+    private function via(int $x): void {
+        $this->checked($x, true);
+    }
+    private static function hollow(int $x): void {
+        return self::noop($x, 1);
+    }
+    private function busy(int $x): void {
+        $this->checked($x, true);
+        prepare($x);
+    }
+    private function ping(int $x): void {
+        $this->pong($x, 1);
+    }
+    private function pong(int $x, int $n): void {
+        $this->ping($x);
+    }
+    public function testDirect(): void {
+        $this->checked(1, true);
+    }
+    public function testViaWrapper(): void {
+        $this->via(1);
+    }
+    public function testHollowWrapper(): void {
+        self::hollow(1);
+    }
+    public function testBusyHelper(): void {
+        $this->busy(1);
+    }
+    public function testWrapperCycle(): void {
+        $this->ping(1);
+    }
+}
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&PhpPack, "tests/WrapTest.php", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     #[test]
     fn test_phpunit_test_extraction_and_assertions() {

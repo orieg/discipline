@@ -250,6 +250,7 @@ impl<'a> GoExtractor<'a> {
                     strong_asserts: helper_fn.strong_asserts,
                     tautologies: helper_fn.tautologies,
                     fatal_asserts: helper_fn.fatal_asserts,
+                    wraps: super::thin_wrapper_callee(body, &GO_WRAPPER, &dummy_calls),
                 };
                 self.helpers.insert(func_name.to_string(), facts);
             }
@@ -514,7 +515,7 @@ impl<'a> GoExtractor<'a> {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
                 for call in calls {
-                    if let Some(h) = self.helpers.get(call) {
+                    if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {
                             test.total_asserts = test.total_asserts.saturating_sub(1);
                             test.strong_asserts = test.strong_asserts.saturating_sub(1);
@@ -636,9 +637,72 @@ pub const GO_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     references: &[],
 };
 
+/// A Go helper whose body is one call: `{ return check(t, true) }`.
+pub const GO_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &[
+        "block",
+        "statement_list",
+        "expression_statement",
+        "return_statement",
+        "expression_list",
+    ],
+    calls: &["call_expression"],
+    arguments: &["argument_list"],
+    plain: &["true", "false", "nil"],
+    skip: &["comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"package a
+
+import "testing"
+
+func checked(x int, strict bool) {
+	if strict && x != 1 {
+		panic("x")
+	}
+}
+func noop(x int, n int) {}
+func via(x int) { checked(x, true) }
+func hollow(x int) { noop(x, 1) }
+func busy(x int) {
+	checked(x, true)
+	prepare(x)
+}
+func ping(x int) { pong(x, 1) }
+func pong(x int, n int) { ping(x) }
+func TestDirect(t *testing.T) { checked(1, true) }
+func TestViaWrapper(t *testing.T) { via(1) }
+func TestHollowWrapper(t *testing.T) { hollow(1) }
+func TestBusyHelper(t *testing.T) { busy(1) }
+func TestWrapperCycle(t *testing.T) { ping(1) }
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&GoPack, "pkg/wrap_test.go", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+        // A closure passed along is work the helper does: not a wrapper, although its
+        // `func_literal` ends in `literal` and makes no call.
+        let closure = format!(
+            "{src}func deferred(x int) {{ checked(x, func() {{}}) }}\nfunc TestClosureArg(t *testing.T) {{ deferred(1) }}\n"
+        );
+        let facts = GoPack
+            .extract("pkg/wrap_test.go", &closure, &AssertVocabulary::default())
+            .unwrap();
+        let t = facts
+            .tests
+            .iter()
+            .find(|t| t.name.contains("Closure"))
+            .unwrap();
+        assert_eq!((t.total_asserts, t.helper_checks), (0, 0), "{t:?}");
+    }
 
     #[test]
     fn test_go_std_test_extraction_and_assertions() {

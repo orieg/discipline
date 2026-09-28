@@ -492,6 +492,7 @@ impl<'a> KotlinExtractor<'a> {
                         strong_asserts: helper_fn.strong_asserts,
                         tautologies: helper_fn.tautologies,
                         fatal_asserts: helper_fn.fatal_asserts,
+                        wraps: super::thin_wrapper_callee(body, &KOTLIN_WRAPPER, &dummy_calls),
                     },
                 );
             }
@@ -688,7 +689,7 @@ impl<'a> KotlinExtractor<'a> {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
                 for call in calls {
-                    if let Some(h) = self.helpers.get(call) {
+                    if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {
                             test.total_asserts = test.total_asserts.saturating_sub(1);
                             test.strong_asserts = test.strong_asserts.saturating_sub(1);
@@ -784,9 +785,69 @@ pub const KOTLIN_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     references: &["callable_reference"],
 };
 
+/// A Kotlin helper whose body is one call: `{ check(x, true) }`, `= check(x, true)`.
+pub const KOTLIN_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &["function_body", "block", "statements", "return_expression"],
+    calls: &["call_expression"],
+    arguments: &["value_arguments", "value_argument"],
+    plain: &["this_expression"],
+    skip: &["line_comment", "block_comment", "multiline_comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"class WrapTest {
+    private fun checked(x: Int, strict: Boolean) {
+        if (strict && x != 1) throw IllegalStateException("x")
+    }
+    private fun noop(x: Int, n: Int) {}
+    private fun via(x: Int) = checked(x, true)
+    private fun hollow(x: Int) {
+        noop(x, 1)
+    }
+    private fun busy(x: Int) {
+        checked(x, true)
+        prepare(x)
+    }
+    private fun ping(x: Int) {
+        pong(x, 1)
+    }
+    private fun pong(x: Int, n: Int) {
+        return ping(x)
+    }
+    @Test
+    fun direct() {
+        checked(1, true)
+    }
+    @Test
+    fun viaWrapper() {
+        via(1)
+    }
+    @Test
+    fun hollowWrapper() {
+        hollow(1)
+    }
+    @Test
+    fun busyHelper() {
+        busy(1)
+    }
+    @Test
+    fun wrapperCycle() {
+        ping(1)
+    }
+}
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&KotlinPack, "src/test/kotlin/WrapTest.kt", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     fn facts(path: &str, src: &str) -> ParsedFileFacts {
         KotlinPack

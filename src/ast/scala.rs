@@ -435,6 +435,7 @@ impl<'a> ScalaExtractor<'a> {
                 strong_asserts: helper.strong_asserts,
                 tautologies: helper.tautologies,
                 fatal_asserts: helper.fatal_asserts,
+                wraps: super::thin_wrapper_callee(body, &SCALA_WRAPPER, &dummy),
             });
     }
 
@@ -565,7 +566,7 @@ impl<'a> ScalaExtractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
             for call in calls {
-                let Some(h) = self.helpers.get(call) else {
+                let Some(h) = super::helper_through_wrappers(call, &self.helpers) else {
                     continue;
                 };
                 if self.vocab.helper_fns.iter().any(|n| n == call) {
@@ -644,9 +645,46 @@ pub const SCALA_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     references: &[],
 };
 
+/// A Scala helper whose body is one call: `= check(x, true)`, `= { check(x) }`.
+pub const SCALA_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &["block", "return_expression"],
+    calls: &["call_expression"],
+    arguments: &["arguments"],
+    plain: &["this"],
+    skip: &["comment", "block_comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"class WrapSuite extends AnyFunSuite {
+  private def checked(x: Int, strict: Boolean): Unit = if (strict && x != 1) throw new IllegalStateException("x")
+  private def noop(x: Int, n: Int): Unit = {}
+  private def via(x: Int): Unit = checked(x, true)
+  private def hollow(x: Int): Unit = { noop(x, 1) }
+  private def busy(x: Int): Unit = {
+    checked(x, true)
+    prepare(x)
+  }
+  private def ping(x: Int): Unit = pong(x, 1)
+  private def pong(x: Int, n: Int): Unit = ping(x)
+  test("direct") { checked(1, true) }
+  test("via wrapper") { via(1) }
+  test("hollow wrapper") { hollow(1) }
+  test("busy helper") { busy(1) }
+  test("wrapper cycle") { ping(1) }
+}
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&ScalaPack, "src/test/scala/WrapSuite.scala", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     fn facts(path: &str, src: &str) -> ParsedFileFacts {
         ScalaPack

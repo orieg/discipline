@@ -243,12 +243,15 @@ impl<'a> CSharpExtractor<'a> {
                 } else if self.is_test_path {
                     let mut helper_fn = TestFn::default();
                     let mut dummy_calls = Vec::new();
+                    let mut wrap_body = None;
                     if let Some(body) = child.child_by_field_name("body") {
+                        wrap_body = Some(body);
                         self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
                     } else {
                         let mut cursor = child.walk();
                         for c in child.children(&mut cursor) {
                             if c.kind() == "arrow_expression_clause" {
+                                wrap_body = Some(c);
                                 self.extract_assertions_in_body(
                                     c,
                                     &mut helper_fn,
@@ -269,6 +272,8 @@ impl<'a> CSharpExtractor<'a> {
                         strong_asserts: helper_fn.strong_asserts,
                         tautologies: helper_fn.tautologies,
                         fatal_asserts: helper_fn.fatal_asserts,
+                        wraps: wrap_body
+                            .and_then(|b| super::thin_wrapper_callee(b, &CS_WRAPPER, &dummy_calls)),
                     };
                     self.helpers.insert(method_name.to_string(), facts);
                 }
@@ -465,7 +470,7 @@ impl<'a> CSharpExtractor<'a> {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
                 for call in calls {
-                    if let Some(h) = self.helpers.get(call) {
+                    if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {
                             test.total_asserts = test.total_asserts.saturating_sub(1);
                             test.strong_asserts = test.strong_asserts.saturating_sub(1);
@@ -721,9 +726,53 @@ pub const CS_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     references: &[],
 };
 
+/// A C# helper whose body is one call: `{ Check(x, true); }`, `=> Check(x, true)`.
+pub const CS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &[
+        "block",
+        "expression_statement",
+        "return_statement",
+        "arrow_expression_clause",
+    ],
+    calls: &["invocation_expression"],
+    arguments: &["argument_list", "argument"],
+    plain: &["this", "this_expression"],
+    skip: &["comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"public class WrapTest {
+  void Checked(int x, bool strict) {
+    if (strict && x != 1) { throw new System.Exception("x"); }
+  }
+  void Noop(int x, int n) {}
+  void Via(int x) => Checked(x, true);
+  void Hollow(int x) { Noop(x, 1); }
+  void Busy(int x) {
+    Checked(x, true);
+    Prepare(x);
+  }
+  void Ping(int x) { Pong(x, 1); }
+  void Pong(int x, int n) => Ping(x);
+  [Fact] public void Direct() { Checked(1, true); }
+  [Fact] public void ViaWrapper() { Via(1); }
+  [Fact] public void HollowWrapper() { Hollow(1); }
+  [Fact] public void BusyHelper() { Busy(1); }
+  [Fact] public void WrapperCycle() { Ping(1); }
+}
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&CSharpPack, "tests/WrapTest.cs", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     #[test]
     fn test_csharp_pack_registration_and_extension_matching() {

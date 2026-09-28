@@ -272,6 +272,9 @@ pub struct HelperFacts {
     pub strong_asserts: usize,
     pub tautologies: usize,
     pub fatal_asserts: usize,
+    /// The one same-file function this helper's whole body calls, when it is a thin
+    /// wrapper ([`thin_wrapper_callee`]); its checks are resolved as the wrapper's.
+    pub wraps: Option<String>,
 }
 
 /// How many calls deep a test's same-file helpers are followed: a C or C++ test `main`
@@ -279,13 +282,48 @@ pub struct HelperFacts {
 /// script's `self_test` calls a function that calls the validator that raises.
 pub const HELPER_DEPTH: usize = 3;
 
+/// How many thin wrappers are followed from one helper call (`install` ->
+/// `install_with` -> `install_in`); a wrapper hop costs no call level.
+pub const WRAPPER_DEPTH: usize = 3;
+
 /// A same-file helper's checks with those of the helpers it calls, up to `HELPER_DEPTH`
 /// levels; a recursive call is not followed again. `None` when `name` is not a helper.
+/// A thin wrapper resolves through to the function it wraps without spending a level.
 pub fn transitive_helper(
     name: &str,
     helpers: &std::collections::HashMap<String, HelperFacts>,
     calls: &std::collections::HashMap<String, Vec<String>>,
     path: &mut Vec<String>,
+) -> Option<HelperFacts> {
+    resolve_helper(name, helpers, calls, path, 0, 0)
+}
+
+/// A one-level pack's helper: its own checks, or, for a thin wrapper, those of the
+/// function it wraps (followed up to `WRAPPER_DEPTH` wrappers, a cycle stopped).
+/// `None` when `name` is not a helper.
+pub fn helper_through_wrappers(
+    name: &str,
+    helpers: &std::collections::HashMap<String, HelperFacts>,
+) -> Option<HelperFacts> {
+    let no_calls = std::collections::HashMap::new();
+    // Level `HELPER_DEPTH - 1` follows no ordinary call: only wrapper hops.
+    resolve_helper(
+        name,
+        helpers,
+        &no_calls,
+        &mut Vec::new(),
+        HELPER_DEPTH - 1,
+        0,
+    )
+}
+
+fn resolve_helper(
+    name: &str,
+    helpers: &std::collections::HashMap<String, HelperFacts>,
+    calls: &std::collections::HashMap<String, Vec<String>>,
+    path: &mut Vec<String>,
+    level: usize,
+    hops: usize,
 ) -> Option<HelperFacts> {
     let own = helpers.get(name)?;
     if path.iter().any(|p| p == name) {
@@ -296,20 +334,113 @@ pub fn transitive_helper(
         strong_asserts: own.strong_asserts,
         tautologies: own.tautologies,
         fatal_asserts: own.fatal_asserts,
+        wraps: None,
     };
-    if path.len() + 1 < HELPER_DEPTH {
+    let add = |out: &mut HelperFacts, sub: HelperFacts| {
+        out.total_asserts += sub.total_asserts;
+        out.strong_asserts += sub.strong_asserts;
+        out.tautologies += sub.tautologies;
+        out.fatal_asserts += sub.fatal_asserts;
+    };
+    if let (Some(callee), true) = (&own.wraps, hops < WRAPPER_DEPTH) {
+        path.push(name.to_string());
+        let sub = resolve_helper(callee, helpers, calls, path, level, hops + 1);
+        path.pop();
+        if let Some(sub) = sub {
+            add(&mut out, sub);
+        }
+        return Some(out);
+    }
+    if level + 1 < HELPER_DEPTH {
         path.push(name.to_string());
         for callee in calls.get(name).into_iter().flatten() {
-            if let Some(sub) = transitive_helper(callee, helpers, calls, path) {
-                out.total_asserts += sub.total_asserts;
-                out.strong_asserts += sub.strong_asserts;
-                out.tautologies += sub.tautologies;
-                out.fatal_asserts += sub.fatal_asserts;
+            if let Some(sub) = resolve_helper(callee, helpers, calls, path, level + 1, hops) {
+                add(&mut out, sub);
             }
         }
         path.pop();
     }
     Some(out)
+}
+
+/// How a pack's grammar spells a function body that is one call.
+pub struct WrapperSpec {
+    /// Bodies, statement lists and statements looked through when they hold exactly
+    /// one named node: `{ f(x) }`, `return f(x)`, `f(x);`, `= f(x)`.
+    pub through: &'static [&'static str],
+    /// Call nodes.
+    pub calls: &'static [&'static str],
+    /// A call's argument containers and argument nodes looked through to their parts
+    /// (`(a, b)`, `name: a`, `&a`).
+    pub arguments: &'static [&'static str],
+    /// Argument kinds besides identifiers and `*literal` kinds: a pass-through
+    /// name or a literal (`true`, `None`, `self`).
+    pub plain: &'static [&'static str],
+    /// Comment kinds and operator nodes, skipped (Swift's `try`).
+    pub skip: &'static [&'static str],
+}
+
+/// The body is a thin wrapper: once blocks, `return` and statement nodes holding a
+/// single node are looked through, it is one call whose callee makes no call of its
+/// own and whose other parts (its arguments, a method name, a trailing closure) are
+/// all names passed through or literals. That call is then the only one in the body,
+/// so the first of `callees` (the same-file calls the pack collected from the body)
+/// names it; `None` when the pack collected none (a call on another object). A body
+/// that does any other work, or makes any other call, is not a wrapper.
+pub fn thin_wrapper_callee(
+    body: tree_sitter::Node,
+    spec: &WrapperSpec,
+    callees: &[String],
+) -> Option<String> {
+    let mut node = body;
+    while !spec.calls.contains(&node.kind()) {
+        if !spec.through.contains(&node.kind()) {
+            return None;
+        }
+        let parts = wrapper_parts(node, spec);
+        let [only] = parts.as_slice() else {
+            return None;
+        };
+        node = *only;
+    }
+    let parts = wrapper_parts(node, spec);
+    let (callee, rest) = parts.split_first()?;
+    let thin = !makes_a_call(*callee, spec) && rest.iter().all(|c| plain_argument(*c, spec));
+    thin.then(|| callees.first().cloned()).flatten()
+}
+
+fn makes_a_call(node: tree_sitter::Node, spec: &WrapperSpec) -> bool {
+    let mut cursor = node.walk();
+    let found = spec.calls.contains(&node.kind())
+        || node
+            .named_children(&mut cursor)
+            .any(|c| makes_a_call(c, spec));
+    found
+}
+
+fn wrapper_parts<'t>(
+    node: tree_sitter::Node<'t>,
+    spec: &WrapperSpec,
+) -> Vec<tree_sitter::Node<'t>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|c| !spec.skip.contains(&c.kind()))
+        .collect()
+}
+
+fn plain_argument(node: tree_sitter::Node, spec: &WrapperSpec) -> bool {
+    let kind = node.kind();
+    if spec.arguments.contains(&kind) {
+        return wrapper_parts(node, spec)
+            .into_iter()
+            .all(|c| plain_argument(c, spec));
+    }
+    // A closure passed along is work the wrapper does, not a value it forwards.
+    let closure = ["lambda", "func", "block", "closure"]
+        .iter()
+        .any(|k| kind.contains(k));
+    !closure
+        && (kind.ends_with("identifier") || kind.ends_with("literal") || spec.plain.contains(&kind))
 }
 
 /// Failure exits in a helper body: nodes of one of `kinds` whose text starts with one of
@@ -571,6 +702,45 @@ pub fn analyze(source: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts
     }
 }
 
+/// The thin-wrapper rule, read the same way for each pack. The source defines a helper
+/// with one failure exit and tests whose names carry a marker, in this order:
+/// `direct` calls it; `via` calls a wrapper around it (adding a literal argument);
+/// `hollow` calls a wrapper around a function with no check; `busy` calls a helper
+/// that calls it and also does other work, which is not a wrapper; `cycle` calls one
+/// of two wrappers around each other. Returns each test's `(total_asserts,
+/// helper_checks)`.
+#[cfg(test)]
+pub(crate) fn thin_wrapper_counts(
+    pack: &dyn LanguagePack,
+    path: &str,
+    src: &str,
+) -> [(usize, usize); 5] {
+    let facts = pack
+        .extract(path, src, &AssertVocabulary::default())
+        .expect(path);
+    ["direct", "via", "hollow", "busy", "cycle"].map(|marker| {
+        let t = facts
+            .tests
+            .iter()
+            .find(|t| t.name.to_lowercase().contains(marker))
+            .unwrap_or_else(|| panic!("{path}: no `{marker}` test in {:?}", facts.tests));
+        (t.total_asserts, t.helper_checks)
+    })
+}
+
+/// What [`thin_wrapper_counts`] reads in a one-level pack: the wrapper gets the
+/// credit of the direct call, a hollow wrapper and a cycle get none, and the busy
+/// helper resolves one level (its callee's check is not reached).
+#[cfg(test)]
+pub(crate) const ONE_LEVEL_WRAPPER_COUNTS: [(usize, usize); 5] =
+    [(1, 1), (1, 1), (0, 0), (0, 0), (0, 0)];
+
+/// The same in C/C++ and Python, which follow ordinary calls: the busy helper reaches
+/// its callee's check as a call one level down.
+#[cfg(test)]
+pub(crate) const TRANSITIVE_WRAPPER_COUNTS: [(usize, usize); 5] =
+    [(1, 1), (1, 1), (0, 0), (1, 1), (0, 0)];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,6 +869,97 @@ mod tests {
             let t = &facts.tests[0];
             assert_eq!((t.total_asserts, t.helper_checks), (1, 1), "{path}: {t:?}");
         }
+    }
+
+    fn helper(total: usize, wraps: Option<&str>) -> HelperFacts {
+        HelperFacts {
+            total_asserts: total,
+            wraps: wraps.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// Wrapper hops are bounded by `WRAPPER_DEPTH` and a wrapper cycle stops; they do
+    /// not spend `HELPER_DEPTH` levels in the packs that follow ordinary calls.
+    #[test]
+    fn wrappers_resolve_to_their_callee_bounded_and_cycle_safe() {
+        let helpers: std::collections::HashMap<String, HelperFacts> = [
+            ("check", helper(2, None)),
+            ("w1", helper(0, Some("check"))),
+            ("w2", helper(0, Some("w1"))),
+            ("w3", helper(0, Some("w2"))),
+            ("w4", helper(0, Some("w3"))),
+            ("ping", helper(0, Some("pong"))),
+            ("pong", helper(0, Some("ping"))),
+            ("gone", helper(0, Some("missing"))),
+            ("outer", helper(0, None)),
+            ("wa", helper(0, Some("wb"))),
+            ("wb", helper(0, Some("busy"))),
+            ("busy", helper(0, None)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let total = |name: &str| helper_through_wrappers(name, &helpers).map(|h| h.total_asserts);
+        assert_eq!(total("w1"), Some(2));
+        assert_eq!(total("w3"), Some(2), "three wrapper hops are followed");
+        assert_eq!(total("w4"), Some(0), "a fourth hop is not");
+        assert_eq!(total("ping"), Some(0), "a cycle stops");
+        assert_eq!(
+            total("gone"),
+            Some(0),
+            "a callee that is not a helper adds nothing"
+        );
+        assert_eq!(total("nope"), None);
+        // In a pack that follows calls, `outer -> wa -> wb -> busy -> check` spends two
+        // levels (outer, busy): the wrapper hops are free, so `busy` may still follow
+        // its call to `check`.
+        let calls: std::collections::HashMap<String, Vec<String>> = [
+            ("outer".to_string(), vec!["wa".to_string()]),
+            ("busy".to_string(), vec!["check".to_string()]),
+        ]
+        .into_iter()
+        .collect();
+        let deep = |name: &str| {
+            transitive_helper(name, &helpers, &calls, &mut Vec::new()).map(|h| h.total_asserts)
+        };
+        assert_eq!(deep("outer"), Some(2));
+        assert_eq!(deep("ping"), Some(0));
+    }
+
+    /// What `thin_wrapper_callee` reads as a wrapper, on Rust bodies; each pack differs
+    /// only in its `WrapperSpec` node kinds.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn a_thin_wrapper_is_one_call_forwarding_names_and_literals() {
+        let callee = |body: &str, callees: &[&str]| {
+            let src = format!("fn w(x: u32) {body}");
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_rust::LANGUAGE.into())
+                .unwrap();
+            let tree = parser.parse(&src, None).unwrap();
+            let f = tree.root_node().named_child(0).unwrap();
+            let callees: Vec<String> = callees.iter().map(|c| c.to_string()).collect();
+            thin_wrapper_callee(
+                f.child_by_field_name("body").unwrap(),
+                &rust::RS_WRAPPER,
+                &callees,
+            )
+        };
+        let check = Some("check".to_string());
+        assert_eq!(callee("{ check(x, true) }", &["check"]), check);
+        assert_eq!(callee("{ return check(x, &y, 1); }", &["check"]), check);
+        assert_eq!(callee("{ check(x)? } // forwarded", &["check"]), check);
+        // Other work besides the call, even with no other call.
+        assert_eq!(callee("{ let y = x; check(y) }", &["check"]), None);
+        // A computed argument, a closure argument, a callee that calls.
+        assert_eq!(callee("{ check(x + 1) }", &["check"]), None);
+        assert_eq!(callee("{ check(x, || true) }", &["check"]), None);
+        assert_eq!(callee("{ make().check(x) }", &["make"]), None);
+        // A call the pack did not collect as a same-file call.
+        assert_eq!(callee("{ other.check(x) }", &[]), None);
+        assert_eq!(callee("{}", &[]), None);
     }
 
     /// Helpers named in a dispatch table and run in a loop resolve like direct calls.

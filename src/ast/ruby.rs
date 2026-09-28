@@ -268,6 +268,7 @@ impl<'a> RubyExtractor<'a> {
                             strong_asserts: helper_fn.strong_asserts,
                             tautologies: helper_fn.tautologies,
                             fatal_asserts: helper_fn.fatal_asserts,
+                            wraps: super::thin_wrapper_callee(body, &RUBY_WRAPPER, &dummy_calls),
                         };
                         self.helpers.insert(method_name.to_string(), facts);
                     }
@@ -523,7 +524,7 @@ impl<'a> RubyExtractor<'a> {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
                 for call in calls {
-                    if let Some(h) = self.helpers.get(call) {
+                    if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {
                             test.total_asserts = test.total_asserts.saturating_sub(1);
                             test.strong_asserts = test.strong_asserts.saturating_sub(1);
@@ -671,9 +672,89 @@ pub const RUBY_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     references: &[],
 };
 
+/// A Ruby helper whose body is one call: `check(x, true)`, `return check(x)`.
+pub const RUBY_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &["body_statement", "return", "argument_list"],
+    calls: &["call"],
+    arguments: &["argument_list", "pair"],
+    plain: &[
+        "true",
+        "false",
+        "nil",
+        "self",
+        "integer",
+        "float",
+        "string",
+        "simple_symbol",
+        "hash_key_symbol",
+        "constant",
+    ],
+    skip: &["comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"class WrapTest < Minitest::Test
+  def checked(x, strict)
+    raise ArgumentError, "x" if strict && x != 1
+  end
+
+  def noop(x, n)
+  end
+
+  def via(x)
+    checked(x, true)
+  end
+
+  def hollow(x)
+    return noop(x, 1)
+  end
+
+  def busy(x)
+    checked(x, true)
+    prepare(x)
+  end
+
+  def ping(x)
+    pong(x, 1)
+  end
+
+  def pong(x, n)
+    ping(x)
+  end
+
+  def test_direct
+    checked(1, true)
+  end
+
+  def test_via_wrapper
+    via(1)
+  end
+
+  def test_hollow_wrapper
+    hollow(1)
+  end
+
+  def test_busy_helper
+    busy(1)
+  end
+
+  def test_wrapper_cycle
+    ping(1)
+  end
+end
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&RubyPack, "test/wrap_test.rb", src),
+            crate::ast::ONE_LEVEL_WRAPPER_COUNTS
+        );
+    }
 
     #[test]
     fn test_ruby_pack_registration_and_extension_matching() {

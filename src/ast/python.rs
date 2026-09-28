@@ -591,12 +591,16 @@ impl<'a> PythonExtractor<'a> {
                 .unwrap_or_default();
             self.collect_calls(body, &scope, &mut calls);
         }
+        let wraps = node
+            .child_by_field_name("body")
+            .and_then(|b| super::thin_wrapper_callee(b, &PY_WRAPPER, &calls));
         self.helper_calls.entry(key.clone()).or_insert(calls);
         self.helpers.entry(key).or_insert(HelperFacts {
             total_asserts: facts.total_asserts,
             strong_asserts: facts.strong_asserts,
             tautologies: facts.tautologies,
             fatal_asserts: facts.fatal_asserts,
+            wraps,
         });
     }
 
@@ -1084,9 +1088,73 @@ pub const PY_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     ],
 };
 
+/// A Python helper whose body is one call: `return check(x, True)`, `self.check(x)`.
+pub const PY_WRAPPER: super::WrapperSpec = super::WrapperSpec {
+    through: &["block", "expression_statement", "return_statement", "await"],
+    calls: &["call"],
+    arguments: &["argument_list", "keyword_argument"],
+    plain: &["true", "false", "none", "integer", "float", "string"],
+    skip: &["comment"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test calling a thin wrapper gets the credit of one calling the wrapped function
+    /// (`crate::ast::thin_wrapper_counts` names the controls).
+    #[test]
+    fn a_thin_wrapper_resolves_to_the_function_it_wraps() {
+        let src = r##"def checked(x, strict):
+    if strict and x != 1:
+        raise ValueError("x")
+
+def noop(x, n):
+    pass
+
+def via(x):
+    return checked(x, strict=True)
+
+def hollow(x):
+    noop(x, 1)
+
+def busy(x):
+    checked(x, True)
+    prepare(x)
+
+def ping(x):
+    return pong(x, 1)
+
+def pong(x, n):
+    return ping(x)
+
+def test_direct():
+    checked(1, True)
+
+def test_via_wrapper():
+    via(1)
+
+def test_hollow_wrapper():
+    hollow(1)
+
+def test_busy_helper():
+    busy(1)
+
+def test_wrapper_cycle():
+    ping(1)
+"##;
+        assert_eq!(
+            crate::ast::thin_wrapper_counts(&PythonPack, "tests/test_wrap.py", src),
+            crate::ast::TRANSITIVE_WRAPPER_COUNTS
+        );
+        // `outer -> w1 -> w2 -> inner -> checked`: `outer` and `inner` spend two of the
+        // three levels and the wrapper hops cost none, so `inner` still reaches the check.
+        let deep = PythonPack
+            .extract("tests/test_deep.py", "def checked(x, strict):\n    if strict and x != 1:\n        raise ValueError(x)\n\ndef inner(x):\n    setup()\n    checked(x, True)\n\ndef w2(x):\n    inner(x)\n\ndef w1(x):\n    return w2(x)\n\ndef outer(x):\n    setup()\n    w1(x)\n\ndef test_deep():\n    outer(1)\n", &AssertVocabulary::default())
+            .unwrap();
+        let t = &deep.tests[0];
+        assert_eq!((t.total_asserts, t.helper_checks), (1, 1), "{t:?}");
+    }
 
     #[test]
     fn parses_pytest_functions_and_assertions() {
@@ -1503,19 +1571,23 @@ def test_cluster():
         // `outer` does not raise itself; it calls `inner`, which does: two levels, counted
         // (a validator moved out of the function a self-test drives). `four` is one level
         // past the limit. `loop_a`/`loop_b` call each other and never raise; `walk`
-        // raises and calls itself: each counts once, and resolution terminates.
+        // raises and calls itself: each counts once, and resolution terminates. The chain's
+        // helpers also call `log`, so none is a thin wrapper followed for free.
         let src = r#"
 def inner(x):
     if not x:
         raise RuntimeError("bad")
 
 def outer(x):
+    log(x)
     inner(x)
 
 def two(x):
+    log(x)
     outer(x)
 
 def four(x):
+    log(x)
     two(x)
 
 def loop_a(n):
