@@ -765,6 +765,9 @@ pub enum Installed {
     Outdated(PathBuf),
     /// The file exists without the hook; nothing was written. Carries the snippet.
     Refused(PathBuf, String),
+    /// A bootstrap pinned to release digests, kept: without `--pin-sums` it would be
+    /// replaced by one that trusts the release's own `SHA256SUMS`.
+    PinKept(PathBuf),
 }
 
 /// Set by [`run_check`] for the check a hook runs: the only run in which a hook file
@@ -779,7 +782,9 @@ pub const HOOK_RUN_ENV: &str = "DISCIPLINE_HOOK_RUN";
 /// directive.
 pub fn is_generated_hook_file(path: &str, content: &str) -> bool {
     if path == CLAUDE_BOOTSTRAP {
-        return content == claude_bootstrap_script();
+        return content == claude_bootstrap_script()
+            || pinned_digests(content)
+                .is_some_and(|d| content == claude_bootstrap_script_with(Some(&d)));
     }
     // A longer timeout is what `hook install --timeout` writes; a shorter one can kill the
     // hook before it answers, so only the default or more is recognised.
@@ -800,6 +805,25 @@ pub fn is_generated_hook_file(path: &str, content: &str) -> bool {
                 .flat_map(move |t| [config_for_opts(*a, false, t), config_for_opts(*a, true, t)])
         })
         .any(|(rel, generated)| rel == path && generated == content)
+}
+
+/// [`is_generated_hook_file`] for a change from `base` to `head`. A pinned bootstrap is
+/// generated output whatever its digests, but this release writes one version line, so a
+/// base already pinned to it with other digests means the digests were edited: that change
+/// is not recognised.
+pub fn is_generated_hook_change(path: &str, base: Option<&str>, head: &str) -> bool {
+    if !is_generated_hook_file(path, head) {
+        return false;
+    }
+    let version = |s: &str| {
+        s.lines()
+            .find(|l| l.starts_with("version=\"v"))
+            .map(str::to_string)
+    };
+    match (base.and_then(pinned_digests), pinned_digests(head)) {
+        (Some(b), Some(h)) => b == h || base.and_then(version) != version(head),
+        _ => true,
+    }
 }
 
 /// A timeout value in a hook file (`"timeout": 300`, `"timeoutSec": 120`).
@@ -1104,6 +1128,89 @@ pub const CLAUDE_BOOTSTRAP: &str = ".claude/hooks/discipline-bootstrap.sh";
 /// discipline is already there, and always exits 0: a failure is a notice to the person,
 /// never a blocked session.
 pub fn claude_bootstrap_script() -> String {
+    claude_bootstrap_script_with(None)
+}
+
+/// The two linux-musl digests of a release, which a pinned bootstrap checks the download
+/// against instead of the release's own `SHA256SUMS`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseDigests {
+    pub x86_64: String,
+    pub aarch64: String,
+}
+
+/// What a pinned bootstrap says about itself.
+pub const PINNED_HEADER: &str = "# Pinned by `discipline hook install --pin-sums`";
+
+/// The linux-musl digests in a release's `SHA256SUMS` (`<sha256>  <asset>`, or `*<asset>`).
+pub fn parse_release_sums(text: &str) -> Result<ReleaseDigests> {
+    let find = |arch: &str| -> Result<String> {
+        let asset = format!("discipline-{arch}-unknown-linux-musl.tar.gz");
+        text.lines()
+            .filter_map(|l| l.split_once(char::is_whitespace))
+            .find(|(_, name)| name.trim().trim_start_matches('*') == asset)
+            .map(|(digest, _)| digest.to_ascii_lowercase())
+            .filter(|d| d.len() == 64 && d.chars().all(|c| c.is_ascii_hexdigit()))
+            .with_context(|| format!("the sums file has no SHA-256 digest for {asset}"))
+    };
+    Ok(ReleaseDigests {
+        x86_64: find("x86_64")?,
+        aarch64: find("aarch64")?,
+    })
+}
+
+/// The digests a pinned bootstrap carries; `None` for an unpinned one.
+fn pinned_digests(script: &str) -> Option<ReleaseDigests> {
+    static PINNED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?m)^  (x86_64|aarch64)\) want="([0-9a-f]{64})" ;;$"#).unwrap()
+    });
+    let mut d = ReleaseDigests {
+        x86_64: String::new(),
+        aarch64: String::new(),
+    };
+    for c in PINNED.captures_iter(script) {
+        match &c[1] {
+            "x86_64" => d.x86_64 = c[2].to_string(),
+            _ => d.aarch64 = c[2].to_string(),
+        }
+    }
+    (!d.x86_64.is_empty() && !d.aarch64.is_empty()).then_some(d)
+}
+
+/// [`claude_bootstrap_script`], pinned to `pin` when given: the download is checked against
+/// those digests and the release's `SHA256SUMS` is never fetched, so a replaced release
+/// asset (and its replaced `SHA256SUMS`) is refused.
+pub fn claude_bootstrap_script_with(pin: Option<&ReleaseDigests>) -> String {
+    let (pin_note, fetch) = match pin {
+        Some(d) => (
+            format!(
+                "{PINNED_HEADER}: the digests below are this release's\n# linux-musl assets, each a subject of its SLSA provenance\n# (`gh attestation verify <asset> --repo orieg/discipline`).\n"
+            ),
+            format!(
+                r#"if ! curl -fsSL --retry 3 -o "${{dir}}/${{asset}}" "${{base}}/${{asset}}"; then
+  say "could not download ${{version}} (network access level?); the hooks cannot check this session"
+  exit 0
+fi
+case "${{arch}}" in
+  x86_64) want="{}" ;;
+  aarch64) want="{}" ;;
+esac
+"#,
+                d.x86_64, d.aarch64
+            ),
+        ),
+        None => (
+            String::new(),
+            r#"if ! curl -fsSL --retry 3 -o "${dir}/${asset}" "${base}/${asset}" \
+  || ! curl -fsSL --retry 3 -o "${dir}/SHA256SUMS" "${base}/SHA256SUMS"; then
+  say "could not download ${version} (network access level?); the hooks cannot check this session"
+  exit 0
+fi
+want="$(awk -v f="${asset}" '$2 == f || $2 == "*" f { print $1 }' "${dir}/SHA256SUMS")"
+"#
+            .to_string(),
+        ),
+    };
     format!(
         r#"#!/bin/bash
 # Written by `discipline hook install --agent claude-code`.
@@ -1112,7 +1219,7 @@ pub fn claude_bootstrap_script() -> String {
 # check the change. Locally it does nothing: install discipline yourself.
 # Claude Code cloud sessions run only on repositories hosted on GitHub; elsewhere this
 # script never runs in the cloud.
-set -u
+{pin_note}set -u
 [ "${{CLAUDE_CODE_REMOTE:-}}" = "true" ] || exit 0
 command -v discipline >/dev/null 2>&1 && exit 0
 
@@ -1127,13 +1234,7 @@ asset="discipline-${{arch}}-unknown-linux-musl.tar.gz"
 base="https://github.com/orieg/discipline/releases/download/${{version}}"
 dir="$(mktemp -d)"
 trap 'rm -rf "${{dir}}"' EXIT
-if ! curl -fsSL --retry 3 -o "${{dir}}/${{asset}}" "${{base}}/${{asset}}" \
-  || ! curl -fsSL --retry 3 -o "${{dir}}/SHA256SUMS" "${{base}}/SHA256SUMS"; then
-  say "could not download ${{version}} (network access level?); the hooks cannot check this session"
-  exit 0
-fi
-want="$(awk -v f="${{asset}}" '$2 == f || $2 == "*" f {{ print $1 }}' "${{dir}}/SHA256SUMS")"
-got="$(sha256sum "${{dir}}/${{asset}}" | awk '{{ print $1 }}')"
+{fetch}got="$(sha256sum "${{dir}}/${{asset}}" | awk '{{ print $1 }}')"
 if [ -z "${{want}}" ] || [ "${{want}}" != "${{got}}" ]; then
   say "checksum mismatch for ${{asset}}; not installed"
   exit 0
@@ -1164,29 +1265,43 @@ exit 0
 
 /// Write [`CLAUDE_BOOTSTRAP`] under `root` unless a file is there.
 pub fn install_claude_bootstrap(root: &Path) -> Result<Installed> {
-    install_claude_bootstrap_with(root, false)
+    install_claude_bootstrap_with(root, false, None)
 }
 
 /// [`install_claude_bootstrap`], rewriting one an earlier release wrote when `upgrade`.
-pub fn install_claude_bootstrap_with(root: &Path, upgrade: bool) -> Result<Installed> {
+/// With `pin`, the script checks the download against those digests ([`claude_bootstrap_script_with`]).
+pub fn install_claude_bootstrap_with(
+    root: &Path,
+    upgrade: bool,
+    pin: Option<&ReleaseDigests>,
+) -> Result<Installed> {
     let path = root.join(CLAUDE_BOOTSTRAP);
+    let script = claude_bootstrap_script_with(pin);
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
-        if let Some(r) = refresh_generated(&path, &existing, &claude_bootstrap_script(), upgrade)? {
+        if pin.is_none() && existing.contains(PINNED_HEADER) {
+            // This release's pinned script is current; an earlier release's needs the
+            // new release's digests, never an unpinned rewrite.
+            return Ok(if is_generated_hook_file(CLAUDE_BOOTSTRAP, &existing) {
+                Installed::AlreadyPresent(path)
+            } else {
+                Installed::PinKept(path)
+            });
+        }
+        if let Some(r) = refresh_generated(&path, &existing, &script, upgrade)? {
             return Ok(r);
         }
         if existing.contains("orieg/discipline/releases") {
             return Ok(Installed::AlreadyPresent(path));
         }
-        return Ok(Installed::Refused(path, claude_bootstrap_script()));
+        return Ok(Installed::Refused(path, script));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
-    std::fs::write(&path, claude_bootstrap_script())
-        .with_context(|| format!("cannot write {}", path.display()))?;
+    std::fs::write(&path, script).with_context(|| format!("cannot write {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1622,6 +1737,61 @@ mod tests {
                 "{agent:?} {cmd}: {present:?}"
             );
         }
+    }
+
+    /// A pinned bootstrap checks the download against the digest written in it: it never
+    /// fetches `SHA256SUMS`, refuses a mismatch, and goes on to unpack on a match. `curl`,
+    /// `uname` and `sha256sum` are stubs, so the test is the script's logic, not the network.
+    #[cfg(unix)]
+    #[test]
+    fn a_pinned_bootstrap_verifies_against_its_own_digests() {
+        use std::os::unix::fs::PermissionsExt;
+        let (good, other) = ("e".repeat(64), "f".repeat(64));
+        let run = |pinned_x86: &str| {
+            let bin = tempfile::tempdir().unwrap();
+            let log = bin.path().join("curl.log");
+            let stub = |name: &str, body: String| {
+                let p = bin.path().join(name);
+                std::fs::write(&p, format!("#!/bin/sh\n{body}")).unwrap();
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            };
+            stub(
+                "curl",
+                format!(
+                    "for a; do case \"$prev\" in -o) out=\"$a\";; esac; prev=\"$a\"; url=\"$a\"; done\necho \"$url\" >> {}\necho asset > \"$out\"\n",
+                    log.display()
+                ),
+            );
+            stub("uname", "echo x86_64\n".into());
+            stub("sha256sum", format!("echo \"{good}  $1\"\n"));
+            let home = tempfile::tempdir().unwrap();
+            let digests = ReleaseDigests {
+                x86_64: pinned_x86.to_string(),
+                aarch64: "0".repeat(64),
+            };
+            let out = std::process::Command::new("/bin/bash")
+                .args(["-c", &claude_bootstrap_script_with(Some(&digests))])
+                .env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+                .env("HOME", home.path())
+                .env("CLAUDE_CODE_REMOTE", "true")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            (
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+                std::fs::read_to_string(&log).unwrap_or_default(),
+            )
+        };
+        let (mismatch, fetched) = run(&other);
+        assert!(mismatch.contains("checksum mismatch"), "{mismatch}");
+        assert!(!fetched.contains("SHA256SUMS"), "{fetched}");
+        assert_eq!(fetched.lines().count(), 1, "only the asset: {fetched}");
+        let (matched, _) = run(&good);
+        assert!(
+            !matched.contains("checksum mismatch") && matched.contains("could not unpack"),
+            "verified, then unpacking the stub asset fails: {matched}"
+        );
     }
 
     /// agy's `SessionStart` handler tells the agent to warn the person when `discipline`

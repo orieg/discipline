@@ -1016,7 +1016,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__hook__subcmd__install)
-            opts="-h --agent --user --observe --cloud-agent --upgrade --timeout --help"
+            opts="-h --agent --user --observe --cloud-agent --upgrade --timeout --pin-sums --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1027,6 +1027,10 @@ _discipline() {
                     return 0
                     ;;
                 --timeout)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --pin-sums)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

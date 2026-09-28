@@ -1328,3 +1328,130 @@ fn install_timeout_sets_the_check_timeout_and_stays_recognised() {
         short.stderr
     );
 }
+
+/// A `SHA256SUMS` file in the release's format, with `x86` and `arm` as the two linux-musl
+/// digests, plus an unrelated asset.
+fn release_sums(dir: &std::path::Path, x86: &str, arm: Option<&str>) -> std::path::PathBuf {
+    let mut text = format!(
+        "{}  discipline-x86_64-apple-darwin.tar.gz\n{x86}  discipline-x86_64-unknown-linux-musl.tar.gz\n",
+        "c".repeat(64)
+    );
+    if let Some(arm) = arm {
+        text.push_str(&format!(
+            "{arm} *discipline-aarch64-unknown-linux-musl.tar.gz\n"
+        ));
+    }
+    let path = dir.join("SHA256SUMS");
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// `--pin-sums` writes the release's linux-musl digests into the Claude Code bootstrap, so a
+/// cloud session verifies the download against digests reviewed in the repository instead of
+/// the release's own `SHA256SUMS`. A pinned bootstrap is never replaced by an unpinned one,
+/// and a hook's own check recognises it as generated unless a digest was edited.
+#[test]
+fn claude_code_bootstrap_pins_release_digests() {
+    let (x86, arm) = ("a".repeat(64), "b".repeat(64));
+    let sums_dir = tempfile::tempdir().unwrap();
+    let sums = release_sums(sums_dir.path(), &x86, Some(&arm));
+    let sums = sums.to_str().unwrap();
+    let repo = Repo::new();
+    let script = ".claude/hooks/discipline-bootstrap.sh";
+
+    let run = repo.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "claude-code",
+            "--observe",
+            "--pin-sums",
+            sums,
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let pinned = std::fs::read_to_string(repo.file(script)).unwrap();
+    assert!(
+        pinned.contains(&format!("x86_64) want=\"{x86}\""))
+            && pinned.contains(&format!("aarch64) want=\"{arm}\"")),
+        "{pinned}"
+    );
+    assert!(
+        !pinned.contains("SHA256SUMS\""),
+        "no SHA256SUMS download: {pinned}"
+    );
+
+    // Without --pin-sums, even with --upgrade, the pinned script is kept.
+    for extra in [&[][..], &["--upgrade"][..]] {
+        let mut args = vec!["hook", "install", "--agent", "claude-code", "--observe"];
+        args.extend_from_slice(extra);
+        let again = repo.run(&args, &[]);
+        assert_eq!(again.code, 0, "{}\n{}", again.stdout, again.stderr);
+        assert_eq!(std::fs::read_to_string(repo.file(script)).unwrap(), pinned);
+    }
+
+    // The hook's own check: the pinned bootstrap is what `hook install` writes.
+    repo.commit("chore(hooks): pinned bootstrap");
+    let clean = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(clean.code, 0, "{}", clean.stderr);
+    // Merged: the next branch that edits a digest of this release is reported.
+    let settings = std::fs::read_to_string(repo.file(".claude/settings.json")).unwrap();
+    let base_files = |bootstrap: &str| {
+        repo.commit_base_files(
+            &[(".claude/settings.json", &settings), (script, bootstrap)],
+            "chore(hooks): pinned bootstrap",
+        )
+    };
+    base_files(&pinned);
+    std::fs::write(repo.file(script), pinned.replace(&x86, &"d".repeat(64))).unwrap();
+    let edited = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(edited.code, 2, "{}", edited.stderr);
+    assert!(edited.stderr.contains(script), "{}", edited.stderr);
+    // Control: moving from an earlier release's pinned digests to this one's is an upgrade.
+    let version = format!("version=\"v{}\"", env!("CARGO_PKG_VERSION"));
+    base_files(
+        &pinned
+            .replace(&version, "version=\"v0.0.1\"")
+            .replace(&x86, &"9".repeat(64)),
+    );
+    std::fs::write(repo.file(script), &pinned).unwrap();
+    let upgraded = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(upgraded.code, 0, "{}", upgraded.stderr);
+
+    // A sums file without both linux-musl digests, or for another agent, is refused.
+    let partial = tempfile::tempdir().unwrap();
+    let partial = release_sums(partial.path(), &x86, None);
+    let other = Repo::new();
+    let missing = other.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "claude-code",
+            "--pin-sums",
+            partial.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(missing.code, 2, "{}", missing.stdout);
+    assert!(
+        missing
+            .stderr
+            .contains("discipline-aarch64-unknown-linux-musl.tar.gz"),
+        "{}",
+        missing.stderr
+    );
+    assert!(!other.file(script).exists());
+    let copilot = other.run(
+        &["hook", "install", "--agent", "copilot", "--pin-sums", sums],
+        &[],
+    );
+    assert_eq!(copilot.code, 2, "{}", copilot.stdout);
+    assert!(
+        copilot.stderr.contains("`--pin-sums` is for claude-code"),
+        "{}",
+        copilot.stderr
+    );
+}

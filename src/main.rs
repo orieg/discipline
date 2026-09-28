@@ -1403,6 +1403,16 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             std::process::exit(i32::from(out.code));
         }
         HookCommand::Install(a) => {
+            let pin = match &a.pin_sums {
+                Some(_) if a.agent != discipline::hook::Agent::ClaudeCode => bail!(
+                    "`--pin-sums` is for claude-code: it pins the digests the Claude Code bootstrap checks"
+                ),
+                Some(f) => Some(discipline::hook::parse_release_sums(
+                    &std::fs::read_to_string(f)
+                        .with_context(|| format!("cannot read {}", f.display()))?,
+                )?),
+                None => None,
+            };
             if a.timeout.is_some() && discipline::hook::default_timeout(a.agent).is_none() {
                 bail!(
                     "`--timeout` is for agy, qwen and copilot, whose hook files carry a check timeout; the {} file does not",
@@ -1424,6 +1434,7 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                 results.push(discipline::hook::install_claude_bootstrap_with(
                     &discipline::hook::repo_root()?,
                     a.upgrade,
+                    pin.as_ref(),
                 )?);
             }
             let mut cloud_note = None;
@@ -1485,6 +1496,14 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                             "{} {} was written by an earlier discipline release and differs from this one's; run this command again with `--upgrade` to rewrite it",
                             style::yellow("note:"),
                             p.display()
+                        );
+                    }
+                    Installed::PinKept(p) => {
+                        println!(
+                            "{} {} pins an earlier release's digests and was kept: rewriting it without them would trust the release's own SHA256SUMS. Run this command again with `--upgrade --pin-sums <SHA256SUMS of v{}>` to move it to this release",
+                            style::yellow("note:"),
+                            p.display(),
+                            env!("CARGO_PKG_VERSION")
                         );
                     }
                     Installed::Refused(p, snippet) => {
