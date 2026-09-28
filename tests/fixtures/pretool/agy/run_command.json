@@ -1,0 +1,20 @@
+{
+  "artifactDirectoryPath": "/home/user/.agent/transcript",
+  "conversationId": "00000000-0000-0000-0000-000000000000",
+  "modelName": "model",
+  "stepIdx": 2,
+  "toolCall": {
+    "args": {
+      "CommandLine": "git -C wt2 status",
+      "Cwd": "/work/repo",
+      "WaitMsBeforeAsync": 10000,
+      "toolAction": "Checking git status",
+      "toolSummary": "Git status check"
+    },
+    "name": "run_command"
+  },
+  "transcriptPath": "/home/user/.agent/transcript",
+  "workspacePaths": [
+    "/work/repo"
+  ]
+}

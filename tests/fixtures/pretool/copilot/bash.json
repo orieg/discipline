@@ -1,0 +1,10 @@
+{
+  "cwd": "/work/repo",
+  "sessionId": "00000000-0000-0000-0000-000000000000",
+  "timestamp": 0,
+  "toolArgs": {
+    "command": "git -C wt2 status",
+    "description": "Check git status of wt2 directory"
+  },
+  "toolName": "bash"
+}

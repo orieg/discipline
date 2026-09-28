@@ -35,6 +35,9 @@ pub struct ToolCall {
     pub targets: Vec<String>,
     pub session: Option<String>,
     pub cwd: Option<PathBuf>,
+    /// The command a shell tool runs (Claude Code `Bash`, Copilot `bash`, agy
+    /// `run_command`, OpenCode `bash`).
+    pub command: Option<String>,
 }
 
 fn s(v: &serde_json::Value, pointer: &str) -> Option<String> {
@@ -92,6 +95,9 @@ pub fn parse(agent: Agent, raw: &str) -> Option<ToolCall> {
             }
             call.session = s(&v, "/session_id");
             call.cwd = s(&v, "/cwd").map(PathBuf::from);
+            if matches!(call.tool.as_str(), "Bash" | "run_shell_command" | "shell") {
+                call.command = s(&v, "/tool_input/command");
+            }
         }
         Agent::Copilot => {
             call.tool = s(&v, "/toolName").unwrap_or_default();
@@ -120,6 +126,9 @@ pub fn parse(agent: Agent, raw: &str) -> Option<ToolCall> {
             }
             call.session = s(&v, "/sessionId");
             call.cwd = s(&v, "/cwd").map(PathBuf::from);
+            if call.tool == "bash" {
+                call.command = s(&v, "/toolArgs/command");
+            }
         }
         Agent::Agy => {
             call.tool = s(&v, "/toolCall/name").unwrap_or_default();
@@ -128,6 +137,11 @@ pub fn parse(agent: Agent, raw: &str) -> Option<ToolCall> {
             call.targets.extend(target);
             call.session = s(&v, "/conversationId");
             call.cwd = s(&v, "/workspacePaths/0").map(PathBuf::from);
+            if call.tool == "run_command" {
+                call.command = s(&v, "/toolCall/args/CommandLine");
+                // The command runs in its own `Cwd`.
+                call.cwd = s(&v, "/toolCall/args/Cwd").map(PathBuf::from).or(call.cwd);
+            }
         }
         Agent::Opencode => {
             call.tool = s(&v, "/input/tool").unwrap_or_default();
@@ -138,6 +152,9 @@ pub fn parse(agent: Agent, raw: &str) -> Option<ToolCall> {
             }
             call.session = s(&v, "/input/sessionID");
             call.cwd = s(&v, "/cwd").map(PathBuf::from);
+            if call.tool == "bash" {
+                call.command = s(&v, "/output/args/command");
+            }
         }
         Agent::Cursor | Agent::Aider => return None,
     }
@@ -239,10 +256,16 @@ pub struct Scene<'a> {
     pub leases: &'a [(String, Lease)],
     /// `scope-confinement`'s `forbidden_paths` when that gate is enabled.
     pub forbidden: Option<&'a crate::guards::PathFilter>,
+    /// The branch checked out in this session's worktree (a push without a refspec
+    /// pushes it).
+    pub branch: Option<&'a str>,
 }
 
 /// Decide whether `call` may run.
 pub fn judge(call: &ToolCall, cwd: &Path, scene: &Scene) -> Verdict {
+    if let Some(cmd) = &call.command {
+        return judge_shell(cmd, cwd, scene);
+    }
     if !call.edits {
         return Verdict::Allow;
     }
@@ -374,7 +397,7 @@ pub fn run(agent: Agent, stdin: &str, observe: bool) -> HookOutput {
         let (store, here) = crate::lease::open(&cwd)?;
         let now = crate::lease::now();
         store.touch(&here.key, call.session.as_deref(), now)?;
-        if !call.edits {
+        if !call.edits && call.command.is_none() {
             return Ok((Verdict::Allow, Some(here.root)));
         }
         let leases: Vec<(String, Lease)> = store
@@ -396,11 +419,12 @@ pub fn run(agent: Agent, stdin: &str, observe: bool) -> HookOutput {
             worktrees: &wts,
             leases: &leases,
             forbidden: forbidden.as_ref(),
+            branch: here.branch.as_deref(),
         };
         Ok((judge(&call, &cwd, &scene), Some(here.root)))
     })();
     let (verdict, root) = decided.unwrap_or_else(|e| {
-        let v = if call.edits {
+        let v = if call.edits || call.command.is_some() {
             Verdict::Deny(format!(
                 "discipline could not check where this edit goes ({e:#}), so it is refused"
             ))
@@ -449,6 +473,292 @@ fn finish(agent: Agent, verdict: &Verdict, observe: bool, root: Option<&Path>) -
         }
         _ => answer(agent, verdict),
     }
+}
+
+/// The literal text of a shell word, or `None` when it expands at run time (a variable,
+/// a command substitution, a glob): such a word cannot be resolved before the command
+/// runs.
+fn literal(node: tree_sitter::Node, src: &str) -> Option<String> {
+    let text = node.utf8_text(src.as_bytes()).ok()?;
+    match node.kind() {
+        "word" | "number" => {
+            (!text.contains(['*', '?', '[', '~', '$', '`'])).then(|| text.to_string())
+        }
+        "raw_string" => Some(text.trim_matches('\'').to_string()),
+        "string" => {
+            let mut out = String::new();
+            let mut c = node.walk();
+            for child in node.named_children(&mut c) {
+                if child.kind() != "string_content" {
+                    return None;
+                }
+                out.push_str(child.utf8_text(src.as_bytes()).ok()?);
+            }
+            Some(out)
+        }
+        "concatenation" => {
+            let mut out = String::new();
+            let mut c = node.walk();
+            for child in node.named_children(&mut c) {
+                out.push_str(&literal(child, src)?);
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// Git subcommands that only read: running them against another worktree changes
+/// nothing there.
+const GIT_READ_ONLY: &[&str] = &[
+    "status",
+    "log",
+    "show",
+    "diff",
+    "rev-parse",
+    "ls-files",
+    "blame",
+    "grep",
+    "describe",
+    "shortlog",
+    "cat-file",
+    "rev-list",
+    "reflog",
+    "worktree",
+    "remote",
+    "config",
+];
+
+/// Decide whether a shell command may run: it must not `cd` into another worktree, run
+/// git against one (`-C`, `--git-dir`, `--work-tree`) other than to read, redirect output
+/// into one, or force-push a branch another worktree leases. A command that does not
+/// parse, or whose path in one of those positions expands at run time, is refused.
+pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .is_err()
+    {
+        return Verdict::Deny(
+            "discipline could not load its shell parser; the command is refused".into(),
+        );
+    }
+    let Some(tree) = parser.parse(cmd, None) else {
+        return Verdict::Deny(
+            "discipline could not parse this shell command, so it is refused".into(),
+        );
+    };
+    if tree.root_node().has_error() {
+        return Verdict::Deny(
+            "discipline could not parse this shell command, so it cannot tell where it acts; it is refused".into(),
+        );
+    }
+    let here = scene
+        .worktrees
+        .all
+        .iter()
+        .find(|(k, _)| *k == scene.worktrees.here)
+        .map(|(k, _)| k.clone());
+    // The worktree a path is in when it is not this session's, else None.
+    let foreign = |p: &str, dir: &Path| -> Option<(String, PathBuf)> {
+        let path = resolve(p, dir);
+        let (key, root) = scene.worktrees.owner(&path)?;
+        (Some(key) != here.as_ref()).then(|| (key.clone(), root.clone()))
+    };
+    let dynamic = |what: &str| {
+        Verdict::Deny(format!(
+            "the {what} in this command expands when it runs, so discipline cannot tell which worktree it acts on; it is refused. Use a literal path"
+        ))
+    };
+    let other_wt = |what: &str, key: &str, root: &Path| {
+        Verdict::Deny(format!(
+            "this command {what} worktree `{key}` ({}), not this session's worktree `{}`. Each session works only in its own worktree; ask the session working in `{key}`, or use a worktree of your own",
+            root.display(),
+            scene.worktrees.here
+        ))
+    };
+    // Commands in source order; `cd` moves the directory the later ones run in.
+    let mut dir = cwd.to_path_buf();
+    let mut stack = vec![tree.root_node()];
+    let mut nodes = Vec::new();
+    while let Some(n) = stack.pop() {
+        nodes.push(n);
+        let mut c = n.walk();
+        let children: Vec<_> = n.named_children(&mut c).collect();
+        stack.extend(children.into_iter().rev());
+    }
+    for n in nodes {
+        match n.kind() {
+            "file_redirect" => {
+                let is_write = n
+                    .utf8_text(cmd.as_bytes())
+                    .map(|t| {
+                        t.trim_start_matches(char::is_numeric).starts_with('>')
+                            || t.starts_with("&>")
+                    })
+                    .unwrap_or(false);
+                if !is_write {
+                    continue;
+                }
+                let Some(dest) = n.child_by_field_name("destination") else {
+                    continue;
+                };
+                let Some(target) = literal(dest, cmd) else {
+                    return dynamic("redirect target");
+                };
+                if target.starts_with("/dev/") {
+                    continue;
+                }
+                if let Some((key, root)) = foreign(&target, &dir) {
+                    return other_wt("writes into", &key, &root);
+                }
+            }
+            "command" => {
+                let Some(name) = n.child_by_field_name("name") else {
+                    continue;
+                };
+                let Some(name) = name.named_child(0).and_then(|w| literal(w, cmd)) else {
+                    continue;
+                };
+                let mut c = n.walk();
+                let args: Vec<tree_sitter::Node> =
+                    n.children_by_field_name("argument", &mut c).collect();
+                let arg = |i: usize| args.get(i).map(|a| literal(*a, cmd));
+                match name.as_str() {
+                    "cd" | "pushd" => {
+                        let Some(target) = arg(0) else {
+                            continue;
+                        };
+                        let Some(target) = target else {
+                            return dynamic("`cd` directory");
+                        };
+                        if target == "-" {
+                            continue;
+                        }
+                        if let Some((key, root)) = foreign(&target, &dir) {
+                            return other_wt("changes into", &key, &root);
+                        }
+                        dir = resolve(&target, &dir);
+                    }
+                    "git" => {
+                        let mut i = 0;
+                        let mut git_dir = dir.clone();
+                        let mut elsewhere: Option<(String, PathBuf)> = None;
+                        let mut sub = None;
+                        while i < args.len() {
+                            let Some(a) = arg(i).flatten() else {
+                                if sub.is_none() {
+                                    return dynamic("git option");
+                                }
+                                i += 1;
+                                continue;
+                            };
+                            if sub.is_some() {
+                                i += 1;
+                                continue;
+                            }
+                            let value = |j: usize| arg(j).flatten();
+                            let (opt, val) = match a.split_once('=') {
+                                Some((o, v)) if o.starts_with("--") => {
+                                    (o.to_string(), Some(v.to_string()))
+                                }
+                                _ => (a.clone(), None),
+                            };
+                            match opt.as_str() {
+                                "-C" | "--git-dir" | "--work-tree" => {
+                                    let v = match val {
+                                        Some(v) => v,
+                                        None => {
+                                            i += 1;
+                                            match value(i) {
+                                                Some(v) => v,
+                                                None => return dynamic("git directory"),
+                                            }
+                                        }
+                                    };
+                                    if let Some(f) = foreign(&v, &git_dir) {
+                                        elsewhere = Some(f);
+                                    }
+                                    if opt == "-C" {
+                                        git_dir = resolve(&v, &git_dir);
+                                    }
+                                }
+                                o if o.starts_with('-') => {}
+                                _ => sub = Some(a.clone()),
+                            }
+                            i += 1;
+                        }
+                        let sub = sub.unwrap_or_default();
+                        if let Some((key, root)) = elsewhere {
+                            if !GIT_READ_ONLY.contains(&sub.as_str()) {
+                                return other_wt(&format!("runs `git {sub}` in"), &key, &root);
+                            }
+                        }
+                        if sub == "push" {
+                            if let Some(v) = judge_push(&args, cmd, scene) {
+                                return v;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    Verdict::Allow
+}
+
+/// A force push (`-f`, `--force`, `--force-with-lease`, a `+` refspec) of a branch
+/// another worktree's live lease claims. Without a refspec the push is of this
+/// worktree's branch.
+fn judge_push(args: &[tree_sitter::Node], cmd: &str, scene: &Scene) -> Option<Verdict> {
+    let words: Vec<Option<String>> = args.iter().map(|a| literal(*a, cmd)).collect();
+    let after: Vec<&Option<String>> = words
+        .iter()
+        .skip_while(|w| w.as_deref() != Some("push"))
+        .skip(1)
+        .collect();
+    let mut force = false;
+    let mut positional = Vec::new();
+    for w in &after {
+        match w.as_deref() {
+            None => return Some(Verdict::Deny(
+                "a `git push` argument in this command expands when it runs, so discipline cannot tell which branch it pushes; it is refused".into(),
+            )),
+            Some("-f" | "--force" | "--force-if-includes") => force = true,
+            Some(o) if o.starts_with("--force-with-lease") => force = true,
+            Some(o) if o.starts_with('-') => {}
+            Some(p) => positional.push(p.to_string()),
+        }
+    }
+    let mut branches: Vec<String> = Vec::new();
+    for spec in positional.iter().skip(1) {
+        let plus = spec.starts_with('+');
+        let spec = spec.trim_start_matches('+');
+        let dst = spec.rsplit_once(':').map_or(spec, |(_, d)| d);
+        let dst = dst.strip_prefix("refs/heads/").unwrap_or(dst);
+        if force || plus {
+            branches.push(dst.to_string());
+        }
+    }
+    if positional.len() <= 1 && force {
+        branches.extend(scene.branch.map(str::to_string));
+    }
+    for b in branches {
+        if let Some((key, lease)) = scene
+            .leases
+            .iter()
+            .find(|(k, l)| *k != scene.worktrees.here && l.branches.contains(&b))
+        {
+            return Some(Verdict::Deny(format!(
+                "this command force-pushes `{b}`, which worktree `{key}` has leased ({} session {}). Hand the work over, or take the branch with `discipline lease take --branch {b} --steal`",
+                lease.agent,
+                if lease.session.is_empty() { "-" } else { &lease.session }
+            )));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -529,6 +839,7 @@ mod tests {
             targets: vec![target.to_string()],
             session: Some(session.to_string()),
             cwd: None,
+            command: None,
         }
     }
 
@@ -543,6 +854,7 @@ mod tests {
             worktrees: &wts,
             leases: &[],
             forbidden: None,
+            branch: None,
         };
         let cwd = main.canonicalize().unwrap();
         assert_eq!(
@@ -598,6 +910,7 @@ mod tests {
             worktrees: &wts,
             leases: &leases,
             forbidden: None,
+            branch: None,
         };
         let v = judge(&edit("a.txt", "s-me"), &cwd, &scene);
         assert!(
@@ -614,6 +927,7 @@ mod tests {
             worktrees: &wts,
             leases: &leases,
             forbidden: None,
+            branch: None,
         };
         assert_eq!(judge(&edit("a.txt", "s-me"), &cwd, &scene), Verdict::Allow);
     }
@@ -627,6 +941,7 @@ mod tests {
             worktrees: &wts,
             leases: &[],
             forbidden: Some(&f),
+            branch: None,
         };
         let cwd = d.path().canonicalize().unwrap();
         assert!(matches!(
@@ -652,5 +967,99 @@ mod tests {
         assert_eq!((a.code, j["decision"].as_str()), (0, Some("deny")));
         assert_eq!(answer(Agent::Opencode, &deny).code, 1);
         assert_eq!(answer(Agent::ClaudeCode, &Verdict::Allow).code, 0);
+    }
+
+    #[test]
+    fn shell_commands_are_judged_by_what_they_touch() {
+        let d = tempfile::tempdir().unwrap();
+        let main = d.path().join("main");
+        let other = main.join("wt2");
+        std::fs::create_dir_all(&other).unwrap();
+        let wts = scene_with(&[("main", &main), ("wt2", &other)], "main");
+        let lease = Lease {
+            agent: "copilot".into(),
+            session: "s2".into(),
+            worktree: "/w".into(),
+            branches: vec!["feat/stack".into(), "work".into()],
+            taken_at: 0,
+            heartbeat: 0,
+            ttl_secs: 60,
+        };
+        let leases = vec![("wt2".to_string(), lease)];
+        let scene = Scene {
+            worktrees: &wts,
+            leases: &leases,
+            forbidden: None,
+            branch: Some("work"),
+        };
+        let cwd = main.canonicalize().unwrap();
+        let o = other.canonicalize().unwrap();
+        let o = o.to_str().unwrap();
+        let refused = |c: &str| matches!(judge_shell(c, &cwd, &scene), Verdict::Deny(_));
+        for c in [
+            "cd wt2",
+            &format!("cd '{o}' && ls"),
+            "true && (cd wt2/src)",
+            "git -C wt2 commit -m x",
+            &format!("git -C \"{o}\" reset --hard"),
+            "git --git-dir=wt2/.git --work-tree=wt2 checkout -b x",
+            "echo hi > wt2/escape.txt",
+            "echo hi >> wt2/log",
+            "cd src && echo x > ../wt2/y",
+            "cd \"$OTHER\"",
+            "git -C $DIR commit",
+            "echo x > \"$F\"",
+            "git push --force origin feat/stack",
+            "git push origin +feat/stack",
+            "git push -f origin HEAD:refs/heads/feat/stack",
+            "git push --force-with-lease",
+            "echo ( unbalanced",
+        ] {
+            assert!(refused(c), "allowed: {c}");
+        }
+        for c in [
+            "ls wt2",
+            "cat wt2/README.md",
+            "git -C wt2 status",
+            "git -C wt2 log --oneline -3",
+            "cd src && cargo test",
+            "echo hi > own.txt 2>/dev/null",
+            "git push origin feat/stack",
+            "git push --force origin feat/mine",
+            "cd -",
+            "grep -r 'cd wt2' .",
+        ] {
+            assert_eq!(judge_shell(c, &cwd, &scene), Verdict::Allow, "refused: {c}");
+        }
+    }
+
+    #[test]
+    fn shell_payloads_carry_their_command() {
+        let bash = parse(Agent::ClaudeCode, &fixture("claude-code/bash.json")).unwrap();
+        assert!(bash.command.is_some());
+        let cases = [
+            (
+                Agent::Copilot,
+                r#"{"toolName":"bash","toolArgs":{"command":"git -C wt2 status"},"sessionId":"s","cwd":"/r"}"#,
+            ),
+            (
+                Agent::Agy,
+                r#"{"toolCall":{"name":"run_command","args":{"CommandLine":"git -C wt2 status","Cwd":"/r/sub"}},"conversationId":"s","workspacePaths":["/r"]}"#,
+            ),
+            (
+                Agent::Opencode,
+                r#"{"input":{"tool":"bash","sessionID":"s"},"output":{"args":{"command":"git -C wt2 status"}},"cwd":"/r"}"#,
+            ),
+        ];
+        for (agent, raw) in cases {
+            let c = parse(agent, raw).unwrap();
+            assert_eq!(c.command.as_deref(), Some("git -C wt2 status"), "{agent:?}");
+        }
+        let agy = parse(Agent::Agy, cases[1].1).unwrap();
+        assert_eq!(
+            agy.cwd.as_deref(),
+            Some(Path::new("/r/sub")),
+            "agy runs the command in its Cwd"
+        );
     }
 }

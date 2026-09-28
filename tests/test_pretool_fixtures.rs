@@ -61,6 +61,30 @@ const PAYLOADS: &[(&str, &str, &str, &str, &str, &str)] = &[
         "/input/sessionID",
         "",
     ),
+    (
+        "copilot/bash.json",
+        "/toolName",
+        "bash",
+        "/toolArgs/command",
+        "/sessionId",
+        "/cwd",
+    ),
+    (
+        "agy/run_command.json",
+        "/toolCall/name",
+        "run_command",
+        "/toolCall/args/CommandLine",
+        "/conversationId",
+        "/toolCall/args/Cwd",
+    ),
+    (
+        "opencode/bash.json",
+        "/input/tool",
+        "bash",
+        "/output/args/command",
+        "/input/sessionID",
+        "",
+    ),
 ];
 
 #[test]
@@ -79,7 +103,7 @@ fn each_recorded_payload_carries_the_tool_its_target_and_the_session() {
         }
         // Every edit target was recorded as an absolute path, which is what lets the
         // check tell one worktree from another without guessing a base directory.
-        if !target_ptr.ends_with("command") {
+        if !target_ptr.ends_with("command") && !target_ptr.ends_with("CommandLine") {
             assert!(
                 target.starts_with('/'),
                 "{rel}: target {target} is not absolute"

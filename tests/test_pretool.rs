@@ -210,10 +210,9 @@ fn a_check_that_cannot_be_made_refuses_the_edit() {
     );
     // A payload that is not JSON is refused as well.
     assert_eq!(pretool(&main, "claude-code", "not json", &[]).code, 2);
-    // A shell command is not an edit: this check does not refuse it (shell commands are
-    // a later step), even with a lease it cannot read.
+    // A shell command is judged too, so a lease it cannot read refuses it as well.
     let bash = fixture("claude-code/bash.json").replace("/work/repo", main.to_str().unwrap());
-    assert_eq!(pretool(&main, "claude-code", &bash, &[]).code, 0);
+    assert_eq!(pretool(&main, "claude-code", &bash, &[]).code, 2);
 }
 
 #[test]
@@ -227,4 +226,95 @@ fn an_edit_outside_any_repository_is_not_this_checks_concern() {
         &[],
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
+}
+
+/// The recorded shell payload of `agent`, its command replaced by `command`.
+fn shell(agent: &str, cwd: &Path, command: &str) -> String {
+    let (rel, recorded) = match agent {
+        "claude-code" => ("claude-code/bash.json", "echo hi > b.txt"),
+        "copilot" => ("copilot/bash.json", "git -C wt2 status"),
+        "agy" => ("agy/run_command.json", "git -C wt2 status"),
+        "opencode" => ("opencode/bash.json", "git -C wt2 status"),
+        _ => unreachable!(),
+    };
+    let text = fixture(rel);
+    assert!(text.contains(recorded), "{rel}");
+    text.replace(recorded, command)
+        .replace("/work/repo", cwd.to_str().unwrap())
+}
+
+#[test]
+fn each_agent_is_refused_a_shell_command_that_acts_on_another_worktree() {
+    let (_repo, main, _wt2) = two_worktrees();
+    for (agent, _) in AGENTS {
+        for refused in [
+            "git -C wt2 commit -m x",
+            "echo hi > wt2/escape.txt",
+            "cd wt2",
+        ] {
+            let o = pretool(&main, agent, &shell(agent, &main, refused), &[]);
+            assert!(
+                denied(agent, &o),
+                "{agent} `{refused}`: {} {} {}",
+                o.code,
+                o.stdout,
+                o.stderr
+            );
+            assert!(
+                format!("{}{}", o.stdout, o.stderr).contains("worktree `wt2`"),
+                "{agent} `{refused}`"
+            );
+        }
+        for allowed in ["git -C wt2 status", "echo hi > own.txt", "ls wt2"] {
+            let o = pretool(&main, agent, &shell(agent, &main, allowed), &[]);
+            assert!(
+                !denied(agent, &o) && o.code == 0,
+                "{agent} `{allowed}`: {} {} {}",
+                o.code,
+                o.stdout,
+                o.stderr
+            );
+        }
+    }
+}
+
+#[test]
+fn a_force_push_of_a_branch_another_worktree_leased_is_refused() {
+    let (repo, main, wt2) = two_worktrees();
+    repo.git(&["branch", "feat/stack"]);
+    let take = repo.run_in_dir(
+        "wt2",
+        &[
+            "lease",
+            "take",
+            "--agent",
+            "copilot",
+            "--session",
+            "s2",
+            "--branch",
+            "feat/stack",
+        ],
+        &[],
+    );
+    assert_eq!(take.code, 0, "{}", take.stderr);
+    let _ = wt2;
+    let o = pretool(
+        &main,
+        "claude-code",
+        &shell("claude-code", &main, "git push --force origin feat/stack"),
+        &[],
+    );
+    assert_eq!(o.code, 2, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("worktree `wt2` has leased"),
+        "{}",
+        o.stderr
+    );
+    let plain = pretool(
+        &main,
+        "claude-code",
+        &shell("claude-code", &main, "git push origin feat/stack"),
+        &[],
+    );
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
 }

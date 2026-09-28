@@ -639,7 +639,7 @@ pub fn config_for_opts(
                         }]
                     }],
                     "PreToolUse": [{
-                        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+                        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
                         "hooks": [{ "type": "command", "command": pre }]
                     }],
                     "PostToolUse": [{
@@ -774,7 +774,7 @@ const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
 
 export const Discipline = async ({{ $, directory }}) => ({{
   \"tool.execute.before\": async (input, output) => {{
-    if (!EDIT_TOOLS.includes(input.tool)) return
+    if (!EDIT_TOOLS.includes(input.tool) && input.tool !== \"bash\") return
     const call = new Response(JSON.stringify({{ input, output, cwd: directory }}))
     const r = await $`{pre} < ${{call}}`.cwd(directory).nothrow().quiet()
     if (r.exitCode !== 0) {{
@@ -954,7 +954,7 @@ fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<&str>) -> String {
     if let Some(pre) = pre {
         hooks["preToolUse"] = serde_json::json!([{
             "type": "command",
-            "matcher": "create|edit|str_replace_editor|apply_patch",
+            "matcher": "create|edit|str_replace_editor|apply_patch|bash",
             "bash": pre,
             "timeoutSec": 30
         }]);
@@ -2102,6 +2102,23 @@ mod tests {
                 "{agent:?}"
             );
         }
+        // Shell tools reach the check too (Step 3c).
+        let (_, claude) = config_for_opts(Agent::ClaudeCode, false, None);
+        let v: serde_json::Value = serde_json::from_str(&claude).unwrap();
+        assert!(v["hooks"]["PreToolUse"][0]["matcher"]
+            .as_str()
+            .unwrap()
+            .split('|')
+            .any(|m| m == "Bash"));
+        let (_, copilot) = config_for_opts(Agent::Copilot, false, None);
+        let v: serde_json::Value = serde_json::from_str(&copilot).unwrap();
+        assert!(v["hooks"]["preToolUse"][0]["matcher"]
+            .as_str()
+            .unwrap()
+            .split('|')
+            .any(|m| m == "bash"));
+        let (_, opencode) = config_for_opts(Agent::Opencode, false, None);
+        assert!(opencode.contains(r#"input.tool !== "bash""#));
         // Contracts not yet observed live get no entry.
         for agent in [Agent::Codex, Agent::Qwen, Agent::Cursor, Agent::Aider] {
             assert!(pre(agent, false).is_none(), "{agent:?}");
