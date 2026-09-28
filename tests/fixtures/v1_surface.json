@@ -983,6 +983,7 @@
       "ci-integrity/discipline-action-policy-from-weakened",
       "ci-integrity/discipline-action-suite-changed",
       "ci-integrity/discipline-run-advisory",
+      "ci-integrity/discipline-version-changed",
       "ci-integrity/exit-code-masked",
       "ci-integrity/frozen-install-flag-removed",
       "ci-integrity/install-command-weakened",

@@ -1133,6 +1133,12 @@ pub struct Protection {
     pub classic_enforce_admins: Option<bool>,
     /// Finding ids whose settings this token could not read.
     pub hidden: BTreeSet<&'static str>,
+    /// Merges need every review conversation resolved (GitHub, GitLab). `None` when not
+    /// visible, or on a forge without such a rule (Gitea, Forgejo).
+    pub thread_resolution_required: Option<bool>,
+    /// Gitea / Forgejo: the rule's protected file patterns, which a pull request cannot
+    /// change (`None` when not visible).
+    pub protected_file_patterns: Option<Vec<String>>,
 }
 
 fn get(api: &dyn ForgeApi, forge: &Forge, path: &str) -> Result<serde_json::Value, String> {
@@ -1214,7 +1220,10 @@ pub fn github_protection(
     branch: &str,
 ) -> Result<Protection, String> {
     let repo = &forge.repo;
-    let mut p = Protection::default();
+    let mut p = Protection {
+        thread_resolution_required: Some(false),
+        ..Protection::default()
+    };
     let rules = get(api, forge, &format!("repos/{repo}/rules/branches/{branch}"))?;
     let rules = rules
         .as_array()
@@ -1269,6 +1278,9 @@ pub fn github_protection(
                 p.code_owner_review |= flag("require_code_owner_review");
                 p.last_push_approval |= flag("require_last_push_approval");
                 p.dismiss_stale_reviews |= flag("dismiss_stale_reviews_on_push");
+                if flag("required_review_thread_resolution") {
+                    p.thread_resolution_required = Some(true);
+                }
             }
             "required_signatures" => p.signatures_required = true,
             _ => {}
@@ -1354,6 +1366,9 @@ pub fn github_protection(
                     p.signatures_required = true;
                 }
                 p.classic_enforce_admins = enabled("enforce_admins");
+                if enabled("required_conversation_resolution") == Some(true) {
+                    p.thread_resolution_required = Some(true);
+                }
             }
             other => {
                 // The summary still lists the required contexts to non-admins.
@@ -1465,6 +1480,16 @@ pub fn gitea_protection(
                 bypass.push("merge allowlist".to_string());
             }
             p.bypass = Some(bypass);
+            p.protected_file_patterns = Some(
+                r.get("protected_file_patterns")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            );
             Ok(p)
         }
         None => {
@@ -1503,6 +1528,7 @@ pub fn gitea_protection(
                 "bypass",
                 "code-owner-review",
                 "last-push-approval",
+                "workflow-protection",
             ]);
             p.bypass = Some(Vec::new());
             Ok(p)
@@ -1524,6 +1550,9 @@ pub fn gitlab_protection(
                 .get("only_allow_merge_if_pipeline_succeeds")
                 .and_then(|v| v.as_bool()),
         ),
+        thread_resolution_required: project
+            .get("only_allow_merge_if_all_discussions_are_resolved")
+            .and_then(|v| v.as_bool()),
         ..Protection::default()
     };
     match project.get("merge_method").and_then(|v| v.as_str()) {
@@ -1901,7 +1930,166 @@ pub fn protection_findings(
             "signed commits are not required (optional)"
         },
     ));
+    match p.thread_resolution_required {
+        Some(true) => out.push(Finding::new(
+            "thread-resolution",
+            Status::Pass,
+            "merges require every review conversation to be resolved",
+        )),
+        Some(false) => out.push(
+            Finding::new(
+                "thread-resolution",
+                Status::Info,
+                "merges do not require resolved review conversations (optional)",
+            )
+            .fix(match kind {
+                ForgeKind::GitLab => "Settings → Merge requests → All threads must be resolved (`only_allow_merge_if_all_discussions_are_resolved`).",
+                _ => "Require conversation resolution in the branch ruleset (`required_review_thread_resolution`) or classic protection.",
+            }),
+        ),
+        None => {}
+    }
+    if matches!(kind, ForgeKind::Gitea | ForgeKind::Forgejo) {
+        let mut workflows: Vec<&str> = jobs.iter().map(|j| j.workflow.as_str()).collect();
+        workflows.sort_unstable();
+        workflows.dedup();
+        match &p.protected_file_patterns {
+            _ if workflows.is_empty() => {}
+            None if p.hidden.contains("workflow-protection") => {
+                out.push(hidden("workflow-protection"))
+            }
+            None => {}
+            Some(patterns) => {
+                // Gitea and Forgejo match these globs with `/` as a separator.
+                let covered = |path: &str| {
+                    patterns.iter().any(|pat| {
+                        globset::GlobBuilder::new(pat)
+                            .literal_separator(true)
+                            .build()
+                            .map(|g| g.compile_matcher().is_match(path))
+                            .unwrap_or(false)
+                    })
+                };
+                let open: Vec<&str> = workflows.iter().copied().filter(|w| !covered(w)).collect();
+                out.push(if open.is_empty() {
+                    Finding::new(
+                        "workflow-protection",
+                        Status::Pass,
+                        "the workflows that run discipline are protected files",
+                    )
+                } else {
+                    Finding::new(
+                        "workflow-protection",
+                        Status::Warn,
+                        format!(
+                            "{} can be changed by the pull request it judges: a pull-request workflow runs from the head",
+                            open.join(", ")
+                        ),
+                    )
+                    .fix("Add the workflow directories (`.gitea/workflows/*`, `.forgejo/workflows/*`, `.github/workflows/*`) to the branch rule's protected file patterns.")
+                });
+            }
+        }
+    }
     out
+}
+
+/// The repository role of `login` and whether it is a site administrator, as far as the
+/// token can see. GitHub, Gitea and Forgejo: `collaborators/{login}/permission`; GitLab:
+/// the user's membership, inherited ones included.
+pub fn agent_permission(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    login: &str,
+) -> Result<(String, bool), String> {
+    match forge.kind {
+        ForgeKind::GitLab => {
+            let users = get(api, forge, &format!("users?username={login}"))?;
+            let Some(user) = users.as_array().and_then(|u| u.first()) else {
+                return Ok(("none".into(), false));
+            };
+            let admin = user.get("is_admin").and_then(|v| v.as_bool()) == Some(true);
+            let uid = user.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+            let role = match api.get(
+                forge,
+                &format!(
+                    "projects/{}/members/all/{uid}",
+                    gitlab_project_id(&forge.repo)
+                ),
+            )? {
+                None => "none".to_string(),
+                Some(m) => match m.get("access_level").and_then(|v| v.as_u64()) {
+                    Some(50..) => "owner",
+                    Some(40..=49) => "maintainer",
+                    Some(30..=39) => "developer",
+                    Some(_) => "reporter",
+                    None => "unknown",
+                }
+                .to_string(),
+            };
+            Ok((role, admin))
+        }
+        _ => match api.get(
+            forge,
+            &format!("repos/{}/collaborators/{login}/permission", forge.repo),
+        )? {
+            None => Ok(("none".into(), false)),
+            Some(v) => {
+                let role = v
+                    .get("role_name")
+                    .and_then(|r| r.as_str())
+                    .filter(|r| !r.is_empty())
+                    .or_else(|| v.get("permission").and_then(|r| r.as_str()))
+                    .unwrap_or("unknown")
+                    .to_ascii_lowercase();
+                let admin = ["site_admin", "is_admin"].iter().any(|k| {
+                    v.pointer(&format!("/user/{k}")).and_then(|b| b.as_bool()) == Some(true)
+                });
+                Ok((role, admin))
+            }
+        },
+    }
+}
+
+/// `agent-permission`: an agent login that is a site administrator or holds admin, owner,
+/// maintain or maintainer rights can act as, or rewrite the comments of, the owner whose
+/// ratification `ratified-paths` reads.
+pub fn agent_permission_findings(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    agent_logins: &[String],
+) -> Vec<Finding> {
+    agent_logins
+        .iter()
+        .map(|login| match agent_permission(api, forge, login) {
+            Err(e) => Finding::new(
+                "agent-permission",
+                Status::Unknown,
+                format!("could not read the permissions of agent login `{login}`: {e}"),
+            )
+            .fix(access_hint(forge.kind, &e)),
+            Ok((role, admin)) => {
+                let privileged = matches!(role.as_str(), "admin" | "owner" | "maintain" | "maintainer");
+                if admin || privileged {
+                    Finding::new(
+                        "agent-permission",
+                        Status::Fail,
+                        format!(
+                            "agent login `{login}` is {}; it could act as, or edit the comments of, the owner whose ratification `ratified-paths` reads",
+                            if admin { "a site administrator".to_string() } else { format!("a repository {role}") }
+                        ),
+                    )
+                    .fix("Give agent accounts write access at most, and never site-administrator rights.")
+                } else {
+                    Finding::new(
+                        "agent-permission",
+                        Status::Pass,
+                        format!("agent login `{login}` has `{role}` access and is not an administrator"),
+                    )
+                }
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2012,8 +2200,10 @@ pub fn run(input: &DoctorInput) -> Report {
     // Whether the push run can read a merged pull request's body (`merged-pr-body` in
     // `directives.sources`, on by default): then a squash or rebase merge is a token
     // question, not a lost review record.
-    let merged_source_on = read(root, "discipline.toml")
-        .and_then(|c| crate::config::DisciplineConfig::from_toml_str(&c).ok())
+    let repo_config = read(root, "discipline.toml")
+        .and_then(|c| crate::config::DisciplineConfig::from_toml_str(&c).ok());
+    let merged_source_on = repo_config
+        .as_ref()
         .map(|cfg| cfg.directives.sources.iter().any(|s| s == "merged-pr-body"))
         // No file: the built-in default keeps the source on.
         .unwrap_or(true);
@@ -2210,6 +2400,19 @@ pub fn run(input: &DoctorInput) -> Report {
                             )
                             .fix(access_hint(forge.kind, &e)),
                         ),
+                    }
+                    // `ratified-paths` trusts comment authorship: an agent login with
+                    // administrator rights could act as, or edit the comments of, the owner.
+                    if let Some(rp) = repo_config
+                        .as_ref()
+                        .map(|c| &c.gates.ratified_paths)
+                        .filter(|rp| rp.enabled && !rp.agent_logins.is_empty())
+                    {
+                        findings.extend(agent_permission_findings(
+                            input.api,
+                            forge,
+                            &rp.agent_logins,
+                        ));
                     }
                 }
             }
@@ -2856,6 +3059,45 @@ jobs:
     }
 
     #[test]
+    fn github_thread_resolution_is_read_from_rulesets_and_classic_protection() {
+        let f = forge(ForgeKind::GitHub);
+        // Neither: readable, and off.
+        let none = github(full_rules(), serde_json::json!([]));
+        assert_eq!(
+            github_protection(&none, &f, "main")
+                .unwrap()
+                .thread_resolution_required,
+            Some(false)
+        );
+        // A ruleset's pull_request rule.
+        let mut rules = full_rules();
+        rules[3]["parameters"]["required_review_thread_resolution"] = serde_json::json!(true);
+        let ruleset = github(rules, serde_json::json!([]));
+        assert_eq!(
+            github_protection(&ruleset, &f, "main")
+                .unwrap()
+                .thread_resolution_required,
+            Some(true)
+        );
+        // Classic protection.
+        let mut classic = github(serde_json::json!([]), serde_json::json!([]));
+        classic.responses.insert(
+            "github:repos/o/r/branches/main".into(),
+            serde_json::json!({"protected": true, "protection": {"enabled": true}}),
+        );
+        classic.responses.insert(
+            "github:repos/o/r/branches/main/protection".into(),
+            serde_json::json!({"required_conversation_resolution": {"enabled": true}}),
+        );
+        assert_eq!(
+            github_protection(&classic, &f, "main")
+                .unwrap()
+                .thread_resolution_required,
+            Some(true)
+        );
+    }
+
+    #[test]
     fn classic_protection_is_merged_and_unreadable_classic_is_an_error() {
         let mut gh = github(serde_json::json!([]), serde_json::json!([]));
         gh.responses.insert(
@@ -2940,6 +3182,134 @@ jobs:
         let get = |id: &str| f.iter().find(|x| x.id == id).unwrap().status;
         assert_eq!(get("force-push"), Status::Fail);
         assert_eq!(get("required-check"), Status::Fail);
+    }
+
+    #[test]
+    fn workflow_files_must_be_protected_on_gitea_and_forgejo() {
+        let jobs = analyse_workflows(&wf(WF), false).jobs;
+        assert!(!jobs.is_empty());
+        let workflow = jobs[0].workflow.clone();
+        let status = |patterns: &str| {
+            let mut api = CannedApi::default();
+            let mut rule = forgejo_rule();
+            rule[0]["protected_file_patterns"] = serde_json::json!(patterns);
+            api.responses
+                .insert("gitea:repos/o/r/branch_protections".into(), rule);
+            let p = gitea_protection(&api, &forge(ForgeKind::Gitea), "main").unwrap();
+            let f = protection_findings(ForgeKind::Gitea, &p, &jobs);
+            f.iter()
+                .find(|x| x.id == "workflow-protection")
+                .map(|x| x.status)
+        };
+        let dir = workflow.rsplit_once('/').unwrap().0.to_string();
+        assert_eq!(status(""), Some(Status::Warn), "{workflow}");
+        assert_eq!(status("docs/*"), Some(Status::Warn));
+        assert_eq!(status(&format!("{dir}/*;docs/*")), Some(Status::Pass));
+        // `*` does not cross `/` on these forges.
+        assert_eq!(status("*"), Some(Status::Warn));
+        // GitHub has no such setting: no finding.
+        let p = Protection::default();
+        assert!(!protection_findings(ForgeKind::GitHub, &p, &jobs)
+            .iter()
+            .any(|x| x.id == "workflow-protection"));
+    }
+
+    #[test]
+    fn a_native_thread_resolution_rule_is_reported_on_github_and_gitlab() {
+        let status = |kind: ForgeKind, required: Option<bool>| {
+            let p = Protection {
+                thread_resolution_required: required,
+                ..Protection::default()
+            };
+            protection_findings(kind, &p, &[])
+                .iter()
+                .find(|x| x.id == "thread-resolution")
+                .map(|x| x.status)
+        };
+        assert_eq!(status(ForgeKind::GitHub, Some(true)), Some(Status::Pass));
+        assert_eq!(status(ForgeKind::GitLab, Some(false)), Some(Status::Info));
+        assert_eq!(status(ForgeKind::Gitea, None), None);
+        // GitLab reads it from the project.
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "gitlab:projects/o%2Fr".into(),
+            serde_json::json!({"only_allow_merge_if_all_discussions_are_resolved": true, "merge_method": "merge"}),
+        );
+        api.responses.insert(
+            "gitlab:projects/o%2Fr/protected_branches/main".into(),
+            serde_json::Value::Null,
+        );
+        let p = gitlab_protection(&api, &forge(ForgeKind::GitLab), "main").unwrap();
+        assert_eq!(p.thread_resolution_required, Some(true));
+    }
+
+    #[test]
+    fn an_agent_login_with_administrator_rights_fails() {
+        let perm = |kind: ForgeKind, body: serde_json::Value| {
+            let mut api = CannedApi::default();
+            api.responses.insert(
+                format!("{}:repos/o/r/collaborators/agent/permission", kind.label()),
+                body,
+            );
+            agent_permission_findings(&api, &forge(kind), &["agent".into()])[0].status
+        };
+        use serde_json::json;
+        assert_eq!(
+            perm(
+                ForgeKind::GitHub,
+                json!({"permission": "admin", "role_name": "admin"})
+            ),
+            Status::Fail
+        );
+        assert_eq!(
+            perm(
+                ForgeKind::GitHub,
+                json!({"permission": "write", "role_name": "maintain"})
+            ),
+            Status::Fail
+        );
+        assert_eq!(
+            perm(
+                ForgeKind::GitHub,
+                json!({"permission": "write", "role_name": "write"})
+            ),
+            Status::Pass
+        );
+        assert_eq!(
+            perm(
+                ForgeKind::Gitea,
+                json!({"permission": "write", "role_name": "write", "user": {"is_admin": true}})
+            ),
+            Status::Fail,
+            "a site administrator can act as any user"
+        );
+        assert_eq!(
+            perm(ForgeKind::Forgejo, serde_json::Value::Null),
+            Status::Pass
+        );
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "github:repos/o/r/collaborators/agent/permission".into(),
+            json!({"__error": "HTTP 403"}),
+        );
+        assert_eq!(
+            agent_permission_findings(&api, &forge(ForgeKind::GitHub), &["agent".into()])[0].status,
+            Status::Unknown
+        );
+        // GitLab: membership access level 40 is a maintainer.
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "gitlab:users?username=agent".into(),
+            json!([{"id": 9, "is_admin": false}]),
+        );
+        api.responses.insert(
+            "gitlab:projects/o%2Fr/members/all/9".into(),
+            json!({"access_level": 40}),
+        );
+        assert_eq!(
+            agent_permission_findings(&api, &forge(ForgeKind::GitLab), &["agent".into()])[0].status,
+            Status::Fail
+        );
     }
 
     #[test]

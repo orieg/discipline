@@ -221,6 +221,70 @@ fn doctor_reads_gitea_protection_with_the_gitea_token_header() {
     assert!(!run.stdout.contains("tok-secret-123") && !run.stderr.contains("tok-secret-123"));
 }
 
+/// `ratified-paths` trusts comment authorship, so an agent login with administrator
+/// rights fails `doctor`, and an unprotected workflow that runs discipline is named.
+#[test]
+fn doctor_checks_what_owner_ratification_relies_on_gitea() {
+    let config = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.ratified-paths]\nenabled = true\nprotected_paths = [\"scripts/**\"]\nratifiers = [\"owner\"]\nagent_logins = [\"agent\"]\n";
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (".gitea/workflows/ci.yml", WORKFLOW),
+            (
+                ".gitea/CODEOWNERS",
+                CODEOWNERS.replace(".github", ".gitea").as_str(),
+            ),
+            ("discipline.toml", config),
+        ],
+        "base",
+    );
+    let run = |patterns: &str, agent: &str| {
+        let rule = format!(
+            r#"[{{"rule_name":"main","enable_push":false,"enable_status_check":true,"status_check_contexts":["CI / ci-gate (pull_request)"],"block_on_outdated_branch":true,"block_admin_merge_override":true,"protected_file_patterns":"{patterns}"}}]"#
+        );
+        let api = FakeForge::start();
+        api.serve_raw("repos/o/r/branch_protections", 200, &[], &rule);
+        api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));
+        api.serve_raw("repos/o/r/collaborators/agent/permission", 200, &[], agent);
+        let url = api.url();
+        let env = [
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ("DISCIPLINE_FORGE", "gitea"),
+            ("DISCIPLINE_FORGE_URL", "https://git.example.com"),
+            ("DISCIPLINE_FORGE_REPO", "o/r"),
+            ("GITEA_TOKEN", "t"),
+        ];
+        repo.run(&["doctor", "--format", "json"], &env)
+    };
+    let writer =
+        r#"{"permission":"write","role_name":"write","user":{"login":"agent","is_admin":false}}"#;
+    let ok = run(".gitea/workflows/*", writer);
+    assert_eq!(ok.code, 0, "{}\n{}", ok.stdout, ok.stderr);
+    let st = statuses(&ok.stdout);
+    assert!(
+        st.contains(&("workflow-protection".into(), "pass".into())),
+        "{st:?}"
+    );
+    assert!(
+        st.contains(&("agent-permission".into(), "pass".into())),
+        "{st:?}"
+    );
+
+    let open = run("docs/*", writer);
+    assert!(
+        statuses(&open.stdout).contains(&("workflow-protection".into(), "warn".into())),
+        "{}",
+        open.stdout
+    );
+
+    let admin = run(
+        ".gitea/workflows/*",
+        r#"{"permission":"admin","role_name":"admin","user":{"login":"agent"}}"#,
+    );
+    assert_eq!(admin.code, 1, "{}\n{}", admin.stdout, admin.stderr);
+    assert!(statuses(&admin.stdout).contains(&("agent-permission".into(), "fail".into())));
+}
+
 #[test]
 fn redirects_to_another_host_are_not_followed_with_the_token() {
     let repo = protected_repo();

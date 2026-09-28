@@ -1760,6 +1760,72 @@ jobs:
 }
 
 #[test]
+fn ci_integrity_flags_a_change_that_picks_an_older_or_movable_discipline() {
+    // The Gitea job-container recipe: the binary comes from the job's image.
+    const GITEA: &str = r#"name: CI
+permissions: read-all
+on: [pull_request]
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: ghcr.io/orieg/discipline:v0.14.4
+    steps:
+      - name: Run discipline
+        run: discipline check --policy-from base
+"#;
+    let run_with = |path: &str, base: &str, head: &str, msg: &str| {
+        let repo = Repo::new();
+        repo.commit_base(path, base, "ci: add");
+        repo.write(path, head);
+        repo.commit(msg);
+        repo.check(&[])
+    };
+    let wf = ".gitea/workflows/ci.yml";
+    for older in ["v0.13.0", "latest", "v0"] {
+        let run = run_with(wf, GITEA, &GITEA.replace("v0.14.4", older), "ci: pin");
+        assert_eq!(run.code, 1, "{older}: {}", run.stdout);
+        assert_eq!(
+            run.titles("ci-integrity"),
+            vec!["Discipline Version Chosen By The Change"],
+            "{older}"
+        );
+    }
+    // An upgrade is a note, not a finding.
+    let up = run_with(wf, GITEA, &GITEA.replace("v0.14.4", "v0.15.0"), "ci: bump");
+    assert!(up.titles("ci-integrity").is_empty(), "{}", up.stdout);
+    assert!(up.outcome("ci-integrity")["notes"]
+        .to_string()
+        .contains("discipline pin `image` changed"));
+    // Lifted like every ci-integrity weakening.
+    let lifted = run_with(
+        wf,
+        GITEA,
+        &GITEA.replace("v0.14.4", "v0.13.0"),
+        "ci: pin\n\nallow-gate-weakening: ci-integrity v0.14.4 misreads our runner; pinned back until the fix",
+    );
+    assert!(
+        lifted.titles("ci-integrity").is_empty(),
+        "{}",
+        lifted.stdout
+    );
+
+    // GitLab: the template included from a release.
+    const GITLAB: &str = "include:\n  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.14.4/templates/discipline.gitlab-ci.yml'\nstages: [test]\n";
+    let run = run_with(
+        ".gitlab-ci.yml",
+        GITLAB,
+        &GITLAB.replace("v0.14.4", "v0.12.0"),
+        "ci: pin",
+    );
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert!(run
+        .titles("ci-integrity")
+        .contains(&"Discipline Version Chosen By The Change".to_string()));
+}
+
+#[test]
 fn ci_integrity_reads_gitlab_pipelines() {
     const PIPELINE: &str = "stages: [test]\n\
         unit-tests:\n  stage: test\n  script:\n    - cargo test --locked\n\
