@@ -487,3 +487,66 @@ fn an_unprotected_change_asks_the_forge_nothing() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(api.requests().is_empty(), "{:?}", api.requests());
 }
+
+// ---- review-threads ----------------------------------------------------------------
+
+/// A loopback Gitea answering reviews the way Gitea 1.24.7 did (RUN): thread A on line 1
+/// has a reply in a second review, and only its first comment carries `resolver`.
+fn gitea_threads(a_resolved: bool, b_resolved: bool) -> FakeForge {
+    let api = gitea();
+    api.serve_raw(
+        "repos/o/r/pulls/7/reviews?limit=50&page=1",
+        200,
+        &[("X-Total-Count", "2")],
+        r#"[{"id":1,"state":"COMMENT"},{"id":2,"state":"COMMENT"}]"#,
+    );
+    let resolver = |r: bool| if r { r#"{"login":"owner"}"# } else { "null" };
+    api.serve_raw(
+        "repos/o/r/pulls/7/reviews/1/comments",
+        200,
+        &[],
+        &format!(
+            r#"[{{"id":58,"path":"scripts/check_x.py","position":1,"original_position":0,"resolver":{}}},{{"id":59,"path":"scripts/check_x.py","position":3,"original_position":0,"resolver":{}}}]"#,
+            resolver(a_resolved),
+            resolver(b_resolved)
+        ),
+    );
+    api.serve_raw(
+        "repos/o/r/pulls/7/reviews/2/comments",
+        200,
+        &[],
+        r#"[{"id":61,"path":"scripts/check_x.py","position":1,"original_position":0,"resolver":null}]"#,
+    );
+    api
+}
+
+const THREADS: &str = "[gates.review-threads]\nenabled = true\n";
+
+#[test]
+fn an_unresolved_review_thread_fails_and_a_resolved_one_with_replies_passes() {
+    let (repo, event) = protected_change(THREADS, &[("docs/notes.md", "# Notes\n")]);
+    let api = gitea_threads(true, false);
+    let run = ratify_check(&repo, &event, &api, "", "base");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let v = run.violations("review-threads");
+    assert_eq!(
+        v.len(),
+        1,
+        "thread A is resolved despite its unresolved reply: {v:?}"
+    );
+    assert_eq!(v[0]["code"], "review-threads/unresolved-review-thread");
+    assert!(v[0]["message"].as_str().unwrap().contains("line 3"));
+
+    let ok = ratify_check(&repo, &event, &gitea_threads(true, true), "", "base");
+    assert_eq!(ok.code, 0, "{}{}", ok.stdout, ok.stderr);
+}
+
+#[test]
+fn review_threads_that_cannot_be_read_are_a_labelled_failure() {
+    let (repo, event) = protected_change(THREADS, &[("docs/notes.md", "# Notes\n")]);
+    let api = gitea_threads(true, true);
+    api.serve_raw("repos/o/r/pulls/7/reviews/2/comments", 503, &[], "{}");
+    let run = ratify_check(&repo, &event, &api, "", "base");
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.could_not_check().0, "forge");
+}

@@ -21,6 +21,7 @@ pub mod ratification;
 pub mod references;
 pub mod replay;
 pub mod report;
+pub mod review_threads;
 pub mod schema;
 pub mod selftest;
 pub mod style;

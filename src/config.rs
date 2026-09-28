@@ -132,6 +132,13 @@ pub const GATES: &[GateInfo] = &[
         available: true,
     },
     GateInfo {
+        id: "review-threads",
+        suite: Suite::Hygiene,
+        summary: "the pull request has no unresolved review thread",
+        languages: "any",
+        available: true,
+    },
+    GateInfo {
         id: "ratified-paths",
         suite: Suite::AgentGuard,
         summary: "edits to protected paths carry an owner's ratification on an issue the pull request closes",
@@ -564,6 +571,7 @@ pub struct Gates {
     pub shell_secrets: ShellSecretsGate,
     pub issue_link: IssueLinkGate,
     pub ratified_paths: RatifiedPathsGate,
+    pub review_threads: ReviewThreadsGate,
     pub commit_provenance: CommitProvenanceGate,
     pub citation_metadata: CitationMetadataGate,
     pub provenance_tags: ProvenanceTagsGate,
@@ -641,6 +649,7 @@ impl_gate_settings!(
     ShellSecretsGate,
     IssueLinkGate,
     RatifiedPathsGate,
+    ReviewThreadsGate,
     CommitProvenanceGate,
     CitationMetadataGate,
     ProvenanceTagsGate,
@@ -1433,6 +1442,27 @@ impl Default for RatifiedPathsGate {
     }
 }
 
+/// The pull request has no unresolved review thread. Off by default: it reads the forge,
+/// and GitHub and GitLab can enforce the same at merge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReviewThreadsGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    /// Threads on these paths are not counted.
+    pub exempt_paths: Vec<String>,
+}
+
+impl Default for ReviewThreadsGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+        }
+    }
+}
+
 /// Where `ratified-paths` reads the issues a pull request closes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1937,6 +1967,7 @@ impl Gates {
             "shell-secrets" => &self.shell_secrets,
             "issue-link" => &self.issue_link,
             "ratified-paths" => &self.ratified_paths,
+            "review-threads" => &self.review_threads,
             "commit-provenance" => &self.commit_provenance,
             "citation-metadata" => &self.citation_metadata,
             "config-integrity" => &self.config_integrity,

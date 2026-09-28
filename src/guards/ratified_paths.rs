@@ -81,22 +81,7 @@ pub fn evaluate_ratified_paths(ctx: &Context) -> Result<GateOutcome> {
             "`gates.ratified-paths` must be judged by the base ref's policy (`--policy-from base`, action input `policy_from: base`): the change edits a protected path and could otherwise loosen the policy that judges it".into(),
         ));
     }
-    let pull = ctx.forge.as_ref().and_then(|f| f.pull.as_ref());
-    let Some(pull) = pull else {
-        let in_ci = [
-            "CI",
-            "GITHUB_ACTIONS",
-            "GITLAB_CI",
-            "GITEA_ACTIONS",
-            "FORGEJO_ACTIONS",
-        ]
-        .iter()
-        .any(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty() && v != "false"));
-        if in_ci && !crate::gitctx::is_push_event_environment() {
-            return Err(config_err(
-                "`gates.ratified-paths` needs the pull request being checked (the Actions event payload, or GitLab's CI_MERGE_REQUEST_IID), and this CI run has none".into(),
-            ));
-        }
+    let Some(access) = ctx.pull_request_for(GATE)? else {
         // A local run (hook, pre-commit, a developer's `check`) or a push has no pull
         // request to read; a direct push is for branch protection to refuse.
         out.examined -= changed_protected.len();
@@ -107,10 +92,10 @@ pub fn evaluate_ratified_paths(ctx: &Context) -> Result<GateOutcome> {
         ));
         return Ok(out);
     };
-    let access = ctx
-        .forge
+    let pull = access
+        .pull
         .as_ref()
-        .expect("pull context implies forge access");
+        .expect("pull_request_for returns a pull request");
     let forge = (access.identify)().map_err(|e| {
         tag(
             Reason::Forge,

@@ -36,6 +36,7 @@ pub fn generate_schema() -> Value {
             "shell-secrets" => "#/$defs/ShellSecretsGate",
             "issue-link" => "#/$defs/IssueLinkGate",
             "ratified-paths" => "#/$defs/RatifiedPathsGate",
+            "review-threads" => "#/$defs/ReviewThreadsGate",
             "commit-provenance" => "#/$defs/CommitProvenanceGate",
             "citation-metadata" => "#/$defs/CitationMetadataGate",
             "provenance-tags" => "#/$defs/ProvenanceTagsGate",
@@ -488,6 +489,15 @@ pub fn generate_schema() -> Value {
                     "reference_repos": { "$ref": "#/$defs/StringListOrReset", "description": "With verify_references: other repositories a reference may resolve in" },
                     "accept_pull_references": { "type": "boolean", "description": "With verify_references: a reference to a pull or merge request satisfies the gate" },
                     "waiver": { "type": "string", "enum": ["directive", "none"], "description": "Whether `no-issue: <reason>` is accepted (default: directive)" }
+                }
+            },
+            "ReviewThreadsGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Threads on these paths are not counted" }
                 }
             },
             "RatifiedPathsGate": {

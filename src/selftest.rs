@@ -320,6 +320,34 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "review-threads: a Gitea conversation is resolved by its first comment, not its replies",
+        || {
+            use crate::forge::{CannedApi, Forge, ForgeKind};
+            use crate::review_threads::review_threads;
+            let forge = Forge {
+                kind: ForgeKind::Gitea,
+                url: "https://git.example.com".into(),
+                repo: "o/r".into(),
+            };
+            let mut api = CannedApi::default();
+            api.responses.insert(
+                "gitea:repos/o/r/pulls/2/reviews?limit=50&page=1".into(),
+                serde_json::json!({"__status": 200, "__headers": {"X-Total-Count": "2"},
+                    "__body": [{"id": 1, "state": "COMMENT"}, {"id": 2, "state": "COMMENT"}]}),
+            );
+            api.responses.insert(
+                "gitea:repos/o/r/pulls/2/reviews/1/comments".into(),
+                serde_json::json!([{"id": 58, "path": "a.py", "position": 1, "original_position": 0, "resolver": {"login": "owner"}}]),
+            );
+            api.responses.insert(
+                "gitea:repos/o/r/pulls/2/reviews/2/comments".into(),
+                serde_json::json!([{"id": 61, "path": "a.py", "position": 1, "original_position": 0, "resolver": null}]),
+            );
+            let t = review_threads(&api, &forge, 2).map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(t.len() == 1 && t[0].resolved)
+        },
+    ),
+    (
         "overrides: the budget refuses the override past it, not the one at it",
         || {
             use crate::config::DirectivesConfig;

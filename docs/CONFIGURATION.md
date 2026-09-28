@@ -268,6 +268,9 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.ratified-paths.ratifiers` | list | `[]` | Logins whose comments ratify |
 | `gates.ratified-paths.require_open_issue` | boolean | `true` | A closed issue carries no ratification (default: true) |
 | `gates.ratified-paths.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.review-threads.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.review-threads.exempt_paths` | list | `[]` | Threads on these paths are not counted |
+| `gates.review-threads.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.sanitizers.canary` | boolean | `false` | Whether to verify a negative-control race canary before main tests |
 | `gates.sanitizers.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.sanitizers.exempt_paths` | list | `[]` | File path globs exempted from this gate |

@@ -183,6 +183,7 @@ Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java
 | [`agent-scratch`](docs/GATES.md#agent-scratch) | hygiene | any | agent scratch state is never tracked |
 | [`shell-secrets`](docs/GATES.md#shell-secrets) | hygiene | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](docs/GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
+| [`review-threads`](docs/GATES.md#review-threads) | hygiene | any | the pull request has no unresolved review thread |
 | [`ratified-paths`](docs/GATES.md#ratified-paths) | agent-guard | any | edits to protected paths carry an owner's ratification on an issue the pull request closes |
 | [`citation-metadata`](docs/GATES.md#citation-metadata) | hygiene | any | CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI |
 | [`commit-provenance`](docs/GATES.md#commit-provenance) | hygiene | any | commits carry the required trailers; an agent-produced commit carries a review by someone else |

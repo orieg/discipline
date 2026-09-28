@@ -965,6 +965,23 @@
       },
       "type": "object"
     },
+    "ReviewThreadsGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Threads on these paths are not counted"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "SanitizersGate": {
       "additionalProperties": false,
       "properties": {
@@ -1590,6 +1607,14 @@
             }
           ],
           "description": "edits to protected paths carry an owner's ratification on an issue the pull request closes"
+        },
+        "review-threads": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ReviewThreadsGate"
+            }
+          ],
+          "description": "the pull request has no unresolved review thread"
         },
         "sanitizers": {
           "allOf": [

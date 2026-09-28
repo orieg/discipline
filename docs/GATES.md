@@ -28,6 +28,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`agent-scratch`](#agent-scratch) | hygiene | **shipped** | any | agent scratch state is never tracked |
 | [`shell-secrets`](#shell-secrets) | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
+| [`review-threads`](#review-threads) | hygiene | **shipped** | any | the pull request has no unresolved review thread |
 | [`ratified-paths`](#ratified-paths) | agent-guard | **shipped** | any | edits to protected paths carry an owner's ratification on an issue the pull request closes |
 | [`citation-metadata`](#citation-metadata) | hygiene | **shipped** | any | CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI |
 | [`commit-provenance`](#commit-provenance) | hygiene | **shipped** | any | commits carry the required trailers; an agent-produced commit carries a review by someone else |
@@ -113,6 +114,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `issue-link/issue-link-missing` | Tracking Issue Link Missing |
 | `issue-link/issue-reference-not-found` | Tracking Issue Reference Not Found |
 | `issue-link/issue-reference-closed` | Tracking Issue Reference Closed |
+| `review-threads/unresolved-review-thread` | Unresolved Review Thread |
 | `ratified-paths/protected-path-unratified` | Protected Path Edited Without Ratification |
 | `ratified-paths/never-ratifiable-path-changed` | Never-Ratifiable Path Edited |
 | `ratified-paths/ratification-entry-malformed` | Ratification Entry Refused |
@@ -899,6 +901,16 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Could not check (exit 2):** with `verify_references`, a forge that cannot be identified or reached, a repository the token cannot see (`forge-denied`: GitHub answers 404 for a private repository without access, which would make every reference look missing), a 5xx or rate limit that outlasts the retries (`forge-unavailable`, `forge-rate-limited`), more than ten references, or a custom `pattern` (it cannot be looked up). The label is at the start of `could_not_check.detail`.
 - **Lifting directive:** `no-issue: <reason>` on its own line in the PR description; `waiver = "none"` refuses it.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `pattern`, `require_in_commit_if_no_pr`, `verify_references`, `require_open_issue`, `reference_repos`, `accept_pull_references`, `waiver`.
+
+#### `review-threads`
+- **Rule:** the pull request being checked has no unresolved review thread.
+- **Default:** `enabled = false` (opt-in). Where the forge can enforce the same at merge (GitHub: a ruleset's `required_review_thread_resolution` or classic `required_conversation_resolution`; GitLab: "All threads must be resolved"), that rule is the stronger control: `discipline doctor` reports it as `thread-resolution`. Gitea and Forgejo have no such rule, and this gate is the check there.
+- **How each forge is read:** GitHub, GraphQL `reviewThreads { isResolved isOutdated }` (the REST API does not expose it); GitLab, the merge request's discussions whose notes are `resolvable`, resolved when every resolvable note is; Gitea and Forgejo, the code comments of every review that is not `PENDING`, grouped into conversations by path and line (`position`, or `original_position` for an old-side line) across reviews. A conversation is resolved when its **first** comment carries `resolver`: resolving sets it there only, and replies keep `resolver: null` (RUN on Gitea 1.24.7 and Forgejo 12.0.4: a reply posted in a second review joined the conversation; resolve and unresolve set and cleared the first comment's `resolver`).
+- **When it runs:** the state changes without a push, and resolving a thread starts no workflow, so the verdict is that of the run. Trigger the workflow on review events (`pull_request_review`, `pull_request_review_comment`) and re-run it after resolving. A local run or a push has no pull request and examines nothing; a pull-request run in CI without the event payload is exit `2`.
+- **What it catches:** `Unresolved Review Thread`, one per thread, on its file. Threads on `exempt_paths` are not counted.
+- **Could not check (exit 2):** a forge that cannot be reached or identified, a list of reviews, comments or threads that cannot be read to its end.
+- **Lifting directive:** none: a thread is resolved, not waived by the change's author.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `ratified-paths`
 - **Rule:** A pull request that edits a path matching `protected_paths` passes only when an issue it **closes** carries a comment, by a login in `ratifiers` and not in `agent_logins`, that names the path exactly:
@@ -1785,7 +1797,7 @@ severity = "error"
 
 ## Forge Access
 
-`require_open_pending_issues`, `issue-link`'s `verify_references`, `ratified-paths`, bench-regression citation freshness, `directives.require_approval` (pull-request reviews), the `merged-pr-body` directive source on a push event, `discipline replay` (each replayed change's merged pull-request body) and `discipline doctor` read from the forge that hosts the repository; `check --comment` (opt-in) writes one pull-request comment. No gate needs the network otherwise. Requests are made by the binary itself over HTTPS (rustls; no OpenSSL, no `gh`, no `curl`), so they work the same in the static binary and the container.
+`require_open_pending_issues`, `issue-link`'s `verify_references`, `ratified-paths`, `review-threads`, bench-regression citation freshness, `directives.require_approval` (pull-request reviews), the `merged-pr-body` directive source on a push event, `discipline replay` (each replayed change's merged pull-request body) and `discipline doctor` read from the forge that hosts the repository; `check --comment` (opt-in) writes one pull-request comment. No gate needs the network otherwise. Requests are made by the binary itself over HTTPS (rustls; no OpenSSL, no `gh`, no `curl`), so they work the same in the static binary and the container.
 
 | Forge | API base | Token (optional for public repositories) |
 |---|---|---|
@@ -1796,7 +1808,7 @@ severity = "error"
 
 - **Transport rules:** HTTPS only; plain HTTP is accepted for a loopback address, or for any host with `DISCIPLINE_FORGE_ALLOW_HTTP=1` (the token then travels in clear). Redirects are followed only to the same scheme, host and port, at most three times, so a token never leaves the forge. API paths with empty, `.` or `..` segments are refused. Credentials embedded in a URL variable (`https://user:token@host`) are dropped; put tokens in a token variable. Certificates are verified with the platform's trust store (the system CA bundle; the macOS keychain), so a corporate CA installed there is honoured. `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are honoured. Responses are capped at 25 MiB and each request at 30 seconds.
 - **Retries:** a read that gets no answer, or a 500, 502, 503 or 504, is tried three times in all, 0.5 s and then 1.5 s apart. A rate limit (429, or a 403 with `x-ratelimit-remaining: 0` or `Retry-After`) is waited out when the forge asks for at most 60 seconds (`Retry-After`, GitHub `x-ratelimit-reset`, GitLab `RateLimit-Reset`), and given up at once otherwise. A 401, 403, 404 or other status is answered at once. Writes are never retried. One run makes at most 500 requests. A read that still fails is exit 2 and its detail starts with the class of failure: `forge-unavailable`, `forge-rate-limited`, `forge-denied`, `forge-malformed`, `forge-partial-list`.
-- **GraphQL:** GitHub facts its REST API does not expose (a pull request's closing issues, who edited a comment) are read with a GraphQL query: a POST to `/graphql` (`<url>/api/graphql` on GitHub Enterprise Server). It is a read. It changes nothing on the forge, is retried like any read, and is never used to write.
+- **GraphQL:** GitHub facts its REST API does not expose (a pull request's closing issues, who edited a comment, whether a review thread is resolved) are read with a GraphQL query: a POST to `/graphql` (`<url>/api/graphql` on GitHub Enterprise Server). It is a read. It changes nothing on the forge, is retried like any read, and is never used to write.
 - **Lists** are read to the end or not at all: pages are requested with `per_page=100` (GitHub, GitLab) or `limit=50` (Gitea and Forgejo read `limit` and ignore `per_page`). With a stated total (`X-Total-Count`, GitLab `x-total`), pages are read until the items reach it; a short page is not an end, since a server may clamp the page size. An endpoint that ignores paging (Gitea's and Forgejo's issue comments) returns the whole list, with its total, on page 1. Without a total, GitHub and GitLab stop where no further page is stated (`Link: rel="next"`, `x-next-page`), and Gitea and Forgejo at an empty page. Pages that end before the total or overshoot it, a total that changes between pages, a page that only repeats earlier items when no total is sent, or more than 20 pages is `forge-partial-list`: never judged on what was read.
 - **No network:** `DISCIPLINE_NO_NETWORK=1` refuses every request that is not to a loopback address; the features that need the forge then exit 2.
 - **Other endpoint:** `DISCIPLINE_FORGE_API_URL` replaces the API base (an internal mirror or proxy, or a local mock).

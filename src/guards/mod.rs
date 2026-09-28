@@ -25,6 +25,7 @@ pub mod pr_checklist;
 pub mod presets;
 pub mod provenance_tags;
 pub mod ratified_paths;
+pub mod review_threads;
 pub mod sanitizers;
 pub mod scope_confinement;
 pub mod shell_secrets;
@@ -347,6 +348,35 @@ pub struct ForgeAccess<'a> {
     pub pull: Option<crate::override_policy::PullContext>,
 }
 
+impl Context<'_> {
+    /// The pull request a gate that reads pull-request facts judges. `Ok(None)` for a
+    /// run that has none to read (a local run, a push); in CI on any other event, a
+    /// missing pull request is a configuration error (exit 2), never a pass.
+    pub fn pull_request_for(&self, gate: &str) -> Result<Option<&ForgeAccess<'_>>> {
+        let Some(access) = self.forge.as_ref().filter(|f| f.pull.is_some()) else {
+            let in_ci = [
+                "CI",
+                "GITHUB_ACTIONS",
+                "GITLAB_CI",
+                "GITEA_ACTIONS",
+                "FORGEJO_ACTIONS",
+            ]
+            .iter()
+            .any(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty() && v != "false"));
+            if in_ci && !crate::gitctx::is_push_event_environment() {
+                return Err(crate::could_not_check::tag(
+                    crate::could_not_check::Reason::Configuration,
+                    anyhow::anyhow!(
+                        "`gates.{gate}` needs the pull request being checked (the Actions event payload, or GitLab's CI_MERGE_REQUEST_IID), and this CI run has none"
+                    ),
+                ));
+            }
+            return Ok(None);
+        };
+        Ok(Some(access))
+    }
+}
+
 /// Set by `discipline replay` on each case's `check`: the configuration under test is
 /// newer than the replayed trees. Honoured only when the base is a commit replay built
 /// ([`crate::gitctx::GitCtx::base_is_replay_base`]), so setting it in a CI job loosens
@@ -470,6 +500,7 @@ pub fn run_checks(
         "stub-bodies",
         "scope-confinement",
         "ratified-paths",
+        "review-threads",
         "commit-provenance",
         "bench-regression",
     ];
@@ -509,6 +540,7 @@ pub fn run_checks(
             "shell-secrets" => shell_secrets::evaluate_shell_secrets(ctx),
             "issue-link" => issue_link::evaluate_issue_link(ctx),
             "ratified-paths" => ratified_paths::evaluate_ratified_paths(ctx),
+            "review-threads" => review_threads::evaluate_review_threads(ctx),
             "commit-provenance" => commit_provenance::commit_provenance(ctx),
             "citation-metadata" => citation_metadata::citation_metadata(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
