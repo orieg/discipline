@@ -674,6 +674,7 @@ pub const JAVA_WRAPPER: super::WrapperSpec = super::WrapperSpec {
     through: &["block", "expression_statement", "return_statement"],
     calls: &["method_invocation"],
     arguments: &["argument_list"],
+    references: &[],
     plain: &["true", "false", "this", "super"],
     skip: &["line_comment", "block_comment"],
 };

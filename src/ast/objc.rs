@@ -520,6 +520,7 @@ pub const OBJC_WRAPPER: super::WrapperSpec = super::WrapperSpec {
     ],
     calls: &["message_expression", "call_expression"],
     arguments: &["argument_list"],
+    references: &[("pointer_expression", "&")],
     plain: &["true", "false", "null", "self"],
     skip: &["comment"],
 };

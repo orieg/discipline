@@ -1116,7 +1116,8 @@ pub const C_WRAPPER: super::WrapperSpec = super::WrapperSpec {
         "return_statement",
     ],
     calls: &["call_expression"],
-    arguments: &["argument_list"],
+    arguments: &["argument_list", "initializer_list"],
+    references: &[("pointer_expression", "&")],
     plain: &["true", "false", "null", "this"],
     skip: &["comment"],
 };

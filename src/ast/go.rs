@@ -648,6 +648,7 @@ pub const GO_WRAPPER: super::WrapperSpec = super::WrapperSpec {
     ],
     calls: &["call_expression"],
     arguments: &["argument_list"],
+    references: &[("unary_expression", "&")],
     plain: &["true", "false", "nil"],
     skip: &["comment"],
 };

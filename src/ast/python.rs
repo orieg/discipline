@@ -1092,7 +1092,16 @@ pub const PY_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
 pub const PY_WRAPPER: super::WrapperSpec = super::WrapperSpec {
     through: &["block", "expression_statement", "return_statement", "await"],
     calls: &["call"],
-    arguments: &["argument_list", "keyword_argument"],
+    arguments: &[
+        "argument_list",
+        "keyword_argument",
+        "list",
+        "tuple",
+        "set",
+        "dictionary",
+        "pair",
+    ],
+    references: &[],
     plain: &["true", "false", "none", "integer", "float", "string"],
     skip: &["comment"],
 };

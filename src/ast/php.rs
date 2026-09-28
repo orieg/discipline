@@ -763,7 +763,14 @@ pub const PHP_WRAPPER: super::WrapperSpec = super::WrapperSpec {
         "scoped_call_expression",
         "function_call_expression",
     ],
-    arguments: &["arguments", "argument", "variable_name"],
+    arguments: &[
+        "arguments",
+        "argument",
+        "variable_name",
+        "array_creation_expression",
+        "array_element_initializer",
+    ],
+    references: &[],
     plain: &["name", "boolean", "null", "integer", "float", "string"],
     skip: &["comment"],
 };

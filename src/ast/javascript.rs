@@ -825,7 +825,8 @@ pub const JS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
         "parenthesized_expression",
     ],
     calls: &["call_expression"],
-    arguments: &["arguments"],
+    arguments: &["arguments", "array", "object", "pair"],
+    references: &[],
     plain: &[
         "true",
         "false",

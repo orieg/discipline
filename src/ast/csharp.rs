@@ -736,6 +736,7 @@ pub const CS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
     ],
     calls: &["invocation_expression"],
     arguments: &["argument_list", "argument"],
+    references: &[],
     plain: &["this", "this_expression"],
     skip: &["comment"],
 };

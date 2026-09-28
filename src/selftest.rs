@@ -2095,11 +2095,11 @@ command = "cargo test"
         },
     ),
     (
-        "assertion-reduction: a thin wrapper stands for the helper it wraps; a hollow one and a cycle count nothing",
+        "assertion-reduction: a thin wrapper (forwarding names, literals or `&[]`) stands for the helper it wraps; a hollow one and a cycle count nothing",
         || {
             use crate::ast::LanguagePack;
             let vocab = AssertVocabulary::default();
-            let src = "fn check(x: u32, strict: bool) { if strict && x != 1 { panic!(\"x\"); } }\nfn noop(_x: u32, _n: u32) {}\nfn via(x: u32) { check(x, true) }\nfn hollow(x: u32) { noop(x, 1) }\nfn ping(x: u32) { pong(x, 1) }\nfn pong(x: u32, _n: u32) { ping(x) }\n#[test]\nfn direct() { check(1, true); }\n#[test]\nfn wrapped() { via(1); }\n#[test]\nfn hollowed() { hollow(1); }\n#[test]\nfn cycled() { ping(1); }\n";
+            let src = "fn check(x: u32, strict: bool) { if strict && x != 1 { panic!(\"x\"); } }\nfn noop(_x: u32, _n: u32) {}\nfn via(x: u32) { check(x, true) }\nfn hollow(x: u32) { noop(x, 1) }\nfn ping(x: u32) { pong(x, 1) }\nfn pong(x: u32, _n: u32) { ping(x) }\nfn check_env(x: u32, env: &[u32]) { if x != env.len() as u32 + 1 { panic!(\"x\"); } }\nfn via_empty(x: u32) { check_env(x, &[]) }\n#[test]\nfn direct() { check(1, true); }\n#[test]\nfn wrapped() { via(1); }\n#[test]\nfn wrapped_empty() { via_empty(1); }\n#[test]\nfn hollowed() { hollow(1); }\n#[test]\nfn cycled() { ping(1); }\n";
             let facts = crate::ast::rust::RustPack.extract("tests/wrap.rs", src, &vocab)?;
             let count = |n: &str| {
                 facts
@@ -2110,6 +2110,7 @@ command = "cargo test"
             };
             Ok(count("direct") == Some((1, 1))
                 && count("wrapped") == Some((1, 1))
+                && count("wrapped_empty") == Some((1, 1))
                 && count("hollowed") == Some((0, 0))
                 && count("cycled") == Some((0, 0)))
         },

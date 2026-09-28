@@ -676,7 +676,8 @@ pub const RUBY_DISPATCH: super::DispatchSpec = super::DispatchSpec {
 pub const RUBY_WRAPPER: super::WrapperSpec = super::WrapperSpec {
     through: &["body_statement", "return", "argument_list"],
     calls: &["call"],
-    arguments: &["argument_list", "pair"],
+    arguments: &["argument_list", "pair", "array", "hash"],
+    references: &[],
     plain: &[
         "true",
         "false",
