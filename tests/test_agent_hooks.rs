@@ -1242,3 +1242,216 @@ fn fixtures_never_touch_an_inherited_git_dir() {
         "no fixture file reached the sentinel"
     );
 }
+
+/// agy's `Stop` gets 300 s by default (a check under heavy load took 131 s and agy killed it
+/// at the old 120 s). `--timeout` sets every check timeout of the agents whose files carry one
+/// (agy, Qwen Code, Copilot CLI, also at user level), and is refused for the others. A hook's
+/// own check still recognises such a file as generated, unless the timeout is below the
+/// default: a shortened timeout can kill the hook, so it is reported.
+#[test]
+fn install_timeout_sets_the_check_timeout_and_stays_recognised() {
+    let read = |repo: &Repo, rel: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(repo.file(rel)).unwrap()).unwrap()
+    };
+    let default = Repo::new();
+    assert_eq!(
+        default
+            .run(&["hook", "install", "--agent", "agy"], &[])
+            .code,
+        0
+    );
+    assert_eq!(
+        read(&default, ".agents/hooks.json")["discipline"]["Stop"][0]["timeout"],
+        300
+    );
+
+    let repo = Repo::new();
+    let install = |agent: &str, extra: &[&str], env: &[(&str, &str)]| {
+        let mut args = vec!["hook", "install", "--agent", agent, "--timeout"];
+        args.extend_from_slice(extra);
+        let run = repo.run(&args, env);
+        assert_eq!(run.code, 0, "{agent}: {}\n{}", run.stdout, run.stderr);
+    };
+    install("agy", &["600"], &[]);
+    install("qwen", &["200"], &[]);
+    install("copilot", &["200"], &[]);
+    let agy = read(&repo, ".agents/hooks.json");
+    assert_eq!(agy["discipline"]["Stop"][0]["timeout"], 600, "{agy}");
+    assert_eq!(agy["discipline"]["SessionStart"][0]["timeout"], 10, "{agy}");
+    let qwen = read(&repo, ".qwen/settings.json");
+    for event in ["PostToolUse", "Stop"] {
+        assert_eq!(
+            qwen["hooks"][event][0]["hooks"][0]["timeout"], 200,
+            "{qwen}"
+        );
+    }
+    let copilot = read(&repo, ".github/hooks/discipline.json");
+    for event in ["postToolUse", "agentStop"] {
+        assert_eq!(copilot["hooks"][event][0]["timeoutSec"], 200, "{copilot}");
+    }
+    let home = tempfile::tempdir().unwrap();
+    install(
+        "copilot",
+        &["200", "--user"],
+        &[("COPILOT_HOME", home.path().to_str().unwrap())],
+    );
+    let user: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.path().join("hooks/discipline.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(user["hooks"]["agentStop"][0]["timeoutSec"], 200, "{user}");
+
+    let cursor = repo.run(
+        &["hook", "install", "--agent", "cursor", "--timeout", "60"],
+        &[],
+    );
+    assert_eq!(cursor.code, 2, "{}", cursor.stdout);
+    assert!(
+        cursor.stderr.contains("`--timeout` is for"),
+        "{}",
+        cursor.stderr
+    );
+
+    // The hook's own check: files with a longer timeout are what `hook install` writes.
+    repo.commit("chore(hooks): longer timeouts");
+    let clean = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(clean.code, 0, "{}", clean.stderr);
+    // Control: a timeout below the default can kill the hook, and is reported.
+    let path = repo.file(".agents/hooks.json");
+    let longer = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, longer.replace("\"timeout\": 600", "\"timeout\": 1")).unwrap();
+    let short = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(short.code, 2, "{}", short.stderr);
+    assert!(
+        short.stderr.contains(".agents/hooks.json"),
+        "{}",
+        short.stderr
+    );
+}
+
+/// A `SHA256SUMS` file in the release's format, with `x86` and `arm` as the two linux-musl
+/// digests, plus an unrelated asset.
+fn release_sums(dir: &std::path::Path, x86: &str, arm: Option<&str>) -> std::path::PathBuf {
+    let mut text = format!(
+        "{}  discipline-x86_64-apple-darwin.tar.gz\n{x86}  discipline-x86_64-unknown-linux-musl.tar.gz\n",
+        "c".repeat(64)
+    );
+    if let Some(arm) = arm {
+        text.push_str(&format!(
+            "{arm} *discipline-aarch64-unknown-linux-musl.tar.gz\n"
+        ));
+    }
+    let path = dir.join("SHA256SUMS");
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// `--pin-sums` writes the release's linux-musl digests into the Claude Code bootstrap, so a
+/// cloud session verifies the download against digests reviewed in the repository instead of
+/// the release's own `SHA256SUMS`. A pinned bootstrap is never replaced by an unpinned one,
+/// and a hook's own check recognises it as generated unless a digest was edited.
+#[test]
+fn claude_code_bootstrap_pins_release_digests() {
+    let (x86, arm) = ("a".repeat(64), "b".repeat(64));
+    let sums_dir = tempfile::tempdir().unwrap();
+    let sums = release_sums(sums_dir.path(), &x86, Some(&arm));
+    let sums = sums.to_str().unwrap();
+    let repo = Repo::new();
+    let script = ".claude/hooks/discipline-bootstrap.sh";
+
+    let run = repo.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "claude-code",
+            "--observe",
+            "--pin-sums",
+            sums,
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let pinned = std::fs::read_to_string(repo.file(script)).unwrap();
+    assert!(
+        pinned.contains(&format!("x86_64) want=\"{x86}\""))
+            && pinned.contains(&format!("aarch64) want=\"{arm}\"")),
+        "{pinned}"
+    );
+    assert!(
+        !pinned.contains("SHA256SUMS\""),
+        "no SHA256SUMS download: {pinned}"
+    );
+
+    // Without --pin-sums, even with --upgrade, the pinned script is kept.
+    for extra in [&[][..], &["--upgrade"][..]] {
+        let mut args = vec!["hook", "install", "--agent", "claude-code", "--observe"];
+        args.extend_from_slice(extra);
+        let again = repo.run(&args, &[]);
+        assert_eq!(again.code, 0, "{}\n{}", again.stdout, again.stderr);
+        assert_eq!(std::fs::read_to_string(repo.file(script)).unwrap(), pinned);
+    }
+
+    // The hook's own check: the pinned bootstrap is what `hook install` writes.
+    repo.commit("chore(hooks): pinned bootstrap");
+    let clean = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(clean.code, 0, "{}", clean.stderr);
+    // Merged: the next branch that edits a digest of this release is reported.
+    let settings = std::fs::read_to_string(repo.file(".claude/settings.json")).unwrap();
+    let base_files = |bootstrap: &str| {
+        repo.commit_base_files(
+            &[(".claude/settings.json", &settings), (script, bootstrap)],
+            "chore(hooks): pinned bootstrap",
+        )
+    };
+    base_files(&pinned);
+    std::fs::write(repo.file(script), pinned.replace(&x86, &"d".repeat(64))).unwrap();
+    let edited = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(edited.code, 2, "{}", edited.stderr);
+    assert!(edited.stderr.contains(script), "{}", edited.stderr);
+    // Control: moving from an earlier release's pinned digests to this one's is an upgrade.
+    let version = format!("version=\"v{}\"", env!("CARGO_PKG_VERSION"));
+    base_files(
+        &pinned
+            .replace(&version, "version=\"v0.0.1\"")
+            .replace(&x86, &"9".repeat(64)),
+    );
+    std::fs::write(repo.file(script), &pinned).unwrap();
+    let upgraded = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(upgraded.code, 0, "{}", upgraded.stderr);
+
+    // A sums file without both linux-musl digests, or for another agent, is refused.
+    let partial = tempfile::tempdir().unwrap();
+    let partial = release_sums(partial.path(), &x86, None);
+    let other = Repo::new();
+    let missing = other.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "claude-code",
+            "--pin-sums",
+            partial.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(missing.code, 2, "{}", missing.stdout);
+    assert!(
+        missing
+            .stderr
+            .contains("discipline-aarch64-unknown-linux-musl.tar.gz"),
+        "{}",
+        missing.stderr
+    );
+    assert!(!other.file(script).exists());
+    let copilot = other.run(
+        &["hook", "install", "--agent", "copilot", "--pin-sums", sums],
+        &[],
+    );
+    assert_eq!(copilot.code, 2, "{}", copilot.stdout);
+    assert!(
+        copilot.stderr.contains("`--pin-sums` is for claude-code"),
+        "{}",
+        copilot.stderr
+    );
+}

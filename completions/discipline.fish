@@ -177,6 +177,8 @@ copilot\t'GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + age
 agy\t'Antigravity CLI (`.agents/hooks.json`, Stop)'
 qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
 opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l timeout -d 'Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long' -r
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l pin-sums -d 'A release\'s SHA256SUMS, verified (`gh attestation verify`): the Claude Code bootstrap checks its download against the linux-musl digests in it instead of fetching SHA256SUMS from the release (claude-code only)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l user -d 'Write the user-level hook instead (copilot: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l observe -d 'Write the hook commands in observe mode (hook run --observe): the agent is never blocked while a hook is rolled out'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l cloud-agent -d 'Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)'

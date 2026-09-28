@@ -676,7 +676,7 @@ Write the agent\*(Aqs hook configuration at the repository root (or, with \-\-us
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-\-user\fR] [\fB\-\-observe\fR] [\fB\-\-cloud\-agent\fR] [\fB\-\-upgrade\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline hook install\fR <\fB\-\-agent\fR> [\fB\-\-user\fR] [\fB\-\-observe\fR] [\fB\-\-cloud\-agent\fR] [\fB\-\-upgrade\fR] [\fB\-\-timeout\fR] [\fB\-\-pin\-sums\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -718,6 +718,12 @@ Also write .github/workflows/copilot\-setup\-steps.yml, which installs disciplin
 .TP
 \fB\-\-upgrade\fR
 Rewrite a file an earlier discipline release generated (it carries the `Written by \\`discipline hook install\\`` header: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten
+.TP
+\fB\-\-timeout\fR \fI<SECONDS>\fR
+Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long
+.TP
+\fB\-\-pin\-sums\fR \fI<FILE>\fR
+A release\*(Aqs SHA256SUMS, verified (`gh attestation verify`): the Claude Code bootstrap checks its download against the linux\-musl digests in it instead of fetching SHA256SUMS from the release (claude\-code only)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
