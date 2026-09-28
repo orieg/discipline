@@ -2134,6 +2134,134 @@ fn pr_read_granted(jobs: &str, when: &str) -> Finding {
 /// discipline hook, which it skips without a message in a folder it does not trust. `None`
 /// without a repository hook or without Copilot CLI configuration (a CI runner, or a
 /// machine where Copilot CLI has not run).
+/// A generated agent hook file: agent id, path, and whether its text has the pre-tool entry.
+type HookFile = (&'static str, &'static str, fn(&str) -> bool);
+
+/// Several agents in one repository (docs/ROADMAP.md, Phase 13 Step 4):
+///
+/// - `ref-guard`: with more than one worktree, the lease guard (`discipline lease
+///   install-guard`) is what stops one session moving another's branch. A warning when
+///   it is missing; information with a single worktree.
+/// - `leases`: a lease file that does not parse makes the guard refuse every branch
+///   update in every worktree (a failure); leases whose holder stopped refreshing them
+///   are listed (information).
+/// - `pretool-hook`: a generated agent hook file without its pre-tool entry, which a file
+///   written before that entry existed lacks (information: the entry needs a discipline
+///   release that has `hook run --event pre-tool`).
+pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let Ok(repo) = crate::gitctx::discover_repository(root) else {
+        return out;
+    };
+    let linked = git2::Repository::open(repo.commondir())
+        .ok()
+        .and_then(|m| m.worktrees().ok().map(|w| w.len()))
+        .unwrap_or(0);
+    let hooks = match repo
+        .config()
+        .ok()
+        .and_then(|c| c.get_path("core.hooksPath").ok())
+    {
+        Some(p) if p.is_absolute() => p,
+        Some(p) => root.join(p),
+        None => repo.commondir().join("hooks"),
+    };
+    let guard = std::fs::read_to_string(hooks.join("reference-transaction"))
+        .is_ok_and(|t| t.contains(crate::lease::GUARD_MARKER));
+    out.push(match (guard, linked) {
+        (true, _) => Finding::new(
+            "ref-guard",
+            Status::Pass,
+            "the lease guard refuses a branch update another worktree's session has leased",
+        ),
+        (false, 0) => Finding::new(
+            "ref-guard",
+            Status::Info,
+            "one worktree: the lease guard matters once several agents share the repository (optional)",
+        )
+        .fix("Run `discipline lease install-guard` when agents work in several worktrees."),
+        (false, n) => Finding::new(
+            "ref-guard",
+            Status::Warn,
+            format!(
+                "{} worktrees and no lease guard: one session can move a branch another is working on (a rebase with --update-refs, branch -f, reset)",
+                n + 1
+            ),
+        )
+        .fix("Run `discipline lease install-guard`, and have each session take its branches with `discipline lease take`."),
+    });
+    if let Ok((store, _)) = crate::lease::open(root) {
+        match store.list() {
+            Err(e) => out.push(
+                Finding::new(
+                    "leases",
+                    Status::Fail,
+                    format!("a lease cannot be read ({e:#}); the lease guard refuses every branch update until it can"),
+                )
+                .fix(format!("Remove or repair the file under {}.", store.dir.display())),
+            ),
+            Ok(all) if !all.is_empty() => {
+                let now = crate::lease::now();
+                let stale: Vec<String> = all
+                    .iter()
+                    .filter(|(_, l)| !l.is_live(now))
+                    .map(|(k, l)| format!("`{k}` ({})", l.agent))
+                    .collect();
+                out.push(if stale.is_empty() {
+                    Finding::new("leases", Status::Pass, format!("{} live lease(s)", all.len()))
+                } else {
+                    Finding::new(
+                        "leases",
+                        Status::Info,
+                        format!("stale lease(s), holder no longer refreshing: {}", stale.join(", ")),
+                    )
+                    .fix("Run `discipline lease release` in that worktree, or remove the worktree; a stale lease claims nothing.")
+                });
+            }
+            Ok(_) => {}
+        }
+    }
+    let files: [HookFile; 4] = [
+        ("claude-code", ".claude/settings.json", |t| {
+            t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")
+        }),
+        ("copilot", ".github/hooks/discipline.json", |t| {
+            t.contains("\"preToolUse\"") && t.contains("--event pre-tool")
+        }),
+        ("agy", ".agents/hooks.json", |t| {
+            t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")
+        }),
+        ("opencode", ".opencode/plugins/discipline.js", |t| {
+            t.contains("tool.execute.before") && t.contains("--event pre-tool")
+        }),
+    ];
+    for (agent, rel, has) in files {
+        let Some(text) = read(root, rel) else {
+            continue;
+        };
+        if !text.contains("discipline hook run") {
+            continue;
+        }
+        out.push(if has(&text) {
+            Finding::new(
+                "pretool-hook",
+                Status::Pass,
+                format!("`{rel}` refuses an edit outside the session's worktree before it runs"),
+            )
+        } else {
+            Finding::new(
+                "pretool-hook",
+                Status::Info,
+                format!("`{rel}` has no pre-tool entry: {agent} can edit another worktree before any check runs"),
+            )
+            .fix(format!(
+                "Once the installed discipline has `hook run --event pre-tool`, regenerate it: `discipline hook install --agent {agent} --upgrade` (JSON hook files: delete and reinstall)."
+            ))
+        });
+    }
+    out
+}
+
 pub fn copilot_trust_finding(root: &Path, home: Option<&Path>) -> Option<Finding> {
     let hook = crate::hook::copilot_repo_hook(root)?;
     let hook = hook
@@ -2257,6 +2385,7 @@ pub fn run(input: &DoctorInput) -> Report {
     if let Some(f) = copilot_trust_finding(root, input.copilot_home.as_deref()) {
         findings.push(f);
     }
+    findings.extend(multi_agent_findings(root));
 
     let mut platform_name = "local".to_string();
     let mut gitea_version: Option<String> = None;

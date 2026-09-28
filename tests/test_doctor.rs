@@ -714,3 +714,63 @@ fn doctor_warns_when_copilot_does_not_trust_the_repository_hook() {
         .into_owned()]);
     assert_eq!(finding().unwrap()["status"], "pass");
 }
+
+fn local(repo: &Repo) -> (i32, Vec<(String, String)>) {
+    let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    (run.code, statuses(&run.stdout))
+}
+
+fn status_of(st: &[(String, String)], id: &str) -> Vec<String> {
+    st.iter()
+        .filter(|(i, _)| i == id)
+        .map(|(_, s)| s.clone())
+        .collect()
+}
+
+#[test]
+fn doctor_reports_what_several_agents_in_one_repository_rely_on() {
+    let repo = protected_repo();
+    // One worktree, no guard: information only.
+    let (_, st) = local(&repo);
+    assert_eq!(status_of(&st, "ref-guard"), vec!["info"], "{st:?}");
+
+    // A second worktree without the guard: a warning; installed: a pass.
+    std::fs::write(repo.path().join(".git/info/exclude"), "wt2/\n").unwrap();
+    repo.git(&["worktree", "add", "-q", "-b", "feat/b", "wt2"]);
+    let (_, st) = local(&repo);
+    assert_eq!(status_of(&st, "ref-guard"), vec!["warn"], "{st:?}");
+    assert_eq!(repo.run(&["lease", "install-guard"], &[]).code, 0);
+    let (_, st) = local(&repo);
+    assert_eq!(status_of(&st, "ref-guard"), vec!["pass"], "{st:?}");
+
+    // A stale lease is listed; a lease that does not parse fails.
+    let dir = repo.path().join(".git/discipline/leases");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("wt2.json"),
+        r#"{"agent":"copilot","session":"s","worktree":"/w","branches":["feat/b"],"taken_at":1,"heartbeat":1,"ttl_secs":60}"#,
+    )
+    .unwrap();
+    let (_, st) = local(&repo);
+    assert_eq!(status_of(&st, "leases"), vec!["info"], "{st:?}");
+    std::fs::write(dir.join("wt2.json"), "{").unwrap();
+    let (code, st) = local(&repo);
+    assert_eq!(status_of(&st, "leases"), vec!["fail"], "{st:?}");
+    assert_eq!(code, 1);
+    std::fs::remove_file(dir.join("wt2.json")).unwrap();
+
+    // A hook file written before the pre-tool entry existed: information; regenerated: a pass.
+    std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
+    std::fs::write(
+        repo.path().join(".claude/settings.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"discipline hook run --agent claude-code"}]}]}}"#,
+    )
+    .unwrap();
+    let (_, st) = local(&repo);
+    assert_eq!(status_of(&st, "pretool-hook"), vec!["info"], "{st:?}");
+    std::fs::remove_file(repo.path().join(".claude/settings.json")).unwrap();
+    let install = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(install.code, 0, "{}", install.stderr);
+    let (_, st) = local(&repo);
+    assert_eq!(status_of(&st, "pretool-hook"), vec!["pass"], "{st:?}");
+}
