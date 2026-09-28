@@ -159,6 +159,7 @@ runs:
         INPUT_BINARY_PATH: ${{ inputs.binary_path }}
         INPUT_DOWNLOAD_URL: ${{ inputs.download_url }}
         ACTION_REF: ${{ github.action_ref }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         fail() {
@@ -227,6 +228,27 @@ runs:
             actual="$(shasum -a 256 "${dir}/${archive}" | awk '{ print $1 }')"
           fi
           [ "${expected}" = "${actual}" ] || fail "checksum mismatch for ${archive}: expected ${expected}, got ${actual}"
+
+          # provenance:begin (tests/test_action_version.rs runs these lines)
+          # SHA256SUMS comes from the same release as the archive, so replacing both
+          # passes the checksum. The build provenance attestation cannot be replaced
+          # that way: it must be signed by this repository's release workflow, for the
+          # requested tag. Checked on github.com with the default release store and
+          # `gh` on the runner; elsewhere the checksum is the check, and a notice says so.
+          if [ "${GITHUB_SERVER_URL:-}" = "https://github.com" ] \
+            && [ "${INPUT_DOWNLOAD_URL}" = "https://github.com/orieg/discipline/releases" ] \
+            && [ -n "${GH_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+            attest=(gh attestation verify "${dir}/${archive}" --repo orieg/discipline
+              --signer-workflow orieg/discipline/.github/workflows/release.yml)
+            if [ -n "${version}" ]; then
+              attest+=(--source-ref "refs/tags/${version}")
+            fi
+            "${attest[@]}" > /dev/null 2> "${dir}/attestation.err" \
+              || fail "build provenance of ${archive} (${version:-latest}) did not verify: $(tail -n 1 "${dir}/attestation.err")"
+          else
+            echo "::notice title=discipline install::build provenance not verified (needs github.com, the default download_url and gh); checked against SHA256SUMS only"
+          fi
+          # provenance:end
 
           tar -xzf "${dir}/${archive}" -C "${dir}"
           bin="${dir}/discipline"

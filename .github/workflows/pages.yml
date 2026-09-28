@@ -4,6 +4,8 @@ name: Pages
 # repositories from the latest stable release's packages, signed with
 # REPO_SIGNING_KEY. No package or repository metadata is committed: packages come
 # from the release (checked against its SHA256SUMS), signatures are made here.
+# The key is only read by `sign`, a job bound to the `package-signing`
+# environment that runs no third-party action and can reach GitHub only.
 # Repository > Settings > Pages must use "GitHub Actions" as the source.
 on:
   push:
@@ -26,18 +28,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  # Renders the site. It runs the Pages actions (one of them a container) and
+  # holds no secret; its output is data for `sign`, never code.
+  site:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
         with:
           source: ./docs
           destination: ./_site
+      # The Jekyll container writes _site as root.
+      - run: sudo chown -R "$(id -u):$(id -g)" _site
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: site
+          path: _site
+          if-no-files-found: error
+          retention-days: 1
+
+  # Adds the signed APT and RPM repositories to the rendered site. The only
+  # job that reads REPO_SIGNING_KEY: first-party actions and this repository's
+  # own scripts, from a checkout of the same commit, with egress limited to GitHub.
+  sign:
+    needs: site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: package-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          disable-telemetry: true
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: site
+          path: _site
       - name: Latest stable release packages
         shell: bash
         env:
@@ -80,8 +125,6 @@ jobs:
           REPO_SIGNING_PASSPHRASE: ${{ secrets.REPO_SIGNING_PASSPHRASE }}
         run: |
           set -euo pipefail
-          # The Jekyll container writes _site as root.
-          sudo chown -R "$(id -u):$(id -g)" _site
           python3 scripts/build_repo.py --artifacts-dir artifacts --docs-dir _site \
             --version "${RELEASE_TAG#v}" --sign-key "${REPO_KEY}"
           gpgv --keyring _site/apt/discipline-archive-keyring.gpg _site/apt/dists/stable/InRelease
@@ -90,7 +133,7 @@ jobs:
           path: _site
 
   deploy:
-    needs: build
+    needs: sign
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -100,5 +143,17 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          disable-telemetry: true
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
