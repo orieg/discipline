@@ -202,6 +202,38 @@ fn git_with_hooks(dir: &std::path::Path, args: &[&str]) -> std::process::Output 
     cmd.output().unwrap()
 }
 
+/// As [`git_with_hooks`], with the `discipline` found first on `PATH` taken from `bin`.
+fn git_with_discipline_in(
+    dir: &std::path::Path,
+    args: &[&str],
+    bin: &std::path::Path,
+) -> std::process::Output {
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut cmd = std::process::Command::new("git");
+    // An explicit identity: the runner has no global one, and GIT_* is cleared below.
+    cmd.args([
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=discipline test",
+        "-c",
+        "user.email=test@example.invalid",
+    ])
+    .args(args)
+    .current_dir(dir)
+    .env("PATH", path);
+    for (k, _) in std::env::vars() {
+        if k.starts_with("GIT_") || k.starts_with("DISCIPLINE_") {
+            cmd.env_remove(k);
+        }
+    }
+    cmd.output().unwrap()
+}
+
 #[test]
 fn the_ref_guard_refuses_moving_a_branch_another_worktree_leased() {
     let repo = two_worktrees();
@@ -262,6 +294,20 @@ fn the_ref_guard_refuses_moving_a_branch_another_worktree_leased() {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // An earlier release's guard (same marker, older body) is rewritten.
+    let hook = repo.path().join(".git/hooks/reference-transaction");
+    let current = std::fs::read_to_string(&hook).unwrap();
+    std::fs::write(
+        &hook,
+        current.replace("discipline lease --help >/dev/null 2>&1 || exit 0\n", ""),
+    )
+    .unwrap();
+    assert_eq!(repo.run(&["lease", "install-guard"], &[]).code, 0);
+    assert_eq!(
+        std::fs::read_to_string(&hook).unwrap(),
+        current,
+        "the earlier guard was not updated"
+    );
     // Installing twice is a no-op; a foreign hook is never rewritten.
     assert!(repo
         .run(&["lease", "install-guard"], &[])
@@ -342,5 +388,41 @@ fn a_rebase_that_would_update_a_leased_stacked_branch_is_refused() {
     assert_eq!(
         git_with_hooks(&wt2, &["rev-parse", "feat/stack"]).stdout,
         before
+    );
+}
+
+/// An installed discipline older than `lease` (0.14.4 answers
+/// `unrecognized subcommand 'lease'` with exit 2) has no guard to run. The hook lets
+/// the update through silently rather than aborting every ref update in every worktree.
+#[test]
+fn the_guard_passes_silently_when_the_installed_discipline_predates_lease() {
+    let repo = two_worktrees();
+    assert_eq!(repo.run(&["lease", "install-guard"], &[]).code, 0);
+    let take = repo.run(&["lease", "take", "--branch", "feat/stack"], &[]);
+    assert_eq!(take.code, 0, "{}", take.stderr);
+    // An older discipline first on PATH: it knows no `lease` subcommand.
+    let old = tempfile::tempdir().unwrap();
+    let shim = old.path().join("discipline");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\necho \"error: unrecognized subcommand '$1'\" >&2\nexit 2\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let wt2 = repo.path().join("wt2");
+    let out = git_with_discipline_in(&wt2, &["branch", "-f", "feat/stack", "HEAD"], old.path());
+    assert!(
+        out.status.success(),
+        "an old discipline aborted the update: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("discipline"),
+        "silent: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

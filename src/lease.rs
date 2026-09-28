@@ -380,9 +380,12 @@ pub const GUARD_MARKER: &str = "# Written by `discipline lease install-guard`";
 /// updates on stdin, and a non-zero exit in the `prepared` state aborts the transaction.
 /// Without `discipline` on `PATH` it says so and lets the update through: a guard that
 /// refused every ref update would stop the repository, and the leases are cooperative.
+/// An installed discipline older than `lease` (0.14.x) lets it through silently: the
+/// guard becomes active when that installation is upgraded, and until then no commit in
+/// any worktree carries a message about it.
 pub fn guard_hook() -> String {
     format!(
-        "#!/bin/sh\n{GUARD_MARKER}: refuses a branch update that another worktree's\n# live lease claims (docs/ROADMAP.md, Phase 13 Step 1).\n[ \"$1\" = prepared ] || exit 0\nif ! command -v discipline >/dev/null 2>&1; then\n  echo \"discipline is not on PATH; the lease guard did not run\" >&2\n  exit 0\nfi\nexec discipline lease guard \"$1\"\n"
+        "#!/bin/sh\n{GUARD_MARKER}: refuses a branch update that another worktree's\n# live lease claims (docs/ROADMAP.md, Phase 13 Step 1).\n[ \"$1\" = prepared ] || exit 0\nif ! command -v discipline >/dev/null 2>&1; then\n  echo \"discipline is not on PATH; the lease guard did not run\" >&2\n  exit 0\nfi\n# An installed discipline older than `lease` has no guard to run: pass, silently.\ndiscipline lease --help >/dev/null 2>&1 || exit 0\nexec discipline lease guard \"$1\"\n"
     )
 }
 

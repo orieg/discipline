@@ -1353,10 +1353,12 @@ fn lease(args: discipline::cli::LeaseArgs) -> Result<bool> {
             };
             let path = hooks.join("reference-transaction");
             match std::fs::read_to_string(&path) {
-                Ok(existing) if existing.contains(discipline::lease::GUARD_MARKER) => {
+                Ok(existing) if existing == discipline::lease::guard_hook() => {
                     println!("lease: the guard is already installed at {}", path.display());
                     return Ok(true);
                 }
+                // An earlier release's guard is ours to rewrite.
+                Ok(existing) if existing.contains(discipline::lease::GUARD_MARKER) => {}
                 Ok(_) => anyhow::bail!(
                     "{} already exists and is not the lease guard; add `discipline lease guard \"$1\"` to it (when $1 is `prepared`, a non-zero exit aborts the update)",
                     path.display()
