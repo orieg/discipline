@@ -1828,6 +1828,97 @@ jobs:
 }
 
 #[test]
+fn a_discipline_version_finding_points_at_the_changed_pin() {
+    // A release workflow: an earlier job names the binary in a script, a later job
+    // runs the action from the checkout. The change gives both `uses: ./` steps a
+    // download URL; the finding belongs on the first of them, not on the script line.
+    const RELEASE: &str = r#"name: Release
+permissions: read-all
+on: [pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - run: |
+          bin="target/${TARGET}/release/discipline"
+          cp "$bin" dist/
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: ./
+        with:
+          install_only: 'true'
+      - uses: ./
+        with:
+          install_only: 'true'
+"#;
+    let head = RELEASE.replace(
+        "          install_only: 'true'\n",
+        "          install_only: 'true'\n          download_url: ${{ steps.store.outputs.url }}\n",
+    );
+    let line_of = |text: &str, needle: &str| {
+        text.lines().position(|l| l.contains(needle)).unwrap() as u64 + 1
+    };
+    let repo = Repo::new();
+    repo.commit_base(".github/workflows/release.yml", RELEASE, "ci: add");
+    repo.write(".github/workflows/release.yml", &head);
+    repo.commit("ci: smoke the stored binary");
+    let run = repo.check(&[]);
+    let found: Vec<(String, u64)> = run
+        .violations("ci-integrity")
+        .iter()
+        .map(|v| {
+            (
+                v["title"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        vec![(
+            "Discipline Version Chosen By The Change".to_string(),
+            line_of(&head, "download_url:")
+        )],
+        "{}",
+        run.stdout
+    );
+
+    // GitLab: the changed include, after a job whose name says discipline.
+    const GITLAB: &str = "stages: [test]\ndiscipline-notes:\n  stage: test\n  script: [echo]\ninclude:\n  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.14.4/templates/discipline.gitlab-ci.yml'\n";
+    let head = GITLAB.replace("v0.14.4", "v0.12.0");
+    let repo = Repo::new();
+    repo.commit_base(".gitlab-ci.yml", GITLAB, "ci: add");
+    repo.write(".gitlab-ci.yml", &head);
+    repo.commit("ci: pin");
+    let run = repo.check(&[]);
+    let v = run.violations("ci-integrity");
+    assert_eq!(v.len(), 1, "{}", run.stdout);
+    assert_eq!(v[0]["line"], line_of(&head, "remote:"), "{}", run.stdout);
+
+    // A pin in a local include is reported on the pipeline's `include:` line.
+    const ROOT: &str = "stages: [test]\ndiscipline-notes:\n  stage: test\n  script: [echo]\ninclude:\n  - local: ci/gate.yml\n";
+    const GATE: &str = "gate:\n  image: ghcr.io/orieg/discipline:v0.14.4@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  script: [discipline check]\n";
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[(".gitlab-ci.yml", ROOT), ("ci/gate.yml", GATE)],
+        "ci: add",
+    );
+    repo.write("ci/gate.yml", &GATE.replace("v0.14.4", "v0.12.0"));
+    repo.commit("ci: pin");
+    let run = repo.check(&[]);
+    let v: Vec<serde_json::Value> = run
+        .violations("ci-integrity")
+        .into_iter()
+        .filter(|v| v["title"] == "Discipline Version Chosen By The Change")
+        .collect();
+    assert_eq!(v.len(), 1, "{}", run.stdout);
+    assert_eq!(v[0]["line"], line_of(ROOT, "include:"), "{}", run.stdout);
+}
+
+#[test]
 fn ci_integrity_reads_gitlab_pipelines() {
     const PIPELINE: &str = "stages: [test]\n\
         unit-tests:\n  stage: test\n  script:\n    - cargo test --locked\n\

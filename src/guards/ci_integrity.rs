@@ -167,13 +167,14 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
             .and_then(|s| serde_yaml::from_str::<serde_yaml::Value>(s).ok());
 
         if let (Some(b), Some(h)) = (&base_val, &head_val) {
-            let (blocking, notes) =
-                discipline_pin_changes(&discipline_pins(b), &discipline_pins(h));
+            let mut head_pins = discipline_pins(h);
+            locate_pins(&mut head_pins, &head_content);
+            let (blocking, notes) = discipline_pin_changes(&discipline_pins(b), &head_pins);
             for n in notes {
                 out.notes.push(format!("`{path}`: discipline pin {n}"));
             }
             if !blocking.is_empty() {
-                let line = find_line_number(&head_content, "discipline");
+                let line = blocking.iter().filter_map(|(_, l)| *l).min();
                 record_or_excuse(
                     ctx,
                     Some(&head_content),
@@ -184,7 +185,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                     line,
                     format!(
                         "The discipline that judges this change is chosen by the change: {}.",
-                        blocking.join("; ")
+                        describe_blocking(&blocking)
                     ),
                     "Keep the discipline pin, or move it to a newer immutable release; excuse with allow-gate-weakening: ci-integrity <reason>.",
                     "discipline-version",
@@ -1579,17 +1580,24 @@ fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
             base_docs.push(c);
         }
     }
+    // Pins of the pipeline file itself carry their line; pins of an included file do
+    // not (the finding is reported on the pipeline file).
     let pins = |docs: &[String]| -> Vec<DisciplinePin> {
         let mut out = Vec::new();
-        for d in docs {
+        for (i, d) in docs.iter().enumerate() {
+            let mut file_pins = Vec::new();
             // A document that does not parse ends the read: the deserializer does not
             // advance past it (the diff below reports the file as unreadable).
             for doc in serde_yaml::Deserializer::from_str(d) {
                 let Ok(v) = <serde_yaml::Value as serde::Deserialize>::deserialize(doc) else {
                     break;
                 };
-                out.extend(discipline_pins(&v));
+                file_pins.extend(discipline_pins(&v));
             }
+            if i == 0 {
+                locate_pins(&mut file_pins, d);
+            }
+            out.extend(file_pins);
         }
         out
     };
@@ -1605,10 +1613,14 @@ fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
             settings.severity,
             &crate::findings::DISCIPLINE_VERSION_CHANGED,
             Some(path.to_string()),
-            find_line_number(&head, "discipline"),
+            blocking
+                .iter()
+                .filter_map(|(_, l)| *l)
+                .min()
+                .or_else(|| find_line_number(&head, "include:")),
             format!(
                 "The discipline that judges this change is chosen by the change: {}.",
-                blocking.join("; ")
+                describe_blocking(&blocking)
             ),
             "Keep the discipline pin, or move it to a newer immutable release; excuse with allow-gate-weakening: ci-integrity <reason>.",
             "discipline-version",
@@ -1654,6 +1666,44 @@ fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
 pub struct DisciplinePin {
     pub what: &'static str,
     pub value: String,
+    /// The 1-based line of the pin in its file, once `locate_pins` has read the text.
+    pub line: Option<usize>,
+}
+
+/// Set each pin's line: the line holding its key and value (the image or include value
+/// alone), taking the n-th such line for the n-th pin with the same key and value.
+/// Comment lines do not count.
+pub fn locate_pins(pins: &mut [DisciplinePin], text: &str) {
+    for i in 0..pins.len() {
+        let (what, value) = (pins[i].what, pins[i].value.clone());
+        let nth = pins[..i]
+            .iter()
+            .filter(|p| p.what == what && p.value == value)
+            .count();
+        // An include by project is recorded as `project@ref`; the file names the project.
+        let needle = match (what, value.rsplit_once('@')) {
+            ("include", Some((project, _))) if !text.contains(value.as_str()) => project,
+            _ => value.as_str(),
+        };
+        let key = match what {
+            "uses" | "version" | "binary" | "download_url" => Some(format!("{what}:")),
+            _ => None,
+        };
+        let matching: Vec<usize> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| {
+                let t = l.trim_start().trim_start_matches("- ").trim_start();
+                !t.starts_with('#')
+                    && match &key {
+                        Some(k) => t.starts_with(k.as_str()) && t.contains(needle),
+                        None => t.contains(needle),
+                    }
+            })
+            .map(|(n, _)| n + 1)
+            .collect();
+        pins[i].line = matching.get(nth).or(matching.first()).copied();
+    }
 }
 
 fn names_discipline(s: &str) -> bool {
@@ -1667,6 +1717,7 @@ pub fn discipline_pins(doc: &serde_yaml::Value) -> Vec<DisciplinePin> {
         pins.push(DisciplinePin {
             what,
             value: v.trim().to_string(),
+            line: None,
         })
     };
     let image_of = |v: &serde_yaml::Value| -> Option<String> {
@@ -1838,11 +1889,12 @@ pub fn pin_change(what: &str, base: Option<&DisciplinePin>, head: &DisciplinePin
     }
 }
 
-/// Compare the discipline pins of a file's base and head: blocking changes and notes.
+/// Compare the discipline pins of a file's base and head: blocking changes (each with
+/// the line of its head pin) and notes.
 pub fn discipline_pin_changes(
     base: &[DisciplinePin],
     head: &[DisciplinePin],
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<(String, Option<usize>)>, Vec<String>) {
     let (mut blocking, mut notes) = (Vec::new(), Vec::new());
     for what in [
         "uses",
@@ -1861,13 +1913,21 @@ pub fn discipline_pin_changes(
                 None => format!("`{what}` set to `{}`", hp.value),
             };
             match pin_change(what, bp, hp) {
-                Some(true) => blocking.push(describe()),
+                Some(true) => blocking.push((describe(), hp.line)),
                 Some(false) => notes.push(describe()),
                 None => {}
             }
         }
     }
     (blocking, notes)
+}
+
+fn describe_blocking(blocking: &[(String, Option<usize>)]) -> String {
+    blocking
+        .iter()
+        .map(|(d, _)| d.as_str())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Whether a discipline step's `with:` block switches advisory mode on. YAML `true` and
@@ -2578,10 +2638,39 @@ mod tests {
     }
 
     #[test]
+    fn each_pin_is_located_on_its_own_line() {
+        let located = |yaml: &str| {
+            let mut p = pins(yaml);
+            locate_pins(&mut p, yaml);
+            p.iter().map(|p| (p.what, p.line)).collect::<Vec<_>>()
+        };
+        // Two identical steps: the second pin is on the second step, and neither the
+        // script nor the comment naming the input is taken for a pin.
+        let actions = "jobs:\n  build:\n    steps:\n      - run: cp target/release/discipline dist/\n  smoke:\n    steps:\n      # download_url: x\n      - uses: ./\n        with:\n          download_url: x\n      - uses: ./\n        with:\n          download_url: x\n";
+        assert_eq!(
+            located(actions),
+            vec![
+                ("uses", Some(8)),
+                ("download_url", Some(10)),
+                ("uses", Some(11)),
+                ("download_url", Some(13)),
+            ]
+        );
+        // An include by project is found on its project line; an image on its value, not
+        // on a comment naming it.
+        let gitlab = "include:\n  - project: orieg/discipline\n    ref: v0.14.4\n    file: templates/discipline.gitlab-ci.yml\n# was ghcr.io/orieg/discipline:v0.14.4\ngate:\n  image: ghcr.io/orieg/discipline:v0.14.4\n";
+        assert_eq!(
+            located(gitlab),
+            vec![("include", Some(2)), ("image", Some(7))]
+        );
+    }
+
+    #[test]
     fn a_downgrade_or_a_movable_ref_blocks_and_an_upgrade_is_a_note() {
         let pin = |what: &'static str, value: &str| DisciplinePin {
             what,
             value: value.into(),
+            line: None,
         };
         let uses = |r: &str| pin("uses", &format!("orieg/discipline@{r}"));
         let change = |b: &str, h: &str| pin_change("uses", Some(&uses(b)), &uses(h));
