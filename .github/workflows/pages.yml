@@ -40,10 +40,16 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-      - uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
+      # The image actions/jekyll-build-pages v1.0.13 runs, by digest: the action's own
+      # metadata names it by tag. Its inputs are passed as the action would pass them.
+      - uses: docker://ghcr.io/actions/jekyll-build-pages@sha256:6791ebfd912185ed59bfb5fb102664fa872496b79f87ff8b9cfba292a7345041 # v1.0.13
         with:
           source: ./docs
           destination: ./_site
+          future: false
+          build_revision: ${{ github.sha }}
+          verbose: true
+          token: ${{ github.token }}
       # The Jekyll container writes _site as root.
       - run: sudo chown -R "$(id -u):$(id -g)" _site
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

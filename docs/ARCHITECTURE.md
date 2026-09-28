@@ -411,7 +411,7 @@ Major tags (`v0`, `v1`) provide consumer convenience for action workflows (`uses
 Static security analysis runs on pull requests, pushes to `main`, and on a scheduled run (`cron: '30 6 * * 1'`) using GitHub CodeQL Advanced setup (`github/codeql-action` pinned by SHA):
 - **Matrix analysis:** Analyzes `rust`, `actions`, and `python`.
 - **Query suite:** Configured with `queries: security-extended` for deep vulnerability scanning.
-- **Toolchain:** Pins `dtolnay/rust-toolchain` stable for Rust AST and macro expansion.
+- **Toolchain:** `dtolnay/rust-toolchain`, pinned to a commit of its `master` branch with `toolchain: stable` set explicitly (its `stable` branch is rewritten, which orphans a pinned commit), for Rust AST and macro expansion.
 
 #### CodeQL Rust Build Mode
 - **Mode:** Rust is analysed with `build-mode: none` (source-only extraction), as are `actions` and `python`.
