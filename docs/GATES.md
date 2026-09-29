@@ -377,7 +377,7 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `citation-metadata` | on, `error` | High: both files are parsed and their shape is checked against the Citation File Format 1.2.0 and Zenodo's deposit vocabulary; ORCID check digits are computed. The concept-DOI rule relies on how `identifiers` describes each DOI. | False block: none known; a CFF 1.2.0 feature outside the checked subset is ignored, not rejected. Miss: a DOI that is well formed but does not resolve, or names another work. | A repository with neither file examines nothing, and only a change that edits one is judged, so enabling it costs nothing elsewhere. |
 | `agents-md` | on, `warning` | High, but the finding is documentation hygiene, not a code defect. | False block: a repository without an agent guide fails every change. | Missing or forked guidance does not make a change unsafe. |
 
-**Default-off gates** (`issue-link`, `commit-provenance`, `provenance-tags`, `pr-checklist`, `scope-confinement`, `archive-contents`, `manifest-sync`, `version-lockstep`, `sanitizers`, `miri`, `unsafe-budget`, `msrv`) need repository-specific input (a tracker convention, archive path, manifest rules, version sources, toolchain) or encode a policy most repositories do not hold. They default to `error` so that enabling one is a single `enabled = true` line that blocks.
+**Default-off gates** (`issue-link`, `review-threads`, `ratified-paths`, `commit-provenance`, `provenance-tags`, `pr-checklist`, `scope-confinement`, `archive-contents`, `manifest-sync`, `version-lockstep`, `sanitizers`, `miri`, `unsafe-budget`, `msrv`) need repository-specific input (a tracker convention, a forge token, protected paths and their owners, archive path, manifest rules, version sources, toolchain) or encode a policy most repositories do not hold. They default to `error` so that enabling one is a single `enabled = true` line that blocks.
 
 ### Finding-Level Severity Overrides
 
@@ -1885,5 +1885,5 @@ The official container image (`ghcr.io/orieg/discipline`) intentionally relaxes 
 
 ## Roadmap & Future Gates
 
-All 37 gates across the six suites are implemented and shipped; `discipline gates` lists them with their effective state. Paired within-run ratio benchmarking shipped as `bench-regression` `mode = "paired-ratio"`. Known limitations and candidate work are tracked in the "Outstanding Checks & Known Limitations" section of [ROADMAP.md](ROADMAP.md).
+All 40 gates across the six suites are implemented and shipped; `discipline gates` lists them with their effective state. Paired within-run ratio benchmarking shipped as `bench-regression` `mode = "paired-ratio"`. Known limitations and candidate work are tracked in the "Outstanding Checks & Known Limitations" section of [ROADMAP.md](ROADMAP.md).
 

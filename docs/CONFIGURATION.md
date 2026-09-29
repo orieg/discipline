@@ -1444,7 +1444,7 @@ path = "docs/old_plan.md"
 fingerprint = "5847c9fe7cec2622f5c427937d6a48adebd8e240c027a55d9fdaf8009e8b7100"
 ```
 
-Committing a new or grown baseline trips `config-integrity` ("Baseline Grew Without Directive"). `baseline --write` prints the exact directive line to add to the commit message.
+Committing a new or grown baseline trips `config-integrity` (`config-integrity/baseline-increased`, "Baseline Increased"). `baseline --write` prints the exact directive line to add to the commit message.
 
 Fingerprints (version 2) are `sha256("v2:" + gate/code + ":" + path + ":" + sha256(content))`. `content` is the trimmed source line, followed by the finding's anchor when it has one; for a finding with no line it is the anchor alone, or empty. An anchor is a typed source datum that tells two findings of one code in one file apart (the removed test's name, the added dependency, the weakened key, the regressed counter, the commit whose subject carries a directive), never prose, so a reworded message never changes a fingerprint. Two findings that would still share a fingerprint fall back to their messages, so baselining one never hides the other. They use the finding's code (`rule`), never its title, and no line number, so neither a reworded title nor a line shift caused by an unrelated edit churns the baseline. The same fingerprint is the `fingerprint` field of each finding in `check --format json` and the SARIF `partialFingerprints`.
 
@@ -1465,7 +1465,7 @@ Subsequent runs automatically detect `discipline-baseline.toml` if present:
    ```text
    allow-gate-weakening: baseline grandfathering legacy modules for migration
    ```
-   A baseline that keeps its size but swaps grandfathered findings for new ones is refused the same way ("Baseline Contains New Findings Without Directive").
+   A baseline that keeps its size but swaps grandfathered findings for new ones is refused the same way (`config-integrity/baseline-new-findings`, "Baseline Contains New Findings").
 2. **Ratchet Down (Stale Entry Notes):** When a grandfathered finding is fixed in source code, Discipline reports the stale baseline entry as a note on its gate:
    ```text
    1 stale baseline entry (resolved findings) (`Time Estimate` in `docs/old_plan.md`): run `discipline baseline --write` to ratchet down

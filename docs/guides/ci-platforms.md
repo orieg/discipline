@@ -70,7 +70,7 @@ When evaluating Discipline on high-velocity repositories with legacy technical d
           advisory: true
 ```
 
-Adding `advisory: true` is itself a `ci-integrity` finding (`Discipline Action Weakened`), since the step then exits 0 whatever the gates report. Record the decision in the pull-request body with `allow-gate-weakening: ci-integrity <reason>`.
+Adding `advisory: true` is itself a `ci-integrity` finding (`ci-integrity/discipline-action-advisory`, "Discipline Action Weakened (advisory: true)"), since the step then exits 0 whatever the gates report. Record the decision in the pull-request body with `allow-gate-weakening: ci-integrity <reason>`.
 
 ---
 
