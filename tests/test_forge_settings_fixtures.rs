@@ -39,7 +39,8 @@ fn gitea_and_forgejo_list_secrets_by_name_with_no_scope() {
                 let keys: Vec<&str> = s.as_object().unwrap().keys().map(String::as_str).collect();
                 // A name and when it was created, never a value, and no environment or
                 // other scope to check.
-                assert!(keys.contains(&"name"), "{forge}: {s}");
+                // The keys only: a failure never prints a secret entry.
+                assert!(keys.contains(&"name"), "{forge}: {list} keys {keys:?}");
                 for absent in ["data", "value", "environment", "environment_scope", "scope"] {
                     assert!(!keys.contains(&absent), "{forge}: {list} has {absent}");
                 }
@@ -87,9 +88,13 @@ fn gitlab_variables_carry_their_scope_and_never_their_value() {
     for var in vars {
         let o = var.as_object().unwrap();
         for key in ["key", "protected", "masked", "hidden", "environment_scope"] {
-            assert!(o.contains_key(key), "{var}: {key}");
+            assert!(o.contains_key(key), "{}: {key}", var["key"]);
         }
-        assert!(!o.contains_key("value"), "a recorded value: {var}");
+        assert!(
+            !o.contains_key("value"),
+            "a recorded value for {}",
+            var["key"]
+        );
     }
     // One of each shape `secret-scoping` tells apart: readable by every pipeline,
     // protected branches and tags only, one environment only.
