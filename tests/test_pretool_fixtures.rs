@@ -22,6 +22,38 @@ fn text<'a>(v: &'a Value, pointer: &str) -> &'a str {
 /// (fixture, tool-name pointer, tool name, target pointer, session pointer, cwd pointer)
 const PAYLOADS: &[(&str, &str, &str, &str, &str, &str)] = &[
     (
+        "codex/apply_patch.json",
+        "/tool_name",
+        "apply_patch",
+        "/tool_input/command",
+        "/session_id",
+        "/cwd",
+    ),
+    (
+        "codex/bash.json",
+        "/tool_name",
+        "Bash",
+        "/tool_input/command",
+        "/session_id",
+        "/cwd",
+    ),
+    (
+        "qwen/write_file.json",
+        "/tool_name",
+        "write_file",
+        "/tool_input/file_path",
+        "/session_id",
+        "/cwd",
+    ),
+    (
+        "qwen/run_shell_command.json",
+        "/tool_name",
+        "run_shell_command",
+        "/tool_input/command",
+        "/session_id",
+        "/cwd",
+    ),
+    (
         "claude-code/write.json",
         "/tool_name",
         "Write",
@@ -119,6 +151,8 @@ fn each_recorded_deny_blocked_the_call() {
         "copilot/deny.json",
         "agy/deny.json",
         "opencode/deny.json",
+        "qwen/deny.json",
+        "codex/deny.json",
     ] {
         let v = fixture(rel);
         assert!(text(&v, "/observed").starts_with("RUN "), "{rel}");
@@ -153,6 +187,20 @@ fn no_fixture_names_a_local_machine() {
 /// fields `hook run --event session-start` reads. OpenCode's is the raw `session.created`
 /// event; the generated plugin maps it to `{input: {sessionID}, cwd}`.
 const SESSION_STARTS: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "codex/session_start.json",
+        "/hook_event_name",
+        "SessionStart",
+        "/session_id",
+        "/cwd",
+    ),
+    (
+        "qwen/session_start.json",
+        "/hook_event_name",
+        "SessionStart",
+        "/session_id",
+        "/cwd",
+    ),
     (
         "claude-code/session_start.json",
         "/hook_event_name",

@@ -2247,7 +2247,7 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
             Ok(_) => {}
         }
     }
-    let files: [HookFile; 4] = [
+    let files: [HookFile; 6] = [
         ("claude-code", ".claude/settings.json", |t| {
             t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")
         }),
@@ -2259,6 +2259,12 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
         }),
         ("opencode", ".opencode/plugins/discipline.js", |t| {
             t.contains("tool.execute.before") && t.contains("--event pre-tool")
+        }),
+        ("qwen", ".qwen/settings.json", |t| {
+            t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")
+        }),
+        ("codex", ".codex/hooks.json", |t| {
+            t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")
         }),
     ];
     for (agent, rel, has) in files {
