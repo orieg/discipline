@@ -984,8 +984,9 @@ struct JsonEntry<'a> {
 
 /// `cmd` as a command some release of `hook install` writes for `agent`: `hook run` for
 /// that agent, with the flags it writes, behind the missing-binary guard or (before
-/// v0.15.0) without it; the Claude Code bootstrap; agy's missing-binary notice.
-fn json_command(agent: Agent, cmd: &str) -> Option<JsonCommand> {
+/// v0.15.0) without it; the Claude Code bootstrap; agy's missing-binary notice. With
+/// `user`, the command of a user-level file: `hook run` with `--if-configured`.
+fn json_command(agent: Agent, cmd: &str, user: bool) -> Option<JsonCommand> {
     if (agent == Agent::Agy && cmd == AGY_MISSING_BINARY)
         || (agent == Agent::ClaudeCode
             && cmd == format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}"))
@@ -996,6 +997,12 @@ fn json_command(agent: Agent, cmd: &str) -> Option<JsonCommand> {
         .strip_prefix(&guarded(agent, ""))
         .or_else(|| cmd.strip_prefix(&guarded_pretool("")))
         .unwrap_or(cmd);
+    let flag = " --if-configured";
+    let run = match (user, run.matches(flag).count()) {
+        (true, 1) => run.replacen(flag, "", 1),
+        (false, 0) => run.to_string(),
+        _ => return None,
+    };
     match run.strip_prefix(&format!("discipline hook run --agent {}", agent.id()))? {
         "" => Some(JsonCommand::Check { observe: false }),
         " --observe" => Some(JsonCommand::Check { observe: true }),
@@ -1010,7 +1017,11 @@ fn json_command(agent: Agent, cmd: &str) -> Option<JsonCommand> {
 /// the table has the shape `hook install` writes: each event a non-empty list of entries,
 /// or of groups (`matcher` and a non-empty `hooks` list) of entries, each entry with one
 /// command some release writes. `None` for anything else.
-fn json_entries(agent: Agent, events: &serde_json::Value) -> Option<Vec<JsonEntry<'_>>> {
+fn json_entries(
+    agent: Agent,
+    events: &serde_json::Value,
+    user: bool,
+) -> Option<Vec<JsonEntry<'_>>> {
     let mut out = Vec::new();
     for (event, list) in events.as_object()? {
         let list = list.as_array().filter(|l| !l.is_empty())?;
@@ -1041,7 +1052,7 @@ fn json_entries(agent: Agent, events: &serde_json::Value) -> Option<Vec<JsonEntr
                 out.push(JsonEntry {
                     event,
                     matcher: matcher.or_else(|| fields.get("matcher")),
-                    command: json_command(agent, cmd.as_str()?)?,
+                    command: json_command(agent, cmd.as_str()?, user)?,
                     fields,
                 });
             }
@@ -1066,8 +1077,24 @@ fn json_timeout(fields: &serde_json::Map<String, serde_json::Value>) -> Option<O
 /// `permissions`, `.qwen/settings.json`'s model), no comment. Only such a file is
 /// rewritten by `--upgrade`; a file a person or another tool edited is not.
 pub fn generated_json_hooks(agent: Agent, text: &str) -> Option<GeneratedJson> {
-    let current: serde_json::Value =
-        serde_json::from_str(&config_for_opts(agent, false, None).1).ok()?;
+    generated_json_against(agent, &config_for_opts(agent, false, None).1, text, false)
+}
+
+/// [`generated_json_hooks`] for the user-level file of `agent` ([`user_config_for`]),
+/// whose commands carry `--if-configured`. `None` for an agent without one.
+pub fn generated_user_json_hooks(agent: Agent, text: &str) -> Option<GeneratedJson> {
+    let (_, current) = user_config_for(agent, false, None).ok()?;
+    generated_json_against(agent, &current, text, true)
+}
+
+/// [`generated_json_hooks`] against `current`, what this release writes in that file.
+fn generated_json_against(
+    agent: Agent,
+    current: &str,
+    text: &str,
+    user: bool,
+) -> Option<GeneratedJson> {
+    let current: serde_json::Value = serde_json::from_str(current).ok()?;
     let existing: serde_json::Value = serde_json::from_str(text).ok()?;
     let (current, existing) = (current.as_object()?, existing.as_object()?);
     let mut reference = Vec::new();
@@ -1075,8 +1102,8 @@ pub fn generated_json_hooks(agent: Agent, text: &str) -> Option<GeneratedJson> {
     for (key, value) in existing {
         match current.get(key)? {
             events @ serde_json::Value::Object(_) => {
-                reference.extend(json_entries(agent, events)?);
-                found.extend(json_entries(agent, value)?);
+                reference.extend(json_entries(agent, events, user)?);
+                found.extend(json_entries(agent, value, user)?);
             }
             // `version`: what this release writes.
             other if other == value => {}
@@ -1471,9 +1498,11 @@ fn copilot_repo_hook_runs(dir: &Path) -> bool {
         && copilot_home().and_then(|h| copilot_trusts(&h, dir)) == Some(true)
 }
 
-/// Write the user-level hook file ([`user_config_for`]). An existing file that runs
-/// discipline for `agent` and differs from this release's is rewritten only with
-/// `upgrade`; any other existing file is never rewritten.
+/// Write the user-level hook file ([`user_config_for`]). An existing file some release
+/// generated ([`generated_user_json_hooks`]) that differs from this release's is
+/// rewritten only with `upgrade`, keeping its mode and a longer check timeout as
+/// [`install_with`] does; any other existing file is never rewritten, and `upgrade`
+/// refuses one that runs discipline but lacks a hook command this release writes.
 pub fn install_user(
     agent: Agent,
     observe: bool,
@@ -1484,18 +1513,31 @@ pub fn install_user(
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
-        if existing == content {
-            return Ok(Installed::AlreadyPresent(path));
+        if let Some(was) = generated_user_json_hooks(agent, &existing) {
+            let timeout = timeout.or(was
+                .timeout
+                .filter(|t| default_timeout(agent).is_some_and(|d| *t > d)));
+            let (_, content) = user_config_for(agent, observe || was.observe, timeout)?;
+            if existing == content {
+                return Ok(Installed::AlreadyPresent(path));
+            }
+            if !upgrade {
+                return Ok(Installed::Outdated(path));
+            }
+            std::fs::write(&path, content)
+                .with_context(|| format!("cannot write {}", path.display()))?;
+            return Ok(Installed::Upgraded(path));
         }
         if !existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
             return Ok(Installed::Refused(path, content));
         }
-        if !upgrade {
-            return Ok(Installed::Outdated(path));
+        // Merged by hand: what to merge is written in the file's own mode.
+        let (_, content) =
+            user_config_for(agent, observe || existing.contains(" --observe"), timeout)?;
+        if upgrade && lacks_a_generated_command(&existing, &content) {
+            return Ok(Installed::Refused(path, content));
         }
-        std::fs::write(&path, content)
-            .with_context(|| format!("cannot write {}", path.display()))?;
-        return Ok(Installed::Upgraded(path));
+        return Ok(Installed::AlreadyPresent(path));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -2808,5 +2850,40 @@ mod tests {
         let up = install_with(Agent::ClaudeCode, dir.path(), true, true, None).unwrap();
         assert_eq!(up, Installed::AlreadyPresent(path.clone()));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+
+    #[test]
+    fn the_user_level_copilot_file_is_recognised_only_as_generated() {
+        let fixture = |mode: &str| {
+            std::fs::read_to_string(format!(
+                "{}/tests/fixtures/hook_install/v0.15.0/copilot-user.{mode}.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap()
+        };
+        for (mode, observe) in [("enforce", false), ("observe", true)] {
+            let want = Some(GeneratedJson {
+                observe,
+                timeout: Some(120),
+            });
+            let (_, now) = user_config_for(Agent::Copilot, observe, None).unwrap();
+            for text in [now.clone(), fixture(mode)] {
+                assert_eq!(generated_user_json_hooks(Agent::Copilot, &text), want);
+                // A repository file is not a user-level one, nor the other way round.
+                assert_eq!(generated_json_hooks(Agent::Copilot, &text), None);
+            }
+            let (_, repo) = config_for_opts(Agent::Copilot, observe, None);
+            assert_eq!(generated_user_json_hooks(Agent::Copilot, &repo), None);
+            // A hook of its own: not generated.
+            let mut v = json(&now);
+            v["hooks"]["agentStop"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"type": "command", "bash": "./notify.sh"}));
+            assert_eq!(generated_user_json_hooks(Agent::Copilot, &pretty(&v)), None);
+        }
+        // Only Copilot has a user-level file.
+        let (_, now) = user_config_for(Agent::Copilot, false, None).unwrap();
+        assert_eq!(generated_user_json_hooks(Agent::Qwen, &now), None);
     }
 }

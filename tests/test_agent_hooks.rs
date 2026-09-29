@@ -793,8 +793,8 @@ fn copilot_user_install_keeps_observe_mode() {
 }
 
 /// A user-level file an earlier release wrote (it runs discipline, without the pre-tool
-/// entry) is reported and kept, and rewritten with `--upgrade`; a file that does not run
-/// discipline is never rewritten.
+/// entry) is reported and kept, and rewritten with `--upgrade`; a file with a hook of its
+/// own, or one that does not run discipline, is never rewritten.
 #[test]
 fn copilot_user_file_from_an_earlier_release_is_rewritten_only_with_upgrade() {
     let repo = Repo::new();
@@ -846,6 +846,42 @@ fn copilot_user_file_from_an_earlier_release_is_rewritten_only_with_upgrade() {
         "{}",
         again.stdout
     );
+
+    // A hook of its own beside discipline's, in the earlier file: never rewritten, and
+    // --upgrade refuses it with the entries to merge.
+    let mut own: serde_json::Value = serde_json::from_str(&earlier).unwrap();
+    own["hooks"]["agentStop"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({ "type": "command", "bash": "./notify.sh" }));
+    let own = own.to_string();
+    std::fs::write(&path, &own).unwrap();
+    let plain = repo.run(&["hook", "install", "--agent", "copilot", "--user"], &env);
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
+    assert!(
+        plain.stdout.contains("already runs discipline"),
+        "{}",
+        plain.stdout
+    );
+    let refused = repo.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "copilot",
+            "--user",
+            "--upgrade",
+        ],
+        &env,
+    );
+    assert_ne!(refused.code, 0, "{}", refused.stdout);
+    assert!(
+        refused.stdout.contains("Merge this into it")
+            && refused.stdout.contains("--event pre-tool --if-configured"),
+        "{}",
+        refused.stdout
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), own);
 
     let foreign = r#"{"version":1,"hooks":{}}"#;
     std::fs::write(&path, foreign).unwrap();

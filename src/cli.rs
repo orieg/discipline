@@ -282,8 +282,7 @@ pub struct HookInstallArgs {
     /// setup step, the OpenCode plugin), or a JSON hook file holding only the entries a
     /// release writes, whose observe mode and longer check timeout are kept. A file with
     /// hooks or settings of its own is never rewritten; one missing an entry is refused
-    /// with the snippet to merge. With --user, rewrite a user-level file that runs
-    /// discipline for the agent
+    /// with the snippet to merge. With --user, the same for the user-level file
     #[arg(long)]
     pub upgrade: bool,
 
