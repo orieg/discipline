@@ -325,6 +325,26 @@ fn resolve_helper(
     level: usize,
     hops: usize,
 ) -> Option<HelperFacts> {
+    if name.contains('|') {
+        // A callee chosen at the call (`(if c { a } else { b })(x)`, named `a|b` by the
+        // pack): only the checks every choice runs are sure, so each count is the smallest
+        // over the choices, and a choice that is not a same-file helper leaves none.
+        let mut sure: Option<HelperFacts> = None;
+        for choice in name.split('|') {
+            let f = resolve_helper(choice, helpers, calls, path, level, hops)?;
+            sure = Some(match sure {
+                None => f,
+                Some(s) => HelperFacts {
+                    total_asserts: s.total_asserts.min(f.total_asserts),
+                    strong_asserts: s.strong_asserts.min(f.strong_asserts),
+                    tautologies: s.tautologies.min(f.tautologies),
+                    fatal_asserts: s.fatal_asserts.min(f.fatal_asserts),
+                    wraps: None,
+                },
+            });
+        }
+        return sure;
+    }
     let own = helpers.get(name)?;
     if path.iter().any(|p| p == name) {
         return None;
@@ -465,8 +485,11 @@ pub fn forwarding_wrapper_callee(
         }
     }
     // A pack may key a method by its scope (`Class::method`, `self.method`).
+    // A callee chosen at the call is named `a|b`; all its choices come from one call, so
+    // the first identifies it.
     let last = callees.last()?;
-    let short = last.rsplit("::").next()?.rsplit('.').next()?;
+    let first = last.split('|').next()?;
+    let short = first.rsplit("::").next()?.rsplit('.').next()?;
     names_word(call.utf8_text(src).ok()?, short).then(|| last.clone())
 }
 

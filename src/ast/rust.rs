@@ -163,6 +163,18 @@ impl<'a> Extractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
+    /// A callee chosen at the call, `(if c { a } else { b })(x)`, named by every function
+    /// it can be, joined by `|` (resolved in `ast::resolve_helper`); `None` for any other
+    /// callee.
+    fn selected_callee(&self, f: Node) -> Option<String> {
+        if f.kind() != "parenthesized_expression" {
+            return None;
+        }
+        let mut names = Vec::new();
+        branch_names(f, self.src, &mut names)?;
+        (!names.is_empty()).then(|| names.join("|"))
+    }
+
     fn collect_comments(&mut self, node: Node) {
         if matches!(node.kind(), "line_comment" | "block_comment") {
             let text = self.text(node);
@@ -530,11 +542,13 @@ impl<'a> Extractor<'a> {
                             }
                         }
                     }
-                    let name = last_segment(self.text(f));
-                    direct_calls.push(name.to_string());
-                    if self.vocab.helper_fns.iter().any(|h| h == name) {
+                    let name = self
+                        .selected_callee(f)
+                        .unwrap_or_else(|| last_segment(self.text(f)).to_string());
+                    if self.vocab.helper_fns.contains(&name) {
                         test.total_asserts += 1;
                     }
+                    direct_calls.push(name);
                 }
             }
             _ => {}
@@ -920,6 +934,54 @@ const NON_EVALUATING_MACROS: &[&str] = &[
     "compile_error",
     "module_path",
 ];
+
+/// Every name a branch of a callee chosen at the call can take: `(if c { a } else { b })`
+/// or `(match m { .. => a, .. => b })`, nested and parenthesised alike. `None` when a
+/// branch is anything but a function name, or an `if` has no `else`.
+fn branch_names(n: Node, src: &[u8], out: &mut Vec<String>) -> Option<()> {
+    match n.kind() {
+        "parenthesized_expression" => branch_names(n.named_child(0)?, src, out),
+        "if_expression" => {
+            branch_names(n.child_by_field_name("consequence")?, src, out)?;
+            let otherwise = n.child_by_field_name("alternative")?.named_child(0)?;
+            branch_names(otherwise, src, out)
+        }
+        "match_expression" => {
+            let body = n.child_by_field_name("body")?;
+            let mut cursor = body.walk();
+            let arms: Vec<Node> = body
+                .named_children(&mut cursor)
+                .filter(|a| a.kind() == "match_arm")
+                .collect();
+            if arms.is_empty() {
+                return None;
+            }
+            for arm in arms {
+                branch_names(arm.child_by_field_name("value")?, src, out)?;
+            }
+            Some(())
+        }
+        "block" => {
+            let mut cursor = n.walk();
+            let parts: Vec<Node> = n
+                .named_children(&mut cursor)
+                .filter(|c| !matches!(c.kind(), "line_comment" | "block_comment"))
+                .collect();
+            let [only] = parts.as_slice() else {
+                return None;
+            };
+            branch_names(*only, src, out)
+        }
+        "identifier" | "scoped_identifier" | "generic_function" => {
+            let name = last_segment(n.utf8_text(src).ok()?).to_string();
+            if !out.contains(&name) {
+                out.push(name);
+            }
+            Some(())
+        }
+        _ => None,
+    }
+}
 
 fn last_segment(path: &str) -> &str {
     let path = without_type_arguments(path.trim());
@@ -1462,6 +1524,86 @@ fn t_not_a_helper() {
             assert_eq!(counts(name), plain, "{name}");
         }
         assert_eq!(counts("t_not_a_helper"), (0, 0, 0));
+    }
+
+    /// A callee chosen at the call (`(if SHARED { a } else { b })(x)`, or a `match`) runs
+    /// one of its choices: the checks every choice runs count, directly and through a
+    /// forwarding wrapper (the expanse `map_insert_mode` shape). A weaker choice lowers
+    /// the count to its own; a choice that is not a same-file helper leaves none.
+    #[test]
+    fn a_callee_chosen_at_the_call_counts_the_checks_every_choice_runs() {
+        let src = r##"fn plain(x: u32, s: &mut u32) -> u32 {
+    debug_assert!(x < 10);
+    assert_eq!(x % 2, 0);
+    *s += 1;
+    x
+}
+fn shared(x: u32, s: &mut u32) -> u32 {
+    debug_assert!(x < 10);
+    assert_eq!(x % 2, 0);
+    *s += 2;
+    x
+}
+fn weak(x: u32, s: &mut u32) -> u32 {
+    debug_assert!(x < 10);
+    *s += 3;
+    x
+}
+fn insert_mode<const SHARED: bool>(x: u32) -> u32 {
+    let mut s = 0;
+    (if SHARED { shared } else { plain })(x, &mut s)
+}
+fn insert(x: u32) -> u32 {
+    insert_mode::<false>(x)
+}
+#[test]
+fn t_plain() {
+    let mut s = 0;
+    plain(2, &mut s);
+}
+#[test]
+fn t_if() {
+    let mut s = 0;
+    (if FAST { plain } else { shared })(2, &mut s);
+}
+#[test]
+fn t_match() {
+    let mut s = 0;
+    (match MODE { Mode::A => plain, Mode::B => self::shared, _ => plain })(2, &mut s);
+}
+#[test]
+fn t_wrapper() {
+    insert(2);
+}
+#[test]
+fn t_weaker() {
+    let mut s = 0;
+    (if FAST { plain } else { weak })(2, &mut s);
+}
+#[test]
+fn t_weak_only() {
+    let mut s = 0;
+    weak(2, &mut s);
+}
+#[test]
+fn t_not_all_helpers() {
+    let mut s = 0;
+    (if FAST { plain } else { other_crate::run })(2, &mut s);
+}
+"##;
+        let f = facts(src);
+        let counts = |name: &str| {
+            let t = f.tests.iter().find(|t| t.name == name).unwrap();
+            (t.total_asserts, t.strong_asserts, t.helper_checks)
+        };
+        let plain = counts("t_plain");
+        assert!(plain.0 > 0 && plain.2 == 1, "{plain:?}");
+        for name in ["t_if", "t_match", "t_wrapper"] {
+            assert_eq!(counts(name), plain, "{name}");
+        }
+        assert_eq!(counts("t_weaker"), counts("t_weak_only"));
+        assert!(counts("t_weaker").0 < plain.0);
+        assert_eq!(counts("t_not_all_helpers"), (0, 0, 0));
     }
 
     /// A same-file helper called inside a macro's arguments (`assert!(run(1) > 0)`) runs
