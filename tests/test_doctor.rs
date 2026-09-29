@@ -1105,3 +1105,65 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
         "{scoping}"
     );
 }
+
+/// Gitea secrets through the binary against a fake forge serving the lists recorded from
+/// Gitea 1.24 (Phase 14 Step 2): the exposure is stated, a pull-request workflow reading
+/// a secret is named, and an organisation secret no workflow reads is a warning.
+#[test]
+fn doctor_states_gitea_secrets_and_reports_an_unread_one() {
+    let recorded: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/forge_settings/gitea.json")).unwrap();
+    let repo = Repo::new();
+    repo.write(
+        ".gitea/workflows/deploy.yml",
+        "on:\n  pull_request:\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: deploy\n        env:\n          KEY: ${{ secrets.DEPLOY_KEY }}\n",
+    );
+    repo.commit("ci: deploy");
+    let api = FakeForge::start();
+    api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));
+    api.serve(
+        "repos/o/r/actions/secrets?limit=50&page=1",
+        recorded["repo_secrets"].clone(),
+    );
+    api.serve(
+        "repos/o/r/actions/secrets?limit=50&page=2",
+        serde_json::json!([]),
+    );
+    api.serve(
+        "orgs/o/actions/secrets?limit=50&page=1",
+        recorded["org_secrets"].clone(),
+    );
+    api.serve(
+        "orgs/o/actions/secrets?limit=50&page=2",
+        serde_json::json!([]),
+    );
+    let url = api.url();
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("DISCIPLINE_FORGE", "gitea"),
+        ("DISCIPLINE_FORGE_URL", "https://git.example.com"),
+        ("DISCIPLINE_FORGE_REPO", "o/r"),
+        ("GITEA_TOKEN", "tok-secret-123"),
+    ];
+    let run = repo.run(&["doctor", "--format", "json"], &env);
+    let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let f = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "secret-scoping")
+        .unwrap()
+        .clone();
+    assert_eq!(f["status"], "warn", "{f}");
+    let summary = f["summary"].as_str().unwrap();
+    assert!(summary.contains("no environment to scope"), "{summary}");
+    assert!(
+        summary.contains("`DEPLOY_KEY` (.gitea/workflows/deploy.yml job `deploy`)"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("not read by any workflow here: `ORG_TOKEN`"),
+        "{summary}"
+    );
+    assert!(!run.stdout.contains("tok-secret-123") && !run.stderr.contains("tok-secret-123"));
+}
