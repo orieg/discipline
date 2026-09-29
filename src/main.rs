@@ -505,6 +505,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
         outcomes,
         policy_failures: Vec::new(),
         deprecations: Vec::new(),
+        unused_directives: Vec::new(),
     };
     let json_summary = empty(
         Vec::new(),

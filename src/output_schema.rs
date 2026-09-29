@@ -48,6 +48,7 @@ pub fn report_schema() -> Value {
             "planned_gates": { "type": "array", "items": { "type": "string" }, "description": "Gate ids the roadmap plans but this binary does not ship" },
             "policy_failures": { "type": "array", "items": { "type": "string" }, "description": "Run-level refusals no single gate owns; any entry fails the run. Omitted when empty" },
             "deprecations": { "type": "array", "items": { "type": "string" }, "description": "Deprecated configuration keys this run read, one note each; never fails the run. Omitted when empty" },
+            "unused_directives": { "type": "array", "items": { "$ref": "#/$defs/UnusedDirective" }, "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty" },
             "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" }
         },
         "$defs": {
@@ -102,6 +103,16 @@ pub fn report_schema() -> Value {
                     "subject": { "type": "string", "description": "What the directive names: a test, path, rule, dependency, ..." },
                     "directive": { "type": "string" },
                     "reason": { "type": "string" },
+                    "source": { "$ref": "#/$defs/OverrideSource" },
+                    "hidden": { "type": "boolean", "description": "The directive was inside an HTML comment" }
+                }
+            },
+            "UnusedDirective": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["directive", "source", "hidden"],
+                "properties": {
+                    "directive": { "type": "string" },
                     "source": { "$ref": "#/$defs/OverrideSource" },
                     "hidden": { "type": "boolean", "description": "The directive was inside an HTML comment" }
                 }
@@ -186,7 +197,7 @@ pub fn replay_schema() -> Value {
         "description": "The summary `discipline replay --json` prints: each replayed change's verdict under the configuration, and per-gate counts. Changes are labelled `#N` (pull request) or by a 10-character commit id.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["schema_version", "cases", "passed", "blocked", "could_not_check", "errors_by_gate", "refused_overrides_by_gate", "warnings_by_gate", "could_not_check_by_reason", "skipped_by_gate", "cases_detail"],
+        "required": ["schema_version", "cases", "passed", "blocked", "could_not_check", "errors_by_gate", "refused_overrides_by_gate", "overrides_by_gate", "warnings_by_gate", "could_not_check_by_reason", "skipped_by_gate", "cases_detail"],
         "properties": {
             "schema_version": { "const": REPLAY_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
             "cases": { "type": "integer", "minimum": 0 },
@@ -195,6 +206,7 @@ pub fn replay_schema() -> Value {
             "could_not_check": { "type": "integer", "minimum": 0 },
             "errors_by_gate": { "description": "Gate id -> the changes it blocked with an error finding", "$ref": "#/$defs/ChangeLists" },
             "refused_overrides_by_gate": { "description": "Gate id -> the changes whose override of that gate `fail_on_overrides` refused", "$ref": "#/$defs/ChangeLists" },
+            "overrides_by_gate": { "description": "Gate id -> the changes whose check applied an override of that gate (refused ones included)", "$ref": "#/$defs/ChangeLists" },
             "warnings_by_gate": {
                 "description": "Gate id -> the number of changes with a warning from it",
                 "type": "object",
@@ -209,7 +221,7 @@ pub fn replay_schema() -> Value {
             "Case": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["sha", "pr", "subject", "verdict", "blocking_gates", "refused_overrides", "actor", "warning_gates", "findings", "directives_from", "skipped_checks"],
+                "required": ["sha", "pr", "subject", "verdict", "blocking_gates", "refused_overrides", "overrides", "actor", "warning_gates", "findings", "directives_from", "skipped_checks"],
                 "properties": {
                     "sha": { "type": "string", "description": "Full commit id of the replayed change" },
                     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from the forge or the subject's `(#N)`" },
@@ -217,6 +229,7 @@ pub fn replay_schema() -> Value {
                     "verdict": { "enum": ["passed", "blocked", "could_not_check"] },
                     "blocking_gates": { "type": "array", "items": { "type": "string" }, "description": "Gates with an `error` finding" },
                     "refused_overrides": { "type": "array", "items": { "type": "string" }, "description": "Gates whose overrides `fail_on_overrides` refused" },
+                    "overrides": { "type": "array", "items": { "$ref": "#/$defs/CaseOverride" }, "description": "Overrides the change's check applied (each lifted a finding), in report order; empty when the check itself could not run. The reason is never included: it is free text and can echo secret material" },
                     "actor": { "type": ["string", "null"], "description": "The login the change was checked as: its merged pull request's author" },
                     "warning_gates": { "type": "array", "items": { "type": "string" } },
                     "findings": { "type": "array", "items": { "$ref": "#/$defs/CaseFinding" }, "description": "Every error and warning of the change's report, in report order; empty when the check itself could not run. The message is never included: a finding can echo secret material" },
@@ -224,6 +237,18 @@ pub fn replay_schema() -> Value {
                     "skipped_checks": { "type": "array", "items": { "$ref": "#/$defs/SkippedCheck" }, "description": "Parts of gates skipped because the configuration names a file this change does not have yet; empty when the check itself could not run" },
                     "reason": { "enum": reasons(), "description": "Why the change could not be checked: the report's `could_not_check.reason`, or `forge` when its merged pull request could not be read. Omitted otherwise" },
                     "detail": { "type": "string", "description": "Why the change could not be checked. Omitted otherwise" }
+                }
+            },
+            "CaseOverride": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["gate", "directive", "subject", "source", "hidden"],
+                "properties": {
+                    "gate": { "type": "string", "description": "Gate id" },
+                    "directive": { "type": "string", "description": "The directive's name, as written" },
+                    "subject": { "type": "string", "description": "What the override covers: the path, test or dependency the finding named" },
+                    "source": { "type": "string", "description": "Where the directive was read: `PR body` (under replay, the merged pull request's body), `commit <sha>`, `merged pull request #N body` or `inline <file>:<line>`" },
+                    "hidden": { "type": "boolean", "description": "The directive was inside an HTML comment" }
                 }
             },
             "SkippedCheck": {

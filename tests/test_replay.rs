@@ -164,6 +164,26 @@ fn replay_reads_the_waiver_in_the_merged_pull_request_body() {
     assert_eq!(case["pr"], 12, "{s}");
     assert_eq!(case["directives_from"], "pull request body");
     assert_eq!(case["verdict"], "passed", "{s}");
+    // The waiver that let it pass is named, without its reason.
+    assert_eq!(
+        case["overrides"],
+        serde_json::json!([{
+            "gate": "assertion-reduction",
+            "directive": "allow-assertion-drop",
+            "subject": "adds",
+            // Replay hands the merged pull request's body to the check as its PR body.
+            "source": "PR body",
+            "hidden": false
+        }]),
+        "{s}"
+    );
+    assert!(!case["overrides"].to_string().contains("integration test"));
+    assert_eq!(
+        s["overrides_by_gate"]["assertion-reduction"],
+        serde_json::json!(["#12"])
+    );
+    // The change with no directive applied none.
+    assert_eq!(s["cases_detail"][0]["overrides"], serde_json::json!([]));
 }
 
 #[test]

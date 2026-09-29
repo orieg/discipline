@@ -237,6 +237,11 @@ pub struct CheckSummary {
     /// Deprecated configuration keys this run read, one note each. They never fail the run.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deprecations: Vec<String>,
+    /// Directives this run read (PR body, commit bodies, merged pull-request bodies) that
+    /// lifted no finding. Computed when every suite ran; empty under `--suite`. They
+    /// never fail the run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unused_directives: Vec<crate::tokens::UnusedDirective>,
     /// Why the run could not check (exit 2): only then present, and `outcomes` is empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub could_not_check: Option<crate::could_not_check::CouldNotCheck>,
@@ -769,6 +774,14 @@ pub fn run_checks(
             .filter(|g| !g.available)
             .map(|g| g.id)
             .collect(),
+        unused_directives: if matches!(suite, SuiteChoice::All) {
+            crate::tokens::unused_directives(
+                &ctx.directives,
+                outcomes.iter().flat_map(|o| o.overrides.iter()),
+            )
+        } else {
+            Vec::new()
+        },
         outcomes,
         policy_failures: Vec::new(),
         deprecations,

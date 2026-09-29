@@ -211,6 +211,27 @@
         }
       ]
     },
+    "UnusedDirective": {
+      "additionalProperties": false,
+      "properties": {
+        "directive": {
+          "type": "string"
+        },
+        "hidden": {
+          "description": "The directive was inside an HTML comment",
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/OverrideSource"
+        }
+      },
+      "required": [
+        "directive",
+        "source",
+        "hidden"
+      ],
+      "type": "object"
+    },
     "Violation": {
       "additionalProperties": false,
       "properties": {
@@ -338,6 +359,13 @@
     "schema_version": {
       "const": 1,
       "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it"
+    },
+    "unused_directives": {
+      "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty",
+      "items": {
+        "$ref": "#/$defs/UnusedDirective"
+      },
+      "type": "array"
     },
     "warnings": {
       "description": "Findings of severity `warning`",

@@ -36,6 +36,9 @@ pub struct Case {
     /// Gates whose overrides `fail_on_overrides` refused, since `actor` is not in
     /// `allowed_override_actors`. Each blocks the change as an error finding does.
     pub refused_overrides: Vec<String>,
+    /// Overrides the change's check applied, in report order: those that lifted a
+    /// finding. Refused ones are in `refused_overrides` too.
+    pub overrides: Vec<CaseOverride>,
     /// The login the change was checked as: its merged pull request's author, or none.
     pub actor: Option<String>,
     /// Gates with a `warning` finding.
@@ -68,6 +71,22 @@ pub struct CaseFinding {
     pub line: Option<u64>,
 }
 
+/// One override a replayed change's check applied. Its reason is never carried: it is
+/// free text the change's author wrote, and can echo secret material or a name.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CaseOverride {
+    pub gate: String,
+    pub directive: String,
+    /// What the override covers: a path, test or dependency the finding named.
+    pub subject: String,
+    /// Where the directive was read, as the check report's text output names it
+    /// (`PR body`, `commit <sha>`, `merged pull request #N body`, `inline <file>:<line>`).
+    /// Replay hands a change's merged pull-request body to its check as the PR body.
+    pub source: String,
+    /// The directive was inside an HTML comment.
+    pub hidden: bool,
+}
+
 /// Part of a gate a replayed change skipped: its configuration names a file the change
 /// does not have (see [`crate::guards::PREDATES_CONFIG_NOTE`]).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -89,6 +108,8 @@ pub struct Summary {
     pub errors_by_gate: BTreeMap<String, Vec<String>>,
     /// Gate id → the changes whose overrides of that gate were refused.
     pub refused_overrides_by_gate: BTreeMap<String, Vec<String>>,
+    /// Gate id → the changes whose check applied an override of that gate.
+    pub overrides_by_gate: BTreeMap<String, Vec<String>>,
     /// Gate id → the number of changes with a warning from it.
     pub warnings_by_gate: BTreeMap<String, usize>,
     /// The reason code a change could not be checked for → the changes (`#N`, else the
@@ -145,6 +166,14 @@ impl Summary {
                     .or_default()
                     .push(c.label());
             }
+            let overridden: std::collections::BTreeSet<&String> =
+                c.overrides.iter().map(|o| &o.gate).collect();
+            for g in overridden {
+                s.overrides_by_gate
+                    .entry(g.clone())
+                    .or_default()
+                    .push(c.label());
+            }
             for g in &c.warning_gates {
                 *s.warnings_by_gate.entry(g.clone()).or_default() += 1;
             }
@@ -174,6 +203,11 @@ impl Summary {
                     "  overrides refused: {}",
                     c.refused_overrides.join(", ")
                 ));
+            } else if !c.overrides.is_empty() {
+                let overridden: std::collections::BTreeSet<&str> =
+                    c.overrides.iter().map(|o| o.gate.as_str()).collect();
+                let overridden: Vec<&str> = overridden.into_iter().collect();
+                gates.push_str(&format!("  overridden: {}", overridden.join(", ")));
             }
             out.push_str(&format!(
                 "{:<9} {:<16} {}{gates}\n",
@@ -205,6 +239,13 @@ impl Summary {
         for (g, changes) in &self.refused_overrides_by_gate {
             out.push_str(&format!(
                 "  override refused {g:<16} {} change(s): {}\n",
+                changes.len(),
+                changes.join(" ")
+            ));
+        }
+        for (g, changes) in &self.overrides_by_gate {
+            out.push_str(&format!(
+                "  override {g:<24} {} change(s): {}\n",
                 changes.len(),
                 changes.join(" ")
             ));
@@ -377,6 +418,34 @@ pub fn read_skipped_checks(json: &str) -> Vec<SkippedCheck> {
         }
     }
     out
+}
+
+/// The overrides one `check --format json` run applied, in report order; empty when
+/// the check itself could not run.
+pub fn read_overrides(code: i32, json: &str) -> Vec<CaseOverride> {
+    if !matches!(code, 0 | 1) {
+        return Vec::new();
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    v["outcomes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|o| o["overrides"].as_array().into_iter().flatten())
+        .filter_map(|x| {
+            let source: crate::tokens::OverrideSource =
+                serde_json::from_value(x["source"].clone()).ok()?;
+            Some(CaseOverride {
+                gate: x["gate"].as_str()?.to_string(),
+                directive: x["directive"].as_str()?.to_string(),
+                subject: x["subject"].as_str().unwrap_or("").to_string(),
+                source: source.to_string(),
+                hidden: x["hidden"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect()
 }
 
 /// Gates that applied an override, in report order.
@@ -666,6 +735,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
         let (mut verdict, blocking, warning) =
             read_verdict(code, &String::from_utf8_lossy(&out.stdout));
         let findings = read_findings(code, &String::from_utf8_lossy(&out.stdout));
+        let overrides = read_overrides(code, &String::from_utf8_lossy(&out.stdout));
         let skipped_checks = if matches!(code, 0 | 1) {
             read_skipped_checks(&String::from_utf8_lossy(&out.stdout))
         } else {
@@ -711,6 +781,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
             verdict,
             blocking_gates: blocking,
             refused_overrides: refused,
+            overrides,
             actor: author,
             warning_gates: warning,
             findings,
@@ -843,6 +914,7 @@ mod tests {
             verdict,
             blocking_gates: e.iter().map(|s| s.to_string()).collect(),
             refused_overrides: Vec::new(),
+            overrides: Vec::new(),
             actor: None,
             warning_gates: w.iter().map(|s| s.to_string()).collect(),
             findings: Vec::new(),
@@ -899,5 +971,60 @@ mod tests {
         assert!(refused
             .render()
             .contains("override refused dependency-delta 1 change(s): #7"));
+        let ov = |gate: &str| CaseOverride {
+            gate: gate.into(),
+            directive: "allow-x".into(),
+            subject: "a.rs".into(),
+            source: "PR body".into(),
+            hidden: false,
+        };
+        let applied = Summary::from_cases(vec![
+            Case {
+                overrides: vec![ov("pii"), ov("pii"), ov("stub-bodies")],
+                ..case(Some(8), "passed", &[], &[])
+            },
+            Case {
+                overrides: vec![ov("pii")],
+                ..case(Some(9), "blocked", &["ci-integrity"], &[])
+            },
+        ]);
+        // One entry per change, however many overrides of the gate it applied.
+        assert_eq!(applied.overrides_by_gate["pii"], vec!["#8", "#9"]);
+        assert_eq!(applied.overrides_by_gate["stub-bodies"], vec!["#8"]);
+        let text = applied.render();
+        assert!(text.contains("  overridden: pii, stub-bodies"), "{text}");
+        assert!(text.contains("override pii"), "{text}");
+        assert!(text.contains("2 change(s): #8 #9"), "{text}");
+    }
+
+    #[test]
+    fn applied_overrides_are_read_without_their_reason() {
+        let json = r#"{"outcomes":[
+            {"gate":"dependency-delta","overrides":[{"gate":"dependency-delta","subject":"serde","directive":"allow-dependency","reason":"serde AKIA-SECRET","source":{"type":"MergedPrBody","detail":12},"hidden":true}]},
+            {"gate":"pii","overrides":[{"gate":"pii","subject":"a.rs","directive":"discipline:allow(pii)","reason":"a.rs fixture","source":{"type":"Commit","detail":"abc"},"hidden":false}]},
+            {"gate":"stub-bodies","overrides":[]}]}"#;
+        let o = read_overrides(1, json);
+        assert_eq!(
+            o,
+            vec![
+                CaseOverride {
+                    gate: "dependency-delta".into(),
+                    directive: "allow-dependency".into(),
+                    subject: "serde".into(),
+                    source: "merged pull request #12 body".into(),
+                    hidden: true,
+                },
+                CaseOverride {
+                    gate: "pii".into(),
+                    directive: "discipline:allow(pii)".into(),
+                    subject: "a.rs".into(),
+                    source: "commit abc".into(),
+                    hidden: false,
+                },
+            ]
+        );
+        assert!(!serde_json::to_string(&o).unwrap().contains("AKIA"));
+        assert!(read_overrides(2, json).is_empty());
+        assert!(read_overrides(0, "not json").is_empty());
     }
 }
