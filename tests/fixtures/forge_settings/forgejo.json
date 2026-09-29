@@ -1,0 +1,92 @@
+{
+  "endpoints": {
+    "/orgs/{org}/actions/secrets": [
+      "GET"
+    ],
+    "/orgs/{org}/actions/secrets/{secretname}": [
+      "DELETE",
+      "PUT"
+    ],
+    "/orgs/{org}/actions/variables": [
+      "GET"
+    ],
+    "/orgs/{org}/actions/variables/{variablename}": [
+      "DELETE",
+      "GET",
+      "POST",
+      "PUT"
+    ],
+    "/repos/{owner}/{repo}/actions/secrets": [
+      "GET"
+    ],
+    "/repos/{owner}/{repo}/actions/secrets/{secretname}": [
+      "DELETE",
+      "PUT"
+    ],
+    "/repos/{owner}/{repo}/actions/variables": [
+      "GET"
+    ],
+    "/repos/{owner}/{repo}/actions/variables/{variablename}": [
+      "DELETE",
+      "GET",
+      "POST",
+      "PUT"
+    ],
+    "/repos/{owner}/{repo}/releases": [
+      "GET",
+      "POST"
+    ],
+    "/repos/{owner}/{repo}/tag_protections": [
+      "GET",
+      "POST"
+    ],
+    "/repos/{owner}/{repo}/tag_protections/{id}": [
+      "DELETE",
+      "GET",
+      "PATCH"
+    ]
+  },
+  "forge": "Forgejo 12.0.4",
+  "note": "A throwaway instance (docker, SQLite, Actions enabled) with an admin `probe`, a repository `probe/r` and an organisation `po`. `endpoints` is the instance's own API description (swagger.v1.json) filtered to Actions secrets and variables, tag protections and releases; there is no endpoint for the Actions token's default permissions, an allowed-actions policy, or release immutability.",
+  "observed": "RUN 2026-09-29",
+  "org_secrets": [
+    {
+      "created_at": "1970-01-01T00:00:00Z",
+      "name": "ORG_TOKEN"
+    }
+  ],
+  "repo_secrets": [
+    {
+      "created_at": "1970-01-01T00:00:00Z",
+      "name": "DEPLOY_KEY"
+    }
+  ],
+  "repo_variables": [
+    {
+      "data": "",
+      "name": "REGION",
+      "owner_id": 0,
+      "repo_id": 1
+    }
+  ],
+  "repository": {
+    "has_actions": true,
+    "has_releases": true
+  },
+  "tag_protection_create_without_whitelist": {
+    "message": "both whitelist_usernames and whitelist_teams are empty",
+    "status": 400
+  },
+  "tag_protections": [
+    {
+      "created_at": "1970-01-01T00:00:00Z",
+      "id": 1,
+      "name_pattern": "v*",
+      "updated_at": "1970-01-01T00:00:00Z",
+      "whitelist_teams": [],
+      "whitelist_usernames": [
+        "probe"
+      ]
+    }
+  ]
+}
