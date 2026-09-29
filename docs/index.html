@@ -475,29 +475,45 @@
     }
     .platform-nav {
       display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.75rem;
+      padding: 1rem 1.25rem;
       background: var(--card-inner);
       border-bottom: 1px solid var(--border);
-      overflow-x: auto;
-      scrollbar-width: thin;
+    }
+    .platform-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      min-width: 0;
+    }
+    .platform-group-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .platform-group-btns {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
     }
     .platform-btn {
-      padding: 0.85rem 1.25rem;
+      padding: 0.45rem 0.85rem;
       background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
+      border: 1px solid var(--border);
+      border-radius: 999px;
       color: var(--text-muted);
-      font-size: 0.88rem;
+      font-size: 0.85rem;
       font-weight: 600;
       cursor: pointer;
       white-space: nowrap;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
       transition: all 0.15s ease;
     }
     .platform-btn:hover {
       color: var(--heading);
-      background: var(--nav-pill-bg);
+      border-color: var(--border-accent);
     }
     .platform-btn:focus-visible,
     .theme-toggle-btn:focus-visible,
@@ -508,8 +524,8 @@
     }
     .platform-btn.active {
       color: var(--accent);
-      border-bottom-color: var(--accent);
-      background: var(--card-bg);
+      border-color: var(--accent);
+      background: var(--nav-pill-bg);
     }
     .platform-pane {
       display: none;
@@ -775,6 +791,36 @@
       overflow-wrap: anywhere;
     }
 
+    .copy-wrap {
+      position: relative;
+    }
+    .copy-wrap > .install-snippet { padding-right: 2.75rem; }
+    .copy-wrap > .code-block { padding-right: 3rem; }
+    .copy-btn {
+      position: absolute;
+      top: 0.4rem;
+      right: 0.4rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.9rem;
+      height: 1.9rem;
+      padding: 0;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #94a3b8;
+      cursor: pointer;
+      opacity: 0.75;
+      transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+    .copy-wrap:hover .copy-btn,
+    .copy-btn:focus-visible { opacity: 1; }
+    .copy-btn:hover { color: #e2e8f0; border-color: #64748b; }
+    .copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .copy-btn.copied { color: #34d399; border-color: #34d399; opacity: 1; }
+    .copy-btn svg { width: 15px; height: 15px; }
+
     /* Footer */
     footer {
       border-top: 1px solid var(--border);
@@ -998,15 +1044,30 @@
 
     <div class="platform-container">
       <nav class="platform-nav" id="platformNav" role="tablist" aria-label="Platform guides">
-        <button type="button" role="tab" aria-selected="true" aria-controls="pane-github" class="platform-btn active" data-target="pane-github">GitHub Actions</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pane-gitlab" class="platform-btn" data-target="pane-gitlab">GitLab CI/CD</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pane-forgejo" class="platform-btn" data-target="pane-forgejo">Forgejo Actions</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pane-gitea" class="platform-btn" data-target="pane-gitea">Gitea Actions</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pane-argo" class="platform-btn" data-target="pane-argo">Argo Workflows</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pane-docker" class="platform-btn" data-target="pane-docker">Container (Docker)</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pane-precommit" class="platform-btn" data-target="pane-precommit">pre-commit</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pane-cli" class="platform-btn" data-target="pane-cli">Standalone CLI</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="pane-agents" class="platform-btn" data-target="pane-agents">Coding Agents</button>
+        <div class="platform-group" role="presentation">
+          <span class="platform-group-label" aria-hidden="true">CI/CD forges</span>
+          <div class="platform-group-btns" role="presentation">
+            <button type="button" role="tab" aria-selected="true" aria-controls="pane-github" class="platform-btn active" data-target="pane-github">GitHub Actions</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="pane-gitlab" class="platform-btn" data-target="pane-gitlab">GitLab CI/CD</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="pane-forgejo" class="platform-btn" data-target="pane-forgejo">Forgejo Actions</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="pane-gitea" class="platform-btn" data-target="pane-gitea">Gitea Actions</button>
+          </div>
+        </div>
+        <div class="platform-group" role="presentation">
+          <span class="platform-group-label" aria-hidden="true">Pipelines &amp; containers</span>
+          <div class="platform-group-btns" role="presentation">
+            <button type="button" role="tab" aria-selected="false" aria-controls="pane-argo" class="platform-btn" data-target="pane-argo">Argo Workflows</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="pane-docker" class="platform-btn" data-target="pane-docker">Container (Docker)</button>
+          </div>
+        </div>
+        <div class="platform-group" role="presentation">
+          <span class="platform-group-label" aria-hidden="true">Local &amp; agents</span>
+          <div class="platform-group-btns" role="presentation">
+            <button type="button" role="tab" aria-selected="false" aria-controls="pane-precommit" class="platform-btn" data-target="pane-precommit">pre-commit</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="pane-cli" class="platform-btn" data-target="pane-cli">Standalone CLI</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="pane-agents" class="platform-btn" data-target="pane-agents">Coding Agents</button>
+          </div>
+        </div>
       </nav>
 
       <!-- GitHub Actions -->
@@ -1208,7 +1269,7 @@ discipline replay --last 50</div>
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
           Tell the agent while it edits: after an edit that weakens a test, the hook hands the agent the finding and its repair, judged by the default branch's configuration so the change cannot switch its own check off. Where the agent supports it, a pre-tool entry refuses an edit into another worktree before it runs, and a session-start entry takes this worktree's lease.
         </p>
-        <div class="code-block"><span class="code-comment"># Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code or OpenCode</span>
+        <div class="code-block" data-no-copy><span class="code-comment"># Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code or OpenCode</span>
 discipline hook install --agent claude-code
 
 <span class="code-comment"># Any MCP client: register the server (tools: check_diff, list_gates, explain_finding)</span>
@@ -2015,6 +2076,56 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       const targetId = btn.getAttribute('data-target');
       document.getElementById(targetId).classList.add('active');
     });
+  });
+
+  // Copy buttons on install snippets and platform code blocks
+  const COPY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  const CHECK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).catch(() => copyTextFallback(text));
+    }
+    return copyTextFallback(text);
+  }
+  function copyTextFallback(text) {
+    return new Promise((resolve, reject) => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy') ? resolve() : reject(); } catch (e) { reject(e); }
+      document.body.removeChild(ta);
+    });
+  }
+  document.querySelectorAll('.install-snippet, .platform-pane .code-block:not([data-no-copy])').forEach(block => {
+    const wrap = document.createElement('div');
+    wrap.className = 'copy-wrap';
+    block.parentNode.insertBefore(wrap, block);
+    wrap.appendChild(block);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy-btn';
+    btn.setAttribute('aria-label', 'Copy to clipboard');
+    btn.title = 'Copy';
+    btn.innerHTML = COPY_ICON;
+    btn.addEventListener('click', () => {
+      copyText(block.textContent.trim()).then(() => {
+        btn.classList.add('copied');
+        btn.innerHTML = CHECK_ICON;
+        btn.setAttribute('aria-label', 'Copied');
+        btn.title = 'Copied';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.innerHTML = COPY_ICON;
+          btn.setAttribute('aria-label', 'Copy to clipboard');
+          btn.title = 'Copy';
+        }, 1500);
+      }).catch(() => {});
+    });
+    wrap.appendChild(btn);
   });
 
   // Real-time client-side gate search/filter
