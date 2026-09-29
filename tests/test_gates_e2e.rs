@@ -12879,6 +12879,38 @@ fn a_helper_call_moved_into_an_assert_is_not_an_assertion_reduction() {
     }
 }
 
+/// A helper whose body moves into a generic function it now calls with type arguments
+/// (`insert_mode::<false>(x)`) keeps its checks: the test's count is unchanged. The same
+/// move that also drops a check is still a reduction.
+#[test]
+fn a_helper_body_moved_behind_a_turbofish_call_is_not_an_assertion_reduction() {
+    let test = "#[test]\nfn insert_is_checked() {\n    insert(2);\n}\n";
+    let plain = "fn insert(x: u32) -> u32 {\n    debug_assert!(x < 10);\n    assert_eq!(x % 2, 0);\n    x\n}\n\n";
+    let generic = "fn insert_mode<const REPLACE: bool>(x: u32) -> u32 {\n    debug_assert!(x < 10);\n    assert_eq!(x % 2, 0);\n    x\n}\n\nfn insert(x: u32) -> u32 {\n    insert_mode::<false>(x)\n}\n\n";
+    let weaker = "fn insert_mode<const REPLACE: bool>(x: u32) -> u32 {\n    debug_assert!(x < 10);\n    x\n}\n\nfn insert(x: u32) -> u32 {\n    insert_mode::<false>(x)\n}\n\n";
+    for (after, reported) in [(generic, false), (weaker, true)] {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("tests/insert.rs", &format!("{plain}{test}"));
+        repo.commit("test: insert");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("tests/insert.rs", &format!("{after}{test}"));
+        repo.commit("refactor: insert through a generic mode");
+        let run = repo.check(&[]);
+        let expected: Vec<&str> = if reported {
+            vec!["Assertion Count Decreased In Existing Test"]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            run.titles("assertion-reduction"),
+            expected,
+            "{}",
+            run.stdout
+        );
+    }
+}
+
 const CITATION_CFF: &str ="cff-version: 1.2.0\nmessage: \"Cite it.\"\ntitle: \"Tool: a thing\"\ntype: software\ndate-released: 2026-09-28\nauthors:\n  - family-names: \"Doe\"\n    given-names: \"Jane\"\n    orcid: \"https://orcid.org/0000-0002-1825-0097\"\nlicense:\n  - MIT\n  - Apache-2.0\nkeywords:\n  - ci\ndoi: \"10.5281/zenodo.100\"\nidentifiers:\n  - type: doi\n    value: \"10.5281/zenodo.100\"\n    description: \"Concept DOI (all versions)\"\n  - type: doi\n    value: \"10.5281/zenodo.101\"\n    description: \"Version DOI (v1.0.0)\"\n";
 const ZENODO_JSON: &str = r#"{"title": "Tool: a thing", "upload_type": "software", "creators": [{"name": "Doe, Jane", "orcid": "0000-0002-1825-0097"}], "license": "mit", "keywords": ["ci"]}"#;
 

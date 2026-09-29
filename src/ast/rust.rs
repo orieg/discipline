@@ -922,7 +922,31 @@ const NON_EVALUATING_MACROS: &[&str] = &[
 ];
 
 fn last_segment(path: &str) -> &str {
+    let path = without_type_arguments(path.trim());
     path.rsplit("::").next().unwrap_or(path).trim()
+}
+
+/// `path` without a trailing turbofish: `insert_mode::<false>` is `insert_mode`, so a
+/// call with type arguments names the function it calls. A path whose `<` does not
+/// follow `::` (a comparison, a malformed path) is kept as it is.
+fn without_type_arguments(path: &str) -> &str {
+    if !path.ends_with('>') {
+        return path;
+    }
+    let mut depth = 0usize;
+    for (i, b) in path.bytes().enumerate().rev() {
+        match b {
+            b'>' => depth += 1,
+            b'<' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return path[..i].strip_suffix("::").unwrap_or(path);
+                }
+            }
+            _ => {}
+        }
+    }
+    path
 }
 
 fn is_strong(name: &str) -> bool {
@@ -1375,6 +1399,69 @@ fn t_dropped() {
                 ("t_dropped", 2, 1),
             ]
         );
+    }
+
+    /// A helper called with type arguments (`insert_mode::<false>(x)`) is the helper
+    /// `insert_mode`: its checks count as a plain call's do, directly, through a path,
+    /// with nested type arguments (`store::<Vec<u8>>`), and through a thin wrapper (the refactor that moved a body into a generic
+    /// `*_mode` function and left the named function as a wrapper). A generic call to a
+    /// function that is not a same-file helper (`Vec::<u32>::new()`) adds nothing.
+    #[test]
+    fn a_helper_called_with_type_arguments_counts_its_checks() {
+        let src = r##"fn plain(x: u32) -> u32 {
+    debug_assert!(x < 10);
+    assert_eq!(x % 2, 0);
+    x
+}
+fn insert_mode<const REPLACE: bool>(x: u32) -> u32 {
+    debug_assert!(x < 10);
+    assert_eq!(x % 2, 0);
+    x
+}
+fn insert(x: u32) -> u32 {
+    insert_mode::<false>(x)
+}
+fn store<T: Default>(x: u32) -> u32 {
+    debug_assert!(x < 10);
+    assert_eq!(x % 2, 0);
+    x
+}
+#[test]
+fn t_plain() {
+    plain(2);
+}
+#[test]
+fn t_generic() {
+    insert_mode::<true>(2);
+}
+#[test]
+fn t_path() {
+    self::insert_mode::<true>(2);
+}
+#[test]
+fn t_wrapper() {
+    insert(2);
+}
+#[test]
+fn t_nested() {
+    store::<Vec<u8>>(2);
+}
+#[test]
+fn t_not_a_helper() {
+    let v = Vec::<u32>::new();
+}
+"##;
+        let f = facts(src);
+        let counts = |name: &str| {
+            let t = f.tests.iter().find(|t| t.name == name).unwrap();
+            (t.total_asserts, t.strong_asserts, t.helper_checks)
+        };
+        let plain = counts("t_plain");
+        assert!(plain.0 > 0 && plain.2 == 1, "{plain:?}");
+        for name in ["t_generic", "t_path", "t_wrapper", "t_nested"] {
+            assert_eq!(counts(name), plain, "{name}");
+        }
+        assert_eq!(counts("t_not_a_helper"), (0, 0, 0));
     }
 
     /// A same-file helper called inside a macro's arguments (`assert!(run(1) > 0)`) runs
