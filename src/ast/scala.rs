@@ -435,7 +435,13 @@ impl<'a> ScalaExtractor<'a> {
                 strong_asserts: helper.strong_asserts,
                 tautologies: helper.tautologies,
                 fatal_asserts: helper.fatal_asserts,
-                wraps: super::thin_wrapper_callee(body, &SCALA_WRAPPER, &dummy),
+                wraps: super::forwarding_wrapper_callee(
+                    body,
+                    &SCALA_WRAPPER,
+                    &SCALA_LOCALS,
+                    &dummy,
+                    self.src,
+                ),
             });
     }
 
@@ -643,6 +649,17 @@ pub const SCALA_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     containers: &["method_value"],
     names: &["identifier"],
     references: &[],
+};
+
+/// A local a Scala wrapper computes and forwards: `val b = loc(d)`.
+pub const SCALA_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &[],
+    binders: &["val_definition", "var_definition"],
+    pattern: &["pattern"],
+    value: &["value"],
+    names: &["identifier"],
+    holders: &[],
+    refused: &[],
 };
 
 /// A Scala helper whose body is one call: `= check(x, true)`, `= { check(x) }`.

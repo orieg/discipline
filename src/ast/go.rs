@@ -250,7 +250,13 @@ impl<'a> GoExtractor<'a> {
                     strong_asserts: helper_fn.strong_asserts,
                     tautologies: helper_fn.tautologies,
                     fatal_asserts: helper_fn.fatal_asserts,
-                    wraps: super::thin_wrapper_callee(body, &GO_WRAPPER, &dummy_calls),
+                    wraps: super::forwarding_wrapper_callee(
+                        body,
+                        &GO_WRAPPER,
+                        &GO_LOCALS,
+                        &dummy_calls,
+                        self.src,
+                    ),
                 };
                 self.helpers.insert(func_name.to_string(), facts);
             }
@@ -635,6 +641,17 @@ pub const GO_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     containers: &["literal_value"],
     names: &["identifier"],
     references: &[],
+};
+
+/// A local a Go wrapper computes and forwards: `b := loc(d)`, `var b = loc(d)`.
+pub const GO_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &["var_declaration"],
+    binders: &["short_var_declaration", "var_spec"],
+    pattern: &["left", "name"],
+    value: &["right", "value"],
+    names: &["identifier"],
+    holders: &["expression_list"],
+    refused: &[],
 };
 
 /// A Go helper whose body is one call: `{ return check(t, true) }`.

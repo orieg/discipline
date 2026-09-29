@@ -345,10 +345,23 @@ fn resolve_helper(
     if let (Some(callee), true) = (&own.wraps, hops < WRAPPER_DEPTH) {
         path.push(name.to_string());
         let sub = resolve_helper(callee, helpers, calls, path, level, hops + 1);
-        path.pop();
         if let Some(sub) = sub {
             add(&mut out, sub);
         }
+        // The calls computing a forwarding wrapper's locals are ordinary calls, followed
+        // as a busy helper's are; the wrapped call itself is the hop above.
+        if level + 1 < HELPER_DEPTH {
+            let mut others: Vec<&String> = calls.get(name).into_iter().flatten().collect();
+            if let Some(at) = others.iter().position(|c| *c == callee) {
+                others.remove(at);
+            }
+            for other in others {
+                if let Some(sub) = resolve_helper(other, helpers, calls, path, level + 1, hops) {
+                    add(&mut out, sub);
+                }
+            }
+        }
+        path.pop();
         return Some(out);
     }
     if level + 1 < HELPER_DEPTH {
@@ -395,20 +408,31 @@ pub fn thin_wrapper_callee(
     spec: &WrapperSpec,
     callees: &[String],
 ) -> Option<String> {
-    wrapper_call(body, spec, &[])?;
+    wrapper_call(body, spec, None)?;
     callees.first().cloned()
 }
 
 /// How a pack's grammar spells a local a wrapper computes before its call:
-/// `let bin = locate(dir);`.
+/// `let bin = locate(dir);`, `b = loc(d)`, `const b = loc(d);`, `int b = loc(d);`.
 pub struct LocalSpec {
-    /// Binding statements.
-    pub kinds: &'static [&'static str],
-    /// The field holding what is bound, which must be one identifier.
-    pub pattern: &'static str,
-    /// The field holding the value; a binding without one computes nothing.
-    pub value: &'static str,
-    /// Fields that make a binding more than a local (`let x = y else { .. }`).
+    /// Statements holding a binding: one of them is a binding when exactly one
+    /// `binders` node sits in it (`const b = 1;`, not `const a = 1, b = 2;`).
+    pub statements: &'static [&'static str],
+    /// Nodes binding one name to one value.
+    pub binders: &'static [&'static str],
+    /// Fields, or else child kinds, holding what a binder binds; the first present is
+    /// read, and a field given twice (`var a, b = ..`) is not one name.
+    pub pattern: &'static [&'static str],
+    /// Fields holding the value; empty when the grammar names none, and then the value
+    /// is the binder's last named child, after the pattern.
+    pub value: &'static [&'static str],
+    /// Name kinds: what is bound, and what reads it.
+    pub names: &'static [&'static str],
+    /// Pattern kinds looked through to the one name they hold (`$b`, Go's `b :=`
+    /// expression list, Kotlin's `val b: Int`, Swift's `let b`).
+    pub holders: &'static [&'static str],
+    /// Fields or child kinds that make a binding more than a local
+    /// (`let x = y else { .. }`, a Kotlin getter or delegate).
     pub refused: &'static [&'static str],
 }
 
@@ -417,8 +441,8 @@ pub struct LocalSpec {
 /// the call the body holds only bindings of one name each, and every name bound is
 /// forwarded to the call or used by a later binding; a binding nothing reads, or any
 /// other statement, is work, and the body is not a wrapper. The call is then the last
-/// one in the body, so the last of `callees` names it, provided the pack collected
-/// every call in the body.
+/// one in the body, so the last of `callees` names it, provided that name is in the
+/// call (a call the pack did not collect leaves an earlier one last).
 pub fn forwarding_wrapper_callee(
     body: tree_sitter::Node,
     spec: &WrapperSpec,
@@ -426,38 +450,116 @@ pub fn forwarding_wrapper_callee(
     callees: &[String],
     src: &[u8],
 ) -> Option<String> {
-    let (call, bindings) = wrapper_call(body, spec, locals.kinds)?;
+    let (call, bindings) = wrapper_call(body, spec, Some(locals))?;
     if bindings.is_empty() {
         return callees.first().cloned();
     }
-    for (i, binding) in bindings.iter().enumerate() {
-        let pattern = binding.child_by_field_name(locals.pattern)?;
-        let plain = pattern.kind() == "identifier"
-            && binding.child_by_field_name(locals.value).is_some()
-            && !locals
-                .refused
-                .iter()
-                .any(|f| binding.child_by_field_name(f).is_some());
-        let name = pattern.utf8_text(src).ok()?;
-        let mut readers = bindings[i + 1..]
-            .iter()
-            .filter_map(|b| b.child_by_field_name(locals.value))
-            .chain([call]);
-        if !plain || !readers.any(|n| reads_name(n, name, src)) {
+    let bound: Vec<(&str, tree_sitter::Node)> = bindings
+        .iter()
+        .map(|b| bound_local(*b, locals, src))
+        .collect::<Option<_>>()?;
+    for (i, (name, _)) in bound.iter().enumerate() {
+        let mut readers = bound[i + 1..].iter().map(|(_, value)| *value).chain([call]);
+        if !readers.any(|n| reads_name(n, name, locals.names, src)) {
             return None;
         }
     }
-    (callees.len() == count_calls(body, spec))
-        .then(|| callees.last().cloned())
-        .flatten()
+    // A pack may key a method by its scope (`Class::method`, `self.method`).
+    let last = callees.last()?;
+    let short = last.rsplit("::").next()?.rsplit('.').next()?;
+    names_word(call.utf8_text(src).ok()?, short).then(|| last.clone())
 }
 
-/// The call a wrapper body comes down to, with the bindings of `binding_kinds` that
-/// precede it; `None` when the body is not one call forwarding names and literals.
+/// The binder a statement holds, when it is a binding.
+fn binder_of<'t>(node: tree_sitter::Node<'t>, locals: &LocalSpec) -> Option<tree_sitter::Node<'t>> {
+    if locals.binders.contains(&node.kind()) {
+        return Some(node);
+    }
+    if !locals.statements.contains(&node.kind()) {
+        return None;
+    }
+    fn collect<'t>(
+        n: tree_sitter::Node<'t>,
+        locals: &LocalSpec,
+        out: &mut Vec<tree_sitter::Node<'t>>,
+    ) {
+        let mut cursor = n.walk();
+        for c in n.named_children(&mut cursor) {
+            if locals.binders.contains(&c.kind()) {
+                out.push(c);
+            } else {
+                collect(c, locals, out);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    collect(node, locals, &mut found);
+    let [only] = found.as_slice() else {
+        return None;
+    };
+    Some(*only)
+}
+
+/// The name a binding statement binds and the value it computes; `None` for a
+/// pattern, a second name, no value, or a refused part.
+fn bound_local<'t>(
+    statement: tree_sitter::Node<'t>,
+    locals: &LocalSpec,
+    src: &'t [u8],
+) -> Option<(&'t str, tree_sitter::Node<'t>)> {
+    let binder = binder_of(statement, locals)?;
+    let mut cursor = binder.walk();
+    let children: Vec<tree_sitter::Node> = binder.named_children(&mut cursor).collect();
+    let refused = locals.refused.iter().any(|r| {
+        binder.child_by_field_name(r).is_some() || children.iter().any(|c| c.kind() == *r)
+    });
+    if refused {
+        return None;
+    }
+    let pattern = locals.pattern.iter().find_map(|p| {
+        let mut cursor = binder.walk();
+        let fielded: Vec<_> = binder.children_by_field_name(p, &mut cursor).collect();
+        match fielded.as_slice() {
+            [one] => Some(Some(*one)),
+            [] => children.iter().find(|c| c.kind() == *p).map(|c| Some(*c)),
+            _ => Some(None),
+        }
+    })??;
+    let name = if locals.names.contains(&pattern.kind()) {
+        pattern
+    } else if locals.holders.contains(&pattern.kind()) {
+        let mut cursor = pattern.walk();
+        let names: Vec<_> = pattern
+            .named_children(&mut cursor)
+            .filter(|c| locals.names.contains(&c.kind()))
+            .collect();
+        let [one] = names.as_slice() else {
+            return None;
+        };
+        *one
+    } else {
+        return None;
+    };
+    let value = if locals.value.is_empty() {
+        children
+            .last()
+            .filter(|v| v.start_byte() >= pattern.end_byte())
+            .copied()
+    } else {
+        locals
+            .value
+            .iter()
+            .find_map(|v| binder.child_by_field_name(v))
+    }?;
+    Some((name.utf8_text(src).ok()?, value))
+}
+
+/// The call a wrapper body comes down to, with the bindings (`locals`) that precede
+/// it; `None` when the body is not one call forwarding names and literals.
 fn wrapper_call<'t>(
     body: tree_sitter::Node<'t>,
     spec: &WrapperSpec,
-    binding_kinds: &[&str],
+    locals: Option<&LocalSpec>,
 ) -> Option<(tree_sitter::Node<'t>, Vec<tree_sitter::Node<'t>>)> {
     let mut node = body;
     let mut bindings = Vec::new();
@@ -468,7 +570,7 @@ fn wrapper_call<'t>(
         let parts = wrapper_parts(node, spec);
         let bound = parts
             .iter()
-            .take_while(|p| binding_kinds.contains(&p.kind()))
+            .take_while(|p| locals.is_some_and(|l| binder_of(**p, l).is_some()))
             .count();
         bindings.extend_from_slice(&parts[..bound]);
         let [only] = &parts[bound..] else {
@@ -482,23 +584,32 @@ fn wrapper_call<'t>(
     thin.then_some((node, bindings))
 }
 
-fn reads_name(node: tree_sitter::Node, name: &str, src: &[u8]) -> bool {
-    if node.kind() == "identifier" && node.utf8_text(src).is_ok_and(|t| t == name) {
+/// Fields that name a member, a method, a selector part or an argument label: an
+/// identifier there (`x.b`, `[self run:x b:y]`, `run(b: x)`) is not a read of `b`.
+const NOT_READS: &[&str] = &["method", "name", "field", "property", "attribute", "suffix"];
+
+fn reads_name(node: tree_sitter::Node, name: &str, names: &[&str], src: &[u8]) -> bool {
+    if names.contains(&node.kind()) && node.utf8_text(src).is_ok_and(|t| t == name) {
         return true;
     }
-    let mut cursor = node.walk();
-    let found = node.children(&mut cursor).any(|c| reads_name(c, name, src));
-    found
+    (0..node.child_count()).any(|i| {
+        let label = node
+            .field_name_for_child(i as u32)
+            .is_some_and(|f| NOT_READS.contains(&f));
+        !label
+            && node
+                .child(i)
+                .is_some_and(|c| reads_name(c, name, names, src))
+    })
 }
 
-fn count_calls(node: tree_sitter::Node, spec: &WrapperSpec) -> usize {
-    let own = usize::from(spec.calls.contains(&node.kind()));
-    let mut cursor = node.walk();
-    let nested: usize = node
-        .named_children(&mut cursor)
-        .map(|c| count_calls(c, spec))
-        .sum();
-    own + nested
+/// `word` occurs in `text` bounded by characters that cannot continue a name.
+fn names_word(text: &str, word: &str) -> bool {
+    let part = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    text.match_indices(word).any(|(at, _)| {
+        !text[..at].chars().next_back().is_some_and(part)
+            && !text[at + word.len()..].chars().next().is_some_and(part)
+    })
 }
 
 fn makes_a_call(node: tree_sitter::Node, spec: &WrapperSpec) -> bool {
@@ -1273,6 +1384,125 @@ mod tests {
             assert_eq!(counts("computed"), (0, 0), "{path}");
         }
         assert!(ran > 0, "no pack compiled in");
+    }
+
+    /// A wrapper may first compute locals it forwards, with its parameters, to its one
+    /// call (`b = loc(x); checked(x, b)`), in every pack; a local nothing reads makes it
+    /// an ordinary helper. C/C++ and Python sit the wrapper under two busy helpers, as
+    /// above, so only a free wrapper hop reaches `checked`.
+    #[test]
+    fn a_wrapper_forwarding_a_computed_local_resolves_in_every_pack() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "tests/t.rs",
+                "fn checked(x: u32, b: u32) { if x != b { panic!(\"x\"); } }\nfn forwards(x: u32) { let b = loc(x); checked(x, b) }\nfn unread(x: u32) { let b = loc(x); checked(x, x) }\n#[test]\nfn t_forwards() { forwards(1); }\n#[test]\nfn t_unread() { unread(1); }\n",
+            ),
+            (
+                "tests/t_test.cc",
+                "namespace {\nvoid Checked(int x, int b) { if (x != b) std::abort(); }\nvoid Forwards(int x) { auto b = Loc(x); Checked(x, b); }\nvoid Unread(int x) { auto b = Loc(x); Checked(x, x); }\nvoid B1(int x) { Setup(); Forwards(x); }\nvoid A1(int x) { Setup(); B1(x); }\nvoid B2(int x) { Setup(); Unread(x); }\nvoid A2(int x) { Setup(); B2(x); }\n}  // namespace\nTEST(T, Forwards) { A1(1); }\nTEST(T, Unread) { A2(1); }\n",
+            ),
+            (
+                "tests/test_t.py",
+                "def checked(x, b):\n    if x != b:\n        raise ValueError(\"x\")\n\ndef forwards(x):\n    b = loc(x)\n    return checked(x, b)\n\ndef unread(x):\n    b = loc(x)\n    return checked(x, x)\n\ndef b1(x):\n    setup()\n    forwards(x)\n\ndef a1(x):\n    setup()\n    b1(x)\n\ndef b2(x):\n    setup()\n    unread(x)\n\ndef a2(x):\n    setup()\n    b2(x)\n\ndef test_forwards():\n    a1(1)\n\ndef test_unread():\n    a2(1)\n",
+            ),
+            (
+                "test/t.test.js",
+                "function checked(x, b) { if (x !== b) { throw new Error('x'); } }\nfunction forwards(x) { const b = loc(x); let c = b; return checked(x, c); }\nfunction unread(x) { const b = loc(x); return checked(x, x); }\ntest('forwards', () => { forwards(1); });\ntest('unread', () => { unread(1); });\n",
+            ),
+            (
+                "test/t.test.ts",
+                "function checked(x: number, b: number) { if (x !== b) { throw new Error('x'); } }\nfunction forwards(x: number) { const b: number = loc(x); return checked(x, b); }\nfunction unread(x: number) { const b: number = loc(x); return checked(x, x); }\ntest('forwards', () => { forwards(1); });\ntest('unread', () => { unread(1); });\n",
+            ),
+            (
+                "src/test/java/TTest.java",
+                "class TTest {\n  void checked(int x, int b) { if (x != b) { throw new IllegalStateException(\"x\"); } }\n  void forwards(int x) { int b = loc(x); checked(x, b); }\n  void unread(int x) { int b = loc(x); checked(x, x); }\n  @Test void testForwards() { forwards(1); }\n  @Test void testUnread() { unread(1); }\n}\n",
+            ),
+            (
+                "pkg/t_test.go",
+                "package a\n\nimport \"testing\"\n\nfunc checked(x int, b int) {\n\tif x != b {\n\t\tpanic(\"x\")\n\t}\n}\nfunc forwards(x int) { b := loc(x); var c = b; checked(x, c) }\nfunc unread(x int) { b := loc(x); checked(x, x) }\nfunc TestForwards(t *testing.T) { forwards(1) }\nfunc TestUnread(t *testing.T) { unread(1) }\n",
+            ),
+            (
+                "tests/TTest.php",
+                "<?php\nclass TTest extends TestCase {\n    private function checked(int $x, int $b): void { if ($x !== $b) { throw new RuntimeException('x'); } }\n    private function forwards(int $x): void { $b = loc($x); $this->checked($x, $b); }\n    private function unread(int $x): void { $b = loc($x); $this->checked($x, $x); }\n    public function testForwards(): void { $this->forwards(1); }\n    public function testUnread(): void { $this->unread(1); }\n}\n",
+            ),
+            (
+                "tests/TTest.cs",
+                "public class TTest {\n  void Checked(int x, int b) { if (x != b) { throw new System.Exception(\"x\"); } }\n  void Forwards(int x) { var b = Loc(x); Checked(x, b); }\n  void Unread(int x) { var b = Loc(x); Checked(x, x); }\n  [Fact] public void TestForwards() { Forwards(1); }\n  [Fact] public void TestUnread() { Unread(1); }\n}\n",
+            ),
+            (
+                "test/t_test.rb",
+                "class TTest < Minitest::Test\n  def checked(x, b)\n    raise ArgumentError, 'x' if x != b\n  end\n\n  def forwards(x)\n    b = loc(x)\n    checked(x, b)\n  end\n\n  def unread(x)\n    b = loc(x)\n    checked(x, x)\n  end\n\n  def test_forwards\n    forwards(1)\n  end\n\n  def test_unread\n    unread(1)\n  end\nend\n",
+            ),
+            (
+                "src/test/kotlin/TTest.kt",
+                "class TTest {\n    private fun checked(x: Int, b: Int) { if (x != b) throw IllegalStateException(\"x\") }\n    private fun forwards(x: Int) { val b: Int = loc(x); checked(x, b) }\n    private fun unread(x: Int) { val b = loc(x); checked(x, x) }\n    @Test\n    fun testForwards() { forwards(1) }\n    @Test\n    fun testUnread() { unread(1) }\n}\n",
+            ),
+            (
+                "Tests/TTests.swift",
+                "import XCTest\n\nfinal class TTests: XCTestCase {\n    func checked(_ x: Int, _ b: Int) { if x != b { fatalError(\"x\") } }\n    func forwards(_ x: Int) { let b = loc(x); checked(x, b) }\n    func unread(_ x: Int) { let b = loc(x); checked(x, x) }\n    func testForwards() { forwards(1) }\n    func testUnread() { unread(1) }\n}\n",
+            ),
+            (
+                "src/test/scala/TSuite.scala",
+                "class TSuite extends AnyFunSuite {\n  private def checked(x: Int, b: Int): Unit = if (x != b) throw new IllegalStateException(\"x\")\n  private def forwards(x: Int): Unit = { val b = loc(x); checked(x, b) }\n  private def unread(x: Int): Unit = { val b = loc(x); checked(x, x) }\n  test(\"forwards\") { forwards(1) }\n  test(\"unread\") { unread(1) }\n}\n",
+            ),
+            (
+                "Tests/TTests.m",
+                "#import <XCTest/XCTest.h>\n@interface TTests : XCTestCase\n@end\n@implementation TTests\n- (void)checked:(int)x b:(int)b {\n    if (x != b) { XCTFail(@\"x\"); }\n}\n- (void)forwards:(int)x {\n    int b = loc(x);\n    [self checked:x b:b];\n}\n- (void)unread:(int)x {\n    int b = loc(x);\n    [self checked:x b:x];\n}\n- (void)testForwards {\n    [self forwards:1];\n}\n- (void)testUnread {\n    [self unread:1];\n}\n@end\n",
+            ),
+        ];
+        let reg = default_registry();
+        let vocab = AssertVocabulary::default();
+        let mut ran = 0;
+        let mut wrong = Vec::new();
+        for (path, src) in cases {
+            let Some(pack) = reg.find_pack(path) else {
+                continue;
+            };
+            ran += 1;
+            let facts = pack.extract(path, src, &vocab).expect(path);
+            for (marker, want) in [("forwards", (1, 1)), ("unread", (0, 0))] {
+                let t = facts
+                    .tests
+                    .iter()
+                    .find(|t| t.name.to_lowercase().contains(marker))
+                    .unwrap_or_else(|| panic!("{path}: no `{marker}` test in {:?}", facts.tests));
+                if (t.total_asserts, t.helper_checks) != want {
+                    wrong.push(format!(
+                        "{path} {marker}: {:?}",
+                        (t.total_asserts, t.helper_checks)
+                    ));
+                }
+            }
+        }
+        assert!(ran > 0, "no pack compiled in");
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// In C/C++ and Python, which follow ordinary calls, a wrapper's other calls (in the
+    /// locals it computes) are still followed: `both` counts `loc`'s checks and `checked`'s.
+    #[test]
+    fn a_forwarding_wrapper_still_follows_the_calls_computing_its_locals() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "tests/test_t.py",
+                "def loc(x):\n    if x != 1:\n        raise ValueError(\"loc\")\n    return x\n\ndef checked(x, b):\n    if x != b:\n        raise ValueError(\"x\")\n\ndef both(x):\n    b = loc(x)\n    return checked(x, b)\n\ndef test_both():\n    both(1)\n\ndef test_loc():\n    loc(1)\n\ndef test_checked():\n    checked(1, 1)\n",
+            ),
+            (
+                "tests/t_test.cc",
+                "namespace {\nint Loc(int x) { if (x != 1) std::abort(); return x; }\nvoid Checked(int x, int b) { if (x != b) std::abort(); }\nvoid Both(int x) { auto b = Loc(x); Checked(x, b); }\n}  // namespace\nTEST(T, Both) { Both(1); }\nTEST(T, Loc) { Loc(1); }\nTEST(T, Checked) { Checked(1, 1); }\n",
+            ),
+        ];
+        let reg = default_registry();
+        let vocab = AssertVocabulary::default();
+        for (path, src) in cases {
+            let Some(pack) = reg.find_pack(path) else {
+                continue;
+            };
+            let facts = pack.extract(path, src, &vocab).expect(path);
+            let total = |i: usize| facts.tests[i].total_asserts;
+            assert_eq!(total(0), total(1) + total(2), "{path}: {:?}", facts.tests);
+            assert!(total(1) > 0 && total(2) > 0, "{path}: {:?}", facts.tests);
+        }
     }
 
     /// Helpers named in a dispatch table and run in a loop resolve like direct calls.

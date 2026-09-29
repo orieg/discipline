@@ -761,6 +761,83 @@ fn judge_push(args: &[tree_sitter::Node], cmd: &str, scene: &Scene) -> Option<Ve
     None
 }
 
+/// The session a session-start payload names, and the directory it starts in (the
+/// shapes recorded live: `tests/fixtures/pretool/*/session_start.json`). OpenCode's plugin
+/// sends `{"input": {"sessionID": ...}, "cwd": ...}` from its `session.created` event.
+pub fn parse_session_start(agent: Agent, raw: &str) -> Option<(String, Option<PathBuf>)> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let (session, cwd) = match agent {
+        Agent::ClaudeCode | Agent::Codex | Agent::Qwen => (s(&v, "/session_id"), s(&v, "/cwd")),
+        Agent::Copilot => (s(&v, "/sessionId"), s(&v, "/cwd")),
+        Agent::Agy => (s(&v, "/conversationId"), s(&v, "/workspacePaths/0")),
+        Agent::Opencode => (s(&v, "/input/sessionID"), s(&v, "/cwd")),
+        Agent::Cursor | Agent::Aider => (None, None),
+    };
+    Some((session?, cwd.map(PathBuf::from)))
+}
+
+/// `hook run --event session-start`: take this worktree's lease for the session, on the
+/// branch checked out there, so later tool calls from another session are refused and
+/// this one's refresh the heartbeat. It never blocks a session from starting: every
+/// outcome passes, and what it could not do is said on stderr.
+///
+/// - A live lease of another session on this worktree is left alone (said).
+/// - A branch another worktree's live lease claims is not taken; the worktree is still
+///   leased to this session, without it (said).
+pub fn session_start(agent: Agent, stdin: &str) -> HookOutput {
+    let pass = |note: String| HookOutput {
+        stdout: String::new(),
+        stderr: note,
+        code: 0,
+    };
+    let Some((session, cwd)) = parse_session_start(agent, stdin) else {
+        return pass(String::new());
+    };
+    let dir = cwd
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    if crate::gitctx::discover_repository(&dir).is_err() {
+        return pass(String::new());
+    }
+    let result = (|| -> anyhow::Result<String> {
+        let (store, here) = crate::lease::open(&dir)?;
+        let now = crate::lease::now();
+        if let Some((_, held)) = store.list()?.into_iter().find(|(k, _)| *k == here.key) {
+            if held.is_live(now) && !held.session.is_empty() && held.session != session {
+                return Ok(format!(
+                    "discipline: worktree `{}` is leased by {} session {}; this session did not take it, and its edits here will be refused until that lease is released or goes stale\n",
+                    here.key, held.agent, held.session
+                ));
+            }
+        }
+        let lease = |branches: Vec<String>| Lease {
+            agent: agent.id().to_string(),
+            session: session.clone(),
+            worktree: here.root.display().to_string(),
+            branches,
+            taken_at: now,
+            heartbeat: now,
+            ttl_secs: crate::lease::DEFAULT_TTL_SECS,
+        };
+        let branches: Vec<String> = here.branch.iter().cloned().collect();
+        match store.take(&here.key, lease(branches.clone()), now, false) {
+            Ok(_) => Ok(String::new()),
+            Err(e) if !branches.is_empty() => {
+                store.take(&here.key, lease(Vec::new()), now, false)?;
+                Ok(format!(
+                    "discipline: this session leases worktree `{}` but not its branch: {e:#}\n",
+                    here.key
+                ))
+            }
+            Err(e) => Err(e),
+        }
+    })();
+    pass(match result {
+        Ok(note) => note,
+        Err(e) => format!("discipline: could not take this worktree's lease: {e:#}\n"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,6 +848,32 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn each_recorded_session_start_parses_to_its_session_and_directory() {
+        let opencode = serde_json::json!({
+            "input": { "sessionID": "00000000-0000-0000-0000-000000000000" },
+            "cwd": "/work/repo",
+        })
+        .to_string();
+        for (agent, raw) in [
+            (Agent::ClaudeCode, fixture("claude-code/session_start.json")),
+            (Agent::Copilot, fixture("copilot/session_start.json")),
+            (Agent::Agy, fixture("agy/session_start.json")),
+            (Agent::Opencode, opencode),
+        ] {
+            let (session, cwd) =
+                parse_session_start(agent, &raw).unwrap_or_else(|| panic!("{agent:?}: no session"));
+            assert_eq!(session, "00000000-0000-0000-0000-000000000000", "{agent:?}");
+            assert_eq!(cwd, Some(PathBuf::from("/work/repo")), "{agent:?}");
+        }
+        // Another agent's shape names no session for this one.
+        assert_eq!(
+            parse_session_start(Agent::Copilot, &fixture("claude-code/session_start.json")),
+            None
+        );
+        assert_eq!(parse_session_start(Agent::ClaudeCode, "not json"), None);
     }
 
     #[test]

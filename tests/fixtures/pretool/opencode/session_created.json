@@ -1,0 +1,47 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "properties": {
+    "info": {
+      "cost": 0,
+      "directory": "/work/repo",
+      "id": "00000000-0000-0000-0000-000000000000",
+      "path": "",
+      "permission": [
+        {
+          "action": "deny",
+          "pattern": "*",
+          "permission": "question"
+        },
+        {
+          "action": "deny",
+          "pattern": "*",
+          "permission": "plan_enter"
+        },
+        {
+          "action": "deny",
+          "pattern": "*",
+          "permission": "plan_exit"
+        }
+      ],
+      "projectID": "00000000-0000-0000-0000-000000000000",
+      "slug": "probe",
+      "time": {
+        "created": 1790627001977,
+        "updated": 1790627001977
+      },
+      "title": "probe",
+      "tokens": {
+        "cache": {
+          "read": 0,
+          "write": 0
+        },
+        "input": 0,
+        "output": 0,
+        "reasoning": 0
+      },
+      "version": "1.18.25"
+    },
+    "sessionID": "00000000-0000-0000-0000-000000000000"
+  },
+  "type": "session.created"
+}

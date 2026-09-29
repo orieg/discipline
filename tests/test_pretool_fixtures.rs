@@ -148,3 +148,49 @@ fn no_fixture_names_a_local_machine() {
         }
     }
 }
+
+/// (fixture, event-name pointer, event name, session pointer, directory pointer): the
+/// fields `hook run --event session-start` reads. OpenCode's is the raw `session.created`
+/// event; the generated plugin maps it to `{input: {sessionID}, cwd}`.
+const SESSION_STARTS: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "claude-code/session_start.json",
+        "/hook_event_name",
+        "SessionStart",
+        "/session_id",
+        "/cwd",
+    ),
+    (
+        "copilot/session_start.json",
+        "/source",
+        "new",
+        "/sessionId",
+        "/cwd",
+    ),
+    (
+        "agy/session_start.json",
+        "",
+        "",
+        "/conversationId",
+        "/workspacePaths/0",
+    ),
+    (
+        "opencode/session_created.json",
+        "/type",
+        "session.created",
+        "/properties/sessionID",
+        "/properties/info/directory",
+    ),
+];
+
+#[test]
+fn each_recorded_session_start_names_its_session_and_directory() {
+    for (rel, event_ptr, event, session_ptr, dir_ptr) in SESSION_STARTS {
+        let v = fixture(rel);
+        if !event_ptr.is_empty() {
+            assert_eq!(text(&v, event_ptr), *event, "{rel}");
+        }
+        assert!(!text(&v, session_ptr).is_empty(), "{rel}: empty session");
+        assert_eq!(text(&v, dir_ptr), "/work/repo", "{rel}");
+    }
+}

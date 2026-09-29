@@ -440,7 +440,13 @@ impl<'a> JsExtractor<'a> {
             if let Some(body) = func.child_by_field_name("body") {
                 let mut calls = Vec::new();
                 self.collect_calls(body, &mut calls);
-                wraps = super::thin_wrapper_callee(body, &JS_WRAPPER, &calls);
+                wraps = super::forwarding_wrapper_callee(
+                    body,
+                    &JS_WRAPPER,
+                    &JS_LOCALS,
+                    &calls,
+                    self.src,
+                );
                 h.total_asserts += super::count_failure_exits(
                     body,
                     self.src,
@@ -813,6 +819,17 @@ pub const JS_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     containers: &["array"],
     names: &["identifier"],
     references: &[],
+};
+
+/// A local a JavaScript / TypeScript wrapper computes and forwards: `const b = loc(d);`.
+pub const JS_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &["lexical_declaration", "variable_declaration"],
+    binders: &["variable_declarator"],
+    pattern: &["name"],
+    value: &["value"],
+    names: &["identifier"],
+    holders: &[],
+    refused: &[],
 };
 
 /// A JS / TS helper whose body is one call: `{ return check(x, true); }`, `(x) => check(x)`.

@@ -332,7 +332,13 @@ impl<'a> ObjcExtractor<'a> {
             strong_asserts: helper.strong_asserts,
             tautologies: helper.tautologies,
             fatal_asserts: helper.fatal_asserts,
-            wraps: super::thin_wrapper_callee(body, &OBJC_WRAPPER, &dummy),
+            wraps: super::forwarding_wrapper_callee(
+                body,
+                &OBJC_WRAPPER,
+                &OBJC_LOCALS,
+                &dummy,
+                self.src,
+            ),
         });
     }
 
@@ -509,6 +515,17 @@ pub const OBJC_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["compound_statement"],
     ignored_kinds: &["comment"],
     terminators: &["return", "@throw", "abort("],
+};
+
+/// A local a Objective-C wrapper computes and forwards: `int b = loc(d);`.
+pub const OBJC_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &["declaration"],
+    binders: &["init_declarator"],
+    pattern: &["declarator"],
+    value: &["value"],
+    names: &["identifier"],
+    holders: &[],
+    refused: &[],
 };
 
 /// An Objective-C helper whose body is one call: `{ [self check:x flag:YES]; }`.

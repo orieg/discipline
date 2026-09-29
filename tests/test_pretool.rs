@@ -318,3 +318,224 @@ fn a_force_push_of_a_branch_another_worktree_leased_is_refused() {
     );
     assert_eq!(plain.code, 0, "{}", plain.stderr);
 }
+
+/// `discipline hook run --agent <agent> --event session-start` in `dir`, `payload` on stdin.
+fn session_start(dir: &Path, agent: &str, payload: &str) -> Out {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"));
+    cmd.args(["hook", "run", "--agent", agent, "--event", "session-start"])
+        .current_dir(dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (k, _) in std::env::vars() {
+        if k.starts_with("GIT_") || k.starts_with("DISCIPLINE_") {
+            cmd.env_remove(k);
+        }
+    }
+    let mut child = cmd.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let o = child.wait_with_output().unwrap();
+    Out {
+        code: o.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+    }
+}
+
+/// A session-start payload for `agent` naming `session`, started in `cwd`. OpenCode's
+/// is the shape its generated plugin sends.
+fn start_payload(agent: &str, cwd: &Path, session: &str) -> String {
+    let rel = match agent {
+        "opencode" => {
+            return serde_json::json!({ "input": { "sessionID": session }, "cwd": cwd })
+                .to_string();
+        }
+        a => format!("{a}/session_start.json"),
+    };
+    fixture(&rel)
+        .replace("/work/repo", cwd.to_str().unwrap())
+        .replace("00000000-0000-0000-0000-000000000000", session)
+}
+
+/// The recorded edit payload `rel`, editing `target` in `cwd` as `session`.
+fn edit_as(rel: &str, cwd: &Path, target: &Path, session: &str) -> String {
+    payload(rel, cwd, target).replace("00000000-0000-0000-0000-000000000000", session)
+}
+
+fn lease_list(repo: &Repo) -> String {
+    let o = repo.run(&["lease", "list", "--json"], &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    o.stdout
+}
+
+#[test]
+fn each_agent_session_start_leases_its_worktree_and_branch() {
+    for (agent, rel) in AGENTS {
+        let (repo, _main, wt2) = two_worktrees();
+        let o = session_start(&wt2, agent, &start_payload(agent, &wt2, "sess-a"));
+        assert_eq!(o.code, 0, "{agent}: {}", o.stderr);
+        assert!(o.stdout.is_empty(), "{agent}: {}", o.stdout);
+        let leases = lease_list(&repo);
+        assert!(leases.contains("\"sess-a\""), "{agent}: {leases}");
+        assert!(leases.contains("\"feat/b\""), "{agent}: {leases}");
+        assert!(
+            leases.contains(&format!("\"{agent}\"")),
+            "{agent}: {leases}"
+        );
+
+        // The same session edits there; another session is refused.
+        let target = wt2.join("a.txt");
+        let own = pretool(&wt2, agent, &edit_as(rel, &wt2, &target, "sess-a"), &[]);
+        assert!(
+            !denied(agent, &own),
+            "{agent}: {} {}",
+            own.stdout,
+            own.stderr
+        );
+        let other = pretool(&wt2, agent, &edit_as(rel, &wt2, &target, "sess-b"), &[]);
+        assert!(
+            denied(agent, &other),
+            "{agent}: {} {}",
+            other.stdout,
+            other.stderr
+        );
+    }
+}
+
+#[test]
+fn a_second_session_leaves_a_live_lease_alone_and_says_so() {
+    let (repo, main, _wt2) = two_worktrees();
+    assert_eq!(
+        session_start(
+            &main,
+            "claude-code",
+            &start_payload("claude-code", &main, "sess-a")
+        )
+        .code,
+        0
+    );
+    let o = session_start(&main, "copilot", &start_payload("copilot", &main, "sess-b"));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("leased by claude-code session sess-a"),
+        "{}",
+        o.stderr
+    );
+    let leases = lease_list(&repo);
+    assert!(
+        leases.contains("\"sess-a\"") && !leases.contains("\"sess-b\""),
+        "{leases}"
+    );
+
+    // The same session starting again (a resume) keeps its lease without a note.
+    let again = session_start(
+        &main,
+        "claude-code",
+        &start_payload("claude-code", &main, "sess-a"),
+    );
+    assert_eq!(again.code, 0);
+    assert!(again.stderr.is_empty(), "{}", again.stderr);
+}
+
+#[test]
+fn a_stale_lease_is_taken_over_by_a_new_session() {
+    let (repo, main, _wt2) = two_worktrees();
+    let take = repo.run(
+        &[
+            "lease",
+            "take",
+            "--agent",
+            "copilot",
+            "--session",
+            "old",
+            "--ttl",
+            "1",
+        ],
+        &[],
+    );
+    assert_eq!(take.code, 0, "{}", take.stderr);
+    // Age the heartbeat past its time-to-live instead of waiting for it.
+    let dir = repo.path().join(".git/discipline/leases");
+    for f in std::fs::read_dir(&dir).unwrap() {
+        let p = f.unwrap().path();
+        let mut v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        v["heartbeat"] = serde_json::json!(0);
+        std::fs::write(&p, v.to_string()).unwrap();
+    }
+    let o = session_start(
+        &main,
+        "claude-code",
+        &start_payload("claude-code", &main, "new"),
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let leases = lease_list(&repo);
+    assert!(
+        leases.contains("\"new\"") && !leases.contains("\"old\""),
+        "{leases}"
+    );
+}
+
+#[test]
+fn a_branch_leased_in_another_worktree_is_left_out_of_the_new_lease() {
+    let (repo, main, wt2) = two_worktrees();
+    // wt2's session claims the main worktree's branch too.
+    let branch = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&main)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let take = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+        .args([
+            "lease",
+            "take",
+            "--agent",
+            "agy",
+            "--session",
+            "s-wt2",
+            "--branch",
+            &branch,
+        ])
+        .current_dir(&wt2)
+        .output()
+        .unwrap();
+    assert!(
+        take.status.success(),
+        "{}",
+        String::from_utf8_lossy(&take.stderr)
+    );
+
+    let o = session_start(
+        &main,
+        "claude-code",
+        &start_payload("claude-code", &main, "s-main"),
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("but not its branch"), "{}", o.stderr);
+    let leases = lease_list(&repo);
+    assert!(leases.contains("\"s-main\""), "{leases}");
+}
+
+#[test]
+fn a_session_start_outside_a_repository_or_unparsed_passes_silently() {
+    let dir = tempfile::tempdir().unwrap();
+    let o = session_start(
+        dir.path(),
+        "claude-code",
+        &start_payload("claude-code", dir.path(), "s"),
+    );
+    assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, "", ""));
+    let o = session_start(dir.path(), "claude-code", "not json");
+    assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, "", ""));
+}

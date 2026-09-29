@@ -259,7 +259,8 @@
       "hook run --agent=opencode",
       "hook run --agent=qwen",
       "hook run --event=check",
-      "hook run --event=pre-tool"
+      "hook run --event=pre-tool",
+      "hook run --event=session-start"
     ],
     "config.keys": [
       "directives",
