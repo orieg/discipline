@@ -11,10 +11,10 @@
 //! | Copilot CLI | `create`, `edit`, `str_replace_editor`, `apply_patch` | `toolArgs.path`         | `sessionId`       | exit 0, `{"permissionDecision":"deny", ...}`              |
 //! | agy         | a tool whose arguments name a `TargetFile`      | `toolCall.args.TargetFile`  | `conversationId`  | exit 0, `{"decision":"deny","reason": ...}`               |
 //! | OpenCode    | `write`, `edit`, `apply_patch`                  | `output.args.filePath`, or the patch's file lines | `input.sessionID` | exit 1, the plugin throws with the reason |
+//! | Qwen Code   | `write_file`, `edit`, `replace`                 | `tool_input.file_path`      | `session_id`      | exit 2, reason on stderr (Claude Code's contract) |
+//! | Codex       | `apply_patch`, `Edit`, `Write`                  | the patch's file lines (`tool_input.command`) | `session_id` | exit 2, reason on stderr (Claude Code's contract) |
 //!
-//! Codex and Qwen Code are answered like Claude Code (their documented contract, not
-//! observed live). Cursor and Aider have no pre-tool event for edits: this check does
-//! not apply to them.
+//! Cursor and Aider have no pre-tool event for edits: this check does not apply to them.
 //!
 //! The check is cooperative: it stops sessions stepping on each other by mistake. An
 //! edit outside the repository (a scratch directory) is not refused. An edit tool whose

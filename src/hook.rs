@@ -671,6 +671,17 @@ pub fn config_for_opts(
             ".codex/hooks.json",
             serde_json::to_string_pretty(&serde_json::json!({
                 "hooks": {
+                    // Codex's contract is Claude Code's (recorded live:
+                    // tests/fixtures/pretool/codex/): edits arrive as `apply_patch`, shell
+                    // commands (reads included) as `Bash`. Codex runs a project's hooks
+                    // only once they are approved in an interactive session.
+                    "SessionStart": [{
+                        "hooks": [{ "type": "command", "command": start }]
+                    }],
+                    "PreToolUse": [{
+                        "matcher": "apply_patch|Edit|Write|Bash",
+                        "hooks": [{ "type": "command", "command": pre }]
+                    }],
                     "PostToolUse": [{
                         "matcher": "apply_patch|Edit|Write",
                         "hooks": [{ "type": "command", "command": cmd }]
@@ -731,6 +742,16 @@ pub fn config_for_opts(
             ".qwen/settings.json",
             serde_json::to_string_pretty(&serde_json::json!({
                 "hooks": {
+                    // Qwen Code's contract is Claude Code's (recorded live:
+                    // tests/fixtures/pretool/qwen/); its tools are `write_file`, `edit`
+                    // and `run_shell_command`.
+                    "SessionStart": [{
+                        "hooks": [{ "type": "command", "command": start, "timeout": 30 }]
+                    }],
+                    "PreToolUse": [{
+                        "matcher": "^(write_file|edit|replace|run_shell_command)$",
+                        "hooks": [{ "type": "command", "command": pre, "timeout": 30 }]
+                    }],
                     "PostToolUse": [{
                         "matcher": "^(write_file|edit)$",
                         "hooks": [{ "type": "command", "command": cmd, "timeout": secs }]
@@ -2134,6 +2155,8 @@ mod tests {
             Agent::Copilot,
             Agent::Agy,
             Agent::Opencode,
+            Agent::Qwen,
+            Agent::Codex,
         ] {
             let cmd =
                 pre(agent, false).unwrap_or_else(|| panic!("{agent:?} has no pre-tool entry"));
@@ -2169,8 +2192,28 @@ mod tests {
             .any(|m| m == "bash"));
         let (_, opencode) = config_for_opts(Agent::Opencode, false, None);
         assert!(opencode.contains(r#"input.tool !== "bash""#));
-        // Contracts not yet observed live get no entry.
-        for agent in [Agent::Codex, Agent::Qwen, Agent::Cursor, Agent::Aider] {
+        // Qwen Code's matcher is a regular expression over its recorded tool names.
+        let (_, qwen) = config_for_opts(Agent::Qwen, false, None);
+        let v: serde_json::Value = serde_json::from_str(&qwen).unwrap();
+        let matcher = v["hooks"]["PreToolUse"][0]["matcher"].as_str().unwrap();
+        let inner = matcher
+            .strip_prefix("^(")
+            .and_then(|m| m.strip_suffix(")$"))
+            .unwrap();
+        for tool in ["write_file", "edit", "run_shell_command"] {
+            assert!(inner.split('|').any(|t| t == tool), "{matcher}: {tool}");
+        }
+        assert!(!inner.split('|').any(|t| t == "read_file"), "{matcher}");
+        // Codex edits through `apply_patch` and runs shell commands as `Bash`.
+        let (_, codex) = config_for_opts(Agent::Codex, false, None);
+        let v: serde_json::Value = serde_json::from_str(&codex).unwrap();
+        let matcher = v["hooks"]["PreToolUse"][0]["matcher"].as_str().unwrap();
+        for tool in ["apply_patch", "Bash"] {
+            assert!(matcher.split('|').any(|t| t == tool), "{matcher}: {tool}");
+        }
+        // Contracts not yet observed live get no entry (Qwen Code's and Codex's were,
+        // 2026-09-29).
+        for agent in [Agent::Cursor, Agent::Aider] {
             assert!(pre(agent, false).is_none(), "{agent:?}");
         }
         // Without discipline on PATH a pre-tool entry passes with an empty answer.
@@ -2196,7 +2239,9 @@ mod tests {
             }
             let v: serde_json::Value = serde_json::from_str(&text).ok()?;
             let entries = match agent {
-                Agent::ClaudeCode => v.pointer("/hooks/SessionStart/0/hooks"),
+                Agent::ClaudeCode | Agent::Qwen | Agent::Codex => {
+                    v.pointer("/hooks/SessionStart/0/hooks")
+                }
                 Agent::Copilot => v.pointer("/hooks/sessionStart"),
                 Agent::Agy => v.pointer("/discipline/SessionStart"),
                 _ => v
@@ -2216,6 +2261,8 @@ mod tests {
             Agent::Copilot,
             Agent::Agy,
             Agent::Opencode,
+            Agent::Qwen,
+            Agent::Codex,
         ] {
             let cmd =
                 start(agent).unwrap_or_else(|| panic!("{agent:?} has no session-start entry"));
@@ -2234,7 +2281,7 @@ mod tests {
             .as_str()
             .unwrap()
             .contains(CLAUDE_BOOTSTRAP));
-        for agent in [Agent::Codex, Agent::Qwen, Agent::Cursor, Agent::Aider] {
+        for agent in [Agent::Cursor, Agent::Aider] {
             assert!(start(agent).is_none(), "{agent:?}");
         }
         // Without discipline on PATH the entry passes silently.

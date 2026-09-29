@@ -52,10 +52,16 @@ fn fixture(rel: &str) -> String {
 }
 
 /// The recorded payload with its probe repository (`/work/repo`) moved to `cwd`, and its
-/// edit target `/work/repo/a.txt` moved to `target`.
+/// edit target (`/work/repo/a.txt`, Qwen Code's `/work/repo/probe.txt`, the file Codex's
+/// recorded patch adds) moved to `target`.
 fn payload(rel: &str, cwd: &Path, target: &Path) -> String {
     fixture(rel)
         .replace("/work/repo/a.txt", target.to_str().unwrap())
+        .replace("/work/repo/probe.txt", target.to_str().unwrap())
+        .replace(
+            "*** Add File: probe.txt",
+            &format!("*** Add File: {}", target.display()),
+        )
         .replace("/work/repo", cwd.to_str().unwrap())
 }
 
@@ -73,7 +79,7 @@ fn two_worktrees() -> (Repo, std::path::PathBuf, std::path::PathBuf) {
 /// Whether `agent`'s answer refused the call, in the shape recorded live.
 fn denied(agent: &str, o: &Out) -> bool {
     match agent {
-        "claude-code" => o.code == 2 && !o.stderr.is_empty(),
+        "claude-code" | "qwen" | "codex" => o.code == 2 && !o.stderr.is_empty(),
         "copilot" => o.code == 0 && o.stdout.contains(r#""permissionDecision":"deny""#),
         "agy" => o.code == 0 && o.stdout.contains(r#""decision":"deny""#),
         "opencode" => o.code == 1 && !o.stdout.is_empty(),
@@ -86,6 +92,8 @@ const AGENTS: &[(&str, &str)] = &[
     ("copilot", "copilot/create.json"),
     ("agy", "agy/write_to_file.json"),
     ("opencode", "opencode/write.json"),
+    ("qwen", "qwen/write_file.json"),
+    ("codex", "codex/apply_patch.json"),
 ];
 
 #[test]
@@ -235,6 +243,8 @@ fn shell(agent: &str, cwd: &Path, command: &str) -> String {
         "copilot" => ("copilot/bash.json", "git -C wt2 status"),
         "agy" => ("agy/run_command.json", "git -C wt2 status"),
         "opencode" => ("opencode/bash.json", "git -C wt2 status"),
+        "qwen" => ("qwen/run_shell_command.json", "echo hi > shell.txt"),
+        "codex" => ("codex/bash.json", "echo hi > shell.txt"),
         _ => unreachable!(),
     };
     let text = fixture(rel);

@@ -1,0 +1,14 @@
+{
+  "cwd": "/work/repo",
+  "hook_event_name": "PreToolUse",
+  "model": "model",
+  "permission_mode": "bypassPermissions",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: probe.txt\n+hi\n*** End Patch"
+  },
+  "tool_name": "apply_patch",
+  "tool_use_id": "00000000-0000-0000-0000-000000000000",
+  "transcript_path": "/home/user/.agent/transcript",
+  "turn_id": "00000000-0000-0000-0000-000000000000"
+}

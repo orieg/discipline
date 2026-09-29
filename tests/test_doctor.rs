@@ -812,6 +812,60 @@ fn doctor_reports_what_several_agents_in_one_repository_rely_on() {
     assert_eq!(install.code, 0, "{}", install.stderr);
     let (_, st) = local(&repo);
     assert_eq!(status_of(&st, "pretool-hook"), vec!["pass"], "{st:?}");
+
+    // Qwen Code: a project's own settings file is not discipline's; an earlier generated
+    // one is information; regenerated, a pass.
+    std::fs::create_dir_all(repo.path().join(".qwen")).unwrap();
+    std::fs::write(
+        repo.path().join(".qwen/settings.json"),
+        r#"{"model":{"name":"m"}}"#,
+    )
+    .unwrap();
+    let (_, st) = local(&repo);
+    assert_eq!(status_of(&st, "pretool-hook"), vec!["pass"], "{st:?}");
+    std::fs::write(
+        repo.path().join(".qwen/settings.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"discipline hook run --agent qwen"}]}]}}"#,
+    )
+    .unwrap();
+    let (_, st) = local(&repo);
+    assert_eq!(
+        status_of(&st, "pretool-hook"),
+        vec!["pass", "info"],
+        "{st:?}"
+    );
+    std::fs::remove_file(repo.path().join(".qwen/settings.json")).unwrap();
+    let install = repo.run(&["hook", "install", "--agent", "qwen"], &[]);
+    assert_eq!(install.code, 0, "{}", install.stderr);
+    let (_, st) = local(&repo);
+    assert_eq!(
+        status_of(&st, "pretool-hook"),
+        vec!["pass", "pass"],
+        "{st:?}"
+    );
+
+    // Codex: an earlier generated file is information; regenerated, a pass.
+    std::fs::create_dir_all(repo.path().join(".codex")).unwrap();
+    std::fs::write(
+        repo.path().join(".codex/hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"discipline hook run --agent codex"}]}]}}"#,
+    )
+    .unwrap();
+    let (_, st) = local(&repo);
+    assert_eq!(
+        status_of(&st, "pretool-hook"),
+        vec!["pass", "pass", "info"],
+        "{st:?}"
+    );
+    std::fs::remove_file(repo.path().join(".codex/hooks.json")).unwrap();
+    let install = repo.run(&["hook", "install", "--agent", "codex"], &[]);
+    assert_eq!(install.code, 0, "{}", install.stderr);
+    let (_, st) = local(&repo);
+    assert_eq!(
+        status_of(&st, "pretool-hook"),
+        vec!["pass", "pass", "pass"],
+        "{st:?}"
+    );
 }
 
 #[test]
