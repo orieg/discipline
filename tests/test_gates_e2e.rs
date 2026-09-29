@@ -61,6 +61,70 @@ fn assertion_reduction_override_must_name_the_test() {
 }
 
 #[test]
+fn a_directive_that_lifted_no_finding_is_reported_without_failing_the_run() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace("    assert_eq!(x + 3, 4);\n", ""),
+    );
+    // Scoped to the wrong test: it lifts nothing. The second names the test and lifts
+    // the finding. The PR body's waiver has nothing to waive.
+    repo.commit("test: trim\n\nallow-assertion-drop: orders covered elsewhere");
+    repo.commit("test: justify\n\nallow-assertion-drop: adds second case moved to proptest");
+    let run = repo.check_with_pr(
+        &[],
+        "Refs #101\n\nallow-dependency: serde parser for the config\n",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let json = run.json();
+    let unused = json["unused_directives"].as_array().unwrap();
+    let named: Vec<(&str, &str)> = unused
+        .iter()
+        .map(|u| {
+            (
+                u["directive"].as_str().unwrap(),
+                u["source"]["type"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        named,
+        vec![
+            ("allow-dependency", "PrBody"),
+            ("allow-assertion-drop", "Commit")
+        ],
+        "{json}"
+    );
+    // The reason text stays out; the directive that lifted the finding is not listed.
+    assert!(!json["unused_directives"].to_string().contains("orders"));
+    assert!(!json["unused_directives"].to_string().contains("serde"));
+    assert_eq!(json["overrides"], 1, "{json}");
+
+    // The text report names each one.
+    let text = repo.run(
+        &["check", "--base", "main"],
+        &[("PR_BODY", "allow-dependency: serde parser for the config")],
+    );
+    assert!(
+        text.stdout
+            .contains("unused directive: `allow-dependency` in PR body lifted no finding"),
+        "{}",
+        text.stdout
+    );
+
+    // Under --suite only part of the gates ran: nothing is reported.
+    let suite = repo.check_with_pr(
+        &["--suite", "hygiene"],
+        "allow-dependency: serde parser for the config\n",
+    );
+    assert!(
+        suite.json().get("unused_directives").is_none(),
+        "{}",
+        suite.stdout
+    );
+}
+
+#[test]
 fn adding_assertions_is_not_a_reduction() {
     let repo = Repo::new();
     repo.write(

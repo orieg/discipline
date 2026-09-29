@@ -47,6 +47,40 @@ pub struct OverrideRecord {
     pub hidden: bool,
 }
 
+/// A directive a run read that lifted no finding. Its reason is not carried: it is free
+/// text the change's author wrote, and can echo secret material or a name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnusedDirective {
+    pub directive: String,
+    pub source: OverrideSource,
+    pub hidden: bool,
+}
+
+/// The directives in `directives` that no applied override came from, in order. An
+/// override records the directive, reason and source it was granted from, so a
+/// directive matches one when all three are equal (the name case-insensitively).
+pub fn unused_directives<'a>(
+    directives: &[ParsedDirective],
+    applied: impl IntoIterator<Item = &'a OverrideRecord>,
+) -> Vec<UnusedDirective> {
+    let applied: Vec<&OverrideRecord> = applied.into_iter().collect();
+    directives
+        .iter()
+        .filter(|d| {
+            !applied.iter().any(|o| {
+                o.directive.eq_ignore_ascii_case(&d.directive)
+                    && o.reason == d.reason
+                    && o.source == d.source
+            })
+        })
+        .map(|d| UnusedDirective {
+            directive: d.directive.clone(),
+            source: d.source.clone(),
+            hidden: d.hidden,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedDirective {
     pub directive: String,
@@ -1536,6 +1570,48 @@ removes: tests/old.rs inside a fence
             ),
             vec!["instructions::cost::sync_set_insert/random"]
         );
+    }
+
+    #[test]
+    fn a_directive_is_unused_unless_an_override_came_from_it() {
+        let body = "allow-dependency: serde parser\nallow-stub: fn_a placeholder until #12\n";
+        let parsed = parse_directives(body, OverrideSource::PrBody);
+        let from = |d: &ParsedDirective, source: OverrideSource, reason: &str| OverrideRecord {
+            gate: "g".into(),
+            subject: "s".into(),
+            directive: d.directive.to_ascii_uppercase(),
+            reason: reason.into(),
+            source,
+            hidden: false,
+        };
+        // The first lifted a finding (the name matches case-insensitively); the second
+        // did not.
+        let applied = vec![from(&parsed[0], OverrideSource::PrBody, &parsed[0].reason)];
+        let unused = unused_directives(&parsed, &applied);
+        assert_eq!(
+            unused,
+            vec![UnusedDirective {
+                directive: "allow-stub".into(),
+                source: OverrideSource::PrBody,
+                hidden: false,
+            }]
+        );
+        assert!(!serde_json::to_string(&unused)
+            .unwrap()
+            .contains("placeholder"));
+        // The same directive and reason from another source, or another reason from the
+        // same source, is not the one that was used.
+        let elsewhere = vec![
+            from(
+                &parsed[0],
+                OverrideSource::Commit("abc".into()),
+                &parsed[0].reason,
+            ),
+            from(&parsed[1], OverrideSource::PrBody, "fn_a something else"),
+        ];
+        assert_eq!(unused_directives(&parsed, &elsewhere).len(), 2);
+        assert!(unused_directives(&parsed, &[]).len() == 2);
+        assert!(unused_directives(&[], &applied).is_empty());
     }
 
     #[test]

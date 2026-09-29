@@ -242,6 +242,7 @@ mod tests {
             outcomes: Vec::new(),
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            unused_directives: Vec::new(),
         };
         let json = format_gitlab(&summary);
         assert_eq!(json.trim(), "[]");
@@ -277,6 +278,7 @@ mod tests {
             outcomes: vec![outcome],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            unused_directives: Vec::new(),
         };
 
         let json = format_gitlab(&summary);

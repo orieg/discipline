@@ -48,6 +48,7 @@ pub fn report_schema() -> Value {
             "planned_gates": { "type": "array", "items": { "type": "string" }, "description": "Gate ids the roadmap plans but this binary does not ship" },
             "policy_failures": { "type": "array", "items": { "type": "string" }, "description": "Run-level refusals no single gate owns; any entry fails the run. Omitted when empty" },
             "deprecations": { "type": "array", "items": { "type": "string" }, "description": "Deprecated configuration keys this run read, one note each; never fails the run. Omitted when empty" },
+            "unused_directives": { "type": "array", "items": { "$ref": "#/$defs/UnusedDirective" }, "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty" },
             "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" }
         },
         "$defs": {
@@ -102,6 +103,16 @@ pub fn report_schema() -> Value {
                     "subject": { "type": "string", "description": "What the directive names: a test, path, rule, dependency, ..." },
                     "directive": { "type": "string" },
                     "reason": { "type": "string" },
+                    "source": { "$ref": "#/$defs/OverrideSource" },
+                    "hidden": { "type": "boolean", "description": "The directive was inside an HTML comment" }
+                }
+            },
+            "UnusedDirective": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["directive", "source", "hidden"],
+                "properties": {
+                    "directive": { "type": "string" },
                     "source": { "$ref": "#/$defs/OverrideSource" },
                     "hidden": { "type": "boolean", "description": "The directive was inside an HTML comment" }
                 }

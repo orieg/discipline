@@ -207,6 +207,7 @@ mod tests {
             planned_gates: Vec::new(),
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            unused_directives: Vec::new(),
         };
 
         let val = format_sarif(&summary);
@@ -263,6 +264,7 @@ mod tests {
             planned_gates: Vec::new(),
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            unused_directives: Vec::new(),
         };
 
         let val = format_sarif(&summary);
