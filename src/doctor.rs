@@ -2287,7 +2287,7 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
                 format!("`{rel}` has no pre-tool entry: {agent} can edit another worktree before any check runs"),
             )
             .fix(format!(
-                "Once the installed discipline has `hook run --event pre-tool`, regenerate it: `discipline hook install --agent {agent} --upgrade` (JSON hook files: delete and reinstall)."
+                "Once the installed discipline has `hook run --event pre-tool`, regenerate it: `discipline hook install --agent {agent} --upgrade` (a file with hooks or settings of its own is not rewritten: merge the entry it prints)."
             ))
         });
     }

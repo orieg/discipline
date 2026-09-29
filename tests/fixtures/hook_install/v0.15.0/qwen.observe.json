@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v discipline >/dev/null 2>&1 || { echo 'discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)' >&2; exit 0; }; discipline hook run --agent qwen --observe",
+            "timeout": 120,
+            "type": "command"
+          }
+        ],
+        "matcher": "^(write_file|edit)$"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "command -v discipline >/dev/null 2>&1 || { echo 'discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)' >&2; exit 0; }; discipline hook run --agent qwen --observe",
+            "timeout": 120,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

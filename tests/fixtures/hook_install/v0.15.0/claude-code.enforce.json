@@ -1,0 +1,51 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v discipline >/dev/null 2>&1 || { echo 'discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)' >&2; exit 0; }; discipline hook run --agent claude-code",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v discipline >/dev/null 2>&1 || { echo 'discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)' >&2; exit 0; }; discipline hook run --agent claude-code --event pre-tool",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/discipline-bootstrap.sh",
+            "type": "command"
+          },
+          {
+            "command": "command -v discipline >/dev/null 2>&1 || { echo 'discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)' >&2; exit 0; }; discipline hook run --agent claude-code --event session-start",
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "command -v discipline >/dev/null 2>&1 || { echo 'discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)' >&2; exit 0; }; discipline hook run --agent claude-code",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
