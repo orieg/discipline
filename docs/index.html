@@ -757,27 +757,50 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* Installation grid */
-    .install-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
-      gap: 1.25rem;
-      margin-top: 1.5rem;
+    /* Installation list */
+    .install-group { margin-top: 1.75rem; }
+    .install-group-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.6rem;
     }
-    .install-card {
+    .install-list {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 1.25rem;
-      transition: border-color 0.15s ease;
+      overflow: hidden;
     }
-    .install-card:hover { border-color: var(--border-accent); }
-    .install-card h4 {
-      font-size: 1rem;
+    .install-row {
+      display: grid;
+      grid-template-columns: minmax(0, 17rem) minmax(0, 1fr);
+      gap: 1.25rem;
+      align-items: start;
+      padding: 1rem 1.25rem;
+      border-top: 1px solid var(--border);
+    }
+    .install-row:first-child { border-top: none; }
+    .install-meta h4 {
+      font-size: 0.95rem;
       font-weight: 700;
       color: var(--heading);
-      margin-bottom: 0.5rem;
+      margin-bottom: 0.25rem;
     }
+    .install-meta h4 span {
+      font-weight: 500;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      margin-left: 0.25rem;
+    }
+    .install-meta p {
+      font-size: 0.8rem;
+      line-height: 1.5;
+      color: var(--text-muted);
+    }
+    .install-meta a { color: var(--accent); }
+    .install-meta code { overflow-wrap: anywhere; }
     .install-snippet {
       background: var(--code-bg);
       border: 1px solid var(--border);
@@ -787,8 +810,7 @@
       font-size: 0.8rem;
       color: #e2e8f0;
       overflow-x: auto;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
+      white-space: pre;
     }
 
     .copy-wrap {
@@ -854,6 +876,7 @@
       .nav-links a { white-space: nowrap; }
     }
     @media (max-width: 768px) {
+      .install-row { grid-template-columns: minmax(0, 1fr); gap: 0.6rem; padding: 0.9rem 1rem; }
       .container { padding: 0 1rem; }
       .hero { padding: 3rem 0 2.5rem; }
       .hero h1 { font-size: 2rem; }
@@ -1949,72 +1972,117 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       <p class="section-desc">Available as a one-line installer, native APT/RPM packages, Homebrew formula, pre-compiled static binary, container image, or from source via Cargo.</p>
     </div>
 
-    <div class="install-grid">
-      <div class="install-card">
-        <h4>Quick Install (Linux & macOS)</h4>
-        <div class="install-snippet">curl -fsSL -o install.sh https://orieg.github.io/discipline/install.sh && bash install.sh</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Recommended download-verify-run workflow. Or via one-liner: <code>curl -fsSL https://orieg.github.io/discipline/install.sh | bash</code></p>
+    <div class="install-group">
+      <h3 class="install-group-title">Install the binary</h3>
+      <div class="install-list">
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>Quick install <span>Linux &amp; macOS</span></h4>
+            <p>Download, verify, run. Or the one-liner <code>curl -fsSL https://orieg.github.io/discipline/install.sh | bash</code>.</p>
+          </div>
+          <div class="install-snippet">curl -fsSL -o install.sh https://orieg.github.io/discipline/install.sh \
+  &amp;&amp; bash install.sh</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>Homebrew <span>macOS &amp; Linux</span></h4>
+            <p>Native formula for Apple Silicon, Intel macOS, and Linux.</p>
+          </div>
+          <div class="install-snippet">brew install orieg/tap/discipline</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>APT <span>Debian / Ubuntu</span></h4>
+            <p>Signed APT repo for Debian 11+ and Ubuntu 20.04+. <a href="apt/">Browse repo &rarr;</a></p>
+          </div>
+          <div class="install-snippet">curl -fsSL https://orieg.github.io/discipline/apt/discipline-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/discipline-archive-keyring.gpg &gt;/dev/null \
+  &amp;&amp; echo "deb [signed-by=/usr/share/keyrings/discipline-archive-keyring.gpg] \
+     https://orieg.github.io/discipline/apt/ stable main" \
+  | sudo tee /etc/apt/sources.list.d/discipline.list \
+  &amp;&amp; sudo apt update &amp;&amp; sudo apt install -y discipline</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>RPM <span>RHEL / Fedora</span></h4>
+            <p>Signed RPM repo (repository metadata is GPG-verified) for RHEL 8/9/10, Fedora, CentOS, Rocky, Alma. <a href="rpm/">Browse repo &rarr;</a></p>
+          </div>
+          <div class="install-snippet">sudo dnf config-manager --add-repo \
+     https://orieg.github.io/discipline/rpm/discipline.repo \
+  &amp;&amp; sudo dnf install -y discipline</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>MacPorts <span>macOS</span></h4>
+            <p>A generated Portfile is attached to each release; install it from a local ports tree (see the README).</p>
+          </div>
+          <div class="install-snippet">mkdir -p ~/ports/devel/discipline \
+  &amp;&amp; curl -fsSL -o ~/ports/devel/discipline/Portfile \
+     https://github.com/orieg/discipline/releases/latest/download/Portfile</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>Cargo <span>from source</span></h4>
+            <p>Builds with rustc 1.90+ and a C compiler (vendored libgit2 and the C tree-sitter grammars).</p>
+          </div>
+          <div class="install-snippet">cargo install --git https://github.com/orieg/discipline</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>Docker <span>container</span></h4>
+            <p>Non-root Alpine container with static binary.</p>
+          </div>
+          <div class="install-snippet">docker pull ghcr.io/orieg/discipline:latest</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>Shell completions</h4>
+            <p>The APT, RPM, Homebrew and MacPorts packages install bash, zsh and fish completions, and a release tarball carries them under <code>completions/</code>. For a Cargo install, generate them into your shell's completion directory and regenerate after each upgrade (see the README).</p>
+          </div>
+          <div class="install-snippet">discipline completions zsh &gt; ~/.zfunc/_discipline</div>
+        </div>
       </div>
-      <div class="install-card">
-        <h4>Debian / Ubuntu (APT)</h4>
-        <div class="install-snippet">curl -fsSL https://orieg.github.io/discipline/apt/discipline-archive-keyring.gpg | sudo tee /usr/share/keyrings/discipline-archive-keyring.gpg &gt;/dev/null && echo "deb [signed-by=/usr/share/keyrings/discipline-archive-keyring.gpg] https://orieg.github.io/discipline/apt/ stable main" | sudo tee /etc/apt/sources.list.d/discipline.list && sudo apt update && sudo apt install -y discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Signed APT repo for Debian 11+ and Ubuntu 20.04+. <a href="apt/" style="color: var(--accent);">Browse repo &rarr;</a></p>
-      </div>
-      <div class="install-card">
-        <h4>Enterprise Linux / Fedora (RPM)</h4>
-        <div class="install-snippet">sudo dnf config-manager --add-repo https://orieg.github.io/discipline/rpm/discipline.repo && sudo dnf install -y discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Signed RPM repo (repository metadata is GPG-verified) for RHEL 8/9/10, Fedora, CentOS, Rocky, Alma. <a href="rpm/" style="color: var(--accent);">Browse repo &rarr;</a></p>
-      </div>
-      <div class="install-card">
-        <h4>Homebrew (macOS & Linux)</h4>
-        <div class="install-snippet">brew install orieg/tap/discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Native formula for Apple Silicon, Intel macOS, and Linux.</p>
-      </div>
-      <div class="install-card">
-        <h4>MacPorts (macOS)</h4>
-        <div class="install-snippet">mkdir -p ~/ports/devel/discipline && curl -fsSL -o ~/ports/devel/discipline/Portfile https://github.com/orieg/discipline/releases/latest/download/Portfile</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">A generated Portfile is attached to each release; install it from a local ports tree (see the README).</p>
-      </div>
-      <div class="install-card">
-        <h4>Cargo (From Source)</h4>
-        <div class="install-snippet">cargo install --git https://github.com/orieg/discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Builds with rustc 1.90+ and a C compiler (vendored libgit2 and the C tree-sitter grammars).</p>
-      </div>
-      <div class="install-card">
-        <h4>Shell Completions</h4>
-        <div class="install-snippet">discipline completions zsh &gt; ~/.zfunc/_discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">The APT, RPM, Homebrew and MacPorts packages install bash, zsh and fish completions, and a release tarball carries them under <code>completions/</code>. For a Cargo install, generate them into your shell's completion directory and regenerate after each upgrade (see the README).</p>
-      </div>
-      <div class="install-card">
-        <h4>Docker Container</h4>
-        <div class="install-snippet">docker pull ghcr.io/orieg/discipline:latest</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Non-root Alpine container with static binary.</p>
-      </div>
-      <div class="install-card">
-        <h4>GitHub Action</h4>
-        <div class="install-snippet">uses: orieg/discipline@v0</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Composite action with automatic binary bootstrap. Under the default <code>ci-integrity</code> gate, pin it by commit SHA and set <code>version:</code>.</p>
-      </div>
-      <div class="install-card">
-        <h4>GitLab CI/CD</h4>
-        <div class="install-snippet">include:
+    </div>
+
+    <div class="install-group">
+      <h3 class="install-group-title">Add it to CI and hooks</h3>
+      <div class="install-list">
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>GitHub Action</h4>
+            <p>Composite action with automatic binary bootstrap. Under the default <code>ci-integrity</code> gate, pin it by commit SHA and set <code>version:</code>.</p>
+          </div>
+          <div class="install-snippet">uses: orieg/discipline@v0</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>GitLab CI/CD</h4>
+            <p>Job template with <code>spec: inputs</code> (GitLab 16.0+), pinned to a release.</p>
+          </div>
+          <div class="install-snippet">include:
   - remote: https://raw.githubusercontent.com/orieg/discipline/v0.15.0/templates/discipline.gitlab-ci.yml</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Job template with <code>spec: inputs</code> (GitLab 16.0+), pinned to a release.</p>
-      </div>
-      <div class="install-card">
-        <h4>Forgejo Action</h4>
-        <div class="install-snippet">uses: https://github.com/orieg/discipline@v0</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Compatible with Forgejo Actions and forgejo-runner.</p>
-      </div>
-      <div class="install-card">
-        <h4>Gitea Action</h4>
-        <div class="install-snippet">uses: https://github.com/orieg/discipline@v0</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Compatible with self-hosted Gitea and act_runner.</p>
-      </div>
-      <div class="install-card">
-        <h4>Pre-Commit Hook</h4>
-        <div class="install-snippet">repo: https://github.com/orieg/discipline</div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Local git pre-commit hook (discipline / discipline-system).</p>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>Forgejo Action</h4>
+            <p>Compatible with Forgejo Actions and forgejo-runner.</p>
+          </div>
+          <div class="install-snippet">uses: https://github.com/orieg/discipline@v0</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>Gitea Action</h4>
+            <p>Compatible with self-hosted Gitea and act_runner.</p>
+          </div>
+          <div class="install-snippet">uses: https://github.com/orieg/discipline@v0</div>
+        </div>
+        <div class="install-row">
+          <div class="install-meta">
+            <h4>pre-commit hook</h4>
+            <p>Local git pre-commit hook (discipline / discipline-system).</p>
+          </div>
+          <div class="install-snippet">repo: https://github.com/orieg/discipline</div>
+        </div>
       </div>
     </div>
   </section>
