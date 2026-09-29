@@ -1015,3 +1015,93 @@ fn doctor_fails_an_imposter_pin_and_warns_on_a_tag_pinned_nested_action() {
     );
     assert!(run.stdout.contains(BAD), "{}", run.stdout);
 }
+
+/// GitLab settings through the binary against a fake forge serving the responses
+/// recorded from gitlab.com (Phase 14): the job token, the CI/CD variables, the protected
+/// tags and the token `doctor` runs with; then a fine-grained token refused the variables
+/// read, whose warning names the permission it lacks.
+#[test]
+fn doctor_reads_gitlab_settings_and_audits_the_token() {
+    let recorded: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/forge_settings/gitlab.json")).unwrap();
+    let repo = Repo::new();
+    let api = FakeForge::start();
+    // The recording kept the CI settings; `doctor` also reads the default branch.
+    let mut project = recorded["project_ci_settings"].clone();
+    project["default_branch"] = serde_json::json!("main");
+    api.serve("projects/o%2Fr", project);
+    api.serve(
+        "projects/o%2Fr/job_token_scope",
+        recorded["job_token_scope"].clone(),
+    );
+    let mut vars = recorded["variables"].clone();
+    for v in vars.as_array_mut().unwrap() {
+        if v["key"] == "DEPLOY_TOKEN" {
+            v["environment_scope"] = serde_json::json!("*");
+        }
+    }
+    api.serve("projects/o%2Fr/variables?per_page=100&page=1", vars);
+    api.serve(
+        "projects/o%2Fr/protected_tags?per_page=100&page=1",
+        recorded["protected_tags"].clone(),
+    );
+    api.serve(
+        "projects/o%2Fr/releases?per_page=1",
+        serde_json::json!([{"tag_name": "v1.0.0"}]),
+    );
+    // The probing token's scopes: it can write.
+    api.serve(
+        "personal_access_tokens/self",
+        serde_json::json!({"scopes": recorded["token_self"]["scopes"], "expires_at": "2099-01-01"}),
+    );
+    let url = api.url();
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("DISCIPLINE_FORGE", "gitlab"),
+        ("DISCIPLINE_FORGE_URL", "https://gitlab.example.com"),
+        ("DISCIPLINE_FORGE_REPO", "o/r"),
+        ("GITLAB_TOKEN", "glpat-secret-123"),
+    ];
+    let run = repo.run(&["doctor", "--format", "json"], &env);
+    let st = statuses(&run.stdout);
+    for (id, want) in [
+        ("default-token", "pass"),
+        ("tag-protection", "pass"),
+        ("secret-scoping", "warn"),
+        ("forge-token", "warn"),
+        ("actions-sha-pinning", "info"),
+    ] {
+        assert!(
+            st.contains(&(id.into(), want.into())),
+            "{id} {want}: {st:?}"
+        );
+    }
+    assert!(run.stdout.contains("`DEPLOY_TOKEN`"), "{}", run.stdout);
+    assert!(run.stdout.contains("`api`"), "{}", run.stdout);
+    assert!(!run.stdout.contains("glpat-secret-123") && !run.stderr.contains("glpat-secret-123"));
+
+    // A fine-grained token without `Variable: Read`.
+    api.serve_raw(
+        "projects/o%2Fr/variables?per_page=100&page=1",
+        403,
+        &[],
+        r#"{"error":"insufficient_granular_scope","error_description":"Access denied: This operation requires a fine-grained personal access token with the following project permissions: [Variable: Read]."}"#,
+    );
+    let run = repo.run(&["doctor", "--format", "json"], &env);
+    let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let scoping = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "secret-scoping")
+        .unwrap()
+        .clone();
+    assert_eq!(scoping["status"], "warn", "{scoping}");
+    assert!(
+        scoping["remediation"]
+            .as_str()
+            .unwrap_or("")
+            .contains("`Variable: Read`"),
+        "{scoping}"
+    );
+}

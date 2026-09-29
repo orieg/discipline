@@ -27,6 +27,7 @@ pub const IDS: &[&str] = &[
     "immutable-releases",
     "tag-protection",
     "secret-scoping",
+    "forge-token",
 ];
 
 /// The access GitHub needs for the admin-only settings endpoints.
@@ -79,7 +80,8 @@ fn unavailable(id: &'static str, kind: ForgeKind) -> Finding {
 pub fn findings(api: &dyn ForgeApi, forge: &Forge, workflows: &[(String, String)]) -> Vec<Finding> {
     match forge.kind {
         ForgeKind::GitHub => github(api, forge, workflows),
-        ForgeKind::Gitea | ForgeKind::Forgejo | ForgeKind::GitLab => {
+        ForgeKind::GitLab => gitlab(api, forge),
+        ForgeKind::Gitea | ForgeKind::Forgejo => {
             let mut out: Vec<Finding> = IDS
                 .iter()
                 .filter(|id| **id != "tag-protection")
@@ -156,6 +158,9 @@ fn github(api: &dyn ForgeApi, forge: &Forge, workflows: &[(String, String)]) -> 
     );
     out.push(github_tag_rulesets(api, forge));
     out.push(secret_scoping(api, forge, workflows));
+    // A GitHub token's scopes are only in a response header (`X-OAuth-Scopes`, classic
+    // tokens); a fine-grained token does not list its permissions.
+    out.push(unavailable("forge-token", forge.kind));
     out
 }
 
@@ -732,6 +737,228 @@ fn secret_scoping(api: &dyn ForgeApi, forge: &Forge, workflows: &[(String, Strin
     )
 }
 
+/// The read permission a GitLab fine-grained token lacks, named in the refusal's reason
+/// ("... requires a fine-grained personal access token with the following project
+/// permissions: [Variable: Read]."), recorded live in
+/// `tests/fixtures/forge_settings/gitlab.json`.
+pub fn gitlab_missing_permission(why: &str) -> Option<&str> {
+    let start = why.find("permissions: [")? + "permissions: [".len();
+    let end = why[start..].find(']')? + start;
+    Some(why[start..end].trim()).filter(|p| !p.is_empty())
+}
+
+/// What a GitLab token needs to read a setting: the permission the refusal names, else
+/// `fallback`.
+fn gitlab_need(why: &str, fallback: &str) -> String {
+    match gitlab_missing_permission(why) {
+        Some(p) => format!(
+            "a token that holds `{p}` (a fine-grained token), or `read_api` with {fallback}"
+        ),
+        None => format!("a token with `read_api` and {fallback}"),
+    }
+}
+
+/// GitLab's settings: the job token (`default-token`), CI/CD variables
+/// (`secret-scoping`), protected tags, and the token `doctor` runs with (`forge-token`).
+/// GitLab has no `uses:` actions, no workflow-approval setting and no release
+/// immutability: those stay information.
+fn gitlab(api: &dyn ForgeApi, forge: &Forge) -> Vec<Finding> {
+    let id = gitlab_project_id(&forge.repo);
+    let project = match api.fetch(forge, &format!("projects/{id}")) {
+        Ok(v) => v,
+        Err(e) => {
+            let why = e.to_string();
+            return IDS.iter().map(|i| down(i, forge.kind, &why)).collect();
+        }
+    };
+    let mut out: Vec<Finding> = ["actions-sha-pinning", "allowed-actions"]
+        .iter()
+        .map(|i| unavailable(i, forge.kind))
+        .collect();
+    out.push(
+        match ask(api, forge, &format!("projects/{id}/job_token_scope")) {
+            Answer::Ok(v) => gitlab_job_token_finding(&v, &project),
+            Answer::Hidden(why) => hidden(
+                "default-token",
+                "the CI job token scope",
+                &why,
+                &gitlab_need(&why, "the Maintainer role"),
+            ),
+            Answer::Down(why) => down("default-token", forge.kind, &why),
+        },
+    );
+    for i in ["actions-approve-prs", "immutable-releases"] {
+        out.push(unavailable(i, forge.kind));
+    }
+    out.push(protected_tags(api, forge));
+    out.push(
+        match read_all(api, forge, &format!("projects/{id}/variables")) {
+            Ok(vars) => gitlab_variables_finding(
+                &vars,
+                project
+                    .get("ci_allow_fork_pipelines_to_run_in_parent_project")
+                    .and_then(|f| f.as_bool())
+                    == Some(true),
+            ),
+            Err(e) if matches!(e.kind, ForgeErrorKind::NotFound | ForgeErrorKind::Denied) => {
+                let why = e.to_string();
+                hidden(
+                    "secret-scoping",
+                    "the project's CI/CD variables",
+                    &why,
+                    &gitlab_need(&why, "the Maintainer role"),
+                )
+            }
+            Err(e) => down("secret-scoping", forge.kind, &e.to_string()),
+        },
+    );
+    out.push(match ask(api, forge, "personal_access_tokens/self") {
+        Answer::Ok(v) => gitlab_token_finding(&v, crate::lease::now()),
+        // A CI job token, a deploy token or an OAuth token has no self-description.
+        Answer::Hidden(_) => Finding::new(
+            "forge-token",
+            Status::Info,
+            "this token does not describe itself (`personal_access_tokens/self`): a CI job token, a deploy token or an OAuth token",
+        ),
+        Answer::Down(why) => down("forge-token", forge.kind, &why),
+    });
+    out
+}
+
+/// `default-token` on GitLab: other projects' CI job tokens are kept out by the inbound
+/// allowlist (`job_token_scope.inbound_enabled`), and a job token cannot push to the
+/// repository (`ci_push_repository_for_job_token_allowed`).
+pub fn gitlab_job_token_finding(scope: &serde_json::Value, project: &serde_json::Value) -> Finding {
+    let inbound = scope.get("inbound_enabled").and_then(|b| b.as_bool());
+    let push = project
+        .get("ci_push_repository_for_job_token_allowed")
+        .and_then(|b| b.as_bool());
+    let mut wrong = Vec::new();
+    if inbound != Some(true) {
+        wrong.push("a CI job token from any project can call this project's API (the job-token allowlist is off: `inbound_enabled: false`)");
+    }
+    if push == Some(true) {
+        wrong.push("a CI job token can push to this repository (`ci_push_repository_for_job_token_allowed`)");
+    }
+    if wrong.is_empty() {
+        return Finding::new(
+            "default-token",
+            Status::Pass,
+            "only allowlisted projects' CI job tokens reach this project, and a job token cannot push to it",
+        );
+    }
+    Finding::new("default-token", Status::Warn, wrong.join("; "))
+        .fix("Settings → CI/CD → Job token permissions: limit access to this project to the allowlist, and do not let job tokens push to the repository.")
+}
+
+/// `secret-scoping` on GitLab: a variable marked sensitive (masked or hidden) that is
+/// neither protected nor scoped to one environment reaches every pipeline of the
+/// project, including merge-request pipelines; when fork pipelines run in the project
+/// (`ci_allow_fork_pipelines_to_run_in_parent_project`), a fork's change can read it.
+/// Variables that are not masked are configuration, counted but not reported. Names
+/// only: a value is never read into a finding.
+pub fn gitlab_variables_finding(vars: &[serde_json::Value], forks_run: bool) -> Finding {
+    if vars.is_empty() {
+        return Finding::new(
+            "secret-scoping",
+            Status::Pass,
+            "no project-level CI/CD variables",
+        );
+    }
+    let flag = |v: &serde_json::Value, k: &str| v.get(k).and_then(|b| b.as_bool()) == Some(true);
+    let exposed: Vec<String> = vars
+        .iter()
+        .filter(|v| (flag(v, "masked") || flag(v, "hidden")) && !flag(v, "protected"))
+        .filter(|v| {
+            v.get("environment_scope")
+                .and_then(|e| e.as_str())
+                .unwrap_or("*")
+                == "*"
+        })
+        .filter_map(|v| {
+            v.get("key")
+                .and_then(|k| k.as_str())
+                .map(|k| format!("`{k}`"))
+        })
+        .collect();
+    if exposed.is_empty() {
+        return Finding::new(
+            "secret-scoping",
+            Status::Pass,
+            format!(
+                "{} project-level CI/CD variable(s); each masked one is protected or scoped to an environment",
+                vars.len()
+            ),
+        );
+    }
+    let forks = if forks_run {
+        "; pipelines for merge requests from forks run in this project (`ci_allow_fork_pipelines_to_run_in_parent_project`), so a fork's change can read them"
+    } else {
+        ""
+    };
+    Finding::new(
+        "secret-scoping",
+        Status::Warn,
+        format!(
+            "masked CI/CD variable(s) every pipeline of the project can read (not protected, every environment): {}{forks}",
+            exposed.join(", ")
+        ),
+    )
+    .fix("Settings → CI/CD → Variables: mark each one Protected, so only pipelines on protected branches and tags get it, or scope it to the environment whose jobs use it.")
+}
+
+/// How many days ahead a GitLab token's expiry is reported (`forge-token`).
+pub const TOKEN_EXPIRY_WARN_DAYS: i64 = 14;
+
+/// `forge-token` on GitLab: the token `doctor` runs with, from its own description
+/// (`personal_access_tokens/self`). `doctor` and the gates only read, so any scope that
+/// is not `read_*` is more than they need; a token that never expires, or expires within
+/// [`TOKEN_EXPIRY_WARN_DAYS`], is reported too. `now` is Unix seconds.
+pub fn gitlab_token_finding(v: &serde_json::Value, now: i64) -> Finding {
+    let scopes: Vec<&str> = v
+        .get("scopes")
+        .and_then(|s| s.as_array())
+        .map(|a| a.iter().filter_map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+    let beyond: Vec<String> = scopes
+        .iter()
+        .filter(|s| !s.starts_with("read_"))
+        .map(|s| format!("`{s}`"))
+        .collect();
+    let expires = v.get("expires_at").and_then(|e| e.as_str());
+    let days_left = expires
+        .and_then(|d| crate::ratification::parse_time(&format!("{d}T00:00:00Z")))
+        .map(|t| (t - now).div_euclid(86_400));
+    let mut wrong = Vec::new();
+    if !beyond.is_empty() {
+        wrong.push(format!(
+            "the token can do more than read: {}; `doctor` and the gates need `read_api` only",
+            beyond.join(", ")
+        ));
+    }
+    match (expires, days_left) {
+        (None, _) => wrong.push("the token never expires".to_string()),
+        (Some(d), Some(n)) if n < TOKEN_EXPIRY_WARN_DAYS => {
+            wrong.push(format!("the token expires on {d} ({n} day(s))"))
+        }
+        _ => {}
+    }
+    if wrong.is_empty() {
+        return Finding::new(
+            "forge-token",
+            Status::Pass,
+            format!(
+                "the token reads only ({}) and expires on {}",
+                scopes.join(", "),
+                expires.unwrap_or("?")
+            ),
+        );
+    }
+    Finding::new("forge-token", Status::Warn, wrong.join("; ")).fix(
+        "Create a token with `read_api` only (User settings → Access tokens), with an expiry, and run `doctor` and CI with it.",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -796,7 +1023,15 @@ mod tests {
         let f = findings(&healthy(), &gh(), &[]);
         let ids: Vec<&str> = f.iter().map(|x| x.id).collect();
         assert_eq!(ids, IDS);
-        assert!(f.iter().all(|x| x.status == Status::Pass), "{f:?}");
+        // Every setting passes; the token audit is not available on GitHub.
+        assert!(
+            f.iter()
+                .filter(|x| x.id != "forge-token")
+                .all(|x| x.status == Status::Pass),
+            "{f:?}"
+        );
+        let token = f.iter().find(|x| x.id == "forge-token").unwrap();
+        assert_eq!(token.status, Status::Info, "{token:?}");
     }
 
     #[test]
@@ -1107,5 +1342,193 @@ jobs:
             status_of(&findings(&api, &gh(), &[]), "secret-scoping"),
             Status::Pass
         );
+    }
+
+    /// The responses recorded from gitlab.com (Phase 14 Step 0).
+    fn gitlab_recorded() -> serde_json::Value {
+        serde_json::from_str(include_str!("../tests/fixtures/forge_settings/gitlab.json")).unwrap()
+    }
+
+    const GITLAB_DENIAL: &str = "Access denied: This operation requires a fine-grained personal access token with the following project permissions: [Variable: Read].";
+
+    #[test]
+    fn a_gitlab_denial_names_the_permission_the_token_lacks() {
+        assert_eq!(
+            gitlab_missing_permission(GITLAB_DENIAL),
+            Some("Variable: Read")
+        );
+        assert_eq!(
+            gitlab_missing_permission("gitlab.com answered HTTP 403 403 Forbidden"),
+            None
+        );
+        assert_eq!(gitlab_missing_permission("permissions: []"), None);
+        assert!(gitlab_need(GITLAB_DENIAL, "the Maintainer role").contains("`Variable: Read`"));
+        assert!(!gitlab_need("403 Forbidden", "the Maintainer role").contains('['));
+    }
+
+    #[test]
+    fn gitlab_job_token_passes_only_with_the_allowlist_on_and_no_push() {
+        let r = gitlab_recorded();
+        let (scope, project) = (&r["job_token_scope"], &r["project_ci_settings"]);
+        assert_eq!(
+            gitlab_job_token_finding(scope, project).status,
+            Status::Pass
+        );
+        let open = json!({"inbound_enabled": false, "outbound_enabled": false});
+        let f = gitlab_job_token_finding(&open, project);
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.summary.contains("inbound_enabled: false"), "{f:?}");
+        let mut pushing = project.clone();
+        pushing["ci_push_repository_for_job_token_allowed"] = json!(true);
+        let f = gitlab_job_token_finding(scope, &pushing);
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.summary.contains("can push"), "{f:?}");
+    }
+
+    #[test]
+    fn gitlab_masked_variables_readable_by_every_pipeline_are_reported_by_name() {
+        let r = gitlab_recorded();
+        let vars = r["variables"].as_array().unwrap().clone();
+        // As recorded: the masked one is scoped to `production`, the other two are not
+        // masked (configuration).
+        assert_eq!(gitlab_variables_finding(&vars, true).status, Status::Pass);
+        assert_eq!(gitlab_variables_finding(&[], true).status, Status::Pass);
+
+        let mut widened = vars.clone();
+        for v in widened.iter_mut() {
+            if v["key"] == "DEPLOY_TOKEN" {
+                v["environment_scope"] = json!("*");
+            }
+        }
+        let f = gitlab_variables_finding(&widened, false);
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.summary.contains("`DEPLOY_TOKEN`"), "{f:?}");
+        assert!(
+            !f.summary.contains("PLAIN_VAR"),
+            "an unmasked variable: {f:?}"
+        );
+        assert!(!f.summary.contains("fork"), "{f:?}");
+        let f = gitlab_variables_finding(&widened, true);
+        assert!(f.summary.contains("forks"), "{f:?}");
+
+        // Protected is enough; a hidden variable counts as masked.
+        let mut protected = widened.clone();
+        for v in protected.iter_mut() {
+            v["protected"] = json!(true);
+        }
+        assert_eq!(
+            gitlab_variables_finding(&protected, true).status,
+            Status::Pass
+        );
+        let hidden_var = vec![
+            json!({"key": "H", "masked": false, "hidden": true, "protected": false, "environment_scope": "*"}),
+        ];
+        assert_eq!(
+            gitlab_variables_finding(&hidden_var, false).status,
+            Status::Warn
+        );
+    }
+
+    #[test]
+    fn a_gitlab_token_that_can_write_or_expires_soon_is_reported() {
+        let now = crate::ratification::parse_time("2026-09-29T00:00:00Z").unwrap();
+        // The recorded probing token: `api`, write and runner scopes.
+        let f = gitlab_token_finding(&gitlab_recorded()["token_self"], now);
+        assert_eq!(f.status, Status::Warn);
+        for s in ["`api`", "`write_repository`", "`create_runner`"] {
+            assert!(f.summary.contains(s), "{s}: {f:?}");
+        }
+        assert!(!f.summary.contains("`read_api`,"), "{f:?}");
+
+        let read_only = |expires: serde_json::Value| json!({"scopes": ["read_api", "read_repository"], "expires_at": expires});
+        assert_eq!(
+            gitlab_token_finding(&read_only(json!("2026-12-01")), now).status,
+            Status::Pass
+        );
+        let soon = gitlab_token_finding(&read_only(json!("2026-10-05")), now);
+        assert_eq!(soon.status, Status::Warn);
+        assert!(soon.summary.contains("2026-10-05 (6 day(s))"), "{soon:?}");
+        let never = gitlab_token_finding(&read_only(serde_json::Value::Null), now);
+        assert_eq!(never.status, Status::Warn);
+        assert!(never.summary.contains("never expires"), "{never:?}");
+        // Exactly at the threshold is not reported.
+        assert_eq!(
+            gitlab_token_finding(&read_only(json!("2026-10-13")), now).status,
+            Status::Pass
+        );
+        assert_eq!(
+            gitlab_token_finding(&read_only(json!("2026-10-12")), now).status,
+            Status::Warn
+        );
+    }
+
+    #[test]
+    fn gitlab_settings_are_read_and_a_denial_names_the_missing_permission() {
+        let r = gitlab_recorded();
+        let forge = Forge {
+            kind: ForgeKind::GitLab,
+            url: "https://gitlab.example.com".into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        let mut put = |k: &str, v: serde_json::Value| {
+            api.responses.insert(format!("gitlab:projects/o%2Fr{k}"), v);
+        };
+        put("", r["project_ci_settings"].clone());
+        put("/job_token_scope", r["job_token_scope"].clone());
+        put("/variables?per_page=100&page=1", r["variables"].clone());
+        put(
+            "/protected_tags?per_page=100&page=1",
+            r["protected_tags"].clone(),
+        );
+        put("/releases?per_page=1", json!([{"tag_name": "v1.0.0"}]));
+        api.responses.insert(
+            "gitlab:personal_access_tokens/self".into(),
+            json!({"scopes": ["read_api"], "expires_at": "2099-01-01"}),
+        );
+        let f = findings(&api, &forge, &[]);
+        let ids: Vec<&str> = f.iter().map(|x| x.id).collect();
+        assert_eq!(ids, IDS);
+        for id in [
+            "default-token",
+            "tag-protection",
+            "secret-scoping",
+            "forge-token",
+        ] {
+            assert_eq!(status_of(&f, id), Status::Pass, "{id}: {f:?}");
+        }
+        for id in [
+            "actions-sha-pinning",
+            "allowed-actions",
+            "actions-approve-prs",
+            "immutable-releases",
+        ] {
+            assert_eq!(status_of(&f, id), Status::Info, "{id}");
+        }
+
+        // A fine-grained token without `Variable: Read`: the fix names it.
+        api.responses.insert(
+            "gitlab:projects/o%2Fr/variables?per_page=100&page=1".into(),
+            json!({"__status": 403, "__body": {"error": "insufficient_granular_scope", "error_description": GITLAB_DENIAL}}),
+        );
+        let f = findings(&api, &forge, &[]);
+        let scoping = f.iter().find(|x| x.id == "secret-scoping").unwrap();
+        assert_eq!(scoping.status, Status::Warn, "{scoping:?}");
+        assert!(
+            scoping
+                .remediation
+                .as_deref()
+                .unwrap_or("")
+                .contains("`Variable: Read`"),
+            "{scoping:?}"
+        );
+
+        // A CI job token cannot describe itself: information, not a failure.
+        api.responses.insert(
+            "gitlab:personal_access_tokens/self".into(),
+            json!({"__status": 401, "__body": {"message": "401 Unauthorized"}}),
+        );
+        let f = findings(&api, &forge, &[]);
+        assert_eq!(status_of(&f, "forge-token"), Status::Info);
     }
 }
