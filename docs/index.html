@@ -819,6 +819,19 @@
       #gate-table { min-width: 720px; }
       .section-block { scroll-margin-top: 6.5rem; }
     }
+    /* Phones: each gate is a card. Its id, category, default and languages share
+       a wrapped line, and the description takes the full width below. */
+    @media (max-width: 640px) {
+      #gate-table { min-width: 0; }
+      #gate-table thead { display: none; }
+      #gate-table, #gate-table tbody, #gate-table tr { display: block; }
+      #gate-table tr { padding: 0.8rem 0.9rem; border-bottom: 1px solid var(--border); }
+      #gate-table tr:last-child { border-bottom: none; }
+      #gate-table td { display: inline-block; padding: 0 0.5rem 0.35rem 0; border-bottom: none; }
+      #gate-table td.gate-id { display: block; padding-bottom: 0.4rem; }
+      #gate-table td:last-child { display: block; padding: 0.35rem 0 0; color: var(--text-muted, inherit); }
+      table.gate-table tr:hover td { background: transparent; }
+    }
     @media (max-width: 420px) {
       .hero h1 { font-size: 1.65rem; }
       .hero h1 br { display: none; }
