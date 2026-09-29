@@ -446,7 +446,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```
 - **What it does NOT catch:**
   - Assertions inside dynamically evaluated strings or macro expansions (e.g. `proptest! { ... }`).
-  - Assertions inside unconfigured helper functions (configure via `assert_helper_fns` or `extra_assert_macros`; same-file helpers are resolved automatically, up to three calls deep in C/C++ and Python and one level in every other pack, thin wrappers followed through in every pack).
+  - Assertions inside unconfigured helper functions (configure via `assert_helper_fns` or `extra_assert_macros`; same-file helpers are resolved automatically, up to three calls deep in C/C++ and Python and one level in every other pack, thin wrappers followed through in every pack; in Rust a helper called inside a macro's arguments, such as `assert!(run(x).is_ok())` or `format!("{}", run(x))`, resolves as one called outside, except in macros that run no argument: `stringify!`, `concat!`, `env!`, `cfg!`, `include*!` and the like).
   - Assertions deleted in the same change that adds a call to a same-file helper that fails: the growth in helper calls excuses the whole drop for that test. The gate's notes name each test read this way.
   - Dynamic loops in Python (`@pytest.mark.parametrize` counts definitions, not iterations) or JS (`test.each`).
   - Run-time reachability: an assertion under a condition that is false only at run time (`if DEBUG:`, a flag read from configuration), or inside a closure the test never calls, still counts. A constant-false condition and code after an unconditional terminator are handled (see *Unreachable assertions* under `vacuous-tests` below).

@@ -12847,6 +12847,38 @@ fn a_helper_forwarding_a_local_is_not_an_assertion_reduction_in_other_packs() {
     }
 }
 
+/// A helper call moved into an `assert!` still runs the helper: its `unwrap` counts as
+/// it did when the result was bound first. Dropping the call is still a reduction.
+#[test]
+fn a_helper_call_moved_into_an_assert_is_not_an_assertion_reduction() {
+    let helper = "use std::process::{Command, Output};\n\nfn git(args: &[&str]) -> Output {\n    Command::new(\"git\").args(args).output().unwrap()\n}\n\n";
+    let bound = "#[test]\nfn status_succeeds() {\n    let out = git(&[\"status\"]);\n    assert!(out.status.success());\n}\n";
+    let inline =
+        "#[test]\nfn status_succeeds() {\n    assert!(git(&[\"status\"]).status.success());\n}\n";
+    let dropped = "#[test]\nfn status_succeeds() {\n    let ok = true;\n    assert!(ok);\n}\n";
+    for (before, after, reported) in [(bound, inline, false), (inline, dropped, true)] {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("tests/git.rs", &format!("{helper}{before}"));
+        repo.commit("test: git");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("tests/git.rs", &format!("{helper}{after}"));
+        repo.commit("refactor: git test");
+        let run = repo.check(&[]);
+        let expected: Vec<&str> = if reported {
+            vec!["Assertion Count Decreased In Existing Test"]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            run.titles("assertion-reduction"),
+            expected,
+            "{}",
+            run.stdout
+        );
+    }
+}
+
 const CITATION_CFF: &str ="cff-version: 1.2.0\nmessage: \"Cite it.\"\ntitle: \"Tool: a thing\"\ntype: software\ndate-released: 2026-09-28\nauthors:\n  - family-names: \"Doe\"\n    given-names: \"Jane\"\n    orcid: \"https://orcid.org/0000-0002-1825-0097\"\nlicense:\n  - MIT\n  - Apache-2.0\nkeywords:\n  - ci\ndoi: \"10.5281/zenodo.100\"\nidentifiers:\n  - type: doi\n    value: \"10.5281/zenodo.100\"\n    description: \"Concept DOI (all versions)\"\n  - type: doi\n    value: \"10.5281/zenodo.101\"\n    description: \"Version DOI (v1.0.0)\"\n";
 const ZENODO_JSON: &str = r#"{"title": "Tool: a thing", "upload_type": "software", "creators": [{"name": "Doe, Jane", "orcid": "0000-0002-1825-0097"}], "license": "mit", "keywords": ["ci"]}"#;
 

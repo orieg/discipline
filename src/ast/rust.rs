@@ -475,6 +475,7 @@ impl<'a> Extractor<'a> {
             .unwrap_or(false);
         if let Some(body) = node.child_by_field_name("body") {
             self.count_asserts(body, &mut test, is_fallible_return, direct_calls);
+            self.macro_argument_calls(body, &mut test, direct_calls);
             super::dispatch_calls(body, self.src, &RS_DISPATCH, direct_calls);
         }
         Some(test)
@@ -541,6 +542,67 @@ impl<'a> Extractor<'a> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             self.count_asserts(child, test, is_fallible_return, direct_calls);
+        }
+    }
+
+    /// Calls a test makes inside macro arguments (`assert!(run(1) > 0)`), which the
+    /// grammar keeps as a flat token tree: a name followed by a parenthesised tree, not
+    /// after a `.` (a method call, not resolved outside macros either). They are added
+    /// to `direct_calls` as calls outside a macro are. A macro in `NON_EVALUATING_MACROS`
+    /// runs none of its arguments, so its tree is not read. Only test bodies are read:
+    /// a helper's collected calls must match its call nodes (`forwarding_wrapper_callee`).
+    fn macro_argument_calls(&self, node: Node, test: &mut TestFn, direct_calls: &mut Vec<String>) {
+        if super::reach::is_dead(&self.dead, node.start_byte()) || node.kind() == "function_item" {
+            return;
+        }
+        if node.kind() == "macro_invocation" {
+            let evaluates = node
+                .child_by_field_name("macro")
+                .is_some_and(|m| !NON_EVALUATING_MACROS.contains(&last_segment(self.text(m))));
+            if evaluates {
+                let mut cursor = node.walk();
+                for tree in node
+                    .children(&mut cursor)
+                    .filter(|c| c.kind() == "token_tree")
+                {
+                    self.token_tree_calls(tree, test, direct_calls);
+                }
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.macro_argument_calls(child, test, direct_calls);
+        }
+    }
+
+    fn token_tree_calls(&self, tree: Node, test: &mut TestFn, direct_calls: &mut Vec<String>) {
+        let mut cursor = tree.walk();
+        let tokens: Vec<Node> = tree.children(&mut cursor).collect();
+        let mut skip = None;
+        for (i, token) in tokens.iter().enumerate() {
+            let next = tokens.get(i + 1);
+            if token.kind() == "identifier" {
+                let name = self.text(*token);
+                let after_dot = i > 0 && tokens[i - 1].kind() == ".";
+                if next.is_some_and(|n| n.kind() == "!") {
+                    if NON_EVALUATING_MACROS.contains(&name) {
+                        skip = Some(i + 2);
+                    }
+                } else if !after_dot
+                    && next.is_some_and(|n| {
+                        n.kind() == "token_tree" && n.child(0).is_some_and(|c| c.kind() == "(")
+                    })
+                {
+                    direct_calls.push(name.to_string());
+                    if self.vocab.helper_fns.iter().any(|h| h == name) {
+                        test.total_asserts += 1;
+                    }
+                }
+            }
+            if token.kind() == "token_tree" && skip != Some(i) {
+                self.token_tree_calls(*token, test, direct_calls);
+            }
         }
     }
 
@@ -843,6 +905,21 @@ fn attribute_name(attr_text: &str) -> String {
         .collect();
     last_segment(&path).to_string()
 }
+
+/// Macros that run none of their arguments: they read them as tokens or names.
+const NON_EVALUATING_MACROS: &[&str] = &[
+    "stringify",
+    "concat",
+    "concat_idents",
+    "env",
+    "option_env",
+    "cfg",
+    "include",
+    "include_str",
+    "include_bytes",
+    "compile_error",
+    "module_path",
+];
 
 fn last_segment(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path).trim()
@@ -1296,6 +1373,66 @@ fn t_dropped() {
                 ("t_unforwarded", 2, 1),
                 ("t_computed", 2, 1),
                 ("t_dropped", 2, 1),
+            ]
+        );
+    }
+
+    /// A same-file helper called inside a macro's arguments (`assert!(run(1) > 0)`) runs
+    /// as surely as one called outside, so its checks count: through a path, a nested
+    /// macro, and a non-assert macro alike. A macro that does not evaluate its arguments
+    /// (`stringify!`), a method call, and a helper-free call add nothing.
+    #[test]
+    fn a_helper_called_inside_a_macro_counts_its_checks() {
+        let src = r##"fn run(x: u32) -> u32 {
+    x.checked_add(1).unwrap()
+}
+#[test]
+fn t_assert() {
+    assert!(run(1) > 0);
+}
+#[test]
+fn t_path() {
+    assert_eq!(self::run(1), 2);
+}
+#[test]
+fn t_nested() {
+    assert!(vec![run(1)].len() == 1);
+}
+#[test]
+fn t_other_macro() {
+    let s = format!("{}", run(1));
+    assert!(!s.is_empty());
+}
+#[test]
+fn t_stringify() {
+    assert!(!stringify!(run(1)).is_empty());
+}
+#[test]
+fn t_method() {
+    let r = Runner;
+    assert!(r.run(1) > 0);
+}
+#[test]
+fn t_other_call() {
+    assert!(other(1) > 0);
+}
+"##;
+        let f = facts(src);
+        let counts: Vec<(&str, usize, usize)> = f
+            .tests
+            .iter()
+            .map(|t| (t.name.as_str(), t.total_asserts, t.helper_checks))
+            .collect();
+        assert_eq!(
+            counts,
+            vec![
+                ("t_assert", 2, 1),
+                ("t_path", 2, 1),
+                ("t_nested", 2, 1),
+                ("t_other_macro", 2, 1),
+                ("t_stringify", 1, 0),
+                ("t_method", 1, 0),
+                ("t_other_call", 1, 0),
             ]
         );
     }
