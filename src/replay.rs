@@ -1000,7 +1000,7 @@ mod tests {
     #[test]
     fn applied_overrides_are_read_without_their_reason() {
         let json = r#"{"outcomes":[
-            {"gate":"dependency-delta","overrides":[{"gate":"dependency-delta","subject":"serde","directive":"allow-dependency","reason":"serde AKIAIOSFODNN7EXAMPLE","source":{"type":"MergedPrBody","detail":12},"hidden":true}]},
+            {"gate":"dependency-delta","overrides":[{"gate":"dependency-delta","subject":"serde","directive":"allow-dependency","reason":"serde AKIA-SECRET","source":{"type":"MergedPrBody","detail":12},"hidden":true}]},
             {"gate":"pii","overrides":[{"gate":"pii","subject":"a.rs","directive":"discipline:allow(pii)","reason":"a.rs fixture","source":{"type":"Commit","detail":"abc"},"hidden":false}]},
             {"gate":"stub-bodies","overrides":[]}]}"#;
         let o = read_overrides(1, json);
