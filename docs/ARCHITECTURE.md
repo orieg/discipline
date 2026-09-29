@@ -401,6 +401,27 @@ Packages: a candidate's `.deb` and `.rpm` carry the version as `X.Y.Z~rc.N` (`-`
 
 The site is built from `docs/` and deployed through GitHub Pages' Actions source. The APT and RPM repositories are assembled at deploy time from the latest stable release's `.deb` and `.rpm` assets (checked against its `SHA256SUMS`) and signed with the `REPO_SIGNING_KEY` secret: an APT `InRelease` / `Release.gpg` and an RPM `repomd.xml.asc`, with the public keys published as `apt/discipline-archive-keyring.gpg` and `rpm/RPM-GPG-KEY-discipline`. No package or repository metadata is committed. Without the key the workflow fails rather than publish an unsigned repository. It runs on every docs change and after each release (dispatched by `promote`). Three jobs: `site` renders `docs/` with the Pages actions and holds no secret; `sign` downloads the packages, adds the signed repositories and is the only job that reads `REPO_SIGNING_KEY` (a secret of the `package-signing` environment), running no third-party action and with egress limited to GitHub; `deploy` publishes.
 
+#### Signing Key Maintenance
+
+One OpenPGP key signs the APT `InRelease` / `Release.gpg` and the RPM `repomd.xml.asc`. Its private half is held in two places only: the `package-signing` environment secrets (`REPO_SIGNING_KEY`, passphrase-protected, and `REPO_SIGNING_PASSPHRASE`), which GitHub never returns, and the maintainer's copy, of which an encrypted offline backup (private key, passphrase and revocation certificate) is kept. The public half is not committed: `sign` exports it on every deploy to `apt/discipline-archive-keyring.gpg` and `rpm/RPM-GPG-KEY-discipline`.
+
+The key carries an expiry date. Read it from what users have installed:
+
+```bash
+curl -fsSL https://orieg.github.io/discipline/apt/discipline-archive-keyring.gpg | gpg --show-keys
+```
+
+**Extending it**, well before that date, keeps the same key, so no user imports a new one; they only refresh their copy:
+
+1. On the maintainer's copy: `gpg --quick-set-expire <fingerprint> <new-expiry>`.
+2. Replace `REPO_SIGNING_KEY` in the `package-signing` environment with the armoured export of the extended key (`gpg --armor --export-secret-keys <fingerprint>`, piped to `gh secret set REPO_SIGNING_KEY --env package-signing`; never written to a file in the repository). The passphrase does not change.
+3. Run `pages.yml` (`gh workflow run pages.yml --ref main`). `sign` republishes the public key with the new date.
+4. Check with the `curl … | gpg --show-keys` line above that the published key shows the new expiry.
+5. Refresh the offline backup.
+6. Tell users in the next release notes to refresh the key: APT users re-run the keyring `curl` line of the install instructions (the file under `/usr/share/keyrings/` is written once and never refreshed, so `apt update` fails with an expired-key error after the old date); RPM users re-import `RPM-GPG-KEY-discipline`.
+
+**Replacing it** (the private key is lost, or its expiry cannot be extended): generate a new passphrase-protected key, set both `package-signing` secrets, run `pages.yml`, and tell users to import the new public key the same way; until they do, their package manager refuses the repository. **If it is compromised**, publish its revocation certificate as well: import it into the key before exporting the public half, so the published keyring shows the old key revoked, then replace the key.
+
 #### Major Tag Floating Pointer Invariant
 Major tags (`v0`, `v1`) provide consumer convenience for action workflows (`uses: orieg/discipline@v0`). The release workflow contract mandates that **major tags are moved exclusively by the release pipeline (`release.yml`) after all smoke tests pass against published release assets**. Moving floating major tags manually or out-of-band bypasses compilation, static linkage verification, attestation generation, and smoke tests, which defeats the security guarantees of the sentinel. To prevent silent tag drift, two automated sentinels enforce this invariant:
 - **Post-release assertion:** In `release.yml`, immediately after pushing the updated major tag, `tests/action/check-major-tag.sh` verifies that the tag dereferences to the release commit.
