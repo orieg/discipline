@@ -612,6 +612,19 @@ pub trait ForgeApi {
     }
 }
 
+/// The reason a forge gives for refusing a read, from its JSON body: `message` (GitHub,
+/// Gitea, Forgejo, GitLab), else GitLab's OAuth-style `error_description` (a
+/// fine-grained token without the permission a setting needs: "... requires ... the
+/// following project permissions: [Variable: Read]."), else `error`. At most 300
+/// characters, so a caller can name what the token lacks without echoing a long body.
+pub fn refusal_message(body: &serde_json::Value) -> Option<String> {
+    ["message", "error_description", "error"]
+        .iter()
+        .find_map(|k| body.get(*k).and_then(|m| m.as_str()))
+        .filter(|m| !m.is_empty())
+        .map(|m| m.chars().take(300).collect())
+}
+
 /// The paging query for `page` (1-based) of a list endpoint. Gitea and Forgejo read
 /// `limit` and ignore `per_page`; their largest page is 50 unless the instance says
 /// otherwise.
@@ -769,6 +782,14 @@ impl CannedApi {
     }
 }
 
+/// A canned refusal's message, carrying the body's reason as the HTTP client's does.
+fn canned_refusal(status: u16, path: &str, body: &serde_json::Value) -> String {
+    match refusal_message(body) {
+        Some(why) => format!("canned forge answered HTTP {status} for `{path}`: {why}"),
+        None => format!("canned forge answered HTTP {status} for `{path}`"),
+    }
+}
+
 impl ForgeApi for CannedApi {
     fn get(&self, forge: &Forge, path: &str) -> Result<Option<serde_json::Value>, String> {
         let key = format!("{}:{path}", forge.kind.label());
@@ -787,10 +808,7 @@ impl ForgeApi for CannedApi {
             .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
         match classify_status(status, &headers) {
             None => Ok(body),
-            Some(kind) => Err(ForgeError::new(
-                kind,
-                format!("canned forge answered HTTP {status} for `{path}`"),
-            )),
+            Some(kind) => Err(ForgeError::new(kind, canned_refusal(status, path, &body))),
         }
     }
 
@@ -800,10 +818,7 @@ impl ForgeApi for CannedApi {
             .answer(&key)
             .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
         if let Some(kind) = classify_status(status, &headers) {
-            return Err(ForgeError::new(
-                kind,
-                format!("canned forge answered HTTP {status} for `{path}`"),
-            ));
+            return Err(ForgeError::new(kind, canned_refusal(status, path, &body)));
         }
         Page::from_answer(body, &headers).map_err(|e| ForgeError::new(ForgeErrorKind::Malformed, e))
     }
@@ -1304,12 +1319,7 @@ impl HttpApi<'_> {
                         Some(kind) => {
                             let message = serde_json::from_str::<serde_json::Value>(&a.body)
                                 .ok()
-                                .and_then(|v| {
-                                    v.get("message")
-                                        .and_then(|m| m.as_str())
-                                        .map(str::to_string)
-                                })
-                                .map(|m| m.chars().take(200).collect::<String>())
+                                .and_then(|v| refusal_message(&v))
                                 .unwrap_or_default();
                             let text = format!("{base_host} answered HTTP {} {message}", a.status)
                                 .trim_end()
@@ -1710,6 +1720,28 @@ pub fn pull_approvers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refusal_carries_the_forge_s_reason_whichever_key_it_uses() {
+        let r = |v: serde_json::Value| refusal_message(&v);
+        assert_eq!(
+            r(serde_json::json!({"message": "Bad credentials"})).as_deref(),
+            Some("Bad credentials")
+        );
+        // GitLab's fine-grained refusal (tests/fixtures/forge_settings/gitlab.json).
+        let gitlab = serde_json::json!({"error": "insufficient_granular_scope", "error_description": "requires ... [Variable: Read]."});
+        assert_eq!(r(gitlab).as_deref(), Some("requires ... [Variable: Read]."));
+        assert_eq!(
+            r(serde_json::json!({"error": "invalid_token"})).as_deref(),
+            Some("invalid_token")
+        );
+        assert_eq!(r(serde_json::json!({"message": ""})), None);
+        assert_eq!(r(serde_json::json!({"message": {"base": ["x"]}})), None);
+        assert_eq!(
+            r(serde_json::json!({"message": "x".repeat(400)})).map(|m| m.len()),
+            Some(300)
+        );
+    }
 
     #[test]
     fn approvers_are_latest_reviews_of_the_checked_head_only() {
