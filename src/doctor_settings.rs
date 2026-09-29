@@ -81,15 +81,14 @@ pub fn findings(api: &dyn ForgeApi, forge: &Forge, workflows: &[(String, String)
     match forge.kind {
         ForgeKind::GitHub => github(api, forge, workflows),
         ForgeKind::GitLab => gitlab(api, forge),
-        ForgeKind::Gitea | ForgeKind::Forgejo => {
-            let mut out: Vec<Finding> = IDS
-                .iter()
-                .filter(|id| **id != "tag-protection")
-                .map(|id| unavailable(id, forge.kind))
-                .collect();
-            out.insert(5, protected_tags(api, forge));
-            out
-        }
+        ForgeKind::Gitea | ForgeKind::Forgejo => IDS
+            .iter()
+            .map(|id| match *id {
+                "tag-protection" => protected_tags(api, forge),
+                "secret-scoping" => gitea_secret_scoping(api, forge, workflows),
+                other => unavailable(other, forge.kind),
+            })
+            .collect(),
     }
 }
 
@@ -959,6 +958,151 @@ pub fn gitlab_token_finding(v: &serde_json::Value, now: i64) -> Finding {
     )
 }
 
+/// The workflows (by path) that run on a pull request: `on:` names `pull_request` or
+/// `pull_request_target`, as a string, a list or a mapping key.
+pub fn pull_request_workflows(workflows: &[(String, String)]) -> BTreeSet<String> {
+    let runs_on_pr = |on: &serde_yaml::Value| {
+        let is_pr = |e: &str| matches!(e, "pull_request" | "pull_request_target");
+        match on {
+            serde_yaml::Value::String(e) => is_pr(e),
+            serde_yaml::Value::Sequence(es) => es.iter().filter_map(|e| e.as_str()).any(is_pr),
+            serde_yaml::Value::Mapping(m) => m.keys().filter_map(|e| e.as_str()).any(is_pr),
+            _ => false,
+        }
+    };
+    workflows
+        .iter()
+        .filter(|(_, content)| {
+            serde_yaml::from_str::<serde_yaml::Value>(content)
+                .ok()
+                .and_then(|wf| wf.get("on").cloned())
+                .is_some_and(|on| runs_on_pr(&on))
+        })
+        .map(|(path, _)| path.clone())
+        .collect()
+}
+
+/// `secret-scoping` on Gitea and Forgejo, whose Actions secrets have no environment or
+/// other scope (recorded: `tests/fixtures/forge_settings/`): every repository and
+/// organisation secret is readable by a workflow on any branch of the repository, so
+/// that exposure is stated, not warned about. A secret no local workflow reads adds
+/// that exposure for nothing, which is a warning. The pull-request workflows that read a
+/// secret are named. Names only.
+pub fn gitea_secrets_finding(
+    kind: ForgeKind,
+    repo_secrets: &[String],
+    org_secrets: &[String],
+    uses: &SecretUses,
+    pr_workflows: &BTreeSet<String>,
+    org_note: Option<&str>,
+) -> Finding {
+    let note = org_note.map(|n| format!("; {n}")).unwrap_or_default();
+    if repo_secrets.is_empty() && org_secrets.is_empty() {
+        return Finding::new(
+            "secret-scoping",
+            Status::Pass,
+            format!("no Actions secrets for this repository or its organisation{note}"),
+        );
+    }
+    let mut all: Vec<&String> = repo_secrets.iter().chain(org_secrets).collect();
+    all.sort_unstable_by_key(|n| n.to_ascii_uppercase());
+    all.dedup_by_key(|n| n.to_ascii_uppercase());
+    let read_by = |n: &str| uses.reads.get(&n.to_ascii_uppercase());
+    let unread: Vec<String> = if uses.inherit.is_empty() {
+        all.iter()
+            .filter(|n| read_by(n).is_none())
+            .map(|n| format!("`{n}`"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let on_pr: Vec<String> = all
+        .iter()
+        .filter_map(|n| {
+            let jobs: Vec<&str> = read_by(n)?
+                .iter()
+                .filter(|(job, _)| {
+                    pr_workflows
+                        .iter()
+                        .any(|w| job.starts_with(&format!("{w} job ")))
+                })
+                .map(|(job, _)| job.as_str())
+                .collect();
+            (!jobs.is_empty()).then(|| format!("`{n}` ({})", jobs.join(", ")))
+        })
+        .collect();
+    let mut summary = format!(
+        "{} Actions secret(s): {} repository, {} organisation. {} has no environment to scope a secret to, so a workflow on any branch of this repository can read each one",
+        all.len(),
+        repo_secrets.len(),
+        org_secrets.len(),
+        kind.label()
+    );
+    if !on_pr.is_empty() {
+        summary.push_str(&format!(
+            "; read in workflows that run on pull requests: {}",
+            on_pr.join(", ")
+        ));
+    }
+    if unread.is_empty() {
+        return Finding::new("secret-scoping", Status::Info, format!("{summary}{note}"));
+    }
+    Finding::new(
+        "secret-scoping",
+        Status::Warn,
+        format!(
+            "{summary}; not read by any workflow here: {}{note}",
+            unread.join(", ")
+        ),
+    )
+    .fix("Delete the secrets no workflow reads (Settings → Actions → Secrets, of the repository or the organisation): a workflow on any branch can still read them.")
+}
+
+/// The Gitea / Forgejo secret lists (names only) behind [`gitea_secrets_finding`]. An
+/// organisation's list is read when the owner is one: a 404 (a user owns the
+/// repository) leaves it out, a 403 (the token is not an organisation owner) is said.
+fn gitea_secret_scoping(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    workflows: &[(String, String)],
+) -> Finding {
+    let names = |list: Vec<serde_json::Value>| -> Vec<String> {
+        list.iter()
+            .filter_map(|s| s.get("name").and_then(|n| n.as_str()).map(str::to_string))
+            .collect()
+    };
+    let repo = match read_all(api, forge, &format!("repos/{}/actions/secrets", forge.repo)) {
+        Ok(l) => names(l),
+        Err(e) if matches!(e.kind, ForgeErrorKind::NotFound | ForgeErrorKind::Denied) => {
+            return hidden(
+                "secret-scoping",
+                "the repository's secret list",
+                &e.to_string(),
+                "a token of a repository administrator (`write:repository`)",
+            )
+        }
+        Err(e) => return down("secret-scoping", forge.kind, &e.to_string()),
+    };
+    let owner = forge.repo.split('/').next().unwrap_or_default();
+    let (org, org_note) = match read_all(api, forge, &format!("orgs/{owner}/actions/secrets")) {
+        Ok(l) => (names(l), None),
+        Err(e) if e.kind == ForgeErrorKind::NotFound => (Vec::new(), None),
+        Err(e) if e.kind == ForgeErrorKind::Denied => (
+            Vec::new(),
+            Some("the organisation's secrets are not visible to this token (an organisation owner's token lists them)"),
+        ),
+        Err(e) => return down("secret-scoping", forge.kind, &e.to_string()),
+    };
+    gitea_secrets_finding(
+        forge.kind,
+        &repo,
+        &org,
+        &secret_uses(workflows),
+        &pull_request_workflows(workflows),
+        org_note,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1263,7 +1407,11 @@ mod tests {
         let ids: Vec<&str> = f.iter().map(|x| x.id).collect();
         assert_eq!(ids, IDS);
         assert_eq!(status_of(&f, "tag-protection"), Status::Pass);
-        for id in IDS.iter().filter(|i| **i != "tag-protection") {
+        // `secret-scoping` is read on Gitea and Forgejo (its own tests below).
+        for id in IDS
+            .iter()
+            .filter(|i| !matches!(**i, "tag-protection" | "secret-scoping"))
+        {
             let x = f.iter().find(|x| x.id == *id).unwrap();
             assert_eq!(x.status, Status::Info, "{id}");
             assert!(x.summary.contains("not available on this forge"), "{id}");
@@ -1530,5 +1678,208 @@ jobs:
         );
         let f = findings(&api, &forge, &[]);
         assert_eq!(status_of(&f, "forge-token"), Status::Info);
+    }
+
+    /// The secret lists recorded from Gitea and Forgejo (Phase 14 Step 0).
+    fn gitea_recorded(forge: &str) -> serde_json::Value {
+        let text = match forge {
+            "gitea" => include_str!("../tests/fixtures/forge_settings/gitea.json"),
+            _ => include_str!("../tests/fixtures/forge_settings/forgejo.json"),
+        };
+        serde_json::from_str(text).unwrap()
+    }
+
+    const PR_DEPLOY: &str = r#"
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: deploy
+        env:
+          KEY: ${{ secrets.DEPLOY_KEY }}
+"#;
+    const PUSH_ONLY: &str = r#"
+on: [push]
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - run: publish ${{ secrets.ORG_TOKEN }}
+"#;
+
+    #[test]
+    fn pull_request_workflows_are_found_in_every_spelling_of_on() {
+        let wf = |on: &str| (format!("w-{on}.yml"), format!("on: {on}\njobs: {{}}\n"));
+        let set = pull_request_workflows(&[
+            wf("pull_request"),
+            wf("[push, pull_request_target]"),
+            wf("{pull_request: {types: [opened]}}"),
+            wf("push"),
+            wf("[push, workflow_dispatch]"),
+        ]);
+        let got: Vec<&str> = set.iter().map(String::as_str).collect();
+        assert_eq!(
+            got,
+            [
+                "w-[push, pull_request_target].yml",
+                "w-pull_request.yml",
+                "w-{pull_request: {types: [opened]}}.yml"
+            ]
+        );
+    }
+
+    #[test]
+    fn gitea_secrets_are_stated_and_an_unread_one_is_reported() {
+        for forge in ["gitea", "forgejo"] {
+            let r = gitea_recorded(forge);
+            let list = |k: &str| -> Vec<String> {
+                r[k].as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|s| s["name"].as_str().unwrap().to_string())
+                    .collect()
+            };
+            let (repo, org) = (list("repo_secrets"), list("org_secrets"));
+            let kind = if forge == "gitea" {
+                ForgeKind::Gitea
+            } else {
+                ForgeKind::Forgejo
+            };
+            let workflows = vec![
+                (
+                    ".gitea/workflows/deploy.yml".to_string(),
+                    PR_DEPLOY.to_string(),
+                ),
+                (
+                    ".gitea/workflows/publish.yml".to_string(),
+                    PUSH_ONLY.to_string(),
+                ),
+            ];
+            let uses = secret_uses(&workflows);
+            let prs = pull_request_workflows(&workflows);
+
+            // Both recorded secrets are read: information, naming the pull-request reader.
+            let f = gitea_secrets_finding(kind, &repo, &org, &uses, &prs, None);
+            assert_eq!(f.status, Status::Info, "{forge}: {f:?}");
+            assert!(f.summary.contains("1 repository, 1 organisation"), "{f:?}");
+            assert!(f.summary.contains("no environment to scope"), "{f:?}");
+            assert!(
+                f.summary
+                    .contains("`DEPLOY_KEY` (.gitea/workflows/deploy.yml job `deploy`)"),
+                "{f:?}"
+            );
+            assert!(
+                !f.summary.contains("`ORG_TOKEN` ("),
+                "a push-only reader: {f:?}"
+            );
+
+            // Drop the publish workflow: `ORG_TOKEN` is read by nothing.
+            let only_pr = &workflows[..1];
+            let f = gitea_secrets_finding(
+                kind,
+                &repo,
+                &org,
+                &secret_uses(only_pr),
+                &pull_request_workflows(only_pr),
+                None,
+            );
+            assert_eq!(f.status, Status::Warn, "{f:?}");
+            assert!(
+                f.summary
+                    .contains("not read by any workflow here: `ORG_TOKEN`"),
+                "{f:?}"
+            );
+            assert!(!f.summary.contains("`DEPLOY_KEY`, "), "{f:?}");
+
+            // `secrets: inherit` may pass any secret on: none is called unread.
+            let inherit = vec![(
+                ".gitea/workflows/call.yml".to_string(),
+                "on: push\njobs:\n  call:\n    uses: ./.gitea/workflows/r.yml\n    secrets: inherit\n".to_string(),
+            )];
+            let f = gitea_secrets_finding(
+                kind,
+                &repo,
+                &org,
+                &secret_uses(&inherit),
+                &BTreeSet::new(),
+                None,
+            );
+            assert_eq!(f.status, Status::Info, "{f:?}");
+
+            assert_eq!(
+                gitea_secrets_finding(kind, &[], &[], &uses, &prs, None).status,
+                Status::Pass
+            );
+        }
+    }
+
+    #[test]
+    fn gitea_secret_lists_are_read_and_a_user_owner_has_no_organisation() {
+        let r = gitea_recorded("gitea");
+        let forge = Forge {
+            kind: ForgeKind::Gitea,
+            url: "https://git.example.com".into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        let page = |p: u32| format!("limit=50&page={p}");
+        api.responses.insert(
+            format!("gitea:repos/o/r/actions/secrets?{}", page(1)),
+            r["repo_secrets"].clone(),
+        );
+        api.responses.insert(
+            format!("gitea:repos/o/r/actions/secrets?{}", page(2)),
+            json!([]),
+        );
+        api.responses.insert(
+            format!("gitea:orgs/o/actions/secrets?{}", page(1)),
+            r["org_secrets"].clone(),
+        );
+        api.responses.insert(
+            format!("gitea:orgs/o/actions/secrets?{}", page(2)),
+            json!([]),
+        );
+        let workflows = vec![(
+            ".gitea/workflows/deploy.yml".to_string(),
+            PR_DEPLOY.to_string(),
+        )];
+        let f = gitea_secret_scoping(&api, &forge, &workflows);
+        assert_eq!(f.status, Status::Warn, "{f:?}");
+        assert!(f.summary.contains("1 repository, 1 organisation"), "{f:?}");
+        assert!(f.summary.contains("`ORG_TOKEN`"), "{f:?}");
+
+        // A user owns the repository: no organisation list, nothing said about one.
+        api.responses.insert(
+            format!("gitea:orgs/o/actions/secrets?{}", page(1)),
+            json!({"__status": 404, "__body": {"message": "GetOrgByName"}}),
+        );
+        let f = gitea_secret_scoping(&api, &forge, &workflows);
+        assert_eq!(f.status, Status::Info, "{f:?}");
+        assert!(f.summary.contains("1 repository, 0 organisation"), "{f:?}");
+        assert!(!f.summary.contains("not visible"), "{f:?}");
+
+        // Not an organisation owner: said, not taken for an empty list.
+        api.responses.insert(
+            format!("gitea:orgs/o/actions/secrets?{}", page(1)),
+            json!({"__status": 403, "__body": {"message": "user should be an owner of the organization"}}),
+        );
+        let f = gitea_secret_scoping(&api, &forge, &workflows);
+        assert!(
+            f.summary.contains("organisation's secrets are not visible"),
+            "{f:?}"
+        );
+
+        // The repository list refused: a warning naming the access, never a pass.
+        api.responses.insert(
+            format!("gitea:repos/o/r/actions/secrets?{}", page(1)),
+            json!({"__status": 403, "__body": {"message": "token does not have required scope"}}),
+        );
+        let f = gitea_secret_scoping(&api, &forge, &workflows);
+        assert_eq!(f.status, Status::Warn, "{f:?}");
+        assert!(f.summary.contains("could not check"), "{f:?}");
     }
 }
