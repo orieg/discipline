@@ -303,6 +303,11 @@ pub fn render_gate_search_html(gates: &[GateInfo]) -> String {
     )
 }
 
+/// The number of available gates, for a count quoted in prose (the Pages stat bar).
+pub fn render_gate_count(gates: &[GateInfo]) -> String {
+    gates.iter().filter(|g| g.available).count().to_string()
+}
+
 /// One row of the generated configuration reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigKeyRow {
@@ -673,6 +678,7 @@ pub fn update_generated_regions(
                     }
                 }
                 "gate-search" => render_gate_search_html(gates),
+                "gate-count" => render_gate_count(gates),
                 "config-schema" | "schema" => render_config_schema_markdown(),
                 "cli" => render_cli_markdown(),
                 "cli-options" => render_cli_options_markdown(),
@@ -1122,6 +1128,18 @@ mod tests {
             !page.contains(".SS \"discipline docs\""),
             "hidden command documented"
         );
+    }
+
+    #[test]
+    fn the_gate_count_is_the_number_of_available_gates() {
+        let available = GATES.iter().filter(|g| g.available).count();
+        assert_eq!(render_gate_count(GATES), available.to_string());
+        let doc = "<h3>\n<!-- generated:gate-count -->\n37\n<!-- /generated -->\n</h3>\n";
+        let spec = ActionSpec::default();
+        let out =
+            update_generated_regions(Path::new("docs/index.html"), doc, &spec, GATES).unwrap();
+        assert!(out.contains(&format!("-->\n{available}\n<!--")), "{out}");
+        assert!(!out.contains("\n37\n"), "{out}");
     }
 
     #[test]

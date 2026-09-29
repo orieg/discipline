@@ -90,6 +90,8 @@
       --badge-text: #38bdf8;
       --spotlight-bg: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
       --spotlight-border: rgba(99, 102, 241, 0.4);
+      --badge-error-text: #f87171;
+      --badge-warn-text: #fbbf24;
       color-scheme: dark;
     }
 
@@ -122,6 +124,8 @@
       --badge-text: #0284c7;
       --spotlight-bg: linear-gradient(135deg, #f0f9ff 0%, #e0e7ff 50%, #f0fdf4 100%);
       --spotlight-border: rgba(99, 102, 241, 0.3);
+      --badge-error-text: #b91c1c;
+      --badge-warn-text: #92400e;
       color-scheme: light;
     }
 
@@ -192,6 +196,7 @@
       font-size: 0.9rem;
       font-weight: 500;
       transition: color 0.15s ease;
+      white-space: nowrap;
     }
     .nav-links a:hover { color: var(--heading); }
     .nav-actions {
@@ -370,6 +375,7 @@
     .section-block {
       padding: 3rem 0;
       border-top: 1px solid var(--border);
+      scroll-margin-top: 4.5rem;
     }
     .section-head {
       margin-bottom: 2rem;
@@ -390,12 +396,12 @@
     /* Card Grids */
     .card-grid-2 {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
       gap: 1.5rem;
     }
     .card-grid-3 {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
       gap: 1.25rem;
     }
     .card {
@@ -435,6 +441,13 @@
       font-size: 0.9rem;
       color: var(--text-muted);
       line-height: 1.55;
+      overflow-wrap: break-word;
+    }
+    .card { min-width: 0; }
+    p code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.88em;
+      overflow-wrap: anywhere;
     }
     .card-tags {
       display: flex;
@@ -484,7 +497,14 @@
     }
     .platform-btn:hover {
       color: var(--heading);
-      background: rgba(255, 255, 255, 0.02);
+      background: var(--nav-pill-bg);
+    }
+    .platform-btn:focus-visible,
+    .theme-toggle-btn:focus-visible,
+    .btn-primary:focus-visible,
+    .btn-secondary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
     .platform-btn.active {
       color: var(--accent);
@@ -511,7 +531,7 @@
       position: relative;
       white-space: pre;
     }
-    .code-comment { color: #64748b; }
+    .code-comment { color: #8b9ab0; }
     .code-keyword { color: #38bdf8; font-weight: 600; }
     .code-string { color: #34d399; }
     .code-prop { color: #f59e0b; }
@@ -563,9 +583,10 @@
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
-    .badge-error { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
-    .badge-warn { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-error { background: rgba(239, 68, 68, 0.12); color: var(--badge-error-text); border: 1px solid rgba(239, 68, 68, 0.35); }
+    .badge-warn { background: rgba(245, 158, 11, 0.12); color: var(--badge-warn-text); border: 1px solid rgba(245, 158, 11, 0.4); }
     .badge-lang { background: var(--card-inner); color: var(--text-muted); border: 1px solid var(--border); }
+    td:nth-child(4) > .badge-lang { text-transform: none; letter-spacing: 0; font-weight: 500; }
 
     /* Gate Search Bar */
     .gate-search-wrapper {
@@ -577,7 +598,7 @@
     }
     .gate-search-input {
       flex: 1;
-      min-width: 240px;
+      min-width: min(240px, 100%);
       max-width: 480px;
       padding: 0.65rem 1rem;
       font-size: 0.92rem;
@@ -723,7 +744,7 @@
     /* Installation grid */
     .install-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
       gap: 1.25rem;
       margin-top: 1.5rem;
     }
@@ -750,7 +771,8 @@
       font-size: 0.8rem;
       color: #e2e8f0;
       overflow-x: auto;
-      white-space: pre;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     /* Footer */
@@ -772,10 +794,49 @@
     .footer-links a:hover { color: var(--heading); }
     footer p { text-align: center; }
 
+    @media (max-width: 1120px) {
+      .navbar { flex-wrap: wrap; row-gap: 0.5rem; padding: 0.6rem 1rem; }
+      .nav-links {
+        order: 3;
+        width: 100%;
+        gap: 1rem;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+        padding-bottom: 0.25rem;
+      }
+      .nav-links a { white-space: nowrap; }
+    }
     @media (max-width: 768px) {
+      .container { padding: 0 1rem; }
+      .hero { padding: 3rem 0 2.5rem; }
       .hero h1 { font-size: 2rem; }
-      .stat-bar { grid-template-columns: repeat(2, 1fr); }
-      .nav-links { display: none; }
+      .hero-sub { font-size: 1rem; }
+      .stat-bar { grid-template-columns: repeat(2, 1fr); padding: 1rem; }
+      .platform-pane { padding: 1rem; }
+      .code-block { font-size: 0.78rem; padding: 1rem; }
+      table.gate-table th, table.gate-table td { padding: 0.65rem 0.75rem; }
+      #gate-table { min-width: 720px; }
+      .section-block { scroll-margin-top: 6.5rem; }
+    }
+    /* Phones: each gate is a card. Its id, category, default and languages share
+       a wrapped line, and the description takes the full width below. */
+    @media (max-width: 640px) {
+      #gate-table { min-width: 0; }
+      #gate-table thead { display: none; }
+      #gate-table, #gate-table tbody, #gate-table tr { display: block; }
+      #gate-table tr { padding: 0.8rem 0.9rem; border-bottom: 1px solid var(--border); }
+      #gate-table tr:last-child { border-bottom: none; }
+      #gate-table td { display: inline-block; padding: 0 0.5rem 0.35rem 0; border-bottom: none; }
+      #gate-table td.gate-id { display: block; padding-bottom: 0.4rem; }
+      #gate-table td:last-child { display: block; padding: 0.35rem 0 0; color: var(--text-muted, inherit); }
+      table.gate-table tr:hover td { background: transparent; }
+    }
+    @media (max-width: 420px) {
+      .hero h1 { font-size: 1.65rem; }
+      .hero h1 br { display: none; }
+      .btn-nav-gh { padding: 0.4rem 0.6rem; }
+      .section-title { font-size: 1.45rem; }
     }
   </style>
 </head>
@@ -795,7 +856,7 @@
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#install">Install</a></li>
     <li><a href="tutorials/getting-started/">Tutorial</a></li>
-    <li><a href="https://github.com/orieg/discipline/blob/main/docs/CONFIGURATION.md">Docs</a></li>
+    <li><a href="configuration/">Docs</a></li>
     <li><a href="apt/">APT</a></li>
     <li><a href="rpm/">RPM</a></li>
   </ul>
@@ -824,7 +885,7 @@
       <span class="pill">&#x1f916; AI Agent Drift Sentinel</span>
     </div>
 
-    <h1>Universal CI/CD Diff Sentinel &<br><span>AI Coding Agent Gatekeeper</span></h1>
+    <h1>Universal CI/CD Diff Sentinel &amp;<br> <span>AI Coding Agent Gatekeeper</span></h1>
     <p class="hero-sub">
       Traverses AST diffs via tree-sitter over merge-base git graphs. Rejects assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, test suppression, loosened toolchain configuration, and text aimed at the next agent, across pull requests and merge requests. And it guards its own trust boundary: a change cannot switch its run to advisory or excuse itself without review.
     </p>
@@ -838,7 +899,11 @@
     <!-- Stat Bar -->
     <div class="stat-bar">
       <div class="stat-item">
-        <h3>37</h3>
+        <h3>
+<!-- generated:gate-count -->
+40
+<!-- /generated -->
+        </h3>
         <p>Fail-Closed Gates</p>
       </div>
       <div class="stat-item">
@@ -851,7 +916,7 @@
       </div>
       <div class="stat-item">
         <h3>0</h3>
-        <p>Network Calls on a Pull-Request Run</p>
+        <p>Network Calls by the Default Gates</p>
       </div>
     </div>
   </header>
@@ -868,7 +933,7 @@
         <div>
           <div class="card-icon-box">&#x1f333;</div>
           <h3>Tree-Sitter AST Diff Inspection</h3>
-          <p>Unlike fragile regex checks that trigger on comments or log messages, Discipline parses the complete AST of changed functions against the merge base. It counts executable assertions and distinguishes real invariants from dead code: an assertion under <code>if false</code> or after a <code>return</code> counts for nothing, and a property-test budget inside a string or comment is not a budget. Fourteen packs: Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C.</p>
+          <p>Unlike fragile regex checks that trigger on comments or log messages, Discipline parses the complete AST of changed functions against the merge base. It counts executable assertions and distinguishes real invariants from dead code: an assertion under <code>if false</code> or after a <code>return</code> counts for nothing, and a property-test budget inside a string or comment is not a budget. Fourteen packs: Rust, Python, JavaScript / TypeScript, Java, Go, PHP, C, C++, C#, Ruby, Kotlin, Swift, Scala and Objective-C, plus a section parser for PHPT test files.</p>
         </div>
         <div class="card-tags">
           <span class="card-tag">tree-sitter-rust</span>
@@ -932,20 +997,20 @@
     </div>
 
     <div class="platform-container">
-      <nav class="platform-nav" id="platformNav">
-        <button class="platform-btn active" data-target="pane-github">GitHub Actions</button>
-        <button class="platform-btn" data-target="pane-gitlab">GitLab CI/CD</button>
-        <button class="platform-btn" data-target="pane-forgejo">Forgejo Actions</button>
-        <button class="platform-btn" data-target="pane-gitea">Gitea Actions</button>
-        <button class="platform-btn" data-target="pane-argo">Argo Workflows</button>
-        <button class="platform-btn" data-target="pane-docker">Container (Docker)</button>
-        <button class="platform-btn" data-target="pane-precommit">pre-commit</button>
-        <button class="platform-btn" data-target="pane-cli">Standalone CLI</button>
-        <button class="platform-btn" data-target="pane-agents">Coding Agents</button>
+      <nav class="platform-nav" id="platformNav" role="tablist" aria-label="Platform guides">
+        <button type="button" role="tab" aria-selected="true" aria-controls="pane-github" class="platform-btn active" data-target="pane-github">GitHub Actions</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pane-gitlab" class="platform-btn" data-target="pane-gitlab">GitLab CI/CD</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pane-forgejo" class="platform-btn" data-target="pane-forgejo">Forgejo Actions</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pane-gitea" class="platform-btn" data-target="pane-gitea">Gitea Actions</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pane-argo" class="platform-btn" data-target="pane-argo">Argo Workflows</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pane-docker" class="platform-btn" data-target="pane-docker">Container (Docker)</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pane-precommit" class="platform-btn" data-target="pane-precommit">pre-commit</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pane-cli" class="platform-btn" data-target="pane-cli">Standalone CLI</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="pane-agents" class="platform-btn" data-target="pane-agents">Coding Agents</button>
       </nav>
 
       <!-- GitHub Actions -->
-      <div class="platform-pane active" id="pane-github">
+      <div class="platform-pane active" id="pane-github" role="tabpanel">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
           Composite GitHub Action writing workflow annotations, a step summary and step outputs. <code>comment: true</code> adds one pull-request comment (needs <code>pull-requests: write</code>); <code>DISCIPLINE_REPORT_SARIF</code> plus an upload step adds code scanning (<a href="guides/ci-platforms/">guide</a>).
         </p>
@@ -975,7 +1040,7 @@
       </div>
 
       <!-- GitLab CI/CD -->
-      <div class="platform-pane" id="pane-gitlab">
+      <div class="platform-pane" id="pane-gitlab" role="tabpanel">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
           Native GitLab CI/CD integration. Populates GitLab Merge Request Code Quality diffs and JUnit test reports.
         </p>
@@ -1014,16 +1079,16 @@
       </div>
 
       <!-- Forgejo Actions -->
-      <div class="platform-pane" id="pane-forgejo">
+      <div class="platform-pane" id="pane-forgejo" role="tabpanel">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
-          Native support for Forgejo Actions running via <code>forgejo-runner</code>. Supports workflows in <code>.forgejo/workflows/</code> with automatic base ref and PR event detection.
+          Runs under <code>forgejo-runner</code> from <code>.forgejo/workflows/</code>, with the base ref and pull-request event detected automatically. <code>edited</code> re-runs the check when the pull-request description (and a directive in it) changes.
         </p>
         <div class="code-block"><span class="code-comment"># .forgejo/workflows/discipline.yml</span>
 <span class="code-prop">name:</span> Forgejo Sentinel Gate
 
 <span class="code-prop">on:</span>
   <span class="code-prop">pull_request:</span>
-    <span class="code-prop">types:</span> [opened, synchronize]
+    <span class="code-prop">types:</span> [opened, synchronize, reopened, edited]
 
 <span class="code-prop">jobs:</span>
   <span class="code-prop">discipline:</span>
@@ -1039,16 +1104,16 @@
       </div>
 
       <!-- Gitea Actions -->
-      <div class="platform-pane" id="pane-gitea">
+      <div class="platform-pane" id="pane-gitea" role="tabpanel">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
-          Runs seamlessly under self-hosted Gitea <code>act_runner</code>. Zero JavaScript runtime required.
+          Runs under self-hosted Gitea <code>act_runner</code>. The action itself is shell-only; the runner image needs <code>git</code>, <code>curl</code> (or <code>wget</code>) and Node.js for <code>actions/checkout</code>. Reference the action by its full URL, since the runner resolves a bare <code>owner/repo</code> against your own instance.
         </p>
         <div class="code-block"><span class="code-comment"># .gitea/workflows/discipline.yml</span>
 <span class="code-prop">name:</span> Gitea Sentinel Gate
 
 <span class="code-prop">on:</span>
   <span class="code-prop">pull_request:</span>
-    <span class="code-prop">types:</span> [opened, synchronize]
+    <span class="code-prop">types:</span> [opened, synchronize, reopened, edited]
 
 <span class="code-prop">jobs:</span>
   <span class="code-prop">discipline:</span>
@@ -1064,7 +1129,7 @@
       </div>
 
       <!-- Argo Workflows -->
-      <div class="platform-pane" id="pane-argo">
+      <div class="platform-pane" id="pane-argo" role="tabpanel">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
           Kubernetes-native pre-merge gating for GitOps and continuous deployment pipelines.
         </p>
@@ -1088,7 +1153,7 @@
       </div>
 
       <!-- Container / Docker -->
-      <div class="platform-pane" id="pane-docker">
+      <div class="platform-pane" id="pane-docker" role="tabpanel">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
           Non-root, minimal static Alpine image for local containers or custom CI runners.
         </p>
@@ -1103,7 +1168,7 @@ docker run --rm \
       </div>
 
       <!-- pre-commit -->
-      <div class="platform-pane" id="pane-precommit">
+      <div class="platform-pane" id="pane-precommit" role="tabpanel">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
           Git hook configuration preventing non-compliant commits before they reach remote branches.
         </p>
@@ -1117,7 +1182,7 @@ docker run --rm \
       </div>
 
       <!-- Standalone CLI -->
-      <div class="platform-pane" id="pane-cli">
+      <div class="platform-pane" id="pane-cli" role="tabpanel">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
           Direct command-line execution for local developers, script automation, and self-checks.
         </p>
@@ -1139,9 +1204,9 @@ discipline replay --last 50</div>
       </div>
 
       <!-- Coding agents -->
-      <div class="platform-pane" id="pane-agents">
+      <div class="platform-pane" id="pane-agents" role="tabpanel">
         <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">
-          Tell the agent while it edits: the hook blocks an edit that weakens a test and hands the agent the repair, judged by the default branch's configuration so the change cannot switch its own check off.
+          Tell the agent while it edits: after an edit that weakens a test, the hook hands the agent the finding and its repair, judged by the default branch's configuration so the change cannot switch its own check off. Where the agent supports it, a pre-tool entry refuses an edit into another worktree before it runs, and a session-start entry takes this worktree's lease.
         </p>
         <div class="code-block"><span class="code-comment"># Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code or OpenCode</span>
 discipline hook install --agent claude-code
@@ -1150,9 +1215,12 @@ discipline hook install --agent claude-code
 claude mcp add discipline -- discipline mcp
 
 <span class="code-comment"># What the agent reads after an edit that weakens a test (exit 2)</span>
-### Issue 1 [assertion-reduction]: Assertion Reduction In Existing Test
+### Issue 1 [assertion-reduction/assertions-reduced]: Assertion Count Decreased In Existing Test
 - Location: tests/cart.rs:6
-- Problem: Test `adds`: effective assertions dropped from 2 to 0.
+- Problem:
+```text
+Test `adds`: effective assertions dropped from 2 to 0.
+```
 - Repair: Restore the assertions that were removed or weakened ...</div>
         <p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.9rem;">
           Every agent's contract, the MCP registration for each client, and what a change cannot do to its check:
@@ -1181,7 +1249,7 @@ claude mcp add discipline -- discipline mcp
     </div>
 
     <div class="gate-table-wrapper">
-      <table class="gate-table">
+      <table class="gate-table" id="gate-table">
         <thead>
           <tr>
             <th>Gate ID</th>
@@ -1484,17 +1552,15 @@ claude mcp add discipline -- discipline mcp
       <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 0.75rem;">
         Legitimate deletions or changes are authorized through explicit, scoped directives in the PR description or commit message; on a push to the default branch, the merged pull request's body is read through the forge (<code>merged-pr-body</code>), because a squash or rebase merge drops it from the commit message. Every applied override is recorded in the report; <code>directives.max_overrides</code> caps them per change, and <code>directives.require_approval</code> makes them count only once the forge shows an approving review of the head commit by a listed reviewer other than the author. <code>policy_from: base</code> judges a change by the base branch's <code>discipline.toml</code>, so a policy edit takes effect once it has merged.
       </p>
-      <div class="directive-card">
-        removes: tests/legacy/ replaced by proptest property suite<br>
-        allow-assertion-drop: test_allocator single large allocation split into benchmark<br>
-        allow-ignore: test_darwin_kqueue requires macos runner environment<br>
-        allow-golden-update: tests/snapshots/v2.snap updated for new serializer format<br>
-        allow-stub: validate schema lands with the next migration<br>
-        allow-toolchain-weakening: strict migrating the legacy tree file by file<br>
-        allow-agent-instructions: AGENTS.md the new rule was reviewed in #90<br>
-        allow-build-hook: prepare husky installs the commit hooks<br>
-allow-gate-weakening: ci-integrity the discipline step runs on pull_request only; merged-pr-body covers pushes
-      </div>
+      <div class="directive-card">removes: tests/legacy/ replaced by proptest property suite
+allow-assertion-drop: test_allocator single large allocation split into benchmark
+allow-ignore: test_darwin_kqueue requires macos runner environment
+allow-golden-update: tests/snapshots/v2.snap updated for new serializer format
+allow-stub: validate schema lands with the next migration
+allow-toolchain-weakening: strict migrating the legacy tree file by file
+allow-agent-instructions: AGENTS.md the new rule was reviewed in #90
+allow-build-hook: prepare husky installs the commit hooks
+allow-gate-weakening: ci-integrity the discipline step runs on pull_request only; merged-pr-body covers pushes</div>
     </div>
 
     <!-- Action inputs & outputs reference -->
@@ -1719,7 +1785,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
   <section class="section-block" id="architecture">
     <div class="section-head">
       <div class="section-title">Architecture & Execution Model</div>
-      <p class="section-desc">Zero-dependency, standalone binary. A pull-request run reads git in memory and makes no network requests.</p>
+      <p class="section-desc">Zero-dependency, standalone binary. With the default gates, a pull-request run reads git in memory and makes no network requests; the forge-reading gates (<code>issue-link</code> verification, <code>review-threads</code>, <code>ratified-paths</code>) and <code>--comment</code> are opt-in.</p>
     </div>
 
     <div class="card arch-card">
@@ -1741,7 +1807,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
         <!-- 2. GitCtx Merge Base Resolver -->
         <rect x="90" y="100" width="680" height="60" rx="8" class="arch-box arch-box-git"/>
         <text x="430" y="125" class="arch-title" text-anchor="middle">GitCtx: Resolves merge-base against Target Ref</text>
-        <text x="430" y="144" class="arch-meta" text-anchor="middle">In-memory git2 diff • No network on a pull-request run • Exit 2 when no merge base resolves</text>
+        <text x="430" y="144" class="arch-meta" text-anchor="middle">In-memory git2 diff • No network with the default gates • Exit 2 when no merge base resolves</text>
 
         <!-- Connector: GitCtx -> AST & Hygiene -->
         <path class="arch-line" d="M 430 160 L 430 185 M 250 185 L 610 185"/>
@@ -1870,7 +1936,8 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       </div>
       <div class="install-card">
         <h4>GitLab CI/CD</h4>
-        <div class="install-snippet">include: - remote: https://raw.githubusercontent.com/orieg/discipline/v0.15.0/templates/discipline.gitlab-ci.yml</div>
+        <div class="install-snippet">include:
+  - remote: https://raw.githubusercontent.com/orieg/discipline/v0.15.0/templates/discipline.gitlab-ci.yml</div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Job template with <code>spec: inputs</code> (GitLab 16.0+), pinned to a release.</p>
       </div>
       <div class="install-card">
@@ -1938,9 +2005,13 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
   const platformButtons = document.querySelectorAll('#platformNav .platform-btn');
   platformButtons.forEach(btn => {
     btn.addEventListener('click', () => {
-      platformButtons.forEach(b => b.classList.remove('active'));
+      platformButtons.forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
       document.querySelectorAll('.platform-pane').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
       const targetId = btn.getAttribute('data-target');
       document.getElementById(targetId).classList.add('active');
     });
@@ -1950,7 +2021,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
   const gateSearch = document.getElementById('gate-search');
   const gateCount = document.getElementById('gate-count');
   if (gateSearch) {
-    const gateRows = document.querySelectorAll('#gates .gate-table tbody tr');
+    const gateRows = document.querySelectorAll('#gate-table tbody tr');
     const totalGates = gateRows.length;
     gateSearch.addEventListener('input', function() {
       const query = this.value.trim().toLowerCase();

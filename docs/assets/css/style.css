@@ -174,11 +174,11 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 .theme-toggle-mobile { display: flex; }
 .theme-toggle-desktop { display: none; }
 
-@media (min-width: 769px) {
+@media (min-width: 961px) {
   .theme-toggle-mobile { display: none !important; }
   .theme-toggle-desktop { display: flex !important; }
 }
-@media (max-width: 768px) {
+@media (max-width: 960px) {
   .navbar {
     padding: 0.6rem 1rem;
     flex-direction: column;
@@ -270,16 +270,19 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   margin-bottom: 1.25rem;
 }
 
-/* Tables */
+/* Tables: a table wider than the screen scrolls inside its own box instead of
+   being clipped by the page (body hides horizontal overflow). */
 .page-content table {
-  width: 100%;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   border-collapse: collapse;
   margin: 1.5rem 0;
   font-size: 0.9rem;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  overflow: hidden;
 }
 
 .page-content th, .page-content td {
@@ -292,6 +295,14 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   background: var(--card-inner);
   color: var(--heading);
   font-weight: 600;
+}
+
+.page-content td code {
+  white-space: nowrap;
+}
+
+.page-content p, .page-content li, .page-content td {
+  overflow-wrap: break-word;
 }
 
 .page-content tr:nth-child(even) td {
@@ -319,12 +330,38 @@ pre {
   line-height: 1.5;
 }
 
+/* The code background is dark in both themes, so code text is light in both. */
 pre code {
   background: transparent;
   border: none;
   padding: 0;
-  color: var(--text);
+  color: #e2e8f0;
   font-size: 0.85rem;
+  white-space: pre;
+}
+
+.page-content .highlighter-rouge { margin: 1.25rem 0; }
+.page-content .highlighter-rouge pre { margin: 0; }
+
+/* Rouge token colours (kramdown syntax_highlighter: rouge), on the dark code background */
+.highlight .c, .highlight .c1, .highlight .cm, .highlight .cs, .highlight .ch, .highlight .cp { color: #8b9ab0; font-style: italic; }
+.highlight .k, .highlight .kd, .highlight .kn, .highlight .kr, .highlight .kt, .highlight .kc { color: #7dd3fc; }
+.highlight .s, .highlight .s1, .highlight .s2, .highlight .sb, .highlight .sh, .highlight .se, .highlight .si, .highlight .sx { color: #86efac; }
+.highlight .m, .highlight .mi, .highlight .mf, .highlight .mh, .highlight .il { color: #fca5a5; }
+.highlight .na, .highlight .nt, .highlight .py, .highlight .nl { color: #fbbf24; }
+.highlight .nb, .highlight .nf, .highlight .nc, .highlight .nn { color: #c4b5fd; }
+.highlight .o, .highlight .p { color: #cbd5e1; }
+.highlight .gd { color: #fca5a5; }
+.highlight .gi { color: #86efac; }
+.highlight .err { color: #fca5a5; background: transparent; }
+
+@media (max-width: 768px) {
+  .page-content { padding: 2rem 1rem; }
+  .page-content h1 { font-size: 1.75rem; }
+  .page-content h2 { font-size: 1.3rem; }
+  .page-content th, .page-content td { padding: 0.55rem 0.7rem; }
+  pre { padding: 0.85rem 1rem; }
+  pre code { font-size: 0.8rem; }
 }
 
 /* Footer */

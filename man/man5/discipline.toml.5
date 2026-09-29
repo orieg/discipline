@@ -131,6 +131,41 @@ Severity of violations reported by this gate.
 Glob patterns of files exempt from this gate.
 .RE
 
+.TP
+.B [tests]
+What the repository counts as test code beyond each language's conventions;
+read by every gate that separates test code from production code. Widening
+either list is a \fBconfig\-integrity\fR weakening
+(\fBallow\-gate\-weakening: tests <reason>\fR).
+.RS
+.TP
+.BI functions " = [\(dqself_test\(dq]"
+Leaf function names that are test entry points wherever they appear
+(read by the Python and Rust packs and by \fBpii\fR). Default is empty.
+.TP
+.BI paths " = [\(dqscripts/fixtures/**\(dq]"
+Path globs whose every line is test scope (read by every language pack).
+Default is empty.
+.RE
+
+.TP
+.B [languages.c]
+C and C++ macros rewritten before parsing, appended to the built\-in Zend,
+CPython and Ruby C API lists; an entry ending in \fB*\fR is a prefix. Adding
+an entry is a \fBconfig\-integrity\fR weakening
+(\fBallow\-gate\-weakening: languages <reason>\fR).
+.RS
+.TP
+.BI macros " = [\(dqMYEXT_API\(dq]"
+Macros blanked with their arguments: statement or declaration macros written
+without a semicolon, list entries without a comma, attribute\-like prefixes.
+Default is empty.
+.TP
+.BI function_macros " = [\(dqMYEXT_METHOD\(dq]"
+Macros that expand to a function head, e.g.
+\fBMYEXT_METHOD(Class, name) { ... }\fR. Default is empty.
+.RE
+
 .SH GATES
 Every table below also accepts the common fields above. The per-gate keys are
 listed in the configuration reference (see

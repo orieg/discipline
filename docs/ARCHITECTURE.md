@@ -40,7 +40,7 @@ Discipline's operational rigors were developed to defend high-assurance reposito
 ```mermaid
 flowchart TD
     subgraph CFG_LAYER["Layered Configuration & Directives"]
-        D["1. Built-in Defaults<br/>(25 gates on, 12 opt-in; see discipline gates)"]
+        D["1. Built-in Defaults<br/>(26 gates on, 14 opt-in; see discipline gates)"]
         F["2. discipline.toml<br/>(Repository configuration)"]
         O["3. Inline Overrides / Directives<br/>(--config-override, PR body)"]
         CLI["4. CLI Flags & Environment<br/>(--enable, --disable, denylist)"]
@@ -85,7 +85,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    D["1. Built-in Defaults<br/>(25 gates on, 12 opt-in; see discipline gates)"] --> M1["Merge Layer 1"]
+    D["1. Built-in Defaults<br/>(26 gates on, 14 opt-in; see discipline gates)"] --> M1["Merge Layer 1"]
     F["2. discipline.toml<br/>(Repository configuration)"] --> M1
     M1 --> M2["Merge Layer 2"]
     O["3. Inline Override<br/>(--config-override / action input)"] --> M2
@@ -115,7 +115,7 @@ sequenceDiagram
     AST-->>CLI: ParsedFileFacts (base vs head TestFn, assertions, unsafe)
     deactivate AST
     loop Each enabled gate, one at a time in registry order
-        CLI->>Gates: agent-guard, hygiene, integrity, verification, bench
+        CLI->>Gates: agent-guard, hygiene, integrity, quality, verification, bench
     end
     Gates-->>CLI: Vec<GateOutcome> (examined counts, violations, overrides)
     CLI->>Report: Render (Terminal, GitHub Summary, JSON, gl-codequality, JUnit, SARIF, Agent-Prompt)
@@ -250,15 +250,21 @@ From 1.0, a `stable` surface below changes incompatibly only in a new major vers
 | `src/doctor_pins.rs` | `discipline doctor`: SHA pins not reachable from a branch or tag of their own repository (imposter commits), and pinned actions whose metadata uses refs that can move (one level deep) |
 | `src/doctor_settings.rs` | `discipline doctor`: repository settings (Actions policy, default workflow token, immutable releases, tag rulesets or protected tags, secret scoping) |
 | `src/override_policy.rs` | `max_overrides` and `require_approval`: whether a run's directive overrides stand |
+| `src/references.rs` | Issue references in a pull request's text (`#12`, `owner/repo#12`, URLs, closing keywords) and what each resolves to on the forge (`issue-link`, `ratified-paths`) |
+| `src/ratification.rs` | `ratified-paths`: the owner's `Owner-ratified-paths:` comment on an issue the pull request closes, read from the forge |
+| `src/review_threads.rs` | `review-threads`: a pull request's review threads and whether each is resolved, per forge |
+| `src/could_not_check.rs` | The machine-readable reason a run could not check (exit 2), carried by the JSON report, `replay` and `mcp` |
 | `src/baseline.rs` | Grandfathering baseline read / write and fingerprints |
-| `src/hook.rs` | `discipline hook run` / `install`: the agent-facing check (base policy, no directives) translated into each agent's hook contract |
+| `src/hook.rs` | `discipline hook run` / `install`: the agent-facing check (base policy, no directives) translated into each agent's hook contract, and the hook files `install` writes |
+| `src/pretool.rs` | `hook run --event pre-tool` and `--event session-start`: refuse an edit into another worktree, a worktree another live session leases, or `forbidden_paths` before the tool runs; take this worktree's lease when a session starts |
+| `src/lease.rs` | `discipline lease`: per-worktree leases in the common git directory, and the reference-transaction guard that refuses a branch update another live lease claims |
 | `src/mcp.rs` | `discipline mcp`: the MCP server over stdio (read-only tools) |
 | `src/explain.rs` | `discipline explain`: a gate's rule, state, finding codes and lifting directive |
 | `src/findings.rs` | The registry of finding kinds: each `gate/code` with its title; a finding that is not registered does not compile |
 | `src/replay.rs` | `discipline replay`: rebuild merged changes in a throwaway repository and check each |
 | `src/comment.rs` | `check --comment`: the one pull-request comment, found by marker and edited in place |
 
-**Agent-facing surfaces.** The hook, the MCP server and the `agent-prompt` format share one design rule: they tell an agent how to repair a finding and leave out the directive that would waive it, and the check they run is judged by the base ref's configuration and reads no directive, so the change being judged cannot switch off or excuse its own check. Hiding the waiver syntax is a convenience (an agent can run `discipline explain`); the base-side policy and the CI configuration (`policy_from: base`, PR-body directives, `fail_on_overrides`, `require_approval`) are the control.
+**Agent-facing surfaces.** The hook, the MCP server and the `agent-prompt` format share one design rule: they tell an agent how to repair a finding and leave out the directive that would waive it, and the check they run is judged by the base ref's configuration and reads no directive, so the change being judged cannot switch off or excuse its own check. The hook's pre-tool check is the exception: it reads `scope-confinement.forbidden_paths` from the working tree's `discipline.toml`, because it guards where the session writes, not what the change contains; CI still judges the change by the base policy. Hiding the waiver syntax is a convenience (an agent can run `discipline explain`); the base-side policy and the CI configuration (`policy_from: base`, PR-body directives, `fail_on_overrides`, `require_approval`) are the control.
 
 ---
 

@@ -61,7 +61,7 @@ discipline replay --last 50
 discipline explain assertion-reduction
 ```
 
-The agent hook blocks an edit that weakens a test and hands the agent the repair; the [tutorial](docs/tutorials/getting-started.md) walks through it in a sandbox, and [Agent Hooks](docs/CONFIGURATION.md#agent-hooks) covers every agent and the [MCP server](docs/CONFIGURATION.md#mcp-server).
+After an edit that weakens a test, the agent hook hands the agent the finding and its repair (and, for most agents, refuses an edit into another worktree before it runs); the [tutorial](docs/tutorials/getting-started.md) walks through it in a sandbox, and [Agent Hooks](docs/CONFIGURATION.md#agent-hooks) covers every agent and the [MCP server](docs/CONFIGURATION.md#mcp-server).
 
 ### 2. Adopting on an Existing Repository (Brownfield)
 
@@ -168,7 +168,7 @@ Adoption and editor tooling:
 
 ## Gates
 
-Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java, Go, PHP, C, C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C) and a section parser for PHPT test files supply the AST facts; the language table in [`docs/GATES.md`](docs/GATES.md) lists what each pack reads. `discipline gates` lists every gate with its suite, effective state and severity. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md). Gates ship on unless their rule is a repository policy (`issue-link`, `commit-provenance`, `provenance-tags`, `scope-confinement`, `pr-checklist`, `msrv`, `archive-contents`, `manifest-sync`, `version-lockstep`, and the `sanitizers`, `miri` and `unsafe-budget` presets); `docs/ROADMAP.md` records every default change per release.
+Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java, Go, PHP, C, C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C) and a section parser for PHPT test files supply the AST facts; the language table in [`docs/GATES.md`](docs/GATES.md) lists what each pack reads. `discipline gates` lists every gate with its suite, effective state and severity. Detailed rules, detection boundaries, and what gates do not catch are documented in [`docs/GATES.md`](docs/GATES.md). Gates ship on unless their rule is a repository policy (`issue-link`, `review-threads`, `ratified-paths`, `commit-provenance`, `provenance-tags`, `scope-confinement`, `pr-checklist`, `msrv`, `archive-contents`, `manifest-sync`, `version-lockstep`, and the `sanitizers`, `miri` and `unsafe-budget` presets); `docs/ROADMAP.md` records every default change per release.
 
 <!-- generated:gates -->
 | Gate | Suite | Languages | Rule Description |
