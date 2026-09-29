@@ -492,7 +492,13 @@ impl<'a> KotlinExtractor<'a> {
                         strong_asserts: helper_fn.strong_asserts,
                         tautologies: helper_fn.tautologies,
                         fatal_asserts: helper_fn.fatal_asserts,
-                        wraps: super::thin_wrapper_callee(body, &KOTLIN_WRAPPER, &dummy_calls),
+                        wraps: super::forwarding_wrapper_callee(
+                            body,
+                            &KOTLIN_WRAPPER,
+                            &KOTLIN_LOCALS,
+                            &dummy_calls,
+                            self.src,
+                        ),
                     },
                 );
             }
@@ -783,6 +789,17 @@ pub const KOTLIN_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     containers: &[],
     names: &[],
     references: &["callable_reference"],
+};
+
+/// A local a Kotlin wrapper computes and forwards: `val b = loc(d)`.
+pub const KOTLIN_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &[],
+    binders: &["property_declaration"],
+    pattern: &["variable_declaration"],
+    value: &[],
+    names: &["identifier"],
+    holders: &["variable_declaration"],
+    refused: &["getter", "setter", "property_delegate"],
 };
 
 /// A Kotlin helper whose body is one call: `{ check(x, true) }`, `= check(x, true)`.

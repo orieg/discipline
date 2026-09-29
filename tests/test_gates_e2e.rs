@@ -12810,6 +12810,43 @@ fn a_helper_forwarding_its_parameters_plus_a_local_is_not_an_assertion_reduction
     }
 }
 
+/// The `tests/test_lease.rs` refactor (#290) in packs other than Rust: a helper that
+/// keeps computing a local and forwards it, with its parameters, to a new function
+/// holding the rest of its body is a wrapper, so its test keeps the moved checks. A
+/// helper doing other work before the call is not, and the drop is still reported.
+#[test]
+fn a_helper_forwarding_a_local_is_not_an_assertion_reduction_in_other_packs() {
+    let js_test = "test('a rebase is refused', () => {\n  const out = gitWithHooks('.', ['rebase']);\n  expect(out.stdout).toBe('');\n});\n";
+    let go_test = "func TestRebaseIsRefused(t *testing.T) {\n\tout := gitWithHooks(t, \".\")\n\tif out != \"\" {\n\t\tt.Fatal(out)\n\t}\n}\n";
+    let cases = [
+        ("test/lease.test.js", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  return gitWithDisciplineIn(dir, args, bin);\n}\n\nfunction gitWithDisciplineIn(dir, args, bin) {\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", js_test, false),
+        ("test/lease.test.js", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", "function gitWithHooks(dir, args) {\n  mkdirSync(dir);\n  const bin = locate();\n  return gitWithDisciplineIn(dir, args, bin);\n}\n\nfunction gitWithDisciplineIn(dir, args, bin) {\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", js_test, true),
+        ("lease/lease_test.go", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\treturn gitWithDisciplineIn(t, dir, bin)\n}\n\nfunc gitWithDisciplineIn(t *testing.T, dir string, bin string) string {\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", go_test, false),
+        ("lease/lease_test.go", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tprepare(dir)\n\tbin := locate()\n\treturn gitWithDisciplineIn(t, dir, bin)\n}\n\nfunc gitWithDisciplineIn(t *testing.T, dir string, bin string) string {\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", go_test, true),
+    ];
+    for (path, before, after, test, reported) in cases {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(path, &format!("{before}{test}"));
+        repo.commit("test: lease");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write(path, &format!("{after}{test}"));
+        repo.commit("refactor: lease helper");
+        let run = repo.check(&[]);
+        let expected: Vec<&str> = if reported {
+            vec!["Assertion Count Decreased In Existing Test"]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            run.titles("assertion-reduction"),
+            expected,
+            "{path} reported={reported}: {}",
+            run.stdout
+        );
+    }
+}
+
 const CITATION_CFF: &str ="cff-version: 1.2.0\nmessage: \"Cite it.\"\ntitle: \"Tool: a thing\"\ntype: software\ndate-released: 2026-09-28\nauthors:\n  - family-names: \"Doe\"\n    given-names: \"Jane\"\n    orcid: \"https://orcid.org/0000-0002-1825-0097\"\nlicense:\n  - MIT\n  - Apache-2.0\nkeywords:\n  - ci\ndoi: \"10.5281/zenodo.100\"\nidentifiers:\n  - type: doi\n    value: \"10.5281/zenodo.100\"\n    description: \"Concept DOI (all versions)\"\n  - type: doi\n    value: \"10.5281/zenodo.101\"\n    description: \"Version DOI (v1.0.0)\"\n";
 const ZENODO_JSON: &str = r#"{"title": "Tool: a thing", "upload_type": "software", "creators": [{"name": "Doe, Jane", "orcid": "0000-0002-1825-0097"}], "license": "mit", "keywords": ["ci"]}"#;
 

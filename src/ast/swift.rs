@@ -338,7 +338,13 @@ impl<'a> SwiftExtractor<'a> {
                     strong_asserts: helper_fn.strong_asserts,
                     tautologies: helper_fn.tautologies,
                     fatal_asserts: helper_fn.fatal_asserts,
-                    wraps: super::thin_wrapper_callee(body, &SWIFT_WRAPPER, &dummy_calls),
+                    wraps: super::forwarding_wrapper_callee(
+                        body,
+                        &SWIFT_WRAPPER,
+                        &SWIFT_LOCALS,
+                        &dummy_calls,
+                        self.src,
+                    ),
                 });
         }
     }
@@ -583,6 +589,17 @@ pub const SWIFT_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     containers: &["array_literal"],
     names: &["simple_identifier"],
     references: &[],
+};
+
+/// A local a Swift wrapper computes and forwards: `let b = loc(d)`.
+pub const SWIFT_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &[],
+    binders: &["property_declaration"],
+    pattern: &["name"],
+    value: &["value"],
+    names: &["simple_identifier"],
+    holders: &["pattern"],
+    refused: &["computed_property", "willset_didset_block"],
 };
 
 /// A Swift helper whose body is one call: `{ check(x, flag: true) }`, `{ return try check(x) }`.

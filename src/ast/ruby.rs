@@ -268,7 +268,13 @@ impl<'a> RubyExtractor<'a> {
                             strong_asserts: helper_fn.strong_asserts,
                             tautologies: helper_fn.tautologies,
                             fatal_asserts: helper_fn.fatal_asserts,
-                            wraps: super::thin_wrapper_callee(body, &RUBY_WRAPPER, &dummy_calls),
+                            wraps: super::forwarding_wrapper_callee(
+                                body,
+                                &RUBY_WRAPPER,
+                                &RUBY_LOCALS,
+                                &dummy_calls,
+                                self.src,
+                            ),
                         };
                         self.helpers.insert(method_name.to_string(), facts);
                     }
@@ -670,6 +676,17 @@ pub const RUBY_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     containers: &["symbol_array", "array"],
     names: &["bare_symbol", "simple_symbol"],
     references: &[],
+};
+
+/// A local a Ruby wrapper computes and forwards: `b = loc(d)`.
+pub const RUBY_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &[],
+    binders: &["assignment"],
+    pattern: &["left"],
+    value: &["right"],
+    names: &["identifier"],
+    holders: &[],
+    refused: &[],
 };
 
 /// A Ruby helper whose body is one call: `check(x, true)`, `return check(x)`.

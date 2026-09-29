@@ -1145,9 +1145,12 @@ pub const RS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 
 /// A local a Rust wrapper computes and forwards: `let bin = locate(dir).unwrap();`.
 pub const RS_LOCALS: super::LocalSpec = super::LocalSpec {
-    kinds: &["let_declaration"],
-    pattern: "pattern",
-    value: "value",
+    statements: &[],
+    binders: &["let_declaration"],
+    pattern: &["pattern"],
+    value: &["value"],
+    names: &["identifier"],
+    holders: &[],
     refused: &["alternative"],
 };
 

@@ -272,8 +272,15 @@ impl<'a> CSharpExtractor<'a> {
                         strong_asserts: helper_fn.strong_asserts,
                         tautologies: helper_fn.tautologies,
                         fatal_asserts: helper_fn.fatal_asserts,
-                        wraps: wrap_body
-                            .and_then(|b| super::thin_wrapper_callee(b, &CS_WRAPPER, &dummy_calls)),
+                        wraps: wrap_body.and_then(|b| {
+                            super::forwarding_wrapper_callee(
+                                b,
+                                &CS_WRAPPER,
+                                &CS_LOCALS,
+                                &dummy_calls,
+                                self.src,
+                            )
+                        }),
                     };
                     self.helpers.insert(method_name.to_string(), facts);
                 }
@@ -724,6 +731,17 @@ pub const CS_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     containers: &["initializer_expression", "collection_expression"],
     names: &["identifier"],
     references: &[],
+};
+
+/// A local a C# wrapper computes and forwards: `var b = Loc(d);`.
+pub const CS_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &["local_declaration_statement"],
+    binders: &["variable_declarator"],
+    pattern: &["name"],
+    value: &[],
+    names: &["identifier"],
+    holders: &[],
+    refused: &[],
 };
 
 /// A C# helper whose body is one call: `{ Check(x, true); }`, `=> Check(x, true)`.

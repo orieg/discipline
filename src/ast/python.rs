@@ -591,9 +591,9 @@ impl<'a> PythonExtractor<'a> {
                 .unwrap_or_default();
             self.collect_calls(body, &scope, &mut calls);
         }
-        let wraps = node
-            .child_by_field_name("body")
-            .and_then(|b| super::thin_wrapper_callee(b, &PY_WRAPPER, &calls));
+        let wraps = node.child_by_field_name("body").and_then(|b| {
+            super::forwarding_wrapper_callee(b, &PY_WRAPPER, &PY_LOCALS, &calls, self.src)
+        });
         self.helper_calls.entry(key.clone()).or_insert(calls);
         self.helpers.entry(key).or_insert(HelperFacts {
             total_asserts: facts.total_asserts,
@@ -1086,6 +1086,17 @@ pub const PY_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
         "continue",
         "break",
     ],
+};
+
+/// A local a Python wrapper computes and forwards: `b = loc(d)`.
+pub const PY_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &["expression_statement"],
+    binders: &["assignment"],
+    pattern: &["left"],
+    value: &["right"],
+    names: &["identifier"],
+    holders: &[],
+    refused: &[],
 };
 
 /// A Python helper whose body is one call: `return check(x, True)`, `self.check(x)`.

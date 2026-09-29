@@ -489,7 +489,13 @@ impl<'a> CCppExtractor<'a> {
                                 strong_asserts: helper_fn.strong_asserts,
                                 tautologies: helper_fn.tautologies,
                                 fatal_asserts: helper_fn.fatal_asserts,
-                                wraps: super::thin_wrapper_callee(body, &C_WRAPPER, &dummy_calls),
+                                wraps: super::forwarding_wrapper_callee(
+                                    body,
+                                    &C_WRAPPER,
+                                    &C_LOCALS,
+                                    &dummy_calls,
+                                    self.src,
+                                ),
                             },
                         );
                         self.helper_calls.insert(fn_name.to_string(), dummy_calls);
@@ -1106,6 +1112,17 @@ pub const C_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["compound_statement"],
     ignored_kinds: &["comment"],
     terminators: &["return", "abort()", "exit(", "_exit(", "throw"],
+};
+
+/// A local a C / C++ wrapper computes and forwards: `int b = loc(d);`, `auto b = Loc(d);`.
+pub const C_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &["declaration"],
+    binders: &["init_declarator"],
+    pattern: &["declarator"],
+    value: &["value"],
+    names: &["identifier"],
+    holders: &[],
+    refused: &[],
 };
 
 /// A C / C++ helper whose body is one call: `{ return check(x, 1); }`.

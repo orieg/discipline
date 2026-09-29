@@ -358,7 +358,13 @@ impl<'a> JavaExtractor<'a> {
                     strong_asserts: helper_fn.strong_asserts,
                     tautologies: helper_fn.tautologies,
                     fatal_asserts: helper_fn.fatal_asserts,
-                    wraps: super::thin_wrapper_callee(body, &JAVA_WRAPPER, &dummy_calls),
+                    wraps: super::forwarding_wrapper_callee(
+                        body,
+                        &JAVA_WRAPPER,
+                        &JAVA_LOCALS,
+                        &dummy_calls,
+                        self.src,
+                    ),
                 };
                 self.helpers.insert(method_name.to_string(), facts);
             }
@@ -667,6 +673,17 @@ pub const JAVA_DISPATCH: super::DispatchSpec = super::DispatchSpec {
     containers: &[],
     names: &[],
     references: &["method_reference"],
+};
+
+/// A local a Java wrapper computes and forwards: `String b = loc(d);`.
+pub const JAVA_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &["local_variable_declaration"],
+    binders: &["variable_declarator"],
+    pattern: &["name"],
+    value: &["value"],
+    names: &["identifier"],
+    holders: &[],
+    refused: &[],
 };
 
 /// A Java helper whose body is one call: `{ return check(x, true); }`.

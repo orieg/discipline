@@ -255,7 +255,8 @@ impl<'a> PhpExtractor<'a> {
             let class_name = key.rsplit_once("::").map_or("", |(c, _)| c);
             let mut calls = Vec::new();
             self.collect_calls(body, class_name, &mut calls);
-            wraps = super::thin_wrapper_callee(body, &PHP_WRAPPER, &calls);
+            wraps =
+                super::forwarding_wrapper_callee(body, &PHP_WRAPPER, &PHP_LOCALS, &calls, self.src);
             self.scan_block(body, &mut h);
             h.total_asserts += super::count_failure_exits(
                 body,
@@ -749,6 +750,17 @@ pub const PHP_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["compound_statement"],
     ignored_kinds: &["comment"],
     terminators: &["return", "throw", "exit(", "die("],
+};
+
+/// A local a PHP wrapper computes and forwards: `$b = loc($d);`.
+pub const PHP_LOCALS: super::LocalSpec = super::LocalSpec {
+    statements: &["expression_statement"],
+    binders: &["assignment_expression"],
+    pattern: &["left"],
+    value: &["right"],
+    names: &["name"],
+    holders: &["variable_name"],
+    refused: &[],
 };
 
 /// A PHP helper whose body is one call: `{ return $this->check($x, true); }`.
