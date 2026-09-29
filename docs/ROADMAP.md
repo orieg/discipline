@@ -34,6 +34,8 @@ flowchart TD
     P11 --> P13["Phase 13: Multi-agent guardrails before the edit (ref guard, leases, pre-tool hooks)"]
     P12 --> P13
     P12 --> P14["Phase 14: doctor forge-settings parity (GitLab variables and job token, Gitea and Forgejo)"]
+    P11 --> P15["Phase 15: discipline audit (escape hatches across history)"]
+    P12 --> P15
 ```
 
 Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 and Tier 1 depend only on Phase 4; Tier 2 adds facts to every language pack, so it follows Phase 7.
@@ -383,6 +385,24 @@ Several coding agents (Claude Code, Codex, Copilot CLI, agy, Cursor, Qwen Code, 
 
 - **Order:** Step 0 first (evidence only). Steps 1 and 2 can run in parallel once Step 0 lands.
 - **Status:** Step 0 done (Gitea, Forgejo, gitlab.com). Step 1 shipped (unreleased) apart from its live e2e run. Next: Step 2 (Gitea and Forgejo).
+
+### Phase 15: `discipline audit`, Escape Hatches Across History
+Every escape hatch is judged one change at a time: a directive lifts a finding in the run that reads it, `config-integrity` reports a loosening in the change that makes it, a baseline entry grandfathers a finding once. Nothing reads them across history, so patterns that only show over many changes go unseen: exemptions that only grow, a gate waived repeatedly and then loosened in configuration, waivers that lifted nothing, a pull-request body edited after merge. Issue #319 carries the investigation. Findings that shape the design (READ unless marked): an `OverrideRecord` exists only when a directive lifts a finding (`src/tokens.rs`), so a directive that matched nothing leaves no trace; `replay` drops the applied overrides the child report carries and keeps only refusals (`src/replay.rs`), and it runs one configuration under test, so it is not the engine for history; `config-integrity`'s `Weakening` is prose (`src/guards/integrity.rs`); on this repository no first-parent commit carries a `Co-Authored-By` trailer (RUN 2026-09-29), so which agent made a change cannot be read from history.
+
+The audit is a read-only subcommand, not a gate (the patterns span changes) and not a mode of `replay`. It emits data first; signals are queries over it. Each record names its input's trust tier: git objects on protected `main` (A), records the forge keeps (B), or text the author wrote (C); a tier-C signal is a hint only. Out of scope: exact-text boilerplate matching, per-file hot spots and per-agent trends (rewording and splitting defeat them), `--fail-on` until a signal has a measured false-positive rate, and any agent-facing output (a list of accepted waivers teaches an agent what passes).
+
+| Item | Status | Work | Ships when |
+|---|---|---|---|
+| Step 1: applied and unused overrides | Open | `replay --json`: each case lists the overrides its change applied (gate, directive, source, hidden; no reason text), additively. `check`: a directive that lifted no finding is reported in the JSON report, and each override names the finding code it lifted | Unit and e2e controls: a directive that lifts a finding, one that lifts nothing, one scoped to the wrong subject; schemas regenerated; surface recorded |
+| Step 2: structured configuration loosening | Open | `Weakening` carries `key`, `direction`, `before` and `after`; `config-integrity` formats its message from them | Existing `config-integrity` tests pass unchanged; a unit test pins the structured fields |
+| Step 3: `discipline audit` extraction | Open | Git only, no child process: per first-parent change, directives from the commit body (and the merged pull-request body when the forge is readable), `discipline.toml` loosenings between the change's parent and itself, `exempt_paths` and baseline growth, inline `discipline:allow(...)` markers. One JSON record per exception with `class` (process, detector, config, baseline, inline), `evidence` (`claimed` or `applied`) and trust tier. A historical configuration that does not parse is a record, not exit 2. Reason text is a hash and length unless asked for | E2e against a fixture repository with each record kind; schema in `src/output_schema.rs`; `DISCIPLINE_NO_NETWORK=1` keeps it offline |
+| Step 4: signals | Open | Queries over Step 3: exemptions and baselines that only grow, a gate waived then loosened, directives that lifted nothing, broad subjects, hidden directives. "No second reviewer" is one repository-level line | Each signal has a positive and a negative fixture and a named next action |
+| Step 5: visual report | Open | `discipline audit --format html` writes one self-contained HTML file: exceptions over time by class and gate, the growth of exemptions and baselines, and a table per signal linking each row to its commit or pull request. Charts are inline SVG rendered by the binary; the page loads nothing from the network and runs no script it does not carry. The JSON output (Step 3) is the export; the HTML is a rendering of the same data, with no field the JSON lacks. A mockup against this repository's history is agreed before the renderer is written | The mockup is agreed; a golden-file test pins the HTML for a fixture history; the page renders with no network access |
+| Step 6: forge facts (opt-in) | Open | Issue timeline for issues a reason cites (state reason, who closed it, closing commit); `check` records a hash of the pull-request body it read so the audit can detect a post-merge edit. Through `src/forge.rs`; "could not check" on a forge without the data | Unit controls against recorded responses; off under `DISCIPLINE_NO_NETWORK=1` |
+| Step 7: agent identity at write time | Open | Hooks and `commit-provenance` record which agent made a change; history reports `unknown` | Blocked on a decision about where the record lives (trailer, note, or report artifact) |
+
+- **Order:** Step 1 first (small, useful to `check` and `replay` users on its own). Step 2 before Step 3. Step 4 after Step 3. Step 5 after Step 4 (it renders the signals). Steps 6 and 7 are independent of Steps 4 and 5.
+- **Status:** investigation done (#319). Next: Step 1.
 
 ### 1.0 Readiness
 Before 1.0 a minor release may change gate behaviour; from 1.0, `docs/ARCHITECTURE.md` §3.1 binds (a default only becomes stricter within a major version, and a looser one needs a ledger entry with the configuration that restores it). 1.0 ships when all of these hold:
