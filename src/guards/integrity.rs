@@ -310,19 +310,101 @@ pub fn direction_of(key: &str) -> Option<Direction> {
         .map(|(_, d)| *d)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+/// How a configuration option moved in the looser direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Change {
+    /// A switch or a named value changed to a looser one.
+    Changed,
+    /// An option that bounds or names the check was removed.
+    Removed,
+    Increased,
+    Decreased,
+    /// A severity lowered.
+    Lowered,
+    /// A list gained entries.
+    Gained,
+    /// A list lost entries.
+    Lost,
+    /// An allow-list was emptied, which switches it off.
+    Emptied,
+}
+
+/// One loosening of a configuration option, as data. [`Weakening::what`] is the sentence
+/// the `config-integrity` finding shows.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Weakening {
+    /// The gate id, or the table (`directives`, `tests`, `languages`, `meta`).
     pub gate: String,
-    pub what: String,
+    /// The option, as written under that table (`c.macros` under `languages`).
+    pub key: String,
+    pub change: Change,
+    /// The value before and after, as the message shows them; `None` for a list, whose
+    /// entries are counted, never named (an entry can be a login).
+    pub before: Option<String>,
+    pub after: Option<String>,
+    /// Entries gained or lost, for a list.
+    pub count: Option<usize>,
+    /// Why the change is looser, when the sentence says so.
+    #[serde(skip)]
+    pub note: Option<&'static str>,
 }
 
 impl Weakening {
-    /// The key the weakening is about: every `what` starts with it in backticks.
+    fn new(gate: &str, key: &str, change: Change) -> Self {
+        Weakening {
+            gate: gate.to_string(),
+            key: key.to_string(),
+            change,
+            before: None,
+            after: None,
+            count: None,
+            note: None,
+        }
+    }
+
+    fn values(mut self, before: impl ToString, after: impl ToString) -> Self {
+        self.before = Some(before.to_string());
+        self.after = Some(after.to_string());
+        self
+    }
+
+    fn was(mut self, before: impl ToString) -> Self {
+        self.before = Some(before.to_string());
+        self
+    }
+
+    fn count(mut self, n: usize) -> Self {
+        self.count = Some(n);
+        self
+    }
+
+    /// The key the weakening is about.
     pub fn key(&self) -> &str {
-        self.what
-            .strip_prefix('`')
-            .and_then(|r| r.split('`').next())
-            .unwrap_or(&self.what)
+        &self.key
+    }
+
+    /// The sentence the finding shows, starting with the key in backticks.
+    pub fn what(&self) -> String {
+        let key = &self.key;
+        let b = self.before.as_deref().unwrap_or("");
+        let a = self.after.as_deref().unwrap_or("");
+        let n = self.count.unwrap_or(0);
+        let text = match self.change {
+            Change::Changed => format!("`{key}` changed from {b} to {a}"),
+            Change::Removed => format!("`{key}` removed (was {b})"),
+            Change::Increased => format!("`{key}` increased from {b} to {a}"),
+            Change::Decreased => format!("`{key}` decreased from {b} to {a}"),
+            Change::Lowered => format!("`{key}` lowered from {b} to {a}"),
+            Change::Gained if self.after.is_some() => format!("`{key}` gained {a}"),
+            Change::Gained => format!("`{key}` gained {n} entr(y/ies)"),
+            Change::Lost => format!("`{key}` lost {n} entr(y/ies)"),
+            Change::Emptied => format!("`{key}` emptied, which switches the allow-list off"),
+        };
+        match self.note {
+            Some(note) => format!("{text} ({note})"),
+            None => text,
+        }
     }
 }
 
@@ -415,7 +497,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                         &crate::findings::GATE_WEAKENED,
                         Some(ctx.config_path),
                         None,
-                        format!("[{}] {}.", w.gate, w.what),
+                        format!("[{}] {}.", w.gate, w.what()),
                         &format!(
                             "Revert the change, or justify it on its own line in the PR body or a commit \
                              message: `allow-gate-weakening: {} <reason>`.",
@@ -807,14 +889,10 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
     let mut found = Vec::new();
 
     // Check [directives] table
-    let mut dir_note = |what: String| {
-        found.push(Weakening {
-            gate: "directives".to_string(),
-            what,
-        })
-    };
+    let mut dir_note = |w: Weakening| found.push(w);
+    let dir = |key: &str, change: Change| Weakening::new("directives", key, change);
     if !base.directives.allow_hidden && head.directives.allow_hidden {
-        dir_note("`allow_hidden` changed from false to true".to_string());
+        dir_note(dir("allow_hidden", Change::Changed).values(false, true));
     }
     let gained_sources: Vec<_> = head
         .directives
@@ -823,10 +901,12 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
         .filter(|s| !base.directives.sources.contains(s))
         .collect();
     if gained_sources.iter().any(|s| s.as_str() == "commits") {
-        dir_note("`sources` gained commits".to_string());
+        let mut w = dir("sources", Change::Gained).count(1);
+        w.after = Some("commits".to_string());
+        dir_note(w);
     }
     if base.directives.fail_on_overrides && !head.directives.fail_on_overrides {
-        dir_note("`fail_on_overrides` changed from true to false".to_string());
+        dir_note(dir("fail_on_overrides", Change::Changed).values(true, false));
     }
     // A listed actor is exempt from `fail_on_overrides`.
     let gained_actors = head
@@ -836,23 +916,23 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
         .filter(|a| !base.directives.allowed_override_actors.contains(a))
         .count();
     if gained_actors > 0 {
-        dir_note(format!(
-            "`allowed_override_actors` gained {gained_actors} entr(y/ies)"
-        ));
+        dir_note(dir("allowed_override_actors", Change::Gained).count(gained_actors));
     }
 
     match (base.directives.max_overrides, head.directives.max_overrides) {
-        (Some(b), None) => dir_note(format!("`max_overrides` removed (was {b})")),
+        (Some(b), None) => dir_note(dir("max_overrides", Change::Removed).was(b)),
         (Some(b), Some(h)) if h > b => {
-            dir_note(format!("`max_overrides` increased from {b} to {h}"))
+            dir_note(dir("max_overrides", Change::Increased).values(b, h))
         }
         _ => {}
     }
     if base.directives.require_approval && !head.directives.require_approval {
-        dir_note("`require_approval` changed from true to false".to_string());
+        dir_note(dir("require_approval", Change::Changed).values(true, false));
     }
     if !base.directives.degrade_offline && head.directives.degrade_offline {
-        dir_note("`degrade_offline` changed from false to true (a failed merged-pr-body lookup no longer stops the run)".to_string());
+        let mut w = dir("degrade_offline", Change::Changed).values(false, true);
+        w.note = Some("a failed merged-pr-body lookup no longer stops the run");
+        dir_note(w);
     }
     // (true -> false is stricter: a failed lookup then stops the run.)
 
@@ -863,10 +943,7 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
     ] {
         let gained = h.iter().filter(|x| !b.contains(x)).count();
         if gained > 0 {
-            found.push(Weakening {
-                gate: "tests".to_string(),
-                what: format!("`{key}` gained {gained} entr(y/ies)"),
-            });
+            found.push(Weakening::new("tests", key, Change::Gained).count(gained));
         }
     }
 
@@ -885,19 +962,13 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
     ] {
         let gained = h.iter().filter(|x| !b.contains(x)).count();
         if gained > 0 {
-            found.push(Weakening {
-                gate: "languages".to_string(),
-                what: format!("`{key}` gained {gained} entr(y/ies)"),
-            });
+            found.push(Weakening::new("languages", key, Change::Gained).count(gained));
         }
     }
 
     // [meta]: advisory mode exits 0 whatever the gates found.
     if base.meta.mode == RunMode::Enforcing && head.meta.mode == RunMode::Advisory {
-        found.push(Weakening {
-            gate: "meta".to_string(),
-            what: "`mode` changed from enforcing to advisory".to_string(),
-        });
+        found.push(Weakening::new("meta", "mode", Change::Changed).values("enforcing", "advisory"));
     }
 
     let base_v = Value::try_from(&base.gates)?;
@@ -913,12 +984,8 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
         ) else {
             continue;
         };
-        let mut note = |what: String| {
-            found.push(Weakening {
-                gate: gate.clone(),
-                what,
-            })
-        };
+        let mut note = |w: Weakening| found.push(w);
+        let w = |key: &str, change: Change| Weakening::new(gate, key, change);
         for (key, bv) in b {
             // An option this binary does not know is judged as a plain switch, so a
             // stale table degrades to the strict reading rather than to silence.
@@ -926,7 +993,7 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
             let Some(hv) = h.get(key) else {
                 match dir {
                     Direction::Evidence | Direction::Floor | Direction::Cap => {
-                        note(format!("`{key}` removed (was {bv})"))
+                        note(w(key, Change::Removed).was(bv))
                     }
                     _ => {}
                 }
@@ -938,13 +1005,11 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                 _ => None,
             };
             match dir {
-                Direction::Evidence if bv != hv => {
-                    note(format!("`{key}` changed from {bv} to {hv}"))
-                }
+                Direction::Evidence if bv != hv => note(w(key, Change::Changed).values(bv, hv)),
                 Direction::StrictMode(strict) => {
                     if let (Value::String(bs), Value::String(hs)) = (bv, hv) {
                         if bs == strict && hs != strict {
-                            note(format!("`{key}` changed from {bs} to {hs}"));
+                            note(w(key, Change::Changed).values(bs, hs));
                         }
                     }
                 }
@@ -953,7 +1018,7 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                         let rank = |v: &str| order.iter().position(|o| *o == v);
                         if let (Some(b), Some(h)) = (rank(bs), rank(hs)) {
                             if h > b {
-                                note(format!("`{key}` changed from {bs} to {hs}"));
+                                note(w(key, Change::Changed).values(bs, hs));
                             }
                         }
                     }
@@ -961,24 +1026,24 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                 Direction::LooserWhenFalse
                     if matches!((bv, hv), (Value::Boolean(true), Value::Boolean(false))) =>
                 {
-                    note(format!("`{key}` changed from true to false"))
+                    note(w(key, Change::Changed).values(true, false))
                 }
                 Direction::LooserWhenTrue
                     if matches!((bv, hv), (Value::Boolean(false), Value::Boolean(true))) =>
                 {
-                    note(format!("`{key}` changed from false to true"))
+                    note(w(key, Change::Changed).values(false, true))
                 }
                 Direction::Floor => {
                     if let (Some(bn), Some(hn)) = (num(bv), num(hv)) {
                         if hn < bn {
-                            note(format!("`{key}` decreased from {bv} to {hv}"));
+                            note(w(key, Change::Decreased).values(bv, hv));
                         }
                     }
                 }
                 Direction::Cap | Direction::Tolerance => {
                     if let (Some(bn), Some(hn)) = (num(bv), num(hv)) {
                         if hn > bn {
-                            note(format!("`{key}` increased from {bv} to {hv}"));
+                            note(w(key, Change::Increased).values(bv, hv));
                         }
                     }
                 }
@@ -987,7 +1052,7 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                         if (bs == "error" && (hs == "warning" || hs == "note"))
                             || (bs == "warning" && hs == "note")
                         {
-                            note(format!("`severity` lowered from {bs} to {hs}"));
+                            note(w("severity", Change::Lowered).values(bs, hs));
                         }
                     }
                 }
@@ -1001,15 +1066,13 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                         .filter(|x| !ha.contains(x) && !entry_tightened(key, x, ba, ha))
                         .count();
                     if dir == Direction::Allowlist && !ba.is_empty() && ha.is_empty() {
-                        note(format!(
-                            "`{key}` emptied, which switches the allow-list off"
-                        ));
+                        note(w(key, Change::Emptied));
                     } else if dir == Direction::Allowlist && ba.is_empty() {
                         // No allow-list on base: adopting one is a tightening.
                     } else if dir != Direction::Shrunk && gained > 0 {
-                        note(format!("`{key}` gained {gained} entr(y/ies)"));
+                        note(w(key, Change::Gained).count(gained));
                     } else if dir == Direction::Shrunk && lost > 0 {
-                        note(format!("`{key}` lost {lost} entr(y/ies)"));
+                        note(w(key, Change::Lost).count(lost));
                     }
                 }
                 _ => {}
@@ -1067,6 +1130,61 @@ mod tests {
     }
 
     #[test]
+    fn each_weakening_carries_its_key_change_and_values_as_data() {
+        let base = cfg(
+            "[directives]\nmax_overrides = 1\nallowed_override_actors = [\"lead\"]\n\
+             [gates.pii]\nexempt_paths = [\"a/**\"]\n\
+             [gates.test-floor]\nenabled = true\nmin_tests = 40\n",
+        );
+        let head = cfg(
+            "[directives]\nallowed_override_actors = [\"lead\", \"someone\"]\n\
+             [gates.pii]\nexempt_paths = [\"a/**\", \"b/**\", \"c/**\"]\nseverity = \"warning\"\n\
+             [gates.test-floor]\nenabled = true\nmin_tests = 3\n",
+        );
+        let found = diff_configs(&base, &head).unwrap();
+        let get = |gate: &str, key: &str| {
+            found
+                .iter()
+                .find(|w| w.gate == gate && w.key == key)
+                .unwrap_or_else(|| panic!("{gate}.{key} not in {found:?}"))
+        };
+        let removed = get("directives", "max_overrides");
+        assert_eq!(
+            (
+                removed.change,
+                removed.before.as_deref(),
+                removed.after.as_deref()
+            ),
+            (Change::Removed, Some("1"), None)
+        );
+        assert_eq!(removed.what(), "`max_overrides` removed (was 1)");
+        let actors = get("directives", "allowed_override_actors");
+        assert_eq!((actors.change, actors.count), (Change::Gained, Some(1)));
+        // A list entry is counted, never named: an actor is a login.
+        let json = serde_json::to_string(&found).unwrap();
+        assert!(!json.contains("someone"), "{json}");
+        let paths = get("pii", "exempt_paths");
+        assert_eq!((paths.change, paths.count), (Change::Gained, Some(2)));
+        assert_eq!(paths.what(), "`exempt_paths` gained 2 entr(y/ies)");
+        let sev = get("pii", "severity");
+        assert_eq!(
+            (sev.change, sev.before.as_deref(), sev.after.as_deref()),
+            (Change::Lowered, Some("error"), Some("warning"))
+        );
+        let floor = get("test-floor", "min_tests");
+        assert_eq!(
+            (
+                floor.change,
+                floor.before.as_deref(),
+                floor.after.as_deref()
+            ),
+            (Change::Decreased, Some("40"), Some("3"))
+        );
+        assert_eq!(floor.what(), "`min_tests` decreased from 40 to 3");
+        assert!(json.contains(r#""change":"decreased""#), "{json}");
+    }
+
+    #[test]
     fn identical_and_stricter_configs_are_not_weakenings() {
         let base = cfg("[gates.pii]\nexempt_paths = [\"a/**\"]\n");
         assert!(diff_configs(&base, &base).unwrap().is_empty());
@@ -1086,7 +1204,7 @@ mod tests {
         let has = |gate: &str, needle: &str| {
             found
                 .iter()
-                .any(|w| w.gate == gate && w.what.contains(needle))
+                .any(|w| w.gate == gate && w.what().contains(needle))
         };
         assert!(has("pii", "`lan_ips` changed from true to false"));
         assert!(has("pii", "`exempt_paths` gained 1"));
@@ -1112,7 +1230,7 @@ mod tests {
             diff_configs(&base, head)
                 .unwrap()
                 .iter()
-                .any(|w| w.gate == "ci-integrity" && w.what.contains("`banned_actions` lost"))
+                .any(|w| w.gate == "ci-integrity" && w.what().contains("`banned_actions` lost"))
         };
         assert!(lost(&dropped));
         assert!(lost(&narrowed));
@@ -1128,7 +1246,7 @@ mod tests {
         let has = |gate: &str, needle: &str| {
             found
                 .iter()
-                .any(|w| w.gate == gate && w.what.contains(needle))
+                .any(|w| w.gate == gate && w.what().contains(needle))
         };
         assert!(has("command", "`min_count` decreased from 10 to 5"));
         assert!(has("unsafe-budget", "`max_unsafe` increased from 5 to 10"));
@@ -1148,7 +1266,7 @@ mod tests {
         let has = |gate: &str, needle: &str| {
             found
                 .iter()
-                .any(|w| w.gate == gate && w.what.contains(needle))
+                .any(|w| w.gate == gate && w.what().contains(needle))
         };
         assert!(
             has("provenance-tags", "`superseded_registry` removed"),
@@ -1189,7 +1307,7 @@ mod tests {
         let has = |gate: &str, needle: &str| {
             skip_found
                 .iter()
-                .any(|w| w.gate == gate && w.what.contains(needle))
+                .any(|w| w.gate == gate && w.what().contains(needle))
         };
         let found = &skip_found;
         assert!(
@@ -1232,7 +1350,7 @@ mod tests {
             diff_configs(&base, head)
                 .unwrap()
                 .into_iter()
-                .map(|w| format!("{}: {}", w.gate, w.what))
+                .map(|w| format!("{}: {}", w.gate, w.what()))
                 .collect()
         };
         let lost = vec!["version-lockstep: `groups` lost 1 entr(y/ies)".to_string()];
@@ -1519,7 +1637,7 @@ mod tests {
             diff_configs(&base, head)
                 .unwrap()
                 .into_iter()
-                .map(|w| w.what)
+                .map(|w| w.what())
                 .collect()
         };
         assert_eq!(
@@ -1540,7 +1658,7 @@ mod tests {
         let notes: Vec<String> = diff_configs(&off, &on)
             .unwrap()
             .into_iter()
-            .map(|w| w.what)
+            .map(|w| w.what())
             .collect();
         assert!(
             notes
@@ -1566,16 +1684,19 @@ mod tests {
         .unwrap();
         let found = diff_configs(&base, &head).unwrap();
         assert_eq!(
-            found,
+            found
+                .iter()
+                .map(|w| (w.gate.as_str(), w.what()))
+                .collect::<Vec<_>>(),
             vec![
-                Weakening {
-                    gate: "directives".into(),
-                    what: "`allowed_override_actors` gained 1 entr(y/ies)".into()
-                },
-                Weakening {
-                    gate: "meta".into(),
-                    what: "`mode` changed from enforcing to advisory".into()
-                },
+                (
+                    "directives",
+                    "`allowed_override_actors` gained 1 entr(y/ies)".to_string()
+                ),
+                (
+                    "meta",
+                    "`mode` changed from enforcing to advisory".to_string()
+                ),
             ]
         );
         // Leaving advisory mode, or dropping an actor, tightens.
@@ -1602,7 +1723,7 @@ mod tests {
         let has = |gate: &str, needle: &str| {
             found
                 .iter()
-                .any(|w| w.gate == gate && w.what.contains(needle))
+                .any(|w| w.gate == gate && w.what().contains(needle))
         };
         assert!(has("test-floor", "`min_tests` removed"), "{found:?}");
         assert!(
@@ -1637,7 +1758,10 @@ mod tests {
         // command is the stronger check is not something a diff can decide.
         let back = diff_configs(&head, &base).unwrap();
         assert_eq!(back.len(), 1, "{back:?}");
-        assert!(back[0].what.contains("`test_command` changed"), "{back:?}");
+        assert!(
+            back[0].what().contains("`test_command` changed"),
+            "{back:?}"
+        );
         // Adopting an allow-list where none existed is a tightening; growing one is not.
         let none = cfg("");
         let adopted = cfg("[gates.dependency-delta]\nallow_dependencies = [\"serde\"]\n");
