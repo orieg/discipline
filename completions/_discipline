@@ -193,14 +193,14 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (run)
 _arguments "${_arguments_options[@]}" : \
-'--agent=[The agent whose hook contract to answer in]:AGENT:((claude-code\:"Claude Code (\`.claude/settings.json\`, PostToolUse + Stop)"
-codex\:"OpenAI Codex CLI (\`.codex/hooks.json\`, PostToolUse + Stop)"
+'--agent=[The agent whose hook contract to answer in]:AGENT:((claude-code\:"Claude Code (\`.claude/settings.json\`, SessionStart + PreToolUse + PostToolUse + Stop)"
+codex\:"OpenAI Codex CLI (\`.codex/hooks.json\`, SessionStart + PreToolUse + PostToolUse + Stop)"
 cursor\:"Cursor (\`.cursor/hooks.json\`, stop)"
 aider\:"Aider (\`.aider.conf.yml\`, lint-cmd)"
-copilot\:"GitHub Copilot CLI (\`.github/hooks/discipline.json\`, postToolUse + agentStop)"
-agy\:"Antigravity CLI (\`.agents/hooks.json\`, Stop)"
-qwen\:"Qwen Code (\`.qwen/settings.json\`, PostToolUse + Stop)"
-opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit tools)"))' \
+copilot\:"GitHub Copilot CLI (\`.github/hooks/discipline.json\`, sessionStart + preToolUse + postToolUse + agentStop)"
+agy\:"Antigravity CLI (\`.agents/hooks.json\`, SessionStart + PreToolUse + Stop)"
+qwen\:"Qwen Code (\`.qwen/settings.json\`, SessionStart + PreToolUse + PostToolUse + Stop)"
+opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin on session start, before tools and after edit tools)"))' \
 '-b+[Base to measure the change against (default\: the merge base with origin'\''s default branch, else main / master)]:BASE:_default' \
 '--base=[Base to measure the change against (default\: the merge base with origin'\''s default branch, else main / master)]:BASE:_default' \
 '--event=[The hook event\: \`pre-tool\` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); \`session-start\` takes this worktree'\''s lease for the session on stdin (never blocks); the default checks the change so far]:EVENT:((check\:"After an edit or at the end of a turn\: check the change so far"
@@ -215,14 +215,14 @@ session-start\:"When a session starts\: take this worktree'\''s lease for it (ne
 ;;
 (install)
 _arguments "${_arguments_options[@]}" : \
-'--agent=[The agent to configure]:AGENT:((claude-code\:"Claude Code (\`.claude/settings.json\`, PostToolUse + Stop)"
-codex\:"OpenAI Codex CLI (\`.codex/hooks.json\`, PostToolUse + Stop)"
+'--agent=[The agent to configure]:AGENT:((claude-code\:"Claude Code (\`.claude/settings.json\`, SessionStart + PreToolUse + PostToolUse + Stop)"
+codex\:"OpenAI Codex CLI (\`.codex/hooks.json\`, SessionStart + PreToolUse + PostToolUse + Stop)"
 cursor\:"Cursor (\`.cursor/hooks.json\`, stop)"
 aider\:"Aider (\`.aider.conf.yml\`, lint-cmd)"
-copilot\:"GitHub Copilot CLI (\`.github/hooks/discipline.json\`, postToolUse + agentStop)"
-agy\:"Antigravity CLI (\`.agents/hooks.json\`, Stop)"
-qwen\:"Qwen Code (\`.qwen/settings.json\`, PostToolUse + Stop)"
-opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit tools)"))' \
+copilot\:"GitHub Copilot CLI (\`.github/hooks/discipline.json\`, sessionStart + preToolUse + postToolUse + agentStop)"
+agy\:"Antigravity CLI (\`.agents/hooks.json\`, SessionStart + PreToolUse + Stop)"
+qwen\:"Qwen Code (\`.qwen/settings.json\`, SessionStart + PreToolUse + PostToolUse + Stop)"
+opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin on session start, before tools and after edit tools)"))' \
 '--timeout=[Seconds the agent gives each check before killing it (agy, qwen, copilot; default\: agy 300, the others 120). Raise it on a machine where a check can run long]:SECONDS:_default' \
 '(--user)--pin-sums=[A release'\''s SHA256SUMS, verified (\`gh attestation verify\`)\: the Claude Code bootstrap checks its download against the linux-musl digests in it instead of fetching SHA256SUMS from the release (claude-code only)]:FILE:_files' \
 '--user[Write the user-level hook instead (copilot\: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml]' \

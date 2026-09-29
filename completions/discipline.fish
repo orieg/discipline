@@ -158,14 +158,14 @@ complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fi
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fish_seen_subcommand_from run install help" -f -a "run" -d 'Check the change so far and answer in the agent\'s hook contract (reads the hook payload on stdin)'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fish_seen_subcommand_from run install help" -f -a "install" -d 'Write the agent\'s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and not __fish_seen_subcommand_from run install help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l agent -d 'The agent whose hook contract to answer in' -r -f -a "claude-code\t'Claude Code (`.claude/settings.json`, PostToolUse + Stop)'
-codex\t'OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)'
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l agent -d 'The agent whose hook contract to answer in' -r -f -a "claude-code\t'Claude Code (`.claude/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)'
+codex\t'OpenAI Codex CLI (`.codex/hooks.json`, SessionStart + PreToolUse + PostToolUse + Stop)'
 cursor\t'Cursor (`.cursor/hooks.json`, stop)'
 aider\t'Aider (`.aider.conf.yml`, lint-cmd)'
-copilot\t'GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + agentStop)'
-agy\t'Antigravity CLI (`.agents/hooks.json`, Stop)'
-qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
-opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
+copilot\t'GitHub Copilot CLI (`.github/hooks/discipline.json`, sessionStart + preToolUse + postToolUse + agentStop)'
+agy\t'Antigravity CLI (`.agents/hooks.json`, SessionStart + PreToolUse + Stop)'
+qwen\t'Qwen Code (`.qwen/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)'
+opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin on session start, before tools and after edit tools)'"
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s b -l base -d 'Base to measure the change against (default: the merge base with origin\'s default branch, else main / master)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l event -d 'The hook event: `pre-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); `session-start` takes this worktree\'s lease for the session on stdin (never blocks); the default checks the change so far' -r -f -a "check\t'After an edit or at the end of a turn: check the change so far'
 pre-tool\t'Before a tool runs: refuse an edit outside this session\'s worktree'
@@ -173,14 +173,14 @@ session-start\t'When a session starts: take this worktree\'s lease for it (never
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l if-configured -d 'Pass silently unless the working directory (for the pre-tool and session-start events, the payload\'s directory) is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l observe -d 'Observe mode: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook-observe.log'
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l agent -d 'The agent to configure' -r -f -a "claude-code\t'Claude Code (`.claude/settings.json`, PostToolUse + Stop)'
-codex\t'OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)'
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l agent -d 'The agent to configure' -r -f -a "claude-code\t'Claude Code (`.claude/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)'
+codex\t'OpenAI Codex CLI (`.codex/hooks.json`, SessionStart + PreToolUse + PostToolUse + Stop)'
 cursor\t'Cursor (`.cursor/hooks.json`, stop)'
 aider\t'Aider (`.aider.conf.yml`, lint-cmd)'
-copilot\t'GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + agentStop)'
-agy\t'Antigravity CLI (`.agents/hooks.json`, Stop)'
-qwen\t'Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)'
-opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)'"
+copilot\t'GitHub Copilot CLI (`.github/hooks/discipline.json`, sessionStart + preToolUse + postToolUse + agentStop)'
+agy\t'Antigravity CLI (`.agents/hooks.json`, SessionStart + PreToolUse + Stop)'
+qwen\t'Qwen Code (`.qwen/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)'
+opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin on session start, before tools and after edit tools)'"
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l timeout -d 'Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long' -r
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l pin-sums -d 'A release\'s SHA256SUMS, verified (`gh attestation verify`): the Claude Code bootstrap checks its download against the linux-musl digests in it instead of fetching SHA256SUMS from the release (claude-code only)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from install" -l user -d 'Write the user-level hook instead (copilot: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml'

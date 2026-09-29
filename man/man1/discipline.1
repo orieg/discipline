@@ -641,21 +641,21 @@ The agent whose hook contract to answer in
 \fIPossible values:\fR
 .RS 14
 .IP \(bu 2
-claude\-code: Claude Code (`.claude/settings.json`, PostToolUse + Stop)
+claude\-code: Claude Code (`.claude/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)
 .IP \(bu 2
-codex: OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)
+codex: OpenAI Codex CLI (`.codex/hooks.json`, SessionStart + PreToolUse + PostToolUse + Stop)
 .IP \(bu 2
 cursor: Cursor (`.cursor/hooks.json`, stop)
 .IP \(bu 2
 aider: Aider (`.aider.conf.yml`, lint\-cmd)
 .IP \(bu 2
-copilot: GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + agentStop)
+copilot: GitHub Copilot CLI (`.github/hooks/discipline.json`, sessionStart + preToolUse + postToolUse + agentStop)
 .IP \(bu 2
-agy: Antigravity CLI (`.agents/hooks.json`, Stop)
+agy: Antigravity CLI (`.agents/hooks.json`, SessionStart + PreToolUse + Stop)
 .IP \(bu 2
-qwen: Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)
+qwen: Qwen Code (`.qwen/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)
 .IP \(bu 2
-opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)
+opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin on session start, before tools and after edit tools)
 .RE
 .TP
 \fB\-b\fR, \fB\-\-base\fR \fI<BASE>\fR
@@ -705,21 +705,21 @@ The agent to configure
 \fIPossible values:\fR
 .RS 14
 .IP \(bu 2
-claude\-code: Claude Code (`.claude/settings.json`, PostToolUse + Stop)
+claude\-code: Claude Code (`.claude/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)
 .IP \(bu 2
-codex: OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)
+codex: OpenAI Codex CLI (`.codex/hooks.json`, SessionStart + PreToolUse + PostToolUse + Stop)
 .IP \(bu 2
 cursor: Cursor (`.cursor/hooks.json`, stop)
 .IP \(bu 2
 aider: Aider (`.aider.conf.yml`, lint\-cmd)
 .IP \(bu 2
-copilot: GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + agentStop)
+copilot: GitHub Copilot CLI (`.github/hooks/discipline.json`, sessionStart + preToolUse + postToolUse + agentStop)
 .IP \(bu 2
-agy: Antigravity CLI (`.agents/hooks.json`, Stop)
+agy: Antigravity CLI (`.agents/hooks.json`, SessionStart + PreToolUse + Stop)
 .IP \(bu 2
-qwen: Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)
+qwen: Qwen Code (`.qwen/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)
 .IP \(bu 2
-opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)
+opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin on session start, before tools and after edit tools)
 .RE
 .TP
 \fB\-\-user\fR

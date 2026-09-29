@@ -36,6 +36,10 @@
 //!   after an edit tool and appends a failure to the tool's output (exit 1, the report
 //!   on stdout, as for Aider). Docs: opencode.ai/docs/plugins.
 //!
+//! Every agent but Cursor and Aider also gets a session-start entry (`--event
+//! session-start`, the worktree's lease) and a pre-tool entry (`--event pre-tool`, which
+//! refuses an edit into another worktree before it runs); both are in `crate::pretool`.
+//!
 //! `discipline hook install --agent <name>` writes that agent's configuration
 //! only where none exists. An existing file is never rewritten: the snippet to
 //! add is printed instead.
@@ -45,21 +49,21 @@ use std::path::{Path, PathBuf};
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Agent {
-    /// Claude Code (`.claude/settings.json`, PostToolUse + Stop)
+    /// Claude Code (`.claude/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)
     ClaudeCode,
-    /// OpenAI Codex CLI (`.codex/hooks.json`, PostToolUse + Stop)
+    /// OpenAI Codex CLI (`.codex/hooks.json`, SessionStart + PreToolUse + PostToolUse + Stop)
     Codex,
     /// Cursor (`.cursor/hooks.json`, stop)
     Cursor,
     /// Aider (`.aider.conf.yml`, lint-cmd)
     Aider,
-    /// GitHub Copilot CLI (`.github/hooks/discipline.json`, postToolUse + agentStop)
+    /// GitHub Copilot CLI (`.github/hooks/discipline.json`, sessionStart + preToolUse + postToolUse + agentStop)
     Copilot,
-    /// Antigravity CLI (`.agents/hooks.json`, Stop)
+    /// Antigravity CLI (`.agents/hooks.json`, SessionStart + PreToolUse + Stop)
     Agy,
-    /// Qwen Code (`.qwen/settings.json`, PostToolUse + Stop)
+    /// Qwen Code (`.qwen/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)
     Qwen,
-    /// OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools)
+    /// OpenCode (`.opencode/plugins/discipline.js`, a plugin on session start, before tools and after edit tools)
     Opencode,
 }
 
