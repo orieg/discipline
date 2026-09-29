@@ -370,6 +370,26 @@ pub fn answer(agent: Agent, verdict: &Verdict) -> HookOutput {
 /// A check that cannot be made (a repository or lease that cannot be read) refuses an
 /// edit, never lets it through.
 pub fn run(agent: Agent, stdin: &str, observe: bool) -> HookOutput {
+    run_with(agent, stdin, observe, false)
+}
+
+/// The answer that lets a call through: empty, which every agent's pre-tool contract
+/// reads as allow.
+fn silent_pass() -> HookOutput {
+    HookOutput {
+        stdout: String::new(),
+        stderr: String::new(),
+        code: 0,
+    }
+}
+
+/// [`run`], and with `if_configured` a silent pass unless the payload's directory (else
+/// the working directory) is in a git repository with a `discipline.toml` at its root:
+/// the guard of a user-level hook, which runs in every folder the agent opens.
+pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -> HookOutput {
+    if if_configured && !crate::hook::configured(&payload_dir(stdin)) {
+        return silent_pass();
+    }
     let Some(call) = parse(agent, stdin) else {
         // Cursor and Aider have no pre-tool event; a payload that is not JSON cannot
         // name an edit.
@@ -785,6 +805,32 @@ pub fn parse_session_start(agent: Agent, raw: &str) -> Option<(String, Option<Pa
 /// - A branch another worktree's live lease claims is not taken; the worktree is still
 ///   leased to this session, without it (said).
 pub fn session_start(agent: Agent, stdin: &str) -> HookOutput {
+    session_start_with(agent, stdin, false)
+}
+
+/// The directory a hook payload names (`cwd`, agy's first workspace path, or the tool
+/// call's `Cwd`), else the working directory: where `--if-configured` looks for a
+/// `discipline.toml`.
+fn payload_dir(stdin: &str) -> PathBuf {
+    serde_json::from_str::<serde_json::Value>(stdin)
+        .ok()
+        .and_then(|v| {
+            ["/cwd", "/workspacePaths/0", "/toolCall/args/Cwd"]
+                .iter()
+                .find_map(|p| s(&v, p))
+        })
+        .map(PathBuf::from)
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// [`session_start`], and with `if_configured` a silent pass outside a repository with a
+/// `discipline.toml`, so a user-level hook takes no lease in a repository that has not
+/// adopted discipline.
+pub fn session_start_with(agent: Agent, stdin: &str, if_configured: bool) -> HookOutput {
+    if if_configured && !crate::hook::configured(&payload_dir(stdin)) {
+        return silent_pass();
+    }
     let pass = |note: String| HookOutput {
         stdout: String::new(),
         stderr: note,

@@ -321,8 +321,14 @@ fn a_force_push_of_a_branch_another_worktree_leased_is_refused() {
 
 /// `discipline hook run --agent <agent> --event session-start` in `dir`, `payload` on stdin.
 fn session_start(dir: &Path, agent: &str, payload: &str) -> Out {
+    session_start_args(dir, agent, payload, &[])
+}
+
+/// [`session_start`] with `extra` arguments.
+fn session_start_args(dir: &Path, agent: &str, payload: &str, extra: &[&str]) -> Out {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"));
     cmd.args(["hook", "run", "--agent", agent, "--event", "session-start"])
+        .args(extra)
         .current_dir(dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -538,4 +544,37 @@ fn a_session_start_outside_a_repository_or_unparsed_passes_silently() {
     assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, "", ""));
     let o = session_start(dir.path(), "claude-code", "not json");
     assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, "", ""));
+}
+
+/// With `--if-configured` (the user-level Copilot hook), the pre-tool check and the
+/// session-start lease pass silently in a repository without a `discipline.toml`, and
+/// act as without it in one that has it.
+#[test]
+fn if_configured_acts_only_in_a_repository_with_discipline_toml() {
+    let (repo, main, wt2) = two_worktrees();
+    let edit = payload("copilot/create.json", &main, &wt2.join("escape.txt"));
+    let start = start_payload("copilot", &main, "sess-a");
+    let guarded = ["--if-configured"];
+
+    let o = pretool(&main, "copilot", &edit, &guarded);
+    assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, "", ""));
+    let o = session_start_args(&main, "copilot", &start, &guarded);
+    assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, "", ""));
+    assert!(!lease_list(&repo).contains("sess-a"));
+    // A payload that cannot be read outside a configured repository passes too.
+    let o = pretool(&main, "copilot", "not json", &guarded);
+    assert_eq!((o.code, o.stdout.as_str()), (0, ""));
+
+    std::fs::write(main.join("discipline.toml"), "").unwrap();
+    let o = pretool(&main, "copilot", &edit, &guarded);
+    assert!(denied("copilot", &o), "{} {}", o.stdout, o.stderr);
+    // The payload's directory decides, not the hook's own working directory.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let o = pretool(elsewhere.path(), "copilot", &edit, &guarded);
+    assert!(denied("copilot", &o), "{} {}", o.stdout, o.stderr);
+    let o = session_start_args(&main, "copilot", &start, &guarded);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(lease_list(&repo).contains("sess-a"));
+    let o = pretool(&main, "copilot", "not json", &guarded);
+    assert!(denied("copilot", &o), "{} {}", o.stdout, o.stderr);
 }

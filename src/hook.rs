@@ -1017,9 +1017,17 @@ pub fn user_config_for(
                         ),
                     ),
                     timeout.or(default_timeout(Agent::Copilot)).unwrap_or(0),
-                    // The user-level hook runs in every folder; the pre-tool check
-                    // does not yet honour --if-configured, so it stays repository-level.
-                    None,
+                    // The user-level hook runs in every folder: each entry passes
+                    // silently outside a repository with a discipline.toml.
+                    Some((
+                        &guarded_pretool(&format!(
+                            "discipline hook run --agent copilot --event pre-tool --if-configured{}",
+                            if observe { " --observe" } else { "" }
+                        )),
+                        &guarded_pretool(
+                            "discipline hook run --agent copilot --event session-start --if-configured",
+                        ),
+                    )),
                 ),
             ))
         }
@@ -1176,17 +1184,31 @@ fn copilot_repo_hook_runs(dir: &Path) -> bool {
         && copilot_home().and_then(|h| copilot_trusts(&h, dir)) == Some(true)
 }
 
-/// Write the user-level hook file ([`user_config_for`]); an existing file is never
-/// rewritten.
-pub fn install_user(agent: Agent, observe: bool, timeout: Option<u32>) -> Result<Installed> {
+/// Write the user-level hook file ([`user_config_for`]). An existing file that runs
+/// discipline for `agent` and differs from this release's is rewritten only with
+/// `upgrade`; any other existing file is never rewritten.
+pub fn install_user(
+    agent: Agent,
+    observe: bool,
+    upgrade: bool,
+    timeout: Option<u32>,
+) -> Result<Installed> {
     let (path, content) = user_config_for(agent, observe, timeout)?;
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
-        if existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
+        if existing == content {
             return Ok(Installed::AlreadyPresent(path));
         }
-        return Ok(Installed::Refused(path, content));
+        if !existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
+            return Ok(Installed::Refused(path, content));
+        }
+        if !upgrade {
+            return Ok(Installed::Outdated(path));
+        }
+        std::fs::write(&path, content)
+            .with_context(|| format!("cannot write {}", path.display()))?;
+        return Ok(Installed::Upgraded(path));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

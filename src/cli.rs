@@ -232,7 +232,7 @@ pub struct HookRunArgs {
     #[arg(short, long)]
     pub base: Option<String>,
 
-    /// Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)
+    /// Pass silently unless the working directory (for the pre-tool and session-start events, the payload's directory) is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)
     #[arg(long)]
     pub if_configured: bool,
 
@@ -279,7 +279,8 @@ pub struct HookInstallArgs {
     pub cloud_agent: bool,
     /// Rewrite a file an earlier discipline release generated (it carries the `Written by
     /// \`discipline hook install\`` header: the Claude Code bootstrap, the Copilot setup step,
-    /// the OpenCode plugin) to this release; a file without that header is never rewritten
+    /// the OpenCode plugin) to this release; a file without that header is never rewritten.
+    /// With --user, rewrite a user-level file that runs discipline for the agent
     #[arg(long)]
     pub upgrade: bool,
 

@@ -662,7 +662,7 @@ opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin after edit tools
 Base to measure the change against (default: the merge base with origin\*(Aqs default branch, else main / master)
 .TP
 \fB\-\-if\-configured\fR
-Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user\-level hook, which runs in every folder)
+Pass silently unless the working directory (for the pre\-tool and session\-start events, the payload\*(Aqs directory) is in a git repository with a discipline.toml at its root (for a user\-level hook, which runs in every folder)
 .TP
 \fB\-\-observe\fR
 Observe mode: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook\-observe.log
@@ -732,7 +732,7 @@ Write the hook commands in observe mode (hook run \-\-observe): the agent is nev
 Also write .github/workflows/copilot\-setup\-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
 .TP
 \fB\-\-upgrade\fR
-Rewrite a file an earlier discipline release generated (it carries the `Written by \\`discipline hook install\\`` header: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten
+Rewrite a file an earlier discipline release generated (it carries the `Written by \\`discipline hook install\\`` header: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten. With \-\-user, rewrite a user\-level file that runs discipline for the agent
 .TP
 \fB\-\-timeout\fR \fI<SECONDS>\fR
 Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long

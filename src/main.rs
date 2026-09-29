@@ -1556,9 +1556,9 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     .context("cannot read the hook payload on stdin")?;
             }
             let out = if a.event == discipline::cli::HookEvent::PreTool {
-                discipline::pretool::run(a.agent, &stdin, a.observe)
+                discipline::pretool::run_with(a.agent, &stdin, a.observe, a.if_configured)
             } else if a.event == discipline::cli::HookEvent::SessionStart {
-                discipline::pretool::session_start(a.agent, &stdin)
+                discipline::pretool::session_start_with(a.agent, &stdin, a.if_configured)
             } else {
                 discipline::hook::run_with(a.agent, a.base, &stdin, a.if_configured, a.observe)?
             };
@@ -1587,7 +1587,7 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                 );
             }
             let mut results = vec![if a.user {
-                discipline::hook::install_user(a.agent, a.observe, a.timeout)?
+                discipline::hook::install_user(a.agent, a.observe, a.upgrade, a.timeout)?
             } else {
                 discipline::hook::install_with(
                     a.agent,

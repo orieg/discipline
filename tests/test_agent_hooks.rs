@@ -4,7 +4,7 @@
 mod common;
 
 use common::Repo;
-use discipline::hook::{guarded, Agent};
+use discipline::hook::{guarded, guarded_pretool, Agent};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -721,6 +721,19 @@ fn copilot_installs_at_user_level_with_the_guard() {
             "{v}"
         );
     }
+    // The pre-tool check and the session-start lease carry the same guard (Phase 13).
+    assert_eq!(
+        v["hooks"]["preToolUse"][0]["bash"],
+        guarded_pretool("discipline hook run --agent copilot --event pre-tool --if-configured"),
+        "{v}"
+    );
+    assert_eq!(
+        v["hooks"]["sessionStart"][0]["bash"],
+        guarded_pretool(
+            "discipline hook run --agent copilot --event session-start --if-configured"
+        ),
+        "{v}"
+    );
     assert!(!repo.file(".github/hooks/discipline.json").exists());
     let again = repo.run(&["hook", "install", "--agent", "copilot", "--user"], &env);
     assert!(
@@ -770,6 +783,85 @@ fn copilot_user_install_keeps_observe_mode() {
             "{v}"
         );
     }
+    assert_eq!(
+        v["hooks"]["preToolUse"][0]["bash"],
+        guarded_pretool(
+            "discipline hook run --agent copilot --event pre-tool --if-configured --observe"
+        ),
+        "{v}"
+    );
+}
+
+/// A user-level file an earlier release wrote (it runs discipline, without the pre-tool
+/// entry) is reported and kept, and rewritten with `--upgrade`; a file that does not run
+/// discipline is never rewritten.
+#[test]
+fn copilot_user_file_from_an_earlier_release_is_rewritten_only_with_upgrade() {
+    let repo = Repo::new();
+    let home = tempfile::tempdir().unwrap();
+    let env = [("COPILOT_HOME", home.path().to_str().unwrap())];
+    let path = home.path().join("hooks/discipline.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let cmd = guarded(
+        Agent::Copilot,
+        "discipline hook run --agent copilot --if-configured",
+    );
+    let earlier = serde_json::json!({
+        "version": 1,
+        "hooks": {
+            "postToolUse": [{ "type": "command", "matcher": "create|edit|str_replace_editor|apply_patch", "bash": cmd, "timeoutSec": 120 }],
+            "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": 120 }]
+        }
+    })
+    .to_string();
+    std::fs::write(&path, &earlier).unwrap();
+
+    let kept = repo.run(&["hook", "install", "--agent", "copilot", "--user"], &env);
+    assert_eq!(kept.code, 0, "{}", kept.stderr);
+    assert!(kept.stdout.contains("--upgrade"), "{}", kept.stdout);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), earlier);
+
+    let up = repo.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "copilot",
+            "--user",
+            "--upgrade",
+        ],
+        &env,
+    );
+    assert_eq!(up.code, 0, "{}", up.stderr);
+    assert!(up.stdout.contains("upgraded"), "{}", up.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(v["hooks"]["preToolUse"][0]["bash"]
+        .as_str()
+        .unwrap()
+        .contains("--event pre-tool --if-configured"));
+    let again = repo.run(&["hook", "install", "--agent", "copilot", "--user"], &env);
+    assert!(
+        again.stdout.contains("already runs discipline"),
+        "{}",
+        again.stdout
+    );
+
+    let foreign = r#"{"version":1,"hooks":{}}"#;
+    std::fs::write(&path, foreign).unwrap();
+    let refused = repo.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "copilot",
+            "--user",
+            "--upgrade",
+        ],
+        &env,
+    );
+    assert_ne!(refused.code, 0, "{}", refused.stdout);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), foreign);
 }
 
 /// `--cloud-agent` also writes the workflow Copilot cloud agent runs before it starts,

@@ -206,7 +206,7 @@ opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit to
 '--event=[The hook event\: \`pre-tool\` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); \`session-start\` takes this worktree'\''s lease for the session on stdin (never blocks); the default checks the change so far]:EVENT:((check\:"After an edit or at the end of a turn\: check the change so far"
 pre-tool\:"Before a tool runs\: refuse an edit outside this session'\''s worktree"
 session-start\:"When a session starts\: take this worktree'\''s lease for it (never blocks)"))' \
-'--if-configured[Pass silently unless the working directory is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)]' \
+'--if-configured[Pass silently unless the working directory (for the pre-tool and session-start events, the payload'\''s directory) is in a git repository with a discipline.toml at its root (for a user-level hook, which runs in every folder)]' \
 '--observe[Observe mode\: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook-observe.log]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
@@ -228,7 +228,7 @@ opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin after edit to
 '--user[Write the user-level hook instead (copilot\: ~/.copilot/hooks/discipline.json, or under COPILOT_HOME), which runs in every folder but checks only repositories with a discipline.toml]' \
 '--observe[Write the hook commands in observe mode (hook run --observe)\: the agent is never blocked while a hook is rolled out]' \
 '(--user)--cloud-agent[Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)]' \
-'--upgrade[Rewrite a file an earlier discipline release generated (it carries the \`Written by \\\`discipline hook install\\\`\` header\: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten]' \
+'--upgrade[Rewrite a file an earlier discipline release generated (it carries the \`Written by \\\`discipline hook install\\\`\` header\: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten. With --user, rewrite a user-level file that runs discipline for the agent]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
