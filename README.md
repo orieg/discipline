@@ -61,7 +61,7 @@ discipline replay --last 50
 discipline explain assertion-reduction
 ```
 
-The agent hook blocks an edit that weakens a test and hands the agent the repair; the [tutorial](docs/tutorials/getting-started.md) walks through it in a sandbox, and [Agent Hooks](docs/CONFIGURATION.md#agent-hooks) covers every agent and the [MCP server](docs/CONFIGURATION.md#mcp-server).
+After an edit that weakens a test, the agent hook hands the agent the finding and its repair (and, for most agents, refuses an edit into another worktree before it runs); the [tutorial](docs/tutorials/getting-started.md) walks through it in a sandbox, and [Agent Hooks](docs/CONFIGURATION.md#agent-hooks) covers every agent and the [MCP server](docs/CONFIGURATION.md#mcp-server).
 
 ### 2. Adopting on an Existing Repository (Brownfield)
 
