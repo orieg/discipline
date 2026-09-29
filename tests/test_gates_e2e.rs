@@ -12911,6 +12911,39 @@ fn a_helper_body_moved_behind_a_turbofish_call_is_not_an_assertion_reduction() {
     }
 }
 
+/// A helper whose body moves behind a generic that chooses its function at the call
+/// (`(if SHARED { shared } else { plain })(x, &mut s)`) keeps its checks when every
+/// choice runs them. A choice that drops a check is still a reduction.
+#[test]
+fn a_helper_body_moved_behind_a_chosen_callee_is_not_an_assertion_reduction() {
+    let test = "#[test]\nfn insert_is_checked() {\n    insert(2);\n}\n";
+    let before = "fn insert(x: u32) -> u32 {\n    debug_assert!(x < 10);\n    assert_eq!(x % 2, 0);\n    x\n}\n\n";
+    let mode = "fn insert_mode<const SHARED: bool>(x: u32) -> u32 {\n    let mut s = 0;\n    (if SHARED { shared } else { plain })(x, &mut s)\n}\n\nfn insert(x: u32) -> u32 {\n    insert_mode::<false>(x)\n}\n\n";
+    let full = "fn plain(x: u32, s: &mut u32) -> u32 {\n    debug_assert!(x < 10);\n    assert_eq!(x % 2, 0);\n    *s += 1;\n    x\n}\n\nfn shared(x: u32, s: &mut u32) -> u32 {\n    debug_assert!(x < 10);\n    assert_eq!(x % 2, 0);\n    *s += 2;\n    x\n}\n\n";
+    let weaker = "fn plain(x: u32, s: &mut u32) -> u32 {\n    debug_assert!(x < 10);\n    assert_eq!(x % 2, 0);\n    *s += 1;\n    x\n}\n\nfn shared(x: u32, s: &mut u32) -> u32 {\n    debug_assert!(x < 10);\n    *s += 2;\n    x\n}\n\n";
+    for (after, reported) in [(full, false), (weaker, true)] {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("tests/insert.rs", &format!("{before}{test}"));
+        repo.commit("test: insert");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("tests/insert.rs", &format!("{after}{mode}{test}"));
+        repo.commit("refactor: insert through a chosen mode");
+        let run = repo.check(&[]);
+        let expected: Vec<&str> = if reported {
+            vec!["Assertion Count Decreased In Existing Test"]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            run.titles("assertion-reduction"),
+            expected,
+            "{}",
+            run.stdout
+        );
+    }
+}
+
 const CITATION_CFF: &str ="cff-version: 1.2.0\nmessage: \"Cite it.\"\ntitle: \"Tool: a thing\"\ntype: software\ndate-released: 2026-09-28\nauthors:\n  - family-names: \"Doe\"\n    given-names: \"Jane\"\n    orcid: \"https://orcid.org/0000-0002-1825-0097\"\nlicense:\n  - MIT\n  - Apache-2.0\nkeywords:\n  - ci\ndoi: \"10.5281/zenodo.100\"\nidentifiers:\n  - type: doi\n    value: \"10.5281/zenodo.100\"\n    description: \"Concept DOI (all versions)\"\n  - type: doi\n    value: \"10.5281/zenodo.101\"\n    description: \"Version DOI (v1.0.0)\"\n";
 const ZENODO_JSON: &str = r#"{"title": "Tool: a thing", "upload_type": "software", "creators": [{"name": "Doe, Jane", "orcid": "0000-0002-1825-0097"}], "license": "mit", "keywords": ["ci"]}"#;
 
