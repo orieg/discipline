@@ -1764,18 +1764,13 @@ jobs:
 
             // Both recorded secrets are read: information, naming the pull-request reader.
             let f = gitea_secrets_finding(kind, &repo, &org, &uses, &prs, None);
-            assert_eq!(f.status, Status::Info, "{forge}: {f:?}");
-            assert!(f.summary.contains("1 repository, 1 organisation"), "{f:?}");
-            assert!(f.summary.contains("no environment to scope"), "{f:?}");
-            assert!(
-                f.summary
-                    .contains("`DEPLOY_KEY` (.gitea/workflows/deploy.yml job `deploy`)"),
-                "{f:?}"
-            );
-            assert!(
-                !f.summary.contains("`ORG_TOKEN` ("),
-                "a push-only reader: {f:?}"
-            );
+            assert_eq!(f.status, Status::Info, "{forge}");
+            assert!(f.summary.contains("1 repository, 1 organisation"));
+            assert!(f.summary.contains("no environment to scope"));
+            assert!(f
+                .summary
+                .contains("`DEPLOY_KEY` (.gitea/workflows/deploy.yml job `deploy`)"));
+            assert!(!f.summary.contains("`ORG_TOKEN` ("), "a push-only reader");
 
             // Drop the publish workflow: `ORG_TOKEN` is read by nothing.
             let only_pr = &workflows[..1];
@@ -1787,13 +1782,11 @@ jobs:
                 &pull_request_workflows(only_pr),
                 None,
             );
-            assert_eq!(f.status, Status::Warn, "{f:?}");
-            assert!(
-                f.summary
-                    .contains("not read by any workflow here: `ORG_TOKEN`"),
-                "{f:?}"
-            );
-            assert!(!f.summary.contains("`DEPLOY_KEY`, "), "{f:?}");
+            assert_eq!(f.status, Status::Warn);
+            assert!(f
+                .summary
+                .contains("not read by any workflow here: `ORG_TOKEN`"));
+            assert!(!f.summary.contains("`DEPLOY_KEY`, "));
 
             // `secrets: inherit` may pass any secret on: none is called unread.
             let inherit = vec![(
@@ -1808,7 +1801,7 @@ jobs:
                 &BTreeSet::new(),
                 None,
             );
-            assert_eq!(f.status, Status::Info, "{f:?}");
+            assert_eq!(f.status, Status::Info);
 
             assert_eq!(
                 gitea_secrets_finding(kind, &[], &[], &uses, &prs, None).status,
@@ -1848,9 +1841,9 @@ jobs:
             PR_DEPLOY.to_string(),
         )];
         let f = gitea_secret_scoping(&api, &forge, &workflows);
-        assert_eq!(f.status, Status::Warn, "{f:?}");
-        assert!(f.summary.contains("1 repository, 1 organisation"), "{f:?}");
-        assert!(f.summary.contains("`ORG_TOKEN`"), "{f:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.summary.contains("1 repository, 1 organisation"));
+        assert!(f.summary.contains("`ORG_TOKEN`"));
 
         // A user owns the repository: no organisation list, nothing said about one.
         api.responses.insert(
@@ -1858,9 +1851,9 @@ jobs:
             json!({"__status": 404, "__body": {"message": "GetOrgByName"}}),
         );
         let f = gitea_secret_scoping(&api, &forge, &workflows);
-        assert_eq!(f.status, Status::Info, "{f:?}");
-        assert!(f.summary.contains("1 repository, 0 organisation"), "{f:?}");
-        assert!(!f.summary.contains("not visible"), "{f:?}");
+        assert_eq!(f.status, Status::Info);
+        assert!(f.summary.contains("1 repository, 0 organisation"));
+        assert!(!f.summary.contains("not visible"));
 
         // Not an organisation owner: said, not taken for an empty list.
         api.responses.insert(
@@ -1868,10 +1861,7 @@ jobs:
             json!({"__status": 403, "__body": {"message": "user should be an owner of the organization"}}),
         );
         let f = gitea_secret_scoping(&api, &forge, &workflows);
-        assert!(
-            f.summary.contains("organisation's secrets are not visible"),
-            "{f:?}"
-        );
+        assert!(f.summary.contains("organisation's secrets are not visible"));
 
         // The repository list refused: a warning naming the access, never a pass.
         api.responses.insert(
@@ -1879,7 +1869,7 @@ jobs:
             json!({"__status": 403, "__body": {"message": "token does not have required scope"}}),
         );
         let f = gitea_secret_scoping(&api, &forge, &workflows);
-        assert_eq!(f.status, Status::Warn, "{f:?}");
-        assert!(f.summary.contains("could not check"), "{f:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.summary.contains("could not check"));
     }
 }
