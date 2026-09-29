@@ -1,0 +1,147 @@
+{
+  "environments": [
+    {
+      "name": "production",
+      "state": "available",
+      "tier": "production"
+    }
+  ],
+  "forge": "gitlab.com",
+  "granular_permissions": {
+    "/projects/:id/environments": "Environment: Read",
+    "/projects/:id/job_token_scope": "Job Token Scope: Read",
+    "/projects/:id/job_token_scope/allowlist": "Job Token Scope Allowlist: Read",
+    "/projects/:id/protected_environments": "Protected Environment: Read",
+    "/projects/:id/variables": "Variable: Read"
+  },
+  "job_token_scope": {
+    "inbound_enabled": true,
+    "outbound_enabled": false
+  },
+  "job_token_scope_allowlist": [
+    {
+      "path_with_namespace": "owner/project"
+    }
+  ],
+  "note": "A private project on gitlab.com (path, ids and names replaced), read with a fine-grained personal access token. Variables were created with throwaway values; values are never recorded. `granular_permissions` are the denials the API returned before the token held each read permission: the permission each setting needs. `token_self` is the probing token's own description (`/personal_access_tokens/self`): its scopes, whether it is fine-grained, and its expiry (date replaced); the token held far more than `doctor` needs, which is the case a token audit reports.",
+  "observed": "RUN 2026-09-29",
+  "project_ci_settings": {
+    "allow_merge_on_skipped_pipeline": null,
+    "ci_allow_fork_pipelines_to_run_in_parent_project": true,
+    "ci_config_path": "",
+    "ci_default_git_depth": 20,
+    "ci_delete_pipelines_in_seconds": null,
+    "ci_display_pipeline_variables": false,
+    "ci_forward_deployment_enabled": true,
+    "ci_forward_deployment_rollback_allowed": true,
+    "ci_id_token_sub_claim_components": [
+      "project_path",
+      "ref_type",
+      "ref"
+    ],
+    "ci_job_token_scope_enabled": false,
+    "ci_pipeline_variables_minimum_override_role": "developer",
+    "ci_push_repository_for_job_token_allowed": false,
+    "ci_separated_caches": true,
+    "ci_skip_branch_pipelines_for_mrs": false,
+    "environments_access_level": "enabled",
+    "only_allow_merge_if_all_discussions_are_resolved": false,
+    "only_allow_merge_if_pipeline_succeeds": false,
+    "protect_merge_request_pipelines": true,
+    "public_jobs": true,
+    "releases_access_level": "enabled",
+    "restrict_user_defined_variables": false
+  },
+  "protected_environments": [
+    {
+      "deploy_access_levels": [
+        {
+          "access_level": 40,
+          "access_level_description": "Maintainers"
+        }
+      ],
+      "name": "production",
+      "required_approval_count": 0
+    }
+  ],
+  "protected_tags": [
+    {
+      "create_access_levels": [
+        {
+          "access_level": 40,
+          "access_level_description": "Maintainers"
+        }
+      ],
+      "name": "v*"
+    }
+  ],
+  "token_self": {
+    "active": true,
+    "endpoint": "/personal_access_tokens/self",
+    "expires_at": "2099-01-01",
+    "granular": false,
+    "keys": [
+      "active",
+      "created_at",
+      "description",
+      "expires_at",
+      "granular",
+      "id",
+      "last_used_at",
+      "last_used_ips",
+      "name",
+      "revoked",
+      "scopes",
+      "user_id"
+    ],
+    "revoked": false,
+    "scopes": [
+      "read_user",
+      "read_repository",
+      "read_registry",
+      "read_virtual_registry",
+      "read_api",
+      "self_rotate",
+      "write_repository",
+      "write_virtual_registry",
+      "write_registry",
+      "api",
+      "ai_features",
+      "create_runner",
+      "manage_runner",
+      "k8s_proxy"
+    ]
+  },
+  "variables": [
+    {
+      "description": null,
+      "environment_scope": "*",
+      "hidden": false,
+      "key": "PLAIN_VAR",
+      "masked": false,
+      "protected": false,
+      "raw": false,
+      "variable_type": "env_var"
+    },
+    {
+      "description": null,
+      "environment_scope": "*",
+      "hidden": false,
+      "key": "PROTECTED_VAR",
+      "masked": false,
+      "protected": true,
+      "raw": false,
+      "variable_type": "env_var"
+    },
+    {
+      "description": null,
+      "environment_scope": "production",
+      "hidden": false,
+      "key": "DEPLOY_TOKEN",
+      "masked": true,
+      "protected": false,
+      "raw": false,
+      "variable_type": "env_var"
+    }
+  ]
+}
