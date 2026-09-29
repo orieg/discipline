@@ -5,6 +5,7 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)](#license)
 [![Rust 1.90+](https://img.shields.io/badge/rustc-1.90%2B-orange.svg)](Cargo.toml)
 [![Release](https://img.shields.io/github/v/release/orieg/discipline?logo=github)](https://github.com/orieg/discipline/releases)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23046102.svg)](https://doi.org/10.5281/zenodo.23046102)
 [![Marketplace](https://img.shields.io/badge/Marketplace-Discipline%20CI%20Gate-blue?logo=github-actions)](https://github.com/marketplace/actions/discipline-ci-gate)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](.pre-commit-hooks.yaml)
 
@@ -342,6 +343,13 @@ Every gate requires a unit test, an end-to-end test through the binary, a mutati
 ## Citing
 
 Citation metadata is in [`CITATION.cff`](CITATION.cff); GitHub renders it under **Cite this repository**. [`.zenodo.json`](.zenodo.json) holds the same record for Zenodo's archive.
+
+Discipline is archived on Zenodo from v0.15.0 on. Cite the **concept DOI** for the project as a whole (it always resolves to the latest release), or a **version DOI** to pin the exact release you used:
+
+| Scope | DOI |
+|---|---|
+| Concept (all versions) | [`10.5281/zenodo.23046102`](https://doi.org/10.5281/zenodo.23046102) |
+| v0.15.0 | [`10.5281/zenodo.23046103`](https://doi.org/10.5281/zenodo.23046103) |
 
 ## License
 
