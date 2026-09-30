@@ -141,8 +141,20 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
         for rule in &rules {
             if rule.matches(entry) {
                 let allowed = ctx
-                    .find_override(GATE, tokens::ALLOW_ARCHIVE_LEAK, entry)
-                    .or_else(|| ctx.find_override(GATE, tokens::ALLOW_ARCHIVE_LEAK, &rule.pattern));
+                    .find_override(
+                        GATE,
+                        &crate::findings::FORBIDDEN_ARCHIVE_ENTRY,
+                        tokens::ALLOW_ARCHIVE_LEAK,
+                        entry,
+                    )
+                    .or_else(|| {
+                        ctx.find_override(
+                            GATE,
+                            &crate::findings::FORBIDDEN_ARCHIVE_ENTRY,
+                            tokens::ALLOW_ARCHIVE_LEAK,
+                            &rule.pattern,
+                        )
+                    });
 
                 if let Some(ov) = allowed {
                     out.overrides.push(ov);
@@ -269,7 +281,12 @@ fn report_scan(
 
     let mut leaks = Vec::new();
     for leak in &scan.leaks {
-        if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_ARCHIVE_LEAK, &leak.entry) {
+        if let Some(ov) = ctx.find_override(
+            GATE,
+            &crate::findings::SOURCE_LEAKED_IN_ARCHIVE,
+            tokens::ALLOW_ARCHIVE_LEAK,
+            &leak.entry,
+        ) {
             out.overrides.push(ov);
             continue;
         }
@@ -312,7 +329,12 @@ fn report_scan(
 
     let mut shipped = Vec::new();
     for entry in &scan.maps_without_source {
-        if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_ARCHIVE_LEAK, entry) {
+        if let Some(ov) = ctx.find_override(
+            GATE,
+            &crate::findings::SOURCE_MAP_SHIPPED,
+            tokens::ALLOW_ARCHIVE_LEAK,
+            entry,
+        ) {
             out.overrides.push(ov);
         } else {
             shipped.push(entry.clone());

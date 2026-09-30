@@ -60,13 +60,13 @@ fn evaluate_findings_for_directive(
     let directives = parse_directives(raw_directive_text, OverrideSource::PrBody);
 
     for &subj in subjects {
-        if let Some(ov) = tokens::find_override(&directives, gate, directive_names, subj) {
+        let kind = discipline::findings::FINDINGS
+            .iter()
+            .find(|k| k.gates.contains(&gate))
+            .unwrap_or_else(|| panic!("no finding kind registered for `{gate}`"));
+        if let Some(ov) = tokens::find_override(&directives, gate, kind, directive_names, subj) {
             outcome.overrides.push(ov);
         } else {
-            let kind = discipline::findings::FINDINGS
-                .iter()
-                .find(|k| k.gates.contains(&gate))
-                .unwrap_or_else(|| panic!("no finding kind registered for `{gate}`"));
             outcome.push_site(
                 Severity::Error,
                 kind,

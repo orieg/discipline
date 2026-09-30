@@ -14641,3 +14641,127 @@ fn ci_integrity_reports_workflow_changes_that_expose_secrets_or_a_write_token() 
         "{found:?}"
     );
 }
+
+/// An override names the finding it lifted (`code`): the same code the change reports
+/// with the directive removed. A PR-body directive and an inline marker alike.
+#[test]
+fn an_override_names_the_finding_it_lifted() {
+    let codes = |v: &serde_json::Value, gate: &str, key: &str| -> Vec<String> {
+        v["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|o| o["gate"] == gate)
+            .flat_map(|o| o[key].as_array().unwrap().clone())
+            .map(|x| x["code"].as_str().unwrap_or("<none>").to_string())
+            .collect()
+    };
+
+    // A PR-body directive: `allow-assertion-drop` names the trimmed test.
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace("    assert_eq!(x + 3, 4);\n", ""),
+    );
+    repo.commit("test: trim");
+    let bare = repo.check(&[]);
+    let reported = codes(&bare.json(), "assertion-reduction", "violations");
+    assert_eq!(
+        reported,
+        ["assertion-reduction/assertions-reduced"],
+        "{}",
+        bare.stdout
+    );
+    let lifted = repo.check_with_pr(
+        &[],
+        "Refs #101\n\nallow-assertion-drop: adds second case moved to proptest\n",
+    );
+    let json = lifted.json();
+    assert!(
+        codes(&json, "assertion-reduction", "violations").is_empty(),
+        "{json}"
+    );
+    assert_eq!(
+        codes(&json, "assertion-reduction", "overrides"),
+        reported,
+        "{json}"
+    );
+
+    // An inline marker lifts the same kind the unmarked line reports.
+    let repo = Repo::new();
+    repo.write(
+        "docs/plan.md",
+        "# Plan\n\nPhase 2 (1 week).\n\nBanned: \"2 weeks\" <!-- discipline:allow(time-estimates) -->\n",
+    );
+    repo.commit("docs: plan");
+    let json = repo.check(&[]).json();
+    let reported = codes(&json, "time-estimates", "violations");
+    assert_eq!(reported, ["time-estimates/time-estimate"], "{json}");
+    assert_eq!(
+        codes(&json, "time-estimates", "overrides"),
+        reported,
+        "{json}"
+    );
+}
+
+/// A directive naming something that raises no finding lifts nothing: it is reported as
+/// an unused directive, not counted as an applied override. `allow-vacuous-test` on a
+/// sound test, and a file-level `secrets-argv-ok` on a script with no hit, which on a
+/// script with one lifts every hit there and names the first.
+#[test]
+fn a_directive_naming_something_with_no_finding_lifts_nothing() {
+    let unused = |json: &serde_json::Value| -> Vec<String> {
+        json["unused_directives"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|u| u["directive"].as_str().unwrap().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let repo = Repo::new();
+    repo.write(
+        "tests/b.rs",
+        "#[test]\nfn sound() {\n    let x = 1;\n    assert_eq!(x + 1, 2);\n}\n",
+    );
+    repo.commit("test: add sound");
+    let run = repo.check_with_pr(&[], "Refs #101\n\nallow-vacuous-test: sound smoke test\n");
+    let json = run.json();
+    assert!(
+        run.outcome("vacuous-tests")["overrides"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{json}"
+    );
+    assert_eq!(unused(&json), ["allow-vacuous-test"], "{json}");
+
+    let repo = Repo::new();
+    repo.write("scripts/clean.sh", "#!/usr/bin/env bash\necho hi\n");
+    repo.write(
+        "scripts/deploy.sh",
+        "#!/usr/bin/env bash\nenv API_KEY=$SECRET ./run.sh\nenv TOKEN=$SECRET ./other.sh\n",
+    );
+    repo.commit("feat: scripts");
+    let run = repo.check_with_pr(
+        &["--base", "HEAD~1"],
+        "Refs #101\n\nsecrets-argv-ok: scripts/clean.sh reviewed\nsecrets-argv-ok: scripts/deploy.sh legacy deployment\n",
+    );
+    let json = run.json();
+    let outcome = run.outcome("shell-secrets");
+    assert!(
+        outcome["violations"].as_array().unwrap().is_empty(),
+        "{json}"
+    );
+    let overrides = outcome["overrides"].as_array().unwrap();
+    assert_eq!(overrides.len(), 1, "one directive, both hits: {json}");
+    assert_eq!(overrides[0]["subject"], "scripts/deploy.sh");
+    assert_eq!(overrides[0]["code"], "shell-secrets/argv-env");
+    assert_eq!(
+        unused(&json),
+        ["secrets-argv-ok"],
+        "the clean script's: {json}"
+    );
+}

@@ -42,10 +42,36 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
             return Ok(out);
         }
         if let Some(ov) = ctx
-            .find_override(GATE, ALLOW_MSRV, "rust-version")
-            .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, "Cargo.toml"))
-            .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, "msrv"))
-            .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, "crate"))
+            .find_override(
+                GATE,
+                &crate::findings::MSRV_DECLARATION_MISSING,
+                ALLOW_MSRV,
+                "rust-version",
+            )
+            .or_else(|| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::MSRV_DECLARATION_MISSING,
+                    ALLOW_MSRV,
+                    "Cargo.toml",
+                )
+            })
+            .or_else(|| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::MSRV_DECLARATION_MISSING,
+                    ALLOW_MSRV,
+                    "msrv",
+                )
+            })
+            .or_else(|| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::MSRV_DECLARATION_MISSING,
+                    ALLOW_MSRV,
+                    "crate",
+                )
+            })
         {
             out.overrides.push(ov.clone());
             out.notes.push(format!(
@@ -76,9 +102,23 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
                 .push(format!("MSRV command `{cmd}` passed under Rust {version}"));
         } else {
             if let Some(ov) = ctx
-                .find_override(GATE, ALLOW_MSRV, "command")
-                .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, "msrv"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_MSRV, cmd))
+                .find_override(
+                    GATE,
+                    &crate::findings::MSRV_COMMAND_FAILED,
+                    ALLOW_MSRV,
+                    "command",
+                )
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::MSRV_COMMAND_FAILED,
+                        ALLOW_MSRV,
+                        "msrv",
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(GATE, &crate::findings::MSRV_COMMAND_FAILED, ALLOW_MSRV, cmd)
+                })
             {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(

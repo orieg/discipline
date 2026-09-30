@@ -643,6 +643,10 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
                 out.inline_exemptions += 1;
                 out.overrides.push(crate::tokens::OverrideRecord {
                     gate: GATE.to_string(),
+                    code: Some(crate::findings::full_code(
+                        GATE,
+                        &crate::findings::TIME_ESTIMATE,
+                    )),
                     subject: format!("{label}:{}", idx + 1),
                     directive: if line.contains("docs-lint: allow") {
                         "docs-lint: allow".to_string()
@@ -1144,6 +1148,10 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                 out.inline_exemptions += 1;
                 out.overrides.push(crate::tokens::OverrideRecord {
                     gate: GATE.to_string(),
+                    code: Some(crate::findings::full_code(
+                        GATE,
+                        &crate::findings::HOST_OR_PII_LEAK,
+                    )),
                     subject: format!("{label}:{}", idx + 1),
                     directive: if line.contains("docs-lint: allow") {
                         "docs-lint: allow".to_string()

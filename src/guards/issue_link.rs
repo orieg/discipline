@@ -120,7 +120,11 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             if has_issue_reference(msg, &re_issue) {
                 return Ok(out);
             }
-            if let Some(waiver) = waiver(settings, &ctx.directives) {
+            if let Some(waiver) = waiver(
+                settings,
+                &ctx.directives,
+                &crate::findings::ISSUE_LINK_MISSING_IN_COMMIT_MESSAGE,
+            ) {
                 out.overrides.push(waiver);
                 return Ok(out);
             }
@@ -166,7 +170,11 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             }
             if !found {
                 // Check if any directive waived it
-                if let Some(waiver) = waiver(settings, &ctx.directives) {
+                if let Some(waiver) = waiver(
+                    settings,
+                    &ctx.directives,
+                    &crate::findings::ISSUE_LINK_MISSING_IN_COMMITS,
+                ) {
                     out.overrides.push(waiver);
                 } else {
                     out.push(
@@ -205,7 +213,11 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
     }
 
     // 2. Check for waiver directive `no-issue: <reason>`
-    if let Some(waiver) = waiver(settings, &ctx.directives) {
+    if let Some(waiver) = waiver(
+        settings,
+        &ctx.directives,
+        &crate::findings::ISSUE_LINK_MISSING,
+    ) {
         out.overrides.push(waiver);
         return Ok(out);
     }
@@ -224,13 +236,15 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
     Ok(out)
 }
 
-/// The accepted `no-issue:` waiver, unless `waiver = "none"`.
+/// The accepted `no-issue:` waiver, unless `waiver = "none"`. `lifts` is the finding the
+/// caller would report without it.
 fn waiver(
     settings: &IssueLinkGate,
     directives: &[tokens::ParsedDirective],
+    lifts: &crate::findings::FindingKind,
 ) -> Option<OverrideRecord> {
     match settings.waiver {
-        IssueWaiver::Directive => find_no_issue_directive(directives),
+        IssueWaiver::Directive => find_no_issue_directive(directives, lifts),
         IssueWaiver::None => None,
     }
 }
@@ -296,11 +310,16 @@ fn verify_references(
         if resolved.iter().any(|r| qualifies(settings, r.verdict)) {
             return Ok(out);
         }
-        if let Some(w) = waiver(settings, &ctx.directives) {
+        let closed = resolved.iter().any(|r| r.verdict == Verdict::Closed);
+        let ref_kind = if closed && settings.require_open_issue {
+            &crate::findings::ISSUE_REFERENCE_CLOSED
+        } else {
+            &crate::findings::ISSUE_REFERENCE_NOT_FOUND
+        };
+        if let Some(w) = waiver(settings, &ctx.directives, ref_kind) {
             out.overrides.push(w);
             return Ok(out);
         }
-        let closed = resolved.iter().any(|r| r.verdict == Verdict::Closed);
         let listed = resolved
             .iter()
             .map(|r| r.describe())
@@ -327,7 +346,11 @@ fn verify_references(
         }
         return Ok(out);
     }
-    if let Some(w) = waiver(settings, &ctx.directives) {
+    if let Some(w) = waiver(
+        settings,
+        &ctx.directives,
+        &crate::findings::ISSUE_LINK_MISSING,
+    ) {
         out.overrides.push(w);
         return Ok(out);
     }
@@ -343,7 +366,10 @@ fn verify_references(
     Ok(out)
 }
 
-fn find_no_issue_directive(directives: &[tokens::ParsedDirective]) -> Option<OverrideRecord> {
+fn find_no_issue_directive(
+    directives: &[tokens::ParsedDirective],
+    lifts: &crate::findings::FindingKind,
+) -> Option<OverrideRecord> {
     for d in directives {
         if tokens::NO_ISSUE
             .iter()
@@ -353,6 +379,7 @@ fn find_no_issue_directive(directives: &[tokens::ParsedDirective]) -> Option<Ove
             if !trimmed.is_empty() && !trimmed.starts_with('<') {
                 return Some(OverrideRecord {
                     gate: GATE.to_string(),
+                    code: Some(crate::findings::full_code(GATE, lifts)),
                     subject: "pull-request".to_string(),
                     directive: d.directive.clone(),
                     reason: d.reason.clone(),
@@ -405,7 +432,7 @@ mod tests {
             source: tokens::OverrideSource::PrBody,
             hidden: false,
         }];
-        let record = find_no_issue_directive(&dirs);
+        let record = find_no_issue_directive(&dirs, &crate::findings::ISSUE_LINK_MISSING);
         assert!(record.is_some());
         assert_eq!(record.unwrap().reason, "trivial typo in README");
 
@@ -416,6 +443,6 @@ mod tests {
             source: tokens::OverrideSource::PrBody,
             hidden: false,
         }];
-        assert!(find_no_issue_directive(&bad_dirs).is_none());
+        assert!(find_no_issue_directive(&bad_dirs, &crate::findings::ISSUE_LINK_MISSING).is_none());
     }
 }

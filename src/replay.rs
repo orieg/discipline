@@ -76,6 +76,9 @@ pub struct CaseFinding {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CaseOverride {
     pub gate: String,
+    /// The finding the override lifted (`gate/code`), when the child report records it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     pub directive: String,
     /// What the override covers: a path, test or dependency the finding named.
     pub subject: String,
@@ -439,6 +442,7 @@ pub fn read_overrides(code: i32, json: &str) -> Vec<CaseOverride> {
                 serde_json::from_value(x["source"].clone()).ok()?;
             Some(CaseOverride {
                 gate: x["gate"].as_str()?.to_string(),
+                code: x["code"].as_str().map(str::to_string),
                 directive: x["directive"].as_str()?.to_string(),
                 subject: x["subject"].as_str().unwrap_or("").to_string(),
                 source: source.to_string(),
@@ -973,6 +977,7 @@ mod tests {
             .contains("override refused dependency-delta 1 change(s): #7"));
         let ov = |gate: &str| CaseOverride {
             gate: gate.into(),
+            code: None,
             directive: "allow-x".into(),
             subject: "a.rs".into(),
             source: "PR body".into(),
@@ -1000,15 +1005,18 @@ mod tests {
     #[test]
     fn applied_overrides_are_read_without_their_reason() {
         let json = r#"{"outcomes":[
-            {"gate":"dependency-delta","overrides":[{"gate":"dependency-delta","subject":"serde","directive":"allow-dependency","reason":"serde AKIA-SECRET","source":{"type":"MergedPrBody","detail":12},"hidden":true}]},
+            {"gate":"dependency-delta","overrides":[{"gate":"dependency-delta","code":"dependency-delta/direct-dependency-added","subject":"serde","directive":"allow-dependency","reason":"serde AKIA-SECRET","source":{"type":"MergedPrBody","detail":12},"hidden":true}]},
             {"gate":"pii","overrides":[{"gate":"pii","subject":"a.rs","directive":"discipline:allow(pii)","reason":"a.rs fixture","source":{"type":"Commit","detail":"abc"},"hidden":false}]},
             {"gate":"stub-bodies","overrides":[]}]}"#;
         let o = read_overrides(1, json);
         assert_eq!(
             o,
             vec![
+                // The lifted finding's code when the child report records it; absent
+                // from an older report.
                 CaseOverride {
                     gate: "dependency-delta".into(),
+                    code: Some("dependency-delta/direct-dependency-added".into()),
                     directive: "allow-dependency".into(),
                     subject: "serde".into(),
                     source: "merged pull request #12 body".into(),
@@ -1016,6 +1024,7 @@ mod tests {
                 },
                 CaseOverride {
                     gate: "pii".into(),
+                    code: None,
                     directive: "discipline:allow(pii)".into(),
                     subject: "a.rs".into(),
                     source: "commit abc".into(),
@@ -1023,7 +1032,9 @@ mod tests {
                 },
             ]
         );
-        assert!(!serde_json::to_string(&o).unwrap().contains("AKIA"));
+        let out = serde_json::to_string(&o).unwrap();
+        assert!(!out.contains("AKIA"));
+        assert_eq!(out.matches("\"code\"").count(), 1, "{out}");
         assert!(read_overrides(2, json).is_empty());
         assert!(read_overrides(0, "not json").is_empty());
     }

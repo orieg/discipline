@@ -2720,13 +2720,13 @@ fn record_or_excuse(
     }
 
     let ov = ctx
-        .find_override(GATE, tokens::ALLOW_CI_WEAKENING, subject)
+        .find_override(GATE, kind, tokens::ALLOW_CI_WEAKENING, subject)
         .or_else(|| {
             subject
                 .split_once('@')
-                .and_then(|(act, _)| ctx.find_override(GATE, tokens::ALLOW_CI_WEAKENING, act))
+                .and_then(|(act, _)| ctx.find_override(GATE, kind, tokens::ALLOW_CI_WEAKENING, act))
         })
-        .or_else(|| ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, GATE));
+        .or_else(|| ctx.find_override(GATE, kind, tokens::ALLOW_GATE_WEAKENING, GATE));
 
     if let Some(record) = ov {
         out.overrides.push(record);

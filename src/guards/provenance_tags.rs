@@ -583,7 +583,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
         }
 
         for f in findings {
-            let override_rec = ctx.find_override(GATE, tokens::ALLOW_PROVENANCE, path);
+            let override_rec = ctx.find_override(GATE, f.kind, tokens::ALLOW_PROVENANCE, path);
 
             if let Some(ov) = override_rec {
                 out.overrides.push(ov);
@@ -709,7 +709,12 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                     .collect()
             };
             for (line, message) in hits {
-                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_PROVENANCE, path) {
+                if let Some(ov) = ctx.find_override(
+                    GATE,
+                    &crate::findings::SUPERSEDED_FIGURE_REPUBLISHED,
+                    tokens::ALLOW_PROVENANCE,
+                    path,
+                ) {
                     out.overrides.push(ov);
                 } else {
                     out.push(

@@ -1643,15 +1643,18 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
             continue;
         };
         out.examined += 1;
-        let lift =
-            |subject: &str| ctx.find_override(GATE, tokens::ALLOW_TOOLCHAIN_WEAKENING, subject);
+        // `lifts`: the finding the caller would report.
+        let lift = |lifts: &crate::findings::FindingKind, subject: &str| {
+            ctx.find_override(GATE, lifts, tokens::ALLOW_TOOLCHAIN_WEAKENING, subject)
+        };
 
         match class {
             Classified::Executable => {
                 if file.kind == ChangeKind::Added {
                     continue;
                 }
-                if let Some(ov) = lift(&file.path) {
+                if let Some(ov) = lift(&crate::findings::TOOLCHAIN_CHANGE_NOT_ANALYSED, &file.path)
+                {
                     out.overrides.push(ov);
                     continue;
                 }
@@ -1678,7 +1681,9 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                     // A file that appears has no bar to lower; one that disappears is
                     // reported: its settings no longer apply.
                     if file.kind == ChangeKind::Deleted {
-                        if let Some(ov) = lift(&file.path) {
+                        if let Some(ov) =
+                            lift(&crate::findings::TOOLCHAIN_CONFIG_DELETED, &file.path)
+                        {
                             out.overrides.push(ov);
                         } else {
                             out.push(
@@ -1707,7 +1712,11 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                     continue;
                 };
                 for (key, gained) in inherited_changes(&name, &base_tree, &head_tree) {
-                    if let Some(ov) = lift(&key).or_else(|| lift(&file.path)) {
+                    if let Some(ov) = lift(&crate::findings::TOOLCHAIN_CHANGE_NOT_ANALYSED, &key)
+                        .or_else(|| {
+                            lift(&crate::findings::TOOLCHAIN_CHANGE_NOT_ANALYSED, &file.path)
+                        })
+                    {
                         out.overrides.push(ov);
                         continue;
                     }
@@ -1730,9 +1739,14 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                     );
                 }
                 for w in diff_trees(&base_tree, &head_tree, &rules) {
-                    if let Some(ov) = lift(&w.key)
-                        .or_else(|| w.key.rsplit('.').next().and_then(lift))
-                        .or_else(|| lift(&file.path))
+                    if let Some(ov) = lift(&crate::findings::TOOLCHAIN_CONFIG_WEAKENED, &w.key)
+                        .or_else(|| {
+                            w.key
+                                .rsplit('.')
+                                .next()
+                                .and_then(|k| lift(&crate::findings::TOOLCHAIN_CONFIG_WEAKENED, k))
+                        })
+                        .or_else(|| lift(&crate::findings::TOOLCHAIN_CONFIG_WEAKENED, &file.path))
                     {
                         out.overrides.push(ov);
                         continue;

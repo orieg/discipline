@@ -91,14 +91,6 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                 out.inline_exemptions += 1;
                 continue;
             }
-            let lift = |subject: &str| ctx.find_override(GATE, tokens::ALLOW_SWALLOW, subject);
-            if let Some(ov) = lift(&file.path)
-                .or_else(|| file.path.rsplit('/').next().and_then(lift))
-                .or_else(|| lift(&format!("{}:{}", file.path, site.line)))
-            {
-                out.overrides.push(ov);
-                continue;
-            }
             let (title, what) = match site.kind {
                 "discarded-result" => (&crate::findings::RESULT_DISCARDED, "throws a fallible call's result away"),
                 "discarded-value" => (
@@ -122,6 +114,15 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                     "catches an error and does nothing with it",
                 ),
             };
+            let lift =
+                |subject: &str| ctx.find_override(GATE, title, tokens::ALLOW_SWALLOW, subject);
+            if let Some(ov) = lift(&file.path)
+                .or_else(|| file.path.rsplit('/').next().and_then(lift))
+                .or_else(|| lift(&format!("{}:{}", file.path, site.line)))
+            {
+                out.overrides.push(ov);
+                continue;
+            }
             // The syntax tree carries no types: a callee off a pack's known-fallible list
             // may return a plain value, so it never blocks on its own.
             let severity = if matches!(site.kind, "discarded-value" | "skipped-input")

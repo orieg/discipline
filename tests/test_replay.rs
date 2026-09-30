@@ -169,6 +169,8 @@ fn replay_reads_the_waiver_in_the_merged_pull_request_body() {
         case["overrides"],
         serde_json::json!([{
             "gate": "assertion-reduction",
+            // The finding the waiver lifted.
+            "code": "assertion-reduction/assertions-reduced",
             "directive": "allow-assertion-drop",
             "subject": "adds",
             // Replay hands the merged pull request's body to the check as its PR body.

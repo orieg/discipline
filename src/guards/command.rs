@@ -467,16 +467,6 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     }
 
     for item in resolved {
-        // Check for override directive covering this command name or "default"
-        let override_rec = ctx
-            .find_override(GATE, tokens::ALLOW_COMMAND, &item.name)
-            .or_else(|| {
-                if item.name != "default" {
-                    ctx.find_override(GATE, tokens::ALLOW_COMMAND, "default")
-                } else {
-                    None
-                }
-            });
         let mut command_violations = Vec::new();
 
         // 0. Check required policy files for stealth deletion
@@ -657,8 +647,20 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             }
         }
 
-        // Apply findings or override
-        if !command_violations.is_empty() {
+        // Apply findings or an override directive covering this command name or
+        // "default". One directive lifts every finding of the command; the record names
+        // the first, as the report would list it.
+        if let Some((first, _, _)) = command_violations.first() {
+            let lifts = *first;
+            let override_rec = ctx
+                .find_override(GATE, lifts, tokens::ALLOW_COMMAND, &item.name)
+                .or_else(|| {
+                    if item.name != "default" {
+                        ctx.find_override(GATE, lifts, tokens::ALLOW_COMMAND, "default")
+                    } else {
+                        None
+                    }
+                });
             if let Some(rec) = override_rec {
                 outcome.overrides.push(rec);
             } else {

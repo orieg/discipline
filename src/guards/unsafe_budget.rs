@@ -102,11 +102,44 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
     if let Some(max) = settings.max_unsafe {
         if head_unsafe_count > max {
             if let Some(ov) = ctx
-                .find_override(GATE, ALLOW_UNSAFE, "max_unsafe")
-                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "unsafe-budget"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "budget"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "FFI"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "pointer"))
+                .find_override(
+                    GATE,
+                    &crate::findings::UNSAFE_BUDGET_EXCEEDED,
+                    ALLOW_UNSAFE,
+                    "max_unsafe",
+                )
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::UNSAFE_BUDGET_EXCEEDED,
+                        ALLOW_UNSAFE,
+                        "unsafe-budget",
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::UNSAFE_BUDGET_EXCEEDED,
+                        ALLOW_UNSAFE,
+                        "budget",
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::UNSAFE_BUDGET_EXCEEDED,
+                        ALLOW_UNSAFE,
+                        "FFI",
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::UNSAFE_BUDGET_EXCEEDED,
+                        ALLOW_UNSAFE,
+                        "pointer",
+                    )
+                })
             {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(
@@ -136,10 +169,38 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
                 .file_name()
                 .and_then(|s| s.to_str());
             let ov = ctx
-                .find_override(GATE, ALLOW_UNSAFE, path)
-                .or_else(|| file_stem.and_then(|s| ctx.find_override(GATE, ALLOW_UNSAFE, s)))
-                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "FFI"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_UNSAFE, "unsafe-budget"));
+                .find_override(
+                    GATE,
+                    &crate::findings::UNSAFE_ADDED_WITHOUT_AUTHORIZATION,
+                    ALLOW_UNSAFE,
+                    path,
+                )
+                .or_else(|| {
+                    file_stem.and_then(|s| {
+                        ctx.find_override(
+                            GATE,
+                            &crate::findings::UNSAFE_ADDED_WITHOUT_AUTHORIZATION,
+                            ALLOW_UNSAFE,
+                            s,
+                        )
+                    })
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::UNSAFE_ADDED_WITHOUT_AUTHORIZATION,
+                        ALLOW_UNSAFE,
+                        "FFI",
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::UNSAFE_ADDED_WITHOUT_AUTHORIZATION,
+                        ALLOW_UNSAFE,
+                        "unsafe-budget",
+                    )
+                });
 
             if let Some(record) = ov {
                 out.overrides.push(record.clone());
@@ -159,7 +220,12 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
             }
         }
         if new_unsafe_sites.is_empty() {
-            if let Some(ov) = ctx.find_override(GATE, ALLOW_UNSAFE, "unsafe-budget") {
+            if let Some(ov) = ctx.find_override(
+                GATE,
+                &crate::findings::UNSAFE_COUNT_INCREASED,
+                ALLOW_UNSAFE,
+                "unsafe-budget",
+            ) {
                 out.overrides.push(ov.clone());
             } else {
                 out.add_violation(

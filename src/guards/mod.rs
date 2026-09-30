@@ -424,13 +424,16 @@ impl Context<'_> {
             && self.git.head_content(path)?.is_none())
     }
 
+    /// [`crate::tokens::find_override`] over this run's directives: `lifts` is the finding
+    /// the gate would report without the override.
     pub fn find_override(
         &self,
         gate: &str,
+        lifts: &crate::findings::FindingKind,
         names: &[&str],
         subject: &str,
     ) -> Option<crate::tokens::OverrideRecord> {
-        crate::tokens::find_override(&self.directives, gate, names, subject)
+        crate::tokens::find_override(&self.directives, gate, lifts, names, subject)
     }
 
     /// A finding that an override directive could lift is only a warning in

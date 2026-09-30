@@ -127,7 +127,7 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
         };
         out.examined += head.functions.iter().filter(|f| !f.is_test).count();
         for f in judge(&base, &head.functions) {
-            let lift = |subject: &str| ctx.find_override(GATE, tokens::ALLOW_STUB, subject);
+            let lift = |subject: &str| ctx.find_override(GATE, f.kind, tokens::ALLOW_STUB, subject);
             if let Some(ov) = lift(&f.name)
                 .or_else(|| lift(&file.path))
                 .or_else(|| file.path.rsplit('/').next().and_then(lift))

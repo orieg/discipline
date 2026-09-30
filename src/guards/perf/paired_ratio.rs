@@ -438,8 +438,13 @@ fn not_comparable(out: &mut GateOutcome, opts: &EvalOptions<'_>, reason: String)
 /// Whether a regression in `cell` is approved by an `allow-regression:` directive that
 /// names it (and, under `require_sourced_override`, cites a fresh measurement).
 fn approve(cell: &str, opts: &EvalOptions<'_>, out: &mut GateOutcome) -> bool {
-    let Some(ov) = tokens::find_override(opts.directives, GATE, tokens::ALLOW_REGRESSION, cell)
-    else {
+    let Some(ov) = tokens::find_override(
+        opts.directives,
+        GATE,
+        &crate::findings::PAIRED_RATIO_REGRESSED,
+        tokens::ALLOW_REGRESSION,
+        cell,
+    ) else {
         return false;
     };
     if opts.require_sourced_override {
@@ -598,7 +603,13 @@ pub fn evaluate_run(
             if axis.cells.contains_key(id) {
                 continue;
             }
-            match tokens::find_override(opts.directives, GATE, tokens::ALLOW_REGRESSION, id) {
+            match tokens::find_override(
+                opts.directives,
+                GATE,
+                &crate::findings::PAIRED_RATIO_CELL_MISSING,
+                tokens::ALLOW_REGRESSION,
+                id,
+            ) {
                 Some(ov) => out.overrides.push(ov),
                 None => {
                     out.push(
@@ -818,7 +829,12 @@ fn check_baseline_change(
         return Ok(());
     }
     let severity = ctx.overridable(settings.severity);
-    let named = ctx.find_override(GATE, tokens::ALLOW_REGRESSION, path);
+    let named = ctx.find_override(
+        GATE,
+        &crate::findings::RATIO_BASELINE_LOOSENED,
+        tokens::ALLOW_REGRESSION,
+        path,
+    );
 
     // Loosening.
     let base = ctx.git.base_content(path)?;
