@@ -123,6 +123,7 @@ fn signal_sentence(s: &Signal, summary: &Summary) -> String {
     let settings = plural(n, "setting", "settings");
     let waivers = plural(n, "waiver", "waivers");
     let were = if n == 1 { "was" } else { "were" };
+    let point = if n == 1 { "points" } else { "point" };
     match s.id {
         "guard-gate-loosened" => {
             let what: Vec<String> = s
@@ -164,14 +165,14 @@ fn signal_sentence(s: &Signal, summary: &Summary) -> String {
             "Existing findings of {gates} were added to the baseline, so they no longer block a change"
         ),
         "waiver-cites-missing-issue" => format!(
-            "{waivers} point to an issue that does not exist"
+            "{waivers} {point} to an issue that does not exist"
         ),
         "waiver-cites-issue-closed-before" => format!(
-            "{waivers} point to an issue that was already closed when {} written, so nothing tracks the promised follow-up",
+            "{waivers} {point} to an issue that was already closed when {} written; check that the issue still supports the waiver",
             if n == 1 { "it was" } else { "they were" }
         ),
         "waiver-cites-issue-not-planned" => format!(
-            "{waivers} point to an issue later closed as not planned, so the promised follow-up will not happen"
+            "{waivers} {point} to an issue later closed as not planned, so the promised follow-up will not happen"
         ),
         "protected-edit-unratified" => format!(
             "{} to protected files had no owner approval the check accepts",
@@ -1428,5 +1429,27 @@ mod tests {
         assert_eq!(role(Some("tests/test_x.rs")), "test or doc");
         assert_eq!(role(Some("docs/GATES.md")), "test or doc");
         assert_eq!(role(Some("src/guards/pii.rs")), "live code");
+    }
+
+    #[test]
+    fn a_closed_cited_issue_asks_for_a_check_not_a_verdict() {
+        // A waiver may cite a closed issue as its approval ("owner-approved via #315"),
+        // not as a follow-up, so the sentence must not say the follow-up is untracked.
+        let signal = |n| Signal {
+            id: "waiver-cites-issue-closed-before",
+            rank: "look-soon",
+            count: n,
+            changes: vec!["#331".into()],
+            records: vec![],
+            list: "records",
+            next: "",
+        };
+        let summary = Summary::default();
+        assert_eq!(
+            signal_sentence(&signal(1), &summary),
+            "1 waiver points to an issue that was already closed when it was written; \
+             check that the issue still supports the waiver"
+        );
+        assert!(signal_sentence(&signal(2), &summary).starts_with("2 waivers point to"));
     }
 }
