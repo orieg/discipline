@@ -894,10 +894,17 @@ pub fn render(s: &Summary) -> String {
             if r.pr.is_none() {
                 flags.push(r##"<span class="badge warn">no pull request</span>"##);
             }
+            if r.edited {
+                flags.push(r##"<span class="badge muted">edited entry</span>"##);
+            }
             if waived_in_change(r, s) {
                 flags.push(r##"<span class="badge muted">waived in same change</span>"##);
             }
-            let restored = restored_by(r, s).map(|t| format!("by {}", ch(t))).unwrap_or_else(|| r##"<span class="badge warn">open</span>"##.to_string());
+            let restored = if r.edited {
+                r##"<span class="badge muted">edited in the same change</span>"##.to_string()
+            } else {
+                restored_by(r, s).map(|t| format!("by {}", ch(t))).unwrap_or_else(|| r##"<span class="badge warn">open</span>"##.to_string())
+            };
             let g = esc(r.gate.as_deref().unwrap_or(""));
             format!(r##"<tr><td>{}</td><td>{}</td><td><a href="#g-{g}"><code>{g}</code></a></td><td><code>{}</code> {val}{}</td><td>{}</td><td>{restored}</td></tr>"##, ch(r), date(r.time), esc(r.key.as_deref().unwrap_or("")), source(r, s), flags.join(" "))
         })

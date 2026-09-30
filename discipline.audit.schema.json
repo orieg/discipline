@@ -92,6 +92,10 @@
           "description": "The directive's name, as written",
           "type": "string"
         },
+        "edited": {
+          "description": "A loosening whose own change also tightened the same option: an edited entry, which `config-integrity` counts as lost unless it can prove it tighter. Omitted when false",
+          "type": "boolean"
+        },
         "evidence": {
           "description": "`claimed`: text that asks for an exception; `applied`: a tree change that is one",
           "enum": [

@@ -425,6 +425,7 @@ pub fn audit_schema() -> Value {
                     "detail": text("Why a configuration or baseline could not be compared"),
                     "source": { "enum": ["commit-message", "pull-request-body"], "description": "Where a directive was read" },
                     "cites": { "type": "array", "items": { "type": "string" }, "description": "Issue references in a directive's reason, as written; omitted when none" },
+                    "edited": { "type": "boolean", "description": "A loosening whose own change also tightened the same option: an edited entry, which `config-integrity` counts as lost unless it can prove it tighter. Omitted when false" },
                     "ratification": {
                         "type": "object",
                         "description": "A protected edit's ratification, judged as `ratified-paths` judges it, with `--forge`. The ratifier's login is not carried",

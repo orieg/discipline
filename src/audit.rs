@@ -113,6 +113,10 @@ pub struct Record {
     /// as written; with `--forge` each is read into `issues`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cites: Vec<String>,
+    /// A loosening whose own change also tightened the same option: an edited list
+    /// entry, which `config-integrity` counts as lost unless it can prove it tighter.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub edited: bool,
     /// The change's position, 0 for the newest audited change.
     #[serde(rename = "change_index")]
     pub ord: usize,
@@ -152,6 +156,7 @@ impl Record {
             source: None,
             ratification: None,
             cites: Vec::new(),
+            edited: false,
             ord: change.ord,
             subject: change.subject.clone(),
         }
@@ -275,7 +280,9 @@ const SIGNALS: &[SignalDef] = &[
         next: "Tighten each setting back, or write down why it stays loose.",
         test: |i, all, tightenings| {
             let r = &all[i];
+            // An edited entry is not a loosening waiting to be paid back.
             is_config(r)
+                && !r.edited
                 && !tightenings
                     .iter()
                     .any(|t| t.ord < r.ord && t.gate == r.gate && t.key == r.key)
@@ -863,11 +870,18 @@ pub fn config_changes(
         }
         r
     };
+    let both = |g: &str, k: &str| tightened.iter().any(|t| t.gate == g && t.key == k);
+    let loosened: Vec<Record> = loosened
+        .iter()
+        .map(|w| {
+            let edited = both(&w.gate, &w.key);
+            let mut r = at_line(record("config", w.clone(), false));
+            r.edited = edited;
+            r
+        })
+        .collect();
     (
-        loosened
-            .into_iter()
-            .map(|w| at_line(record("config", w, false)))
-            .collect(),
+        loosened,
         tightened
             .into_iter()
             .map(|w| at_line(record("config-tightening", w, true)))
@@ -1198,7 +1212,7 @@ fn closed_before_merge(
 ) -> Option<String> {
     match crate::references::issue_facts(api, forge, repo, issue, false) {
         Err(e) => Some(format!("could not read issue #{issue}: {e}")),
-        // The merge closes it within seconds; two minutes of slack for clock skew.
+        // The merge closes it at once; the margin allows for clock skew.
         Ok(f) => f
             .closed_at
             .filter(|t| *t < merged - 120)
@@ -2085,6 +2099,35 @@ mod tests {
             &info(),
         );
         assert_eq!(l[0].line, Some(5));
+    }
+
+    #[test]
+    fn an_edited_entry_is_marked_and_not_waiting_to_be_restored() {
+        // One group's source list rewritten: `config-integrity` reads the old entry as
+        // lost; read backwards, the new one is lost too.
+        let (l, t) = loosen(
+            0,
+            Some(56),
+            "[gates.version-lockstep]\nenabled = true\n",
+            "groups = [{ name = \"v\", sources = [{ path = \"a.toml\", regex = 'v = \"(.*)\"' }] }]\n",
+            "groups = [{ name = \"v\", sources = [{ path = \"a.toml\", regex = '^v = \"(.*)\"' }, { path = \"b.json\", regex = 'v' }] }]\n",
+        );
+        assert_eq!((l.len(), t.len()), (1, 1), "{l:?} {t:?}");
+        assert!(l[0].edited);
+        assert!(changes_of(&found(&l, &t), "loosened-not-restored").is_empty());
+        // A plain loosening is not edited.
+        let (plain, _) = loosen(
+            0,
+            Some(9),
+            "[gates.pii]\n",
+            "exempt_paths = []\n",
+            "exempt_paths = [\"a\"]\n",
+        );
+        assert!(!plain[0].edited);
+        assert_eq!(
+            changes_of(&found(&plain, &[]), "loosened-not-restored"),
+            vec!["#9"]
+        );
     }
 
     #[test]
