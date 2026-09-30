@@ -27,6 +27,7 @@ pub mod presets;
 pub mod provenance_tags;
 pub mod ratified_paths;
 pub mod review_threads;
+pub mod sandbox_config;
 pub mod sanitizers;
 pub mod scope_confinement;
 pub mod shell_secrets;
@@ -554,6 +555,7 @@ pub fn run_checks(
             "citation-metadata" => citation_metadata::citation_metadata(ctx),
             "config-integrity" => integrity::config_integrity(ctx),
             "toolchain-config" => toolchain_config::toolchain_config(ctx),
+            "sandbox-config" => sandbox_config::sandbox_config(ctx),
             "stub-bodies" => stub_bodies::stub_bodies(ctx),
             "error-swallowing" => error_swallowing::error_swallowing(ctx),
             "instruction-smuggling" => instruction_smuggling::instruction_smuggling(ctx),
@@ -663,6 +665,8 @@ pub fn run_checks(
             "stub-bodies"
         } else if note.contains("allow-toolchain-weakening") {
             "toolchain-config"
+        } else if note.contains("allow-sandbox-widening") {
+            "sandbox-config"
         } else if note.contains("allow-suppression") {
             "suppression-delta"
         } else if note.contains("allow-checklist") {
@@ -691,6 +695,7 @@ pub fn run_checks(
                         | "ignored-tests"
                         | "config-integrity"
                         | "toolchain-config"
+                        | "sandbox-config"
                         | "stub-bodies"
                         | "error-swallowing"
                         | "instruction-smuggling"

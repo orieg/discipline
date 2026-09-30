@@ -979,7 +979,7 @@
       <div class="stat-item">
         <h3>
 <!-- generated:gate-count -->
-40
+41
 <!-- /generated -->
         </h3>
         <p>Fail-Closed Gates</p>
@@ -1357,8 +1357,8 @@ Test `adds`: effective assertions dropped from 2 to 0.
 
     <div class="gate-search-wrapper">
 <!-- generated:gate-search -->
-      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 40 gates by id, category, language, or rule..." aria-label="Search active gates">
-      <span id="gate-count" class="gate-count">Showing 40 of 40 gates</span>
+      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 41 gates by id, category, language, or rule..." aria-label="Search active gates">
+      <span id="gate-count" class="gate-count">Showing 41 of 41 gates</span>
 <!-- /generated -->
     </div>
 
@@ -1521,6 +1521,13 @@ Test `adds`: effective assertions dropped from 2 to 0.
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit</span></td>
             <td>compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token</td>
+          </tr>
+          <tr>
+            <td class="gate-id">sandbox-config</td>
+            <td>Integrity</td>
+            <td><span class="gate-badge badge-error">Error</span></td>
+            <td><span class="gate-badge badge-lang">Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor and Copilot CLI settings, MCP server lists, devcontainer.json, Docker Compose</span></td>
+            <td>a change cannot widen an agent's permissions or sandbox, or a container's isolation, without a token</td>
           </tr>
           <tr>
             <td class="gate-id">scope-confinement</td>

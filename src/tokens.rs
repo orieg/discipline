@@ -199,6 +199,14 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
             "Option key path (e.g. `compilerOptions.strict`), its last segment, or the file path",
     },
     DirectiveSpec {
+        canonical: "allow-sandbox-widening",
+        deprecated: None,
+        gate: "sandbox-config",
+        subject_kind: DirectiveSubjectKind::RuleName,
+        subject_doc:
+            "Setting key path (e.g. `permissions.defaultMode`), its last segment, or the file path",
+    },
+    DirectiveSpec {
         canonical: "allow-stub",
         deprecated: None,
         gate: "stub-bodies",
@@ -391,14 +399,15 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     },
 ];
 
-/// The 42 named directives recognized by discipline (32 canonical + 10 deprecated aliases).
+/// The 43 named directives recognized by discipline (33 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 32 Canonical
+    // 33 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
     "allow-gate-weakening",
     "allow-toolchain-weakening",
+    "allow-sandbox-widening",
     "allow-stub",
     "allow-swallow",
     "allow-agent-instructions",
@@ -464,6 +473,11 @@ pub const ALLOW_TOOLCHAIN_WEAKENING: &[&str] = &[
     "allow-toolchain-weakening",
     "discipline:allow(toolchain-config)",
     "allow(toolchain-config)",
+];
+pub const ALLOW_SANDBOX_WIDENING: &[&str] = &[
+    "allow-sandbox-widening",
+    "discipline:allow(sandbox-config)",
+    "allow(sandbox-config)",
 ];
 pub const ALLOW_STUB: &[&str] = &[
     "allow-stub",
@@ -635,6 +649,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-gate-weakening" => ALLOW_GATE_WEAKENING,
         "allow-golden-update" => ALLOW_GOLDEN_UPDATE,
         "allow-toolchain-weakening" => ALLOW_TOOLCHAIN_WEAKENING,
+        "allow-sandbox-widening" => ALLOW_SANDBOX_WIDENING,
         "allow-stub" => ALLOW_STUB,
         "allow-swallow" => ALLOW_SWALLOW,
         "allow-agent-instructions" => ALLOW_SMUGGLING,
@@ -675,12 +690,13 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 32 Canonical
+    // 33 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
     "allow-gate-weakening",
     "allow-toolchain-weakening",
+    "allow-sandbox-widening",
     "allow-stub",
     "allow-swallow",
     "allow-agent-instructions",
@@ -730,6 +746,8 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow(config-integrity)",
     "discipline:allow(toolchain-config)",
     "allow(toolchain-config)",
+    "discipline:allow(sandbox-config)",
+    "allow(sandbox-config)",
     "discipline:allow(stub-bodies)",
     "allow(stub-bodies)",
     "discipline:allow(error-swallowing)",

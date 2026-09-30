@@ -2114,6 +2114,8 @@ pub struct DoctorInput<'a> {
     pub api: &'a dyn ForgeApi,
     /// Copilot CLI's home directory (its `config.json` lists the folders it trusts).
     pub copilot_home: Option<std::path::PathBuf>,
+    /// The user's home directory, where each agent keeps its user-level settings.
+    pub home: Option<std::path::PathBuf>,
 }
 
 fn read(root: &Path, rel: &str) -> Option<String> {
@@ -2294,6 +2296,65 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
     out
 }
 
+/// `agent-sandbox`: the modes and switches in each agent's settings that run it with less
+/// containment than its defaults (`sandbox_config::posture`). The repository's own files
+/// warn, since every session in the repository inherits them; the user's files are
+/// information, since they are that person's choice. Lists (allowed commands, MCP servers)
+/// are not posture and are left to the `sandbox-config` gate, which judges their growth.
+pub fn agent_sandbox_findings(root: &Path, home: Option<&Path>) -> Vec<Finding> {
+    use crate::guards::sandbox_config::{posture, PROJECT_SETTINGS, USER_SETTINGS};
+    let mut out = Vec::new();
+    let mut read_any = false;
+    let mut scan = |base: &Path,
+                    files: &[(&str, &str)],
+                    shown: &str,
+                    status: Status,
+                    out: &mut Vec<Finding>| {
+        for (agent, rel) in files {
+            let Ok(text) = std::fs::read_to_string(base.join(rel)) else {
+                continue;
+            };
+            read_any = true;
+            let path = format!("{shown}{rel}");
+            match posture(rel, &text) {
+                None => out.push(Finding::new(
+                    "agent-sandbox",
+                    status,
+                    format!("`{path}` ({agent}) does not parse, so its sandbox settings could not be read"),
+                ).fix("Fix the file so it parses.")),
+                Some(loose) if !loose.is_empty() => out.push(
+                    Finding::new(
+                        "agent-sandbox",
+                        status,
+                        format!(
+                            "`{path}` runs {agent} with less containment than its defaults: {}",
+                            loose.join("; ")
+                        ),
+                    )
+                    .fix(if status == Status::Warn {
+                        "Every session in this repository inherits these settings: remove them, or keep them in a user-level file for the person who wants them."
+                    } else {
+                        "Your own choice; run the agent inside a container or VM with no credentials and a network allow-list when these are on."
+                    }),
+                ),
+                Some(_) => {}
+            }
+        }
+    };
+    scan(root, PROJECT_SETTINGS, "", Status::Warn, &mut out);
+    if let Some(home) = home {
+        scan(home, USER_SETTINGS, "~/", Status::Info, &mut out);
+    }
+    if out.is_empty() && read_any {
+        out.push(Finding::new(
+            "agent-sandbox",
+            Status::Pass,
+            "no agent settings file runs an agent with less containment than its defaults",
+        ));
+    }
+    out
+}
+
 pub fn copilot_trust_finding(root: &Path, home: Option<&Path>) -> Option<Finding> {
     let hook = crate::hook::copilot_repo_hook(root)?;
     let hook = hook
@@ -2419,6 +2480,7 @@ pub fn run(input: &DoctorInput) -> Report {
         findings.push(f);
     }
     findings.extend(multi_agent_findings(root));
+    findings.extend(agent_sandbox_findings(root, input.home.as_deref()));
 
     let mut platform_name = "local".to_string();
     let mut gitea_version: Option<String> = None;
@@ -2686,6 +2748,57 @@ pub(crate) fn access_hint(kind: ForgeKind, error: &str) -> &'static str {
 mod tests {
     use super::*;
     use crate::forge::{CannedApi, NoApi};
+
+    #[test]
+    fn agent_sandbox_warns_on_the_repository_and_informs_on_the_user() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let write = |base: &Path, rel: &str, text: &str| {
+            let p = base.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        // No settings file anywhere: nothing to say.
+        assert!(agent_sandbox_findings(root.path(), Some(home.path())).is_empty());
+        // Lists only (an allowed command, an MCP server): not posture.
+        write(
+            root.path(),
+            ".claude/settings.json",
+            r#"{"permissions": {"allow": ["Bash(cargo test:*)"]}, "hooks": {}}"#,
+        );
+        let f = agent_sandbox_findings(root.path(), Some(home.path()));
+        assert_eq!(f.len(), 1);
+        assert_eq!((f[0].id, f[0].status), ("agent-sandbox", Status::Pass));
+        // The repository runs Qwen Code in yolo; the user runs Codex without a sandbox.
+        write(
+            root.path(),
+            ".qwen/settings.json",
+            r#"{"tools": {"approvalMode": "yolo"}}"#,
+        );
+        write(
+            home.path(),
+            ".codex/config.toml",
+            "sandbox_mode = \"danger-full-access\"\n",
+        );
+        let f = agent_sandbox_findings(root.path(), Some(home.path()));
+        let got: Vec<(Status, bool)> = f
+            .iter()
+            .map(|x| (x.status, x.summary.contains("tools.approvalMode")))
+            .collect();
+        assert_eq!(got, [(Status::Warn, true), (Status::Info, false)], "{f:?}");
+        assert!(
+            f[1].summary
+                .starts_with("`~/.codex/config.toml` runs Codex"),
+            "{f:?}"
+        );
+        // A user's file that does not parse is information, never exit 2.
+        write(home.path(), ".claude/settings.json", "{");
+        let f = agent_sandbox_findings(root.path(), Some(home.path()));
+        assert!(f
+            .iter()
+            .any(|x| x.status == Status::Info && x.summary.contains("does not parse")));
+        assert!(f.iter().all(|x| x.status != Status::Unknown));
+    }
 
     const WF: &str = r#"
 name: CI
@@ -3751,6 +3864,7 @@ test:
         std::fs::write(dir.join(".github/workflows/ci.yml"), WF).unwrap();
         let input = DoctorInput {
             copilot_home: None,
+            home: None,
             root: &dir,
             forge: Ok(forge(ForgeKind::GitHub)),
             branch: None,
@@ -3761,12 +3875,14 @@ test:
         assert_eq!(r.exit_code(false), 2, "{r:?}");
         let local = run(&DoctorInput {
             copilot_home: None,
+            home: None,
             local_only: true,
             ..input
         });
         assert!(local.findings.iter().all(|f| f.id != "platform"));
         let other = run(&DoctorInput {
             copilot_home: None,
+            home: None,
             root: &dir,
             forge: Err("set DISCIPLINE_FORGE".into()),
             branch: None,
@@ -3805,6 +3921,7 @@ test:
             let status = |local_only: bool, api: &dyn ForgeApi| {
                 run(&DoctorInput {
                     copilot_home: None,
+                    home: None,
                     root: &dir,
                     forge: Ok(forge(ForgeKind::GitHub)),
                     branch: Some("main".into()),

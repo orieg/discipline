@@ -2300,6 +2300,172 @@ fn test_floor_counts_tests_that_run_not_tests_that_exist() {
     assert!(notes.contains("tests/broken.py"), "{notes}");
 }
 
+// ---- sandbox-config ---------------------------------------------------------
+
+#[test]
+fn sandbox_config_reports_a_widened_agent_or_container_and_lifts_it_by_key_or_path() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        ".claude/settings.json",
+        "{\"permissions\": {\"deny\": [\"Read(./.env)\"]}, \"sandbox\": {\"enabled\": true}}\n",
+    );
+    repo.write(
+        "compose.yaml",
+        "services:\n  agent:\n    image: x\n    cap_drop: [ALL]\n",
+    );
+    repo.write(
+        ".devcontainer/init-firewall.sh",
+        "iptables -P OUTPUT DROP\n",
+    );
+    repo.commit("chore: sandbox");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: an image bump, a tighter mode, a Codex file that narrows the sandbox.
+    repo.write(
+        "compose.yaml",
+        "services:\n  agent:\n    image: y\n    cap_drop: [ALL]\n    network_mode: none\n",
+    );
+    repo.write(
+        ".claude/settings.json",
+        "{\"permissions\": {\"deny\": [\"Read(./.env)\"], \"defaultMode\": \"plan\"}, \"sandbox\": {\"enabled\": true}}\n",
+    );
+    repo.write(".codex/config.toml", "sandbox_mode = \"read-only\"\n");
+    repo.commit("chore: tighten");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("sandbox-config").is_empty(),
+        "{:?}",
+        quiet.violations("sandbox-config")
+    );
+    assert_eq!(quiet.outcome("sandbox-config")["examined"], 3);
+
+    repo.write(
+        ".claude/settings.json",
+        "{\"permissions\": {\"defaultMode\": \"bypassPermissions\"}, \"sandbox\": {\"enabled\": true}}\n",
+    );
+    repo.write(
+        "compose.yaml",
+        "services:\n  agent:\n    image: y\n    cap_drop: [ALL]\n    network_mode: host\n",
+    );
+    repo.write(
+        ".codex/config.toml",
+        "sandbox_mode = \"danger-full-access\"\n",
+    );
+    repo.write(
+        ".devcontainer/init-firewall.sh",
+        "iptables -P OUTPUT ACCEPT\n",
+    );
+    repo.commit("chore: widen");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let v = run.violations("sandbox-config");
+    let found: Vec<(String, String, String)> = v
+        .iter()
+        .map(|x| {
+            (
+                x["file"].as_str().unwrap().to_string(),
+                x["title"].as_str().unwrap().to_string(),
+                x["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let row = |f: &str, t: &str, s: &str| (f.to_string(), t.to_string(), s.to_string());
+    assert_eq!(
+        found,
+        vec![
+            row(
+                ".claude/settings.json",
+                "Sandbox Configuration Widened",
+                "error"
+            ),
+            row(
+                ".claude/settings.json",
+                "Sandbox Configuration Widened",
+                "error"
+            ),
+            row(
+                ".codex/config.toml",
+                "Sandbox Configuration Widened",
+                "error"
+            ),
+            row(
+                ".devcontainer/init-firewall.sh",
+                "Sandbox Configuration Change Not Analysed",
+                "warning"
+            ),
+            row("compose.yaml", "Sandbox Configuration Widened", "error"),
+        ],
+        "{v:#?}"
+    );
+    let messages: Vec<&str> = v.iter().map(|x| x["message"].as_str().unwrap()).collect();
+    assert!(
+        messages[0].contains("`permissions.deny` removed"),
+        "{messages:?}"
+    );
+    assert!(
+        messages[1].contains(
+            "`permissions.defaultMode` set to `bypassPermissions` (unset means `default`)"
+        ),
+        "{messages:?}"
+    );
+    assert!(
+        messages[4].contains("`services.agent.network_mode` set to `host` (unset means `bridge`)"),
+        "{messages:?}"
+    );
+
+    // The key's last segment, the full key, and the file path each lift their own finding.
+    repo.commit(
+        "chore: explain\n\nallow-sandbox-widening: defaultMode throwaway VM image for the eval harness\n\
+         allow-sandbox-widening: permissions.deny the VM holds no secrets\n\
+         allow-sandbox-widening: .codex/config.toml same VM\n\
+         allow-sandbox-widening: compose.yaml same VM\n\
+         allow-sandbox-widening: .devcontainer/init-firewall.sh egress is filtered by the VM host",
+    );
+    let lifted = repo.check(&[]);
+    assert!(
+        lifted.titles("sandbox-config").is_empty(),
+        "{:?}",
+        lifted.titles("sandbox-config")
+    );
+    assert_eq!(
+        lifted.outcome("sandbox-config")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+
+    // A deleted settings file loses what it carried; one that no longer parses is reported.
+    repo.remove(".claude/settings.json");
+    repo.write("compose.yaml", "services: [\n");
+    repo.commit("chore: break");
+    let broken = repo.check(&[]);
+    let mut titles = broken.titles("sandbox-config");
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec![
+            "Sandbox Configuration Unreadable",
+            "Sandbox Configuration Widened"
+        ],
+        "{:?}",
+        broken.violations("sandbox-config")
+    );
+
+    // An exempt path is not examined.
+    std::fs::write(
+        repo.path().join("discipline.toml"),
+        "[gates.sandbox-config]\nexempt_paths = [\"compose.yaml\"]\n",
+    )
+    .unwrap();
+    let exempt = repo.check(&[]);
+    assert_eq!(
+        exempt.titles("sandbox-config"),
+        vec!["Sandbox Configuration Widened"]
+    );
+}
+
 // ---- toolchain-config ------------------------------------------------------
 
 #[test]
@@ -5465,7 +5631,7 @@ fn override_record_audit_trail_and_step_outputs() {
         .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
     assert!(
         run.stdout.contains(
-            "gates:  24 passed, 0 failed, 15 disabled, 1 not evaluated (22 items examined)"
+            "gates:  25 passed, 0 failed, 15 disabled, 1 not evaluated (22 items examined)"
         ),
         "{}",
         run.stdout
@@ -5480,14 +5646,14 @@ fn override_record_audit_trail_and_step_outputs() {
         "{step_output}"
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
-    assert!(step_output.contains("passed_gates=24"), "{step_output}");
+    assert!(step_output.contains("passed_gates=25"), "{step_output}");
     assert!(step_output.contains("examined_items=22"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 24 passed, 0 failed, 15 disabled, 1 not evaluated (22 items examined)"
+            "**Summary:** 25 passed, 0 failed, 15 disabled, 1 not evaluated (22 items examined)"
         ),
         "{step_summary}"
     );

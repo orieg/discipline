@@ -403,6 +403,27 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "sandbox-config: bypassPermissions and a host network widen, plan and none do not",
+        || {
+            use crate::guards::sandbox_config::{classify, widenings};
+            use crate::guards::toolchain_config::Classified;
+            let n = |path: &str, head: &str| -> anyhow::Result<usize> {
+                let Some(Classified::Data { name, rules }) = classify(path) else {
+                    anyhow::bail!("{path} not classified");
+                };
+                widenings(&name, &rules, None, Some(head))
+                    .map(|w| w.len())
+                    .map_err(|side| anyhow::anyhow!("{side} unparsed"))
+            };
+            let mode = |m: &str| format!("{{\"permissions\": {{\"defaultMode\": \"{m}\"}}}}");
+            let net = |m: &str| format!("services:\n  a:\n    network_mode: {m}\n");
+            Ok(n(".claude/settings.json", &mode("bypassPermissions"))? == 1
+                && n(".claude/settings.json", &mode("plan"))? == 0
+                && n("compose.yaml", &net("host"))? == 1
+                && n("compose.yaml", &net("none"))? == 0)
+        },
+    ),
+    (
         "suppression-delta: a moved suppression is not new, an added one is",
         || {
             use crate::guards::suppression_delta::new_sites;
