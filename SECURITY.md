@@ -21,17 +21,18 @@ Reports are acknowledged and triaged upon receipt. Verified fixes are published 
 
 Security fixes land on `main` and ship with the next release. Only the latest stable released version is actively supported:
 
-| Version | Supported | Notes |
-|---|---|---|
-| `0.4.x` | Yes | Current stable release series |
-| `0.3.x` | Yes | Maintenance support |
-| `< 0.3.0` | No | Upgrade to `0.3.x` or later |
+| Version | Supported |
+|---|---|
+| The latest release ([releases](https://github.com/orieg/discipline/releases/latest)) | Yes |
+| Any earlier release | No: upgrade to the latest |
 
 ## Threat Model
 
+This section is the vulnerability scope: what counts as a flaw in discipline itself. What discipline protects a repository against (careless and rule-evading agents, self-granted waivers, a change that loosens its own policy), its trust boundaries, and the risks it leaves to others are in [`docs/ARCHITECTURE.md` §1.4](docs/ARCHITECTURE.md#14-threat-model).
+
 Discipline is a universal CI/CD gatekeeper and AI coding agent diff sentinel designed to execute in local developer workstations, container runtimes (Docker, Podman), and hosted CI runners (GitHub Actions, Gitea, Forgejo, GitLab CI, Argo Workflows).
 
-Discipline compiles to a standalone static binary with zero external runtime dependencies and **no network connectivity features** (it does not link OpenSSL, TLS, or HTTP clients). It inspects git repositories and diffs locally.
+Discipline compiles to a standalone static binary with no external runtime dependency. It inspects git repositories and diffs locally. Its only network access is the in-process HTTPS client in `src/forge.rs` (rustls, no OpenSSL): read-only forge API calls for the features that need them, and one opt-in write (`check --comment`). `DISCIPLINE_NO_NETWORK=1` keeps every request off the network. A forge's answer is an untrusted input like any other below.
 
 ### Untrusted Inputs (In-Scope Vulnerabilities)
 
@@ -40,6 +41,7 @@ A memory safety violation, panic, denial-of-service, or remote code execution tr
 - **Git Repositories & Diffs:** Arbitrary branch names, commit hashes, author headers, commit messages, diff content, and tree objects parsed via `libgit2`. Malformed repositories or maliciously crafted packfiles must not trigger buffer overflows, uncontrolled recursion, or out-of-bounds memory access.
 - **Source Code Parsed by Tree-Sitter:** Untrusted, incomplete, or deliberately adversarial source code in any supported language (Rust, Python, JavaScript, TypeScript, Go, Java, C#, C, C++, Ruby, PHP). Tree-sitter grammars and parser wrappers must fail closed or record parse errors gracefully without panics or memory corruption.
 - **Configuration Files:** User-supplied `discipline.toml` files. The TOML parser must reject invalid or malicious schemas (e.g. deeply nested tables, huge integers, duplicate keys) without crashing.
+- **Forge API Answers:** JSON from GitHub, GitLab, Gitea or Forgejo (pull requests, reviews, issues, comments). A malformed, partial or oversized answer must fail closed (exit 2), never read as clean, and the client never follows a redirect on a write.
 - **Inline Directives & Markers:** Arbitrary text lines containing `discipline:allow(...)` markers. The directive parser must enforce line-anchored syntax, reject malformed strings, and disallow delimiter injection.
 
 ### Caller & Environment Contracts (Out-of-Scope)

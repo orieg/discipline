@@ -39,6 +39,49 @@ Discipline reads changes and configuration; it does not contain a running agent.
 
 What discipline does own is the configuration that sets those boundaries, because a change to it arrives as a diff like any other. `sandbox-config` reports a change that widens an agent's permissions or sandbox (its project settings and MCP server lists) or a container's isolation (Dev Containers, Docker Compose), and `discipline doctor` reports the agent settings that run an agent with less containment than its defaults (`agent-sandbox`). The pre-tool hook (`hook run --event pre-tool`) refuses edits and shell commands that reach another worktree; it does not block network commands, since a deny-list at the prompt is walked around by any interpreter the agent may run.
 
+
+### 1.4 Threat Model
+
+Discipline stands between a change and the branch it merges into. This section says what it protects, from whom, where it trusts, and what it leaves to others. `SECURITY.md` covers the narrower case of a flaw in discipline itself (hostile input that crashes or subverts the binary).
+
+**Assets.**
+1. **The merge gate's verdict:** a change that erodes tests, safety comments or policy is blocked, or it lands with its waiver on record.
+2. **The policy:** `discipline.toml`, the CI workflows and action inputs that run discipline, the agent hook and sandbox settings, and the list of protected paths.
+3. **The record:** the waivers, loosenings and ratifications in commit messages, pull-request bodies and issue comments, which `discipline audit` reads back.
+4. **What the repository must not publish:** secrets, personal data, private hosts and paths (the hygiene gates).
+5. **The discipline release** that CI downloads and runs with a token (§8.2).
+
+**Actors, by what they can do.** Every actor below except the external one can edit any file in the change and write its commit messages and pull-request body.
+
+| Actor | Intent | Can also | Primary controls |
+|---|---|---|---|
+| Careless agent | Get the checks green; no intent to hide | Run a shell in its worktree | The AST gates (§1.1); fail-closed parsing (§3) |
+| Rule-evading agent | Get the checks green by any accepted means | Use every escape hatch, edit the policy, the workflows and its own hooks, write text aimed at the reviewer or the next agent, and act with whatever credentials its host holds | `config-integrity`, `ci-integrity`, `sandbox-config`, `instruction-smuggling`, `ratified-paths`, `policy_from: base`, `directives.max_overrides` / `require_approval`, `discipline audit` |
+| Concurrent agents | None hostile; they collide | Move another worktree's branch | The lease guard and the pre-tool hook (Phase 13) |
+| Repository owner | Sets the policy | Waive, ratify, merge, change repository settings | Trusted: the owner's login is the root of trust for ratifications and approvals |
+| External attacker | Subvert discipline or its users | Supply hostile repositories, source, configuration or pull requests; tamper with the release chain | `SECURITY.md` (input handling), `deny.toml`, pinned actions, release attestations (§8.2) |
+
+**Trust boundaries.**
+- **The change does not judge itself.** The policy that decides a change is read from the base (`policy_from: base`), and a loosening of it is reported against the base (`config-integrity`, `ci-integrity`). A change's own configuration is data, never authority.
+- **What an author writes is a claim.** A waiver, a closing reference or a trailer is written by the change's author, agent or not. It is accepted as the record of a decision, counted (`max_overrides`), made visible (`audit`) and, where configured, made to wait for a forge fact (`require_approval`), but it proves nothing about who agreed.
+- **A forge fact is as strong as the login behind it.** A review, a ratification comment or a pull request's author is the forge's report of a login. It separates two parties only when they hold different logins. An agent that acts with the owner's credentials can produce every forge fact the owner can (Phase 15 Step 8).
+- **Discipline cannot make itself run.** Its verdict binds only as a required check on a protected branch with no bypass; `discipline doctor` reports when that is not so (§8.4).
+- **The running agent is outside the boundary** (§1.3): discipline reads the change and the configuration that contains the agent, not the process.
+- **The network is read-only but one opt-in write** (§2, `AGENTS.md` §3.3); an unreachable or partial answer fails closed.
+
+**Assumptions the guarantees depend on.**
+1. Discipline runs as a required check with `policy_from: base`, and `ci-integrity` protects the workflow that runs it.
+2. The protected paths cover the policy (`discipline.toml`, workflows, agent hook and sandbox settings, agent instructions).
+3. Ratifications and approvals come from a login no agent can use. **This does not hold on this repository today:** every agent posts as the owner's login (Phase 15 Step 8), so a ratification here shows the owner's login agreed, not that a second party did.
+4. The forge reports authors, edits and links truthfully. When it fails to (a closing reference it did not link, #350), discipline refuses rather than guesses.
+
+**Residual risks: what an attacker in this model can still do.**
+- A weakening the AST gates do not model (a rewritten test with the same assertion count, a workflow rewritten in a form `ci-integrity` does not read, what a GitLab `include:` brings in; §10).
+- Every waiver the policy allows, on the record. `audit` shows them; it does not undo them.
+- With the owner's credentials: ratify, approve, edit a pull-request body after the merge (reported on GitHub only), and merge.
+- Say which agent made a change. `discipline audit` reports a commit's agent marker as `claimed` and an agent login (with `--forge`) as `agent-login`, and a change with neither as `no-record`, never as a person's; a record an agent writes about itself is a claim, not a proof (Phase 15 Step 7).
+- Anything outside the diff: the agent's runtime behaviour, its network access, and what it does with credentials (§1.3).
+
 ---
 
 ## 2. Architecture Diagram & Binary Design
