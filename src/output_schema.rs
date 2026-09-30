@@ -293,7 +293,7 @@ pub fn audit_schema() -> Value {
         "description": "The records `discipline audit --json` prints: one per escape hatch a merged change carried, read from git objects only. A record says what was claimed or applied, not whether a check honoured it.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["schema_version", "version", "reference", "tip", "links", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings", "protected_edits", "pulls", "forge"],
+        "required": ["schema_version", "version", "reference", "tip", "links", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings", "protected_edits", "pulls", "issues", "forge"],
         "properties": {
             "schema_version": { "const": AUDIT_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
             "version": text("The discipline version that wrote the report"),
@@ -303,14 +303,15 @@ pub fn audit_schema() -> Value {
                 "description": "Web links from the `origin` remote's forge (GitHub, GitLab, Gitea, Forgejo); null when the remote names none. No request is made",
                 "type": ["object", "null"],
                 "additionalProperties": false,
-                "required": ["repository", "pull", "commit", "file", "file_diff", "issue_comment"],
+                "required": ["repository", "pull", "commit", "file", "file_diff", "issue_comment", "issue"],
                 "properties": {
                     "repository": text("The repository's web page"),
                     "pull": text("A pull request's page, `{n}` for its number"),
                     "commit": text("A commit's page, `{sha}` for its id"),
                     "file": text("A file at a commit: `{sha}`, `{path}`, `{line}` (drop `#L{line}` without a line)"),
                     "file_diff": { "type": ["string", "null"], "description": "One file's diff in a commit: `{sha}`, `{path_sha256}`; GitHub only" },
-                    "issue_comment": text("A comment on an issue: `{repo}` (`owner/name`), `{n}`, `{id}`")
+                    "issue_comment": text("A comment on an issue: `{repo}` (`owner/name`), `{n}`, `{id}`"),
+                    "issue": text("An issue: `{repo}`, `{n}`")
                 }
             },
             "changes": { "type": "integer", "minimum": 0, "description": "First-parent changes audited" },
@@ -336,6 +337,24 @@ pub fn audit_schema() -> Value {
                     }
                 }
             },
+            "issues": {
+                "type": "array",
+                "description": "The issues waivers cite, read with `--forge`; empty otherwise",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["reference", "repo", "number", "state"],
+                    "properties": {
+                        "reference": text("The reference as written in a reason"),
+                        "repo": text("The repository it was looked up in; empty for another repository"),
+                        "number": { "type": "integer", "minimum": 0 },
+                        "state": { "enum": ["open", "closed", "not-found", "pull-request", "cross-repo", "not-checked"] },
+                        "state_reason": text("GitHub's close reason (`completed`, `not_planned`, ...)"),
+                        "closed_at": { "type": "integer", "description": "When it was closed, seconds since the Unix epoch" },
+                        "error": text("Why the forge could not answer")
+                    }
+                }
+            },
             "forge": {
                 "type": ["object", "null"],
                 "description": "What `--forge` read; null without it",
@@ -357,7 +376,7 @@ pub fn audit_schema() -> Value {
                 "additionalProperties": false,
                 "required": ["id", "rank", "count", "changes", "records", "list", "next"],
                 "properties": {
-                    "id": { "enum": ["guard-gate-loosened", "hidden-directive", "config-unreadable", "loosened-without-pull-request", "loosening-without-waiver", "waived-then-loosened", "loosened-not-restored", "baseline-grew", "protected-edit-unratified", "protected-edit-self-ratified"] },
+                    "id": { "enum": ["guard-gate-loosened", "hidden-directive", "config-unreadable", "loosened-without-pull-request", "loosening-without-waiver", "waived-then-loosened", "loosened-not-restored", "baseline-grew", "protected-edit-unratified", "protected-edit-self-ratified", "waiver-cites-missing-issue", "waiver-cites-issue-closed-before", "waiver-cites-issue-not-planned"] },
                     "rank": { "enum": ["look-first", "look-soon", "review"] },
                     "count": { "type": "integer", "minimum": 1, "description": "Records the signal is about" },
                     "changes": { "type": "array", "items": { "type": "string" }, "description": "The changes they are in, newest first (`#N`, else a 10-character commit id)" },
@@ -405,6 +424,7 @@ pub fn audit_schema() -> Value {
                     "reason": text("The directive's reason text: only under `--reasons`"),
                     "detail": text("Why a configuration or baseline could not be compared"),
                     "source": { "enum": ["commit-message", "pull-request-body"], "description": "Where a directive was read" },
+                    "cites": { "type": "array", "items": { "type": "string" }, "description": "Issue references in a directive's reason, as written; omitted when none" },
                     "ratification": {
                         "type": "object",
                         "description": "A protected edit's ratification, judged as `ratified-paths` judges it, with `--forge`. The ratifier's login is not carried",

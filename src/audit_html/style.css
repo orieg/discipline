@@ -145,3 +145,4 @@ details:target { box-shadow: 0 0 0 2px var(--link); }
 .src-link { font-size: 12px; white-space: nowrap; margin-left: 6px; }
 .src-link:not(:hover) { color: var(--muted); }
 td:nth-child(2) { white-space: nowrap; }
+.top { font-size: 1.05rem; max-width: 72ch; }

@@ -61,6 +61,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "cites": {
+          "description": "Issue references in a directive's reason, as written; omitted when none",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "class": {
           "description": "`process`: a waiver of a process rule (`no-issue`); `detector`: a waiver of a finding",
           "enum": [
@@ -254,7 +261,10 @@
             "loosened-not-restored",
             "baseline-grew",
             "protected-edit-unratified",
-            "protected-edit-self-ratified"
+            "protected-edit-self-ratified",
+            "waiver-cites-missing-issue",
+            "waiver-cites-issue-closed-before",
+            "waiver-cites-issue-not-planned"
           ]
         },
         "list": {
@@ -363,6 +373,56 @@
         "null"
       ]
     },
+    "issues": {
+      "description": "The issues waivers cite, read with `--forge`; empty otherwise",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "closed_at": {
+            "description": "When it was closed, seconds since the Unix epoch",
+            "type": "integer"
+          },
+          "error": {
+            "description": "Why the forge could not answer",
+            "type": "string"
+          },
+          "number": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reference": {
+            "description": "The reference as written in a reason",
+            "type": "string"
+          },
+          "repo": {
+            "description": "The repository it was looked up in; empty for another repository",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "closed",
+              "not-found",
+              "pull-request",
+              "cross-repo",
+              "not-checked"
+            ]
+          },
+          "state_reason": {
+            "description": "GitHub's close reason (`completed`, `not_planned`, ...)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference",
+          "repo",
+          "number",
+          "state"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "links": {
       "additionalProperties": false,
       "description": "Web links from the `origin` remote's forge (GitHub, GitLab, Gitea, Forgejo); null when the remote names none. No request is made",
@@ -381,6 +441,10 @@
             "string",
             "null"
           ]
+        },
+        "issue": {
+          "description": "An issue: `{repo}`, `{n}`",
+          "type": "string"
         },
         "issue_comment": {
           "description": "A comment on an issue: `{repo}` (`owner/name`), `{n}`, `{id}`",
@@ -401,7 +465,8 @@
         "commit",
         "file",
         "file_diff",
-        "issue_comment"
+        "issue_comment",
+        "issue"
       ],
       "type": [
         "object",
@@ -497,6 +562,7 @@
     "tightenings",
     "protected_edits",
     "pulls",
+    "issues",
     "forge"
   ],
   "title": "DisciplineAudit",

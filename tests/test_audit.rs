@@ -189,7 +189,7 @@ fn signals_rank_what_needs_a_decision_and_a_tightening_restores_a_loosening() {
     assert!(first["next"]
         .as_str()
         .unwrap()
-        .contains("pull request body"));
+        .contains("pull request description"));
     // Every signal has a state, and what git cannot tell is named, not left out.
     let state = |id: &str| {
         s["checks"]
