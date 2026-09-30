@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="generator" content="discipline test">
+<title>Escape-Hatch Audit · o/r</title>
+<style>
+:root {
+  --bg: #f3f5f8; --surface: #ffffff; --sunk: #eef1f5; --ink: #18202c; --muted: #5a6577; --rule: #dce1e9;
+  --link: #2352b8;
+  --k-detector: #c27812; --k-config: #c0392f; --k-baseline: #17877a; --k-inline: #6a52c7; --k-process: #8793a6; --k-protected: #1f6fb2;
+  --bad: #b3261e; --bad-bg: #fbe9e7; --warn: #8a5a00; --warn-bg: #fdf1dc; --ok: #1b6e3a; --ok-bg: #e4f4e9; --mute-bg: #eceff3;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f141b; --surface: #161d27; --sunk: #121821; --ink: #e5eaf1; --muted: #98a4b6; --rule: #283243; --link: #8fb0ff;
+    --k-detector: #e39a36; --k-config: #ec6a5f; --k-baseline: #3fb8a8; --k-inline: #9a86f0; --k-process: #7d8aa0; --k-protected: #5ea8e8;
+    --bad: #ff8a80; --bad-bg: #3a1716; --warn: #f2c26b; --warn-bg: #33270f; --ok: #7fd49a; --ok-bg: #12301d; --mute-bg: #222a36;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f141b; --surface: #161d27; --sunk: #121821; --ink: #e5eaf1; --muted: #98a4b6; --rule: #283243; --link: #8fb0ff;
+  --k-detector: #e39a36; --k-config: #ec6a5f; --k-baseline: #3fb8a8; --k-inline: #9a86f0; --k-process: #7d8aa0; --k-protected: #5ea8e8;
+  --bad: #ff8a80; --bad-bg: #3a1716; --warn: #f2c26b; --warn-bg: #33270f; --ok: #7fd49a; --ok-bg: #12301d; --mute-bg: #222a36;
+}
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1060px; margin: 0 auto; padding-inline: 18px; padding-block: 24px 64px; display: grid; gap: 22px; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+a:focus-visible, button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+code { font: 0.86em var(--mono); }
+h1 { font-size: 1.45rem; line-height: 1.3; margin: 0; text-wrap: balance; font-weight: 650; max-width: 62ch; }
+h1 code { font-size: 0.8em; }
+h2 { font-size: 1.05rem; margin: 0; }
+h3 { font-size: 0.95rem; margin: 0; }
+p { margin: 0; max-width: 72ch; }
+.eyebrow { font: 12px var(--mono); color: var(--muted); letter-spacing: 0.04em; }
+.sub { color: var(--muted); }
+header { display: grid; gap: 10px; }
+
+.trust { background: var(--sunk); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; display: grid; gap: 8px; font-size: 13.5px; }
+.trust dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; }
+.trust dt { color: var(--muted); }
+.trust dd { margin: 0; }
+.trust .warnline { color: var(--warn); font-weight: 600; }
+
+.checks { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
+.chk { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; row-gap: 0; align-items: baseline; border: 1px solid var(--rule); border-radius: 6px; padding: 6px 9px; background: var(--surface); font-size: 13px; }
+.chk .st { font: 600 10.5px var(--sans); letter-spacing: 0.05em; text-transform: uppercase; border-radius: 4px; padding: 1px 5px; grid-row: span 2; align-self: start; margin-top: 2px; }
+.chk.found .st { background: var(--warn-bg); color: var(--warn); }
+.chk.clean .st { background: var(--ok-bg); color: var(--ok); }
+.chk.unchecked { border-style: dashed; background: transparent; }
+.chk.unchecked .st { background: var(--mute-bg); color: var(--muted); }
+.chk.unchecked .what { color: var(--muted); }
+.chk .src { color: var(--muted); font-size: 11.5px; grid-column: 2; }
+
+nav.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; background: var(--bg); border-bottom: 1px solid var(--rule); display: flex; gap: 2px; overflow-x: auto; padding-top: 4px; }
+nav.tabs a { color: var(--muted); padding: 8px 12px; border-bottom: 2px solid transparent; white-space: nowrap; font-size: 14px; }
+nav.tabs a:hover { color: var(--ink); text-decoration: none; }
+nav.tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+nav.tabs a .n { font: 11.5px var(--mono); color: var(--muted); margin-left: 5px; }
+
+.view { display: grid; gap: 16px; scroll-margin-top: 60px; }
+.js .view { display: none; }
+.js .view.on { display: grid; }
+.viewhead { display: grid; gap: 4px; }
+.viewhead p { color: var(--muted); font-size: 14px; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; display: grid; gap: 10px; }
+.panel > p { color: var(--muted); font-size: 13.5px; }
+
+.decisions { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.dec { display: grid; grid-template-columns: 96px 1fr; gap: 12px; background: var(--surface); border: 1px solid var(--rule); border-left-width: 4px; border-radius: 6px; padding: 10px 14px; }
+.dec.critical { border-left-color: var(--bad); } .dec.high { border-left-color: var(--warn); }
+.dec.medium { border-left-color: var(--k-protected); } .dec.low { border-left-color: var(--k-process); }
+.dec .sev { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding-top: 3px; }
+.dec.critical .sev { color: var(--bad); } .dec.high .sev { color: var(--warn); }
+.dec div { display: grid; gap: 4px; }
+.dec .act { font-size: 13.5px; color: var(--muted); }
+.dec .act b { color: var(--ink); }
+
+.figures { display: flex; flex-wrap: wrap; gap: 12px 40px; padding-block: 4px; }
+.fig { display: grid; gap: 1px; }
+.fig b { font: 600 1.5rem/1.1 var(--mono); font-variant-numeric: tabular-nums; }
+.fig span { font-size: 13px; }
+.fig small { font-size: 12px; color: var(--muted); }
+
+.chartbox { overflow-x: auto; }
+.chart { width: 100%; min-width: 520px; height: auto; display: block; }
+.chart .grid { stroke: var(--rule); }
+.chart .tick { fill: var(--muted); font: 11px var(--mono); }
+.chart .glabel { fill: var(--link); font: 12px var(--mono); }
+.chart .glabel.guardname { fill: var(--bad); font-weight: 600; }
+.chart .val { fill: var(--muted); font: 11px var(--mono); }
+.chart .line { fill: none; stroke: var(--ink); stroke-width: 2; }
+.chart .pt { fill: var(--ink); }
+.chart .mk { stroke: var(--k-config); stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.8; }
+.chart .mk.guard { stroke-width: 2.5; stroke-dasharray: none; opacity: 1; }
+.chart .ann { fill: var(--k-config); font: 600 11px var(--mono); }
+.k-detector { fill: var(--k-detector); background: var(--k-detector); }
+.k-config { fill: var(--k-config); background: var(--k-config); }
+.k-baseline { fill: var(--k-baseline); background: var(--k-baseline); }
+.k-inline { fill: var(--k-inline); background: var(--k-inline); }
+.k-process { fill: var(--k-process); background: var(--k-process); }
+.k-protected { background: var(--k-protected); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; list-style: none; margin: 0; padding: 0; font-size: 12.5px; color: var(--muted); }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; flex: none; }
+
+.tablebox { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th { text-align: left; font: 600 11px var(--sans); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); padding: 6px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; background: var(--surface); }
+td { padding: 6px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; font-variant-numeric: tabular-nums; }
+tbody tr:last-child td { border-bottom: 0; }
+td.muted, .muted { color: var(--muted); }
+.badge { display: inline-block; font: 600 11px var(--sans); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+.badge.bad { background: var(--bad-bg); color: var(--bad); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.muted { background: var(--mute-bg); color: var(--muted); }
+
+details { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+details + details { margin-top: 6px; }
+summary { cursor: pointer; padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; list-style-position: inside; }
+summary .lbl { font: 600 13px var(--mono); min-width: 58px; }
+summary .d { font: 12px var(--mono); color: var(--muted); }
+summary .s { flex: 1 1 280px; font-size: 13.5px; }
+summary .cnt { font-size: 12px; color: var(--muted); }
+details[open] { border-color: var(--ink); }
+details:target { box-shadow: 0 0 0 2px var(--link); }
+.facts, .timeline { margin: 0; padding: 4px 14px 10px 30px; display: grid; gap: 4px; font-size: 13.5px; }
+.facts li, .timeline li { display: list-item; }
+.facts .dot, .timeline .dot { vertical-align: 0; }
+.gh { padding: 0 14px 10px; font-size: 12.5px; color: var(--muted); }
+
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.filters label { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.filters select, .filters input { font: 13px var(--sans); color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 5px 8px; }
+.filters input { min-width: 0; width: 220px; max-width: 100%; }
+.count { color: var(--muted); font-size: 13px; }
+.toggle { font: 13px var(--sans); color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
+
+@media (max-width: 640px) {
+  .dec { grid-template-columns: 1fr; gap: 4px; }
+  h1 { font-size: 1.2rem; }
+  .trust dl { grid-template-columns: 1fr; }
+  .trust dd { margin-bottom: 4px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+.src-link { font-size: 12px; white-space: nowrap; margin-left: 6px; }
+.src-link:not(:hover) { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">discipline audit · o/r · 8 merged changes, records from 2026-09-15 to 2026-09-20</div>
+    <h1>Look first: 1 loosening(s) of <code>ratified-paths</code>, a gate that guards the other gates, in 1 change(s) (<a href="#c-0000000000" class="chg">#6</a>). 4 more signal(s) follow.</h1>
+    <p class="sub">4 of 8 merged changes carried an exception beyond a skipped issue link. 3 of 6 records are requests in text, not effects anyone verified.</p>
+    <div class="trust" aria-label="What this report rests on">
+      <dl>
+        <dt>Audited</dt><dd><code>main</code> at <code>ffffffffff</code></dd>
+        <dt>Links</dt><dd><a href="https://github.com/o/r">https://github.com/o/r</a>, from the <code>origin</code> remote</dd>
+        <dt>Read</dt><dd>Git objects only: commit messages, <code>discipline.toml</code>, <code>discipline-baseline.toml</code> and the changed files. Nothing was read from the network.</dd>
+        <dt>Written by</dt><dd>discipline test</dd>
+      </dl>
+      <p class="warnline">A record is a prompt to look, not a finding of wrongdoing. What git cannot tell is listed as not checked below; it is not a clean result.</p>
+    </div>
+    <ul class="checks" aria-label="What was checked"><li class="chk found"><span class="st">Found</span><span class="what">Guard gates loosened</span><span class="src">1 in 1 change(s)</span></li><li class="chk found"><span class="st">Found</span><span class="what">Hidden directives</span><span class="src">1 in 1 change(s)</span></li><li class="chk clean"><span class="st">Checked, none</span><span class="what">Unreadable configurations</span><span class="src">from git</span></li><li class="chk found"><span class="st">Found</span><span class="what">Loosened with no pull request</span><span class="src">1 in 1 change(s)</span></li><li class="chk clean"><span class="st">Checked, none</span><span class="what">Loosened with no waiver</span><span class="src">from git</span></li><li class="chk clean"><span class="st">Checked, none</span><span class="what">Waived, then loosened</span><span class="src">from git</span></li><li class="chk found"><span class="st">Found</span><span class="what">Loosenings not restored</span><span class="src">2 in 2 change(s)</span></li><li class="chk found"><span class="st">Found</span><span class="what">Baseline growth</span><span class="src">1 in 1 change(s)</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Waivers that lifted nothing</span><span class="src">needs `discipline replay`: a directive in a commit message may have lifted nothing</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Directives in pull request bodies</span><span class="src">pull request bodies are not read</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Owner ratification</span><span class="src">needs the forge: ratification comments live on issues</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Review by another person</span><span class="src">needs the forge: reviews live on pull requests</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Which agent made a change</span><span class="src">no record of which agent made a change is kept in history</span></li></ul>
+  </header>
+
+  <nav class="tabs" aria-label="Report views">
+    <a href="#overview" data-view="overview">Overview</a>
+    <a href="#protected" data-view="protected">Protected paths <span class="n">0</span></a>
+    <a href="#configuration" data-view="configuration">Configuration</a>
+    <a href="#waivers" data-view="waivers">Waivers</a>
+    <a href="#changes" data-view="changes">Changes <span class="n">6</span></a>
+    <a href="#gates" data-view="gates">Gates</a>
+    <a href="#records" data-view="records">All records <span class="n">6</span></a>
+  </nav>
+
+  <section class="view" id="overview">
+    <div class="viewhead"><h2>Needs a decision</h2><p>Ranked by what the exception could hide. Each item is a prompt to look, not a finding of wrongdoing.</p></div>
+    <ol class="decisions"><li class="dec critical"><span class="sev">Look first</span><div><p>1 loosening(s) of <code>ratified-paths</code>, a gate that guards the other gates, in 1 change(s) (<a href="#c-0000000000" class="chg">#6</a>).</p><p class="act"><b>Next:</b> Open the change and confirm each loosened option of a gate that guards the other gates was intended.</p></div></li><li class="dec critical"><span class="sev">Look first</span><div><p>1 directive(s) hidden in an HTML comment, in 1 change(s) (<a href="#c-0000000000" class="chg">#5</a>).</p><p class="act"><b>Next:</b> Read the commit message as text: a directive inside an HTML comment does not show where the message is rendered.</p></div></li><li class="dec high"><span class="sev">Look soon</span><div><p>1 loosening(s) arrived in 1 push(es) with no pull request (<a href="#c-0000000000" class="chg">0000000000</a>).</p><p class="act"><b>Next:</b> Confirm the loosening with whoever pushed it: there was no pull request to review it in.</p></div></li><li class="dec medium"><span class="sev">Review</span><div><p>2 loosening(s) were never tightened back (<a href="#c-0000000000" class="chg">#6</a>, <a href="#c-0000000000" class="chg">0000000000</a>).</p><p class="act"><b>Next:</b> Tighten the option back, or record why the looser value stays.</p></div></li><li class="dec medium"><span class="sev">Review</span><div><p>the baseline grew for <code>stub-bodies</code> (<a href="#c-0000000000" class="chg">#2</a>).</p><p class="act"><b>Next:</b> Fix the grandfathered findings, or record why each stays in the baseline.</p></div></li></ol>
+    <div class="figures" aria-label="Figures"><div class="fig"><b>2</b><span>config loosenings</span><small>2 not restored</small></div><div class="fig"><b>4/8</b><span>changes with an exception</span><small>beyond a skipped issue link</small></div><div class="fig"><b>0</b><span>protected-path edits</span><small>ratification not checked</small></div><div class="fig"><b>5</b><span>questions not checked</span><small>see the strip above</small></div></div>
+    <div class="panel">
+      <h3>Changes with an exception, over time</h3>
+      <p>Share of merged changes, per window, that carried anything beyond a skipped issue link. Red lines mark configuration loosenings; a solid one loosened a gate that guards the other gates.</p>
+      <div class="chartbox"><svg viewBox="0 0 760 230" class="chart" role="img" aria-labelledby="t-rate"><title id="t-rate">Share of changes with an exception beyond a skipped issue link, per 8 merged changes, oldest on the left</title><line x1="40" x2="748" y1="186.0" y2="186.0" class="grid"/><text x="34" y="190.0" class="tick" text-anchor="end">0%</text><line x1="40" x2="748" y1="143.0" y2="143.0" class="grid"/><text x="34" y="147.0" class="tick" text-anchor="end">25%</text><line x1="40" x2="748" y1="100.0" y2="100.0" class="grid"/><text x="34" y="104.0" class="tick" text-anchor="end">50%</text><line x1="40" x2="748" y1="57.0" y2="57.0" class="grid"/><text x="34" y="61.0" class="tick" text-anchor="end">75%</text><line x1="40" x2="748" y1="14.0" y2="14.0" class="grid"/><text x="34" y="18.0" class="tick" text-anchor="end">100%</text><polyline class="line" points="394.0,100.0"/><circle cx="394.0" cy="100.0" r="3" class="pt"><title>50% of 8 changes up to 2026-09-20</title></circle><text x="394.0" y="202" class="tick" text-anchor="middle">09-20</text><line x1="394.0" x2="394.0" y1="14" y2="186" class="mk guard"><title>#6: ratified-paths loosened</title></line><text x="390.0" y="24" class="ann" text-anchor="end">#6 ratified-paths</text><line x1="394.0" x2="394.0" y1="14" y2="186" class="mk"><title>0000000000: pii loosened</title></line><text x="40" y="222" class="tick">oldest</text><text x="748" y="222" class="tick" text-anchor="end">newest · red lines: config loosenings</text></svg></div>
+    </div>
+    <div class="panel">
+      <h3>Where the exceptions are</h3>
+      <ul class="legend"><li><span class="dot k-detector"></span>Waived finding (directive)</li><li><span class="dot k-inline"></span>Inline marker outside tests and docs</li></ul>
+      <p>Markers in tests and docs are left out. Gate names in red guard the other gates. Select a gate to see its history.</p>
+      <div class="chartbox"><svg viewBox="0 0 760 74" class="chart" role="img" aria-labelledby="t-gate"><title id="t-gate">Finding waivers and inline markers outside tests and docs, per gate</title><line x1="180.0" x2="180.0" y1="4" y2="50" class="grid"/><text x="180.0" y="66" class="tick" text-anchor="middle">0</text><line x1="720.0" x2="720.0" y1="4" y2="50" class="grid"/><text x="720.0" y="66" class="tick" text-anchor="middle">5</text><a href="#g-config-integrity"><text x="172" y="19" class="glabel guardname" text-anchor="end">config-integrity</text></a><rect x="180.0" y="6" width="108.0" height="14" class="k-detector"><title>config-integrity: 1 finding waivers</title></rect><text x="293.0" y="19" class="val">1</text><a href="#g-stub-bodies"><text x="172" y="41" class="glabel" text-anchor="end">stub-bodies</text></a><rect x="180.0" y="28" width="108.0" height="14" class="k-detector"><title>stub-bodies: 1 finding waivers</title></rect><text x="293.0" y="41" class="val">1</text></svg></div>
+    </div>
+  </section>
+
+  <section class="view" id="protected">
+    <div class="viewhead"><h2>Protected paths</h2><p>Changes that edited a path the parent configuration protects under <code>ratified-paths</code>. Whether each was ratified, and by whom, lives on the forge and is not checked here.</p></div>
+    <div class="panel"><p class="muted">No change edited a path protected by <code>ratified-paths</code> in its parent configuration.</p><p><b>Next:</b> open each change and confirm its ratification came from someone other than the change's author.</p></div>
+  </section>
+
+  <section class="view" id="configuration">
+    <div class="viewhead"><h2>Configuration</h2><p>Every loosening of <code>discipline.toml</code>, as <code>config-integrity</code> judges it, newest first, with the change that restored it.</p></div>
+    <div class="panel"><h3>Loosenings</h3><div class="tablebox"><table><thead><tr><th>Change</th><th>Date</th><th>Gate</th><th>What</th><th>Flags</th><th>Restored</th></tr></thead><tbody><tr><td><a href="#c-0000000000" class="chg">#6</a></td><td>2026-09-20</td><td><a href="#g-ratified-paths"><code>ratified-paths</code></a></td><td><code>ratifiers</code> gained 1 <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000000abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></td><td><span class="badge bad">guards the gates</span> <span class="badge muted">waived in same change</span></td><td><span class="badge warn">open</span></td></tr><tr><td><a href="#c-0000000000" class="chg">0000000000</a></td><td>2026-09-18</td><td><a href="#g-pii"><code>pii</code></a></td><td><code>exempt_paths</code> gained 1 <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000002abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></td><td><span class="badge warn">no pull request</span></td><td><span class="badge warn">open</span></td></tr></tbody></table></div><p><b>Next:</b> tighten each open loosening back, or record why it stays.</p></div>
+    <div class="panel"><h3>Tightenings</h3><div class="tablebox"><table><thead><tr><th>Change</th><th>Date</th><th>Gate</th><th>What</th></tr></thead><tbody><tr><td><a href="#c-0000000000" class="chg">#3</a></td><td>2026-09-17</td><td><a href="#g-pii"><code>pii</code></a></td><td><code>exempt_paths</code> 1 entr(y/ies) <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000003abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></td></tr></tbody></table></div></div>
+  </section>
+
+  <section class="view" id="waivers">
+    <div class="viewhead"><h2>Waivers</h2><p>Directives in commit messages, grouped by change. Whether each lifted a finding is <code>discipline replay</code>'s to say.</p></div>
+    <div class="panel"><h3>Waived findings <span class="muted">(2)</span></h3><div class="tablebox"><table><thead><tr><th>Change</th><th>Date</th><th>Directive</th><th>Gate</th><th>Reason length</th><th>Lifted a finding</th></tr></thead><tbody><tr><td><a href="#c-0000000000" class="chg">#6</a></td><td>2026-09-20</td><td><code>allow-gate-weakening</code> <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000000abc" title="Open where this is">commit message ↗</a></td><td><a href="#g-config-integrity"><code>config-integrity</code></a></td><td>30</td><td class="muted">not checked</td></tr><tr><td><a href="#c-0000000000" class="chg">#5</a></td><td>2026-09-19</td><td><code>allow-stub</code> <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000001abc" title="Open where this is">commit message ↗</a></td><td><a href="#g-stub-bodies"><code>stub-bodies</code></a></td><td>10</td><td class="muted">not checked</td></tr></tbody></table></div></div>
+    <div class="panel"><h3>Skipped issue links <span class="muted">(1)</span></h3><p>Reasons are hashed. These were reused three times or more, which suggests boilerplate.</p><p class="muted">No reason reused three times.</p></div>
+    <div class="panel"><h3>Inline markers outside tests and docs</h3><p>All markers by where they are: none.</p><p class="muted">None.</p></div>
+  </section>
+
+  <section class="view" id="changes">
+    <div class="viewhead"><h2>Changes</h2><p>Everything each change did, newest first. Only changes with a record are listed.</p></div>
+    <div><details id="c-0000000000"><summary><span class="lbl">#6</span><span class="d">2026-09-20</span><span class="s">chore: widen ratifiers (#6)</span><span class="cnt">1 config · 1 detector</span></summary><ul class="facts"><li><span class="dot k-detector"></span>Directive <code>allow-gate-weakening</code> (config-integrity), reason 30 chars <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000000abc" title="Open where this is">commit message ↗</a></li><li><span class="dot k-config"></span>Loosened <code>ratified-paths.ratifiers</code>: gained 1 <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000000abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></li></ul><p class="gh"><a href="https://github.com/o/r/pull/6">pull request #6</a> <code>0000000000</code></p></details><details id="c-0000000000"><summary><span class="lbl">#5</span><span class="d">2026-09-19</span><span class="s">feat: &lt;script&gt;alert(1)&lt;/script&gt; &amp; stubs (#5)</span><span class="cnt">1 detector</span></summary><ul class="facts"><li><span class="dot k-detector"></span>Directive <code>allow-stub</code> (stub-bodies), reason 10 chars <span class="badge warn">hidden</span> <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000001abc" title="Open where this is">commit message ↗</a></li></ul><p class="gh"><a href="https://github.com/o/r/pull/5">pull request #5</a> <code>0000000000</code></p></details><details id="c-0000000000"><summary><span class="lbl">0000000000</span><span class="d">2026-09-18</span><span class="s">chore: exempt a</span><span class="cnt">1 config</span></summary><ul class="facts"><li><span class="dot k-config"></span>Loosened <code>pii.exempt_paths</code>: gained 1 <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000002abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></li></ul><p class="gh"><a href="https://github.com/o/r/commit/0000000000000000000000000000000000002abc">commit</a> <code>0000000000</code></p></details><details id="c-0000000000"><summary><span class="lbl">#3</span><span class="d">2026-09-17</span><span class="s">chore: drop the exemption (#3)</span><span class="cnt">1 config</span></summary><ul class="facts"><li><span class="dot k-config"></span>Tightened <code>pii.exempt_paths</code> <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000003abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></li></ul><p class="gh"><a href="https://github.com/o/r/pull/3">pull request #3</a> <code>0000000000</code></p></details><details id="c-0000000000"><summary><span class="lbl">#2</span><span class="d">2026-09-16</span><span class="s">chore: grandfather (#2)</span><span class="cnt">1 baseline</span></summary><ul class="facts"><li><span class="dot k-baseline"></span>1 <code>stub-bodies</code> findings grandfathered <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000004abc/discipline-baseline.toml" title="Open where this is">discipline-baseline.toml ↗</a></li></ul><p class="gh"><a href="https://github.com/o/r/pull/2">pull request #2</a> <code>0000000000</code></p></details><details id="c-0000000000"><summary><span class="lbl">#1</span><span class="d">2026-09-15</span><span class="s">chore: release (#1)</span><span class="cnt">1 process</span></summary><ul class="facts"><li><span class="dot k-process"></span>Directive <code>no-issue</code> (issue-link), reason 19 chars <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000005abc" title="Open where this is">commit message ↗</a></li></ul><p class="gh"><a href="https://github.com/o/r/pull/1">pull request #1</a> <code>0000000000</code></p></details></div>
+  </section>
+
+  <section class="view" id="gates">
+    <div class="viewhead"><h2>Gates</h2><p>Each gate's history, oldest first.</p></div>
+    <div><details id="g-config-integrity"><summary><code class="lbl">config-integrity</code><span class="badge bad">guards the gates</span><span class="cnt">1 directive</span></summary><ol class="timeline"><li><span class="dot k-detector"></span>2026-09-20 <a href="#c-0000000000" class="chg">#6</a> waived by <code>allow-gate-weakening</code> <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000000abc" title="Open where this is">commit message ↗</a></li></ol></details><details id="g-issue-link"><summary><code class="lbl">issue-link</code><span class="cnt">1 directive</span></summary><ol class="timeline"><li><span class="dot k-process"></span>2026-09-15 <a href="#c-0000000000" class="chg">#1</a> waived by <code>no-issue</code> <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000005abc" title="Open where this is">commit message ↗</a></li></ol></details><details id="g-pii"><summary><code class="lbl">pii</code><span class="cnt">1 config · 1 config-tightening</span></summary><ol class="timeline"><li><span class="dot k-config"></span>2026-09-17 <a href="#c-0000000000" class="chg">#3</a> tightened <code>exempt_paths</code> <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000003abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></li><li><span class="dot k-config"></span>2026-09-18 <a href="#c-0000000000" class="chg">0000000000</a> <b>loosened</b> <code>exempt_paths</code> gained <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000002abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></li></ol></details><details id="g-ratified-paths"><summary><code class="lbl">ratified-paths</code><span class="badge bad">guards the gates</span><span class="cnt">1 config</span></summary><ol class="timeline"><li><span class="dot k-config"></span>2026-09-20 <a href="#c-0000000000" class="chg">#6</a> <b>loosened</b> <code>ratifiers</code> gained <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000000abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></li></ol></details><details id="g-stub-bodies"><summary><code class="lbl">stub-bodies</code><span class="cnt">1 baseline · 1 directive</span></summary><ol class="timeline"><li><span class="dot k-baseline"></span>2026-09-16 <a href="#c-0000000000" class="chg">#2</a> baseline grew <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000004abc/discipline-baseline.toml" title="Open where this is">discipline-baseline.toml ↗</a></li><li><span class="dot k-detector"></span>2026-09-19 <a href="#c-0000000000" class="chg">#5</a> waived by <code>allow-stub</code> <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000001abc" title="Open where this is">commit message ↗</a></li></ol></details></div>
+  </section>
+
+  <section class="view" id="records">
+    <div class="viewhead"><h2>All records</h2><p>"Author's text" rows could have been worded to pass; "Repository" rows are changes to files on the audited branch.</p></div>
+    <div class="panel">
+      <div class="filters">
+        <label for="f-class">Kind
+          <select id="f-class">
+            <option value="">Everything</option>
+            <option value="nonroutine" selected>Everything but skipped issue links</option>
+            <option value="detector">Waived findings</option>
+            <option value="config">Config loosenings</option>
+            <option value="inline">Inline markers</option>
+            <option value="baseline">Baseline growth</option>
+            <option value="process">Skipped issue links</option>
+          </select>
+        </label>
+        <label for="f-gate">Gate <select id="f-gate"><option value="">Any gate</option><option value="config-integrity">config-integrity</option><option value="issue-link">issue-link</option><option value="pii">pii</option><option value="ratified-paths">ratified-paths</option><option value="stub-bodies">stub-bodies</option></select></label>
+        <label for="f-text">Search <input id="f-text" type="search" placeholder="#12, ci.yml, allow-stub"></label>
+      </div>
+      <div class="count" id="count" aria-live="polite"></div>
+      <div class="tablebox"><table><thead><tr><th>Change</th><th>Date</th><th>Kind</th><th>Gate</th><th>What</th><th>Status</th><th>Source</th></tr></thead><tbody><tr data-class="detector" data-gate="config-integrity"><td><a href="#c-0000000000" class="chg">#6</a></td><td>2026-09-20</td><td><span class="dot k-detector"></span>Waived finding</td><td><code>config-integrity</code></td><td><code>allow-gate-weakening</code> <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000000abc" title="Open where this is">commit message ↗</a></td><td>Requested</td><td>Author's text</td></tr><tr data-class="config" data-gate="ratified-paths"><td><a href="#c-0000000000" class="chg">#6</a></td><td>2026-09-20</td><td><span class="dot k-config"></span>Config loosening</td><td><code>ratified-paths</code></td><td><code>ratifiers</code> gained <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000000abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></td><td>In effect</td><td>Repository</td></tr><tr data-class="detector" data-gate="stub-bodies"><td><a href="#c-0000000000" class="chg">#5</a></td><td>2026-09-19</td><td><span class="dot k-detector"></span>Waived finding</td><td><code>stub-bodies</code></td><td><code>allow-stub</code> <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000001abc" title="Open where this is">commit message ↗</a></td><td>Requested</td><td>Author's text</td></tr><tr data-class="config" data-gate="pii"><td><a href="#c-0000000000" class="chg">0000000000</a></td><td>2026-09-18</td><td><span class="dot k-config"></span>Config loosening</td><td><code>pii</code></td><td><code>exempt_paths</code> gained <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000002abc/discipline.toml#L5" title="Open where this is">discipline.toml:5 ↗</a></td><td>In effect</td><td>Repository</td></tr><tr data-class="baseline" data-gate="stub-bodies"><td><a href="#c-0000000000" class="chg">#2</a></td><td>2026-09-16</td><td><span class="dot k-baseline"></span>Baseline growth</td><td><code>stub-bodies</code></td><td>1 added <a class="src-link" href="https://github.com/o/r/blob/0000000000000000000000000000000000004abc/discipline-baseline.toml" title="Open where this is">discipline-baseline.toml ↗</a></td><td>In effect</td><td>Repository</td></tr><tr data-class="process" data-gate="issue-link"><td><a href="#c-0000000000" class="chg">#1</a></td><td>2026-09-15</td><td><span class="dot k-process"></span>Skipped issue link</td><td><code>issue-link</code></td><td><code>no-issue</code> <a class="src-link" href="https://github.com/o/r/commit/0000000000000000000000000000000000005abc" title="Open where this is">commit message ↗</a></td><td>Requested</td><td>Author's text</td></tr></tbody></table></div>
+    </div>
+  </section>
+</div>
+<script>
+(() => {
+  document.documentElement.classList.add('js');
+  const views = [...document.querySelectorAll('.view')];
+  const tabs = [...document.querySelectorAll('nav.tabs a')];
+  const show = (id, target) => {
+    for (const v of views) v.classList.toggle('on', v.id === id);
+    for (const t of tabs) {
+      if (t.dataset.view === id) t.setAttribute('aria-current', 'page');
+      else t.removeAttribute('aria-current');
+    }
+    if (target) { target.open = true; target.scrollIntoView({ block: 'start' }); }
+  };
+  const route = () => {
+    const h = decodeURIComponent(location.hash.slice(1));
+    const el = h && document.getElementById(h);
+    if (el && el.classList.contains('view')) return show(h);
+    if (el && el.tagName === 'DETAILS') return show(el.closest('.view').id, el);
+    show('overview');
+  };
+  addEventListener('hashchange', route);
+  route();
+
+  const rows = [...document.querySelectorAll('#rows tr')];
+  const fc = document.getElementById('f-class');
+  const fg = document.getElementById('f-gate');
+  const ft = document.getElementById('f-text');
+  const count = document.getElementById('count');
+  if (!fc) return;
+  const apply = () => {
+    const c = fc.value, g = fg.value, q = ft.value.trim().toLowerCase();
+    let n = 0;
+    for (const r of rows) {
+      const on = (c === '' || (c === 'nonroutine' ? r.dataset.class !== 'process' : r.dataset.class === c))
+        && (g === '' || r.dataset.gate === g)
+        && (q === '' || r.textContent.toLowerCase().includes(q));
+      r.hidden = !on;
+      if (on) n++;
+    }
+    count.textContent = n + ' of ' + rows.length + ' records';
+  };
+  for (const el of [fc, fg, ft]) el.addEventListener('input', apply);
+  apply();
+})();
+</script>
+</body>
+</html>

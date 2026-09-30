@@ -292,7 +292,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--last=[Number of first-parent commits (merged changes) to audit, newest first]:LAST:_default' \
 '--ref=[Branch whose history is audited (default\: origin'\''s default branch, else main / master)]:REFERENCE:_default' \
-'--json[Print the records as JSON]' \
+'--format=[Output format\: \`text\`, \`json\`, or \`html\` (one self-contained page)]:FORMAT:(text json html)' \
+'-o+[Write the output to this file instead of stdout]:OUTPUT:_files' \
+'--output=[Write the output to this file instead of stdout]:OUTPUT:_files' \
+'--json[Print the records as JSON (the same as \`--format json\`)]' \
 '--reasons[Include each directive'\''s reason text (by default only its SHA-256 and length)]' \
 '-h[Print help]' \
 '--help[Print help]' \

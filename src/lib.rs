@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod audit;
+pub mod audit_html;
 pub mod baseline;
 pub mod cli;
 pub mod comment;

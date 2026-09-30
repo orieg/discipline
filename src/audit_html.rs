@@ -1,0 +1,1166 @@
+//! `discipline audit --format html`: the audit as one self-contained page.
+//!
+//! The page renders the [`Summary`] the JSON output prints and nothing else: every
+//! number, row and sentence comes from a field of that JSON. It loads nothing: the
+//! styles and the one script are inlined, the charts are SVG drawn here, and fonts are
+//! the reader's system fonts. Without the script every view prints in sequence; with it,
+//! the views become tabs reachable by `#anchor` (`#protected`, `#c-<commit>`, `#g-<gate>`).
+//! Author-written text (subjects, file names, directive names) is escaped.
+
+use crate::audit::{Record, Signal, Summary, GUARD_GATES};
+use std::collections::{BTreeMap, BTreeSet};
+
+const STYLE: &str = include_str!("audit_html/style.css");
+const SCRIPT: &str = include_str!("audit_html/app.js");
+
+/// Escape text for HTML content and attribute values.
+pub fn esc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// `YYYY-MM-DD` (UTC) for seconds since the Unix epoch.
+pub fn date(secs: i64) -> String {
+    // Days to civil date: H. Hinnant, "chrono-Compatible Low-Level Date Algorithms"
+    // (http://howardhinnant.github.io/date_algorithms.html, `civil_from_days`).
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn label(r: &Record) -> String {
+    match r.pr {
+        Some(n) => format!("#{n}"),
+        None => r.sha.chars().take(10).collect(),
+    }
+}
+
+fn anchor(r: &Record) -> String {
+    format!("c-{}", &r.sha[..r.sha.len().min(10)])
+}
+
+/// Link to a change's entry in the Changes view.
+fn ch(r: &Record) -> String {
+    format!(
+        r##"<a href="#{}" class="chg">{}</a>"##,
+        anchor(r),
+        esc(&label(r))
+    )
+}
+
+/// Where a file sits: markers in tests and docs are expected in a repository that
+/// documents its own markers; the others are the ones to read.
+fn role(path: Option<&str>) -> &'static str {
+    let Some(p) = path else { return "other" };
+    let name = p.rsplit('/').next().unwrap_or(p);
+    if p.starts_with(".github/")
+        || p.starts_with(".gitea/")
+        || p.starts_with(".forgejo/")
+        || p == "action.yml"
+        || p == ".gitlab-ci.yml"
+    {
+        "workflow"
+    } else if matches!(name, "AGENTS.md" | "CLAUDE.md" | "GEMINI.md")
+        || p.starts_with(".claude/")
+        || p.starts_with(".agents/")
+    {
+        "agent instructions"
+    } else if p.starts_with("tests/")
+        || p.starts_with("test/")
+        || p.starts_with("docs/")
+        || p.contains("/tests/")
+        || p.contains("fixtures")
+        || p.ends_with(".md")
+        || p.contains("selftest")
+    {
+        "test or doc"
+    } else {
+        "live code"
+    }
+}
+
+fn change_str(r: &Record) -> String {
+    r.change
+        .and_then(|c| serde_json::to_value(c).ok())
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+fn signal_sentence(s: &Signal, summary: &Summary) -> String {
+    let n = s.count;
+    let c = s.changes.len();
+    let gates: BTreeSet<&str> = s
+        .records
+        .iter()
+        .filter_map(|&i| summary.records.get(i).and_then(|r| r.gate.as_deref()))
+        .collect();
+    let gates = gates
+        .iter()
+        .map(|g| format!("<code>{}</code>", esc(g)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match s.id {
+        "guard-gate-loosened" => format!(
+            "{n} loosening(s) of {gates}, a gate that guards the other gates, in {c} change(s)"
+        ),
+        "hidden-directive" => {
+            format!("{n} directive(s) hidden in an HTML comment, in {c} change(s)")
+        }
+        "config-unreadable" => {
+            format!("{n} historical configuration(s) this binary could not read")
+        }
+        "loosened-without-pull-request" => {
+            format!("{n} loosening(s) arrived in {c} push(es) with no pull request")
+        }
+        "loosening-without-waiver" => format!(
+            "{n} loosening(s) carry no <code>allow-gate-weakening</code> in the commit message"
+        ),
+        "waived-then-loosened" => {
+            format!("{n} loosening(s) of {gates} followed waivers of the same gate")
+        }
+        "loosened-not-restored" => format!("{n} loosening(s) were never tightened back"),
+        "baseline-grew" => format!("the baseline grew for {gates}"),
+        _ => format!("{n} record(s)"),
+    }
+}
+
+fn change_links(s: &Signal, summary: &Summary) -> String {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for &i in &s.records {
+        let Some(r) = summary.records.get(i) else {
+            continue;
+        };
+        if seen.insert(r.sha.clone()) {
+            out.push(ch(r));
+        }
+    }
+    let more = out.len().saturating_sub(10);
+    let mut text = out.into_iter().take(10).collect::<Vec<_>>().join(", ");
+    if more > 0 {
+        text.push_str(&format!(" and {more} more"));
+    }
+    text
+}
+
+const RANK_LABEL: &[(&str, &str, &str)] = &[
+    ("look-first", "Look first", "critical"),
+    ("look-soon", "Look soon", "high"),
+    ("review", "Review", "medium"),
+];
+
+fn rank(r: &str) -> (&'static str, &'static str) {
+    RANK_LABEL
+        .iter()
+        .find(|(k, _, _)| *k == r)
+        .map(|(_, l, c)| (*l, *c))
+        .unwrap_or(("Review", "medium"))
+}
+
+const CHECK_LABEL: &[(&str, &str)] = &[
+    ("guard-gate-loosened", "Guard gates loosened"),
+    ("hidden-directive", "Hidden directives"),
+    ("config-unreadable", "Unreadable configurations"),
+    (
+        "loosened-without-pull-request",
+        "Loosened with no pull request",
+    ),
+    ("loosening-without-waiver", "Loosened with no waiver"),
+    ("waived-then-loosened", "Waived, then loosened"),
+    ("loosened-not-restored", "Loosenings not restored"),
+    ("baseline-grew", "Baseline growth"),
+    ("directive-lifted-a-finding", "Waivers that lifted nothing"),
+    (
+        "pull-request-body-directives",
+        "Directives in pull request bodies",
+    ),
+    ("owner-ratification", "Owner ratification"),
+    ("independent-review", "Review by another person"),
+    ("agent-identity", "Which agent made a change"),
+];
+
+fn check_label(id: &str) -> &str {
+    CHECK_LABEL
+        .iter()
+        .find(|(k, _)| *k == id)
+        .map(|(_, l)| *l)
+        .unwrap_or(id)
+}
+
+fn dot(class: &str) -> String {
+    format!(r##"<span class="dot k-{}"></span>"##, esc(class))
+}
+
+fn table(head: &[&str], rows: &str) -> String {
+    let th: String = head.iter().map(|h| format!("<th>{h}</th>")).collect();
+    format!(
+        r##"<div class="tablebox"><table><thead><tr>{th}</tr></thead><tbody>{rows}</tbody></table></div>"##
+    )
+}
+
+/// A restoring tightening of the same option in a newer change, if any.
+fn restored_by<'a>(r: &Record, s: &'a Summary) -> Option<&'a Record> {
+    s.tightenings
+        .iter()
+        .filter(|t| t.ord < r.ord && t.gate == r.gate && t.key == r.key)
+        .max_by_key(|t| t.ord)
+}
+
+fn waived_in_change(r: &Record, s: &Summary) -> bool {
+    s.records.iter().any(|x| {
+        x.kind == "directive" && x.sha == r.sha && x.gate.as_deref() == Some("config-integrity")
+    })
+}
+
+/// Share of changes, per window of `bin` changes, that carried a non-routine exception,
+/// oldest window first, with configuration loosenings marked.
+fn rate_chart(s: &Summary) -> String {
+    let n = s.changes.max(1);
+    let bin = 20.min(n);
+    let nb = n.div_ceil(bin);
+    let mut hit: BTreeSet<usize> = BTreeSet::new();
+    let mut newest_time: BTreeMap<usize, i64> = BTreeMap::new();
+    for r in &s.records {
+        if r.class != "process" {
+            hit.insert(r.ord);
+        }
+    }
+    for r in s
+        .records
+        .iter()
+        .chain(&s.protected_edits)
+        .chain(&s.tightenings)
+    {
+        newest_time.entry(r.ord).or_insert(r.time);
+    }
+    // Window b (0 = oldest) covers change positions [lo, hi).
+    let window = |b: usize| {
+        let hi = n - b * bin;
+        let lo = hi.saturating_sub(bin);
+        (lo, hi)
+    };
+    let (w, h, l, bottom, top) = (760.0, 230.0, 40.0, 44.0, 14.0);
+    let (pw, ph) = (w - l - 12.0, h - bottom - top);
+    let x = |b: usize| l + pw * (b as f64 + 0.5) / nb as f64;
+    let y = |v: f64| top + ph - ph * v;
+    let mut o = String::new();
+    o.push_str(&format!(r##"<svg viewBox="0 0 {w} {h}" class="chart" role="img" aria-labelledby="t-rate"><title id="t-rate">Share of changes with an exception beyond a skipped issue link, per {bin} merged changes, oldest on the left</title>"##));
+    for v in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        o.push_str(&format!(r##"<line x1="{l}" x2="{}" y1="{:.1}" y2="{:.1}" class="grid"/><text x="{}" y="{:.1}" class="tick" text-anchor="end">{}%</text>"##,
+            w - 12.0,
+            y(v),
+            y(v),
+            l - 6.0,
+            y(v) + 4.0,
+            (v * 100.0) as u32));
+    }
+    let mut pts = Vec::new();
+    for b in 0..nb {
+        let (lo, hi) = window(b);
+        let share = hit.range(lo..hi).count() as f64 / (hi - lo) as f64;
+        pts.push((b, share, lo, hi));
+    }
+    let poly: Vec<String> = pts
+        .iter()
+        .map(|(b, v, _, _)| format!("{:.1},{:.1}", x(*b), y(*v)))
+        .collect();
+    o.push_str(&format!(
+        r##"<polyline class="line" points="{}"/>"##,
+        poly.join(" ")
+    ));
+    for (b, v, lo, hi) in &pts {
+        let when = newest_time
+            .range(lo..hi)
+            .next()
+            .map(|(_, t)| format!(" up to {}", date(*t)))
+            .unwrap_or_default();
+        o.push_str(&format!(r##"<circle cx="{:.1}" cy="{:.1}" r="3" class="pt"><title>{}% of {} changes{when}</title></circle>"##,
+            x(*b),
+            y(*v),
+            (v * 100.0).round() as u32,
+            hi - lo));
+    }
+    let step = (nb / 6).max(1);
+    for b in (0..nb).step_by(step) {
+        let (lo, hi) = window(b);
+        if let Some((_, t)) = newest_time.range(lo..hi).next() {
+            o.push_str(&format!(
+                r##"<text x="{:.1}" y="{}" class="tick" text-anchor="middle">{}</text>"##,
+                x(b),
+                h - bottom + 16.0,
+                &date(*t)[5..]
+            ));
+        }
+    }
+    let mut marked = BTreeSet::new();
+    for r in s.records.iter().filter(|r| r.kind == "config") {
+        if !marked.insert(r.sha.clone()) {
+            continue;
+        }
+        let b = (n - 1 - r.ord.min(n - 1)) / bin;
+        let guard = r.gate.as_deref().is_some_and(|g| GUARD_GATES.contains(&g));
+        let cls = if guard { "mk guard" } else { "mk" };
+        o.push_str(&format!(r##"<line x1="{:.1}" x2="{:.1}" y1="{top}" y2="{}" class="{cls}"><title>{}: {} loosened</title></line>"##,
+            x(b),
+            x(b),
+            top + ph,
+            esc(&label(r)),
+            esc(r.gate.as_deref().unwrap_or(""))));
+        if guard {
+            o.push_str(&format!(
+                r##"<text x="{:.1}" y="{}" class="ann" text-anchor="end">{} {}</text>"##,
+                x(b) - 4.0,
+                top + 10.0,
+                esc(&label(r)),
+                esc(r.gate.as_deref().unwrap_or(""))
+            ));
+        }
+    }
+    o.push_str(&format!(r##"<text x="{l}" y="{}" class="tick">oldest</text><text x="{}" y="{}" class="tick" text-anchor="end">newest · red lines: config loosenings</text></svg>"##,
+        h - 8.0,
+        w - 12.0,
+        h - 8.0));
+    o
+}
+
+/// Finding waivers and markers outside tests and docs, per gate.
+fn gate_chart(s: &Summary) -> String {
+    let mut waivers: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut markers: BTreeMap<&str, usize> = BTreeMap::new();
+    for r in &s.records {
+        let Some(g) = r.gate.as_deref() else { continue };
+        if r.kind == "directive" && r.class == "detector" {
+            *waivers.entry(g).or_default() += 1;
+        } else if r.kind == "inline-marker" && role(r.file.as_deref()) != "test or doc" {
+            *markers.entry(g).or_default() += 1;
+        }
+    }
+    let mut gates: Vec<(&str, usize)> = waivers
+        .keys()
+        .chain(markers.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|g| {
+            (
+                *g,
+                waivers.get(g).unwrap_or(&0) + markers.get(g).unwrap_or(&0),
+            )
+        })
+        .collect();
+    gates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    gates.truncate(12);
+    if gates.is_empty() {
+        return r##"<p class="muted">No finding waivers or markers outside tests and docs.</p>"##
+            .to_string();
+    }
+    let max = gates[0].1;
+    let top = max.div_ceil(5).max(1) * 5;
+    let (w, rh, l) = (760.0, 22.0, 180.0);
+    let h = rh * gates.len() as f64 + 30.0;
+    let pw = w - l - 40.0;
+    let mut o = String::new();
+    o.push_str(&format!(r##"<svg viewBox="0 0 {w} {h}" class="chart" role="img" aria-labelledby="t-gate"><title id="t-gate">Finding waivers and inline markers outside tests and docs, per gate</title>"##));
+    for t in (0..=top).step_by(5) {
+        let xx = l + pw * t as f64 / top as f64;
+        o.push_str(&format!(r##"<line x1="{xx:.1}" x2="{xx:.1}" y1="4" y2="{}" class="grid"/><text x="{xx:.1}" y="{}" class="tick" text-anchor="middle">{t}</text>"##,
+            h - 24.0,
+            h - 8.0));
+    }
+    for (i, (g, total)) in gates.iter().enumerate() {
+        let yy = 6.0 + i as f64 * rh;
+        let cls = if GUARD_GATES.contains(g) {
+            "glabel guardname"
+        } else {
+            "glabel"
+        };
+        o.push_str(&format!(r##"<a href="#g-{g}"><text x="{}" y="{}" class="{cls}" text-anchor="end">{g}</text></a>"##,
+            l - 8.0,
+            yy + 13.0,
+            g = esc(g)));
+        let mut xx = l;
+        for (count, cls, what) in [
+            (
+                waivers.get(g).copied().unwrap_or(0),
+                "k-detector",
+                "finding waivers",
+            ),
+            (
+                markers.get(g).copied().unwrap_or(0),
+                "k-inline",
+                "markers outside tests and docs",
+            ),
+        ] {
+            if count > 0 {
+                let ww = pw * count as f64 / top as f64;
+                o.push_str(&format!(r##"<rect x="{xx:.1}" y="{yy}" width="{ww:.1}" height="{}" class="{cls}"><title>{}: {count} {what}</title></rect>"##,
+                    rh - 8.0,
+                    esc(g)));
+                xx += ww;
+            }
+        }
+        o.push_str(&format!(
+            r##"<text x="{:.1}" y="{}" class="val">{total}</text>"##,
+            xx + 5.0,
+            yy + 13.0
+        ));
+    }
+    o.push_str("</svg>");
+    o
+}
+
+/// Link to where the record's evidence is: the file and line at the commit, the file's
+/// diff in the commit, or the commit whose message holds the directive.
+fn source(r: &Record, s: &Summary) -> String {
+    let Some(l) = &s.links else {
+        return String::new();
+    };
+    let file_link = |path: &str| {
+        let mut t = l.file.replace("{sha}", &r.sha).replace("{path}", path);
+        t = match r.line {
+            Some(n) => t.replace("{line}", &n.to_string()),
+            None => t.replace("#L{line}", ""),
+        };
+        t
+    };
+    let (href, text) = match (r.kind, r.file.as_deref()) {
+        ("directive", _) => (
+            l.commit.replace("{sha}", &r.sha),
+            "commit message".to_string(),
+        ),
+        ("protected-edit", Some(p)) => match &l.file_diff {
+            Some(d) => (
+                d.replace("{sha}", &r.sha).replace(
+                    "{path_sha256}",
+                    &crate::report::gitlab::sha256_hex(p.as_bytes()),
+                ),
+                "diff".to_string(),
+            ),
+            None => (l.commit.replace("{sha}", &r.sha), "commit".to_string()),
+        },
+        (_, Some(p)) => (
+            file_link(p),
+            match r.line {
+                Some(n) => format!("{p}:{n}"),
+                None => p.to_string(),
+            },
+        ),
+        _ => (l.commit.replace("{sha}", &r.sha), "commit".to_string()),
+    };
+    format!(
+        r##" <a class="src-link" href="{}" title="Open where this is">{} ↗</a>"##,
+        esc(&href),
+        esc(&text)
+    )
+}
+
+fn external(r: &Record, s: &Summary) -> String {
+    match (&s.links, r.pr) {
+        (Some(l), Some(n)) => format!(
+            r##"<a href="{}">pull request #{n}</a>"##,
+            esc(&l.pull.replace("{n}", &n.to_string()))
+        ),
+        (Some(l), None) => format!(
+            r##"<a href="{}">commit</a>"##,
+            esc(&l.commit.replace("{sha}", &r.sha))
+        ),
+        (None, _) => String::new(),
+    }
+}
+
+/// Render the audit as one self-contained HTML page.
+pub fn render(s: &Summary) -> String {
+    let n = s.changes;
+    let times = s
+        .records
+        .iter()
+        .chain(&s.tightenings)
+        .chain(&s.protected_edits)
+        .map(|r| r.time);
+    let span = match (times.clone().min(), times.max()) {
+        (Some(a), Some(b)) => format!(", records from {} to {}", date(a), date(b)),
+        _ => String::new(),
+    };
+    let repo_name = s
+        .links
+        .as_ref()
+        .map(|l| {
+            l.repository
+                .rsplit('/')
+                .take(2)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_else(|| "this repository".to_string());
+
+    // --- lede ---
+    let lede = match s.signals.first() {
+        None => format!("No escape hatch in the last {n} merged changes needs a decision."),
+        Some(first) => {
+            let (l, _) = rank(first.rank);
+            let others = s.signals.len() - 1;
+            let rest = if others > 0 {
+                format!(" {others} more signal(s) follow.")
+            } else {
+                String::new()
+            };
+            format!(
+                "{l}: {} ({}).{rest}",
+                signal_sentence(first, s),
+                change_links(first, s)
+            )
+        }
+    };
+    let nonroutine: BTreeSet<&str> = s
+        .records
+        .iter()
+        .filter(|r| r.class != "process")
+        .map(|r| r.sha.as_str())
+        .collect();
+    let claimed = s.records.iter().filter(|r| r.evidence == "claimed").count();
+    let sublede = format!(
+        "{} of {n} merged changes carried an exception beyond a skipped issue link. {claimed} of {} records are requests in text, not effects anyone verified.",
+        nonroutine.len(),
+        s.records.len()
+    );
+
+    // --- trust panel and checks ---
+    let links_line = match &s.links {
+        Some(l) => format!(
+            r##"<a href="{0}">{0}</a>, from the <code>origin</code> remote"##,
+            esc(&l.repository)
+        ),
+        None => "none: the <code>origin</code> remote names no known forge".to_string(),
+    };
+    let mut checks = String::new();
+    let mut protected_check = String::new();
+    if !s.protected_edits.is_empty() {
+        let changes: BTreeSet<&str> = s.protected_edits.iter().map(|r| r.sha.as_str()).collect();
+        protected_check.push_str(&format!(r##"<li class="chk found"><span class="st">Found</span><span class="what">{} protected-path edits in {} changes</span><span class="src">from git; ratification not checked</span></li>"##,
+            s.protected_edits.len(),
+            changes.len()));
+    }
+    checks.push_str(&protected_check);
+    for c in &s.checks {
+        let (cls, st) = match c.state {
+            "found" => ("found", "Found"),
+            "clean" => ("clean", "Checked, none"),
+            _ => ("unchecked", "Not checked"),
+        };
+        let src = if c.state == "clean" {
+            "from git".to_string()
+        } else {
+            esc(&c.detail)
+        };
+        checks.push_str(&format!(r##"<li class="chk {cls}"><span class="st">{st}</span><span class="what">{}</span><span class="src">{src}</span></li>"##,
+            esc(check_label(c.id))));
+    }
+
+    // --- decisions ---
+    let mut decisions = String::new();
+    for sg in &s.signals {
+        let (l, cls) = rank(sg.rank);
+        decisions.push_str(&format!(r##"<li class="dec {cls}"><span class="sev">{l}</span><div><p>{} ({}).</p><p class="act"><b>Next:</b> {}</p></div></li>"##,
+            signal_sentence(sg, s),
+            change_links(sg, s),
+            esc(sg.next)));
+    }
+    if decisions.is_empty() {
+        decisions.push_str(r##"<li class="dec low"><span class="sev">Clean</span><div><p>No signal found anything in these changes. The checks above say what was not looked at.</p></div></li>"##);
+    }
+
+    // --- figures ---
+    let loosenings: Vec<&Record> = s.records.iter().filter(|r| r.kind == "config").collect();
+    let open = loosenings
+        .iter()
+        .filter(|r| restored_by(r, s).is_none())
+        .count();
+    let not_checked = s.checks.iter().filter(|c| c.state == "not-checked").count();
+    let figs = [
+        (
+            loosenings.len().to_string(),
+            "config loosenings",
+            format!("{open} not restored"),
+        ),
+        (
+            format!("{}/{n}", nonroutine.len()),
+            "changes with an exception",
+            "beyond a skipped issue link".to_string(),
+        ),
+        (
+            s.protected_edits.len().to_string(),
+            "protected-path edits",
+            "ratification not checked".to_string(),
+        ),
+        (
+            not_checked.to_string(),
+            "questions not checked",
+            "see the strip above".to_string(),
+        ),
+    ];
+    let figs: String = figs
+        .iter()
+        .map(|(v, k, d)| {
+            format!(r##"<div class="fig"><b>{v}</b><span>{k}</span><small>{d}</small></div>"##)
+        })
+        .collect();
+
+    // --- protected view ---
+    let mut by_change: Vec<(&Record, Vec<&Record>)> = Vec::new();
+    for r in &s.protected_edits {
+        match by_change.iter_mut().find(|(f, _)| f.sha == r.sha) {
+            Some((_, v)) => v.push(r),
+            None => by_change.push((r, vec![r])),
+        }
+    }
+    let prot_rows: String = by_change
+        .iter()
+        .map(|(f, rs)| {
+            let paths = rs.iter().map(|r| format!("<code>{}</code>{}", esc(r.file.as_deref().unwrap_or("")), source(r, s))).collect::<Vec<_>>().join("<br>");
+            let gate = f.detail.as_deref().unwrap_or("");
+            let gate_badge = if gate == "gate on" { r##"<span class="badge ok">on</span>"## } else { r##"<span class="badge muted">off</span>"## };
+            format!(r##"<tr><td>{}</td><td>{}</td><td>{paths}</td><td>{gate_badge}</td><td><span class="badge muted">Not checked</span></td><td>{}</td></tr>"##, ch(f), date(f.time), external(f, s))
+        })
+        .collect();
+    let protected_view = if by_change.is_empty() {
+        r##"<p class="muted">No change edited a path protected by <code>ratified-paths</code> in its parent configuration.</p>"##.to_string()
+    } else {
+        table(
+            &[
+                "Change",
+                "Date",
+                "Paths",
+                "Gate",
+                "Ratification",
+                "Where to check",
+            ],
+            &prot_rows,
+        )
+    };
+
+    // --- configuration view ---
+    let cfg_rows: String = loosenings
+        .iter()
+        .map(|r| {
+            let val = match r.count {
+                Some(c) => format!("{} {c}", change_str(r)),
+                None => format!("{}: <code>{}</code> → <code>{}</code>", change_str(r), esc(r.before.as_deref().unwrap_or("")), esc(r.after.as_deref().unwrap_or(""))),
+            };
+            let mut flags = Vec::new();
+            if r.gate.as_deref().is_some_and(|g| GUARD_GATES.contains(&g)) {
+                flags.push(r##"<span class="badge bad">guards the gates</span>"##);
+            }
+            if r.pr.is_none() {
+                flags.push(r##"<span class="badge warn">no pull request</span>"##);
+            }
+            if waived_in_change(r, s) {
+                flags.push(r##"<span class="badge muted">waived in same change</span>"##);
+            }
+            let restored = restored_by(r, s).map(|t| format!("by {}", ch(t))).unwrap_or_else(|| r##"<span class="badge warn">open</span>"##.to_string());
+            let g = esc(r.gate.as_deref().unwrap_or(""));
+            format!(r##"<tr><td>{}</td><td>{}</td><td><a href="#g-{g}"><code>{g}</code></a></td><td><code>{}</code> {val}{}</td><td>{}</td><td>{restored}</td></tr>"##, ch(r), date(r.time), esc(r.key.as_deref().unwrap_or("")), source(r, s), flags.join(" "))
+        })
+        .collect();
+    let tight_rows: String = s
+        .tightenings
+        .iter()
+        .map(|t| {
+            let g = esc(t.gate.as_deref().unwrap_or(""));
+            let val = match t.count {
+                Some(c) => format!("{c} entr(y/ies)"),
+                None => format!("<code>{}</code> → <code>{}</code>", esc(t.before.as_deref().unwrap_or("")), esc(t.after.as_deref().unwrap_or(""))),
+            };
+            format!(r##"<tr><td>{}</td><td>{}</td><td><a href="#g-{g}"><code>{g}</code></a></td><td><code>{}</code> {val}{}</td></tr>"##, ch(t), date(t.time), esc(t.key.as_deref().unwrap_or("")), source(t, s))
+        })
+        .collect();
+
+    // --- waivers view ---
+    let mut det: Vec<(&Record, Vec<&Record>)> = Vec::new();
+    for r in s
+        .records
+        .iter()
+        .filter(|r| r.kind == "directive" && r.class == "detector")
+    {
+        match det.iter_mut().find(|(f, _)| f.sha == r.sha) {
+            Some((_, v)) => v.push(r),
+            None => det.push((r, vec![r])),
+        }
+    }
+    let det_n: usize = det.iter().map(|(_, v)| v.len()).sum();
+    let det_rows: String = det
+        .iter()
+        .map(|(f, rs)| {
+            let d = rs.iter().map(|r| format!("<code>{}</code>", esc(r.directive.as_deref().unwrap_or("")))).collect::<Vec<_>>().join("<br>");
+            let g = rs.iter().map(|r| {
+                let g = esc(r.gate.as_deref().unwrap_or("–"));
+                format!(r##"<a href="#g-{g}"><code>{g}</code></a>"##)
+            }).collect::<Vec<_>>().join("<br>");
+            let len = rs.iter().map(|r| r.reason_len.unwrap_or(0).to_string()).collect::<Vec<_>>().join("<br>");
+            format!(r##"<tr><td>{}</td><td>{}</td><td>{d}{}</td><td>{g}</td><td>{len}</td><td class="muted">not checked</td></tr>"##, ch(f), date(f.time), source(f, s))
+        })
+        .collect();
+    let process: Vec<&Record> = s.records.iter().filter(|r| r.class == "process").collect();
+    let mut reuse: BTreeMap<&str, Vec<&Record>> = BTreeMap::new();
+    for r in &process {
+        if let Some(h) = r.reason_sha256.as_deref() {
+            reuse.entry(h).or_default().push(r);
+        }
+    }
+    let mut reuse: Vec<(&str, Vec<&Record>)> =
+        reuse.into_iter().filter(|(_, v)| v.len() >= 3).collect();
+    reuse.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(b.0)));
+    let reuse_rows: String = reuse
+        .iter()
+        .map(|(h, rs)| {
+            let changes = rs.iter().map(|r| ch(r)).collect::<Vec<_>>().join(", ");
+            format!(
+                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{changes}</td></tr>",
+                &h[..12],
+                rs.len(),
+                rs[0].reason_len.unwrap_or(0)
+            )
+        })
+        .collect();
+    let mut roles: BTreeMap<&str, usize> = BTreeMap::new();
+    for r in s.records.iter().filter(|r| r.kind == "inline-marker") {
+        *roles.entry(role(r.file.as_deref())).or_default() += 1;
+    }
+    let roles_line = roles
+        .iter()
+        .map(|(k, v)| format!("{v} {k}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let marker_rows: String = s
+        .records
+        .iter()
+        .filter(|r| r.kind == "inline-marker" && role(r.file.as_deref()) != "test or doc")
+        .map(|r| {
+            let g = esc(r.gate.as_deref().unwrap_or(""));
+            format!(r##"<tr><td>{}</td><td><a href="#g-{g}"><code>{g}</code></a></td><td>{}</td><td>{}</td></tr>"##, ch(r), source(r, s), role(r.file.as_deref()))
+        })
+        .collect();
+
+    // --- changes view ---
+    let mut order: Vec<&Record> = Vec::new();
+    for r in s
+        .records
+        .iter()
+        .chain(&s.tightenings)
+        .chain(&s.protected_edits)
+    {
+        if !order.iter().any(|x| x.sha == r.sha) {
+            order.push(r);
+        }
+    }
+    order.sort_by_key(|r| r.ord);
+    let mut changes_html = String::new();
+    for f in &order {
+        let mut facts = String::new();
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for r in s
+            .records
+            .iter()
+            .chain(&s.tightenings)
+            .chain(&s.protected_edits)
+            .filter(|r| r.sha == f.sha)
+        {
+            *counts.entry(r.class).or_default() += 1;
+            let g = esc(r.gate.as_deref().unwrap_or(""));
+            let item = match r.kind {
+                "directive" => format!(
+                    "Directive <code>{}</code> ({}), reason {} chars{}",
+                    esc(r.directive.as_deref().unwrap_or("")),
+                    if g.is_empty() {
+                        "no gate".to_string()
+                    } else {
+                        g.clone()
+                    },
+                    r.reason_len.unwrap_or(0),
+                    if r.hidden == Some(true) {
+                        r##" <span class="badge warn">hidden</span>"##
+                    } else {
+                        ""
+                    }
+                ),
+                "config" => format!(
+                    "Loosened <code>{g}.{}</code>: {} {}",
+                    esc(r.key.as_deref().unwrap_or("")),
+                    change_str(r),
+                    r.count.map(|c| c.to_string()).unwrap_or_default()
+                ),
+                "config-tightening" => format!(
+                    "Tightened <code>{g}.{}</code>",
+                    esc(r.key.as_deref().unwrap_or(""))
+                ),
+                "config-unreadable" => format!(
+                    "Configuration unreadable: {}",
+                    esc(r.detail.as_deref().unwrap_or(""))
+                ),
+                "baseline" => format!(
+                    "{} <code>{g}</code> findings grandfathered",
+                    r.count.unwrap_or(0)
+                ),
+                "inline-marker" => format!(
+                    "Inline marker for <code>{g}</code> at <code>{}:{}</code> ({})",
+                    esc(r.file.as_deref().unwrap_or("")),
+                    r.line.unwrap_or(0),
+                    role(r.file.as_deref())
+                ),
+                "protected-edit" => format!(
+                    "Edited protected path <code>{}</code> (gate {}); ratification not checked",
+                    esc(r.file.as_deref().unwrap_or("")),
+                    if r.detail.as_deref() == Some("gate on") {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                ),
+                _ => esc(r.kind),
+            };
+            facts.push_str(&format!("<li>{}{item}{}</li>", dot(r.class), source(r, s)));
+        }
+        let summary = counts
+            .iter()
+            .map(|(k, v)| format!("{v} {k}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        changes_html.push_str(&format!(r##"<details id="{}"><summary><span class="lbl">{}</span><span class="d">{}</span><span class="s">{}</span><span class="cnt">{summary}</span></summary><ul class="facts">{facts}</ul><p class="gh">{} <code>{}</code></p></details>"##,
+            anchor(f),
+            esc(&label(f)),
+            date(f.time),
+            esc(&f.subject),
+            external(f, s),
+            &f.sha[..f.sha.len().min(10)]));
+    }
+
+    // --- gates view ---
+    let mut gates: BTreeSet<&str> = BTreeSet::new();
+    for r in s
+        .records
+        .iter()
+        .chain(&s.tightenings)
+        .chain(&s.protected_edits)
+    {
+        if let Some(g) = r.gate.as_deref() {
+            gates.insert(g);
+        }
+    }
+    let mut gates_html = String::new();
+    for g in &gates {
+        let mut rs: Vec<&Record> = s
+            .records
+            .iter()
+            .chain(&s.tightenings)
+            .chain(&s.protected_edits)
+            .filter(|r| r.gate.as_deref() == Some(g))
+            .collect();
+        rs.sort_by_key(|r| std::cmp::Reverse(r.ord));
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut tl = String::new();
+        for r in &rs {
+            *counts.entry(r.kind).or_default() += 1;
+            let what = match r.kind {
+                "directive" => format!(
+                    "waived by <code>{}</code>",
+                    esc(r.directive.as_deref().unwrap_or(""))
+                ),
+                "config" => format!(
+                    "<b>loosened</b> <code>{}</code> {}",
+                    esc(r.key.as_deref().unwrap_or("")),
+                    change_str(r)
+                ),
+                "config-tightening" => format!(
+                    "tightened <code>{}</code>",
+                    esc(r.key.as_deref().unwrap_or(""))
+                ),
+                "inline-marker" => format!(
+                    "marker in <code>{}</code>",
+                    esc(r.file.as_deref().unwrap_or(""))
+                ),
+                "baseline" => "baseline grew".to_string(),
+                "protected-edit" => format!(
+                    "protected path <code>{}</code> edited",
+                    esc(r.file.as_deref().unwrap_or(""))
+                ),
+                other => esc(other),
+            };
+            tl.push_str(&format!(
+                "<li>{}{} {} {what}{}</li>",
+                dot(r.class),
+                date(r.time),
+                ch(r),
+                source(r, s)
+            ));
+        }
+        let badge = if GUARD_GATES.contains(g) {
+            r##"<span class="badge bad">guards the gates</span>"##
+        } else {
+            ""
+        };
+        let summary = counts
+            .iter()
+            .map(|(k, v)| format!("{v} {k}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        gates_html.push_str(&format!(r##"<details id="g-{g}"><summary><code class="lbl">{g}</code>{badge}<span class="cnt">{summary}</span></summary><ol class="timeline">{tl}</ol></details>"##,
+            g = esc(g)));
+    }
+
+    // --- records view ---
+    let class_label = |c: &str| match c {
+        "detector" => "Waived finding",
+        "config" => "Config loosening",
+        "baseline" => "Baseline growth",
+        "inline" => "Inline marker",
+        "process" => "Skipped issue link",
+        _ => "Other",
+    };
+    let rec_rows: String = s
+        .records
+        .iter()
+        .map(|r| {
+            let what = match r.kind {
+                "directive" => format!("<code>{}</code>", esc(r.directive.as_deref().unwrap_or(""))),
+                "config" => format!("<code>{}</code> {}", esc(r.key.as_deref().unwrap_or("")), change_str(r)),
+                "inline-marker" => format!("<code>{}:{}</code>", esc(r.file.as_deref().unwrap_or("")), r.line.unwrap_or(0)),
+                "baseline" => format!("{} added", r.count.unwrap_or(0)),
+                _ => esc(r.detail.as_deref().unwrap_or("")),
+            };
+            let what = format!("{what}{}", source(r, s));
+            let status = if r.evidence == "claimed" { "Requested" } else { "In effect" };
+            let source = if r.tier == "C" { "Author's text" } else { "Repository" };
+            format!(r##"<tr data-class="{}" data-gate="{}"><td>{}</td><td>{}</td><td>{}{}</td><td><code>{}</code></td><td>{what}</td><td>{status}</td><td>{source}</td></tr>"##, esc(r.class), esc(r.gate.as_deref().unwrap_or("")), ch(r), date(r.time), dot(r.class), class_label(r.class), esc(r.gate.as_deref().unwrap_or("–")))
+        })
+        .collect();
+    let gate_opts: String = s
+        .records
+        .iter()
+        .filter_map(|r| r.gate.as_deref())
+        .collect::<BTreeSet<_>>()
+        .iter()
+        .map(|g| format!(r##"<option value="{0}">{0}</option>"##, esc(g)))
+        .collect();
+
+    let mut o = String::new();
+    o.push_str(&format!(r##"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="generator" content="discipline {version}">
+<title>Escape-Hatch Audit · {repo}</title>
+<style>
+{STYLE}</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">discipline audit · {repo} · {n} merged changes{span}</div>
+    <h1>{lede}</h1>
+    <p class="sub">{sublede}</p>
+    <div class="trust" aria-label="What this report rests on">
+      <dl>
+        <dt>Audited</dt><dd><code>{reference}</code> at <code>{tip}</code></dd>
+        <dt>Links</dt><dd>{links_line}</dd>
+        <dt>Read</dt><dd>Git objects only: commit messages, <code>discipline.toml</code>, <code>discipline-baseline.toml</code> and the changed files. Nothing was read from the network.</dd>
+        <dt>Written by</dt><dd>discipline {version}</dd>
+      </dl>
+      <p class="warnline">A record is a prompt to look, not a finding of wrongdoing. What git cannot tell is listed as not checked below; it is not a clean result.</p>
+    </div>
+    <ul class="checks" aria-label="What was checked">{checks}</ul>
+  </header>
+
+  <nav class="tabs" aria-label="Report views">
+    <a href="#overview" data-view="overview">Overview</a>
+    <a href="#protected" data-view="protected">Protected paths <span class="n">{prot_n}</span></a>
+    <a href="#configuration" data-view="configuration">Configuration</a>
+    <a href="#waivers" data-view="waivers">Waivers</a>
+    <a href="#changes" data-view="changes">Changes <span class="n">{change_n}</span></a>
+    <a href="#gates" data-view="gates">Gates</a>
+    <a href="#records" data-view="records">All records <span class="n">{rec_n}</span></a>
+  </nav>
+
+  <section class="view" id="overview">
+    <div class="viewhead"><h2>Needs a decision</h2><p>Ranked by what the exception could hide. Each item is a prompt to look, not a finding of wrongdoing.</p></div>
+    <ol class="decisions">{decisions}</ol>
+    <div class="figures" aria-label="Figures">{figs}</div>
+    <div class="panel">
+      <h3>Changes with an exception, over time</h3>
+      <p>Share of merged changes, per window, that carried anything beyond a skipped issue link. Red lines mark configuration loosenings; a solid one loosened a gate that guards the other gates.</p>
+      <div class="chartbox">{rate}</div>
+    </div>
+    <div class="panel">
+      <h3>Where the exceptions are</h3>
+      <ul class="legend"><li>{dd}Waived finding (directive)</li><li>{di}Inline marker outside tests and docs</li></ul>
+      <p>Markers in tests and docs are left out. Gate names in red guard the other gates. Select a gate to see its history.</p>
+      <div class="chartbox">{gate}</div>
+    </div>
+  </section>
+
+  <section class="view" id="protected">
+    <div class="viewhead"><h2>Protected paths</h2><p>Changes that edited a path the parent configuration protects under <code>ratified-paths</code>. Whether each was ratified, and by whom, lives on the forge and is not checked here.</p></div>
+    <div class="panel">{protected_view}<p><b>Next:</b> open each change and confirm its ratification came from someone other than the change's author.</p></div>
+  </section>
+
+  <section class="view" id="configuration">
+    <div class="viewhead"><h2>Configuration</h2><p>Every loosening of <code>discipline.toml</code>, as <code>config-integrity</code> judges it, newest first, with the change that restored it.</p></div>
+    <div class="panel"><h3>Loosenings</h3>{cfg}<p><b>Next:</b> tighten each open loosening back, or record why it stays.</p></div>
+    <div class="panel"><h3>Tightenings</h3>{tight}</div>
+  </section>
+
+  <section class="view" id="waivers">
+    <div class="viewhead"><h2>Waivers</h2><p>Directives in commit messages, grouped by change. Whether each lifted a finding is <code>discipline replay</code>'s to say.</p></div>
+    <div class="panel"><h3>Waived findings <span class="muted">({det_n})</span></h3>{det}</div>
+    <div class="panel"><h3>Skipped issue links <span class="muted">({proc_n})</span></h3><p>Reasons are hashed. These were reused three times or more, which suggests boilerplate.</p>{reuse}</div>
+    <div class="panel"><h3>Inline markers outside tests and docs</h3><p>All markers by where they are: {roles}.</p>{markers}</div>
+  </section>
+
+  <section class="view" id="changes">
+    <div class="viewhead"><h2>Changes</h2><p>Everything each change did, newest first. Only changes with a record are listed.</p></div>
+    <div>{changes_html}</div>
+  </section>
+
+  <section class="view" id="gates">
+    <div class="viewhead"><h2>Gates</h2><p>Each gate's history, oldest first.</p></div>
+    <div>{gates_html}</div>
+  </section>
+
+  <section class="view" id="records">
+    <div class="viewhead"><h2>All records</h2><p>"Author's text" rows could have been worded to pass; "Repository" rows are changes to files on the audited branch.</p></div>
+    <div class="panel">
+      <div class="filters">
+        <label for="f-class">Kind
+          <select id="f-class">
+            <option value="">Everything</option>
+            <option value="nonroutine" selected>Everything but skipped issue links</option>
+            <option value="detector">Waived findings</option>
+            <option value="config">Config loosenings</option>
+            <option value="inline">Inline markers</option>
+            <option value="baseline">Baseline growth</option>
+            <option value="process">Skipped issue links</option>
+          </select>
+        </label>
+        <label for="f-gate">Gate <select id="f-gate"><option value="">Any gate</option>{gate_opts}</select></label>
+        <label for="f-text">Search <input id="f-text" type="search" placeholder="#12, ci.yml, allow-stub"></label>
+      </div>
+      <div class="count" id="count" aria-live="polite"></div>
+      {records}
+    </div>
+  </section>
+</div>
+<script>
+{SCRIPT}</script>
+</body>
+</html>
+"##,
+        version = esc(&s.version),
+        repo = esc(&repo_name),
+        reference = esc(&s.reference),
+        tip = esc(&s.tip[..s.tip.len().min(10)]),
+        prot_n = s.protected_edits.len(),
+        change_n = order.len(),
+        rec_n = s.records.len(),
+        rate = rate_chart(s),
+        gate = gate_chart(s),
+        dd = dot("detector"),
+        di = dot("inline"),
+        cfg = if loosenings.is_empty() {
+            r##"<p class="muted">No loosening.</p>"##.to_string()
+        } else {
+            table(
+                &["Change", "Date", "Gate", "What", "Flags", "Restored"],
+                &cfg_rows,
+            )
+        },
+        tight = if s.tightenings.is_empty() {
+            r##"<p class="muted">No tightening.</p>"##.to_string()
+        } else {
+            table(&["Change", "Date", "Gate", "What"], &tight_rows)
+        },
+        det = if det.is_empty() {
+            r##"<p class="muted">No finding waiver.</p>"##.to_string()
+        } else {
+            table(
+                &[
+                    "Change",
+                    "Date",
+                    "Directive",
+                    "Gate",
+                    "Reason length",
+                    "Lifted a finding",
+                ],
+                &det_rows,
+            )
+        },
+        proc_n = process.len(),
+        reuse = if reuse.is_empty() {
+            r##"<p class="muted">No reason reused three times.</p>"##.to_string()
+        } else {
+            table(&["Reason hash", "Times", "Length", "Changes"], &reuse_rows)
+        },
+        roles = if roles_line.is_empty() {
+            "none".to_string()
+        } else {
+            roles_line
+        },
+        markers = if marker_rows.is_empty() {
+            r##"<p class="muted">None.</p>"##.to_string()
+        } else {
+            table(&["Change", "Gate", "Where", "Kind of file"], &marker_rows)
+        },
+        records = table(
+            &["Change", "Date", "Kind", "Gate", "What", "Status", "Source"],
+            &rec_rows
+        ),));
+    o
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dates_match_the_civil_calendar() {
+        // Reference values from `date -u -r <secs> +%F` (BSD) and Python's `datetime`.
+        assert_eq!(date(0), "1970-01-01");
+        assert_eq!(date(951_782_400), "2000-02-29");
+        assert_eq!(date(1_790_710_369), "2026-09-29");
+        assert_eq!(date(-86_400), "1969-12-31");
+    }
+
+    #[test]
+    fn author_text_is_escaped() {
+        assert_eq!(
+            esc(r##"<script>"a" & 'b'</script>"##),
+            "&lt;script&gt;&quot;a&quot; &amp; &#39;b&#39;&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn files_are_sorted_by_what_a_reviewer_should_read() {
+        assert_eq!(role(Some(".github/workflows/ci.yml")), "workflow");
+        assert_eq!(role(Some("AGENTS.md")), "agent instructions");
+        assert_eq!(role(Some("tests/test_x.rs")), "test or doc");
+        assert_eq!(role(Some("docs/GATES.md")), "test or doc");
+        assert_eq!(role(Some("src/guards/pii.rs")), "live code");
+    }
+}

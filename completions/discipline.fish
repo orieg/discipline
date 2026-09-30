@@ -204,7 +204,11 @@ complete -c discipline -n "__fish_discipline_using_subcommand replay" -l json -d
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -s h -l help -d 'Print help'
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l last -d 'Number of first-parent commits (merged changes) to audit, newest first' -r
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l ref -d 'Branch whose history is audited (default: origin\'s default branch, else main / master)' -r
-complete -c discipline -n "__fish_discipline_using_subcommand audit" -l json -d 'Print the records as JSON'
+complete -c discipline -n "__fish_discipline_using_subcommand audit" -l format -d 'Output format: `text`, `json`, or `html` (one self-contained page)' -r -f -a "text\t''
+json\t''
+html\t''"
+complete -c discipline -n "__fish_discipline_using_subcommand audit" -s o -l output -d 'Write the output to this file instead of stdout' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand audit" -l json -d 'Print the records as JSON (the same as `--format json`)'
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l reasons -d 'Include each directive\'s reason text (by default only its SHA-256 and length)'
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -s h -l help -d 'Print help'
 complete -c discipline -n "__fish_discipline_using_subcommand mcp" -s h -l help -d 'Print help'

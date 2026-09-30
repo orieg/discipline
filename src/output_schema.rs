@@ -291,10 +291,25 @@ pub fn audit_schema() -> Value {
         "description": "The records `discipline audit --json` prints: one per escape hatch a merged change carried, read from git objects only. A record says what was claimed or applied, not whether a check honoured it.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["schema_version", "reference", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings"],
+        "required": ["schema_version", "version", "reference", "tip", "links", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings", "protected_edits"],
         "properties": {
             "schema_version": { "const": AUDIT_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
+            "version": text("The discipline version that wrote the report"),
             "reference": text("The ref audited, as given or defaulted"),
+            "tip": text("The commit the ref resolved to"),
+            "links": {
+                "description": "Web links from the `origin` remote's forge (GitHub, GitLab, Gitea, Forgejo); null when the remote names none. No request is made",
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["repository", "pull", "commit", "file", "file_diff"],
+                "properties": {
+                    "repository": text("The repository's web page"),
+                    "pull": text("A pull request's page, `{n}` for its number"),
+                    "commit": text("A commit's page, `{sha}` for its id"),
+                    "file": text("A file at a commit: `{sha}`, `{path}`, `{line}` (drop `#L{line}` without a line)"),
+                    "file_diff": { "type": ["string", "null"], "description": "One file's diff in a commit: `{sha}`, `{path_sha256}`; GitHub only" }
+                }
+            },
             "changes": { "type": "integer", "minimum": 0, "description": "First-parent changes audited" },
             "changes_with_records": { "type": "integer", "minimum": 0, "description": "Changes that carried at least one record" },
             "by_kind": { "description": "Kind -> record count", "$ref": "#/$defs/Counts" },
@@ -303,7 +318,8 @@ pub fn audit_schema() -> Value {
             "signals": { "type": "array", "items": { "$ref": "#/$defs/Signal" }, "description": "Queries over the records that found something, most urgent first. Review prompts, not verdicts" },
             "checks": { "type": "array", "items": { "$ref": "#/$defs/Check" }, "description": "Every question the audit asks, with its state: a signal is `found` or `clean`; what git alone cannot tell is `not-checked`" },
             "records": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Newest change first" },
-            "tightenings": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Tightenings of `discipline.toml` (`kind` `config-tightening`), newest first: `before` is the looser value" }
+            "tightenings": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Tightenings of `discipline.toml` (`kind` `config-tightening`), newest first: `before` is the looser value" },
+            "protected_edits": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Edits to paths the change's parent configuration protects under `ratified-paths` (`kind` `protected-edit`, `detail` `gate on` or `gate off`); whether each was ratified is not checked" }
         },
         "$defs": {
             "Counts": counts,
@@ -333,13 +349,15 @@ pub fn audit_schema() -> Value {
             "Record": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["sha", "pr", "time", "kind", "class", "evidence", "tier", "gate"],
+                "required": ["sha", "pr", "time", "change_index", "subject", "kind", "class", "evidence", "tier", "gate"],
                 "properties": {
                     "sha": text("Full commit id of the change"),
                     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from the subject's `(#N)`" },
                     "time": { "type": "integer", "description": "Commit time, seconds since the Unix epoch" },
-                    "kind": { "enum": ["directive", "config", "config-unreadable", "baseline", "inline-marker", "config-tightening"] },
-                    "class": { "enum": ["process", "detector", "config", "baseline", "inline"], "description": "`process`: a waiver of a process rule (`no-issue`); `detector`: a waiver of a finding" },
+                    "change_index": { "type": "integer", "minimum": 0, "description": "The change's position, 0 for the newest audited change" },
+                    "subject": text("The change's subject line, as its author wrote it"),
+                    "kind": { "enum": ["directive", "config", "config-unreadable", "baseline", "inline-marker", "config-tightening", "protected-edit"] },
+                    "class": { "enum": ["process", "detector", "config", "baseline", "inline", "protected"], "description": "`process`: a waiver of a process rule (`no-issue`); `detector`: a waiver of a finding" },
                     "evidence": { "enum": ["claimed", "applied"], "description": "`claimed`: text that asks for an exception; `applied`: a tree change that is one" },
                     "tier": { "enum": ["A", "C"], "description": "Who controls the input: `A` git objects on the audited branch, `C` text the change's author wrote" },
                     "gate": { "type": ["string", "null"], "description": "Gate id, or the configuration table a loosening is under; null for a directive this binary does not map to a gate" },

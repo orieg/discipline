@@ -140,6 +140,13 @@ pub struct ReplayArgs {
     pub json: bool,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditFormat {
+    Text,
+    Json,
+    Html,
+}
+
 #[derive(Args, Debug)]
 pub struct AuditArgs {
     /// Number of first-parent commits (merged changes) to audit, newest first
@@ -150,9 +157,17 @@ pub struct AuditArgs {
     #[arg(long = "ref")]
     pub reference: Option<String>,
 
-    /// Print the records as JSON
+    /// Print the records as JSON (the same as `--format json`)
     #[arg(long)]
     pub json: bool,
+
+    /// Output format: `text`, `json`, or `html` (one self-contained page)
+    #[arg(long, value_enum, default_value_t = AuditFormat::Text)]
+    pub format: AuditFormat,
+
+    /// Write the output to this file instead of stdout
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
 
     /// Include each directive's reason text (by default only its SHA-256 and length)
     #[arg(long)]

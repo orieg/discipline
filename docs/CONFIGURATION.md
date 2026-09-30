@@ -604,7 +604,9 @@ Every option of every subcommand, generated from the binary's own definitions (`
 |---|---|---|---|
 | `--last` |  |  | Number of first-parent commits (merged changes) to audit, newest first |
 | `--ref` |  |  | Branch whose history is audited (default: origin's default branch, else main / master) |
-| `--json` |  |  | Print the records as JSON |
+| `--json` |  |  | Print the records as JSON (the same as `--format json`) |
+| `--format` |  | `text` | Output format: `text`, `json`, or `html` (one self-contained page) |
+| `-o`, `--output` |  |  | Write the output to this file instead of stdout |
 | `--reasons` |  |  | Include each directive's reason text (by default only its SHA-256 and length) |
 
 **`discipline bench derive`**
@@ -1136,6 +1138,7 @@ The configuration under test is usually newer than the history it replays. A fil
 ```bash
 discipline audit --last 200                           # text: one line per record, then totals
 discipline audit --last 200 --ref origin/main --json  # the records, for jq or a dashboard
+discipline audit --last 200 --format html -o audit.html  # one page to read and share
 ```
 
 Lists every escape hatch the last N first-parent commits of a branch carried (default branch as for `replay`), one record each, read from git objects only: no check runs, no child process starts and nothing is read from the network.
@@ -1164,6 +1167,8 @@ The report opens with **Needs a decision**: the signals that found something, ea
 Tightenings are listed under `tightenings` (`kind` `config-tightening`, `before` the looser value), which is how `loosened-not-restored` tells a paid-back loosening from an open one. `checks` gives every signal a state, `found` or `clean`, and lists what git alone cannot tell as `not-checked` with the reason: whether a directive lifted a finding (`discipline replay` says), directives in pull-request bodies, owner ratification, independent review and which agent made a change. An absent answer is never shown as a clean one.
 
 `evidence` separates text that asks for an exception from a tree change that is one; whether a directive lifted a finding is what `replay` reports (each case's `overrides`, and `unused_directives` in the `check` report). `tier` says who controls the input: `A` is the audited branch's tree, `C` is text the change's author wrote and could have worded to pass. Adopting a configuration is not a loosening; removing it is compared with the built-in defaults. A directive's reason is reported as `reason_sha256` and `reason_len` (the same reason hashes the same, so reuse can be counted without the text); `--reasons` adds the text. Directives in pull-request bodies are not read yet.
+
+`--format html` writes the same data as one self-contained page: a summary sentence and the checks strip on top, then views for **Overview** (the ranked decisions, figures, the share of changes with an exception over time, and exceptions per gate), **Protected paths** (edits to paths the change's parent configuration protects under `ratified-paths`; their ratification is not checked), **Configuration** (each loosening with the change that restored it, and the tightenings), **Waivers**, **Changes** and **Gates** (everything one change did, one gate's history) and **All records** (filters and search). The page loads nothing: styles, the one script and the SVG charts are inline, and without the script every view prints in order. Every row links to where its evidence is, on the forge the `origin` remote names (GitHub, GitLab, Gitea or Forgejo; no link when it names none): an inline marker or a loosened option opens the file at that line at the change's commit, a protected edit opens that file's diff (GitHub) or the commit, and a directive opens the commit whose message carries it. The page is for people: it is not offered through `discipline mcp` or the `agent-prompt` format.
 
 The command exits 0 when the audit ran, whatever it found; 2 when the ref does not resolve or git cannot be read. The shape is defined by `discipline.audit.schema.json` at the repository root. The output is for people reviewing history: it is not offered to agents through `discipline mcp` or the `agent-prompt` format, since a list of accepted waivers is a list of what passes.
 
