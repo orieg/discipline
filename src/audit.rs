@@ -2263,7 +2263,7 @@ mod tests {
         // A direct push, and a change the forge could not answer for.
         assert_eq!(judge(&api(ratifying.clone()), &[], &[]).state, "unratified");
         assert_eq!(
-            judge(&api(ratifying), &[], &[sha.clone()]).state,
+            judge(&api(ratifying), &[], std::slice::from_ref(&sha)).state,
             "not-checked"
         );
 
