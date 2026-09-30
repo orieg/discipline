@@ -1650,6 +1650,14 @@
           ],
           "description": "the pull request has no unresolved review thread"
         },
+        "sandbox-config": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "a change cannot widen an agent's permissions or sandbox, or a container's isolation, without a token"
+        },
         "sanitizers": {
           "allOf": [
             {

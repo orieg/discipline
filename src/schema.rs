@@ -21,6 +21,7 @@ pub fn generate_schema() -> Value {
             "agent-scratch" => "#/$defs/ScratchGate",
             "golden-output" => "#/$defs/GoldenGate",
             "toolchain-config" => "#/$defs/BasicGate",
+            "sandbox-config" => "#/$defs/BasicGate",
             "stub-bodies" => "#/$defs/BasicGate",
             "error-swallowing" => "#/$defs/BasicGate",
             "instruction-smuggling" => "#/$defs/InstructionSmugglingGate",

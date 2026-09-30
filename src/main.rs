@@ -1475,6 +1475,10 @@ fn doctor(args: discipline::cli::DoctorArgs) -> Result<bool> {
         local_only: args.local_only,
         api: &api,
         copilot_home: discipline::hook::copilot_home(),
+        home: std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .filter(|h| !h.is_empty())
+            .map(std::path::PathBuf::from),
     });
     match args.format {
         discipline::cli::DoctorFormat::Text => print!("{}", report.render_text()),

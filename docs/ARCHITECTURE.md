@@ -33,6 +33,12 @@ Discipline's operational rigors were developed to defend high-assurance reposito
 - Unlike legacy regex or aggregate count scripts, Discipline uses tree-sitter AST diff inspection to analyze syntactic structures directly.
 - The specific failure modes, bypasses, and fail-open traps observed in automated development environments form the binding requirements of the Fail-Closed Contract below.
 
+### 1.3 Non-Goal: Runtime Containment
+
+Discipline reads changes and configuration; it does not contain a running agent. Watching system calls, filtering outbound traffic (DNS included), hiding credentials from a process and stopping a session belong to the sandbox the agent runs in: the agent's own sandbox, a container or VM with no credentials and an egress allow-list, or a kernel-level monitor. They are not planned here, for three reasons: they need privileges and a platform (Linux, root or `CAP_BPF`) that a static binary run in CI or on a laptop does not have; they would add a network path, which §2 rules out; and a check that runs inside the process it contains can be walked around by that process. Nor does discipline read an agent's stated reasoning: the agent writes it, so it is evidence of nothing.
+
+What discipline does own is the configuration that sets those boundaries, because a change to it arrives as a diff like any other. `sandbox-config` reports a change that widens an agent's permissions or sandbox (its project settings and MCP server lists) or a container's isolation (Dev Containers, Docker Compose), and `discipline doctor` reports the agent settings that run an agent with less containment than its defaults (`agent-sandbox`). The pre-tool hook (`hook run --event pre-tool`) refuses edits and shell commands that reach another worktree; it does not block network commands, since a deny-list at the prompt is walked around by any interpreter the agent may run.
+
 ---
 
 ## 2. Architecture Diagram & Binary Design
@@ -238,7 +244,7 @@ From 1.0, a `stable` surface below changes incompatibly only in a new major vers
 | `src/guards/agent_diff.rs` | Semantic diff inspection across base vs. head AST facts: `assertion-reduction`, `vacuous-tests`, `ignored-tests`, `unsafe-safety-comment`, `deletion-rationale` |
 | `src/guards/hygiene.rs` | Repository sweeps: `time-estimates`, `pii`, `agent-scratch`, `agents-md` |
 | `src/guards/integrity.rs` | Structural integrity gates: `config-integrity`, `golden-output` |
-| `src/guards/<gate>.rs` | One module per remaining gate (`shell_secrets.rs`, `ci_integrity.rs`, `dependency.rs`, `command.rs`, `archive_contents.rs`, ...), with helpers beside their gate: `ci_gitlab.rs` (`ci-integrity`), `lockfile.rs` (`dependency-delta`), `presets.rs` (`command`), `archive_formats.rs` / `archive_presets.rs` / `source_maps.rs` (`archive-contents`), `claim_registry.rs` (`provenance-tags`) |
+| `src/guards/<gate>.rs` | One module per remaining gate (`shell_secrets.rs`, `ci_integrity.rs`, `dependency.rs`, `command.rs`, `archive_contents.rs`, ...), with helpers beside their gate: `ci_gitlab.rs` (`ci-integrity`), `lockfile.rs` (`dependency-delta`), `presets.rs` (`command`), `archive_formats.rs` / `archive_presets.rs` / `source_maps.rs` (`archive-contents`), `claim_registry.rs` (`provenance-tags`); `sandbox_config.rs` runs `toolchain_config.rs`'s tree diff over its own rule table |
 | `src/guards/perf/` | Benchmark regression sentinel (`bench-regression`): mathematical bounds engine (`bounds.rs`), harness adapter (`mod.rs`), the `paired-ratio` mode (`paired_ratio.rs`) and override citation freshness (`citation.rs`) |
 | `src/guards/mod.rs` | Gate execution scheduling, `GateOutcome`, path filtering, inline marker accounting |
 | `src/report/` | Multi-format reporting: terminal, GitHub summary, JSON, GitLab Code Quality, JUnit XML, SARIF, `agent-prompt` |
@@ -246,7 +252,7 @@ From 1.0, a `stable` surface below changes incompatibly only in a new major vers
 | `src/selftest.rs` | Embedded positive and negative controls compiled into binary |
 | `src/style.rs` | Zero-dependency ANSI terminal styling |
 | `src/forge.rs` | The in-process HTTPS client for forge REST APIs (reads, and the one write: `check --comment`), with the path, https, redirect and `DISCIPLINE_NO_NETWORK` checks |
-| `src/doctor.rs` | `discipline doctor`: workflow, CODEOWNERS and branch-protection checks |
+| `src/doctor.rs` | `discipline doctor`: workflow, CODEOWNERS and branch-protection checks, and the local multi-agent and `agent-sandbox` checks |
 | `src/doctor_pins.rs` | `discipline doctor`: SHA pins not reachable from a branch or tag of their own repository (imposter commits), and pinned actions whose metadata uses refs that can move (one level deep) |
 | `src/doctor_settings.rs` | `discipline doctor`: repository settings (Actions policy, default workflow token, immutable releases, tag rulesets or protected tags, secret scoping) |
 | `src/override_policy.rs` | `max_overrides` and `require_approval`: whether a run's directive overrides stand |

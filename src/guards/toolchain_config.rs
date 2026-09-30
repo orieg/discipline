@@ -35,6 +35,12 @@ pub enum Judge {
     /// Command-line flags (string or list): losing a strict flag or gaining a lax one
     /// loosens.
     Flags,
+    /// A mode, ordered strict to loose, and the rank an absent key takes: moving to a later
+    /// rank loosens. A value outside the order is not judged.
+    Ranked(&'static [&'static str], usize),
+    /// List, string of flags, or map keys: an entry containing one of these fragments that
+    /// the base side did not have loosens. `--flag value` is read as `--flag=value`.
+    GainedMatching(&'static [&'static str]),
 }
 
 /// One rule: files it applies to (basename or `dir/basename` glob), the key path inside
@@ -1071,6 +1077,16 @@ const LAX_FLAGS: &[&str] = &[
 /// Whether `path` is one of the rule files (by basename, or `dir/basename` for the dotted
 /// directories), or an executable configuration.
 pub fn classify(path: &str) -> Option<Classified> {
+    classify_with(path, RULES, EXECUTABLE)
+}
+
+/// [`classify`] over another gate's rule table and executable list. A file pattern is a
+/// basename (`*` matches within it) or `dir/basename`.
+pub fn classify_with(
+    path: &str,
+    rules: &'static [Rule],
+    executable: &[&str],
+) -> Option<Classified> {
     let name = path.rsplit('/').next().unwrap_or(path);
     let tail2 = {
         let mut it = path.rsplitn(3, '/');
@@ -1080,21 +1096,27 @@ pub fn classify(path: &str) -> Option<Classified> {
             None => a.to_string(),
         }
     };
-    if EXECUTABLE.contains(&name) {
-        return Some(Classified::Executable);
-    }
     let matches = |pat: &str| {
         if let Some(prefix) = pat.strip_suffix(".*.json") {
             name.starts_with(&format!("{prefix}."))
                 && name.ends_with(".json")
                 && name.len() > prefix.len() + 6
         } else if pat.contains('/') {
-            tail2 == pat
+            if pat.contains('*') {
+                let (pd, pb) = pat.split_once('/').unwrap_or(("", pat));
+                let (td, tb) = tail2.split_once('/').unwrap_or(("", &tail2));
+                segment_matches(pd, td) && segment_matches(pb, tb)
+            } else {
+                tail2 == pat
+            }
         } else {
-            name == pat
+            segment_matches(pat, name)
         }
     };
-    let rules: Vec<&'static Rule> = RULES
+    if executable.iter().any(|e| matches(e)) {
+        return Some(Classified::Executable);
+    }
+    let rules: Vec<&'static Rule> = rules
         .iter()
         .filter(|r| r.files.iter().any(|f| matches(f)))
         .collect();
@@ -1270,7 +1292,7 @@ pub fn load(name: &str, content: &str) -> Option<Value> {
     if name.ends_with(".toml") || name == ".cargo/config" || name == "config" {
         let v: toml::Value = toml::from_str(content).ok()?;
         serde_json::to_value(v).ok()
-    } else if name.ends_with(".json") || name == ".eslintrc" {
+    } else if name.ends_with(".json") || name.ends_with(".jsonc") || name == ".eslintrc" {
         serde_json::from_str(&strip_jsonc(content)).ok()
     } else if name.ends_with(".yml") || name.ends_with(".yaml") {
         let v: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
@@ -1402,6 +1424,55 @@ fn flag_tokens(v: &Value) -> Vec<String> {
         Value::Array(a) => a.iter().flat_map(flag_tokens).collect(),
         _ => Vec::new(),
     }
+}
+
+/// A scalar's text (`true`, `3`, `host`); `None` for a list or map.
+fn scalar(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.trim().to_string()),
+        Value::Bool(_) | Value::Number(_) => Some(v.to_string()),
+        _ => None,
+    }
+}
+
+/// Entries of a list, map keys, or a flag string, with `--flag value` joined to
+/// `--flag=value`; a map inside a list (a long-form mount) is its values joined by `,`.
+fn entry_tokens(v: &Value) -> Vec<String> {
+    let raw: Vec<String> = match v {
+        Value::String(s) => s.split_whitespace().map(str::to_string).collect(),
+        Value::Array(a) => a
+            .iter()
+            .flat_map(|x| match x {
+                Value::String(s) => s.split_whitespace().map(str::to_string).collect(),
+                Value::Object(m) => vec![m
+                    .iter()
+                    .map(|(k, v)| format!("{k}={}", scalar(v).unwrap_or_default()))
+                    .collect::<Vec<_>>()
+                    .join(",")],
+                other => vec![other.to_string()],
+            })
+            .collect(),
+        Value::Object(m) => m.keys().cloned().collect(),
+        Value::Null => Vec::new(),
+        other => vec![other.to_string()],
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        let t = &raw[i];
+        if t.starts_with("--")
+            && !t.contains('=')
+            && i + 1 < raw.len()
+            && !raw[i + 1].starts_with('-')
+        {
+            out.push(format!("{t}={}", raw[i + 1]));
+            i += 2;
+            continue;
+        }
+        out.push(t.clone());
+        i += 1;
+    }
+    out
 }
 
 /// The strict-vocabulary flags a token list carries, joined with their argument
@@ -1595,6 +1666,58 @@ pub fn diff_trees(base: &Value, head: &Value, rules: &[&Rule]) -> Vec<Weakening>
                         ));
                     }
                     (!parts.is_empty()).then(|| parts.join("; "))
+                }
+                Judge::Ranked(order, default) => {
+                    let rank = |v: Option<&Value>| match v {
+                        None | Some(Value::Null) => Some(default),
+                        Some(v) => {
+                            let s = scalar(v)?;
+                            order.iter().position(|o| {
+                                o.eq_ignore_ascii_case(&s) || (o.ends_with(':') && s.starts_with(o))
+                            })
+                        }
+                    };
+                    let shown = |v: Option<&Value>, r: usize| {
+                        v.and_then(scalar)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| match order[r] {
+                                "" => "unset".to_string(),
+                                o => o.to_string(),
+                            })
+                    };
+                    match (rank(b), rank(h)) {
+                        (Some(br), Some(hr)) if hr > br => Some(match (b, h) {
+                            (_, None) => format!(
+                                "removed (was `{}`; unset means `{}`)",
+                                shown(b, br),
+                                shown(None, hr)
+                            ),
+                            (None, _) => format!(
+                                "set to `{}` (unset means `{}`)",
+                                shown(h, hr),
+                                shown(None, br)
+                            ),
+                            _ => format!("moved from `{}` to `{}`", shown(b, br), shown(h, hr)),
+                        }),
+                        _ => None,
+                    }
+                }
+                Judge::GainedMatching(fragments) => {
+                    let bt = b.map(entry_tokens).unwrap_or_default();
+                    let gained: Vec<String> = h
+                        .map(entry_tokens)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|t| !bt.contains(t))
+                        .filter(|t| {
+                            let low = t.to_ascii_lowercase();
+                            fragments
+                                .iter()
+                                .any(|f| low.contains(&f.to_ascii_lowercase()))
+                        })
+                        .collect();
+                    let gained: Vec<&String> = gained.iter().collect();
+                    (!gained.is_empty()).then(|| format!("gained {}", sample(&gained)))
                 }
             };
             if let Some(what) = what {

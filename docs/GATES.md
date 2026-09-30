@@ -38,6 +38,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`instruction-smuggling`](#instruction-smuggling) | agent-guard | **shipped** | any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C and prose files (phrases) | no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose |
 | [`build-hooks`](#build-hooks) | integrity | **shipped** | package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env* | install and build hooks that gain network or shell access, and package-manager configuration edits, need a token |
 | [`toolchain-config`](#toolchain-config) | integrity | **shipped** | tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit | compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token |
+| [`sandbox-config`](#sandbox-config) | integrity | **shipped** | Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor and Copilot CLI settings, MCP server lists, devcontainer.json, Docker Compose | a change cannot widen an agent's permissions or sandbox, or a container's isolation, without a token |
 | [`scope-confinement`](#scope-confinement) | agent-guard | **shipped** | any | changes stay inside authorized paths |
 | [`suppression-delta`](#suppression-delta) | agent-guard | **shipped** | per pack | newly added linter / compiler suppression annotations |
 | [`provenance-tags`](#provenance-tags) | hygiene | **shipped** | any | published numerics carry (measured|target|projected) |
@@ -161,6 +162,9 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `toolchain-config/toolchain-config-deleted` | Toolchain Configuration Deleted |
 | `toolchain-config/toolchain-config-unreadable` | Toolchain Configuration Unreadable |
 | `toolchain-config/toolchain-config-weakened` | Toolchain Configuration Weakened |
+| `sandbox-config/sandbox-config-widened` | Sandbox Configuration Widened |
+| `sandbox-config/sandbox-change-not-analysed` | Sandbox Configuration Change Not Analysed |
+| `sandbox-config/sandbox-config-unreadable` | Sandbox Configuration Unreadable |
 | `scope-confinement/file-in-forbidden-scope` | File In Forbidden Scope |
 | `scope-confinement/file-outside-authorized-scope` | File Outside Authorized Scope |
 | `suppression-delta/suppression-added` | Suppression Added |
@@ -365,6 +369,7 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `stub-bodies` | on, `error` | High: the body is read from the syntax tree and is the whole body; base and head are compared per function. | False block: a deliberate placeholder needs `allow-stub:`. Miss: a stub that carries one extra statement, or a body that special-cases the inputs its tests use. | An added `todo!()` or a body replaced by `return null` is the change no other gate sees. |
 | `build-hooks` | on, `error` | High for a lifecycle script or a manager-config path: the JSON key or the path is the fact. Medium for a build-script line: token match on added lines. | False block: a `prepare: husky` hook or a private-registry `.npmrc` needs `allow-build-hook:`. Miss: a hook that shells out through a script file the token list does not see. | Code that runs on every install is the workflow an agent can still reach after `ci-integrity` closes the workflow files. |
 | `toolchain-config` | on, `error` | High for a data file: base and head are diffed structurally against a per-tool rule table. A configuration written as code is reported at `warning` as changed, not analysed. | False block: an intended loosening needs `allow-toolchain-weakening:`. Miss: a lint or type bar lowered in the same change that would have failed it. | Same stakes as `ci-integrity` dropping `-D warnings`, one file over. |
+| `sandbox-config` | on, `error` | High for a data file: base and head are diffed structurally against a per-agent rule table, and a mode is judged against the value an absent key takes. A firewall script is reported at `warning` as changed, not analysed. | False block: an intended widening (a new allowed command, an MCP server) needs `allow-sandbox-widening:`. Miss: a key or a value the table does not model. | A widened sandbox removes the boundary every other control assumes. |
 | `ci-integrity` | on, `error` | High for `continue-on-error`, `\|\| true` and unpinned actions in modified workflows (`diff_only = true`). | False block: an intended pattern needs `allow-ci-weakening:`. Miss: a rollup that reports green while a job is skipped. | Only modified workflows are scanned by default, so pre-existing patterns do not block adoption. |
 | `ci-skip-set` | on, `error` | High: each `needs` result is compared to its job's `if:` evaluated over the observed filter outputs; an unmodelled term is a finding, not a guess. Inert (a named "not evaluated" note) unless the rollup job supplies `DISCIPLINE_CI_CONTEXT`. | False block: a rollup whose workflow uses an `if:` form outside the modelled subset. Miss: a skip set the evaluator cannot distinguish from a legitimate one (all filters false on a change that touches no filtered path), reported as a note. | Supplying the context is the opt-in, so enabling it by default costs an ordinary diff check nothing. |
 | `test-floor` | on, `error` | High: the base-ref test count is the floor unless one is configured. | False block: a test consolidation needs `allow-test-shrink:`. Miss: silent test-count erosion. | The ratchet is relative to the base ref, so it never fails a repository for its existing state. |
@@ -1089,6 +1094,47 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - A lowering expressed in code, in a CI command line (see `ci-integrity`), or in an environment variable.
 - **Lifting directive:** `allow-toolchain-weakening: <subject> <reason>`, where the subject is the option's key path (`compilerOptions.strict`), its last segment (`strict`), or the file path (which lifts every finding in that file, and is the only form for a not-analysed or deleted file).
 - **Default:** on, `error`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`.
+
+#### `sandbox-config`
+- **Rule:** A change cannot widen what a coding agent may do, or the isolation of the container it runs in, without an explicit override directive. The same engine as `toolchain-config` over another rule table (`src/guards/sandbox_config.rs::RULES`). A file that appears or disappears is compared with an absent one: an agent with no settings file runs on its defaults, so a new file that grants `bypassPermissions` widens as much as an edit that does.
+- **Files:**
+  - Claude Code: `.claude/settings.json`, `.claude/settings.local.json`.
+  - Codex: `.codex/config.toml` (read by Codex once the project is trusted).
+  - Gemini CLI: `.gemini/settings.json`. Qwen Code: `.qwen/settings.json`.
+  - OpenCode: `opencode.json`, `opencode.jsonc`.
+  - Cursor: `.cursor/cli.json`, `.cursor/sandbox.json`.
+  - Copilot CLI: `.github/copilot/settings.json`, `.github/copilot/settings.local.json`.
+  - MCP server lists: `.mcp.json`, `.cursor/mcp.json`, `.github/mcp.json`, `.vscode/mcp.json`.
+  - Dev Containers: `devcontainer.json`, `.devcontainer.json`. Docker Compose: `compose.yaml`, `docker-compose.yml` and their `compose.<name>.yaml` forms.
+  - A script with `firewall` in its name (`init-firewall.sh`), read for a change only.
+- **What it catches:**
+  - A mode moved toward its looser end, with the value an absent key takes: Claude Code `permissions.defaultMode` (`dontAsk` < `plan` < `default` < `acceptEdits` < `auto` < `bypassPermissions`), Codex `sandbox_mode` (`read-only` < `workspace-write` < `danger-full-access`), `approval_policy` and `default_permissions`, Gemini CLI `general.defaultApprovalMode`, Qwen Code `tools.approvalMode` (default `auto`), OpenCode `permission` actions (`deny` < `ask` < `allow`, most defaulting to `allow`), Cursor `sandbox.json` `type` and `networkPolicy.default`.
+  - An allow-list grown (`permissions.allow`, `additionalDirectories`, `sandbox.network.allowedDomains`, `sandbox.excludedCommands`, Codex `writable_roots`, Gemini `tools.allowed`, Cursor `additionalReadwritePaths`, ...) or a deny-list shrunk (`permissions.deny`, `permissions.ask`, `deniedDomains`, `tools.exclude`, Copilot `deniedUrls`, ...).
+  - A protection switched off (`sandbox.enabled`, `failIfUnavailable`, Gemini `security.folderTrust.enabled`, `hooksConfig.enabled`, Codex `exclude_slash_tmp`, ...) or a laxness switch turned on (`enableAllProjectMcpServers`, `disableAllHooks`, `allowAllUnixSockets`, Codex `network_access`, Qwen `tools.autoAccept`, ...); `disableBypassPermissionsMode: "disable"` removed.
+  - A hook event removed (`hooks`), an MCP server added (`mcpServers`, `servers`, Codex `mcp_servers`, OpenCode `mcp`).
+  - A container made privileged; `network_mode` / `pid` / `ipc` / `uts` / `cgroup` / `userns_mode` moved from private to another container's (`service:`, `container:`) or the host's; capabilities added (`cap_add`, `capAdd`) or no longer dropped (`cap_drop`); seccomp, AppArmor or SELinux labelling switched off (`security_opt`, `securityOpt`); devices added; the host's Docker, Podman or containerd socket mounted (`volumes`, `mounts`); `runArgs` gaining `--privileged`, `--network=host`, `--pid=host`, `--cap-add`, `--device` (`--flag value` is read as `--flag=value`); a feature that reaches the host's engine (`docker-outside-of-docker`, `docker-in-docker`); a new or changed `initializeCommand`, which runs on the host.
+  - A firewall script **changed** or deleted: reported at `warning` as not analysed, since whether a script widens outbound rules cannot be read from a diff.
+  - A recognised file that no longer parses on one side.
+- **Failing diff (rejected):**
+  ```diff
+  // .claude/settings.json
+  - "permissions": { "defaultMode": "plan" }
+  + "permissions": { "defaultMode": "bypassPermissions" }
+  ```
+- **Passing commit / PR body (accepted):**
+  ```text
+  allow-sandbox-widening: defaultMode the eval harness runs in a throwaway VM with no credentials
+  ```
+- **What it does NOT catch:**
+  - Runtime containment: what a running agent does, which commands reach the network, DNS tunnelling, credential reads. That is the sandbox's job (`docs/ARCHITECTURE.md` §1.3).
+  - What an added permission entry grants beyond its text, or whether a newly allowed domain is safe: a grown list is reported, not judged.
+  - A value the rule's order does not know (Codex's `granular` approval table, a custom permission profile name): it is not judged.
+  - A key that has no effect in the file it is written to: Claude Code ignores `auto` and `bypassPermissions` in project files since 2.1.257, and they are still reported, since an older release honours them.
+  - Kubernetes manifests (no file name identifies them), `docker run` command lines in scripts, a Dockerfile's `USER`, and user-level settings (read by `discipline doctor`'s `agent-sandbox` instead).
+  - agy: no project settings file is documented; its hook file `.agents/hooks.json` is covered by `instruction-smuggling`.
+- **Lifting directive:** `allow-sandbox-widening: <subject> <reason>`, where the subject is the key path (`permissions.defaultMode`, `services.agent.network_mode`), its last segment (`defaultMode`), or the file path (which lifts every finding in that file, and is the only form for a firewall script).
+- **Default:** on, `error`. A change to an agent hook file is also reported by `instruction-smuggling`; each gate is lifted by its own directive.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `golden-output`
@@ -1891,5 +1937,5 @@ The official container image (`ghcr.io/orieg/discipline`) intentionally relaxes 
 
 ## Roadmap & Future Gates
 
-All 40 gates across the six suites are implemented and shipped; `discipline gates` lists them with their effective state. Paired within-run ratio benchmarking shipped as `bench-regression` `mode = "paired-ratio"`. Known limitations and candidate work are tracked in the "Outstanding Checks & Known Limitations" section of [ROADMAP.md](ROADMAP.md).
+All 41 gates across the six suites are implemented and shipped; `discipline gates` lists them with their effective state. Paired within-run ratio benchmarking shipped as `bench-regression` `mode = "paired-ratio"`. Known limitations and candidate work are tracked in the "Outstanding Checks & Known Limitations" section of [ROADMAP.md](ROADMAP.md).
 

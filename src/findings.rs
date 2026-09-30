@@ -217,6 +217,11 @@ findings! {
     TOOLCHAIN_CONFIG_UNREADABLE = ["toolchain-config"], "toolchain-config-unreadable", "Toolchain Configuration Unreadable", Same;
     TOOLCHAIN_CONFIG_WEAKENED = ["toolchain-config"], "toolchain-config-weakened", "Toolchain Configuration Weakened", Same;
 
+    // sandbox-config
+    SANDBOX_CONFIG_WIDENED = ["sandbox-config"], "sandbox-config-widened", "Sandbox Configuration Widened", Same;
+    SANDBOX_CHANGE_NOT_ANALYSED = ["sandbox-config"], "sandbox-change-not-analysed", "Sandbox Configuration Change Not Analysed", Same;
+    SANDBOX_CONFIG_UNREADABLE = ["sandbox-config"], "sandbox-config-unreadable", "Sandbox Configuration Unreadable", Same;
+
     // scope-confinement
     FILE_IN_FORBIDDEN_SCOPE = ["scope-confinement"], "file-in-forbidden-scope", "File In Forbidden Scope", Message;
     FILE_OUTSIDE_AUTHORIZED_SCOPE = ["scope-confinement"], "file-outside-authorized-scope", "File Outside Authorized Scope", Message;
