@@ -820,7 +820,7 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
     }
 
     // 2. Process the JSON Schemas: the configuration, the `check` report and the
-    // `replay` summary.
+    // `replay` summary and the `audit` records.
     for (file_name, generated_schema_val) in [
         ("discipline.schema.json", generate_schema()),
         (
@@ -830,6 +830,10 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         (
             "discipline.replay.schema.json",
             crate::output_schema::replay_schema(),
+        ),
+        (
+            "discipline.audit.schema.json",
+            crate::output_schema::audit_schema(),
         ),
     ] {
         let schema_path = root.join(file_name);

@@ -1,0 +1,199 @@
+{
+  "$defs": {
+    "Counts": {
+      "additionalProperties": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "Record": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "description": "The value after",
+          "type": "string"
+        },
+        "before": {
+          "description": "The value before, as the `config-integrity` finding shows it",
+          "type": "string"
+        },
+        "change": {
+          "enum": [
+            "changed",
+            "removed",
+            "increased",
+            "decreased",
+            "lowered",
+            "gained",
+            "lost",
+            "emptied"
+          ]
+        },
+        "class": {
+          "description": "`process`: a waiver of a process rule (`no-issue`); `detector`: a waiver of a finding",
+          "enum": [
+            "process",
+            "detector",
+            "config",
+            "baseline",
+            "inline"
+          ]
+        },
+        "count": {
+          "description": "List entries gained or lost, or baseline findings added",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "detail": {
+          "description": "Why a configuration or baseline could not be compared",
+          "type": "string"
+        },
+        "directive": {
+          "description": "The directive's name, as written",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "`claimed`: text that asks for an exception; `applied`: a tree change that is one",
+          "enum": [
+            "claimed",
+            "applied"
+          ]
+        },
+        "file": {
+          "description": "Where the exception is: the inline marker's file, the baseline, or `discipline.toml`",
+          "type": "string"
+        },
+        "gate": {
+          "description": "Gate id, or the configuration table a loosening is under; null for a directive this binary does not map to a gate",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hidden": {
+          "description": "The directive was inside an HTML comment",
+          "type": "boolean"
+        },
+        "key": {
+          "description": "The configuration option a loosening changed",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "directive",
+            "config",
+            "config-unreadable",
+            "baseline",
+            "inline-marker"
+          ]
+        },
+        "line": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pr": {
+          "description": "Pull request number, from the subject's `(#N)`",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "The directive's reason text: only under `--reasons`",
+          "type": "string"
+        },
+        "reason_len": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason_sha256": {
+          "description": "SHA-256 of the directive's reason, to group reuse without the text",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "sha": {
+          "description": "Full commit id of the change",
+          "type": "string"
+        },
+        "tier": {
+          "description": "Who controls the input: `A` git objects on the audited branch, `C` text the change's author wrote",
+          "enum": [
+            "A",
+            "C"
+          ]
+        },
+        "time": {
+          "description": "Commit time, seconds since the Unix epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sha",
+        "pr",
+        "time",
+        "kind",
+        "class",
+        "evidence",
+        "tier",
+        "gate"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The records `discipline audit --json` prints: one per escape hatch a merged change carried, read from git objects only. A record says what was claimed or applied, not whether a check honoured it.",
+  "properties": {
+    "by_class": {
+      "$ref": "#/$defs/Counts",
+      "description": "Class -> record count"
+    },
+    "by_gate": {
+      "$ref": "#/$defs/Counts",
+      "description": "Gate id (or configuration table) -> record count"
+    },
+    "by_kind": {
+      "$ref": "#/$defs/Counts",
+      "description": "Kind -> record count"
+    },
+    "changes": {
+      "description": "First-parent changes audited",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "changes_with_records": {
+      "description": "Changes that carried at least one record",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "records": {
+      "description": "Newest change first",
+      "items": {
+        "$ref": "#/$defs/Record"
+      },
+      "type": "array"
+    },
+    "reference": {
+      "description": "The ref audited, as given or defaulted",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it"
+    }
+  },
+  "required": [
+    "schema_version",
+    "reference",
+    "changes",
+    "changes_with_records",
+    "by_kind",
+    "by_class",
+    "by_gate",
+    "records"
+  ],
+  "title": "DisciplineAudit",
+  "type": "object"
+}

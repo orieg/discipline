@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 pub mod ast;
+pub mod audit;
 pub mod baseline;
 pub mod cli;
 pub mod comment;

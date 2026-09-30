@@ -288,6 +288,16 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(audit)
+_arguments "${_arguments_options[@]}" : \
+'--last=[Number of first-parent commits (merged changes) to audit, newest first]:LAST:_default' \
+'--ref=[Branch whose history is audited (default\: origin'\''s default branch, else main / master)]:REFERENCE:_default' \
+'--json[Print the records as JSON]' \
+'--reasons[Include each directive'\''s reason text (by default only its SHA-256 and length)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (mcp)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -548,6 +558,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(audit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (mcp)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -645,6 +659,7 @@ _discipline_commands() {
 'hook:Run the gates inside a coding agent'\''s edit loop (Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code, OpenCode)' \
 'explain:Explain a gate\: what it checks, its state here, and the directive that lifts a finding' \
 'replay:Replay the last N merged changes through a configuration\: what it would have blocked' \
+'audit:List the escape hatches the last N merged changes carried\: directives, configuration loosenings, baseline growth, inline markers' \
 'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
@@ -652,6 +667,11 @@ _discipline_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__audit_commands] )) ||
+_discipline__subcmd__audit_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline audit commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__baseline_commands] )) ||
 _discipline__subcmd__baseline_commands() {
@@ -740,6 +760,7 @@ _discipline__subcmd__help_commands() {
 'hook:Run the gates inside a coding agent'\''s edit loop (Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code, OpenCode)' \
 'explain:Explain a gate\: what it checks, its state here, and the directive that lifts a finding' \
 'replay:Replay the last N merged changes through a configuration\: what it would have blocked' \
+'audit:List the escape hatches the last N merged changes carried\: directives, configuration loosenings, baseline growth, inline markers' \
 'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
 'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
@@ -747,6 +768,11 @@ _discipline__subcmd__help_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline help commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__audit_commands] )) ||
+_discipline__subcmd__help__subcmd__audit_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help audit commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__help__subcmd__baseline_commands] )) ||
 _discipline__subcmd__help__subcmd__baseline_commands() {

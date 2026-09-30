@@ -441,6 +441,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `hook` | Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code, OpenCode) |
 | `explain` | Explain a gate: what it checks, its state here, and the directive that lifts a finding |
 | `replay` | Replay the last N merged changes through a configuration: what it would have blocked |
+| `audit` | List the escape hatches the last N merged changes carried: directives, configuration loosenings, baseline growth, inline markers |
 | `mcp` | Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding) |
 | `bench` | Benchmark tooling for the bench-regression gate |
 | `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
@@ -596,6 +597,15 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--ref` |  |  | Branch whose history is replayed (default: origin's default branch, else main / master) |
 | `-c`, `--config` |  |  | Configuration under test (default: discipline.toml in the working tree) |
 | `--json` |  |  | Print the summary as JSON |
+
+**`discipline audit`**
+
+| Option | Env | Default | Description |
+|---|---|---|---|
+| `--last` |  |  | Number of first-parent commits (merged changes) to audit, newest first |
+| `--ref` |  |  | Branch whose history is audited (default: origin's default branch, else main / master) |
+| `--json` |  |  | Print the records as JSON |
+| `--reasons` |  |  | Include each directive's reason text (by default only its SHA-256 and length) |
 
 **`discipline bench derive`**
 
@@ -1120,6 +1130,27 @@ Each change is checked with its pull request's author as the actor (`--actor`), 
 The configuration under test is usually newer than the history it replays. A file it names for `version-lockstep` or `manifest-sync` that neither side of a replayed change has yet skips that group or rule with a note, rather than failing the whole change, and the summary counts it: the text output says how many changes skipped a check whose configuration is newer than the change and names the gate and group or manifest, and `--json` lists the changes per gate in `skipped_by_gate` and each change's skips in its `skipped_checks`; outside replay, the same missing file is a configuration error (exit 2). Replay marks its cases with `DISCIPLINE_REPLAY_CASE`, which is honoured only when the base is the parentless commit replay builds for the case; set on any other `check`, it changes nothing.
 
 `--json` prints the per-change verdicts and the per-gate counts (`errors_by_gate` names the changes each gate blocked with an error finding; `refused_overrides_by_gate` the changes whose override of a gate was refused; `overrides_by_gate` the changes whose check applied an override of a gate, and each case lists those overrides in `overrides` by gate, directive, subject and source, never with the reason text; `could_not_check_by_reason` groups the changes that could not be checked by the reason their check gave, the report's `could_not_check.reason`, with `forge` for a change whose merged pull request could not be read; each case carries its `reason` and the error in `detail`). The command exits 0 when the replay ran, whatever it found; 2 when it could not run. The shape is defined by `discipline.replay.schema.json`, and the `check --format json` report's by `discipline.report.schema.json`, both at the repository root.
+
+### Auditing Escape Hatches: `discipline audit`
+
+```bash
+discipline audit --last 200                           # text: one line per record, then totals
+discipline audit --last 200 --ref origin/main --json  # the records, for jq or a dashboard
+```
+
+Lists every escape hatch the last N first-parent commits of a branch carried (default branch as for `replay`), one record each, read from git objects only: no check runs, no child process starts and nothing is read from the network.
+
+| Kind | What | Evidence | Tier |
+|---|---|---|---|
+| `directive` | A directive line in the commit message (`class` `process` for `no-issue`, `detector` for a finding waiver) | `claimed` | `C` |
+| `config` | A loosening of `discipline.toml` between the change's parent and itself, as `config-integrity` judges it: `gate`, `key`, `change` (`changed`, `removed`, `increased`, `decreased`, `lowered`, `gained`, `lost`, `emptied`), `before` / `after` or `count`. A list's entries are counted, never named | `applied` | `A` |
+| `config-unreadable` | A side of that comparison that does not parse (an option this binary no longer reads), with the side and the parse error in `detail`. The audit continues | `applied` | `A` |
+| `baseline` | Findings added to `discipline-baseline.toml`, counted per gate | `applied` | `A` |
+| `inline-marker` | An added line whose comment opens with `discipline:allow(<gate>)` for a gate this binary has | `claimed` | `A` |
+
+`evidence` separates text that asks for an exception from a tree change that is one; whether a directive lifted a finding is what `replay` reports (each case's `overrides`, and `unused_directives` in the `check` report). `tier` says who controls the input: `A` is the audited branch's tree, `C` is text the change's author wrote and could have worded to pass. Adopting a configuration is not a loosening; removing it is compared with the built-in defaults. A directive's reason is reported as `reason_sha256` and `reason_len` (the same reason hashes the same, so reuse can be counted without the text); `--reasons` adds the text. Directives in pull-request bodies are not read yet.
+
+The command exits 0 when the audit ran, whatever it found; 2 when the ref does not resolve or git cannot be read. The shape is defined by `discipline.audit.schema.json` at the repository root. The output is for people reviewing history: it is not offered to agents through `discipline mcp` or the `agent-prompt` format, since a list of accepted waivers is a list of what passes.
 
 ### VS Code Problems Panel
 

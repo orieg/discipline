@@ -57,6 +57,9 @@ discipline hook install --agent claude-code
 # What would discipline have blocked in your last 50 merged changes?
 discipline replay --last 50
 
+# Which waivers, loosenings and grandfathered findings did they carry?
+discipline audit --last 50
+
 # What a gate checks and how its finding is lifted
 discipline explain assertion-reduction
 ```
@@ -162,6 +165,7 @@ Coding-agent integration:
 
 Adoption and editor tooling:
 - [Previewing Adoption (`discipline replay`)](docs/CONFIGURATION.md#previewing-adoption-discipline-replay)
+- [Auditing Escape Hatches (`discipline audit`)](docs/CONFIGURATION.md#auditing-escape-hatches-discipline-audit)
 - [Explaining a Gate (`discipline explain`)](docs/CONFIGURATION.md#explaining-a-gate)
 - [VS Code Problems Panel](docs/CONFIGURATION.md#vs-code-problems-panel)
 - [Keeping Pins Current with Renovate](docs/CONFIGURATION.md#keeping-pins-current-with-renovate)

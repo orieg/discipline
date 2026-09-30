@@ -39,6 +39,8 @@ pub enum Commands {
     Explain(ExplainArgs),
     /// Replay the last N merged changes through a configuration: what it would have blocked
     Replay(ReplayArgs),
+    /// List the escape hatches the last N merged changes carried: directives, configuration loosenings, baseline growth, inline markers
+    Audit(AuditArgs),
     /// Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding)
     Mcp,
     /// Benchmark tooling for the bench-regression gate
@@ -96,6 +98,7 @@ impl Commands {
             Commands::Hook(_) => "hook",
             Commands::Mcp => "mcp",
             Commands::Replay(_) => "replay",
+            Commands::Audit(_) => "audit",
             Commands::Explain(_) => "explain",
             Commands::Bench(_) => "bench",
             Commands::Doctor(_) => "doctor",
@@ -135,6 +138,25 @@ pub struct ReplayArgs {
     /// Print the summary as JSON
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AuditArgs {
+    /// Number of first-parent commits (merged changes) to audit, newest first
+    #[arg(long)]
+    pub last: usize,
+
+    /// Branch whose history is audited (default: origin's default branch, else main / master)
+    #[arg(long = "ref")]
+    pub reference: Option<String>,
+
+    /// Print the records as JSON
+    #[arg(long)]
+    pub json: bool,
+
+    /// Include each directive's reason text (by default only its SHA-256 and length)
+    #[arg(long)]
+    pub reasons: bool,
 }
 
 #[derive(Args, Debug)]
