@@ -159,6 +159,7 @@ findings! {
     RATIFICATION_AUTHOR_NOT_ACCEPTED = ["ratified-paths"], "ratification-author-not-accepted", "Ratification Author Not Accepted", Same;
     RATIFICATION_COMMENT_EDITED = ["ratified-paths"], "ratification-comment-edited", "Ratification Comment Not Accepted", Same;
     RATIFICATION_OUTSIDE_WINDOW = ["ratified-paths"], "ratification-outside-window", "Ratification Outside Its Window", Same;
+    RATIFICATION_BY_PULL_AUTHOR = ["ratified-paths"], "ratification-by-pull-author", "Ratification By The Pull Request's Author", Same;
 
     // citation-metadata
     CFF_INVALID = ["citation-metadata"], "cff-invalid", "CITATION.cff Is Not Valid", Same;

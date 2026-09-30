@@ -297,6 +297,7 @@ const CASES: &[Case] = &[
                     &cfg,
                     &Input {
                         pull_number: 7,
+                        pull_author: "agent",
                         pull_body: "Closes #12",
                         protected: &protected,
                         never_ratifiable: &never,

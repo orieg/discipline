@@ -113,6 +113,7 @@ pub fn evaluate_ratified_paths(ctx: &Context) -> Result<GateOutcome> {
         cfg,
         &Input {
             pull_number: pull.number,
+            pull_author: &pull.author,
             pull_body: ctx.pr_body.as_deref().unwrap_or(""),
             protected: &changed_protected,
             never_ratifiable: &never,
@@ -175,6 +176,25 @@ pub fn evaluate_ratified_paths(ctx: &Context) -> Result<GateOutcome> {
                     None,
                     format!("The ratification block in {anchor} does not count: {why}."),
                     "Post the ratification as a new comment rather than editing an old one.",
+                );
+                out.anchor_last(anchor);
+            }
+            Finding::ByPullAuthor {
+                anchor,
+                author_known,
+            } => {
+                let msg = if author_known {
+                    format!("The ratification block in {anchor} is by the pull request's own author; with `refuse_author_ratification` it does not count.")
+                } else {
+                    format!("The ratification block in {anchor} does not count: this run does not know the pull request's author, so `refuse_author_ratification` cannot tell it apart from the ratifier.")
+                };
+                out.push(
+                    crate::config::Severity::Note,
+                    &crate::findings::RATIFICATION_BY_PULL_AUTHOR,
+                    None,
+                    None,
+                    msg,
+                    "A listed ratifier other than the login that opened the pull request must post the ratification.",
                 );
                 out.anchor_last(anchor);
             }

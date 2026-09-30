@@ -1574,6 +1574,7 @@ pub fn judge_protected(
                 &cfg,
                 &crate::ratification::Input {
                     pull_number: pull.pr,
+                    pull_author: &pull.author,
                     pull_body: &pull.body,
                     protected: &paths,
                     never_ratifiable: &never,

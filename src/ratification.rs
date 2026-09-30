@@ -485,6 +485,9 @@ pub enum Finding {
     AuthorNotAccepted { anchor: String, author: String },
     /// A block in a comment that was edited, imported or created by email.
     CommentRefused { anchor: String, why: &'static str },
+    /// With `refuse_author_ratification`, a block by the pull request's own author, or
+    /// any block when the run does not know that author (`author_known` false).
+    ByPullAuthor { anchor: String, author_known: bool },
     /// A block that names a path but is older than that path's window.
     OutsideWindow {
         anchor: String,
@@ -515,7 +518,7 @@ pub struct Judgement {
 }
 
 /// Why `comment` cannot ratify, or `None` when it can.
-fn refuse_comment(cfg: &RatifiedPathsGate, c: &Comment) -> Option<Finding> {
+fn refuse_comment(cfg: &RatifiedPathsGate, c: &Comment, pull_author: &str) -> Option<Finding> {
     let anchor = format!("comment:{}", c.id);
     let listed = |list: &[String]| list.iter().any(|l| l.eq_ignore_ascii_case(&c.author));
     if c.author.is_empty()
@@ -531,6 +534,14 @@ fn refuse_comment(cfg: &RatifiedPathsGate, c: &Comment) -> Option<Finding> {
             } else {
                 c.author.clone()
             },
+        });
+    }
+    if cfg.refuse_author_ratification
+        && (pull_author.is_empty() || pull_author.eq_ignore_ascii_case(&c.author))
+    {
+        return Some(Finding::ByPullAuthor {
+            anchor,
+            author_known: !pull_author.is_empty(),
         });
     }
     if c.imported {
@@ -562,6 +573,9 @@ fn refuse_comment(cfg: &RatifiedPathsGate, c: &Comment) -> Option<Finding> {
 /// The inputs of [`judge`] that are not the forge.
 pub struct Input<'a> {
     pub pull_number: u64,
+    /// The pull request author's login, for `refuse_author_ratification`; empty when the
+    /// run does not know it.
+    pub pull_author: &'a str,
     pub pull_body: &'a str,
     /// Changed protected paths (never-ratifiable ones already removed).
     pub protected: &'a [String],
@@ -653,12 +667,16 @@ pub fn judge(
                 continue;
             }
             let anchor = format!("issue:{}#{}/comment:{}", r.repo, r.reference.number, c.id);
-            if let Some(refusal) = refuse_comment(cfg, c) {
+            if let Some(refusal) = refuse_comment(cfg, c, input.pull_author) {
                 out.findings.push(match refusal {
                     Finding::AuthorNotAccepted { author, .. } => {
                         Finding::AuthorNotAccepted { anchor, author }
                     }
                     Finding::CommentRefused { why, .. } => Finding::CommentRefused { anchor, why },
+                    Finding::ByPullAuthor { author_known, .. } => Finding::ByPullAuthor {
+                        anchor,
+                        author_known,
+                    },
                     other => other,
                 });
                 continue;
@@ -897,6 +915,17 @@ mod tests {
         body: &str,
         protected: &[&str],
     ) -> Result<Judgement> {
+        run_by(api, cfg, body, protected, "agent")
+    }
+
+    /// [`run`] for a pull request opened by `author`.
+    fn run_by(
+        api: &CannedApi,
+        cfg: &RatifiedPathsGate,
+        body: &str,
+        protected: &[&str],
+        author: &str,
+    ) -> Result<Judgement> {
         let protected: Vec<String> = protected.iter().map(|s| s.to_string()).collect();
         let never = crate::guards::PathFilter::new(&cfg.never_ratifiable).unwrap();
         let last_change = |_: &str| Ok(None);
@@ -906,6 +935,7 @@ mod tests {
             cfg,
             &Input {
                 pull_number: 7,
+                pull_author: author,
                 pull_body: body,
                 protected: &protected,
                 never_ratifiable: &never,
@@ -970,6 +1000,49 @@ mod tests {
         // No closing reference at all.
         let j = run(&api, &cfg(), "Refs #12", &["scripts/check_x.py"]).unwrap();
         assert_eq!(unratified(&j), vec!["scripts/check_x.py"]);
+    }
+
+    #[test]
+    fn refuse_author_ratification_needs_a_second_login() {
+        let block = format!("{MARKER}\n- scripts/check_x.py\n");
+        let api = || forge_with(vec![comment(1, "owner", &block, T0, T0)]);
+        let refused = |j: &Judgement| {
+            j.findings
+                .iter()
+                .any(|f| matches!(f, Finding::ByPullAuthor { .. }))
+        };
+        // Off (the default): the owner may ratify a pull request the owner opened.
+        let j = run_by(
+            &api(),
+            &cfg(),
+            "Closes #12",
+            &["scripts/check_x.py"],
+            "owner",
+        )
+        .unwrap();
+        assert!(j.findings.is_empty(), "{j:?}");
+        let mut on = cfg();
+        on.refuse_author_ratification = true;
+        // On: the same ratification is refused, whatever the login's case.
+        for author in ["owner", "OWNER"] {
+            let j = run_by(&api(), &on, "Closes #12", &["scripts/check_x.py"], author).unwrap();
+            assert_eq!(unratified(&j), vec!["scripts/check_x.py"], "{author}");
+            assert!(refused(&j), "{author}: {j:?}");
+        }
+        // On, with an unknown pull request author: refused, never assumed to differ.
+        let j = run_by(&api(), &on, "Closes #12", &["scripts/check_x.py"], "").unwrap();
+        assert_eq!(unratified(&j), vec!["scripts/check_x.py"]);
+        assert!(refused(&j), "{j:?}");
+        // On, with a pull request an agent's own login opened: the owner's ratification stands.
+        let j = run_by(
+            &api(),
+            &on,
+            "Closes #12",
+            &["scripts/check_x.py"],
+            "agent-bot",
+        )
+        .unwrap();
+        assert!(j.findings.is_empty(), "{j:?}");
     }
 
     #[test]
@@ -1097,6 +1170,7 @@ mod tests {
                 &c,
                 &Input {
                     pull_number: 7,
+                    pull_author: "agent",
                     pull_body: "Closes #12",
                     protected: &protected,
                     never_ratifiable: &never,
@@ -1210,6 +1284,7 @@ mod tests {
                 c,
                 &Input {
                     pull_number: 7,
+                    pull_author: "agent",
                     pull_body: "",
                     protected: &protected,
                     never_ratifiable: &never,
@@ -1287,6 +1362,7 @@ mod tests {
                 &cfg(),
                 &Input {
                     pull_number: 7,
+                    pull_author: "agent",
                     pull_body: "",
                     protected: &protected,
                     never_ratifiable: &never,

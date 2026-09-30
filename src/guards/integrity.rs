@@ -163,6 +163,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("ratification_max_age_days", Direction::Cap),
     ("accept_edited", Direction::StrictMode("never")),
     ("accept_email_replies", Direction::LooserWhenTrue),
+    ("refuse_author_ratification", Direction::LooserWhenFalse),
     ("pin_actions", Direction::LooserWhenFalse),
     ("forbid_continue_on_error", Direction::LooserWhenFalse),
     ("forbid_or_true", Direction::LooserWhenFalse),
@@ -1158,6 +1159,11 @@ mod tests {
         );
         assert_eq!(weaker(&|g| g.require_open_issue = false).len(), 1);
         assert!(weaker(&|g| g.agent_logins.push("bot".into())).is_empty());
+        // Turning on `refuse_author_ratification` tightens; turning it off loosens.
+        assert!(weaker(&|g| g.refuse_author_ratification = true).is_empty());
+        let mut on = base.clone();
+        on.gates.ratified_paths.refuse_author_ratification = true;
+        assert_eq!(diff_configs(&on, &base).unwrap().len(), 1);
     }
 
     #[test]

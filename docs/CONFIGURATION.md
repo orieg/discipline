@@ -269,6 +269,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.ratified-paths.ratification_repos` | list | `[]` | Other repositories whose issues may carry a ratification |
 | `gates.ratified-paths.ratification_valid_from` | string | `"path-last-changed"` | How old a ratification may be: newer than the path's last change on the base branch (default), newer than the pull request, or any age |
 | `gates.ratified-paths.ratifiers` | list | `[]` | Logins whose comments ratify |
+| `gates.ratified-paths.refuse_author_ratification` | boolean | `false` | Refuse a ratification written by the pull request's own author, so a second login must agree (default: false; turn on once agents open pull requests under their own login) |
 | `gates.ratified-paths.require_open_issue` | boolean | `true` | A closed issue carries no ratification (default: true) |
 | `gates.ratified-paths.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.review-threads.enabled` | boolean | `false` | Whether this gate is active |

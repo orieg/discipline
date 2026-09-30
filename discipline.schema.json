@@ -985,6 +985,10 @@
           "$ref": "#/$defs/StringListOrReset",
           "description": "Logins whose comments ratify"
         },
+        "refuse_author_ratification": {
+          "description": "Refuse a ratification written by the pull request's own author, so a second login must agree (default: false; turn on once agents open pull requests under their own login)",
+          "type": "boolean"
+        },
         "require_open_issue": {
           "description": "A closed issue carries no ratification (default: true)",
           "type": "boolean"
