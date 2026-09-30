@@ -8,6 +8,10 @@
 //!   (GitHub), protected tags (Gitea, Forgejo, GitLab).
 //! - **Secret scoping** (GitHub): repository-level Actions secrets that the workflows read
 //!   only from jobs bound to an environment.
+//! - **Repository settings the OWASP CI/CD Security Cheat Sheet names** (#366): auto-merge,
+//!   forking of a private repository, secret scanning and push protection, dependency
+//!   alerts. Read from the repository object `doctor` already fetches, plus GitHub's two
+//!   alert endpoints.
 //!
 //! Reads go through `crate::forge` (AGENTS.md §3.3). A setting the token cannot see is a
 //! warning naming the access it needs, never a pass; a forge that cannot be reached is
@@ -28,6 +32,10 @@ pub const IDS: &[&str] = &[
     "tag-protection",
     "secret-scoping",
     "forge-token",
+    "auto-merge",
+    "forking",
+    "secret-scanning",
+    "dependency-alerts",
 ];
 
 /// The access GitHub needs for the admin-only settings endpoints.
@@ -76,33 +84,46 @@ fn unavailable(id: &'static str, kind: ForgeKind) -> Finding {
 }
 
 /// Every settings finding for `forge`. `workflows` are the local Actions workflow files
-/// (path, content), read for which jobs use which secrets.
-pub fn findings(api: &dyn ForgeApi, forge: &Forge, workflows: &[(String, String)]) -> Vec<Finding> {
+/// (path, content), read for which jobs use which secrets. `reviews` is the number of
+/// approving reviews the protected branch requires, `None` when not known.
+pub fn findings(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    workflows: &[(String, String)],
+    reviews: Option<u64>,
+) -> Vec<Finding> {
     match forge.kind {
-        ForgeKind::GitHub => github(api, forge, workflows),
+        ForgeKind::GitHub => github(api, forge, workflows, reviews),
         ForgeKind::GitLab => gitlab(api, forge),
         ForgeKind::Gitea | ForgeKind::Forgejo => IDS
             .iter()
             .map(|id| match *id {
                 "tag-protection" => protected_tags(api, forge),
                 "secret-scoping" => gitea_secret_scoping(api, forge, workflows),
+                "auto-merge" => auto_merge_always_offered(forge.kind),
                 other => unavailable(other, forge.kind),
             })
             .collect(),
     }
 }
 
-fn github(api: &dyn ForgeApi, forge: &Forge, workflows: &[(String, String)]) -> Vec<Finding> {
+fn github(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    workflows: &[(String, String)],
+    reviews: Option<u64>,
+) -> Vec<Finding> {
     let r = &forge.repo;
     // The repository read says whether the forge answers at all, and whether this token
     // is an admin (a 404 from `immutable-releases` then means "off", not "hidden").
-    let admin = match api.fetch(forge, &format!("repos/{r}")) {
-        Ok(v) => v.pointer("/permissions/admin").and_then(|a| a.as_bool()),
+    let repo = match api.fetch(forge, &format!("repos/{r}")) {
+        Ok(v) => v,
         Err(e) => {
             let why = e.to_string();
             return IDS.iter().map(|id| down(id, forge.kind, &why)).collect();
         }
     };
+    let admin = repo.pointer("/permissions/admin").and_then(|a| a.as_bool());
     let mut out = Vec::new();
 
     match ask(api, forge, &format!("repos/{r}/actions/permissions")) {
@@ -160,7 +181,216 @@ fn github(api: &dyn ForgeApi, forge: &Forge, workflows: &[(String, String)]) -> 
     // A GitHub token's scopes are only in a response header (`X-OAuth-Scopes`, classic
     // tokens); a fine-grained token does not list its permissions.
     out.push(unavailable("forge-token", forge.kind));
+    out.push(github_auto_merge(&repo, reviews));
+    out.push(github_forking(&repo));
+    out.push(github_secret_scanning(&repo));
+    // `vulnerability-alerts` answers 204 when alerts are on and 404 when they are off or
+    // the token may not read them; an admin token tells the two apart.
+    let updates = match ask(api, forge, &format!("repos/{r}/automated-security-fixes")) {
+        Answer::Ok(v) => v.get("enabled").and_then(|e| e.as_bool()),
+        _ => None,
+    };
+    out.push(
+        match ask(api, forge, &format!("repos/{r}/vulnerability-alerts")) {
+            Answer::Ok(_) => dependency_alerts(true, updates),
+            Answer::Hidden(_) if admin == Some(true) => dependency_alerts(false, updates),
+            Answer::Hidden(why) => hidden(
+                "dependency-alerts",
+                "whether dependency alerts are on",
+                &why,
+                GITHUB_ADMIN,
+            ),
+            Answer::Down(why) => down("dependency-alerts", forge.kind, &why),
+        },
+    );
     out
+}
+
+/// A setting only an admin token sees in GitHub's repository object.
+fn github_admin_hidden(id: &'static str, what: &str) -> Finding {
+    hidden(id, what, "absent from the repository object", GITHUB_ADMIN)
+}
+
+/// `auto-merge` on GitHub (`allow_auto_merge`, shown to admin tokens). Auto-merge lands a
+/// pull request as soon as the required checks pass and the reviews allow: with no required
+/// review, the required checks alone decide (OWASP CI/CD Security Cheat Sheet).
+pub fn github_auto_merge(repo: &serde_json::Value, reviews: Option<u64>) -> Finding {
+    match repo.get("allow_auto_merge").and_then(|a| a.as_bool()) {
+        None => github_admin_hidden("auto-merge", "whether auto-merge is allowed"),
+        Some(false) => Finding::new("auto-merge", Status::Pass, "auto-merge is not allowed"),
+        Some(true) => match reviews {
+            Some(0) => Finding::new(
+                "auto-merge",
+                Status::Warn,
+                "auto-merge is allowed and no approving review is required: a pull request merges on its required checks alone",
+            )
+            .fix("Require an approving review on the protected branch, or turn off \"Allow auto-merge\" in the repository settings."),
+            Some(n) => Finding::new(
+                "auto-merge",
+                Status::Info,
+                format!("auto-merge is allowed; a pull request still needs {n} approving review(s)"),
+            ),
+            None => Finding::new(
+                "auto-merge",
+                Status::Info,
+                "auto-merge is allowed; the required reviews could not be read, and they decide whether a person sees the change before it merges",
+            ),
+        },
+    }
+}
+
+/// `auto-merge` where the forge has no repository setting: GitLab, Gitea and Forgejo always
+/// offer "merge when checks succeed", so the branch's review rule decides.
+fn auto_merge_always_offered(kind: ForgeKind) -> Finding {
+    Finding::new(
+        "auto-merge",
+        Status::Info,
+        format!(
+            "no repository setting on this forge ({}): merging once checks succeed is always offered, so the required reviews decide",
+            kind.label()
+        ),
+    )
+}
+
+/// `forking` on GitHub: a private or internal repository that allows forks lets its code
+/// leave the repository's access control (OWASP CI/CD Security Cheat Sheet).
+pub fn github_forking(repo: &serde_json::Value) -> Finding {
+    let visibility = repo.get("visibility").and_then(|v| v.as_str()).unwrap_or(
+        if repo.get("private").and_then(|p| p.as_bool()) == Some(true) {
+            "private"
+        } else {
+            "public"
+        },
+    );
+    forking_finding(
+        visibility,
+        repo.get("allow_forking").and_then(|a| a.as_bool()),
+        "turn off \"Allow forking\" in the repository settings",
+    )
+}
+
+/// `forking` on GitLab: `forking_access_level` (`disabled`, `private`, `enabled`).
+pub fn gitlab_forking(project: &serde_json::Value) -> Finding {
+    let visibility = project
+        .get("visibility")
+        .and_then(|v| v.as_str())
+        .unwrap_or("private");
+    let allowed = project
+        .get("forking_access_level")
+        .and_then(|v| v.as_str())
+        .map(|level| level == "enabled");
+    forking_finding(
+        visibility,
+        allowed,
+        "set Settings > General > Visibility > Forks to \"Only Project Members\" or disable forking",
+    )
+}
+
+fn forking_finding(visibility: &str, allowed: Option<bool>, fix: &str) -> Finding {
+    match (visibility, allowed) {
+        ("public", _) => Finding::new(
+            "forking",
+            Status::Info,
+            "public repository: anyone can fork it",
+        ),
+        (_, None) => Finding::new(
+            "forking",
+            Status::Info,
+            format!("{visibility} repository: whether it may be forked is not visible to this token"),
+        ),
+        (_, Some(false)) => Finding::new(
+            "forking",
+            Status::Pass,
+            format!("{visibility} repository: forking is off"),
+        ),
+        (_, Some(true)) => Finding::new(
+            "forking",
+            Status::Warn,
+            format!("{visibility} repository that allows forks: a fork leaves the repository's access control"),
+        )
+        .fix(format!("If the code must stay private, {fix}.")),
+    }
+}
+
+/// `secret-scanning` on GitHub: secret scanning and push protection
+/// (`security_and_analysis`, shown to admin tokens). Information: the `shell-secrets` gate
+/// reads the diff either way.
+pub fn github_secret_scanning(repo: &serde_json::Value) -> Finding {
+    let Some(sa) = repo.get("security_and_analysis") else {
+        return github_admin_hidden("secret-scanning", "the secret scanning settings");
+    };
+    let on =
+        |k: &str| sa.pointer(&format!("/{k}/status")).and_then(|s| s.as_str()) == Some("enabled");
+    match (on("secret_scanning"), on("secret_scanning_push_protection")) {
+        (true, true) => Finding::new(
+            "secret-scanning",
+            Status::Pass,
+            "secret scanning and push protection are on",
+        ),
+        (scan, push) => Finding::new(
+            "secret-scanning",
+            Status::Info,
+            format!(
+                "secret scanning is {}, push protection is {}: a pushed secret is {}",
+                if scan { "on" } else { "off" },
+                if push { "on" } else { "off" },
+                if push {
+                    "blocked"
+                } else if scan {
+                    "reported after the push"
+                } else {
+                    "not reported by the forge"
+                }
+            ),
+        )
+        .fix("Turn on secret scanning and push protection in Settings > Code security."),
+    }
+}
+
+/// `secret-scanning` on GitLab: `secret_push_protection_enabled` (Ultimate; absent on other
+/// tiers and to tokens without the Maintainer role).
+pub fn gitlab_secret_push_protection(project: &serde_json::Value) -> Finding {
+    match project
+        .get("secret_push_protection_enabled")
+        .and_then(|v| v.as_bool())
+    {
+        Some(true) => Finding::new("secret-scanning", Status::Pass, "secret push protection is on"),
+        Some(false) => Finding::new(
+            "secret-scanning",
+            Status::Info,
+            "secret push protection is off: a pushed secret is not blocked by the forge",
+        )
+        .fix("Turn on secret push protection in Secure > Security configuration."),
+        None => Finding::new(
+            "secret-scanning",
+            Status::Info,
+            "secret push protection is not shown for this project (a GitLab Ultimate feature, read with the Maintainer role)",
+        ),
+    }
+}
+
+/// `dependency-alerts` on GitHub: vulnerability alerts, and automated security updates when
+/// visible. Information: `dependency-delta` reads the diff either way.
+pub fn dependency_alerts(alerts: bool, updates: Option<bool>) -> Finding {
+    let updates_text = match updates {
+        Some(true) => ", automated security updates are on",
+        Some(false) => ", automated security updates are off",
+        None => "",
+    };
+    if alerts {
+        Finding::new(
+            "dependency-alerts",
+            Status::Pass,
+            format!("dependency alerts are on{updates_text}"),
+        )
+    } else {
+        Finding::new(
+            "dependency-alerts",
+            Status::Info,
+            format!("dependency alerts are off{updates_text}: a known-vulnerable dependency is not reported by the forge"),
+        )
+        .fix("Turn on Dependabot alerts in Settings > Code security.")
+    }
 }
 
 /// `actions-sha-pinning` and `allowed-actions` from `actions/permissions`.
@@ -821,6 +1051,10 @@ fn gitlab(api: &dyn ForgeApi, forge: &Forge) -> Vec<Finding> {
         ),
         Answer::Down(why) => down("forge-token", forge.kind, &why),
     });
+    out.push(auto_merge_always_offered(forge.kind));
+    out.push(gitlab_forking(&project));
+    out.push(gitlab_secret_push_protection(&project));
+    out.push(unavailable("dependency-alerts", forge.kind));
     out
 }
 
@@ -1105,6 +1339,135 @@ fn gitea_secret_scoping(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn repository_settings_the_cheat_sheet_names_are_warnings_or_information() {
+        use serde_json::json;
+        let st = |f: Finding| f.status;
+        // auto-merge (GitHub): hidden, off, on with and without a required review.
+        assert_eq!(st(github_auto_merge(&json!({}), Some(1))), Status::Warn);
+        assert_eq!(
+            st(github_auto_merge(
+                &json!({"allow_auto_merge": false}),
+                Some(0)
+            )),
+            Status::Pass
+        );
+        assert_eq!(
+            st(github_auto_merge(
+                &json!({"allow_auto_merge": true}),
+                Some(0)
+            )),
+            Status::Warn
+        );
+        assert_eq!(
+            st(github_auto_merge(
+                &json!({"allow_auto_merge": true}),
+                Some(2)
+            )),
+            Status::Info
+        );
+        assert_eq!(
+            st(github_auto_merge(&json!({"allow_auto_merge": true}), None)),
+            Status::Info
+        );
+        assert!(github_auto_merge(&json!({}), None)
+            .summary
+            .contains("could not check"));
+        // forking: a private or internal repository that allows forks warns.
+        assert_eq!(
+            st(github_forking(
+                &json!({"visibility": "private", "allow_forking": true})
+            )),
+            Status::Warn
+        );
+        assert_eq!(
+            st(github_forking(
+                &json!({"visibility": "internal", "allow_forking": true})
+            )),
+            Status::Warn
+        );
+        assert_eq!(
+            st(github_forking(
+                &json!({"visibility": "private", "allow_forking": false})
+            )),
+            Status::Pass
+        );
+        assert_eq!(
+            st(github_forking(
+                &json!({"visibility": "public", "allow_forking": true})
+            )),
+            Status::Info
+        );
+        assert_eq!(
+            st(github_forking(
+                &json!({"private": true, "allow_forking": true})
+            )),
+            Status::Warn
+        );
+        assert_eq!(
+            st(gitlab_forking(
+                &json!({"visibility": "private", "forking_access_level": "enabled"})
+            )),
+            Status::Warn
+        );
+        assert_eq!(
+            st(gitlab_forking(
+                &json!({"visibility": "internal", "forking_access_level": "private"})
+            )),
+            Status::Pass
+        );
+        assert_eq!(
+            st(gitlab_forking(
+                &json!({"visibility": "public", "forking_access_level": "enabled"})
+            )),
+            Status::Info
+        );
+        // secret scanning: hidden without an admin token; information when off.
+        assert_eq!(st(github_secret_scanning(&json!({}))), Status::Warn);
+        let sa = |a: &str, b: &str| json!({"security_and_analysis": {"secret_scanning": {"status": a}, "secret_scanning_push_protection": {"status": b}}});
+        assert_eq!(
+            st(github_secret_scanning(&sa("enabled", "enabled"))),
+            Status::Pass
+        );
+        assert_eq!(
+            st(github_secret_scanning(&sa("enabled", "disabled"))),
+            Status::Info
+        );
+        assert_eq!(
+            st(github_secret_scanning(&sa("disabled", "disabled"))),
+            Status::Info
+        );
+        assert_eq!(
+            st(gitlab_secret_push_protection(
+                &json!({"secret_push_protection_enabled": true})
+            )),
+            Status::Pass
+        );
+        assert_eq!(
+            st(gitlab_secret_push_protection(
+                &json!({"secret_push_protection_enabled": false})
+            )),
+            Status::Info
+        );
+        assert_eq!(st(gitlab_secret_push_protection(&json!({}))), Status::Info);
+        // dependency alerts.
+        assert_eq!(st(dependency_alerts(true, Some(true))), Status::Pass);
+        assert_eq!(st(dependency_alerts(false, None)), Status::Info);
+        assert!(dependency_alerts(false, Some(false))
+            .summary
+            .contains("automated security updates are off"));
+        // Never a failure.
+        for f in [
+            github_auto_merge(&json!({"allow_auto_merge": true}), Some(0)),
+            github_forking(&json!({"visibility": "private", "allow_forking": true})),
+            github_secret_scanning(&json!({})),
+            dependency_alerts(false, None),
+        ] {
+            assert_ne!(f.status, Status::Fail, "{}", f.summary);
+        }
+    }
+
     use super::*;
     use crate::forge::CannedApi;
     use serde_json::json;
@@ -1130,7 +1493,18 @@ mod tests {
         let mut put = |k: &str, v: serde_json::Value| {
             api.responses.insert(format!("github:{k}"), v);
         };
-        put("repos/o/r", json!({"permissions": {"admin": true}}));
+        put(
+            "repos/o/r",
+            json!({"permissions": {"admin": true}, "visibility": "private", "allow_forking": false,
+                   "allow_auto_merge": false,
+                   "security_and_analysis": {"secret_scanning": {"status": "enabled"},
+                       "secret_scanning_push_protection": {"status": "enabled"}}}),
+        );
+        put("repos/o/r/vulnerability-alerts", json!({"__status": 204}));
+        put(
+            "repos/o/r/automated-security-fixes",
+            json!({"enabled": true}),
+        );
         put(
             "repos/o/r/actions/permissions",
             json!({"enabled": true, "allowed_actions": "selected", "sha_pinning_required": true}),
@@ -1164,7 +1538,7 @@ mod tests {
 
     #[test]
     fn healthy_github_settings_all_pass() {
-        let f = findings(&healthy(), &gh(), &[]);
+        let f = findings(&healthy(), &gh(), &[], None);
         let ids: Vec<&str> = f.iter().map(|x| x.id).collect();
         assert_eq!(ids, IDS);
         // Every setting passes; the token audit is not available on GitHub.
@@ -1191,7 +1565,7 @@ mod tests {
             "repos/o/r/actions/permissions/workflow",
             json!({"default_workflow_permissions": "write", "can_approve_pull_request_reviews": true}),
         );
-        let f = findings(&api, &gh(), &[]);
+        let f = findings(&api, &gh(), &[], None);
         for id in [
             "actions-sha-pinning",
             "allowed-actions",
@@ -1233,7 +1607,7 @@ mod tests {
             "repos/o/r/actions/secrets?per_page=100&page=1",
             forbidden,
         );
-        let f = findings(&api, &gh(), &[]);
+        let f = findings(&api, &gh(), &[], None);
         for id in [
             "actions-sha-pinning",
             "allowed-actions",
@@ -1261,7 +1635,7 @@ mod tests {
             "repos/o/r/immutable-releases",
             serde_json::Value::Null,
         );
-        let f = findings(&api, &gh(), &[]);
+        let f = findings(&api, &gh(), &[], None);
         let x = f.iter().find(|x| x.id == "immutable-releases").unwrap();
         assert_eq!(x.status, Status::Warn);
         assert!(
@@ -1275,7 +1649,7 @@ mod tests {
             json!({"enabled": false}),
         );
         assert_eq!(
-            status_of(&findings(&api, &gh(), &[]), "immutable-releases"),
+            status_of(&findings(&api, &gh(), &[], None), "immutable-releases"),
             Status::Warn
         );
     }
@@ -1287,7 +1661,7 @@ mod tests {
             "github:repos/o/r".into(),
             json!({"__error": "network access is disabled (DISCIPLINE_NO_NETWORK)"}),
         );
-        let f = findings(&api, &gh(), &[]);
+        let f = findings(&api, &gh(), &[], None);
         assert_eq!(f.len(), IDS.len());
         assert!(f.iter().all(|x| x.status == Status::Unknown), "{f:?}");
         assert_eq!(api.log(), vec!["github:repos/o/r".to_string()]);
@@ -1347,7 +1721,7 @@ mod tests {
                    "rules": [{"type": "update"}, {"type": "deletion"}]}),
         );
         assert_eq!(
-            status_of(&findings(&api, &gh(), &[]), "tag-protection"),
+            status_of(&findings(&api, &gh(), &[], None), "tag-protection"),
             Status::Warn
         );
         set(
@@ -1356,7 +1730,7 @@ mod tests {
             json!([]),
         );
         assert_eq!(
-            status_of(&findings(&api, &gh(), &[]), "tag-protection"),
+            status_of(&findings(&api, &gh(), &[], None), "tag-protection"),
             Status::Warn
         );
     }
@@ -1403,14 +1777,18 @@ mod tests {
             kind: ForgeKind::Gitea,
             ..gh()
         };
-        let f = findings(&api, &forge, &[]);
+        let f = findings(&api, &forge, &[], None);
         let ids: Vec<&str> = f.iter().map(|x| x.id).collect();
         assert_eq!(ids, IDS);
         assert_eq!(status_of(&f, "tag-protection"), Status::Pass);
-        // `secret-scoping` is read on Gitea and Forgejo (its own tests below).
+        // `secret-scoping` is read on Gitea and Forgejo (its own tests below); auto-merge has
+        // no repository setting there and is always offered.
+        assert!(f.iter().any(|x| x.id == "auto-merge"
+            && x.status == Status::Info
+            && x.summary.contains("always offered")));
         for id in IDS
             .iter()
-            .filter(|i| !matches!(**i, "tag-protection" | "secret-scoping"))
+            .filter(|i| !matches!(**i, "tag-protection" | "secret-scoping" | "auto-merge"))
         {
             let x = f.iter().find(|x| x.id == *id).unwrap();
             assert_eq!(x.status, Status::Info, "{id}");
@@ -1483,11 +1861,11 @@ jobs:
         );
         let wf = vec![(".github/workflows/d.yml".to_string(), DEPLOY.to_string())];
         assert_eq!(
-            status_of(&findings(&api, &gh(), &wf), "secret-scoping"),
+            status_of(&findings(&api, &gh(), &wf, None), "secret-scoping"),
             Status::Warn
         );
         assert_eq!(
-            status_of(&findings(&api, &gh(), &[]), "secret-scoping"),
+            status_of(&findings(&api, &gh(), &[], None), "secret-scoping"),
             Status::Pass
         );
     }
@@ -1634,7 +2012,7 @@ jobs:
             "gitlab:personal_access_tokens/self".into(),
             json!({"scopes": ["read_api"], "expires_at": "2099-01-01"}),
         );
-        let f = findings(&api, &forge, &[]);
+        let f = findings(&api, &forge, &[], None);
         let ids: Vec<&str> = f.iter().map(|x| x.id).collect();
         assert_eq!(ids, IDS);
         for id in [
@@ -1659,7 +2037,7 @@ jobs:
             "gitlab:projects/o%2Fr/variables?per_page=100&page=1".into(),
             json!({"__status": 403, "__body": {"error": "insufficient_granular_scope", "error_description": GITLAB_DENIAL}}),
         );
-        let f = findings(&api, &forge, &[]);
+        let f = findings(&api, &forge, &[], None);
         let scoping = f.iter().find(|x| x.id == "secret-scoping").unwrap();
         assert_eq!(scoping.status, Status::Warn, "{scoping:?}");
         assert!(
@@ -1676,7 +2054,7 @@ jobs:
             "gitlab:personal_access_tokens/self".into(),
             json!({"__status": 401, "__body": {"message": "401 Unauthorized"}}),
         );
-        let f = findings(&api, &forge, &[]);
+        let f = findings(&api, &forge, &[], None);
         assert_eq!(status_of(&f, "forge-token"), Status::Info);
     }
 

@@ -385,6 +385,64 @@ discipline doctor --strict       # warnings fail too (exit 1)
 
 **SHA pins.** A full-length SHA pin is not enough on its own, and `doctor` checks two things the diff does not show (GitHub; information on the other forges). `imposter-commit`: GitHub resolves `owner/repo@<sha>` across the repository's fork network, so a commit that exists only in a fork runs under the parent's name. Each pinned commit in the workflows, the repository's `action.yml` and `.github/actions/*/action.yml` must be reachable from a branch or tag of `owner/repo` itself: on its default branch (one compare), the head of a branch or tag, or an ancestor of up to 25 other branches and tags (compare API). It is a failure when every branch and tag was checked and none contains the commit, and a warning when there were more refs than that (the warning also covers a commit that a rewritten branch no longer contains). `nested-action-pins`: the pinned action's `action.yml` (or `action.yaml`, or the pinned reusable workflow) is read at that commit, and a `uses:` there that is not SHA-pinned, or a `docker://` image without a digest, is a warning. This is one level deep: the actions the pinned action calls are not read in turn. A summary line for each counts the pins resolved and the references that are not SHA-pinned, which are not checked here (`ci-integrity` reports those in a diff). An action repository the token cannot read is a warning, never a pass; an unreachable forge is `unknown`.
 
+**Repository settings the OWASP CI/CD Security Cheat Sheet names.** Read from the repository object `doctor` already fetches (#366); each is information or a warning, never a failure, and one the token cannot see is `could not check` with the access it needs:
+- `auto-merge`: on GitHub, a warning when `allow_auto_merge` is on and the protected branch requires no approving review, since a pull request then merges on its required checks alone; information when reviews are required; a pass when auto-merge is off. GitLab, Gitea and Forgejo have no repository setting (merging once checks succeed is always offered), so the required reviews decide: information.
+- `forking`: a warning when a private or internal repository allows forks (GitHub `allow_forking`, GitLab `forking_access_level: enabled`); information for a public one. Not available on Gitea and Forgejo.
+- `secret-scanning`: on GitHub, secret scanning and push protection (`security_and_analysis`), a pass when both are on and information otherwise; on GitLab, secret push protection (`secret_push_protection_enabled`, an Ultimate feature). The `shell-secrets` gate reads the diff either way.
+- `dependency-alerts`: on GitHub, Dependabot alerts (`vulnerability-alerts`) and, when visible, automated security updates; information when off. `dependency-delta` reads the diff either way.
+
+GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to an admin token only (RUN, 2026-09-30, against a public repository with an admin and a read token). Gitea 1.24 and Forgejo 12 expose none of these four settings in their API description (RUN, `swagger.v1.json`).
+
+**Coverage against the OWASP CI/CD Security Cheat Sheet and OpenSSF Scorecard.** Every recommendation of the [cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/CI_CD_Security_Cheat_Sheet.html) and every [Scorecard check](https://github.com/ossf/scorecard/blob/main/docs/checks.md), mapped to a `doctor` finding, a gate, "not checked" with the reason, or out of scope. Scorecard measures a repository's history and practices; `doctor` reads the settings that exist now.
+
+| Item | Where |
+|---|---|
+| Cheat sheet, SCM: avoid auto-merge | `auto-merge` |
+| Cheat sheet, SCM: require reviews that cannot be bypassed | `pull-request`, `review`, `code-owner-review`, `last-push-approval`, `bypass` |
+| Cheat sheet, SCM: protected branches | `required-check`, `up-to-date`, `force-push`, `deletion` |
+| Cheat sheet, SCM: signed commits | `signed-commits` (information) |
+| Cheat sheet, SCM: limit external contributors | not checked yet (#366, access group) |
+| Cheat sheet, SCM: MFA | not checked yet (#366, organisation two-factor requirement) |
+| Cheat sheet, SCM: no default permissions | not checked yet (#366, organisation base permission) |
+| Cheat sheet, SCM: restrict forking of private or internal repositories | `forking` |
+| Cheat sheet, SCM: limit changing visibility to public | not checked yet (#366, organisation setting) |
+| Cheat sheet, pipeline: isolated build nodes | out of scope (runner infrastructure); the `sandbox-config` gate reads job and service containers |
+| Cheat sheet, pipeline: TLS between SCM and CI | out of scope |
+| Cheat sheet, pipeline: restrict CI access by IP | out of scope |
+| Cheat sheet, pipeline: protect the CI configuration | `workflow-protection`; the `ci-integrity` gate and `policy_from: base` |
+| Cheat sheet, pipeline: logging | out of scope; `discipline audit` reads the record back |
+| Cheat sheet, pipeline: SAST, DAST, IaC scanning | out of scope; the `command` gate can run a scanner |
+| Cheat sheet, pipeline: manual approval before production deploys | not checked yet (#366, environments) |
+| Cheat sheet, pipeline: no `--privileged` containers | the `sandbox-config` gate (workflow job and service containers) |
+| Cheat sheet, pipeline: version-controlled pipeline configuration | the `ci-integrity` gate |
+| Cheat sheet, IAM: secrets management | `secret-scoping`, `forge-token`, `secret-scanning`; the `shell-secrets` gate |
+| Cheat sheet, IAM: least privilege | `default-token`, `actions-approve-prs`, `agent-permission`; organisation base permission not checked yet (#366) |
+| Cheat sheet, IAM: identity lifecycle | out of scope (identity provider) |
+| Cheat sheet, third-party code: dependency management | `dependency-alerts`, `actions-sha-pinning`; the `dependency-delta` gate |
+| Cheat sheet, third-party code: plug-ins and integrations | `allowed-actions`, `imposter-commit`, `nested-action-pins`; MCP server lists in the `sandbox-config` gate; webhooks not checked yet (#366) |
+| Cheat sheet: integrity assurance | `immutable-releases`, `tag-protection`; the action checks the release attestation |
+| Cheat sheet: visibility and monitoring | out of scope; `discipline audit` reads the record back |
+| Scorecard Binary-Artifacts | partly the `archive-contents` gate (archives in the diff); not a setting |
+| Scorecard Branch-Protection | `required-check`, `force-push`, `deletion`, `review`, `bypass` |
+| Scorecard CI-Tests | out of scope (project history) |
+| Scorecard CII-Best-Practices | out of scope |
+| Scorecard Code-Review | `pull-request`, `review`, `bypass` (the rule, not past merges) |
+| Scorecard Contributors | out of scope |
+| Scorecard Dangerous-Workflow | `workflow-protection`, `trigger`; the `ci-integrity` gate |
+| Scorecard Dependency-Update-Tool | `dependency-alerts` (automated security updates); an update tool's own configuration is not read |
+| Scorecard Fuzzing | out of scope; the `test-budget` gate keeps existing fuzz targets |
+| Scorecard License | out of scope |
+| Scorecard Maintained | out of scope |
+| Scorecard Packaging | out of scope |
+| Scorecard Pinned-Dependencies | `actions-sha-pinning`; the `ci-integrity` and `dependency-delta` gates; container image digests are not checked |
+| Scorecard SAST | out of scope |
+| Scorecard SBOM | out of scope |
+| Scorecard Security-Policy | not checked yet (#366) |
+| Scorecard Signed-Releases | `immutable-releases`, `tag-protection`; the action checks the release attestation |
+| Scorecard Token-Permissions | `default-token`; the `ci-integrity` gate (workflow token permissions) |
+| Scorecard Vulnerabilities | `dependency-alerts` (information) |
+| Scorecard Webhooks | not checked yet (#366) |
+
 ### Protection checklist
 
 | Setting | Why |

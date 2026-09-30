@@ -289,12 +289,13 @@
     {
       "id": "tm-cicd01",
       "category": "threat_model_coverage",
-      "claim": "CICD-SEC-1 Insufficient Flow Control: doctor reports a required check that does not run discipline, bypass actors and review rules",
+      "claim": "CICD-SEC-1 Insufficient Flow Control: doctor reports a required check that does not run discipline, bypass actors and review rules, and auto-merge with no required review",
       "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
       "code": "src/doctor.rs",
       "pinning_tests": [
         "tests/test_doctor.rs::doctor_required_check_without_discipline_fails",
-        "src/doctor.rs::review_rules_are_read_from_rulesets_and_classic_protection"
+        "src/doctor.rs::review_rules_are_read_from_rulesets_and_classic_protection",
+        "tests/test_doctor.rs::doctor_reports_auto_merge_forking_secret_scanning_and_dependency_alerts"
       ],
       "verdict": "holds"
     },
@@ -1160,6 +1161,19 @@
       "code": "src/guards/version_lockstep.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::version_lockstep_does_not_blame_a_change_for_drift_the_base_already_had"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "doctor-repository-settings",
+      "category": "doctor",
+      "claim": "doctor reports the repository settings the OWASP CI/CD Security Cheat Sheet names (auto-merge with no required review, forking of a private repository, secret scanning and push protection, dependency alerts) as warnings or information, never a failure, and a setting the token cannot see as could not check",
+      "source": "docs/guides/ci-platforms.md:\u00a78 repository settings",
+      "code": "src/doctor_settings.rs",
+      "pinning_tests": [
+        "tests/test_doctor.rs::doctor_reports_auto_merge_forking_secret_scanning_and_dependency_alerts",
+        "src/doctor_settings.rs::repository_settings_the_cheat_sheet_names_are_warnings_or_information",
+        "tests/test_doctor.rs::doctor_reads_gitlab_settings_and_audits_the_token"
       ],
       "verdict": "holds"
     }

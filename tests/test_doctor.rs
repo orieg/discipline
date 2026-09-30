@@ -41,7 +41,10 @@ fn github_api(rules: &str) -> FakeForge {
     );
     api.serve(
         "repos/o/r",
-        serde_json::json!({"default_branch": "main", "permissions": {"admin": true}}),
+        serde_json::json!({"default_branch": "main", "permissions": {"admin": true},
+            "private": false, "visibility": "public", "allow_auto_merge": false, "allow_forking": true,
+            "security_and_analysis": {"secret_scanning": {"status": "enabled"},
+                "secret_scanning_push_protection": {"status": "enabled"}}}),
     );
     serve_safe_settings(&api);
     api
@@ -80,6 +83,11 @@ fn serve_safe_settings(api: &FakeForge) {
         "repos/o/r/actions/secrets?per_page=100&page=1",
         serde_json::json!({"total_count": 0, "secrets": []}),
     );
+    api.serve_raw("repos/o/r/vulnerability-alerts", 204, &[], "");
+    api.serve(
+        "repos/o/r/automated-security-fixes",
+        serde_json::json!({"enabled": true, "paused": false}),
+    );
 }
 
 const GOOD_RULES: &str = r#"[{"type":"required_status_checks","ruleset_id":1,"parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"ci-gate"}]}},{"type":"non_fast_forward","ruleset_id":1},{"type":"deletion","ruleset_id":1},{"type":"pull_request","ruleset_id":1,"parameters":{"required_approving_review_count":1,"require_code_owner_review":true,"dismiss_stale_reviews_on_push":true}}]"#;
@@ -110,6 +118,85 @@ fn statuses(stdout: &str) -> Vec<(String, String)> {
             )
         })
         .collect()
+}
+
+/// The repository settings the OWASP CI/CD Security Cheat Sheet names that `doctor` reads
+/// from the repository object (#366): auto-merge, forking of a private repository, secret
+/// scanning and push protection, dependency alerts. Information or a warning, never a
+/// failure; a setting the token cannot see is "could not check", never a pass.
+#[test]
+fn doctor_reports_auto_merge_forking_secret_scanning_and_dependency_alerts() {
+    let status = |st: &[(String, String)], id: &str| {
+        st.iter()
+            .find(|(i, _)| i == id)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_else(|| panic!("no {id}: {st:?}"))
+    };
+    let repo = protected_repo();
+    let no_review = GOOD_RULES.replace(
+        "\"required_approving_review_count\":1",
+        "\"required_approving_review_count\":0",
+    );
+    let api = github_api(&no_review);
+    api.serve(
+        "repos/o/r",
+        serde_json::json!({"default_branch": "main", "permissions": {"admin": true},
+            "private": true, "visibility": "private", "allow_auto_merge": true, "allow_forking": true,
+            "security_and_analysis": {"secret_scanning": {"status": "disabled"},
+                "secret_scanning_push_protection": {"status": "disabled"}}}),
+    );
+    api.serve_raw(
+        "repos/o/r/vulnerability-alerts",
+        404,
+        &[],
+        "{\"message\": \"Not Found\"}",
+    );
+    api.serve(
+        "repos/o/r/automated-security-fixes",
+        serde_json::json!({"enabled": false, "paused": false}),
+    );
+    let url = api.url();
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("GH_TOKEN", "gh-tok-1"),
+    ];
+    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let st = statuses(&run.stdout);
+    // Auto-merge with no required review merges on the required check alone.
+    assert_eq!(status(&st, "auto-merge"), "warn", "{}", run.stdout);
+    assert_eq!(status(&st, "forking"), "warn", "{}", run.stdout);
+    assert_eq!(status(&st, "secret-scanning"), "info", "{}", run.stdout);
+    assert_eq!(status(&st, "dependency-alerts"), "info", "{}", run.stdout);
+    // Warnings, not failures: without `--strict` the run still passes.
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+
+    // A token without admin rights sees no auto-merge flag, no security settings and no
+    // alert state: each is "could not check", never a pass.
+    api.serve(
+        "repos/o/r",
+        serde_json::json!({"default_branch": "main", "permissions": {"admin": false, "push": true},
+            "private": true, "visibility": "private", "allow_forking": false}),
+    );
+    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let st = statuses(&run.stdout);
+    for id in ["auto-merge", "secret-scanning", "dependency-alerts"] {
+        assert_eq!(status(&st, id), "warn", "{id}: {}", run.stdout);
+    }
+    assert_eq!(status(&st, "forking"), "pass", "{}", run.stdout);
+    let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let auto = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "auto-merge")
+        .unwrap();
+    assert!(
+        auto["summary"]
+            .as_str()
+            .unwrap()
+            .contains("could not check"),
+        "{auto}"
+    );
 }
 
 #[test]
@@ -1029,6 +1116,9 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
     // The recording kept the CI settings; `doctor` also reads the default branch.
     let mut project = recorded["project_ci_settings"].clone();
     project["default_branch"] = serde_json::json!("main");
+    project["visibility"] = serde_json::json!("private");
+    project["forking_access_level"] = serde_json::json!("enabled");
+    project["secret_push_protection_enabled"] = serde_json::json!(false);
     api.serve("projects/o%2Fr", project);
     api.serve(
         "projects/o%2Fr/job_token_scope",
@@ -1070,6 +1160,10 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
         ("secret-scoping", "warn"),
         ("forge-token", "warn"),
         ("actions-sha-pinning", "info"),
+        ("auto-merge", "info"),
+        ("forking", "warn"),
+        ("secret-scanning", "info"),
+        ("dependency-alerts", "info"),
     ] {
         assert!(
             st.contains(&(id.into(), want.into())),

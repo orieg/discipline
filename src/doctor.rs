@@ -2622,6 +2622,7 @@ pub fn run(input: &DoctorInput) -> Report {
                         }
                         ForgeKind::GitLab => gitlab_protection(input.api, forge, b),
                     };
+                    let reviews = protection.as_ref().ok().and_then(|p| p.required_approvals);
                     match protection {
                         Ok(p) => findings.extend(protection_findings(forge.kind, &p, &local.jobs)),
                         Err(e) => findings.push(
@@ -2635,7 +2636,9 @@ pub fn run(input: &DoctorInput) -> Report {
                     }
                     // Repository settings that decide whether mutable action refs,
                     // moved release tags or replaced release assets can run.
-                    findings.extend(crate::doctor_settings::findings(input.api, forge, &files));
+                    findings.extend(crate::doctor_settings::findings(
+                        input.api, forge, &files, reviews,
+                    ));
                     // What a SHA pin does not prove: that the commit belongs to the pinned
                     // repository, and that the action pins what it runs in turn.
                     findings.extend(crate::doctor_pins::findings(
