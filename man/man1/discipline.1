@@ -732,7 +732,7 @@ Write the hook commands in observe mode (hook run \-\-observe): the agent is nev
 Also write .github/workflows/copilot\-setup\-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
 .TP
 \fB\-\-upgrade\fR
-Rewrite a file an earlier discipline release generated (it carries the `Written by \\`discipline hook install\\`` header: the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin) to this release; a file without that header is never rewritten. With \-\-user, rewrite a user\-level file that runs discipline for the agent
+Rewrite a file an earlier discipline release generated to this release: one with the `Written by \\`discipline hook install\\`` header (the Claude Code bootstrap, the Copilot setup step, the OpenCode plugin), or a JSON hook file holding only the entries a release writes, whose observe mode and longer check timeout are kept. A file with hooks or settings of its own is never rewritten; one missing an entry is refused with the snippet to merge. With \-\-user, the same for the user\-level file
 .TP
 \fB\-\-timeout\fR \fI<SECONDS>\fR
 Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long

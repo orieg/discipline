@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "stop": [
+      {
+        "command": "command -v discipline >/dev/null 2>&1 || { echo 'discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)' >&2; echo '{}'; exit 0; }; discipline hook run --agent cursor",
+        "loop_limit": 3
+      }
+    ]
+  },
+  "version": 1
+}

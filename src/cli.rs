@@ -277,10 +277,12 @@ pub struct HookInstallArgs {
     /// Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
     #[arg(long, conflicts_with = "user")]
     pub cloud_agent: bool,
-    /// Rewrite a file an earlier discipline release generated (it carries the `Written by
-    /// \`discipline hook install\`` header: the Claude Code bootstrap, the Copilot setup step,
-    /// the OpenCode plugin) to this release; a file without that header is never rewritten.
-    /// With --user, rewrite a user-level file that runs discipline for the agent
+    /// Rewrite a file an earlier discipline release generated to this release: one with the
+    /// `Written by \`discipline hook install\`` header (the Claude Code bootstrap, the Copilot
+    /// setup step, the OpenCode plugin), or a JSON hook file holding only the entries a
+    /// release writes, whose observe mode and longer check timeout are kept. A file with
+    /// hooks or settings of its own is never rewritten; one missing an entry is refused
+    /// with the snippet to merge. With --user, the same for the user-level file
     #[arg(long)]
     pub upgrade: bool,
 
