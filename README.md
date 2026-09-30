@@ -11,21 +11,6 @@
 
 **Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust.** One static binary, identical in GitHub Actions, GitLab CI/CD, Forgejo Actions, Gitea Actions, Argo Workflows, pre-commit hooks, and an agent's local inner loop. Interactive guides and documentation: [orieg.github.io/discipline](https://orieg.github.io/discipline/).
 
-## See What Got Through
-
-`discipline audit` reads a branch's merged history and lists every escape hatch it carried: directive waivers, loosened `discipline.toml` options, grandfathered findings, inline markers and edits to protected paths. It ranks them by what they could hide and says what it could not check. `--format html` writes one self-contained page with each row linked to the file and line, diff or commit on your forge. [Open the report for this repository](https://orieg.github.io/discipline/demo/audit.html).
-
-```bash
-discipline audit --last 200 --format html -o audit.html
-```
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/img/audit-overview-dark.png">
-  <img alt="discipline audit report: a ranked Needs a decision list led by a loosening of ratified-paths in #270, and a strip of checks marked found, checked or not checked" src="docs/assets/img/audit-overview-light.png" width="100%">
-</picture>
-
-<img alt="The Configuration view: each loosening of discipline.toml with its gate, a link to the line at that commit, flags such as guards the gates or no pull request, and the change that restored it" src="docs/assets/img/audit-configuration.png" width="100%">
-
 ## Why Discipline?
 
 Autonomous coding agents operating in iterate-until-green loops optimize for passing tests, not preserving invariants:
@@ -233,6 +218,19 @@ Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java
 | [`manifest-sync`](docs/GATES.md#manifest-sync) | integrity | any | reconcile git-tracked files against packaging manifest declarations |
 | [`version-lockstep`](docs/GATES.md#version-lockstep) | integrity | any | version declarations across headers, manifests, and files must remain in lockstep |
 <!-- /generated -->
+
+## Auditing What Got Through
+
+`discipline audit` reads a branch's merged history and lists every escape hatch it carried: directive waivers, loosened `discipline.toml` options, grandfathered findings, inline markers and edits to protected paths. It ranks them by what they could hide and says what it could not check. `--format html` writes one self-contained page with each row linked to the file and line, diff or commit on your forge. [Open the report for this repository](https://orieg.github.io/discipline/demo/audit.html).
+
+```bash
+discipline audit --last 200 --format html -o audit.html
+```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/img/audit-overview-dark.png">
+  <img alt="discipline audit report: a ranked Needs a decision list led by a loosening of ratified-paths in #270, and a strip of checks marked found, checked or not checked" src="docs/assets/img/audit-overview-light.png" width="100%">
+</picture>
 
 ## Installation
 
