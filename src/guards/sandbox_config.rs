@@ -47,6 +47,9 @@ const COMPOSE: &[&str] = &[
     "docker-compose.*.yaml",
     "docker-compose.*.yml",
 ];
+/// CI workflows that run jobs in containers: GitHub Actions, and Gitea and Forgejo Actions,
+/// which read the same syntax from `.gitea/workflows/` and `.forgejo/workflows/`.
+const WORKFLOWS: &[&str] = &["workflows/*.yml", "workflows/*.yaml"];
 
 /// Scripts that set a container's outbound rules: read for a change, not for a delta.
 pub const EXECUTABLE: &[&str] = &["*firewall*.sh"];
@@ -63,7 +66,8 @@ const UNCONFINED: &[&str] = &[
 ];
 /// Mount sources that hand a container the host's container engine.
 const ENGINE_SOCKETS: &[&str] = &["docker.sock", "podman.sock", "containerd.sock"];
-/// `runArgs` flags that widen a devcontainer.
+/// `docker create` flags that widen a container: a devcontainer's `runArgs`, a workflow
+/// container's `options`.
 const LAX_RUN_ARGS: &[&str] = &[
     "--privileged",
     "--network=host",
@@ -557,6 +561,29 @@ pub const RULES: &[Rule] = &[
         "services.*.volumes",
         Judge::GainedMatching(ENGINE_SOCKETS),
     ),
+    // CI job and service containers
+    // (https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax):
+    // `options` are `docker create` flags, `volumes` are mounts.
+    r(
+        WORKFLOWS,
+        "jobs.*.container.options",
+        Judge::GainedMatching(LAX_RUN_ARGS),
+    ),
+    r(
+        WORKFLOWS,
+        "jobs.*.container.volumes",
+        Judge::GainedMatching(ENGINE_SOCKETS),
+    ),
+    r(
+        WORKFLOWS,
+        "jobs.*.services.*.options",
+        Judge::GainedMatching(LAX_RUN_ARGS),
+    ),
+    r(
+        WORKFLOWS,
+        "jobs.*.services.*.volumes",
+        Judge::GainedMatching(ENGINE_SOCKETS),
+    ),
 ];
 
 /// Agent settings files `doctor` reads for `agent-sandbox`, relative to the repository.
@@ -868,6 +895,39 @@ mod tests {
         // A named configuration in a subfolder is read too.
         assert!(classify(".devcontainer/python/devcontainer.json").is_some());
         assert!(widened(".devcontainer.json", Some(head), Some(base)).is_empty());
+    }
+
+    #[test]
+    fn workflow_job_and_service_containers_privilege_capabilities_and_engine_socket() {
+        let base = "on: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n    container:\n      image: rust:1\n      options: --cpus 2\n    services:\n      db:\n        image: postgres\n        options: --health-cmd pg_isready\n    steps:\n      - run: cargo test\n";
+        let head = "on: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n    container:\n      image: rust:1\n      options: --cpus 2 --privileged --pid=host\n      volumes: ['/var/run/docker.sock:/var/run/docker.sock', 'cache:/cache']\n    services:\n      db:\n        image: postgres\n        options: --health-cmd pg_isready --cap-add NET_ADMIN\n      dind:\n        image: docker:dind\n        options: --security-opt seccomp=unconfined\n        volumes: ['/var/run/docker.sock:/var/run/docker.sock']\n    steps:\n      - run: cargo test\n";
+        let w = widened(".github/workflows/ci.yml", Some(base), Some(head));
+        assert_eq!(
+            keys(&w),
+            [
+                "jobs.test.container.options",
+                "jobs.test.container.volumes",
+                "jobs.test.services.db.options",
+                "jobs.test.services.dind.options",
+                "jobs.test.services.dind.volumes",
+            ],
+            "{w:?}"
+        );
+        assert!(
+            w[0].1.contains("--privileged") && !w[0].1.contains("--cpus"),
+            "{w:?}"
+        );
+        assert!(!w[1].1.contains("cache:/cache"), "{w:?}");
+        // Gitea and Forgejo read the same syntax from their own directories.
+        for path in [".gitea/workflows/ci.yaml", ".forgejo/workflows/ci.yml"] {
+            assert_eq!(widened(path, Some(base), Some(head)).len(), 5, "{path}");
+        }
+        // Tightening, an image-only container and unchanged options widen nothing.
+        assert!(widened(".github/workflows/ci.yml", Some(head), Some(base)).is_empty());
+        let image_only =
+            "jobs:\n  test:\n    container: rust:1\n    services:\n      db: postgres\n";
+        assert!(widened(".github/workflows/ci.yml", None, Some(image_only)).is_empty());
+        assert!(widened(".github/workflows/ci.yml", Some(head), Some(head)).is_empty());
     }
 
     #[test]

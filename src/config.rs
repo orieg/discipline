@@ -205,7 +205,7 @@ pub const GATES: &[GateInfo] = &[
         id: "sandbox-config",
         suite: Suite::Integrity,
         summary: "a change cannot widen an agent's permissions or sandbox, or a container's isolation, without a token",
-        languages: "Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor and Copilot CLI settings, MCP server lists, devcontainer.json, Docker Compose",
+        languages: "Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor and Copilot CLI settings, MCP server lists, devcontainer.json, Docker Compose, CI job and service containers",
         available: true,
     },
     GateInfo {

@@ -326,12 +326,13 @@
     {
       "id": "tm-cicd07",
       "category": "threat_model_coverage",
-      "claim": "CICD-SEC-7 Insecure System Configuration (repository part): widened container isolation is reported, and doctor warns on unsafe Actions policy values",
+      "claim": "CICD-SEC-7 Insecure System Configuration (repository part): widened container isolation, a privileged CI job or service container included, is reported, and doctor warns on unsafe Actions policy values",
       "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
       "code": "src/guards/sandbox_config.rs",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::sandbox_config_reports_a_widened_agent_or_container_and_lifts_it_by_key_or_path",
-        "src/doctor_settings.rs::actions_policy_warns_on_each_unsafe_value"
+        "src/doctor_settings.rs::actions_policy_warns_on_each_unsafe_value",
+        "tests/test_gates_e2e.rs::sandbox_config_reports_a_privileged_workflow_container"
       ],
       "verdict": "holds"
     },
