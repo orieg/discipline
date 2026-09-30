@@ -311,7 +311,7 @@ jobs:
           working_directory: ${{ runner.temp }}/fx-del
           base_ref: main
           pr_title: "test: fixture (#1)"
-          pr_body: "discipline:allow(deletion-rationale) tests"
+          pr_body: "discipline:allow(deletion-rationale) tests superseded by proptest suite"
       - name: Bare-word directive was rejected by deletion-rationale gate
         shell: bash
         env:
@@ -333,7 +333,7 @@ jobs:
           working_directory: ${{ runner.temp }}/fx-del
           base_ref: main
           pr_title: "test: fixture (#1)"
-          pr_body: "<!-- discipline:allow(deletion-rationale) tests/legacy/ -->"
+          pr_body: "<!-- discipline:allow(deletion-rationale) tests/legacy/ superseded by proptest suite -->"
       - name: Hidden directive was rejected by default
         shell: bash
         env:
@@ -354,7 +354,7 @@ jobs:
           working_directory: ${{ runner.temp }}/fx-del
           base_ref: main
           pr_title: "test: fixture (#1)"
-          pr_body: "discipline:allow(deletion-rationale) tests/legacy/"
+          pr_body: "discipline:allow(deletion-rationale) tests/legacy/ superseded by proptest suite"
       - name: Scoped directory prefix directive passed
         shell: bash
         env:
@@ -379,7 +379,7 @@ jobs:
           config_override: |
             [directives]
             sources = ["__reset__", "commits"]
-          pr_body: "discipline:allow(deletion-rationale) tests/legacy/"
+          pr_body: "discipline:allow(deletion-rationale) tests/legacy/ superseded by proptest suite"
       - name: Rejected pr_body directive when sources reset to commits-only
         shell: bash
         env:

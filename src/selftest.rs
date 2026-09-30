@@ -1234,12 +1234,17 @@ const CASES: &[Case] = &[
             let bare = directive_reasons("removes: tests refactored", REMOVES);
             let slash = directive_reasons("removes: tests/ refactored", REMOVES);
             let directive_marker = directive_reasons(
+                "<!-- discipline:allow(deletion-rationale) tests/legacy/ refactored -->",
+                REMOVES,
+            );
+            let directive_marker_no_reason = directive_reasons(
                 "<!-- discipline:allow(deletion-rationale) tests/legacy/ -->",
                 REMOVES,
             );
             Ok(!covers(&bare, "tests/a.rs")
                 && covers(&slash, "tests/a.rs")
-                && covers(&directive_marker, "tests/legacy/old.rs"))
+                && covers(&directive_marker, "tests/legacy/old.rs")
+                && !covers(&directive_marker_no_reason, "tests/legacy/old.rs"))
         },
     ),
     ("ast: cfg_attr ignore is detected as ignored test", || {

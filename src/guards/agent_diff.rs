@@ -992,15 +992,14 @@ pub fn evaluate_ignored_tests(
         } else {
             &crate::findings::EXISTING_TEST_SKIPPED
         };
-        if let Some(record) = tokens::find_override(
-            directives,
-            GATE,
-            lifts,
-            tokens::ALLOW_IGNORE,
-            leaf_name(test),
-        ) {
-            let subject = leaf_name(test);
-            let cleaned = record.reason.trim().trim_matches(['"', '\'', '`']);
+        let subject = leaf_name(test);
+        if let Some(d) = directives.iter().find(|d| {
+            tokens::ALLOW_IGNORE
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(&d.directive))
+                && d.names_subject(subject)
+        }) {
+            let cleaned = d.reason.trim().trim_matches(['"', '\'', '`']);
             let explanation = cleaned
                 .strip_prefix(subject)
                 .map(|s| s.trim_start_matches(|c: char| c == ':' || c == '-' || c.is_whitespace()))
@@ -1012,6 +1011,7 @@ pub fn evaluate_ignored_tests(
                 || explanation.eq_ignore_ascii_case("fix later")
                 || explanation.eq_ignore_ascii_case("temporary")
                 || explanation.eq_ignore_ascii_case("wip")
+                || !tokens::is_valid_rationale(explanation)
             {
                 out.push(
                     settings.severity(),
@@ -1020,14 +1020,18 @@ pub fn evaluate_ignored_tests(
                     Some(test.line),
                     format!(
                         "Directive for skipped test `{}` lacks a substantive rationale or issue tracker reference (got `{}`).",
-                        test.name, record.reason
+                        test.name, d.reason
                     ),
                     "Provide a substantive explanation or linked issue reference (e.g. `allow-ignore: <test> #123 fix broken upstream API`).",
                 );
                 continue;
             }
-            out.overrides.push(record);
-            continue;
+            if let Some(record) =
+                tokens::find_override(directives, GATE, lifts, tokens::ALLOW_IGNORE, subject)
+            {
+                out.overrides.push(record);
+                continue;
+            }
         }
         let severity = if is_staged {
             crate::config::Severity::Warning

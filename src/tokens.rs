@@ -98,6 +98,10 @@ impl ParsedDirective {
     pub fn covers(&self, subject: &str) -> bool {
         reason_names(&self.reason, subject)
     }
+
+    pub fn names_subject(&self, subject: &str) -> bool {
+        reason_names_subject(&self.reason, subject)
+    }
 }
 
 /// The override one of `directives` grants `gate` for `subject`: a directive named in
@@ -1154,12 +1158,112 @@ fn reason_names(reason: &str, subject: &str) -> bool {
         // 1. Quoted subject anywhere in the reason: "name", 'name', or `name`.
         for quote in ['"', '\'', '`'] {
             let quoted = format!("{quote}{trimmed_subject}{quote}");
+            for (idx, _) in reason.match_indices(&quoted) {
+                let remainder = format!("{} {}", &reason[..idx], &reason[idx + quoted.len()..]);
+                if is_valid_rationale(&remainder) {
+                    return true;
+                }
+            }
+        }
+
+        // 2. Multi-word subject containing ':' (e.g. `type: ignore`) anywhere in the reason, bounded by non-token boundary.
+        if trimmed_subject.contains(':') {
+            for (idx, _) in reason.match_indices(trimmed_subject) {
+                let prev_ok = if idx == 0 {
+                    true
+                } else {
+                    let prev_char = reason[..idx].chars().next_back().unwrap();
+                    !is_token_char(prev_char) && prev_char != ':'
+                };
+                let end_idx = idx + trimmed_subject.len();
+                let next_ok = if end_idx == reason.len() {
+                    true
+                } else {
+                    let next_char = reason[end_idx..].chars().next().unwrap();
+                    !is_token_char(next_char) && next_char != ':'
+                };
+                if prev_ok && next_ok {
+                    let remainder = format!("{} {}", &reason[..idx], &reason[end_idx..]);
+                    if is_valid_rationale(&remainder) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // 3. Subject at the beginning of the reason (e.g. `allow-ignore: my test name <reason>` or `allow-unpinned-action: actions/checkout@v4 <reason>`).
+        let unquoted_reason = reason.trim_start_matches(['"', '\'', '`']);
+        if let Some(rest) = unquoted_reason.strip_prefix(trimmed_subject) {
+            let rest_after_quote = rest.trim_start_matches(['"', '\'', '`']);
+            if rest_after_quote.starts_with(|c: char| !is_token_char(c) || c == ':' || c == '@')
+                && is_valid_rationale(rest_after_quote)
+            {
+                return true;
+            }
+        }
+    }
+
+    let raw_tokens: Vec<&str> = reason
+        .split(|c: char| !is_token_char(c))
+        .filter(|t| !t.is_empty())
+        .collect();
+    let file_name = subject.rsplit('/').next().unwrap_or(subject);
+    for raw_token in &raw_tokens {
+        let has_slash = raw_token.contains('/');
+        let trimmed_leading = raw_token.strip_prefix("./").unwrap_or(raw_token);
+        let token = trimmed_leading.trim_end_matches('.').trim_matches('/');
+        if token.is_empty() {
+            continue;
+        }
+        let matched = if token == subject || token == file_name {
+            true
+        } else if has_slash && subject.contains('/') && subject.starts_with(&format!("{token}/")) {
+            // Directory prefix: only when written with a slash (e.g. `tests/legacy` or `tests/`).
+            // A bare word like `tests` in ordinary prose never acts as a directory prefix.
+            true
+        } else {
+            false
+        };
+
+        if matched {
+            for (idx, _) in reason.match_indices(raw_token) {
+                let prev_ok = if idx == 0 {
+                    true
+                } else {
+                    let prev_char = reason[..idx].chars().next_back().unwrap();
+                    !is_token_char(prev_char)
+                };
+                let end_idx = idx + raw_token.len();
+                let next_ok = if end_idx == reason.len() {
+                    true
+                } else {
+                    let next_char = reason[end_idx..].chars().next().unwrap();
+                    !is_token_char(next_char)
+                };
+                if prev_ok && next_ok {
+                    let remainder = format!("{} {}", &reason[..idx], &reason[end_idx..]);
+                    if is_valid_rationale(&remainder) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+pub(crate) fn reason_names_subject(reason: &str, subject: &str) -> bool {
+    let is_token_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '@');
+    let trimmed_subject = subject.trim();
+
+    if !trimmed_subject.is_empty() {
+        for quote in ['"', '\'', '`'] {
+            let quoted = format!("{quote}{trimmed_subject}{quote}");
             if reason.contains(&quoted) {
                 return true;
             }
         }
 
-        // 2. Multi-word subject containing ':' (e.g. `type: ignore`) anywhere in the reason, bounded by non-token boundary.
         if trimmed_subject.contains(':') {
             for (idx, _) in reason.match_indices(trimmed_subject) {
                 let prev_ok = if idx == 0 {
@@ -1181,22 +1285,23 @@ fn reason_names(reason: &str, subject: &str) -> bool {
             }
         }
 
-        // 3. Subject at the beginning of the reason (e.g. `allow-ignore: my test name <reason>` or `allow-unpinned-action: actions/checkout@v4 <reason>`).
         let unquoted_reason = reason.trim_start_matches(['"', '\'', '`']);
         if let Some(rest) = unquoted_reason.strip_prefix(trimmed_subject) {
-            if rest.is_empty()
-                || rest.starts_with(|c: char| (!is_token_char(c) && c != ':') || c == '@')
+            let rest_after_quote = rest.trim_start_matches(['"', '\'', '`']);
+            if rest_after_quote.is_empty()
+                || rest_after_quote.starts_with(|c: char| !is_token_char(c) || c == ':' || c == '@')
             {
                 return true;
             }
         }
     }
 
-    let raw_tokens = reason
+    let raw_tokens: Vec<&str> = reason
         .split(|c: char| !is_token_char(c))
-        .filter(|t| !t.is_empty());
+        .filter(|t| !t.is_empty())
+        .collect();
     let file_name = subject.rsplit('/').next().unwrap_or(subject);
-    for raw_token in raw_tokens {
+    for raw_token in &raw_tokens {
         let has_slash = raw_token.contains('/');
         let trimmed_leading = raw_token.strip_prefix("./").unwrap_or(raw_token);
         let token = trimmed_leading.trim_end_matches('.').trim_matches('/');
@@ -1206,8 +1311,6 @@ fn reason_names(reason: &str, subject: &str) -> bool {
         if token == subject || token == file_name {
             return true;
         }
-        // Directory prefix: only when written with a slash (e.g. `tests/legacy` or `tests/`).
-        // A bare word like `tests` in ordinary prose never acts as a directory prefix.
         if has_slash && subject.contains('/') && subject.starts_with(&format!("{token}/")) {
             return true;
         }
@@ -1227,15 +1330,40 @@ fn clean_reason(raw: &str) -> String {
     r.to_string()
 }
 
+pub fn is_valid_rationale(rest: &str) -> bool {
+    let cleaned = rest
+        .trim()
+        .trim_matches(|c: char| matches!(c, ':' | '-' | ',' | ';' | '"' | '\'' | '`'))
+        .trim();
+    !cleaned.is_empty() && !is_placeholder(cleaned)
+}
+
 fn is_placeholder(reason: &str) -> bool {
-    let r = reason.trim();
+    let r = reason.trim().trim_matches(['"', '\'', '`']).trim();
     if r.is_empty() {
         return true;
     }
     if r.starts_with('<') && r.ends_with('>') {
         return true;
     }
-    PLACEHOLDERS.contains(&r.to_lowercase().as_str())
+    let lower = r.to_lowercase();
+    if PLACEHOLDERS.contains(&lower.as_str()) {
+        return true;
+    }
+    let words: Vec<&str> = r.split_whitespace().collect();
+    if words.len() > 1
+        && words.iter().all(|w| {
+            let cw = w
+                .trim_matches(|c: char| matches!(c, ':' | '-' | ',' | ';' | '.' | '"' | '\'' | '`'))
+                .to_lowercase();
+            cw.is_empty()
+                || (w.starts_with('<') && w.ends_with('>'))
+                || PLACEHOLDERS.contains(&cw.as_str())
+        })
+    {
+        return true;
+    }
+    false
 }
 
 static CITATION_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
@@ -1405,10 +1533,103 @@ removes: tests/old.rs inside a fence
         assert_eq!(bare_reasons, vec!["tests"]);
         assert!(!covers(&bare_reasons, "tests/legacy/old.rs"));
 
+        // Subject-only directive without a reason does NOT cover:
         let scoped = "<!-- discipline:allow(deletion-rationale) tests/legacy/ -->";
         let scoped_reasons = directive_reasons(scoped, REMOVES);
         assert_eq!(scoped_reasons, vec!["tests/legacy/"]);
-        assert!(covers(&scoped_reasons, "tests/legacy/old.rs"));
+        assert!(!covers(&scoped_reasons, "tests/legacy/old.rs"));
+
+        // Subject with a non-empty, non-placeholder reason DOES cover:
+        let scoped_with_reason =
+            "<!-- discipline:allow(deletion-rationale) tests/legacy/ superseded by proptest suite -->";
+        let scoped_with_reason_reasons = directive_reasons(scoped_with_reason, REMOVES);
+        assert!(covers(&scoped_with_reason_reasons, "tests/legacy/old.rs"));
+    }
+
+    #[test]
+    fn directive_requires_non_empty_non_placeholder_rationale() {
+        // Bare filename without reason:
+        let r_empty = directive_reasons("removes: tests/old.rs", REMOVES);
+        assert!(!covers(&r_empty, "tests/old.rs"));
+
+        // Bare quoted filename without reason:
+        let r_quoted_empty = directive_reasons("removes: \"tests/old.rs\"", REMOVES);
+        assert!(!covers(&r_quoted_empty, "tests/old.rs"));
+
+        // Filename with placeholder reason:
+        for placeholder in [
+            "todo", "TODO", "tbd", "TBD", "n/a", "N/A", "fixme", "<reason>", "...", "-",
+        ] {
+            let line = format!("removes: tests/old.rs {placeholder}");
+            let r_ph = directive_reasons(&line, REMOVES);
+            assert!(
+                !covers(&r_ph, "tests/old.rs"),
+                "placeholder '{placeholder}' must not satisfy rationale requirement"
+            );
+
+            let line_quoted = format!("removes: \"tests/old.rs\" {placeholder}");
+            let r_qph = directive_reasons(&line_quoted, REMOVES);
+            assert!(
+                !covers(&r_qph, "tests/old.rs"),
+                "placeholder '{placeholder}' with quoted subject must not satisfy rationale requirement"
+            );
+        }
+
+        // Multi-token placeholders:
+        for ph in ["todo fixme", "TODO: TBD", "n/a - none"] {
+            let line = format!("removes: tests/old.rs {ph}");
+            let r_ph = directive_reasons(&line, REMOVES);
+            assert!(!covers(&r_ph, "tests/old.rs"));
+        }
+
+        // Valid rationale with filename:
+        let r_valid = directive_reasons(
+            "removes: tests/old.rs superseded by tests/new_suite.rs",
+            REMOVES,
+        );
+        assert!(covers(&r_valid, "tests/old.rs"));
+
+        let r_valid_colon = directive_reasons(
+            "removes: tests/old.rs: superseded by tests/new_suite.rs",
+            REMOVES,
+        );
+        assert!(covers(&r_valid_colon, "tests/old.rs"));
+
+        let r_valid_quoted = directive_reasons(
+            "removes: \"tests/old.rs\" superseded by tests/new_suite.rs",
+            REMOVES,
+        );
+        assert!(covers(&r_valid_quoted, "tests/old.rs"));
+
+        // Multi-word test name subject:
+        let r_test_empty = directive_reasons("allow-ignore: my test name", ALLOW_IGNORE);
+        assert!(!covers(&r_test_empty, "my test name"));
+
+        let r_test_todo = directive_reasons("allow-ignore: my test name todo", ALLOW_IGNORE);
+        assert!(!covers(&r_test_todo, "my test name"));
+
+        let r_test_quoted_empty = directive_reasons("allow-ignore: 'my test name'", ALLOW_IGNORE);
+        assert!(!covers(&r_test_quoted_empty, "my test name"));
+
+        let r_test_valid = directive_reasons(
+            "allow-ignore: my test name skipped because upstream bug #123",
+            ALLOW_IGNORE,
+        );
+        assert!(covers(&r_test_valid, "my test name"));
+
+        // Multi-word with colon subject:
+        let r_colon_empty = directive_reasons("allow-suppression: type: ignore", ALLOW_SUPPRESSION);
+        assert!(!covers(&r_colon_empty, "type: ignore"));
+
+        let r_colon_todo =
+            directive_reasons("allow-suppression: type: ignore todo", ALLOW_SUPPRESSION);
+        assert!(!covers(&r_colon_todo, "type: ignore"));
+
+        let r_colon_valid = directive_reasons(
+            "allow-suppression: type: ignore needed for untyped third-party library",
+            ALLOW_SUPPRESSION,
+        );
+        assert!(covers(&r_colon_valid, "type: ignore"));
     }
 
     #[test]
