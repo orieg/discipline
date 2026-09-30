@@ -1301,11 +1301,14 @@ pub fn read_issues(
     out
 }
 
+/// Whether a waiver and the issue it cites make a citation signal.
+type CiteTest = dyn Fn(&Record, &IssueFact) -> bool;
+
 /// The citation signals: a waiver whose cited issue does not exist, was closed as not
 /// planned, or was already closed when the waiver was written.
 pub fn citation_signals(records: &[Record], issues: &[IssueFact]) -> Vec<Signal> {
     let fact = |t: &str| issues.iter().find(|f| f.reference == t);
-    let defs: [(&str, &str, &str, &dyn Fn(&Record, &IssueFact) -> bool); 3] = [
+    let defs: [(&str, &str, &str, &CiteTest); 3] = [
         (
             "waiver-cites-missing-issue",
             "look-soon",
