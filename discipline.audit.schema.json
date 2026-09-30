@@ -133,6 +133,10 @@
             "protected-edit"
           ]
         },
+        "lifted": {
+          "description": "With `--replay`, for a finding waiver: whether the replayed check applied it to lift a finding (then `evidence` is `applied`). Omitted when the replay did not judge the change, for `no-issue`, and for inline markers",
+          "type": "boolean"
+        },
         "line": {
           "minimum": 1,
           "type": "integer"
@@ -268,7 +272,8 @@
             "protected-edit-self-ratified",
             "waiver-cites-missing-issue",
             "waiver-cites-issue-closed-before",
-            "waiver-cites-issue-not-planned"
+            "waiver-cites-issue-not-planned",
+            "waiver-lifted-nothing"
           ]
         },
         "list": {

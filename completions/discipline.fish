@@ -208,6 +208,7 @@ complete -c discipline -n "__fish_discipline_using_subcommand audit" -l format -
 json\t''
 html\t''"
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -s o -l output -d 'Write the output to this file instead of stdout' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand audit" -l replay -d 'A `discipline replay --json` report of the same history: says which waivers lifted a finding and which lifted nothing' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l json -d 'Print the records as JSON (the same as `--format json`)'
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l forge -d 'Read each change\'s merged pull request from the forge (its body\'s directives, and whether another login approved it); needs a token that can read pull requests'
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l reasons -d 'Include each directive\'s reason text (by default only its SHA-256 and length)'

@@ -295,6 +295,7 @@ _arguments "${_arguments_options[@]}" : \
 '--format=[Output format\: \`text\`, \`json\`, or \`html\` (one self-contained page)]:FORMAT:(text json html)' \
 '-o+[Write the output to this file instead of stdout]:OUTPUT:_files' \
 '--output=[Write the output to this file instead of stdout]:OUTPUT:_files' \
+'--replay=[A \`discipline replay --json\` report of the same history\: says which waivers lifted a finding and which lifted nothing]:FILE:_files' \
 '--json[Print the records as JSON (the same as \`--format json\`)]' \
 '--forge[Read each change'\''s merged pull request from the forge (its body'\''s directives, and whether another login approved it); needs a token that can read pull requests]' \
 '--reasons[Include each directive'\''s reason text (by default only its SHA-256 and length)]' \

@@ -393,7 +393,7 @@ pub fn audit_schema() -> Value {
                 "additionalProperties": false,
                 "required": ["id", "rank", "count", "changes", "records", "list", "next"],
                 "properties": {
-                    "id": { "enum": ["guard-gate-loosened", "hidden-directive", "config-unreadable", "loosened-without-pull-request", "loosening-without-waiver", "waived-then-loosened", "loosened-not-restored", "baseline-grew", "protected-edit-unratified", "protected-edit-self-ratified", "waiver-cites-missing-issue", "waiver-cites-issue-closed-before", "waiver-cites-issue-not-planned"] },
+                    "id": { "enum": ["guard-gate-loosened", "hidden-directive", "config-unreadable", "loosened-without-pull-request", "loosening-without-waiver", "waived-then-loosened", "loosened-not-restored", "baseline-grew", "protected-edit-unratified", "protected-edit-self-ratified", "waiver-cites-missing-issue", "waiver-cites-issue-closed-before", "waiver-cites-issue-not-planned", "waiver-lifted-nothing"] },
                     "rank": { "enum": ["look-first", "look-soon", "review"] },
                     "count": { "type": "integer", "minimum": 1, "description": "Records the signal is about" },
                     "changes": { "type": "array", "items": { "type": "string" }, "description": "The changes they are in, newest first (`#N`, else a 10-character commit id)" },
@@ -442,6 +442,7 @@ pub fn audit_schema() -> Value {
                     "detail": text("Why a configuration or baseline could not be compared"),
                     "source": { "enum": ["commit-message", "pull-request-body"], "description": "Where a directive was read" },
                     "cites": { "type": "array", "items": { "type": "string" }, "description": "Issue references in a directive's reason, as written; omitted when none" },
+                    "lifted": { "type": "boolean", "description": "With `--replay`, for a finding waiver: whether the replayed check applied it to lift a finding (then `evidence` is `applied`). Omitted when the replay did not judge the change, for `no-issue`, and for inline markers" },
                     "edited": { "type": "boolean", "description": "A loosening whose own change also tightened the same option: an edited entry, which `config-integrity` counts as lost unless it can prove it tighter. Omitted when false" },
                     "ratification": {
                         "type": "object",

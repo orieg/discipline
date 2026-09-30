@@ -46,6 +46,8 @@ pub struct Options {
     /// Read each change's merged pull request from the forge: its body's directives and
     /// whether a login other than its author approved it.
     pub forge: bool,
+    /// A `discipline replay --json` report, read for which waivers lifted a finding.
+    pub replay: Option<std::path::PathBuf>,
 }
 
 /// One exception one change carried.
@@ -117,6 +119,11 @@ pub struct Record {
     /// entry, which `config-integrity` counts as lost unless it can prove it tighter.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub edited: bool,
+    /// With `--replay`, for a finding waiver: whether the replayed check applied it to
+    /// lift a finding (then `evidence` is `applied`). Absent when the replay did not
+    /// judge the change, or for a `process` waiver (`no-issue`), which lifts no finding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifted: Option<bool>,
     /// The change's position, 0 for the newest audited change.
     #[serde(rename = "change_index")]
     pub ord: usize,
@@ -157,6 +164,7 @@ impl Record {
             ratification: None,
             cites: Vec::new(),
             edited: false,
+            lifted: None,
             ord: change.ord,
             subject: change.subject.clone(),
         }
@@ -1250,6 +1258,13 @@ pub fn run(opts: &Options) -> Result<Summary> {
         forge_checks(&mut s.checks, &read, &pulls, &s.records);
         s.forge = Some(read);
     }
+    if let Some(path) = &opts.replay {
+        let cases = read_replay(path)?;
+        judge_lifted(&mut s.records, &cases);
+        s.signals.extend(replay_signals(&s.records));
+        s.signals.sort_by_key(|g| rank_order(g.rank));
+        lifted_check(&mut s.checks, &s.records, &cases);
+    }
     s.identities = identities(
         &s.records,
         &s.protected_edits,
@@ -1261,6 +1276,177 @@ pub fn run(opts: &Options) -> Result<Summary> {
     s.pulls = pulls;
     s.issues = issues;
     Ok(s)
+}
+
+/// One change as a `discipline replay --json` report records it: whether its check ran,
+/// and the overrides it applied, as `(gate, directive, source)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayCase {
+    pub sha: String,
+    /// The check ran (`passed` or `blocked`); a `could_not_check` case judges nothing.
+    pub judged: bool,
+    pub overrides: Vec<(String, String, String)>,
+}
+
+/// The cases of a `discipline replay --json` report.
+pub fn read_replay(path: &std::path::Path) -> Result<Vec<ReplayCase>> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("cannot read the replay report {}", path.display()))?;
+    parse_replay(&text).with_context(|| format!("{} is not a replay report", path.display()))
+}
+
+pub fn parse_replay(text: &str) -> Result<Vec<ReplayCase>> {
+    let v: serde_json::Value = serde_json::from_str(text)?;
+    if v.get("schema_version").and_then(|n| n.as_u64()).is_none() {
+        bail!("no `schema_version`");
+    }
+    let cases = v
+        .get("cases_detail")
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| anyhow!("no `cases_detail` list"))?;
+    let s = |c: &serde_json::Value, k: &str| {
+        c.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
+    };
+    cases
+        .iter()
+        .map(|c| {
+            let sha = s(c, "sha");
+            if sha.is_empty() {
+                bail!("a case has no `sha`");
+            }
+            let overrides = c
+                .get("overrides")
+                .and_then(|o| o.as_array())
+                .ok_or_else(|| anyhow!("case {sha} has no `overrides` list"))?
+                .iter()
+                .map(|o| (s(o, "gate"), s(o, "directive"), s(o, "source")))
+                .collect();
+            Ok(ReplayCase {
+                judged: matches!(s(c, "verdict").as_str(), "passed" | "blocked"),
+                sha,
+                overrides,
+            })
+        })
+        .collect()
+}
+
+/// Whether the replayed check of each finding waiver's change applied it: a directive
+/// matches an override of the same gate under any of its names. Process waivers
+/// (`no-issue`), inline markers and changes the replay did not judge stay `None`. Inline
+/// markers are left out because the audit reads marker text line by line, which also
+/// finds markers quoted in tests and documentation; those lift nothing by design.
+pub fn judge_lifted(records: &mut [Record], cases: &[ReplayCase]) {
+    for r in records.iter_mut() {
+        let waiver = r.kind == "directive" && r.class == "detector";
+        let Some(case) = cases.iter().find(|c| c.sha == r.sha && c.judged) else {
+            continue;
+        };
+        if !waiver {
+            continue;
+        }
+        let same_gate = |g: &str| {
+            r.gate
+                .as_deref()
+                .is_some_and(|rg| rg.eq_ignore_ascii_case(g))
+        };
+        let lifted = case.overrides.iter().any(|(gate, directive, _)| {
+            same_gate(gate)
+                && r.directive.as_deref().is_some_and(|d| {
+                    crate::tokens::names_for_directive(d)
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(directive))
+                        || d.eq_ignore_ascii_case(directive)
+                })
+        });
+        r.lifted = Some(lifted);
+        if lifted {
+            r.evidence = "applied";
+        }
+    }
+}
+
+/// `waiver-lifted-nothing`: finding waivers the replayed check did not apply.
+pub fn replay_signals(records: &[Record]) -> Vec<Signal> {
+    let hits: Vec<usize> = (0..records.len())
+        .filter(|&i| records[i].lifted == Some(false))
+        .collect();
+    if hits.is_empty() {
+        return Vec::new();
+    }
+    let mut changes: Vec<String> = Vec::new();
+    for &i in &hits {
+        let l = records[i].label();
+        if !changes.contains(&l) {
+            changes.push(l);
+        }
+    }
+    vec![Signal {
+        id: "waiver-lifted-nothing",
+        rank: "look-soon",
+        count: hits.len(),
+        changes,
+        records: hits,
+        list: "records",
+        next: "Ask why the change waived a finding it did not have: a waiver written in advance, just in case, is a habit to stop.",
+    }]
+}
+
+/// `directive-lifted-a-finding` from a replay: `found` when a waiver lifted nothing,
+/// `clean` when the replay judged every change with a finding waiver and each one lifted
+/// something, else `not-checked` with what the replay did not cover.
+pub fn lifted_check(checks: &mut [Check], records: &[Record], cases: &[ReplayCase]) {
+    let Some(c) = checks
+        .iter_mut()
+        .find(|c| c.id == "directive-lifted-a-finding")
+    else {
+        return;
+    };
+    let waivers: Vec<&Record> = records
+        .iter()
+        .filter(|r| r.kind == "directive" && r.class == "detector")
+        .collect();
+    let judged = waivers.iter().filter(|r| r.lifted.is_some()).count();
+    let nothing = waivers.iter().filter(|r| r.lifted == Some(false)).count();
+    let unjudged: std::collections::BTreeSet<&str> = waivers
+        .iter()
+        .filter(|r| r.lifted.is_none())
+        .map(|r| r.sha.as_str())
+        .collect();
+    let waivers_n = crate::audit_html::plural(waivers.len(), "finding waiver", "finding waivers");
+    let replayed = cases.iter().filter(|c| c.judged).count();
+    if nothing > 0 {
+        c.state = "found";
+        c.detail = format!(
+            "{nothing} of the {} the replay judged lifted nothing{}",
+            crate::audit_html::plural(judged, "finding waiver", "finding waivers"),
+            if unjudged.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; {} changes with a finding waiver were not judged",
+                    unjudged.len()
+                )
+            }
+        );
+    } else if waivers.is_empty() {
+        c.state = "clean";
+        c.detail = "no finding waiver to judge".to_string();
+    } else if unjudged.is_empty() {
+        c.state = "clean";
+        c.detail = format!("each of {judged} {waivers_n} lifted a finding in the replay");
+    } else {
+        c.state = "not-checked";
+        let missing = unjudged
+            .iter()
+            .filter(|sha| !cases.iter().any(|c| c.sha == **sha))
+            .count();
+        c.detail = format!(
+            "{} of the changes with a finding waiver were not judged: {} the replay could not check, {missing} it did not include (the replay checked {})",
+            unjudged.len(),
+            unjudged.len() - missing,
+            crate::audit_html::plural(replayed, "change", "changes")
+        );
+    }
 }
 
 /// One [`Identity`] per change with a record or a protected edit, newest first. `pulls`
@@ -2643,6 +2829,118 @@ mod tests {
                 "1 of 2 pull requests merged with no approval from another login".to_string()
             )
         );
+    }
+
+    #[test]
+    fn a_replay_says_which_waivers_lifted_a_finding() {
+        let (a, b, c) = (at(0, Some(10)), at(1, Some(11)), at(2, Some(12)));
+        // #10: `deletes` (an alias of `removes`) was applied, `allow-assertion-drop` was
+        // not, `no-issue` lifts no finding, and inline markers are not judged (the replay
+        // applied the one in `src/x.rs`, but quoted markers would read as lifting nothing). #11 could not be checked; #12 was not
+        // replayed at all.
+        let mut records = directive_records(
+            "s\n\ndeletes: tests/old.rs obsolete\nallow-assertion-drop: tests/a.rs weaker\nno-issue: chore",
+            &a,
+            false,
+        );
+        let marker = |info: &ChangeInfoRef, file: &str| {
+            let mut r = Record::new(&info.to_owned(), "inline-marker", "inline");
+            r.gate = Some("pii".into());
+            r.file = Some(file.into());
+            r.line = Some(4);
+            r
+        };
+        records.push(marker(&a, "src/x.rs"));
+        records.push(marker(&a, "src/y.rs"));
+        records.push(marker(&a, "src/x"));
+        records.extend(directive_records(
+            "s\n\nallow-dependency: serde parser",
+            &b,
+            false,
+        ));
+        records.extend(directive_records(
+            "s\n\nallow-dependency: serde parser",
+            &c,
+            false,
+        ));
+        let gate = |d: &str| gate_for_directive(d).unwrap().to_string();
+        let report = serde_json::json!({"schema_version": 1, "cases_detail": [
+            {"sha": a.sha, "verdict": "passed", "overrides": [
+                {"gate": gate("removes"), "directive": "removes", "source": format!("commit {}", a.sha)},
+                {"gate": "pii", "directive": "discipline:allow(pii)", "source": "inline src/x.rs:4"},
+                {"gate": "pii", "directive": "discipline:allow(pii)", "source": "inline src/x.rs.bak:1"}]},
+            {"sha": b.sha, "verdict": "could_not_check", "overrides": []}
+        ]});
+        let cases = parse_replay(&report.to_string()).unwrap();
+        judge_lifted(&mut records, &cases);
+        assert_eq!(
+            records
+                .iter()
+                .map(|r| (
+                    r.directive.as_deref().or(r.file.as_deref()).unwrap_or(""),
+                    r.lifted,
+                    r.evidence
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("deletes", Some(true), "applied"),
+                ("allow-assertion-drop", Some(false), "claimed"),
+                ("no-issue", None, "claimed"),
+                ("src/x.rs", None, "claimed"),
+                ("src/y.rs", None, "claimed"),
+                ("src/x", None, "claimed"),
+                ("allow-dependency", None, "claimed"),
+                ("allow-dependency", None, "claimed"),
+            ]
+        );
+        let sig = replay_signals(&records);
+        assert_eq!(
+            sig.iter()
+                .map(|g| (g.id, g.count, g.records.clone()))
+                .collect::<Vec<_>>(),
+            vec![("waiver-lifted-nothing", 1, vec![1])]
+        );
+        let check = |records: &[Record], cases: &[ReplayCase]| {
+            let mut checks = signals(&[], &[]).1;
+            lifted_check(&mut checks, records, cases);
+            checks
+                .into_iter()
+                .find(|c| c.id == "directive-lifted-a-finding")
+                .map(|c| (c.state, c.detail))
+                .unwrap()
+        };
+        assert_eq!(
+            check(&records, &cases),
+            (
+                "found",
+                "1 of the 2 finding waivers the replay judged lifted nothing; 2 changes with a finding waiver were not judged".to_string()
+            )
+        );
+        // Every waiver judged and applied: clean. Some not judged: not checked.
+        let applied: Vec<Record> = records
+            .iter()
+            .filter(|r| r.lifted == Some(true))
+            .cloned()
+            .collect();
+        assert_eq!(check(&applied, &cases).0, "clean");
+        let partial: Vec<Record> = records
+            .iter()
+            .filter(|r| r.lifted != Some(false))
+            .cloned()
+            .collect();
+        assert_eq!(
+            check(&partial, &cases),
+            (
+                "not-checked",
+                "2 of the changes with a finding waiver were not judged: 1 the replay could not check, 1 it did not include (the replay checked 1 change)".to_string()
+            )
+        );
+        // A report that is not a replay is refused, never read as "nothing lifted".
+        assert!(parse_replay("{}").is_err());
+        assert!(parse_replay(
+            r#"{"schema_version":1,"cases_detail":[{"sha":"x","verdict":"passed"}]}"#
+        )
+        .is_err());
     }
 
     #[test]

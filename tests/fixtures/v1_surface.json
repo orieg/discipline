@@ -79,6 +79,7 @@
       "audit --output",
       "audit --reasons",
       "audit --ref",
+      "audit --replay",
       "audit -o",
       "baseline --all-severities",
       "baseline --base",
