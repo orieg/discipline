@@ -72,10 +72,13 @@
       "self-test"
     ],
     "cli.flags": [
+      "audit --format",
       "audit --json",
       "audit --last",
+      "audit --output",
       "audit --reasons",
       "audit --ref",
+      "audit -o",
       "baseline --all-severities",
       "baseline --base",
       "baseline --baseline-file",
@@ -203,6 +206,9 @@
       "replay -c"
     ],
     "cli.values": [
+      "audit --format=html",
+      "audit --format=json",
+      "audit --format=text",
       "baseline --suite=agent-guard",
       "baseline --suite=all",
       "baseline --suite=bench",

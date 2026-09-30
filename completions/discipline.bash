@@ -250,7 +250,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__audit)
-            opts="-h --last --ref --json --reasons --help"
+            opts="-o -h --last --ref --json --format --output --reasons --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -261,6 +261,18 @@ _discipline() {
                     return 0
                     ;;
                 --ref)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "text json html" -- "${cur}"))
+                    return 0
+                    ;;
+                --output)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -o)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

@@ -122,10 +122,21 @@ fn run_command(command: Commands) -> Result<bool> {
                 reference: args.reference,
                 reasons: args.reasons,
             })?;
-            if args.json {
-                println!("{}", serde_json::to_string_pretty(&summary)?);
+            use discipline::cli::AuditFormat;
+            let format = if args.json {
+                AuditFormat::Json
             } else {
-                print!("{}", summary.render());
+                args.format
+            };
+            let out = match format {
+                AuditFormat::Json => serde_json::to_string_pretty(&summary)? + "\n",
+                AuditFormat::Html => discipline::audit_html::render(&summary),
+                AuditFormat::Text => summary.render(),
+            };
+            match &args.output {
+                Some(path) => std::fs::write(path, out)
+                    .with_context(|| format!("cannot write {}", path.display()))?,
+                None => print!("{out}"),
             }
             Ok(true)
         }

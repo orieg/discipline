@@ -101,8 +101,10 @@ pub struct Record {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// The change's position, 0 for the newest audited change.
-    #[serde(skip)]
+    #[serde(rename = "change_index")]
     pub ord: usize,
+    /// The change's subject line, as its author wrote it.
+    pub subject: String,
 }
 
 impl Record {
@@ -135,6 +137,7 @@ impl Record {
             reason: None,
             detail: None,
             ord: change.ord,
+            subject: change.subject.clone(),
         }
     }
 
@@ -339,12 +342,63 @@ pub fn signals(records: &[Record], tightenings: &[Record]) -> (Vec<Signal>, Vec<
     (found, checks)
 }
 
+/// Web links for a change, from the `origin` remote (no request is made).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Links {
+    /// The repository's web page.
+    pub repository: String,
+    /// A pull request's page, with `{n}` for its number.
+    pub pull: String,
+    /// A commit's page, with `{sha}` for its full id.
+    pub commit: String,
+    /// A file at a commit, with `{sha}`, `{path}` and `{line}` (drop `#L{line}` when the
+    /// record has no line).
+    pub file: String,
+    /// One file's diff within a commit, with `{sha}` and `{path_sha256}`; GitHub only.
+    pub file_diff: Option<String>,
+}
+
+impl Links {
+    /// Links for a forge's web UI, or `None` when the remote names no known forge.
+    pub fn for_forge(f: &crate::forge::Forge) -> Self {
+        use crate::forge::ForgeKind::*;
+        let base = format!("{}/{}", f.url, f.repo);
+        let (pull, commit, file) = match f.kind {
+            GitHub => ("pull/{n}", "commit/{sha}", "blob/{sha}/{path}#L{line}"),
+            GitLab => (
+                "-/merge_requests/{n}",
+                "-/commit/{sha}",
+                "-/blob/{sha}/{path}#L{line}",
+            ),
+            Gitea | Forgejo => (
+                "pulls/{n}",
+                "commit/{sha}",
+                "src/commit/{sha}/{path}#L{line}",
+            ),
+        };
+        Links {
+            pull: format!("{base}/{pull}"),
+            commit: format!("{base}/{commit}"),
+            file: format!("{base}/{file}"),
+            file_diff: (f.kind == GitHub)
+                .then(|| format!("{base}/commit/{{sha}}#diff-{{path_sha256}}")),
+            repository: base,
+        }
+    }
+}
+
 #[derive(Debug, Default, serde::Serialize)]
 pub struct Summary {
     /// [`crate::output_schema::AUDIT_SCHEMA_VERSION`].
     pub schema_version: u32,
+    /// The discipline version that wrote the report.
+    pub version: String,
     /// The ref audited, as given or defaulted.
     pub reference: String,
+    /// The commit the ref resolved to.
+    pub tip: String,
+    /// Web links, when the `origin` remote names a known forge.
+    pub links: Option<Links>,
     /// Changes audited.
     pub changes: usize,
     /// Changes that carried at least one record.
@@ -364,6 +418,10 @@ pub struct Summary {
     /// Tightenings of `discipline.toml`, newest first (`kind` `config-tightening`): the
     /// value moved in the stricter direction, so `before` is the looser one.
     pub tightenings: Vec<Record>,
+    /// Edits to paths the change's parent configuration protects under
+    /// `ratified-paths` (`kind` `protected-edit`), newest first. Whether each was ratified
+    /// needs the forge and is `not-checked`.
+    pub protected_edits: Vec<Record>,
 }
 
 impl Summary {
@@ -375,6 +433,7 @@ impl Summary {
     ) -> Self {
         let mut s = Summary {
             schema_version: crate::output_schema::AUDIT_SCHEMA_VERSION,
+            version: env!("CARGO_PKG_VERSION").to_string(),
             reference,
             changes,
             ..Default::default()
@@ -419,6 +478,18 @@ impl Summary {
                     sg.rank, sg.id, sg.count, sg.next
                 ));
             }
+        }
+        if !self.protected_edits.is_empty() {
+            let changes: std::collections::BTreeSet<&str> = self
+                .protected_edits
+                .iter()
+                .map(|r| r.sha.as_str())
+                .collect();
+            out.push_str(&format!(
+                "\nProtected paths: {} edit(s) in {} change(s); ratification not checked (needs the forge)\n",
+                self.protected_edits.len(),
+                changes.len()
+            ));
         }
         out.push_str("\nChecks:\n");
         for c in &self.checks {
@@ -488,6 +559,7 @@ struct ChangeInfo {
     pr: Option<u64>,
     time: i64,
     ord: usize,
+    subject: String,
 }
 
 /// The gate a directive name waives, from the directive registry.
@@ -545,6 +617,7 @@ pub struct ChangeInfoRef {
     pub time: i64,
     /// The change's position, 0 for the newest audited change.
     pub ord: usize,
+    pub subject: String,
 }
 
 impl ChangeInfoRef {
@@ -554,6 +627,7 @@ impl ChangeInfoRef {
             pr: self.pr,
             time: self.time,
             ord: self.ord,
+            subject: self.subject.clone(),
         }
     }
 }
@@ -627,16 +701,52 @@ pub fn config_changes(
         }
         r
     };
+    // The option's line in the change's own file, to link to; a removed option has none.
+    let at_line = |mut r: Record| {
+        if let (Some(h), Some(g), Some(k)) = (head, r.gate.as_deref(), r.key.as_deref()) {
+            r.line = key_line(h, g, k);
+        }
+        r
+    };
     (
         loosened
             .into_iter()
-            .map(|w| record("config", w, false))
+            .map(|w| at_line(record("config", w, false)))
             .collect(),
         tightened
             .into_iter()
-            .map(|w| record("config-tightening", w, true))
+            .map(|w| at_line(record("config-tightening", w, true)))
             .collect(),
     )
+}
+
+/// The 1-based line of `key` under its table in a `discipline.toml` text: `[gates.<gate>]`,
+/// or `[directives]`, `[tests]`, `[meta]`, `[languages.c]` for those tables.
+pub fn key_line(text: &str, gate: &str, key: &str) -> Option<u32> {
+    let (table, key) = match gate {
+        "directives" | "tests" | "meta" => (format!("[{gate}]"), key),
+        "languages" => match key.split_once('.') {
+            Some((lang, k)) => (format!("[languages.{lang}]"), k),
+            None => ("[languages]".to_string(), key),
+        },
+        g => (format!("[gates.{g}]"), key),
+    };
+    let mut inside = false;
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            inside = t == table;
+            continue;
+        }
+        if inside {
+            if let Some(rest) = t.strip_prefix(key) {
+                if rest.trim_start().starts_with('=') {
+                    return Some(i as u32 + 1);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Findings added to the baseline, one record per gate.
@@ -753,13 +863,52 @@ fn inline_records(
     Ok(out)
 }
 
-/// The records and tightenings of one first-parent change.
-fn change_records(
+/// Paths this change touched (either side of a rename) that its parent configuration
+/// protects under `ratified-paths`. `detail` says whether that gate was on.
+fn protected_records(
     repo: &Repository,
-    c: &Commit,
-    ord: usize,
-    reasons: bool,
-) -> Result<(Vec<Record>, Vec<Record>)> {
+    parent: &git2::Tree,
+    tree: &git2::Tree,
+    parent_config: Option<&str>,
+    info: &ChangeInfoRef,
+) -> Result<Vec<Record>> {
+    let Some(cfg) = parent_config.and_then(|t| DisciplineConfig::from_toml_str(t).ok()) else {
+        return Ok(Vec::new());
+    };
+    let gate = &cfg.gates.ratified_paths;
+    if gate.protected_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let filter = crate::guards::PathFilter::new(&gate.protected_paths)?;
+    let change = info.to_owned();
+    let diff = repo.diff_tree_to_tree(Some(parent), Some(tree), None)?;
+    let mut paths = std::collections::BTreeSet::new();
+    for d in diff.deltas() {
+        for f in [d.old_file(), d.new_file()] {
+            if let Some(p) = f.path() {
+                let p = p.to_string_lossy().replace('\\', "/");
+                if filter.matches(&p) {
+                    paths.insert(p);
+                }
+            }
+        }
+    }
+    Ok(paths
+        .into_iter()
+        .map(|p| {
+            let mut r = Record::new(&change, "protected-edit", "protected");
+            r.gate = Some("ratified-paths".to_string());
+            r.file = Some(p);
+            r.detail = Some(if gate.enabled { "gate on" } else { "gate off" }.to_string());
+            r
+        })
+        .collect())
+}
+
+/// The records and tightenings of one first-parent change.
+type ChangeParts = (Vec<Record>, Vec<Record>, Vec<Record>);
+
+fn change_records(repo: &Repository, c: &Commit, ord: usize, reasons: bool) -> Result<ChangeParts> {
     let parent = c.parent(0)?;
     let (pt, ct) = (parent.tree()?, c.tree()?);
     let subject = c.summary().ok().flatten().unwrap_or("").to_string();
@@ -768,10 +917,12 @@ fn change_records(
         pr: crate::replay::pr_from_subject(&subject),
         time: c.time().seconds(),
         ord,
+        subject,
     };
     let mut out = directive_records(c.message().unwrap_or(""), &info, reasons);
+    let parent_config = blob_text(repo, &pt, CONFIG_NAME)?;
     let (loosened, tightened) = config_changes(
-        blob_text(repo, &pt, CONFIG_NAME)?.as_deref(),
+        parent_config.as_deref(),
         blob_text(repo, &ct, CONFIG_NAME)?.as_deref(),
         &info,
     );
@@ -782,7 +933,8 @@ fn change_records(
         &info,
     ));
     out.extend(inline_records(repo, &pt, &ct, &info)?);
-    Ok((out, tightened))
+    let protected = protected_records(repo, &pt, &ct, parent_config.as_deref(), &info)?;
+    Ok((out, tightened, protected))
 }
 
 pub fn run(opts: &Options) -> Result<Summary> {
@@ -803,18 +955,32 @@ pub fn run(opts: &Options) -> Result<Summary> {
     let commits = crate::replay::commits_to_replay(&repo, tip, opts.last)?;
     let mut records = Vec::new();
     let mut tightenings = Vec::new();
+    let mut protected = Vec::new();
     for (ord, c) in commits.iter().enumerate() {
-        let (r, t) = change_records(&repo, c, ord, opts.reasons)
+        let (r, t, p) = change_records(&repo, c, ord, opts.reasons)
             .with_context(|| format!("cannot read change {}", c.id()))?;
         records.extend(r);
         tightenings.extend(t);
+        protected.extend(p);
     }
-    Ok(Summary::from_records(
-        reference,
-        commits.len(),
-        records,
-        tightenings,
-    ))
+    let mut s = Summary::from_records(reference, commits.len(), records, tightenings);
+    s.tip = tip.to_string();
+    s.protected_edits = protected;
+    s.links = forge_links(&repo);
+    Ok(s)
+}
+
+/// Web links from the `origin` remote, the same detection `replay` uses; nothing is read
+/// from the network.
+fn forge_links(repo: &Repository) -> Option<Links> {
+    let origin = repo
+        .find_remote("origin")
+        .ok()
+        .and_then(|r| r.url().ok().map(str::to_string))
+        .map(|o| crate::forge::resolve_ssh_alias(&o, &|a| crate::forge::ssh_hostname_from_home(a)));
+    crate::forge::detect(&|k| std::env::var(k).ok(), origin.as_deref())
+        .ok()
+        .map(|f| Links::for_forge(&f))
 }
 
 #[cfg(test)]
@@ -827,6 +993,7 @@ mod tests {
             pr: Some(7),
             time: 1,
             ord: 0,
+            subject: "s".into(),
         }
     }
 
@@ -990,6 +1157,7 @@ mod tests {
                 pr: None,
                 time: 2,
                 ord: 1,
+                subject: "s".into(),
             },
             false,
         ));
@@ -1014,6 +1182,7 @@ mod tests {
             pr,
             time: 100 - ord as i64,
             ord,
+            subject: format!("change {ord}"),
         }
     }
 
@@ -1039,6 +1208,69 @@ mod tests {
             .into_iter()
             .map(|s| (s.id, s.changes))
             .collect()
+    }
+
+    #[test]
+    fn links_follow_the_forge_not_github() {
+        use crate::forge::{Forge, ForgeKind};
+        let f = |kind, url: &str, repo: &str| {
+            Links::for_forge(&Forge {
+                kind,
+                url: url.into(),
+                repo: repo.into(),
+            })
+        };
+        let gh = f(ForgeKind::GitHub, "https://github.com", "o/r");
+        assert_eq!(gh.pull, "https://github.com/o/r/pull/{n}");
+        assert_eq!(gh.file, "https://github.com/o/r/blob/{sha}/{path}#L{line}");
+        assert!(gh.file_diff.is_some());
+        let gl = f(ForgeKind::GitLab, "https://gitlab.example.com", "g/sub/r");
+        assert_eq!(
+            gl.pull,
+            "https://gitlab.example.com/g/sub/r/-/merge_requests/{n}"
+        );
+        assert_eq!(
+            gl.commit,
+            "https://gitlab.example.com/g/sub/r/-/commit/{sha}"
+        );
+        assert_eq!(
+            gl.file,
+            "https://gitlab.example.com/g/sub/r/-/blob/{sha}/{path}#L{line}"
+        );
+        assert_eq!(gl.file_diff, None);
+        for kind in [ForgeKind::Gitea, ForgeKind::Forgejo] {
+            let g = f(kind, "https://code.example.org", "o/r");
+            assert_eq!(g.pull, "https://code.example.org/o/r/pulls/{n}");
+            assert_eq!(
+                g.file,
+                "https://code.example.org/o/r/src/commit/{sha}/{path}#L{line}"
+            );
+            assert_eq!(g.file_diff, None);
+        }
+    }
+
+    #[test]
+    fn a_loosened_option_links_to_its_line() {
+        let text = "[meta]\nversion = 1\n[gates.pii]\nenabled = true\nexempt_paths = [\"a\"]\n[gates.stub-bodies]\nexempt_paths = []\n[languages.c]\nmacros = [\"X\"]\n";
+        assert_eq!(key_line(text, "pii", "exempt_paths"), Some(5));
+        assert_eq!(key_line(text, "stub-bodies", "exempt_paths"), Some(7));
+        assert_eq!(key_line(text, "languages", "c.macros"), Some(9));
+        assert_eq!(key_line(text, "pii", "severity"), None);
+        // `exempt_paths_extra` is not `exempt_paths`.
+        assert_eq!(
+            key_line(
+                "[gates.pii]\nexempt_paths_extra = 1\n",
+                "pii",
+                "exempt_paths"
+            ),
+            None
+        );
+        let (l, _) = config_changes(
+            Some("[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\nexempt_paths = []\n"),
+            Some("[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\nexempt_paths = [\"a\"]\n"),
+            &info(),
+        );
+        assert_eq!(l[0].line, Some(5));
     }
 
     #[test]

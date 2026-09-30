@@ -818,7 +818,7 @@ List the escape hatches the last N merged changes carried: directives, configura
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline audit\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-\-json\fR] [\fB\-\-reasons\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline audit\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-reasons\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -831,7 +831,25 @@ Number of first\-parent commits (merged changes) to audit, newest first
 Branch whose history is audited (default: origin\*(Aqs default branch, else main / master)
 .TP
 \fB\-\-json\fR
-Print the records as JSON
+Print the records as JSON (the same as `\-\-format json`)
+.TP
+\fB\-\-format\fR \fI<FORMAT>\fR [default: text]
+Output format: `text`, `json`, or `html` (one self\-contained page)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+text
+.IP \(bu 2
+json
+.IP \(bu 2
+html
+.RE
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
+Write the output to this file instead of stdout
 .TP
 \fB\-\-reasons\fR
 Include each directive\*(Aqs reason text (by default only its SHA\-256 and length)

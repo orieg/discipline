@@ -56,6 +56,11 @@
             "emptied"
           ]
         },
+        "change_index": {
+          "description": "The change's position, 0 for the newest audited change",
+          "minimum": 0,
+          "type": "integer"
+        },
         "class": {
           "description": "`process`: a waiver of a process rule (`no-issue`); `detector`: a waiver of a finding",
           "enum": [
@@ -63,7 +68,8 @@
             "detector",
             "config",
             "baseline",
-            "inline"
+            "inline",
+            "protected"
           ]
         },
         "count": {
@@ -112,7 +118,8 @@
             "config-unreadable",
             "baseline",
             "inline-marker",
-            "config-tightening"
+            "config-tightening",
+            "protected-edit"
           ]
         },
         "line": {
@@ -144,6 +151,10 @@
           "description": "Full commit id of the change",
           "type": "string"
         },
+        "subject": {
+          "description": "The change's subject line, as its author wrote it",
+          "type": "string"
+        },
         "tier": {
           "description": "Who controls the input: `A` git objects on the audited branch, `C` text the change's author wrote",
           "enum": [
@@ -160,6 +171,8 @@
         "sha",
         "pr",
         "time",
+        "change_index",
+        "subject",
         "kind",
         "class",
         "evidence",
@@ -259,6 +272,53 @@
       },
       "type": "array"
     },
+    "links": {
+      "additionalProperties": false,
+      "description": "Web links from the `origin` remote's forge (GitHub, GitLab, Gitea, Forgejo); null when the remote names none. No request is made",
+      "properties": {
+        "commit": {
+          "description": "A commit's page, `{sha}` for its id",
+          "type": "string"
+        },
+        "file": {
+          "description": "A file at a commit: `{sha}`, `{path}`, `{line}` (drop `#L{line}` without a line)",
+          "type": "string"
+        },
+        "file_diff": {
+          "description": "One file's diff in a commit: `{sha}`, `{path_sha256}`; GitHub only",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pull": {
+          "description": "A pull request's page, `{n}` for its number",
+          "type": "string"
+        },
+        "repository": {
+          "description": "The repository's web page",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "pull",
+        "commit",
+        "file",
+        "file_diff"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "protected_edits": {
+      "description": "Edits to paths the change's parent configuration protects under `ratified-paths` (`kind` `protected-edit`, `detail` `gate on` or `gate off`); whether each was ratified is not checked",
+      "items": {
+        "$ref": "#/$defs/Record"
+      },
+      "type": "array"
+    },
     "records": {
       "description": "Newest change first",
       "items": {
@@ -287,11 +347,22 @@
         "$ref": "#/$defs/Record"
       },
       "type": "array"
+    },
+    "tip": {
+      "description": "The commit the ref resolved to",
+      "type": "string"
+    },
+    "version": {
+      "description": "The discipline version that wrote the report",
+      "type": "string"
     }
   },
   "required": [
     "schema_version",
+    "version",
     "reference",
+    "tip",
+    "links",
     "changes",
     "changes_with_records",
     "by_kind",
@@ -300,7 +371,8 @@
     "signals",
     "checks",
     "records",
-    "tightenings"
+    "tightenings",
+    "protected_edits"
   ],
   "title": "DisciplineAudit",
   "type": "object"
