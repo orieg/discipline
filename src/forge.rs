@@ -1172,6 +1172,24 @@ impl ForgeWrite for HttpApi<'_> {
 /// Requests made by this process, retries included (see [`MAX_REQUESTS`]).
 static REQUESTS_MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// This process's request budget: [`MAX_REQUESTS`], unless a command whose reads scale
+/// with a count its user gave raised it ([`raise_request_limit`]).
+static REQUEST_LIMIT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(MAX_REQUESTS);
+
+/// Raise this process's request budget to `n` (never lower it). For a command whose
+/// reads scale with an explicit count, such as `audit --last N --forge` reading each
+/// change's pull request; `check`, whose reads a pull-request body could inflate, keeps
+/// [`MAX_REQUESTS`].
+pub fn raise_request_limit(n: usize) {
+    REQUEST_LIMIT.fetch_max(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// This process's request budget.
+pub fn request_limit() -> usize {
+    REQUEST_LIMIT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// One HTTP answer.
 struct Answer {
     status: u16,
@@ -1303,12 +1321,11 @@ impl HttpApi<'_> {
     ) -> Result<Answer, ForgeError> {
         let mut attempt = 1;
         loop {
-            if REQUESTS_MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= MAX_REQUESTS {
+            let limit = request_limit();
+            if REQUESTS_MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= limit {
                 return Err(ForgeError {
                     kind: ForgeErrorKind::Unavailable,
-                    message: format!(
-                        "more than {MAX_REQUESTS} forge requests in one run; stopping"
-                    ),
+                    message: format!("more than {limit} forge requests in one run; stopping"),
                     attempts: attempt,
                 });
             }
@@ -1720,6 +1737,16 @@ pub fn pull_approvers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_request_budget_only_rises() {
+        let before = request_limit();
+        assert!(before >= MAX_REQUESTS);
+        raise_request_limit(MAX_REQUESTS - 1);
+        assert_eq!(request_limit(), before, "never lowered");
+        raise_request_limit(before + 7);
+        assert_eq!(request_limit(), before + 7);
+    }
 
     #[test]
     fn a_refusal_carries_the_forge_s_reason_whichever_key_it_uses() {

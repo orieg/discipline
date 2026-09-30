@@ -1126,6 +1126,9 @@ pub fn run(opts: &Options) -> Result<Summary> {
                 anyhow!("--forge: the forge cannot be identified: {e}"),
             )
         })?;
+        // Each change costs a pull-request read and a review read, plus the ratification
+        // and cited-issue reads of the few that need them.
+        crate::forge::raise_request_limit(crate::forge::MAX_REQUESTS + commits.len() * 4);
         let api = crate::forge::HttpApi::from_env();
         let changes: Vec<ChangeInfoRef> = commits
             .iter()
