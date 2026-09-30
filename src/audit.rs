@@ -296,7 +296,7 @@ const NOT_CHECKED: &[(&str, &str)] = &[
     ),
     (
         "owner-ratification",
-        "needs the forge: ratification comments live on issues",
+        "ratification comments live on issues: run with `--forge`",
     ),
     (
         "independent-review",

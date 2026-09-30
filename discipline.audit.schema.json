@@ -134,6 +134,46 @@
             "null"
           ]
         },
+        "ratification": {
+          "additionalProperties": false,
+          "description": "A protected edit's ratification, judged as `ratified-paths` judges it, with `--forge`. The ratifier's login is not carried",
+          "properties": {
+            "comment_id": {
+              "description": "The ratifying comment's id",
+              "type": "string"
+            },
+            "created": {
+              "description": "When the ratifying comment was posted, seconds since the Unix epoch",
+              "type": "integer"
+            },
+            "issue": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "issue_repo": {
+              "description": "The repository of the issue carrying the ratifying comment",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "ratified",
+                "self-ratified",
+                "unratified",
+                "not-required",
+                "never-ratifiable",
+                "not-checked"
+              ]
+            },
+            "why": {
+              "description": "Why it is unratified or not checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
         "reason": {
           "description": "The directive's reason text: only under `--reasons`",
           "type": "string"
@@ -212,7 +252,16 @@
             "loosening-without-waiver",
             "waived-then-loosened",
             "loosened-not-restored",
-            "baseline-grew"
+            "baseline-grew",
+            "protected-edit-unratified",
+            "protected-edit-self-ratified"
+          ]
+        },
+        "list": {
+          "description": "The list `records` indexes: `protected_edits` for the ratification signals",
+          "enum": [
+            "records",
+            "protected_edits"
           ]
         },
         "next": {
@@ -227,7 +276,7 @@
           ]
         },
         "records": {
-          "description": "Indexes into `records`",
+          "description": "Indexes into the list `list` names",
           "items": {
             "minimum": 0,
             "type": "integer"
@@ -241,6 +290,7 @@
         "count",
         "changes",
         "records",
+        "list",
         "next"
       ],
       "type": "object"
@@ -332,6 +382,10 @@
             "null"
           ]
         },
+        "issue_comment": {
+          "description": "A comment on an issue: `{repo}` (`owner/name`), `{n}`, `{id}`",
+          "type": "string"
+        },
         "pull": {
           "description": "A pull request's page, `{n}` for its number",
           "type": "string"
@@ -346,7 +400,8 @@
         "pull",
         "commit",
         "file",
-        "file_diff"
+        "file_diff",
+        "issue_comment"
       ],
       "type": [
         "object",
@@ -354,7 +409,7 @@
       ]
     },
     "protected_edits": {
-      "description": "Edits to paths the change's parent configuration protects under `ratified-paths` (`kind` `protected-edit`, `detail` `gate on` or `gate off`); whether each was ratified is not checked",
+      "description": "Edits to paths the change's parent configuration protects under `ratified-paths` (`kind` `protected-edit`, `detail` `gate on` or `gate off`); with `--forge` each carries its `ratification`",
       "items": {
         "$ref": "#/$defs/Record"
       },
