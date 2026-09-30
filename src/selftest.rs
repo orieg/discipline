@@ -403,6 +403,23 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "sandbox-config: a workflow container gaining --privileged widens, a resource limit does not",
+        || {
+            use crate::guards::sandbox_config::{classify, widenings};
+            use crate::guards::toolchain_config::Classified;
+            let Some(Classified::Data { name, rules }) = classify(".github/workflows/ci.yml") else {
+                anyhow::bail!("workflow not classified");
+            };
+            let job = |o: &str| format!("jobs:\n  t:\n    container:\n      image: x\n      options: {o}\n");
+            let n = |o: &str| {
+                widenings(&name, &rules, Some(&job("--cpus 1")), Some(&job(o)))
+                    .map(|w| w.len())
+                    .map_err(|side| anyhow::anyhow!("{side} unparsed"))
+            };
+            Ok(n("--cpus 1 --privileged")? == 1 && n("--cpus 2")? == 0)
+        },
+    ),
+    (
         "sandbox-config: bypassPermissions and a host network widen, plan and none do not",
         || {
             use crate::guards::sandbox_config::{classify, widenings};

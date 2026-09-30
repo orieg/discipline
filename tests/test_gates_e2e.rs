@@ -2302,6 +2302,79 @@ fn test_floor_counts_tests_that_run_not_tests_that_exist() {
 
 // ---- sandbox-config ---------------------------------------------------------
 
+/// A CI job or service container made privileged, given host namespaces or capabilities, or
+/// handed the host's Docker socket widens its isolation like a Dev Container or a Compose
+/// service does (#367).
+#[test]
+fn sandbox_config_reports_a_privileged_workflow_container() {
+    let base = "name: ci\non: [pull_request]\npermissions: {}\njobs:\n  test:\n    runs-on: ubuntu-latest\n    container:\n      image: rust:1\n    steps:\n      - run: cargo test\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    for dir in [".github", ".gitea", ".forgejo"] {
+        repo.write(&format!("{dir}/workflows/ci.yml"), base);
+    }
+    repo.commit("ci: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: a new image and a resource limit widen nothing.
+    let bumped = base.replace("image: rust:1", "image: rust:2\n      options: --cpus 2");
+    repo.write(".github/workflows/ci.yml", &bumped);
+    repo.commit("ci: bump");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("sandbox-config").is_empty(),
+        "{:?}",
+        quiet.violations("sandbox-config")
+    );
+
+    // The reproduction from #367, on every forge's workflow directory.
+    let lax = base.replace(
+        "image: rust:1",
+        "image: rust:1\n      options: --privileged --pid=host -v /var/run/docker.sock:/var/run/docker.sock",
+    );
+    for dir in [".github", ".gitea", ".forgejo"] {
+        repo.write(&format!("{dir}/workflows/ci.yml"), &lax);
+    }
+    repo.commit("ci: container options");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let v = run.violations("sandbox-config");
+    let mut files: Vec<&str> = v.iter().map(|x| x["file"].as_str().unwrap()).collect();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            ".forgejo/workflows/ci.yml",
+            ".gitea/workflows/ci.yml",
+            ".github/workflows/ci.yml"
+        ],
+        "{v:?}"
+    );
+    assert!(
+        v.iter()
+            .all(|x| x["code"] == "sandbox-config/sandbox-config-widened"),
+        "{v:?}"
+    );
+    let msg = v[0]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("--privileged") && msg.contains("docker.sock"),
+        "{msg}"
+    );
+
+    // A path lifts its file.
+    repo.commit(
+        "ci: explain\n\nallow-sandbox-widening: .github/workflows/ci.yml the job builds container images on a throwaway runner\n\
+         allow-sandbox-widening: .gitea/workflows/ci.yml same runner\n\
+         allow-sandbox-widening: .forgejo/workflows/ci.yml same runner",
+    );
+    let lifted = repo.check(&[]);
+    assert!(
+        lifted.titles("sandbox-config").is_empty(),
+        "{:?}",
+        lifted.violations("sandbox-config")
+    );
+}
+
 #[test]
 fn sandbox_config_reports_a_widened_agent_or_container_and_lifts_it_by_key_or_path() {
     let repo = Repo::new();
