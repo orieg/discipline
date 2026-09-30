@@ -548,61 +548,125 @@
       "id": "gate-instruction-smuggling-base64url",
       "category": "gates",
       "claim": "base64url (RFC 4648 \u00a75) alphabet in encoded blobs",
-      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "source": "docs/GATES.md:instruction-smuggling",
       "code": "src/guards/instruction_smuggling.rs:has_encoded_blob",
-      "verdict": "gap",
+      "verdict": "holds",
       "issue": 354,
-      "pinning_tests": []
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases",
+        "src/guards/instruction_smuggling.rs::blob_shape_rules_accept_base64url_and_slashes_but_not_paths_keys_or_hashes"
+      ]
     },
     {
       "id": "gate-instruction-smuggling-base64-slash",
       "category": "gates",
       "claim": "base64 run containing / without trailing = is not treated as a path and is detected as encoded blob",
-      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "source": "docs/GATES.md:instruction-smuggling",
       "code": "src/guards/instruction_smuggling.rs:has_encoded_blob",
-      "verdict": "gap",
+      "verdict": "holds",
       "issue": 354,
-      "pinning_tests": []
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases",
+        "src/guards/instruction_smuggling.rs::blob_shape_rules_accept_base64url_and_slashes_but_not_paths_keys_or_hashes"
+      ]
     },
     {
       "id": "gate-instruction-smuggling-split-markdown-lines",
       "category": "gates",
       "claim": "phrase split across Markdown lines is detected across line breaks",
-      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "source": "docs/GATES.md:instruction-smuggling",
       "code": "src/guards/instruction_smuggling.rs:phrase_classes",
-      "verdict": "gap",
+      "verdict": "holds",
       "issue": 354,
-      "pinning_tests": []
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases",
+        "tests/test_gates_e2e.rs::a_split_phrase_is_reported_where_it_starts_and_lifted_by_any_of_its_lines"
+      ]
     },
     {
       "id": "gate-instruction-smuggling-split-line-comments",
       "category": "gates",
       "claim": "phrase split across // comments is detected across line breaks",
-      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "source": "docs/GATES.md:instruction-smuggling",
       "code": "src/guards/instruction_smuggling.rs:phrase_classes",
-      "verdict": "gap",
+      "verdict": "holds",
       "issue": 354,
-      "pinning_tests": []
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases"
+      ]
     },
     {
       "id": "gate-instruction-smuggling-base64-wrapped-76",
       "category": "gates",
       "claim": "base64 wrapped at 76 columns (default base64 output) is detected across line breaks",
-      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "source": "docs/GATES.md:instruction-smuggling",
       "code": "src/guards/instruction_smuggling.rs:has_encoded_blob",
-      "verdict": "doc",
+      "verdict": "holds",
       "issue": 354,
-      "pinning_tests": []
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases",
+        "src/guards/instruction_smuggling.rs::wrapped_base64_joins_into_one_run_and_a_pem_block_does_not"
+      ]
     },
     {
       "id": "gate-instruction-smuggling-scanned-extensions",
       "category": "gates",
-      "claim": "scanned-extension list in docs matches closed implementation list (.mdx, .ini, .ipynb, .svg, NOTES)",
-      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "claim": "the prose files scanned as whole lines are the exact list docs/GATES.md generates from the gate (.mdx, .ini, .cfg, .conf, .ipynb, .svg, README, NOTES among them)",
+      "source": "docs/GATES.md:instruction-smuggling",
       "code": "src/guards/instruction_smuggling.rs:is_prose_path",
-      "verdict": "doc",
+      "verdict": "holds",
       "issue": 354,
-      "pinning_tests": []
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases",
+        "src/guards/instruction_smuggling.rs::prose_files_are_listed_by_extension_and_extensionless_name"
+      ]
+    },
+    {
+      "id": "gate-instruction-smuggling-folded-and-decoded",
+      "category": "gates",
+      "claim": "a phrase is matched after folding (NFKC, TR39 look-alikes, leetspeak, joined words, invisible characters) and after decoding ROT13, %xx, hex and base64/base64url, and the finding names the encoding",
+      "source": "docs/GATES.md:instruction-smuggling",
+      "code": "src/guards/instruction_smuggling.rs:text_classes",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases",
+        "src/guards/instruction_smuggling.rs::folding_reads_compatibility_look_alike_leetspeak_and_joined_spellings",
+        "src/guards/instruction_smuggling.rs::encoded_phrases_are_decoded_before_the_match"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "gate-instruction-smuggling-mixed-script",
+      "category": "gates",
+      "claim": "a word mixing Latin letters with a Cyrillic or Greek look-alike is reported as mixed-script; Cyrillic or Greek prose, a unit such as \u00b5s and a right-to-left line are not",
+      "source": "docs/GATES.md:instruction-smuggling",
+      "code": "src/guards/instruction_smuggling.rs:has_mixed_script_word",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases",
+        "src/guards/instruction_smuggling.rs::a_mixed_script_word_is_one_that_imitates_latin_letters",
+        "tests/test_gates_e2e.rs::instruction_smuggling_new_normalisers_stay_quiet_on_ordinary_text"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "gate-instruction-smuggling-hidden-directive-lines",
+      "category": "gates",
+      "claim": "a directive line inside an HTML comment in the change description is scanned for phrases, and every description line, directive lines included, is checked for invisible characters",
+      "source": "docs/GATES.md:instruction-smuggling",
+      "code": "src/guards/instruction_smuggling.rs:instruction_smuggling",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "gate-instruction-smuggling-visible-directive-reason",
+      "category": "gates",
+      "claim": "the reason text of a visible directive line in the change description is not scanned for phrases (documented)",
+      "source": "docs/GATES.md:instruction-smuggling, issue:#363",
+      "code": "src/guards/instruction_smuggling.rs:instruction_smuggling",
+      "pinning_tests": [],
+      "verdict": "known",
+      "issue": 363
     },
     {
       "id": "gate-build-hooks",
