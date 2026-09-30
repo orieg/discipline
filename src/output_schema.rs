@@ -303,13 +303,14 @@ pub fn audit_schema() -> Value {
                 "description": "Web links from the `origin` remote's forge (GitHub, GitLab, Gitea, Forgejo); null when the remote names none. No request is made",
                 "type": ["object", "null"],
                 "additionalProperties": false,
-                "required": ["repository", "pull", "commit", "file", "file_diff"],
+                "required": ["repository", "pull", "commit", "file", "file_diff", "issue_comment"],
                 "properties": {
                     "repository": text("The repository's web page"),
                     "pull": text("A pull request's page, `{n}` for its number"),
                     "commit": text("A commit's page, `{sha}` for its id"),
                     "file": text("A file at a commit: `{sha}`, `{path}`, `{line}` (drop `#L{line}` without a line)"),
-                    "file_diff": { "type": ["string", "null"], "description": "One file's diff in a commit: `{sha}`, `{path_sha256}`; GitHub only" }
+                    "file_diff": { "type": ["string", "null"], "description": "One file's diff in a commit: `{sha}`, `{path_sha256}`; GitHub only" },
+                    "issue_comment": text("A comment on an issue: `{repo}` (`owner/name`), `{n}`, `{id}`")
                 }
             },
             "changes": { "type": "integer", "minimum": 0, "description": "First-parent changes audited" },
@@ -347,20 +348,21 @@ pub fn audit_schema() -> Value {
                     "error": text("The first error, when one failed")
                 }
             },
-            "protected_edits": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Edits to paths the change's parent configuration protects under `ratified-paths` (`kind` `protected-edit`, `detail` `gate on` or `gate off`); whether each was ratified is not checked" }
+            "protected_edits": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Edits to paths the change's parent configuration protects under `ratified-paths` (`kind` `protected-edit`, `detail` `gate on` or `gate off`); with `--forge` each carries its `ratification`" }
         },
         "$defs": {
             "Counts": counts,
             "Signal": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["id", "rank", "count", "changes", "records", "next"],
+                "required": ["id", "rank", "count", "changes", "records", "list", "next"],
                 "properties": {
-                    "id": { "enum": ["guard-gate-loosened", "hidden-directive", "config-unreadable", "loosened-without-pull-request", "loosening-without-waiver", "waived-then-loosened", "loosened-not-restored", "baseline-grew"] },
+                    "id": { "enum": ["guard-gate-loosened", "hidden-directive", "config-unreadable", "loosened-without-pull-request", "loosening-without-waiver", "waived-then-loosened", "loosened-not-restored", "baseline-grew", "protected-edit-unratified", "protected-edit-self-ratified"] },
                     "rank": { "enum": ["look-first", "look-soon", "review"] },
                     "count": { "type": "integer", "minimum": 1, "description": "Records the signal is about" },
                     "changes": { "type": "array", "items": { "type": "string" }, "description": "The changes they are in, newest first (`#N`, else a 10-character commit id)" },
-                    "records": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "Indexes into `records`" },
+                    "records": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "Indexes into the list `list` names" },
+                    "list": { "enum": ["records", "protected_edits"], "description": "The list `records` indexes: `protected_edits` for the ratification signals" },
                     "next": text("The next action a reviewer takes")
                 }
             },
@@ -402,7 +404,21 @@ pub fn audit_schema() -> Value {
                     "reason_len": { "type": "integer", "minimum": 0 },
                     "reason": text("The directive's reason text: only under `--reasons`"),
                     "detail": text("Why a configuration or baseline could not be compared"),
-                    "source": { "enum": ["commit-message", "pull-request-body"], "description": "Where a directive was read" }
+                    "source": { "enum": ["commit-message", "pull-request-body"], "description": "Where a directive was read" },
+                    "ratification": {
+                        "type": "object",
+                        "description": "A protected edit's ratification, judged as `ratified-paths` judges it, with `--forge`. The ratifier's login is not carried",
+                        "additionalProperties": false,
+                        "required": ["state"],
+                        "properties": {
+                            "state": { "enum": ["ratified", "self-ratified", "unratified", "not-required", "never-ratifiable", "not-checked"] },
+                            "issue_repo": text("The repository of the issue carrying the ratifying comment"),
+                            "issue": { "type": "integer", "minimum": 1 },
+                            "comment_id": text("The ratifying comment's id"),
+                            "created": { "type": "integer", "description": "When the ratifying comment was posted, seconds since the Unix epoch" },
+                            "why": text("Why it is unratified or not checked")
+                        }
+                    }
                 }
             }
         }
