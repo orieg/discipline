@@ -176,6 +176,7 @@ pub const GUARD_GATES: &[&str] = &[
     "config-integrity",
     "ci-integrity",
     "instruction-smuggling",
+    "sandbox-config",
 ];
 
 /// A query over the records that found something: what, how urgent, and what to do.
@@ -2237,6 +2238,34 @@ mod tests {
             (t[0].before.as_deref(), t[0].after.as_deref()),
             (Some("3"), Some("40"))
         );
+    }
+
+    #[test]
+    fn switching_sandbox_config_off_is_a_guard_gate_loosening() {
+        // An agent that turns this gate off can widen its own sandbox, hooks included,
+        // with no finding: the same stakes as loosening the gates that guard the others.
+        let (off, _) = loosen(
+            0,
+            Some(7),
+            "[gates.sandbox-config]\n",
+            "enabled = true\n",
+            "enabled = false\n",
+        );
+        let (pii, _) = loosen(
+            1,
+            Some(6),
+            "[gates.pii]\n",
+            "enabled = true\n",
+            "enabled = false\n",
+        );
+        let guard = |r: &[Record]| {
+            found(r, &[])
+                .into_iter()
+                .find(|(id, _)| *id == "guard-gate-loosened")
+                .map(|(_, c)| c)
+        };
+        assert_eq!(guard(&off), Some(vec!["#7".to_string()]));
+        assert_eq!(guard(&pii), None);
     }
 
     #[test]

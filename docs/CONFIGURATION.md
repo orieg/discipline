@@ -448,7 +448,7 @@ Discipline provides a standalone CLI for local developer workflows, pre-commit h
 | `audit` | List the escape hatches the last N merged changes carried: directives, configuration loosenings, baseline growth, inline markers |
 | `mcp` | Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding) |
 | `bench` | Benchmark tooling for the bench-regression gate |
-| `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
+| `doctor` | Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection, and the local agent settings. Exit 0 = healthy, 1 = a failing check, 2 = could not check |
 | `lease` | Claim this worktree's branches for one agent session, so other worktrees' sessions do not move them (kept in the common git directory, never committed) |
 <!-- /generated -->
 
@@ -1163,7 +1163,7 @@ The report opens with **Needs a decision**: the signals that found something, ea
 
 | Signal | Rank | Fires on |
 |---|---|---|
-| `guard-gate-loosened` | look-first | A loosening of `ratified-paths`, `config-integrity`, `ci-integrity` or `instruction-smuggling`, the gates that guard the other gates |
+| `guard-gate-loosened` | look-first | A loosening of `ratified-paths`, `config-integrity`, `ci-integrity`, `instruction-smuggling` or `sandbox-config`, the gates that guard the other gates (`sandbox-config` guards the agent settings that run discipline's hooks) |
 | `hidden-directive` | look-first | A directive inside an HTML comment, which does not show where the message is rendered |
 | `config-unreadable` | look-soon | A `discipline.toml` in history this binary could not read, so its loosenings are unknown |
 | `loosened-without-pull-request` | look-soon | A loosening in a change with no `(#N)` pull request |
