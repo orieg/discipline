@@ -20,7 +20,7 @@ def check_no_prd_references():
     """Ensure grep for obsolete token outside .git and target returns 0 hits."""
     print(f"Checking for obsolete '{FORBIDDEN_TOKEN}' references across repository...")
     violations = []
-    ignore_dirs = {".git", "target", ".cargo", "node_modules"}
+    ignore_dirs = {".git", "target", ".cargo", "node_modules", ".claude", ".gemini", ".antigravity"}
     this_file = Path(__file__).resolve()
     # Generated reports of this repository's history (`discipline audit --format html`)
     # name files as they were when committed, the retired document among them.
