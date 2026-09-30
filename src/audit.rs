@@ -109,6 +109,10 @@ pub struct Record {
     /// A protected edit's ratification, read with `--forge`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ratification: Option<RatificationFact>,
+    /// Issue references in a directive's reason (`#12`, `owner/repo#12`, an issue URL),
+    /// as written; with `--forge` each is read into `issues`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cites: Vec<String>,
     /// The change's position, 0 for the newest audited change.
     #[serde(rename = "change_index")]
     pub ord: usize,
@@ -147,6 +151,7 @@ impl Record {
             detail: None,
             source: None,
             ratification: None,
+            cites: Vec::new(),
             ord: change.ord,
             subject: change.subject.clone(),
         }
@@ -299,6 +304,10 @@ const NOT_CHECKED: &[(&str, &str)] = &[
         "ratification comments live on issues: run with `--forge`",
     ),
     (
+        "cited-issues",
+        "the issues waivers cite are read with `--forge`",
+    ),
+    (
         "independent-review",
         "reviews live on the forge: run with `--forge`",
     ),
@@ -376,6 +385,8 @@ pub struct Links {
     pub file_diff: Option<String>,
     /// A comment on an issue, with `{repo}` (`owner/name`), `{n}` and `{id}`.
     pub issue_comment: String,
+    /// An issue's page, with `{repo}` and `{n}`.
+    pub issue: String,
 }
 
 impl Links {
@@ -402,6 +413,15 @@ impl Links {
         };
         Links {
             issue_comment: format!("{}/{{repo}}/{issue_comment}", f.url),
+            issue: format!(
+                "{}/{{repo}}/{}",
+                f.url,
+                if f.kind == GitLab {
+                    "-/issues/{n}"
+                } else {
+                    "issues/{n}"
+                }
+            ),
             pull: format!("{base}/{pull}"),
             commit: format!("{base}/{commit}"),
             file: format!("{base}/{file}"),
@@ -449,6 +469,8 @@ pub struct Summary {
     pub protected_edits: Vec<Record>,
     /// Each change's merged pull request, read with `--forge`; empty otherwise.
     pub pulls: Vec<Pull>,
+    /// The issues waivers cite, read with `--forge`; empty otherwise.
+    pub issues: Vec<IssueFact>,
     /// What `--forge` read; `None` without it.
     pub forge: Option<ForgeRead>,
 }
@@ -732,6 +754,11 @@ fn directives_from(
             }
             r.directive = Some(d.directive);
             r.source = Some(source);
+            r.cites = crate::references::parse(&d.reason, crate::forge::ForgeKind::GitHub, &[])
+                .into_iter()
+                .filter(|x| !x.pull)
+                .map(|x| x.text)
+                .collect();
             r
         })
         .collect()
@@ -1134,8 +1161,14 @@ pub fn run(opts: &Options) -> Result<Summary> {
     }
     let mut s = Summary::from_records(reference, commits.len(), records, tightenings);
     s.tip = tip.to_string();
+    let issues = match (opts.forge, &forge) {
+        (true, Ok(f)) => read_issues(&crate::forge::HttpApi::from_env(), f, &s.records),
+        _ => Vec::new(),
+    };
     if read.is_some() {
         s.signals.extend(protected_signals(&protected));
+        s.signals.extend(citation_signals(&s.records, &issues));
+        issues_check(&mut s.checks, &s.records, &issues);
         s.signals.sort_by_key(|g| rank_order(g.rank));
         ratification_check(&mut s.checks, &protected);
     }
@@ -1146,7 +1179,218 @@ pub fn run(opts: &Options) -> Result<Summary> {
         s.forge = Some(read);
     }
     s.pulls = pulls;
+    s.issues = issues;
     Ok(s)
+}
+
+/// Why a ratifying issue does not count: it was closed before the merge, so the gate
+/// that required it open could not have accepted it. `None` when it stands; a reason
+/// starting `could not` when the forge could not say.
+fn closed_before_merge(
+    api: &dyn crate::forge::ForgeApi,
+    forge: &crate::forge::Forge,
+    repo: &str,
+    issue: u64,
+    merged: i64,
+) -> Option<String> {
+    match crate::references::issue_facts(api, forge, repo, issue, false) {
+        Err(e) => Some(format!("could not read issue #{issue}: {e}")),
+        // The merge closes it within seconds; two minutes of slack for clock skew.
+        Ok(f) => f
+            .closed_at
+            .filter(|t| *t < merged - 120)
+            .map(|_| format!("issue #{issue} was closed before the merge")),
+    }
+}
+
+/// One issue a waiver cites, as the forge reports it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct IssueFact {
+    /// The reference as written in a reason (`#12`, `o/r#12`, a URL).
+    pub reference: String,
+    /// The repository it was looked up in (`owner/name`); empty for another repository.
+    pub repo: String,
+    pub number: u64,
+    /// `open`, `closed`, `not-found`, `pull-request`, `cross-repo` (not looked up), or
+    /// `not-checked` (the forge could not answer, reason in `error`).
+    pub state: &'static str,
+    /// GitHub's close reason (`completed`, `not_planned`, ...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_reason: Option<String>,
+    /// When it was closed, seconds since the Unix epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Read each issue the waivers cite once. References to other repositories are not read.
+pub fn read_issues(
+    api: &dyn crate::forge::ForgeApi,
+    forge: &crate::forge::Forge,
+    records: &[Record],
+) -> Vec<IssueFact> {
+    use crate::references::Verdict;
+    let mut out: Vec<IssueFact> = Vec::new();
+    for text in records.iter().flat_map(|r| r.cites.iter()) {
+        if out.iter().any(|f| &f.reference == text) {
+            continue;
+        }
+        let Some(reference) = crate::references::parse(text, forge.kind, &[])
+            .into_iter()
+            .next()
+        else {
+            continue;
+        };
+        let Some(repo) = crate::references::locate(&reference, forge, &[]) else {
+            out.push(IssueFact {
+                reference: text.clone(),
+                repo: String::new(),
+                number: reference.number,
+                state: "cross-repo",
+                state_reason: None,
+                closed_at: None,
+                error: None,
+            });
+            continue;
+        };
+        // The same issue written another way is read once.
+        if let Some(prev) = out
+            .iter()
+            .find(|f| f.repo.eq_ignore_ascii_case(&repo) && f.number == reference.number)
+            .cloned()
+        {
+            out.push(IssueFact {
+                reference: text.clone(),
+                ..prev
+            });
+            continue;
+        }
+        let fact = match crate::references::issue_facts(api, forge, &repo, reference.number, false)
+        {
+            Ok(f) => IssueFact {
+                reference: text.clone(),
+                repo,
+                number: reference.number,
+                state: match f.verdict {
+                    Verdict::Issue => "open",
+                    Verdict::Closed => "closed",
+                    Verdict::NotFound => "not-found",
+                    Verdict::IsPull => "pull-request",
+                    Verdict::CrossRepo => "cross-repo",
+                },
+                state_reason: f.state_reason,
+                closed_at: f.closed_at,
+                error: None,
+            },
+            Err(e) => IssueFact {
+                reference: text.clone(),
+                repo,
+                number: reference.number,
+                state: "not-checked",
+                state_reason: None,
+                closed_at: None,
+                error: Some(e.to_string()),
+            },
+        };
+        out.push(fact);
+    }
+    out
+}
+
+/// The citation signals: a waiver whose cited issue does not exist, was closed as not
+/// planned, or was already closed when the waiver was written.
+pub fn citation_signals(records: &[Record], issues: &[IssueFact]) -> Vec<Signal> {
+    let fact = |t: &str| issues.iter().find(|f| f.reference == t);
+    let defs: [(&str, &str, &str, &dyn Fn(&Record, &IssueFact) -> bool); 3] = [
+        (
+            "waiver-cites-missing-issue",
+            "look-soon",
+            "Open the waiver: the issue its reason cites does not exist, so nothing tracks the follow-up.",
+            &|_, f| f.state == "not-found",
+        ),
+        (
+            "waiver-cites-issue-closed-before",
+            "look-soon",
+            "Open the waiver: the issue its reason cites was already closed when it was written, so it tracks nothing.",
+            &|r, f| f.state == "closed" && f.closed_at.is_some_and(|t| t < r.time - 60),
+        ),
+        (
+            "waiver-cites-issue-not-planned",
+            "review",
+            "Decide what replaces the follow-up: the issue the waiver cites was closed as not planned.",
+            &|r, f| {
+                f.state == "closed"
+                    && f.state_reason.as_deref() == Some("not_planned")
+                    && !f.closed_at.is_some_and(|t| t < r.time - 60)
+            },
+        ),
+    ];
+    let mut out = Vec::new();
+    for (id, rank, next, test) in defs {
+        let hits: Vec<usize> = (0..records.len())
+            .filter(|&i| {
+                records[i]
+                    .cites
+                    .iter()
+                    .filter_map(|t| fact(t))
+                    .any(|f| test(&records[i], f))
+            })
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        let mut changes: Vec<String> = Vec::new();
+        for &i in &hits {
+            let l = records[i].label();
+            if !changes.contains(&l) {
+                changes.push(l);
+            }
+        }
+        out.push(Signal {
+            id,
+            rank,
+            count: hits.len(),
+            changes,
+            records: hits,
+            list: "records",
+            next,
+        });
+    }
+    out
+}
+
+/// The `cited-issues` check once `--forge` read them.
+pub fn issues_check(checks: &mut [Check], records: &[Record], issues: &[IssueFact]) {
+    let Some(c) = checks.iter_mut().find(|c| c.id == "cited-issues") else {
+        return;
+    };
+    let citing = records.iter().filter(|r| !r.cites.is_empty()).count();
+    if let Some(f) = issues.iter().find(|f| f.state == "not-checked") {
+        c.state = "not-checked";
+        c.detail = format!(
+            "could not read {}: {}",
+            f.reference,
+            f.error.as_deref().unwrap_or("")
+        );
+        return;
+    }
+    let bad = citation_signals(records, issues)
+        .iter()
+        .map(|s| s.count)
+        .sum::<usize>();
+    let waivers = crate::audit_html::plural(citing, "waiver", "waivers");
+    if bad > 0 {
+        c.state = "found";
+        c.detail = format!("{bad} of {waivers} citing an issue point at one missing, closed before, or not planned");
+    } else {
+        c.state = "clean";
+        c.detail = if citing == 0 {
+            "no waiver cites an issue".to_string()
+        } else {
+            format!("every one of {waivers} citing an issue points at one that tracks it")
+        };
+    }
 }
 
 /// The merged pull request of each change: its body's directives, and whether another
@@ -1286,18 +1530,31 @@ pub fn judge_protected(
                     .iter()
                     .map(|p| {
                         let v = match j.ratified.iter().find(|r| &r.path == p) {
-                            Some(r) => RatificationFact {
-                                state: if r.author.eq_ignore_ascii_case(&pull.author) {
-                                    "self-ratified"
-                                } else {
-                                    "ratified"
-                                },
-                                issue_repo: Some(r.repo.clone()),
-                                issue: Some(r.issue),
-                                comment_id: Some(r.comment_id.clone()),
-                                created: Some(r.created_at),
-                                why: None,
-                            },
+                            Some(r) => {
+                                let early = closed_before_merge(
+                                    api,
+                                    forge,
+                                    &r.repo,
+                                    r.issue,
+                                    commit.time().seconds(),
+                                );
+                                let state = match &early {
+                                    Some(why) if why.starts_with("could not") => "not-checked",
+                                    Some(_) => "unratified",
+                                    None if r.author.eq_ignore_ascii_case(&pull.author) => {
+                                        "self-ratified"
+                                    }
+                                    None => "ratified",
+                                };
+                                RatificationFact {
+                                    state,
+                                    issue_repo: Some(r.repo.clone()),
+                                    issue: Some(r.issue),
+                                    comment_id: Some(r.comment_id.clone()),
+                                    created: Some(r.created_at),
+                                    why: early,
+                                }
+                            }
                             None => fact(
                                 "unratified",
                                 j.findings.iter().find_map(|f| match f {
@@ -2260,6 +2517,24 @@ mod tests {
             judge(&api(serde_json::json!([])), &[pull("dev")], &[]).state,
             "unratified"
         );
+        // The ratifying issue was closed long before the merge: the gate, which needs it
+        // open, could not have accepted it.
+        let closed_early = canned(&[
+            ("gitea:repos/o/r", serde_json::json!({"full_name": "o/r"})),
+            (
+                "gitea:repos/o/r/issues/12",
+                serde_json::json!({"number": 12, "state": "closed", "closed_at": "1970-01-01T00:00:00Z"}),
+            ),
+            (
+                "gitea:repos/o/r/issues/12/comments?limit=50&page=1",
+                serde_json::json!({"__status": 200, "__headers": {"X-Total-Count": "1"}, "__body": ratifying.clone()}),
+            ),
+        ]);
+        let early = judge(&closed_early, &[pull("dev")], &[]);
+        assert_eq!(
+            (early.state, early.why.as_deref()),
+            ("unratified", Some("issue #12 was closed before the merge"))
+        );
         // A direct push, and a change the forge could not answer for.
         assert_eq!(judge(&api(ratifying.clone()), &[], &[]).state, "unratified");
         assert_eq!(
@@ -2288,5 +2563,110 @@ mod tests {
             .find(|c| c.id == "owner-ratification")
             .unwrap();
         assert_eq!(c.state, "found", "{c:?}");
+    }
+
+    #[test]
+    fn a_waiver_cites_the_issues_its_reason_names_but_not_pull_requests() {
+        let r = directive_records(
+            "s\n\nallow-stub: fn_a tracked in #12 and o/r#5, see https://github.com/o/r/pull/9\n",
+            &info(),
+            false,
+        );
+        assert_eq!(r[0].cites, vec!["#12".to_string(), "o/r#5".to_string()]);
+        assert!(
+            directive_records("s\n\nallow-stub: fn_a no issue", &info(), false)[0]
+                .cites
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cited_issues_are_read_once_and_judged_against_the_waiver() {
+        // The waiver's change is dated 2026-09-20T00:00:00Z.
+        let at_time = |cites: &str| {
+            let mut r =
+                directive_records(&format!("s\n\nallow-stub: fn_a {cites}"), &info(), false);
+            r[0].time = 1_789_862_400;
+            r
+        };
+        let mut records = at_time("tracked in #12");
+        records.extend(at_time("tracked in #13"));
+        records.extend(at_time("tracked in #14 and other/x#1"));
+        records.extend(at_time("tracked in #15 and o/r#15"));
+        let api = canned(&[
+            ("github:repos/o/r", serde_json::json!({"full_name": "o/r"})),
+            // Closed after the waiver, as not planned.
+            (
+                "github:repos/o/r/issues/12",
+                serde_json::json!({"number": 12, "state": "closed", "state_reason": "not_planned", "closed_at": "2026-09-25T00:00:00Z"}),
+            ),
+            ("github:repos/o/r/issues/13", serde_json::Value::Null),
+            // Already closed when the waiver was written.
+            (
+                "github:repos/o/r/issues/14",
+                serde_json::json!({"number": 14, "state": "closed", "state_reason": "completed", "closed_at": "2026-09-01T00:00:00Z"}),
+            ),
+            (
+                "github:repos/o/r/issues/15",
+                serde_json::json!({"number": 15, "state": "open"}),
+            ),
+        ]);
+        let issues = read_issues(&api, &github(), &records);
+        let states: Vec<(&str, &str)> = issues
+            .iter()
+            .map(|f| (f.reference.as_str(), f.state))
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                ("#12", "closed"),
+                ("#13", "not-found"),
+                ("#14", "closed"),
+                ("other/x#1", "cross-repo"),
+                ("#15", "open"),
+                ("o/r#15", "open")
+            ]
+        );
+        // `o/r#15` is `#15`: read once. Another repository is never read.
+        assert_eq!(
+            api.log().iter().filter(|k| k.contains("issues/15")).count(),
+            1
+        );
+        assert!(!api.log().iter().any(|k| k.contains("other/x")));
+        let sigs = citation_signals(&records, &issues);
+        let hit = |id: &str| {
+            sigs.iter()
+                .find(|g| g.id == id)
+                .map(|g| g.records.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(hit("waiver-cites-missing-issue"), vec![1]);
+        assert_eq!(hit("waiver-cites-issue-closed-before"), vec![2]);
+        assert_eq!(hit("waiver-cites-issue-not-planned"), vec![0]);
+        let mut checks = signals(&records, &[]).1;
+        issues_check(&mut checks, &records, &issues);
+        let c = checks.iter().find(|c| c.id == "cited-issues").unwrap();
+        assert_eq!(c.state, "found", "{c:?}");
+
+        // A forge that cannot answer leaves the question not checked.
+        let down = canned(&[
+            ("github:repos/o/r", serde_json::json!({"full_name": "o/r"})),
+            (
+                "github:repos/o/r/issues/12",
+                serde_json::json!({"__status": 500}),
+            ),
+        ]);
+        let issues = read_issues(&down, &github(), &records[..1]);
+        assert_eq!(issues[0].state, "not-checked");
+        let mut checks = signals(&records, &[]).1;
+        issues_check(&mut checks, &records[..1], &issues);
+        assert_eq!(
+            checks
+                .iter()
+                .find(|c| c.id == "cited-issues")
+                .unwrap()
+                .state,
+            "not-checked"
+        );
     }
 }

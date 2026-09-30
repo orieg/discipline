@@ -151,6 +151,18 @@ fn signal_sentence(s: &Signal, summary: &Summary) -> String {
         }
         "loosened-not-restored" => format!("{loosenings} {verb_were} never tightened back"),
         "baseline-grew" => format!("the baseline grew for {gates}"),
+        "waiver-cites-missing-issue" => format!(
+            "{} cite an issue that does not exist, in {changes}",
+            plural(n, "waiver", "waivers")
+        ),
+        "waiver-cites-issue-closed-before" => format!(
+            "{} cite an issue already closed when the waiver was written, in {changes}",
+            plural(n, "waiver", "waivers")
+        ),
+        "waiver-cites-issue-not-planned" => format!(
+            "{} cite an issue closed as not planned, in {changes}",
+            plural(n, "waiver", "waivers")
+        ),
         "protected-edit-unratified" => format!(
             "{} with no ratification the gate accepts, in {changes}",
             plural(n, "protected-path edit", "protected-path edits")
@@ -238,6 +250,19 @@ const CHECK_LABEL: &[(&str, &str)] = &[
     ("loosened-not-restored", "Loosenings not restored"),
     ("baseline-grew", "Baseline growth"),
     ("protected-edit-unratified", "Unratified protected edits"),
+    (
+        "waiver-cites-missing-issue",
+        "Waivers citing a missing issue",
+    ),
+    (
+        "waiver-cites-issue-closed-before",
+        "Waivers citing an issue closed before them",
+    ),
+    (
+        "waiver-cites-issue-not-planned",
+        "Waivers citing an issue not planned",
+    ),
+    ("cited-issues", "Issues waivers cite"),
     (
         "protected-edit-self-ratified",
         "Self-ratified protected edits",
@@ -533,6 +558,48 @@ fn source(r: &Record, s: &Summary) -> String {
         esc(&href),
         esc(&text)
     )
+}
+
+/// The issues a waiver cites, each linked, with its state when `--forge` read it.
+fn cites_cell(r: &Record, s: &Summary) -> String {
+    r.cites
+        .iter()
+        .map(|t| {
+            let fact = s.issues.iter().find(|f| &f.reference == t);
+            let href = match (&s.links, fact) {
+                (Some(l), Some(f)) if !f.repo.is_empty() => Some(
+                    l.issue
+                        .replace("{repo}", &f.repo)
+                        .replace("{n}", &f.number.to_string()),
+                ),
+                _ => None,
+            };
+            let label = match href {
+                Some(h) => format!(r##"<a href="{}">{}</a>"##, esc(&h), esc(t)),
+                None => format!("<code>{}</code>", esc(t)),
+            };
+            let state = fact
+                .map(|f| match (f.state, f.state_reason.as_deref()) {
+                    ("closed", Some("not_planned")) => {
+                        r##" <span class="badge warn">closed, not planned</span>"##.to_string()
+                    }
+                    ("closed", _) => format!(
+                        r##" <span class="badge muted">closed{}</span>"##,
+                        f.closed_at
+                            .map(|t| format!(" {}", date(t)))
+                            .unwrap_or_default()
+                    ),
+                    ("not-found", _) => {
+                        r##" <span class="badge bad">not found</span>"##.to_string()
+                    }
+                    ("open", _) => r##" <span class="badge ok">open</span>"##.to_string(),
+                    (other, _) => format!(r##" <span class="badge muted">{}</span>"##, esc(other)),
+                })
+                .unwrap_or_default();
+            format!("{label}{state}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Each path's ratification in one change, as `--forge` judged it, linked to the comment.
@@ -921,7 +988,7 @@ pub fn render(s: &Summary) -> String {
             let g = esc(r.gate.as_deref().unwrap_or(""));
             let item = match r.kind {
                 "directive" => format!(
-                    "Directive <code>{}</code> in the {} ({}), reason {} chars{}",
+                    "Directive <code>{}</code> in the {} ({}), reason {} chars{}{}",
                     esc(r.directive.as_deref().unwrap_or("")),
                     if r.source == Some("pull-request-body") {
                         "pull request body"
@@ -938,6 +1005,11 @@ pub fn render(s: &Summary) -> String {
                         r##" <span class="badge warn">hidden</span>"##
                     } else {
                         ""
+                    },
+                    if r.cites.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; cites {}", cites_cell(r, s))
                     }
                 ),
                 "config" => format!(

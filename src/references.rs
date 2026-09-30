@@ -294,6 +294,16 @@ pub fn probe_repository(api: &dyn ForgeApi, forge: &Forge) -> Result<(), ForgeEr
     }
 }
 
+/// What an issue is, with when and why it was closed where the forge says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueFacts {
+    pub verdict: Verdict,
+    /// When it was closed, seconds since the Unix epoch.
+    pub closed_at: Option<i64>,
+    /// GitHub's `state_reason` (`completed`, `not_planned`, ...); other forges give none.
+    pub state_reason: Option<String>,
+}
+
 /// What `number` is in `repo`. `as_pull` is a reference written as a pull or merge request.
 pub fn resolve_number(
     api: &dyn ForgeApi,
@@ -302,9 +312,25 @@ pub fn resolve_number(
     number: u64,
     as_pull: bool,
 ) -> Result<Verdict, ForgeError> {
+    issue_facts(api, forge, repo, number, as_pull).map(|f| f.verdict)
+}
+
+/// [`resolve_number`], with the close time and reason.
+pub fn issue_facts(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    repo: &str,
+    number: u64,
+    as_pull: bool,
+) -> Result<IssueFacts, ForgeError> {
+    let bare = |verdict| IssueFacts {
+        verdict,
+        closed_at: None,
+        state_reason: None,
+    };
     if as_pull && forge.kind == ForgeKind::GitLab {
         // GitLab numbers merge requests apart from issues: `!12` is never issue 12.
-        return Ok(Verdict::IsPull);
+        return Ok(bare(Verdict::IsPull));
     }
     let path = match forge.kind {
         ForgeKind::GitLab => format!("projects/{}/issues/{number}", gitlab_project_id(repo)),
@@ -312,24 +338,37 @@ pub fn resolve_number(
     };
     let issue = match api.fetch(forge, &path) {
         Ok(v) => v,
-        Err(e) if e.kind == ForgeErrorKind::NotFound => return Ok(Verdict::NotFound),
+        Err(e) if e.kind == ForgeErrorKind::NotFound => return Ok(bare(Verdict::NotFound)),
         Err(e) => return Err(e),
     };
     // GitHub, Gitea and Forgejo number pull requests and issues together and answer a
     // pull request here too, with a `pull_request` member.
     if issue.get("pull_request").is_some_and(|p| !p.is_null()) {
-        return Ok(Verdict::IsPull);
+        return Ok(bare(Verdict::IsPull));
     }
-    match issue.get("state").and_then(|s| s.as_str()) {
+    let verdict = match issue.get("state").and_then(|s| s.as_str()) {
         Some(s) if s.eq_ignore_ascii_case("open") || s.eq_ignore_ascii_case("opened") => {
-            Ok(Verdict::Issue)
+            Verdict::Issue
         }
-        Some(s) if s.eq_ignore_ascii_case("closed") => Ok(Verdict::Closed),
-        other => Err(ForgeError::new(
-            ForgeErrorKind::Malformed,
-            format!("issue #{number} of {repo} has no readable state ({other:?})"),
-        )),
-    }
+        Some(s) if s.eq_ignore_ascii_case("closed") => Verdict::Closed,
+        other => {
+            return Err(ForgeError::new(
+                ForgeErrorKind::Malformed,
+                format!("issue #{number} of {repo} has no readable state ({other:?})"),
+            ))
+        }
+    };
+    Ok(IssueFacts {
+        verdict,
+        closed_at: issue
+            .get("closed_at")
+            .and_then(|t| t.as_str())
+            .and_then(crate::ratification::parse_time),
+        state_reason: issue
+            .get("state_reason")
+            .and_then(|r| r.as_str())
+            .map(str::to_string),
+    })
 }
 
 /// Resolve every reference: cross-repository ones without a request, the rest with one
