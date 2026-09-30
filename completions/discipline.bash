@@ -250,7 +250,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__audit)
-            opts="-o -h --last --ref --json --format --output --reasons --help"
+            opts="-o -h --last --ref --json --format --output --forge --reasons --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

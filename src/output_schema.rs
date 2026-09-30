@@ -293,7 +293,7 @@ pub fn audit_schema() -> Value {
         "description": "The records `discipline audit --json` prints: one per escape hatch a merged change carried, read from git objects only. A record says what was claimed or applied, not whether a check honoured it.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["schema_version", "version", "reference", "tip", "links", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings", "protected_edits"],
+        "required": ["schema_version", "version", "reference", "tip", "links", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings", "protected_edits", "pulls", "forge"],
         "properties": {
             "schema_version": { "const": AUDIT_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
             "version": text("The discipline version that wrote the report"),
@@ -321,6 +321,32 @@ pub fn audit_schema() -> Value {
             "checks": { "type": "array", "items": { "$ref": "#/$defs/Check" }, "description": "Every question the audit asks, with its state: a signal is `found` or `clean`; what git alone cannot tell is `not-checked`" },
             "records": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Newest change first" },
             "tightenings": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Tightenings of `discipline.toml` (`kind` `config-tightening`), newest first: `before` is the looser value" },
+            "pulls": {
+                "type": "array",
+                "description": "Each change's merged pull request, read with `--forge`; empty otherwise. Logins are not carried",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["sha", "pr", "approved_by_other"],
+                    "properties": {
+                        "sha": text("The change's commit"),
+                        "pr": { "type": "integer", "minimum": 1 },
+                        "approved_by_other": { "type": "boolean", "description": "A login other than the pull request's author approved its head" }
+                    }
+                }
+            },
+            "forge": {
+                "type": ["object", "null"],
+                "description": "What `--forge` read; null without it",
+                "additionalProperties": false,
+                "required": ["changes", "pulls", "failed"],
+                "properties": {
+                    "changes": { "type": "integer", "minimum": 0, "description": "Changes whose merged pull request was looked up" },
+                    "pulls": { "type": "integer", "minimum": 0, "description": "Of those, the ones that arrived through one" },
+                    "failed": { "type": "integer", "minimum": 0, "description": "Changes the forge could not answer for; any makes the forge checks `not-checked`" },
+                    "error": text("The first error, when one failed")
+                }
+            },
             "protected_edits": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Edits to paths the change's parent configuration protects under `ratified-paths` (`kind` `protected-edit`, `detail` `gate on` or `gate off`); whether each was ratified is not checked" }
         },
         "$defs": {
@@ -375,7 +401,8 @@ pub fn audit_schema() -> Value {
                     "reason_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the directive's reason, to group reuse without the text" },
                     "reason_len": { "type": "integer", "minimum": 0 },
                     "reason": text("The directive's reason text: only under `--reasons`"),
-                    "detail": text("Why a configuration or baseline could not be compared")
+                    "detail": text("Why a configuration or baseline could not be compared"),
+                    "source": { "enum": ["commit-message", "pull-request-body"], "description": "Where a directive was read" }
                 }
             }
         }

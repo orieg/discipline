@@ -151,6 +151,13 @@
           "description": "Full commit id of the change",
           "type": "string"
         },
+        "source": {
+          "description": "Where a directive was read",
+          "enum": [
+            "commit-message",
+            "pull-request-body"
+          ]
+        },
         "subject": {
           "description": "The change's subject line, as its author wrote it",
           "type": "string"
@@ -272,6 +279,40 @@
       },
       "type": "array"
     },
+    "forge": {
+      "additionalProperties": false,
+      "description": "What `--forge` read; null without it",
+      "properties": {
+        "changes": {
+          "description": "Changes whose merged pull request was looked up",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error": {
+          "description": "The first error, when one failed",
+          "type": "string"
+        },
+        "failed": {
+          "description": "Changes the forge could not answer for; any makes the forge checks `not-checked`",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pulls": {
+          "description": "Of those, the ones that arrived through one",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "changes",
+        "pulls",
+        "failed"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "links": {
       "additionalProperties": false,
       "description": "Web links from the `origin` remote's forge (GitHub, GitLab, Gitea, Forgejo); null when the remote names none. No request is made",
@@ -316,6 +357,33 @@
       "description": "Edits to paths the change's parent configuration protects under `ratified-paths` (`kind` `protected-edit`, `detail` `gate on` or `gate off`); whether each was ratified is not checked",
       "items": {
         "$ref": "#/$defs/Record"
+      },
+      "type": "array"
+    },
+    "pulls": {
+      "description": "Each change's merged pull request, read with `--forge`; empty otherwise. Logins are not carried",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "approved_by_other": {
+            "description": "A login other than the pull request's author approved its head",
+            "type": "boolean"
+          },
+          "pr": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sha": {
+            "description": "The change's commit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "pr",
+          "approved_by_other"
+        ],
+        "type": "object"
       },
       "type": "array"
     },
@@ -372,7 +440,9 @@
     "checks",
     "records",
     "tightenings",
-    "protected_edits"
+    "protected_edits",
+    "pulls",
+    "forge"
   ],
   "title": "DisciplineAudit",
   "type": "object"

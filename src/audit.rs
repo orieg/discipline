@@ -43,6 +43,9 @@ pub struct Options {
     pub reference: Option<String>,
     /// Report each directive's reason text, not only its hash.
     pub reasons: bool,
+    /// Read each change's merged pull request from the forge: its body's directives and
+    /// whether a login other than its author approved it.
+    pub forge: bool,
 }
 
 /// One exception one change carried.
@@ -100,6 +103,9 @@ pub struct Record {
     /// Why a configuration could not be compared: which side, and the parse error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Where a directive was read: `commit-message` or `pull-request-body`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<&'static str>,
     /// The change's position, 0 for the newest audited change.
     #[serde(rename = "change_index")]
     pub ord: usize,
@@ -136,6 +142,7 @@ impl Record {
             reason_len: None,
             reason: None,
             detail: None,
+            source: None,
             ord: change.ord,
             subject: change.subject.clone(),
         }
@@ -279,7 +286,7 @@ const NOT_CHECKED: &[(&str, &str)] = &[
     ),
     (
         "pull-request-body-directives",
-        "pull request bodies are not read",
+        "pull request bodies are read with `--forge`",
     ),
     (
         "owner-ratification",
@@ -287,7 +294,7 @@ const NOT_CHECKED: &[(&str, &str)] = &[
     ),
     (
         "independent-review",
-        "needs the forge: reviews live on pull requests",
+        "reviews live on the forge: run with `--forge`",
     ),
     (
         "agent-identity",
@@ -426,6 +433,33 @@ pub struct Summary {
     /// `ratified-paths` (`kind` `protected-edit`), newest first. Whether each was ratified
     /// needs the forge and is `not-checked`.
     pub protected_edits: Vec<Record>,
+    /// Each change's merged pull request, read with `--forge`; empty otherwise.
+    pub pulls: Vec<Pull>,
+    /// What `--forge` read; `None` without it.
+    pub forge: Option<ForgeRead>,
+}
+
+/// A change's merged pull request, as the forge reported it. Logins are not carried.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Pull {
+    pub sha: String,
+    pub pr: u64,
+    /// A login other than the pull request's author approved its head.
+    pub approved_by_other: bool,
+}
+
+/// How the forge reads of `--forge` went.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeRead {
+    /// Changes whose merged pull request was looked up.
+    pub changes: usize,
+    /// Of those, the ones that arrived through a merged pull request.
+    pub pulls: usize,
+    /// Changes the forge could not answer for.
+    pub failed: usize,
+    /// The first error, when one failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl Summary {
@@ -595,25 +629,66 @@ fn directive_class(name: &str) -> &'static str {
 
 /// The directive records of one commit message.
 pub fn directive_records(message: &str, info: &ChangeInfoRef, reasons: bool) -> Vec<Record> {
-    let change = info.to_owned();
-    crate::tokens::parse_directives(
+    directives_from(
         message,
-        crate::tokens::OverrideSource::Commit(change.sha.clone()),
+        crate::tokens::OverrideSource::Commit(info.sha.clone()),
+        "commit-message",
+        info,
+        reasons,
+    )
+}
+
+/// The directive records of a change's merged pull-request body, less those its commit
+/// message already carries (a squash merge often copies the body into the message).
+pub fn pull_body_records(
+    body: &str,
+    info: &ChangeInfoRef,
+    reasons: bool,
+    from_commit: &[Record],
+) -> Vec<Record> {
+    directives_from(
+        body,
+        crate::tokens::OverrideSource::PrBody,
+        "pull-request-body",
+        info,
+        reasons,
     )
     .into_iter()
-    .map(|d| {
-        let mut r = Record::new(&change, "directive", directive_class(&d.directive));
-        r.gate = gate_for_directive(&d.directive).map(str::to_string);
-        r.hidden = Some(d.hidden);
-        r.reason_sha256 = Some(crate::report::gitlab::sha256_hex(d.reason.as_bytes()));
-        r.reason_len = Some(d.reason.chars().count());
-        if reasons {
-            r.reason = Some(d.reason.clone());
-        }
-        r.directive = Some(d.directive);
-        r
+    .filter(|r| {
+        !from_commit.iter().any(|c| {
+            c.kind == "directive"
+                && c.directive.as_deref().map(str::to_ascii_lowercase)
+                    == r.directive.as_deref().map(str::to_ascii_lowercase)
+                && c.reason_sha256 == r.reason_sha256
+        })
     })
     .collect()
+}
+
+fn directives_from(
+    text: &str,
+    origin: crate::tokens::OverrideSource,
+    source: &'static str,
+    info: &ChangeInfoRef,
+    reasons: bool,
+) -> Vec<Record> {
+    let change = info.to_owned();
+    crate::tokens::parse_directives(text, origin)
+        .into_iter()
+        .map(|d| {
+            let mut r = Record::new(&change, "directive", directive_class(&d.directive));
+            r.gate = gate_for_directive(&d.directive).map(str::to_string);
+            r.hidden = Some(d.hidden);
+            r.reason_sha256 = Some(crate::report::gitlab::sha256_hex(d.reason.as_bytes()));
+            r.reason_len = Some(d.reason.chars().count());
+            if reasons {
+                r.reason = Some(d.reason.clone());
+            }
+            r.directive = Some(d.directive);
+            r.source = Some(source);
+            r
+        })
+        .collect()
 }
 
 /// A change's identity, as the record constructors take it.
@@ -970,24 +1045,181 @@ pub fn run(opts: &Options) -> Result<Summary> {
         tightenings.extend(t);
         protected.extend(p);
     }
+    let forge = detect_forge(&repo);
+    let (pulls, read) = if opts.forge {
+        let f = forge.as_ref().map_err(|e| {
+            crate::could_not_check::tag(
+                crate::could_not_check::Reason::Forge,
+                anyhow!("--forge: the forge cannot be identified: {e}"),
+            )
+        })?;
+        let api = crate::forge::HttpApi::from_env();
+        let changes: Vec<ChangeInfoRef> = commits
+            .iter()
+            .enumerate()
+            .map(|(ord, c)| ChangeInfoRef {
+                sha: c.id().to_string(),
+                pr: None,
+                time: c.time().seconds(),
+                ord,
+                subject: c.summary().ok().flatten().unwrap_or("").to_string(),
+            })
+            .collect();
+        let (pulls, read, body) = read_pulls(&api, f, &changes, &records, opts.reasons);
+        // The pull request a change arrived through names changes whose subject does not.
+        for r in records
+            .iter_mut()
+            .chain(&mut tightenings)
+            .chain(&mut protected)
+        {
+            if r.pr.is_none() {
+                r.pr = pulls.iter().find(|p| p.sha == r.sha).map(|p| p.pr);
+            }
+        }
+        records.extend(body);
+        records.sort_by_key(|r| r.ord);
+        (pulls, Some(read))
+    } else {
+        (Vec::new(), None)
+    };
     let mut s = Summary::from_records(reference, commits.len(), records, tightenings);
     s.tip = tip.to_string();
     s.protected_edits = protected;
-    s.links = forge_links(&repo);
+    s.links = forge.ok().map(|f| Links::for_forge(&f));
+    if let Some(read) = read {
+        forge_checks(&mut s.checks, &read, &pulls, &s.records);
+        s.forge = Some(read);
+    }
+    s.pulls = pulls;
     Ok(s)
 }
 
-/// Web links from the `origin` remote, the same detection `replay` uses; nothing is read
+/// The merged pull request of each change: its body's directives, and whether another
+/// login approved it. A change the forge cannot answer for is counted, never guessed.
+pub fn read_pulls(
+    api: &dyn crate::forge::ForgeApi,
+    forge: &crate::forge::Forge,
+    changes: &[ChangeInfoRef],
+    records: &[Record],
+    reasons: bool,
+) -> (Vec<Pull>, ForgeRead, Vec<Record>) {
+    let mut pulls = Vec::new();
+    let mut body_records = Vec::new();
+    let mut read = ForgeRead::default();
+    for c in changes {
+        read.changes += 1;
+        let found =
+            crate::forge::merged_pull_for_commit(api, forge, &c.sha).and_then(|m| match m {
+                None => Ok(None),
+                Some(m) => crate::forge::pull_approvers(api, forge, m.number, &m.head_sha)
+                    .map(|approvers| Some((m, approvers))),
+            });
+        match found {
+            Ok(None) => {}
+            Ok(Some((m, approvers))) => {
+                read.pulls += 1;
+                let info = ChangeInfoRef {
+                    pr: Some(m.number),
+                    ..c.clone()
+                };
+                let from_commit: Vec<Record> =
+                    records.iter().filter(|r| r.sha == c.sha).cloned().collect();
+                body_records.extend(pull_body_records(&m.body, &info, reasons, &from_commit));
+                pulls.push(Pull {
+                    sha: c.sha.clone(),
+                    pr: m.number,
+                    approved_by_other: approvers.iter().any(|a| !a.eq_ignore_ascii_case(&m.author)),
+                });
+            }
+            Err(e) => {
+                read.failed += 1;
+                read.error.get_or_insert(e);
+            }
+        }
+    }
+    (pulls, read, body_records)
+}
+
+/// The checks `--forge` answers: pull-request-body directives and independent review.
+/// A read that failed for any change leaves them not checked, with the reason.
+pub fn forge_checks(checks: &mut [Check], read: &ForgeRead, pulls: &[Pull], records: &[Record]) {
+    let set = |checks: &mut [Check], id: &str, state: &'static str, detail: String| {
+        if let Some(c) = checks.iter_mut().find(|c| c.id == id) {
+            c.state = state;
+            c.detail = detail;
+        }
+    };
+    if read.failed > 0 {
+        let why = format!(
+            "the forge could not answer for {} of {} changes: {}",
+            read.failed,
+            read.changes,
+            read.error.as_deref().unwrap_or("")
+        );
+        set(
+            checks,
+            "pull-request-body-directives",
+            "not-checked",
+            why.clone(),
+        );
+        set(checks, "independent-review", "not-checked", why);
+        return;
+    }
+    let n = pulls.len();
+    let prs = crate::audit_html::plural(n, "pull request", "pull requests");
+    let body = records
+        .iter()
+        .filter(|r| r.source == Some("pull-request-body"))
+        .count();
+    if body > 0 {
+        set(
+            checks,
+            "pull-request-body-directives",
+            "found",
+            format!("{body} in {prs}, beyond the commit messages"),
+        );
+    } else {
+        set(
+            checks,
+            "pull-request-body-directives",
+            "clean",
+            format!("none beyond the commit messages, in {prs}"),
+        );
+    }
+    let unreviewed = pulls.iter().filter(|p| !p.approved_by_other).count();
+    if n == 0 {
+        set(
+            checks,
+            "independent-review",
+            "clean",
+            "no change arrived through a pull request".to_string(),
+        );
+    } else if unreviewed > 0 {
+        set(
+            checks,
+            "independent-review",
+            "found",
+            format!("{unreviewed} of {prs} merged with no approval from another login"),
+        );
+    } else {
+        set(
+            checks,
+            "independent-review",
+            "clean",
+            format!("every one of {prs} approved by another login"),
+        );
+    }
+}
+
+/// The forge the `origin` remote names, the same detection `replay` uses; nothing is read
 /// from the network.
-fn forge_links(repo: &Repository) -> Option<Links> {
+fn detect_forge(repo: &Repository) -> Result<crate::forge::Forge, String> {
     let origin = repo
         .find_remote("origin")
         .ok()
         .and_then(|r| r.url().ok().map(str::to_string))
         .map(|o| crate::forge::resolve_ssh_alias(&o, &|a| crate::forge::ssh_hostname_from_home(a)));
     crate::forge::detect(&|k| std::env::var(k).ok(), origin.as_deref())
-        .ok()
-        .map(|f| Links::for_forge(&f))
 }
 
 #[cfg(test)]
@@ -1468,5 +1700,141 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("not-checked owner-ratification"), "{text}");
+    }
+
+    fn canned(entries: &[(&str, serde_json::Value)]) -> crate::forge::CannedApi {
+        let mut api = crate::forge::CannedApi::default();
+        for (k, v) in entries {
+            api.responses.insert((*k).to_string(), v.clone());
+        }
+        api
+    }
+
+    fn github() -> crate::forge::Forge {
+        crate::forge::Forge {
+            kind: crate::forge::ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        }
+    }
+
+    #[test]
+    fn pull_requests_add_body_directives_and_say_who_approved() {
+        let a = at(0, None);
+        let b = at(1, None);
+        let pr = |n: u64, body: &str| serde_json::json!([{"number": n, "merged_at": "2026-09-20T00:00:00Z", "user": {"login": "dev"}, "body": body, "head": {"sha": format!("h{n}")}}]);
+        let api = canned(&[
+            (
+                &format!("github:repos/o/r/commits/{}/pulls", a.sha),
+                pr(
+                    8,
+                    "Refs #1\n\nallow-dependency: serde parser\nno-issue: bookkeeping\n",
+                ),
+            ),
+            (
+                "github:repos/o/r/pulls/8/reviews?per_page=100",
+                serde_json::json!([
+                    {"user": {"login": "dev"}, "state": "APPROVED", "commit_id": "h8"},
+                    {"user": {"login": "lead"}, "state": "APPROVED", "commit_id": "h8"}
+                ]),
+            ),
+            // #9's only approval is its author's own, on its head.
+            (
+                &format!("github:repos/o/r/commits/{}/pulls", b.sha),
+                pr(9, "no directive here"),
+            ),
+            (
+                "github:repos/o/r/pulls/9/reviews?per_page=100",
+                serde_json::json!([
+                    {"user": {"login": "DEV"}, "state": "APPROVED", "commit_id": "h9"}
+                ]),
+            ),
+        ]);
+        // The commit message already carries the `no-issue` line: only the other is new.
+        let from_commit = directive_records("s\n\nno-issue: bookkeeping", &a, false);
+        let (pulls, read, body) = read_pulls(&api, &github(), &[a.clone(), b], &from_commit, false);
+        assert_eq!((read.changes, read.pulls, read.failed), (2, 2, 0));
+        assert_eq!(
+            pulls
+                .iter()
+                .map(|p| (p.pr, p.approved_by_other))
+                .collect::<Vec<_>>(),
+            vec![(8, true), (9, false)]
+        );
+        assert_eq!(body.len(), 1, "{body:?}");
+        assert_eq!(
+            (
+                body[0].directive.as_deref(),
+                body[0].source,
+                body[0].pr,
+                body[0].tier
+            ),
+            (
+                Some("allow-dependency"),
+                Some("pull-request-body"),
+                Some(8),
+                "C"
+            )
+        );
+        let mut checks = signals(&body, &[]).1;
+        forge_checks(&mut checks, &read, &pulls, &body);
+        let state = |id: &str| {
+            checks
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| (c.state, c.detail.clone()))
+                .unwrap()
+        };
+        assert_eq!(state("pull-request-body-directives").0, "found");
+        assert_eq!(
+            state("independent-review"),
+            (
+                "found",
+                "1 of 2 pull requests merged with no approval from another login".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn a_forge_that_cannot_answer_leaves_the_questions_not_checked() {
+        let a = at(0, None);
+        let api = canned(&[(
+            &format!("github:repos/o/r/commits/{}/pulls", a.sha),
+            serde_json::json!({"__status": 500}),
+        )]);
+        let (pulls, read, body) = read_pulls(&api, &github(), &[a], &[], false);
+        assert!(pulls.is_empty() && body.is_empty());
+        assert_eq!((read.changes, read.failed), (1, 1));
+        let mut checks = signals(&[], &[]).1;
+        forge_checks(&mut checks, &read, &pulls, &[]);
+        let review = checks
+            .iter()
+            .find(|c| c.id == "independent-review")
+            .unwrap();
+        assert_eq!(review.state, "not-checked");
+        assert!(
+            review
+                .detail
+                .starts_with("the forge could not answer for 1 of 1 changes"),
+            "{}",
+            review.detail
+        );
+        // A direct push (no merged pull request) is read, and clean.
+        let d = at(1, None);
+        let api = canned(&[(
+            &format!("github:repos/o/r/commits/{}/pulls", d.sha),
+            serde_json::json!([]),
+        )]);
+        let (pulls, read, _) = read_pulls(&api, &github(), &[d], &[], false);
+        let mut checks = signals(&[], &[]).1;
+        forge_checks(&mut checks, &read, &pulls, &[]);
+        assert_eq!(
+            checks
+                .iter()
+                .find(|c| c.id == "independent-review")
+                .unwrap()
+                .state,
+            "clean"
+        );
     }
 }

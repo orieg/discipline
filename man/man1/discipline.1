@@ -818,7 +818,7 @@ List the escape hatches the last N merged changes carried: directives, configura
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline audit\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-reasons\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline audit\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-forge\fR] [\fB\-\-reasons\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -850,6 +850,9 @@ html
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
 Write the output to this file instead of stdout
+.TP
+\fB\-\-forge\fR
+Read each change\*(Aqs merged pull request from the forge (its body\*(Aqs directives, and whether another login approved it); needs a token that can read pull requests
 .TP
 \fB\-\-reasons\fR
 Include each directive\*(Aqs reason text (by default only its SHA\-256 and length)

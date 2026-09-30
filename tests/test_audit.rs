@@ -227,3 +227,99 @@ fn signals_rank_what_needs_a_decision_and_a_tightening_restores_a_loosening() {
         text.stdout
     );
 }
+
+#[test]
+fn forge_reads_add_pull_request_body_waivers_and_review_state() {
+    let repo = history();
+    let three = repo.git_output(&["rev-parse", "HEAD~3"]).trim().to_string();
+    let api = common::FakeForge::start();
+    // #3's pull request carries the waiver its commit message lacks; nobody else approved.
+    api.serve(
+        &format!("repos/o/r/commits/{three}/pulls"),
+        serde_json::json!([{
+            "number": 3, "merged_at": "2026-09-21T00:00:00Z", "user": {"login": "dev"},
+            "body": "allow-gate-weakening: pii exempt b/ fixtures", "head": {"sha": "h3"}
+        }]),
+    );
+    api.serve(
+        "repos/o/r/pulls/3/reviews?per_page=100",
+        serde_json::json!([]),
+    );
+    for rev in ["HEAD", "HEAD~1", "HEAD~2", "HEAD~4"] {
+        let sha = repo.git_output(&["rev-parse", rev]).trim().to_string();
+        api.serve(
+            &format!("repos/o/r/commits/{sha}/pulls"),
+            serde_json::json!([]),
+        );
+    }
+    let url = api.url();
+    let env = [
+        ("GITHUB_REPOSITORY", "o/r"),
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("GITHUB_TOKEN", "t"),
+    ];
+    let run = repo.run(
+        &["audit", "--last", "5", "--ref", "main", "--json", "--forge"],
+        &env,
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let s: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(s["forge"]["pulls"], 1, "{s:#}");
+    assert_eq!(
+        s["pulls"],
+        serde_json::json!([{"sha": three, "pr": 3, "approved_by_other": false}])
+    );
+    let body: Vec<&Value> = s["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["source"] == "pull-request-body")
+        .collect();
+    assert_eq!(body.len(), 1, "{s:#}");
+    assert_eq!(body[0]["directive"], "allow-gate-weakening");
+    // The pull-request body's waiver answers `loosening-without-waiver` for #3.
+    assert!(
+        !signal_ids(&s).contains(&"loosening-without-waiver".to_string()),
+        "{s:#}"
+    );
+    let state = |id: &str| {
+        s["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap()["state"]
+            .clone()
+    };
+    assert_eq!(state("independent-review"), "found");
+    assert_eq!(state("pull-request-body-directives"), "found");
+    assert!(!run.stdout.contains("fixtures"), "reason text stays out");
+
+    // No network: every read fails, and the questions stay not checked.
+    let off = repo.run(
+        &["audit", "--last", "5", "--ref", "main", "--json", "--forge"],
+        &[
+            ("GITHUB_REPOSITORY", "o/r"),
+            ("DISCIPLINE_FORGE_API_URL", "https://api.example.invalid"),
+        ],
+    );
+    assert_eq!(off.code, 0, "{}", off.stderr);
+    let s: Value = serde_json::from_str(&off.stdout).unwrap();
+    assert_eq!(s["forge"]["failed"], 5, "{s:#}");
+    let review = s["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "independent-review")
+        .unwrap()
+        .clone();
+    assert_eq!(review["state"], "not-checked", "{s:#}");
+}
+
+#[test]
+fn forge_reads_with_no_forge_to_read_are_exit_2() {
+    let repo = history();
+    let run = repo.run(&["audit", "--last", "1", "--ref", "main", "--forge"], &[]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(run.stderr.contains("--forge"), "{}", run.stderr);
+}
