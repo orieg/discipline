@@ -485,6 +485,28 @@ pub struct Summary {
     pub issues: Vec<IssueFact>,
     /// What `--forge` read; `None` without it.
     pub forge: Option<ForgeRead>,
+    /// For each change with an exception (a record or a protected edit), newest first:
+    /// whether anything records that an agent made it.
+    pub identities: Vec<Identity>,
+}
+
+/// Whether a change carries any record that an agent made it. A missing record is
+/// `no-record`, never a person: agents can commit under a person's identity.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Identity {
+    pub sha: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u64>,
+    /// `agent-login` (with `--forge`, its pull request was opened by an `agent_logins`
+    /// or `[bot]` login), `claimed` (a commit carries a `commit-provenance` agent marker,
+    /// which the commit asserts and nothing verifies), or `no-record`.
+    pub state: &'static str,
+    /// A `commit-provenance` agent marker matched the commit's trailers or author.
+    pub marker: bool,
+    /// Its pull request's author is an agent login; absent without `--forge` or a pull
+    /// request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_login: Option<bool>,
 }
 
 /// A change's merged pull request, as the forge reported it. Logins are not carried.
@@ -1140,7 +1162,25 @@ pub fn run(opts: &Options) -> Result<Summary> {
     let mut records = Vec::new();
     let mut tightenings = Vec::new();
     let mut protected = Vec::new();
+    let tip_config = blob_text(&repo, &repo.find_commit(tip)?.tree()?, CONFIG_NAME)?
+        .and_then(|t| DisciplineConfig::from_toml_str(&t).ok())
+        .unwrap_or_else(|| DisciplineConfig::default_for_repo("audit"));
+    let mut marked = std::collections::BTreeSet::new();
     for (ord, c) in commits.iter().enumerate() {
+        let detail = crate::gitctx::CommitDetail {
+            sha: c.id().to_string(),
+            author_name: c.author().name().unwrap_or("").to_string(),
+            author_email: c.author().email().unwrap_or("").to_string(),
+            committer_email: c.committer().email().unwrap_or("").to_string(),
+            message: c.message().unwrap_or("").to_string(),
+        };
+        if crate::guards::commit_provenance::is_agent_commit(
+            &detail,
+            &crate::guards::commit_provenance::trailers(&detail.message),
+            &tip_config.gates.commit_provenance.agent_markers,
+        ) {
+            marked.insert(detail.sha);
+        }
         let (r, t, p) = change_records(&repo, c, ord, opts.reasons)
             .with_context(|| format!("cannot read change {}", c.id()))?;
         records.extend(r);
@@ -1210,9 +1250,93 @@ pub fn run(opts: &Options) -> Result<Summary> {
         forge_checks(&mut s.checks, &read, &pulls, &s.records);
         s.forge = Some(read);
     }
+    s.identities = identities(
+        &s.records,
+        &s.protected_edits,
+        &marked,
+        s.forge.as_ref().map(|_| pulls.as_slice()),
+        &tip_config.gates.ratified_paths.agent_logins,
+    );
+    identity_check(&mut s.checks, &s.identities, s.forge.is_some());
     s.pulls = pulls;
     s.issues = issues;
     Ok(s)
+}
+
+/// One [`Identity`] per change with a record or a protected edit, newest first. `pulls`
+/// is `Some` when the forge was read.
+pub fn identities(
+    records: &[Record],
+    protected: &[Record],
+    marked: &std::collections::BTreeSet<String>,
+    pulls: Option<&[Pull]>,
+    agent_logins: &[String],
+) -> Vec<Identity> {
+    let mut changes: Vec<(&str, Option<u64>, usize)> = Vec::new();
+    for r in records.iter().chain(protected) {
+        if !changes.iter().any(|(s, _, _)| *s == r.sha) {
+            changes.push((&r.sha, r.pr, r.ord));
+        }
+    }
+    changes.sort_by_key(|(_, _, ord)| *ord);
+    changes
+        .into_iter()
+        .map(|(sha, pr, _)| {
+            let marker = marked.contains(sha);
+            let agent_login = pulls.and_then(|ps| {
+                ps.iter().find(|p| p.sha == sha).map(|p| {
+                    p.author.ends_with("[bot]")
+                        || agent_logins
+                            .iter()
+                            .any(|a| a.eq_ignore_ascii_case(&p.author))
+                })
+            });
+            Identity {
+                sha: sha.to_string(),
+                pr,
+                state: match (agent_login, marker) {
+                    (Some(true), _) => "agent-login",
+                    (_, true) => "claimed",
+                    _ => "no-record",
+                },
+                marker,
+                agent_login,
+            }
+        })
+        .collect()
+}
+
+/// `agent-identity`: `found` when a change with an exception carries an agent record,
+/// else `not-checked`. Never `clean`, since a missing record does not show a person.
+pub fn identity_check(checks: &mut [Check], ids: &[Identity], forge: bool) {
+    let Some(c) = checks.iter_mut().find(|c| c.id == "agent-identity") else {
+        return;
+    };
+    let n = ids.len();
+    let changes = crate::audit_html::plural(n, "change", "changes");
+    let login = ids.iter().filter(|i| i.state == "agent-login").count();
+    let claimed = ids.iter().filter(|i| i.state == "claimed").count();
+    let sources = if forge {
+        "a commit's agent marker or an agent login"
+    } else {
+        "a commit's agent marker; agent logins are read with `--forge`"
+    };
+    if n == 0 {
+        c.state = "not-checked";
+        c.detail = "no change with an exception to attribute".to_string();
+    } else if login + claimed == 0 {
+        c.state = "not-checked";
+        c.detail = format!(
+            "none of the {changes} with an exception carries a record of an agent ({sources}); a missing record does not mean a person made the change"
+        );
+    } else {
+        c.state = "found";
+        c.detail = format!(
+            "{} of the {changes} with an exception carry an agent record: {login} from an agent login, {claimed} claimed by the commit (a marker it asserts, not verified); the other {} have none, which does not mean a person made them",
+            login + claimed,
+            n - login - claimed
+        );
+    }
 }
 
 /// Why a ratifying issue does not count: it was closed before the merge, so the gate
@@ -2519,6 +2643,88 @@ mod tests {
                 "1 of 2 pull requests merged with no approval from another login".to_string()
             )
         );
+    }
+
+    #[test]
+    fn a_change_without_an_agent_record_is_never_read_as_a_person() {
+        // Four changes with a waiver each, newest first, plus a protected edit.
+        let records: Vec<Record> = (0..4)
+            .flat_map(|o| {
+                directive_records("s\n\nno-issue: chore", &at(o, Some(10 + o as u64)), false)
+            })
+            .collect();
+        let mut edit = records[0].clone();
+        edit.sha = at(4, None).sha;
+        edit.ord = 4;
+        edit.pr = None;
+        let marked: std::collections::BTreeSet<String> =
+            [at(1, None).sha, at(2, None).sha].into_iter().collect();
+        let pull = |o: usize, author: &str| Pull {
+            sha: at(o, None).sha,
+            pr: 10 + o as u64,
+            approved_by_other: false,
+            body_edited_after_merge: None,
+            merged_at: None,
+            author: author.into(),
+            body: String::new(),
+        };
+        // #10 by an agent login, #11 marked and opened by the owner, #12 marked and
+        // opened by a bot, #13 neither; the protected edit was pushed directly.
+        let pulls = vec![
+            pull(0, "Agent"),
+            pull(1, "owner"),
+            pull(2, "dependabot[bot]"),
+            pull(3, "owner"),
+        ];
+        let ids = identities(
+            &records,
+            &[edit.clone()],
+            &marked,
+            Some(&pulls),
+            &["agent".to_string()],
+        );
+        assert_eq!(
+            ids.iter()
+                .map(|i| (i.pr, i.state, i.marker, i.agent_login))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some(10), "agent-login", false, Some(true)),
+                (Some(11), "claimed", true, Some(false)),
+                (Some(12), "agent-login", true, Some(true)),
+                (Some(13), "no-record", false, Some(false)),
+                (None, "no-record", false, None),
+            ]
+        );
+        let check = |ids: &[Identity], forge: bool| {
+            let mut checks = signals(&[], &[]).1;
+            identity_check(&mut checks, ids, forge);
+            checks
+                .into_iter()
+                .find(|c| c.id == "agent-identity")
+                .map(|c| (c.state, c.detail))
+                .unwrap()
+        };
+        let (state, detail) = check(&ids, true);
+        assert_eq!(state, "found");
+        assert_eq!(
+            detail,
+            "3 of the 5 changes with an exception carry an agent record: 2 from an agent login, \
+             1 claimed by the commit (a marker it asserts, not verified); the other 2 have none, \
+             which does not mean a person made them"
+        );
+        // Without the forge, only markers count, and no record is never `clean`.
+        let offline = identities(&records, &[], &Default::default(), None, &[]);
+        assert!(offline
+            .iter()
+            .all(|i| i.state == "no-record" && i.agent_login.is_none()));
+        let (state, detail) = check(&offline, false);
+        assert_eq!(state, "not-checked");
+        assert!(
+            detail.contains("does not mean a person made the change")
+                && detail.contains("agent logins are read with `--forge`"),
+            "{detail}"
+        );
+        assert_eq!(check(&[], false).0, "not-checked");
     }
 
     #[test]

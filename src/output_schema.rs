@@ -293,7 +293,7 @@ pub fn audit_schema() -> Value {
         "description": "The records `discipline audit --json` prints: one per escape hatch a merged change carried, read from git objects only. A record says what was claimed or applied, not whether a check honoured it.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["schema_version", "version", "reference", "tip", "links", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings", "protected_edits", "pulls", "issues", "forge"],
+        "required": ["schema_version", "version", "reference", "tip", "links", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings", "protected_edits", "pulls", "issues", "forge", "identities"],
         "properties": {
             "schema_version": { "const": AUDIT_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
             "version": text("The discipline version that wrote the report"),
@@ -335,6 +335,22 @@ pub fn audit_schema() -> Value {
                         "pr": { "type": "integer", "minimum": 1 },
                         "approved_by_other": { "type": "boolean", "description": "A login other than the pull request's author approved its head" },
                         "body_edited_after_merge": { "type": "boolean", "description": "Its body was edited after the merge (GitHub's `lastEditedAt`), so the directives read from it now may not be the ones the gates read; absent when not known" }
+                    }
+                }
+            },
+            "identities": {
+                "type": "array",
+                "description": "For each change with a record or a protected edit, newest first: whether anything records that an agent made it. A missing record is `no-record`, never a person",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["sha", "state", "marker"],
+                    "properties": {
+                        "sha": text("The change's commit"),
+                        "pr": { "type": "integer", "minimum": 1 },
+                        "state": { "type": "string", "enum": ["agent-login", "claimed", "no-record"], "description": "`agent-login`: with `--forge`, its pull request was opened by an `agent_logins` or `[bot]` login; `claimed`: a commit carries a `commit-provenance` agent marker, asserted by the commit and verified by nothing; `no-record`: neither" },
+                        "marker": { "type": "boolean", "description": "A `commit-provenance` agent marker matched the commit's trailers or author" },
+                        "agent_login": { "type": "boolean", "description": "Its pull request's author is an agent login; absent without `--forge` or a pull request" }
                     }
                 }
             },

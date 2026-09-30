@@ -377,6 +377,46 @@
         "null"
       ]
     },
+    "identities": {
+      "description": "For each change with a record or a protected edit, newest first: whether anything records that an agent made it. A missing record is `no-record`, never a person",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_login": {
+            "description": "Its pull request's author is an agent login; absent without `--forge` or a pull request",
+            "type": "boolean"
+          },
+          "marker": {
+            "description": "A `commit-provenance` agent marker matched the commit's trailers or author",
+            "type": "boolean"
+          },
+          "pr": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sha": {
+            "description": "The change's commit",
+            "type": "string"
+          },
+          "state": {
+            "description": "`agent-login`: with `--forge`, its pull request was opened by an `agent_logins` or `[bot]` login; `claimed`: a commit carries a `commit-provenance` agent marker, asserted by the commit and verified by nothing; `no-record`: neither",
+            "enum": [
+              "agent-login",
+              "claimed",
+              "no-record"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "state",
+          "marker"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "issues": {
       "description": "The issues waivers cite, read with `--forge`; empty otherwise",
       "items": {
@@ -571,7 +611,8 @@
     "protected_edits",
     "pulls",
     "issues",
-    "forge"
+    "forge",
+    "identities"
   ],
   "title": "DisciplineAudit",
   "type": "object"
