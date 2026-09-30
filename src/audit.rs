@@ -1316,14 +1316,21 @@ pub fn citation_signals(records: &[Record], issues: &[IssueFact]) -> Vec<Signal>
             "waiver-cites-issue-closed-before",
             "look-soon",
             "Open the waiver: the issue its reason cites was already closed when it was written, so it tracks nothing.",
-            &|r, f| f.state == "closed" && f.closed_at.is_some_and(|t| t < r.time - 60),
+            // A finding waiver's cited issue is its promise to follow up; a skipped issue
+            // link citing a closed issue is context ("follows #12").
+            &|r, f| {
+                r.class == "detector"
+                    && f.state == "closed"
+                    && f.closed_at.is_some_and(|t| t < r.time - 60)
+            },
         ),
         (
             "waiver-cites-issue-not-planned",
             "review",
             "Decide what replaces the follow-up: the issue the waiver cites was closed as not planned.",
             &|r, f| {
-                f.state == "closed"
+                r.class == "detector"
+                    && f.state == "closed"
                     && f.state_reason.as_deref() == Some("not_planned")
                     && !f.closed_at.is_some_and(|t| t < r.time - 60)
             },
@@ -2647,6 +2654,10 @@ mod tests {
         assert_eq!(hit("waiver-cites-missing-issue"), vec![1]);
         assert_eq!(hit("waiver-cites-issue-closed-before"), vec![2]);
         assert_eq!(hit("waiver-cites-issue-not-planned"), vec![0]);
+        // A skipped issue link citing a closed issue is context, not a promise.
+        let mut context = directive_records("s\n\nno-issue: follows #14", &info(), false);
+        context[0].time = 1_789_862_400;
+        assert!(citation_signals(&context, &issues).is_empty());
         let mut checks = signals(&records, &[]).1;
         issues_check(&mut checks, &records, &issues);
         let c = checks.iter().find(|c| c.id == "cited-issues").unwrap();
