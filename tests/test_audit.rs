@@ -160,3 +160,70 @@ fn a_ref_that_does_not_resolve_is_exit_2() {
     let zero = repo.run(&["audit", "--last", "0"], &[]);
     assert_eq!(zero.code, 2, "{}", zero.stderr);
 }
+
+fn signal_ids(s: &Value) -> Vec<String> {
+    s["signals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn signals_rank_what_needs_a_decision_and_a_tightening_restores_a_loosening() {
+    let repo = history();
+    let s = audit(&repo, &[]);
+    assert_eq!(
+        signal_ids(&s),
+        vec![
+            "loosening-without-waiver",
+            "loosened-not-restored",
+            "baseline-grew"
+        ],
+        "{s:#}"
+    );
+    let first = &s["signals"][0];
+    assert_eq!(first["changes"], serde_json::json!(["#3"]));
+    assert_eq!(first["rank"], "review");
+    assert!(first["next"]
+        .as_str()
+        .unwrap()
+        .contains("pull request body"));
+    // Every signal has a state, and what git cannot tell is named, not left out.
+    let state = |id: &str| {
+        s["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .map(|c| c["state"].as_str().unwrap().to_string())
+    };
+    assert_eq!(state("guard-gate-loosened").as_deref(), Some("clean"));
+    assert_eq!(state("baseline-grew").as_deref(), Some("found"));
+    assert_eq!(state("owner-ratification").as_deref(), Some("not-checked"));
+
+    // #7 restores `exempt_paths`: the loosening is paid back.
+    repo.write("discipline.toml", CONFIG);
+    repo.commit("chore: drop the b exemption (#7)");
+    let run = repo.run(&["audit", "--last", "6", "--ref", "main", "--json"], &[]);
+    let s: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert!(
+        !signal_ids(&s).contains(&"loosened-not-restored".to_string()),
+        "{s:#}"
+    );
+    assert_eq!(s["tightenings"][0]["pr"], 7, "{s:#}");
+    assert_eq!(s["tightenings"][0]["key"], "exempt_paths");
+
+    let text = repo.run(&["audit", "--last", "6", "--ref", "main"], &[]);
+    assert!(
+        text.stdout.starts_with("Needs a decision:\n"),
+        "{}",
+        text.stdout
+    );
+    assert!(
+        text.stdout.contains("not-checked independent-review"),
+        "{}",
+        text.stdout
+    );
+}

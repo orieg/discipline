@@ -291,7 +291,7 @@ pub fn audit_schema() -> Value {
         "description": "The records `discipline audit --json` prints: one per escape hatch a merged change carried, read from git objects only. A record says what was claimed or applied, not whether a check honoured it.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["schema_version", "reference", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "records"],
+        "required": ["schema_version", "reference", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings"],
         "properties": {
             "schema_version": { "const": AUDIT_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
             "reference": text("The ref audited, as given or defaulted"),
@@ -300,10 +300,36 @@ pub fn audit_schema() -> Value {
             "by_kind": { "description": "Kind -> record count", "$ref": "#/$defs/Counts" },
             "by_class": { "description": "Class -> record count", "$ref": "#/$defs/Counts" },
             "by_gate": { "description": "Gate id (or configuration table) -> record count", "$ref": "#/$defs/Counts" },
-            "records": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Newest change first" }
+            "signals": { "type": "array", "items": { "$ref": "#/$defs/Signal" }, "description": "Queries over the records that found something, most urgent first. Review prompts, not verdicts" },
+            "checks": { "type": "array", "items": { "$ref": "#/$defs/Check" }, "description": "Every question the audit asks, with its state: a signal is `found` or `clean`; what git alone cannot tell is `not-checked`" },
+            "records": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Newest change first" },
+            "tightenings": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Tightenings of `discipline.toml` (`kind` `config-tightening`), newest first: `before` is the looser value" }
         },
         "$defs": {
             "Counts": counts,
+            "Signal": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "rank", "count", "changes", "records", "next"],
+                "properties": {
+                    "id": { "enum": ["guard-gate-loosened", "hidden-directive", "config-unreadable", "loosened-without-pull-request", "loosening-without-waiver", "waived-then-loosened", "loosened-not-restored", "baseline-grew"] },
+                    "rank": { "enum": ["look-first", "look-soon", "review"] },
+                    "count": { "type": "integer", "minimum": 1, "description": "Records the signal is about" },
+                    "changes": { "type": "array", "items": { "type": "string" }, "description": "The changes they are in, newest first (`#N`, else a 10-character commit id)" },
+                    "records": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "Indexes into `records`" },
+                    "next": text("The next action a reviewer takes")
+                }
+            },
+            "Check": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "state", "detail"],
+                "properties": {
+                    "id": text("A signal id, or a question git alone cannot answer"),
+                    "state": { "enum": ["found", "clean", "not-checked"] },
+                    "detail": text("What was found, or why it was not checked")
+                }
+            },
             "Record": {
                 "type": "object",
                 "additionalProperties": false,
@@ -312,7 +338,7 @@ pub fn audit_schema() -> Value {
                     "sha": text("Full commit id of the change"),
                     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from the subject's `(#N)`" },
                     "time": { "type": "integer", "description": "Commit time, seconds since the Unix epoch" },
-                    "kind": { "enum": ["directive", "config", "config-unreadable", "baseline", "inline-marker"] },
+                    "kind": { "enum": ["directive", "config", "config-unreadable", "baseline", "inline-marker", "config-tightening"] },
                     "class": { "enum": ["process", "detector", "config", "baseline", "inline"], "description": "`process`: a waiver of a process rule (`no-issue`); `detector`: a waiver of a finding" },
                     "evidence": { "enum": ["claimed", "applied"], "description": "`claimed`: text that asks for an exception; `applied`: a tree change that is one" },
                     "tier": { "enum": ["A", "C"], "description": "Who controls the input: `A` git objects on the audited branch, `C` text the change's author wrote" },
