@@ -120,10 +120,20 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
                 continue;
             }
             let allowed = ctx
-                .find_override(GATE, tokens::ALLOW_VERSION_MISMATCH, &group.name)
+                .find_override(
+                    GATE,
+                    &crate::findings::VERSION_MISMATCH,
+                    tokens::ALLOW_VERSION_MISMATCH,
+                    &group.name,
+                )
                 .or_else(|| {
                     extracted.iter().find_map(|(p, _)| {
-                        ctx.find_override(GATE, tokens::ALLOW_VERSION_MISMATCH, p)
+                        ctx.find_override(
+                            GATE,
+                            &crate::findings::VERSION_MISMATCH,
+                            tokens::ALLOW_VERSION_MISMATCH,
+                            p,
+                        )
                     })
                 });
 

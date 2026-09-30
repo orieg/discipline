@@ -40,8 +40,20 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
             let expected = preset.canary_expected_diagnostic.unwrap_or("Sanitizer");
             if !combined.contains(expected) {
                 if let Some(ov) = ctx
-                    .find_override(GATE, ALLOW_SANITIZERS, "canary")
-                    .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "sanitizers"))
+                    .find_override(
+                        GATE,
+                        &crate::findings::SANITIZER_CANARY_DIAGNOSTIC_MISSING,
+                        ALLOW_SANITIZERS,
+                        "canary",
+                    )
+                    .or_else(|| {
+                        ctx.find_override(
+                            GATE,
+                            &crate::findings::SANITIZER_CANARY_DIAGNOSTIC_MISSING,
+                            ALLOW_SANITIZERS,
+                            "sanitizers",
+                        )
+                    })
                 {
                     out.overrides.push(ov.clone());
                     out.notes.push(format!(
@@ -93,10 +105,36 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
             ));
         }
         if let Some(ov) = ctx
-            .find_override(GATE, ALLOW_SANITIZERS, "failure")
-            .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "sanitizers"))
-            .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "toolchain"))
-            .or_else(|| ctx.find_override(GATE, ALLOW_SANITIZERS, "nightly"))
+            .find_override(
+                GATE,
+                &crate::findings::SANITIZER_VIOLATION_DETECTED,
+                ALLOW_SANITIZERS,
+                "failure",
+            )
+            .or_else(|| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::SANITIZER_VIOLATION_DETECTED,
+                    ALLOW_SANITIZERS,
+                    "sanitizers",
+                )
+            })
+            .or_else(|| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::SANITIZER_VIOLATION_DETECTED,
+                    ALLOW_SANITIZERS,
+                    "toolchain",
+                )
+            })
+            .or_else(|| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::SANITIZER_VIOLATION_DETECTED,
+                    ALLOW_SANITIZERS,
+                    "nightly",
+                )
+            })
         {
             out.overrides.push(ov.clone());
             out.notes.push(format!(

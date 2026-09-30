@@ -59,31 +59,31 @@ pub fn evaluate_pr_checklist(ctx: &Context) -> Result<GateOutcome> {
 
     let claims = find_unsupported_claims(pr_body, has_tests, has_docs, has_benches);
     for claim in claims {
-        if let Some(ov) = ctx.find_override(GATE, ALLOW_PR_CHECKLIST, claim.subject) {
+        let (kind, desc) = match claim.subject {
+            "test" => (
+                &crate::findings::CHECKLIST_CLAIMS_TESTS,
+                "PR checklist claims tests added or extended, but diff adds or extends no test file or test function",
+            ),
+            "docs" => (
+                &crate::findings::CHECKLIST_CLAIMS_DOCS,
+                "PR checklist claims documentation updated, but diff contains zero documentation files",
+            ),
+            "bench" => (
+                &crate::findings::CHECKLIST_CLAIMS_BENCHMARKS,
+                "PR checklist claims benchmarks updated, but diff contains zero benchmark files",
+            ),
+            _ => (
+                &crate::findings::CHECKLIST_CLAIM_UNSUPPORTED,
+                "PR checklist claims unsupported change",
+            ),
+        };
+        if let Some(ov) = ctx.find_override(GATE, kind, ALLOW_PR_CHECKLIST, claim.subject) {
             out.overrides.push(ov.clone());
             out.notes.push(format!(
                 "override applied: `{}: {}` for {} checklist claim ({})",
                 ov.directive, ov.reason, claim.subject, ov.source
             ));
         } else {
-            let (kind, desc) = match claim.subject {
-                "test" => (
-                    &crate::findings::CHECKLIST_CLAIMS_TESTS,
-                    "PR checklist claims tests added or extended, but diff adds or extends no test file or test function",
-                ),
-                "docs" => (
-                    &crate::findings::CHECKLIST_CLAIMS_DOCS,
-                    "PR checklist claims documentation updated, but diff contains zero documentation files",
-                ),
-                "bench" => (
-                    &crate::findings::CHECKLIST_CLAIMS_BENCHMARKS,
-                    "PR checklist claims benchmarks updated, but diff contains zero benchmark files",
-                ),
-                _ => (
-                    &crate::findings::CHECKLIST_CLAIM_UNSUPPORTED,
-                    "PR checklist claims unsupported change",
-                ),
-            };
             out.add_violation(
                 ctx.overridable(settings.severity),
                 kind,

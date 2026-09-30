@@ -194,6 +194,10 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
             if line_allows(line_text, GATE) {
                 out.overrides.push(crate::tokens::OverrideRecord {
                     gate: GATE.to_string(),
+                    code: Some(crate::findings::full_code(
+                        GATE,
+                        &crate::findings::SUPPRESSION_ADDED,
+                    )),
                     subject: format!("{}:{}", file.path, site.line),
                     directive: format!("discipline:allow({GATE})"),
                     reason: "inline exemption marker".to_string(),
@@ -232,7 +236,12 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
 
         let mut applied: Option<(crate::tokens::OverrideRecord, String)> = None;
         for subj in &candidate_subjects {
-            if let Some(ov) = ctx.find_override(GATE, ALLOW_SUPPRESSION, subj) {
+            if let Some(ov) = ctx.find_override(
+                GATE,
+                &crate::findings::SUPPRESSION_ADDED,
+                ALLOW_SUPPRESSION,
+                subj,
+            ) {
                 applied = Some((ov, subj.clone()));
                 break;
             }

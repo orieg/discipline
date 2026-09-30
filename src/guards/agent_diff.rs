@@ -600,17 +600,24 @@ pub(crate) fn report_newly_added_nul_bytes(
         if ff.newly_added_nul {
             if let Some(record) =
                 // The finding lands in the first enabled AST gate: its own marker lifts it.
-                tokens::find_override(directives, out.gate, tokens::ALLOW_NUL, &ff.file.path)
-                        .or_else(|| {
-                            let own = format!("discipline:allow({})", out.gate);
-                            let short = format!("allow({})", out.gate);
-                            tokens::find_override(
-                                directives,
-                                out.gate,
-                                &[own.as_str(), short.as_str()],
-                                &ff.file.path,
-                            )
-                        })
+                tokens::find_override(
+                    directives,
+                    out.gate,
+                    &crate::findings::NUL_BYTE_ADDED,
+                    tokens::ALLOW_NUL,
+                    &ff.file.path,
+                )
+                .or_else(|| {
+                    let own = format!("discipline:allow({})", out.gate);
+                    let short = format!("allow({})", out.gate);
+                    tokens::find_override(
+                        directives,
+                        out.gate,
+                        &crate::findings::NUL_BYTE_ADDED,
+                        &[own.as_str(), short.as_str()],
+                        &ff.file.path,
+                    )
+                })
             {
                 out.overrides.push(record);
                 continue;
@@ -684,24 +691,33 @@ pub fn evaluate_assertion_reduction(
         // For forced pairs (unrelated names forced together), the override directive MUST name
         // the old test that was replaced/gutted. For non-forced pairs (exact name or similarity rename),
         // naming either the old test or the new test is accepted.
-        let allowed = if p.forced {
-            tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(b))
-                .or_else(|| {
-                    tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, p.path)
-                })
+        // The finding the override lifts, as the report below would rank it: the drop
+        // (fewer assertions, weaker fatal ones, or doubles grown alone), else a loosened
+        // bound. One directive lifts every finding of the pair; the record names the first.
+        let lifts = if total_drop || strong_drop {
+            &crate::findings::ASSERTIONS_REDUCED
+        } else if fatal_drop {
+            &crate::findings::FATAL_ASSERTIONS_WEAKENED
+        } else if mock_growth {
+            &crate::findings::MOCKING_INCREASED
         } else {
-            tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, leaf_name(h))
-                .or_else(|| {
-                    tokens::find_override(
-                        directives,
-                        GATE,
-                        tokens::ALLOW_ASSERTION_DROP,
-                        leaf_name(b),
-                    )
-                })
-                .or_else(|| {
-                    tokens::find_override(directives, GATE, tokens::ALLOW_ASSERTION_DROP, p.path)
-                })
+            &crate::findings::ASSERTION_BOUND_LOOSENED
+        };
+        let lift = |subject: &str| {
+            tokens::find_override(
+                directives,
+                GATE,
+                lifts,
+                tokens::ALLOW_ASSERTION_DROP,
+                subject,
+            )
+        };
+        let allowed = if p.forced {
+            lift(leaf_name(b)).or_else(|| lift(p.path))
+        } else {
+            lift(leaf_name(h))
+                .or_else(|| lift(leaf_name(b)))
+                .or_else(|| lift(p.path))
         };
         if let Some(record) = allowed {
             out.overrides.push(record);
@@ -831,10 +847,34 @@ pub fn evaluate_vacuous_tests(
     out.examined = added.len();
 
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
+        // The finding this test would raise, in the order the checks below report it;
+        // a sound test raises none, and a directive naming it lifts nothing.
+        let mocks_only = a.test.mock_asserts > 0
+            && a.test.mock_asserts >= a.test.effective_asserts()
+            && a.test.strong_asserts == 0
+            && !a.test.should_panic;
+        let trivial_only = a.test.trivial_asserts > 0
+            && a.test.trivial_asserts >= a.test.effective_asserts()
+            && !a.test.should_panic;
+        let below_floor = settings
+            .min_assertions_per_test
+            .is_some_and(|min| a.test.effective_asserts() < min);
+        let lifts = if mocks_only {
+            &crate::findings::ASSERTS_ONLY_ON_MOCKS
+        } else if trivial_only {
+            &crate::findings::ASSERTS_ONLY_TRIVIAL
+        } else if a.test.is_vacuous() {
+            &crate::findings::VACUOUS_TEST_ADDED
+        } else if below_floor {
+            &crate::findings::ASSERTION_DENSITY_BELOW_FLOOR
+        } else {
+            continue;
+        };
         // `allow-vacuous-test: <test> <reason>` lifts every finding on that one test.
         if let Some(record) = tokens::find_override(
             directives,
             GATE,
+            lifts,
             tokens::ALLOW_VACUOUS_TEST,
             leaf_name(a.test),
         ) {
@@ -947,9 +987,18 @@ pub fn evaluate_ignored_tests(
         if exempt.matches(path) {
             continue;
         }
-        if let Some(record) =
-            tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
-        {
+        let lifts = if arrives_ignored {
+            &crate::findings::IGNORED_TEST_ADDED
+        } else {
+            &crate::findings::EXISTING_TEST_SKIPPED
+        };
+        if let Some(record) = tokens::find_override(
+            directives,
+            GATE,
+            lifts,
+            tokens::ALLOW_IGNORE,
+            leaf_name(test),
+        ) {
             let subject = leaf_name(test);
             let cleaned = record.reason.trim().trim_matches(['"', '\'', '`']);
             let explanation = cleaned
@@ -1027,9 +1076,13 @@ pub fn evaluate_ignored_tests(
         if exempt.matches(path) {
             continue;
         }
-        if let Some(record) =
-            tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
-        {
+        if let Some(record) = tokens::find_override(
+            directives,
+            GATE,
+            &crate::findings::TEST_SLEEP_ADDED,
+            tokens::ALLOW_IGNORE,
+            leaf_name(test),
+        ) {
             out.overrides.push(record);
             continue;
         }
@@ -1063,9 +1116,13 @@ pub fn evaluate_ignored_tests(
         if exempt.matches(path) {
             continue;
         }
-        if let Some(record) =
-            tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
-        {
+        if let Some(record) = tokens::find_override(
+            directives,
+            GATE,
+            &crate::findings::TEST_RETRY_ADDED,
+            tokens::ALLOW_IGNORE,
+            leaf_name(test),
+        ) {
             out.overrides.push(record);
             continue;
         }
@@ -1116,9 +1173,13 @@ pub fn evaluate_ignored_tests(
         {
             continue;
         }
-        if let Some(record) =
-            tokens::find_override(directives, GATE, tokens::ALLOW_IGNORE, leaf_name(test))
-        {
+        if let Some(record) = tokens::find_override(
+            directives,
+            GATE,
+            &crate::findings::TEST_CONDITIONALLY_SKIPPED,
+            tokens::ALLOW_IGNORE,
+            leaf_name(test),
+        ) {
             out.overrides.push(record);
             continue;
         }
@@ -1225,13 +1286,16 @@ pub fn evaluate_deletion_rationale(
     };
     let mut out = GateOutcome::new(GATE);
 
-    let check_override = |subject: &str,
+    // `lifts`: the finding the deletion would raise (a deleted file or a removed test).
+    let check_override = |lifts: &crate::findings::FindingKind,
+                          subject: &str,
                           alt_subject: Option<&str>|
      -> Option<crate::tokens::OverrideRecord> {
         let rec = if settings.require_scope {
-            tokens::find_override(directives, GATE, tokens::REMOVES, subject).or_else(|| {
-                alt_subject
-                    .and_then(|alt| tokens::find_override(directives, GATE, tokens::REMOVES, alt))
+            tokens::find_override(directives, GATE, lifts, tokens::REMOVES, subject).or_else(|| {
+                alt_subject.and_then(|alt| {
+                    tokens::find_override(directives, GATE, lifts, tokens::REMOVES, alt)
+                })
             })
         } else {
             directives
@@ -1243,6 +1307,7 @@ pub fn evaluate_deletion_rationale(
                 })
                 .map(|d| crate::tokens::OverrideRecord {
                     gate: GATE.to_string(),
+                    code: Some(crate::findings::full_code(GATE, lifts)),
                     subject: subject.to_string(),
                     directive: d.directive.clone(),
                     reason: d.reason.clone(),
@@ -1264,7 +1329,11 @@ pub fn evaluate_deletion_rationale(
             continue;
         }
         out.examined += 1;
-        if let Some(record) = check_override(&file.path, None) {
+        if let Some(record) = check_override(
+            &crate::findings::FILE_DELETED_WITHOUT_RATIONALE,
+            &file.path,
+            None,
+        ) {
             out.overrides.push(record);
             continue;
         }
@@ -1294,7 +1363,11 @@ pub fn evaluate_deletion_rationale(
             continue;
         }
         out.examined += 1;
-        if let Some(record) = check_override(leaf_name(r.test), Some(r.path)) {
+        if let Some(record) = check_override(
+            &crate::findings::TEST_REMOVED_WITHOUT_RATIONALE,
+            leaf_name(r.test),
+            Some(r.path),
+        ) {
             out.overrides.push(record);
             continue;
         }

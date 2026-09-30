@@ -759,7 +759,7 @@ fn lock_violation(
     subject: &str,
     message: String,
 ) {
-    if let Some(rec) = ctx.find_override(GATE, tokens::ALLOW_DEPENDENCY, subject) {
+    if let Some(rec) = ctx.find_override(GATE, kind, tokens::ALLOW_DEPENDENCY, subject) {
         outcome.overrides.push(rec);
         return;
     }
@@ -1198,8 +1198,11 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             }
 
             // Check override directive covering this dependency
-            if !dep_violations.is_empty() {
-                if let Some(rec) = ctx.find_override(GATE, tokens::ALLOW_DEPENDENCY, &h.name) {
+            // One directive lifts every finding of the dependency; the record names the
+            // first, as the report would list it.
+            if let Some((lifts, _, _)) = dep_violations.first() {
+                if let Some(rec) = ctx.find_override(GATE, lifts, tokens::ALLOW_DEPENDENCY, &h.name)
+                {
                     outcome.overrides.push(rec);
                 } else {
                     for (title, msg, rem) in dep_violations {

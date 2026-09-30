@@ -206,7 +206,10 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
     let exempt = PathFilter::new(&settings.exempt_paths)?;
     let registry = default_registry();
     let vocab = super::agent_diff::assert_vocabulary(ctx.config);
-    let lift = |subject: &str| ctx.find_override(GATE, tokens::ALLOW_SMUGGLING, subject);
+    // `lifts`: the finding the caller would report.
+    let lift = |lifts: &crate::findings::FindingKind, subject: &str| {
+        ctx.find_override(GATE, lifts, tokens::ALLOW_SMUGGLING, subject)
+    };
     let own_files = PathFilter::new(&settings.instruction_files)?;
     let instructs = |p: &str| is_instruction_file(p) || own_files.matches(p);
     // A path `agent-scratch` reports as tracked scratch state (`.claude/*.lock`) is not
@@ -227,8 +230,13 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         if file.kind == ChangeKind::Deleted {
             if instructs(&file.path) && !is_scratch(&file.path) && !ctx.git.is_whole_tree() {
                 out.examined += 1;
-                if let Some(ov) =
-                    lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
+                if let Some(ov) = lift(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path)
+                    .or_else(|| {
+                        file.path
+                            .rsplit('/')
+                            .next()
+                            .and_then(|n| lift(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, n))
+                    })
                 {
                     out.overrides.push(ov);
                 } else {
@@ -267,8 +275,13 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 file.path
             ));
         } else if instructs(&file.path) && !ctx.git.is_whole_tree() {
-            if let Some(ov) =
-                lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
+            if let Some(ov) = lift(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path)
+                .or_else(|| {
+                    file.path
+                        .rsplit('/')
+                        .next()
+                        .and_then(|n| lift(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, n))
+                })
             {
                 out.overrides.push(ov);
             } else {
@@ -300,7 +313,14 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             if classes.is_empty() {
                 continue;
             }
-            if let Some(ov) = lift(&file.path).or_else(|| lift(&format!("{}:{n}", file.path))) {
+            if let Some(ov) = lift(&crate::findings::INVISIBLE_CHARACTERS_ADDED, &file.path)
+                .or_else(|| {
+                    lift(
+                        &crate::findings::INVISIBLE_CHARACTERS_ADDED,
+                        &format!("{}:{n}", file.path),
+                    )
+                })
+            {
                 out.overrides.push(ov);
                 continue;
             }
@@ -350,7 +370,14 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             if classes.is_empty() {
                 continue;
             }
-            if let Some(ov) = lift(&file.path).or_else(|| lift(&format!("{}:{line}", file.path))) {
+            if let Some(ov) = lift(&crate::findings::INSTRUCTION_LIKE_TEXT_ADDED, &file.path)
+                .or_else(|| {
+                    lift(
+                        &crate::findings::INSTRUCTION_LIKE_TEXT_ADDED,
+                        &format!("{}:{line}", file.path),
+                    )
+                })
+            {
                 out.overrides.push(ov);
                 continue;
             }
@@ -419,7 +446,12 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         if invisible.is_empty() && classes.is_empty() {
             continue;
         }
-        if let Some(ov) = lift(&where_) {
+        let lifts = if invisible.is_empty() {
+            &crate::findings::INSTRUCTION_LIKE_TEXT_IN_DESCRIPTION
+        } else {
+            &crate::findings::INVISIBLE_CHARACTERS_IN_DESCRIPTION
+        };
+        if let Some(ov) = lift(lifts, &where_) {
             out.overrides.push(ov);
             continue;
         }

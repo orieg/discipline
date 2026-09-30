@@ -151,6 +151,11 @@
     "CaseOverride": {
       "additionalProperties": false,
       "properties": {
+        "code": {
+          "description": "The finding the override lifted (`gate/code`); absent when the child report did not record it",
+          "pattern": "^[a-z0-9-]+/[a-z0-9-]+$",
+          "type": "string"
+        },
         "directive": {
           "description": "The directive's name, as written",
           "type": "string"

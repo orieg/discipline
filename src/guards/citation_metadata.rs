@@ -104,7 +104,12 @@ pub fn citation_metadata(ctx: &Context) -> Result<GateOutcome> {
             ));
             continue;
         }
-        if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_CITATION_METADATA, problem.file) {
+        if let Some(ov) = ctx.find_override(
+            GATE,
+            problem.kind,
+            tokens::ALLOW_CITATION_METADATA,
+            problem.file,
+        ) {
             out.overrides.push(ov);
             continue;
         }

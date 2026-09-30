@@ -435,7 +435,12 @@ pub fn advisory_mode_unapproved(ctx: &Context) -> Result<bool> {
         .is_some_and(|base| base.meta.mode == RunMode::Enforcing);
     Ok(base_enforcing
         && ctx
-            .find_override("config-integrity", tokens::ALLOW_GATE_WEAKENING, "meta")
+            .find_override(
+                "config-integrity",
+                &crate::findings::GATE_WEAKENED,
+                tokens::ALLOW_GATE_WEAKENING,
+                "meta",
+            )
             .is_none())
 }
 
@@ -486,9 +491,12 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                     .map(|t| t.len())
                     .unwrap_or(0);
                 for w in weakenings {
-                    if let Some(record) =
-                        ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, &w.gate)
-                    {
+                    if let Some(record) = ctx.find_override(
+                        GATE,
+                        &crate::findings::GATE_WEAKENED,
+                        tokens::ALLOW_GATE_WEAKENING,
+                        &w.gate,
+                    ) {
                         out.overrides.push(record);
                         continue;
                     }
@@ -586,9 +594,12 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 return Ok(out);
             }
             if !others.is_empty() {
-                if let Some(record) =
-                    ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, "baseline")
-                {
+                if let Some(record) = ctx.find_override(
+                    GATE,
+                    &crate::findings::BASELINE_MIGRATION_NOT_ALONE,
+                    tokens::ALLOW_GATE_WEAKENING,
+                    "baseline",
+                ) {
                     out.overrides.push(record);
                     return Ok(out);
                 }
@@ -631,10 +642,17 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
             .collect();
 
         if h_count > b_count || !new_fps.is_empty() {
+            // The finding the else-branches below report: new findings under an unchanged
+            // count, else a grown baseline.
+            let lifts = if !new_fps.is_empty() && h_count <= b_count {
+                &crate::findings::BASELINE_NEW_FINDINGS
+            } else {
+                &crate::findings::BASELINE_INCREASED
+            };
             if let Some(record) = ctx
-                .find_override(GATE, tokens::ALLOW_GATE_WEAKENING, "baseline")
+                .find_override(GATE, lifts, tokens::ALLOW_GATE_WEAKENING, "baseline")
                 .or_else(|| {
-                    ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, baseline_filename)
+                    ctx.find_override(GATE, lifts, tokens::ALLOW_GATE_WEAKENING, baseline_filename)
                 })
             {
                 out.overrides.push(record);
@@ -809,7 +827,12 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
             if unmatched.is_empty() {
                 continue;
             }
-            if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_GOLDEN_UPDATE, &file.path) {
+            if let Some(ov) = ctx.find_override(
+                GATE,
+                &crate::findings::SNAPSHOT_ADDED_FOR_EXISTING_TEST,
+                tokens::ALLOW_GOLDEN_UPDATE,
+                &file.path,
+            ) {
                 out.overrides.push(ov);
                 continue;
             }
@@ -843,12 +866,20 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
 
         out.examined += 1;
 
-        if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_GOLDEN_UPDATE, &file.path) {
+        // The finding reported below without a directive.
+        let golden = if snapshot_only {
+            &crate::findings::GOLDEN_REGENERATED_WITHOUT_SOURCE_CHANGE
+        } else {
+            &crate::findings::GOLDEN_CHANGED_WITHOUT_DIRECTIVE
+        };
+        if let Some(ov) = ctx.find_override(GATE, golden, tokens::ALLOW_GOLDEN_UPDATE, &file.path) {
             out.overrides.push(ov);
             continue;
         }
         if !file.old_path.is_empty() && file.old_path != file.path {
-            if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_GOLDEN_UPDATE, &file.old_path) {
+            if let Some(ov) =
+                ctx.find_override(GATE, golden, tokens::ALLOW_GOLDEN_UPDATE, &file.old_path)
+            {
                 out.overrides.push(ov);
                 continue;
             }

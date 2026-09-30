@@ -67,7 +67,12 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
 
         // 1. Check forbidden paths first
         if forbidden_set.is_match(&file.path) {
-            if let Some(ov) = ctx.find_override(GATE, ALLOW_SCOPE, &file.path) {
+            if let Some(ov) = ctx.find_override(
+                GATE,
+                &crate::findings::FILE_IN_FORBIDDEN_SCOPE,
+                ALLOW_SCOPE,
+                &file.path,
+            ) {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` for forbidden file `{}` ({})",
@@ -88,7 +93,12 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
 
         // 2. Check allowed paths if configured
         if has_allowed && !allowed_set.is_match(&file.path) {
-            if let Some(ov) = ctx.find_override(GATE, ALLOW_SCOPE, &file.path) {
+            if let Some(ov) = ctx.find_override(
+                GATE,
+                &crate::findings::FILE_OUTSIDE_AUTHORIZED_SCOPE,
+                ALLOW_SCOPE,
+                &file.path,
+            ) {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(
                     "override applied: `{}: {}` for out-of-scope file `{}` ({})",

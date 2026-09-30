@@ -120,9 +120,19 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
         for path in &watched_git_files {
             if !manifest_files.contains(path) {
                 let allowed = ctx
-                    .find_override(GATE, tokens::ALLOW_MANIFEST_DRIFT, path)
+                    .find_override(
+                        GATE,
+                        &crate::findings::MANIFEST_DRIFT,
+                        tokens::ALLOW_MANIFEST_DRIFT,
+                        path,
+                    )
                     .or_else(|| {
-                        ctx.find_override(GATE, tokens::ALLOW_MANIFEST_DRIFT, &rule.manifest)
+                        ctx.find_override(
+                            GATE,
+                            &crate::findings::MANIFEST_DRIFT,
+                            tokens::ALLOW_MANIFEST_DRIFT,
+                            &rule.manifest,
+                        )
                     });
 
                 if let Some(ov) = allowed {
@@ -140,9 +150,19 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
                 && !watched_git_files.contains(path)
             {
                 let allowed = ctx
-                    .find_override(GATE, tokens::ALLOW_MANIFEST_DRIFT, path)
+                    .find_override(
+                        GATE,
+                        &crate::findings::MANIFEST_DRIFT,
+                        tokens::ALLOW_MANIFEST_DRIFT,
+                        path,
+                    )
                     .or_else(|| {
-                        ctx.find_override(GATE, tokens::ALLOW_MANIFEST_DRIFT, &rule.manifest)
+                        ctx.find_override(
+                            GATE,
+                            &crate::findings::MANIFEST_DRIFT,
+                            tokens::ALLOW_MANIFEST_DRIFT,
+                            &rule.manifest,
+                        )
                     });
 
                 if let Some(ov) = allowed {
