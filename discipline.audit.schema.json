@@ -1,5 +1,31 @@
 {
   "$defs": {
+    "Check": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "description": "What was found, or why it was not checked",
+          "type": "string"
+        },
+        "id": {
+          "description": "A signal id, or a question git alone cannot answer",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "found",
+            "clean",
+            "not-checked"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "detail"
+      ],
+      "type": "object"
+    },
     "Counts": {
       "additionalProperties": {
         "minimum": 0,
@@ -85,7 +111,8 @@
             "config",
             "config-unreadable",
             "baseline",
-            "inline-marker"
+            "inline-marker",
+            "config-tightening"
           ]
         },
         "line": {
@@ -140,6 +167,63 @@
         "gate"
       ],
       "type": "object"
+    },
+    "Signal": {
+      "additionalProperties": false,
+      "properties": {
+        "changes": {
+          "description": "The changes they are in, newest first (`#N`, else a 10-character commit id)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "count": {
+          "description": "Records the signal is about",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "id": {
+          "enum": [
+            "guard-gate-loosened",
+            "hidden-directive",
+            "config-unreadable",
+            "loosened-without-pull-request",
+            "loosening-without-waiver",
+            "waived-then-loosened",
+            "loosened-not-restored",
+            "baseline-grew"
+          ]
+        },
+        "next": {
+          "description": "The next action a reviewer takes",
+          "type": "string"
+        },
+        "rank": {
+          "enum": [
+            "look-first",
+            "look-soon",
+            "review"
+          ]
+        },
+        "records": {
+          "description": "Indexes into `records`",
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "rank",
+        "count",
+        "changes",
+        "records",
+        "next"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -168,6 +252,13 @@
       "minimum": 0,
       "type": "integer"
     },
+    "checks": {
+      "description": "Every question the audit asks, with its state: a signal is `found` or `clean`; what git alone cannot tell is `not-checked`",
+      "items": {
+        "$ref": "#/$defs/Check"
+      },
+      "type": "array"
+    },
     "records": {
       "description": "Newest change first",
       "items": {
@@ -182,6 +273,20 @@
     "schema_version": {
       "const": 1,
       "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it"
+    },
+    "signals": {
+      "description": "Queries over the records that found something, most urgent first. Review prompts, not verdicts",
+      "items": {
+        "$ref": "#/$defs/Signal"
+      },
+      "type": "array"
+    },
+    "tightenings": {
+      "description": "Tightenings of `discipline.toml` (`kind` `config-tightening`), newest first: `before` is the looser value",
+      "items": {
+        "$ref": "#/$defs/Record"
+      },
+      "type": "array"
     }
   },
   "required": [
@@ -192,7 +297,10 @@
     "by_kind",
     "by_class",
     "by_gate",
-    "records"
+    "signals",
+    "checks",
+    "records",
+    "tightenings"
   ],
   "title": "DisciplineAudit",
   "type": "object"

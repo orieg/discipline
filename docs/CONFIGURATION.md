@@ -1148,6 +1148,21 @@ Lists every escape hatch the last N first-parent commits of a branch carried (de
 | `baseline` | Findings added to `discipline-baseline.toml`, counted per gate | `applied` | `A` |
 | `inline-marker` | An added line whose comment opens with `discipline:allow(<gate>)` for a gate this binary has | `claimed` | `A` |
 
+The report opens with **Needs a decision**: the signals that found something, each a query over the records with a rank and the next action a reviewer takes. They are review prompts, not verdicts.
+
+| Signal | Rank | Fires on |
+|---|---|---|
+| `guard-gate-loosened` | look-first | A loosening of `ratified-paths`, `config-integrity`, `ci-integrity` or `instruction-smuggling`, the gates that guard the other gates |
+| `hidden-directive` | look-first | A directive inside an HTML comment, which does not show where the message is rendered |
+| `config-unreadable` | look-soon | A `discipline.toml` in history this binary could not read, so its loosenings are unknown |
+| `loosened-without-pull-request` | look-soon | A loosening in a change with no `(#N)` pull request |
+| `loosening-without-waiver` | review | A loosening in a pull request whose commit message carries no `allow-gate-weakening` (the waiver may be in the pull request body, which is not read) |
+| `waived-then-loosened` | review | A loosening of a gate that an older change waived by directive |
+| `loosened-not-restored` | review | A loosening with no newer change that tightened the same option |
+| `baseline-grew` | review | Findings added to the baseline |
+
+Tightenings are listed under `tightenings` (`kind` `config-tightening`, `before` the looser value), which is how `loosened-not-restored` tells a paid-back loosening from an open one. `checks` gives every signal a state, `found` or `clean`, and lists what git alone cannot tell as `not-checked` with the reason: whether a directive lifted a finding (`discipline replay` says), directives in pull-request bodies, owner ratification, independent review and which agent made a change. An absent answer is never shown as a clean one.
+
 `evidence` separates text that asks for an exception from a tree change that is one; whether a directive lifted a finding is what `replay` reports (each case's `overrides`, and `unused_directives` in the `check` report). `tier` says who controls the input: `A` is the audited branch's tree, `C` is text the change's author wrote and could have worded to pass. Adopting a configuration is not a loosening; removing it is compared with the built-in defaults. A directive's reason is reported as `reason_sha256` and `reason_len` (the same reason hashes the same, so reuse can be counted without the text); `--reasons` adds the text. Directives in pull-request bodies are not read yet.
 
 The command exits 0 when the audit ran, whatever it found; 2 when the ref does not resolve or git cannot be read. The shape is defined by `discipline.audit.schema.json` at the repository root. The output is for people reviewing history: it is not offered to agents through `discipline mcp` or the `agent-prompt` format, since a list of accepted waivers is a list of what passes.

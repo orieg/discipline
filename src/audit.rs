@@ -12,6 +12,14 @@
 //! * `baseline`: findings added to `discipline-baseline.toml`, per gate;
 //! * `inline-marker`: an added line carrying a `discipline:allow(<gate>)` marker.
 //!
+//! Tightenings of `discipline.toml` are listed separately (`tightenings`), so a loosening
+//! can be matched with a later change that restored it.
+//!
+//! Signals are queries over those records, each with a rank and the next action a
+//! reviewer takes. `checks` gives every signal a state (`found` or `clean`) and names what
+//! git alone cannot tell (`not-checked`, with the reason), so an absent answer never reads
+//! as a clean one.
+//!
 //! What a record claims is not what a check applied: a directive in a commit message may
 //! have lifted nothing. `evidence` says which it is, and `tier` who controls the input:
 //! `A` for the tree on the audited branch, `C` for text the change's author wrote. A
@@ -92,6 +100,9 @@ pub struct Record {
     /// Why a configuration could not be compared: which side, and the parse error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The change's position, 0 for the newest audited change.
+    #[serde(skip)]
+    pub ord: usize,
 }
 
 impl Record {
@@ -123,8 +134,209 @@ impl Record {
             reason_len: None,
             reason: None,
             detail: None,
+            ord: change.ord,
         }
     }
+
+    fn label(&self) -> String {
+        match self.pr {
+            Some(n) => format!("#{n}"),
+            None => self.sha.chars().take(10).collect(),
+        }
+    }
+}
+
+/// Gates that guard the other gates: loosening one weakens the checks on every change.
+pub const GUARD_GATES: &[&str] = &[
+    "ratified-paths",
+    "config-integrity",
+    "ci-integrity",
+    "instruction-smuggling",
+];
+
+/// A query over the records that found something: what, how urgent, and what to do.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Signal {
+    pub id: &'static str,
+    /// `look-first`, `look-soon` or `review`.
+    pub rank: &'static str,
+    /// Records the signal is about.
+    pub count: usize,
+    /// The changes they are in, newest first (`#N`, else a 10-character commit id).
+    pub changes: Vec<String>,
+    /// Indexes into `records` (or `tightenings`, for none today).
+    pub records: Vec<usize>,
+    /// The next action a reviewer takes.
+    pub next: &'static str,
+}
+
+/// One question the audit asks, and whether it could answer it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Check {
+    pub id: &'static str,
+    /// `found`, `clean` or `not-checked`.
+    pub state: &'static str,
+    /// What was found, or why it was not checked.
+    pub detail: String,
+}
+
+struct SignalDef {
+    id: &'static str,
+    rank: &'static str,
+    next: &'static str,
+    /// Whether record `i` belongs to the signal, given every record and the tightenings.
+    test: fn(usize, &[Record], &[Record]) -> bool,
+}
+
+fn is_config(r: &Record) -> bool {
+    r.kind == "config"
+}
+
+/// The change also carries a directive that waives `config-integrity`.
+fn waived_in_change(r: &Record, all: &[Record]) -> bool {
+    all.iter().any(|x| {
+        x.kind == "directive" && x.sha == r.sha && x.gate.as_deref() == Some("config-integrity")
+    })
+}
+
+const SIGNALS: &[SignalDef] = &[
+    SignalDef {
+        id: "guard-gate-loosened",
+        rank: "look-first",
+        next: "Open the change and confirm each loosened option of a gate that guards the other gates was intended.",
+        test: |i, all, _| {
+            let r = &all[i];
+            is_config(r) && r.gate.as_deref().is_some_and(|g| GUARD_GATES.contains(&g))
+        },
+    },
+    SignalDef {
+        id: "hidden-directive",
+        rank: "look-first",
+        next: "Read the commit message as text: a directive inside an HTML comment does not show where the message is rendered.",
+        test: |i, all, _| all[i].hidden == Some(true),
+    },
+    SignalDef {
+        id: "config-unreadable",
+        rank: "look-soon",
+        next: "Compare that change's discipline.toml by hand: this binary could not read one side, so its loosenings are unknown.",
+        test: |i, all, _| all[i].kind == "config-unreadable",
+    },
+    SignalDef {
+        id: "loosened-without-pull-request",
+        rank: "look-soon",
+        next: "Confirm the loosening with whoever pushed it: there was no pull request to review it in.",
+        test: |i, all, _| is_config(&all[i]) && all[i].pr.is_none(),
+    },
+    SignalDef {
+        id: "loosening-without-waiver",
+        rank: "review",
+        next: "Read the pull request body for the allow-gate-weakening this audit did not find in the commit message; if it is not there, find out how config-integrity passed.",
+        test: |i, all, _| {
+            let r = &all[i];
+            is_config(r) && r.pr.is_some() && !waived_in_change(r, all)
+        },
+    },
+    SignalDef {
+        id: "waived-then-loosened",
+        rank: "review",
+        next: "Decide whether the loosening fixed the rule or only stopped it asking.",
+        test: |i, all, _| {
+            let r = &all[i];
+            is_config(r)
+                && all.iter().any(|x| {
+                    x.kind == "directive" && x.ord > r.ord && x.gate.is_some() && x.gate == r.gate
+                })
+        },
+    },
+    SignalDef {
+        id: "loosened-not-restored",
+        rank: "review",
+        next: "Tighten the option back, or record why the looser value stays.",
+        test: |i, all, tightenings| {
+            let r = &all[i];
+            is_config(r)
+                && !tightenings
+                    .iter()
+                    .any(|t| t.ord < r.ord && t.gate == r.gate && t.key == r.key)
+        },
+    },
+    SignalDef {
+        id: "baseline-grew",
+        rank: "review",
+        next: "Fix the grandfathered findings, or record why each stays in the baseline.",
+        test: |i, all, _| all[i].kind == "baseline" && all[i].count.is_some_and(|n| n > 0),
+    },
+];
+
+/// What git alone cannot tell, and why.
+const NOT_CHECKED: &[(&str, &str)] = &[
+    (
+        "directive-lifted-a-finding",
+        "needs `discipline replay`: a directive in a commit message may have lifted nothing",
+    ),
+    (
+        "pull-request-body-directives",
+        "pull request bodies are not read",
+    ),
+    (
+        "owner-ratification",
+        "needs the forge: ratification comments live on issues",
+    ),
+    (
+        "independent-review",
+        "needs the forge: reviews live on pull requests",
+    ),
+    (
+        "agent-identity",
+        "no record of which agent made a change is kept in history",
+    ),
+];
+
+/// The signals that found something, and a state for every question.
+pub fn signals(records: &[Record], tightenings: &[Record]) -> (Vec<Signal>, Vec<Check>) {
+    let mut found = Vec::new();
+    let mut checks = Vec::new();
+    for def in SIGNALS {
+        let hits: Vec<usize> = (0..records.len())
+            .filter(|&i| (def.test)(i, records, tightenings))
+            .collect();
+        if hits.is_empty() {
+            checks.push(Check {
+                id: def.id,
+                state: "clean",
+                detail: "none".to_string(),
+            });
+            continue;
+        }
+        let mut changes: Vec<String> = Vec::new();
+        for &i in &hits {
+            let l = records[i].label();
+            if !changes.contains(&l) {
+                changes.push(l);
+            }
+        }
+        checks.push(Check {
+            id: def.id,
+            state: "found",
+            detail: format!("{} in {} change(s)", hits.len(), changes.len()),
+        });
+        found.push(Signal {
+            id: def.id,
+            rank: def.rank,
+            count: hits.len(),
+            changes,
+            records: hits,
+            next: def.next,
+        });
+    }
+    for (id, why) in NOT_CHECKED {
+        checks.push(Check {
+            id,
+            state: "not-checked",
+            detail: why.to_string(),
+        });
+    }
+    (found, checks)
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -143,12 +355,24 @@ pub struct Summary {
     pub by_class: BTreeMap<String, usize>,
     /// Record count per gate (or configuration table).
     pub by_gate: BTreeMap<String, usize>,
+    /// Signals that found something, most urgent first.
+    pub signals: Vec<Signal>,
+    /// Every question the audit asks, with `found`, `clean` or `not-checked`.
+    pub checks: Vec<Check>,
     /// Newest change first; within a change, in the order the kinds are listed above.
     pub records: Vec<Record>,
+    /// Tightenings of `discipline.toml`, newest first (`kind` `config-tightening`): the
+    /// value moved in the stricter direction, so `before` is the looser one.
+    pub tightenings: Vec<Record>,
 }
 
 impl Summary {
-    pub fn from_records(reference: String, changes: usize, records: Vec<Record>) -> Self {
+    pub fn from_records(
+        reference: String,
+        changes: usize,
+        records: Vec<Record>,
+        tightenings: Vec<Record>,
+    ) -> Self {
         let mut s = Summary {
             schema_version: crate::output_schema::AUDIT_SCHEMA_VERSION,
             reference,
@@ -165,13 +389,43 @@ impl Summary {
             }
         }
         s.changes_with_records = shas.len();
+        let (found, checks) = signals(&records, &tightenings);
+        s.signals = found;
+        s.checks = checks;
         s.records = records;
+        s.tightenings = tightenings;
         s
     }
 
     pub fn render(&self) -> String {
         let mut out = String::new();
-        for r in &self.records {
+        if self.signals.is_empty() {
+            out.push_str("Needs a decision: nothing the git history shows.\n");
+        } else {
+            out.push_str("Needs a decision:\n");
+            for sg in &self.signals {
+                let mut changes = sg
+                    .changes
+                    .iter()
+                    .take(8)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if sg.changes.len() > 8 {
+                    changes.push_str(&format!(" and {} more", sg.changes.len() - 8));
+                }
+                out.push_str(&format!(
+                    "  {:<10} {:<30} {:>3}  {changes}\n             next: {}\n",
+                    sg.rank, sg.id, sg.count, sg.next
+                ));
+            }
+        }
+        out.push_str("\nChecks:\n");
+        for c in &self.checks {
+            out.push_str(&format!("  {:<11} {:<30} {}\n", c.state, c.id, c.detail));
+        }
+        out.push('\n');
+        for r in self.records.iter().chain(&self.tightenings) {
             let label = match r.pr {
                 Some(n) => format!("#{n}"),
                 None => r.sha.chars().take(10).collect(),
@@ -186,7 +440,7 @@ impl Summary {
                         ""
                     }
                 ),
-                "config" => format!(
+                "config" | "config-tightening" => format!(
                     "{} {}",
                     r.key.as_deref().unwrap_or(""),
                     r.change
@@ -233,6 +487,7 @@ struct ChangeInfo {
     sha: String,
     pr: Option<u64>,
     time: i64,
+    ord: usize,
 }
 
 /// The gate a directive name waives, from the directive registry.
@@ -288,6 +543,8 @@ pub struct ChangeInfoRef {
     pub sha: String,
     pub pr: Option<u64>,
     pub time: i64,
+    /// The change's position, 0 for the newest audited change.
+    pub ord: usize,
 }
 
 impl ChangeInfoRef {
@@ -296,6 +553,7 @@ impl ChangeInfoRef {
             sha: self.sha.clone(),
             pr: self.pr,
             time: self.time,
+            ord: self.ord,
         }
     }
 }
@@ -303,19 +561,29 @@ impl ChangeInfoRef {
 /// The configuration records of one change, from the two sides' `discipline.toml` text
 /// (`None`: the side has no such file).
 pub fn config_records(base: Option<&str>, head: Option<&str>, info: &ChangeInfoRef) -> Vec<Record> {
+    config_changes(base, head, info).0
+}
+
+/// The loosenings and the tightenings of one change's `discipline.toml`. A tightening is
+/// a loosening read backwards (head to parent); its `before` is the looser value.
+pub fn config_changes(
+    base: Option<&str>,
+    head: Option<&str>,
+    info: &ChangeInfoRef,
+) -> (Vec<Record>, Vec<Record>) {
     let change = info.to_owned();
     if base == head {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
-    // Adopting a configuration is not a loosening: there was none to loosen.
+    // Adopting a configuration is neither: there was none before.
     let Some(base) = base else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let unreadable = |detail: String| {
         let mut r = Record::new(&change, "config-unreadable", "config");
         r.file = Some(CONFIG_NAME.to_string());
         r.detail = Some(detail);
-        vec![r]
+        (vec![r], Vec::new())
     };
     let parse = |side: &str, text: &str| {
         DisciplineConfig::from_toml_str(text)
@@ -333,23 +601,42 @@ pub fn config_records(base: Option<&str>, head: Option<&str>, info: &ChangeInfoR
         },
         None => DisciplineConfig::default_for_repo(&base_cfg.meta.name),
     };
-    match integrity::diff_configs(&base_cfg, &head_cfg) {
-        Ok(found) => found
+    let (loosened, tightened) = match (
+        integrity::diff_configs(&base_cfg, &head_cfg),
+        integrity::diff_configs(&head_cfg, &base_cfg),
+    ) {
+        (Ok(l), Ok(t)) => (l, t),
+        (Err(e), _) | (_, Err(e)) => {
+            return unreadable(format!("compare: {}", first_line(&e.to_string())))
+        }
+    };
+    let record = |kind: &'static str, w: integrity::Weakening, backwards: bool| {
+        let mut r = Record::new(&change, kind, "config");
+        r.file = Some(CONFIG_NAME.to_string());
+        r.gate = Some(w.gate);
+        r.key = Some(w.key);
+        r.count = w.count;
+        if backwards {
+            // Read head to parent: swap the values back to the change's own direction.
+            r.before = w.after;
+            r.after = w.before;
+        } else {
+            r.change = Some(w.change);
+            r.before = w.before;
+            r.after = w.after;
+        }
+        r
+    };
+    (
+        loosened
             .into_iter()
-            .map(|w| {
-                let mut r = Record::new(&change, "config", "config");
-                r.file = Some(CONFIG_NAME.to_string());
-                r.gate = Some(w.gate);
-                r.key = Some(w.key);
-                r.change = Some(w.change);
-                r.before = w.before;
-                r.after = w.after;
-                r.count = w.count;
-                r
-            })
+            .map(|w| record("config", w, false))
             .collect(),
-        Err(e) => unreadable(format!("compare: {}", first_line(&e.to_string()))),
-    }
+        tightened
+            .into_iter()
+            .map(|w| record("config-tightening", w, true))
+            .collect(),
+    )
 }
 
 /// Findings added to the baseline, one record per gate.
@@ -466,8 +753,13 @@ fn inline_records(
     Ok(out)
 }
 
-/// The records of one first-parent change.
-fn change_records(repo: &Repository, c: &Commit, reasons: bool) -> Result<Vec<Record>> {
+/// The records and tightenings of one first-parent change.
+fn change_records(
+    repo: &Repository,
+    c: &Commit,
+    ord: usize,
+    reasons: bool,
+) -> Result<(Vec<Record>, Vec<Record>)> {
     let parent = c.parent(0)?;
     let (pt, ct) = (parent.tree()?, c.tree()?);
     let subject = c.summary().ok().flatten().unwrap_or("").to_string();
@@ -475,20 +767,22 @@ fn change_records(repo: &Repository, c: &Commit, reasons: bool) -> Result<Vec<Re
         sha: c.id().to_string(),
         pr: crate::replay::pr_from_subject(&subject),
         time: c.time().seconds(),
+        ord,
     };
     let mut out = directive_records(c.message().unwrap_or(""), &info, reasons);
-    out.extend(config_records(
+    let (loosened, tightened) = config_changes(
         blob_text(repo, &pt, CONFIG_NAME)?.as_deref(),
         blob_text(repo, &ct, CONFIG_NAME)?.as_deref(),
         &info,
-    ));
+    );
+    out.extend(loosened);
     out.extend(baseline_records(
         blob_text(repo, &pt, BASELINE_NAME)?.as_deref(),
         blob_text(repo, &ct, BASELINE_NAME)?.as_deref(),
         &info,
     ));
     out.extend(inline_records(repo, &pt, &ct, &info)?);
-    Ok(out)
+    Ok((out, tightened))
 }
 
 pub fn run(opts: &Options) -> Result<Summary> {
@@ -508,13 +802,19 @@ pub fn run(opts: &Options) -> Result<Summary> {
         .id();
     let commits = crate::replay::commits_to_replay(&repo, tip, opts.last)?;
     let mut records = Vec::new();
-    for c in &commits {
-        records.extend(
-            change_records(&repo, c, opts.reasons)
-                .with_context(|| format!("cannot read change {}", c.id()))?,
-        );
+    let mut tightenings = Vec::new();
+    for (ord, c) in commits.iter().enumerate() {
+        let (r, t) = change_records(&repo, c, ord, opts.reasons)
+            .with_context(|| format!("cannot read change {}", c.id()))?;
+        records.extend(r);
+        tightenings.extend(t);
     }
-    Ok(Summary::from_records(reference, commits.len(), records))
+    Ok(Summary::from_records(
+        reference,
+        commits.len(),
+        records,
+        tightenings,
+    ))
 }
 
 #[cfg(test)]
@@ -526,6 +826,7 @@ mod tests {
             sha: "0123456789abcdef".into(),
             pr: Some(7),
             time: 1,
+            ord: 0,
         }
     }
 
@@ -688,10 +989,11 @@ mod tests {
                 sha: "fedcba9876543210".into(),
                 pr: None,
                 time: 2,
+                ord: 1,
             },
             false,
         ));
-        let s = Summary::from_records("main".into(), 5, records);
+        let s = Summary::from_records("main".into(), 5, records, Vec::new());
         assert_eq!((s.changes, s.changes_with_records), (5, 2));
         assert_eq!(s.by_kind["directive"], 3);
         assert_eq!(s.by_class["process"], 1);
@@ -703,5 +1005,229 @@ mod tests {
         );
         assert!(text.contains("#7 "), "{text}");
         assert!(text.contains("fedcba9876 "), "{text}");
+    }
+
+    /// A change at position `ord` (0 = newest) with an optional pull request.
+    fn at(ord: usize, pr: Option<u64>) -> ChangeInfoRef {
+        ChangeInfoRef {
+            sha: format!("{ord:0>16}"),
+            pr,
+            time: 100 - ord as i64,
+            ord,
+        }
+    }
+
+    const CFG: &str = "[meta]\nversion = 1\nname = \"t\"\n";
+
+    fn loosen(
+        ord: usize,
+        pr: Option<u64>,
+        table: &str,
+        before: &str,
+        after: &str,
+    ) -> (Vec<Record>, Vec<Record>) {
+        config_changes(
+            Some(&format!("{CFG}{table}{before}")),
+            Some(&format!("{CFG}{table}{after}")),
+            &at(ord, pr),
+        )
+    }
+
+    fn found(records: &[Record], tightenings: &[Record]) -> Vec<(&'static str, Vec<String>)> {
+        signals(records, tightenings)
+            .0
+            .into_iter()
+            .map(|s| (s.id, s.changes))
+            .collect()
+    }
+
+    #[test]
+    fn a_tightening_is_a_loosening_read_backwards() {
+        let (l, t) = loosen(
+            0,
+            Some(9),
+            "[gates.pii]\n",
+            "exempt_paths = [\"a\", \"b\"]\n",
+            "exempt_paths = [\"a\"]\n",
+        );
+        assert!(l.is_empty(), "{l:?}");
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!(
+            (t[0].kind, t[0].key.as_deref(), t[0].count, t[0].change),
+            ("config-tightening", Some("exempt_paths"), Some(1), None)
+        );
+        let (l, t) = loosen(
+            0,
+            Some(9),
+            "[gates.test-floor]\nenabled = true\n",
+            "min_tests = 3\n",
+            "min_tests = 40\n",
+        );
+        assert!(l.is_empty());
+        // Values in the change's own direction: it raised the floor from 3 to 40.
+        assert_eq!(
+            (t[0].before.as_deref(), t[0].after.as_deref()),
+            (Some("3"), Some("40"))
+        );
+    }
+
+    #[test]
+    fn each_signal_fires_on_its_case_and_not_on_its_control() {
+        let waiver = |ord, pr| {
+            directive_records(
+                "s\n\nallow-gate-weakening: ratified-paths reviewed",
+                &at(ord, pr),
+                false,
+            )
+        };
+        // Newest first: #5 loosens a guard gate with a waiver; 0000000000000003 (no pull
+        // request) loosens pii; #2 tightens pii back; #1 waives dependency-delta, which
+        // #4 then loosens with no waiver.
+        let mut records = Vec::new();
+        let mut tightenings = Vec::new();
+        records.extend(waiver(0, Some(5)));
+        records.extend(
+            loosen(
+                0,
+                Some(5),
+                "[gates.ratified-paths]\n",
+                "ratifiers = [\"a\"]\n",
+                "ratifiers = [\"a\", \"b\"]\n",
+            )
+            .0,
+        );
+        records.extend(
+            loosen(
+                1,
+                Some(4),
+                "[gates.dependency-delta]\n",
+                "allow_dependencies = [\"y\"]\n",
+                "allow_dependencies = [\"y\", \"x\"]\n",
+            )
+            .0,
+        );
+        records.extend(
+            loosen(
+                2,
+                None,
+                "[gates.pii]\n",
+                "exempt_paths = []\n",
+                "exempt_paths = [\"a\"]\n",
+            )
+            .0,
+        );
+        let (_, t) = loosen(
+            1,
+            Some(2),
+            "[gates.pii]\n",
+            "exempt_paths = [\"a\"]\n",
+            "exempt_paths = []\n",
+        );
+        tightenings.extend(t);
+        records.extend(directive_records(
+            "s\n\nallow-dependency: x needed",
+            &at(3, Some(1)),
+            false,
+        ));
+        let got = found(&records, &tightenings);
+        let ids: Vec<&str> = got.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "guard-gate-loosened",
+                "loosened-without-pull-request",
+                "loosening-without-waiver",
+                "waived-then-loosened",
+                "loosened-not-restored",
+            ],
+            "{got:?}"
+        );
+        let changes = |id: &str| got.iter().find(|(i, _)| *i == id).unwrap().1.clone();
+        assert_eq!(changes("guard-gate-loosened"), vec!["#5"]);
+        assert_eq!(changes("loosened-without-pull-request"), vec!["0000000000"]);
+        // #5 carries its waiver; #4 does not.
+        assert_eq!(changes("loosening-without-waiver"), vec!["#4"]);
+        assert_eq!(changes("waived-then-loosened"), vec!["#4"]);
+        // The pii loosening was tightened back by a newer change; the others were not.
+        assert_eq!(changes("loosened-not-restored"), vec!["#5", "#4"]);
+
+        // A tightening older than the loosening does not restore it.
+        let mut old = tightenings.clone();
+        old[0].ord = 9;
+        assert!(changes_of(&found(&records, &old), "loosened-not-restored")
+            .contains(&"0000000000".to_string()));
+        // A waiver newer than the loosening is not "waived, then loosened".
+        let mut later = records.clone();
+        for r in later
+            .iter_mut()
+            .filter(|r| r.kind == "directive" && r.pr == Some(1))
+        {
+            r.ord = 0;
+        }
+        assert!(!found(&later, &tightenings)
+            .iter()
+            .any(|(id, _)| *id == "waived-then-loosened"));
+    }
+
+    fn changes_of(got: &[(&'static str, Vec<String>)], id: &str) -> Vec<String> {
+        got.iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, c)| c.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn hidden_unreadable_and_baseline_signals_and_their_controls() {
+        let hidden = directive_records(
+            "s\n\n<!-- allow-stub: fn_a later -->",
+            &at(0, Some(3)),
+            false,
+        );
+        let shown = directive_records("s\n\nallow-stub: fn_a later", &at(0, Some(3)), false);
+        assert_eq!(
+            changes_of(&found(&hidden, &[]), "hidden-directive"),
+            vec!["#3"]
+        );
+        assert!(changes_of(&found(&shown, &[]), "hidden-directive").is_empty());
+        let unreadable = config_records(
+            Some(&format!("{CFG}[gates.pii]\nretired = 1\n")),
+            Some(CFG),
+            &at(0, Some(3)),
+        );
+        assert_eq!(
+            changes_of(&found(&unreadable, &[]), "config-unreadable"),
+            vec!["#3"]
+        );
+        let entry =
+            "[[findings]]\ngate = \"pii\"\nrule = \"r\"\npath = \"a\"\nfingerprint = \"\"\n";
+        let grew = baseline_records(
+            None,
+            Some(&format!("version = 2\n{entry}")),
+            &at(0, Some(3)),
+        );
+        let shrank = baseline_records(
+            Some(&format!("version = 2\n{entry}")),
+            None,
+            &at(0, Some(3)),
+        );
+        assert_eq!(changes_of(&found(&grew, &[]), "baseline-grew"), vec!["#3"]);
+        assert!(shrank.is_empty());
+    }
+
+    #[test]
+    fn every_question_has_a_state_and_nothing_found_reads_as_clean_not_as_absent() {
+        let (sigs, checks) = signals(&[], &[]);
+        assert!(sigs.is_empty());
+        assert_eq!(checks.len(), SIGNALS.len() + NOT_CHECKED.len());
+        assert!(checks[..SIGNALS.len()].iter().all(|c| c.state == "clean"));
+        assert!(checks[SIGNALS.len()..]
+            .iter()
+            .all(|c| c.state == "not-checked" && !c.detail.is_empty()));
+        let text = Summary::from_records("main".into(), 3, Vec::new(), Vec::new()).render();
+        assert!(
+            text.contains("Needs a decision: nothing the git history shows."),
+            "{text}"
+        );
+        assert!(text.contains("not-checked owner-ratification"), "{text}");
     }
 }
