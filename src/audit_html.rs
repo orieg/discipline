@@ -461,7 +461,10 @@ fn gate_chart(s: &Summary) -> String {
         let Some(g) = r.gate.as_deref() else { continue };
         if r.kind == "directive" && r.class == "detector" {
             *waivers.entry(g).or_default() += 1;
-        } else if r.kind == "inline-marker" && role(r.file.as_deref()) != "test or doc" {
+        } else if r.kind == "inline-marker"
+            && role(r.file.as_deref()) != "test or doc"
+            && r.lifted != Some(false)
+        {
             *markers.entry(g).or_default() += 1;
         }
     }
@@ -1007,15 +1010,31 @@ pub fn render(s: &Summary) -> String {
     for r in s.records.iter().filter(|r| r.kind == "inline-marker") {
         *roles.entry(role(r.file.as_deref())).or_default() += 1;
     }
-    let roles_line = roles
+    let mut roles_line = roles
         .iter()
         .map(|(k, v)| format!("{v} {k}"))
         .collect::<Vec<_>>()
         .join(", ");
+    let judged: Vec<&Record> = s
+        .records
+        .iter()
+        .filter(|r| r.kind == "inline-marker" && r.lifted.is_some())
+        .collect();
+    if !judged.is_empty() {
+        let nothing = judged.iter().filter(|r| r.lifted == Some(false)).count();
+        roles_line.push_str(&format!(
+            "; in the replay, {} lifted a finding and {nothing} lifted nothing (left out below)",
+            judged.len() - nothing
+        ));
+    }
     let marker_rows: String = s
         .records
         .iter()
-        .filter(|r| r.kind == "inline-marker" && role(r.file.as_deref()) != "test or doc")
+        .filter(|r| {
+            r.kind == "inline-marker"
+                && role(r.file.as_deref()) != "test or doc"
+                && r.lifted != Some(false)
+        })
         .map(|r| {
             let g = esc(r.gate.as_deref().unwrap_or(""));
             format!(r##"<tr><td>{}</td><td><a href="#g-{g}"><code>{g}</code></a></td><td>{}</td><td>{}</td></tr>"##, ch(r), source(r, s), role(r.file.as_deref()))
@@ -1094,10 +1113,11 @@ pub fn render(s: &Summary) -> String {
                     r.count.unwrap_or(0)
                 ),
                 "inline-marker" => format!(
-                    "Inline marker for <code>{g}</code> at <code>{}:{}</code> ({})",
+                    "Inline marker for <code>{g}</code> at <code>{}:{}</code> ({}){}",
                     esc(r.file.as_deref().unwrap_or("")),
                     r.line.unwrap_or(0),
-                    role(r.file.as_deref())
+                    role(r.file.as_deref()),
+                    lifted_badge(r)
                 ),
                 "protected-edit" if r.ratification.is_some() => format!(
                     "Edited protected path <code>{}</code>: {}",

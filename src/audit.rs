@@ -1330,14 +1330,15 @@ pub fn parse_replay(text: &str) -> Result<Vec<ReplayCase>> {
         .collect()
 }
 
-/// Whether the replayed check of each finding waiver's change applied it: a directive
-/// matches an override of the same gate under any of its names. Process waivers
-/// (`no-issue`), inline markers and changes the replay did not judge stay `None`. Inline
-/// markers are left out because the audit reads marker text line by line, which also
-/// finds markers quoted in tests and documentation; those lift nothing by design.
+/// Whether the replayed check of each waiver's change applied it. A directive matches an
+/// override of the same gate under any of its names; an inline marker, an override of the
+/// same gate read from its own file and line (`inline <file>:<line>`). A marker the gates
+/// read by line text is often quoted text (a fixture, a doc example) on a line with no
+/// finding: it lifts nothing, and the replay says so. Process waivers (`no-issue`) and
+/// changes the replay did not judge stay `None`.
 pub fn judge_lifted(records: &mut [Record], cases: &[ReplayCase]) {
     for r in records.iter_mut() {
-        let waiver = r.kind == "directive" && r.class == "detector";
+        let waiver = (r.kind == "directive" && r.class == "detector") || r.kind == "inline-marker";
         let Some(case) = cases.iter().find(|c| c.sha == r.sha && c.judged) else {
             continue;
         };
@@ -1349,14 +1350,22 @@ pub fn judge_lifted(records: &mut [Record], cases: &[ReplayCase]) {
                 .as_deref()
                 .is_some_and(|rg| rg.eq_ignore_ascii_case(g))
         };
-        let lifted = case.overrides.iter().any(|(gate, directive, _)| {
+        let at = match (r.file.as_deref(), r.line) {
+            (Some(f), Some(l)) => format!("inline {f}:{l}"),
+            _ => String::new(),
+        };
+        let lifted = case.overrides.iter().any(|(gate, directive, source)| {
             same_gate(gate)
-                && r.directive.as_deref().is_some_and(|d| {
-                    crate::tokens::names_for_directive(d)
-                        .iter()
-                        .any(|n| n.eq_ignore_ascii_case(directive))
-                        || d.eq_ignore_ascii_case(directive)
-                })
+                && if r.kind == "inline-marker" {
+                    !at.is_empty() && *source == at
+                } else {
+                    r.directive.as_deref().is_some_and(|d| {
+                        crate::tokens::names_for_directive(d)
+                            .iter()
+                            .any(|n| n.eq_ignore_ascii_case(directive))
+                            || d.eq_ignore_ascii_case(directive)
+                    })
+                }
         });
         r.lifted = Some(lifted);
         if lifted {
@@ -1365,10 +1374,12 @@ pub fn judge_lifted(records: &mut [Record], cases: &[ReplayCase]) {
     }
 }
 
-/// `waiver-lifted-nothing`: finding waivers the replayed check did not apply.
+/// `waiver-lifted-nothing`: directive waivers the replayed check did not apply. An inline
+/// marker that lifted nothing is not a signal: it is usually quoted text, and it is
+/// reported by `lifted` and in the check's detail.
 pub fn replay_signals(records: &[Record]) -> Vec<Signal> {
     let hits: Vec<usize> = (0..records.len())
-        .filter(|&i| records[i].lifted == Some(false))
+        .filter(|&i| records[i].kind == "directive" && records[i].lifted == Some(false))
         .collect();
     if hits.is_empty() {
         return Vec::new();
@@ -1446,6 +1457,25 @@ pub fn lifted_check(checks: &mut [Check], records: &[Record], cases: &[ReplayCas
             unjudged.len() - missing,
             crate::audit_html::plural(replayed, "change", "changes")
         );
+    }
+    let markers: Vec<&Record> = records
+        .iter()
+        .filter(|r| r.kind == "inline-marker" && r.lifted.is_some())
+        .collect();
+    if !markers.is_empty() {
+        let applied = markers.iter().filter(|r| r.lifted == Some(true)).count();
+        let n = crate::audit_html::plural(
+            markers.len(),
+            "replayed inline marker",
+            "replayed inline markers",
+        );
+        c.detail.push_str(&if applied == markers.len() {
+            format!("; each of {n} lifted a finding")
+        } else if applied == 0 {
+            format!("; none of the {n} lifted a finding (they sit on lines with nothing to lift, such as markers quoted in tests and docs)")
+        } else {
+            format!("; {applied} of {n} lifted a finding (the rest sit on lines with nothing to lift, such as markers quoted in tests and docs)")
+        });
     }
 }
 
@@ -2835,8 +2865,9 @@ mod tests {
     fn a_replay_says_which_waivers_lifted_a_finding() {
         let (a, b, c) = (at(0, Some(10)), at(1, Some(11)), at(2, Some(12)));
         // #10: `deletes` (an alias of `removes`) was applied, `allow-assertion-drop` was
-        // not, `no-issue` lifts no finding, and inline markers are not judged (the replay
-        // applied the one in `src/x.rs`, but quoted markers would read as lifting nothing). #11 could not be checked; #12 was not
+        // not, and `no-issue` lifts no finding. Inline markers match by file and line:
+        // `src/x.rs:4` was applied; `src/y.rs:4`, `src/x:4` and a marker at another line
+        // of `src/x.rs` were not. #11 could not be checked; #12 was not
         // replayed at all.
         let mut records = directive_records(
             "s\n\ndeletes: tests/old.rs obsolete\nallow-assertion-drop: tests/a.rs weaker\nno-issue: chore",
@@ -2853,6 +2884,9 @@ mod tests {
         records.push(marker(&a, "src/x.rs"));
         records.push(marker(&a, "src/y.rs"));
         records.push(marker(&a, "src/x"));
+        let mut moved = marker(&a, "src/x.rs");
+        moved.line = Some(40);
+        records.push(moved);
         records.extend(directive_records(
             "s\n\nallow-dependency: serde parser",
             &b,
@@ -2886,9 +2920,10 @@ mod tests {
                 ("deletes", Some(true), "applied"),
                 ("allow-assertion-drop", Some(false), "claimed"),
                 ("no-issue", None, "claimed"),
-                ("src/x.rs", None, "claimed"),
-                ("src/y.rs", None, "claimed"),
-                ("src/x", None, "claimed"),
+                ("src/x.rs", Some(true), "applied"),
+                ("src/y.rs", Some(false), "claimed"),
+                ("src/x", Some(false), "claimed"),
+                ("src/x.rs", Some(false), "claimed"),
                 ("allow-dependency", None, "claimed"),
                 ("allow-dependency", None, "claimed"),
             ]
@@ -2913,7 +2948,7 @@ mod tests {
             check(&records, &cases),
             (
                 "found",
-                "1 of the 2 finding waivers the replay judged lifted nothing; 2 changes with a finding waiver were not judged".to_string()
+                "1 of the 2 finding waivers the replay judged lifted nothing; 2 changes with a finding waiver were not judged; 1 of 4 replayed inline markers lifted a finding (the rest sit on lines with nothing to lift, such as markers quoted in tests and docs)".to_string()
             )
         );
         // Every waiver judged and applied: clean. Some not judged: not checked.
@@ -2932,7 +2967,7 @@ mod tests {
             check(&partial, &cases),
             (
                 "not-checked",
-                "2 of the changes with a finding waiver were not judged: 1 the replay could not check, 1 it did not include (the replay checked 1 change)".to_string()
+                "2 of the changes with a finding waiver were not judged: 1 the replay could not check, 1 it did not include (the replay checked 1 change); each of 1 replayed inline marker lifted a finding".to_string()
             )
         );
         // A report that is not a replay is refused, never read as "nothing lifted".
@@ -2941,6 +2976,54 @@ mod tests {
             r#"{"schema_version":1,"cases_detail":[{"sha":"x","verdict":"passed"}]}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_marker_that_lifted_nothing_leaves_the_markers_table() {
+        let a = at(0, Some(10));
+        let marker = |file: &str, lifted: Option<bool>| {
+            let mut r = Record::new(&a.to_owned(), "inline-marker", "inline");
+            r.gate = Some("pii".into());
+            r.file = Some(file.into());
+            r.line = Some(4);
+            r.lifted = lifted;
+            r
+        };
+        let page = |records: Vec<Record>| {
+            crate::audit_html::render(&Summary::from_records("main".into(), 1, records, vec![]))
+        };
+        let rows = |page: &str| {
+            page.split("Inline markers outside tests and docs")
+                .nth(1)
+                .and_then(|t| t.split("</div>").next())
+                .unwrap()
+                .matches("<tr><td>")
+                .count()
+        };
+        // Before a replay, both markers in live code are listed.
+        let before = page(vec![
+            marker("src/live.rs", None),
+            marker("src/quoted.rs", None),
+        ]);
+        assert_eq!(rows(&before), 2);
+        // With it, the one that lifted nothing is left out of the table and counted.
+        let after = page(vec![
+            marker("src/live.rs", Some(true)),
+            marker("src/quoted.rs", Some(false)),
+        ]);
+        let table = after
+            .split("Inline markers outside tests and docs")
+            .nth(1)
+            .and_then(|t| t.split("</div>").next())
+            .unwrap();
+        assert_eq!(rows(&after), 1, "{table}");
+        assert!(
+            table.contains(
+                "in the replay, 1 lifted a finding and 1 lifted nothing (left out below)"
+            ),
+            "{table}"
+        );
+        assert!(after.contains(">lifted nothing</span>"));
     }
 
     #[test]
