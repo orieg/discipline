@@ -666,7 +666,7 @@ _discipline_commands() {
 'audit:List the escape hatches the last N merged changes carried\: directives, configuration loosenings, baseline growth, inline markers' \
 'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
-'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
+'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection, and the local agent settings. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
 'lease:Claim this worktree'\''s branches for one agent session, so other worktrees'\'' sessions do not move them (kept in the common git directory, never committed)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -767,7 +767,7 @@ _discipline__subcmd__help_commands() {
 'audit:List the escape hatches the last N merged changes carried\: directives, configuration loosenings, baseline growth, inline markers' \
 'mcp:Serve the gates to an MCP client over stdio (read-only tools\: check_diff, list_gates, explain_finding)' \
 'bench:Benchmark tooling for the bench-regression gate' \
-'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
+'doctor:Check that the repository and its platform enforce discipline\: workflows, CODEOWNERS, branch protection, and the local agent settings. Exit 0 = healthy, 1 = a failing check, 2 = could not check' \
 'lease:Claim this worktree'\''s branches for one agent session, so other worktrees'\'' sessions do not move them (kept in the common git directory, never committed)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )

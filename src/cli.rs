@@ -45,7 +45,7 @@ pub enum Commands {
     Mcp,
     /// Benchmark tooling for the bench-regression gate
     Bench(BenchArgs),
-    /// Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection. Exit 0 = healthy, 1 = a failing check, 2 = could not check
+    /// Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection, and the local agent settings. Exit 0 = healthy, 1 = a failing check, 2 = could not check
     Doctor(DoctorArgs),
     /// Claim this worktree's branches for one agent session, so other worktrees' sessions do not move them (kept in the common git directory, never committed)
     Lease(LeaseArgs),

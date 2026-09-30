@@ -27,6 +27,7 @@ Autonomous coding agents operating in iterate-until-green loops optimize for pas
 - Repointing a lockfile entry at another host or dropping its integrity hash, or trading `npm ci` / `--frozen-lockfile` for an install that rewrites the lock.
 - Editing the gate configuration (`discipline.toml`), the CI workflow, or the agent's own instruction files (`AGENTS.md`, `.cursorrules`) to disable failing checks.
 - Carrying text aimed at the next agent: an injection in a comment, a PR description or a commit message, or a bidirectional override that hides what a parser reads.
+- Widening its own sandbox: an allowed command, `bypassPermissions`, the sandbox or a hook switched off, a new MCP server, or a devcontainer or Compose service made privileged or put on the host network.
 - Running a command on every install from where CI checks do not look: a `package.json` `postinstall`, a `build.rs`, or a repointed registry in `.npmrc` / `pip.conf`.
 - Introducing unverified calendar estimates or leaking developer workstation paths and LAN IPs.
 

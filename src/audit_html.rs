@@ -193,6 +193,7 @@ fn guard_role(gate: &str) -> &'static str {
         "config-integrity" => "reports every change that loosens discipline's own configuration",
         "ci-integrity" => "reports every change that weakens the CI workflows that run the checks",
         "instruction-smuggling" => "reports edits to the instruction files coding agents read",
+        "sandbox-config" => "reports every change that widens a coding agent's permissions or sandbox, including the hooks that run discipline",
         _ => "protects the other checks",
     }
 }

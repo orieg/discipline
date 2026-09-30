@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Discipline — Universal CI/CD Diff Sentinel & AI Coding Agent Gatekeeper</title>
-  <meta name="description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Traverses AST diffs via tree-sitter to reject assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, loosened toolchain configuration, and prompt injection in comments.">
+  <meta name="description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Traverses AST diffs via tree-sitter to reject assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, loosened toolchain configuration, widened agent sandboxes, and prompt injection in comments.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Discipline — Universal CI/CD Diff Sentinel & AI Coding Agent Gatekeeper">
-  <meta property="og:description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Prevents assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, loosened toolchain configuration, and prompt injection in comments.">
+  <meta property="og:description" content="Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust. Prevents assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, loosened toolchain configuration, widened agent sandboxes, and prompt injection in comments.">
   <meta property="og:url" content="https://orieg.github.io/discipline/">
   <meta property="og:site_name" content="Discipline">
   <meta name="twitter:card" content="summary_large_image">
@@ -965,7 +965,7 @@
 
     <h1>Universal CI/CD Diff Sentinel &amp;<br> <span>AI Coding Agent Gatekeeper</span></h1>
     <p class="hero-sub">
-      Traverses AST diffs via tree-sitter over merge-base git graphs. Rejects assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, test suppression, loosened toolchain configuration, and text aimed at the next agent, across pull requests and merge requests. And it guards its own trust boundary: a change cannot switch its run to advisory or excuse itself without review.
+      Traverses AST diffs via tree-sitter over merge-base git graphs. Rejects assertion weakening, vacuous and mock-only tests, stub bodies, swallowed errors, test suppression, loosened toolchain configuration, widened agent and container sandboxes, and text aimed at the next agent, across pull requests and merge requests. And it guards its own trust boundary: a change cannot switch its run to advisory or excuse itself without review.
     </p>
 
     <div class="hero-actions">
@@ -1679,6 +1679,7 @@ allow-ignore: test_darwin_kqueue requires macos runner environment
 allow-golden-update: tests/snapshots/v2.snap updated for new serializer format
 allow-stub: validate schema lands with the next migration
 allow-toolchain-weakening: strict migrating the legacy tree file by file
+allow-sandbox-widening: defaultMode the eval harness runs in a throwaway VM with no credentials
 allow-agent-instructions: AGENTS.md the new rule was reviewed in #90
 allow-build-hook: prepare husky installs the commit hooks
 allow-gate-weakening: ci-integrity the discipline step runs on pull_request only; merged-pr-body covers pushes</div>
