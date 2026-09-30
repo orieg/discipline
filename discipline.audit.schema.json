@@ -134,7 +134,7 @@
           ]
         },
         "lifted": {
-          "description": "With `--replay`, for a finding waiver: whether the replayed check applied it to lift a finding (then `evidence` is `applied`). Omitted when the replay did not judge the change, for `no-issue`, and for inline markers",
+          "description": "With `--replay`, for a finding waiver: whether the replayed check applied it to lift a finding (then `evidence` is `applied`). Omitted when the replay did not judge the change, and for `no-issue`. An inline marker matches by file and line",
           "type": "boolean"
         },
         "line": {
