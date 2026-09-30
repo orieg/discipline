@@ -49,15 +49,15 @@ header { display: grid; gap: 10px; }
 .trust dd { margin: 0; }
 .trust .warnline { color: var(--warn); font-weight: 600; }
 
-.checks { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
-.chk { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; row-gap: 0; align-items: baseline; border: 1px solid var(--rule); border-radius: 6px; padding: 6px 9px; background: var(--surface); font-size: 13px; }
-.chk .st { font: 600 10.5px var(--sans); letter-spacing: 0.05em; text-transform: uppercase; border-radius: 4px; padding: 1px 5px; grid-row: span 2; align-self: start; margin-top: 2px; }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 4px 14px; font-size: 13px; }
+.chk { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; padding: 3px 0; border-bottom: 1px solid var(--rule); }
+.chk .st { font: 600 10px var(--sans); letter-spacing: 0.05em; text-transform: uppercase; border-radius: 4px; padding: 1px 5px; flex: none; }
 .chk.found .st { background: var(--warn-bg); color: var(--warn); }
 .chk.clean .st { background: var(--ok-bg); color: var(--ok); }
-.chk.unchecked { border-style: dashed; background: transparent; }
 .chk.unchecked .st { background: var(--mute-bg); color: var(--muted); }
 .chk.unchecked .what { color: var(--muted); }
-.chk .src { color: var(--muted); font-size: 11.5px; grid-column: 2; }
+.chk .src { color: var(--muted); font-size: 11.5px; }
+.chk .src::before { content: "· "; }
 
 nav.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; background: var(--bg); border-bottom: 1px solid var(--rule); display: flex; gap: 2px; overflow-x: auto; padding-top: 4px; }
 nav.tabs a { color: var(--muted); padding: 8px 12px; border-bottom: 2px solid transparent; white-space: nowrap; font-size: 14px; }
@@ -152,13 +152,14 @@ details:target { box-shadow: 0 0 0 2px var(--link); }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 .src-link { font-size: 12px; white-space: nowrap; margin-left: 6px; }
 .src-link:not(:hover) { color: var(--muted); }
+td:nth-child(2) { white-space: nowrap; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <div class="eyebrow">discipline audit · o/r · 8 merged changes, records from 2026-09-15 to 2026-09-20</div>
-    <h1>Look first: 1 loosening(s) of <code>ratified-paths</code>, a gate that guards the other gates, in 1 change(s) (<a href="#c-0000000000" class="chg">#6</a>). 4 more signal(s) follow.</h1>
+    <h1>Look first: 1 loosening of <code>ratified-paths</code>, a gate that guards the other gates, in 1 change (<a href="#c-0000000000" class="chg">#6</a>). 4 more signals follow.</h1>
     <p class="sub">4 of 8 merged changes carried an exception beyond a skipped issue link. 3 of 6 records are requests in text, not effects anyone verified.</p>
     <div class="trust" aria-label="What this report rests on">
       <dl>
@@ -169,7 +170,7 @@ details:target { box-shadow: 0 0 0 2px var(--link); }
       </dl>
       <p class="warnline">A record is a prompt to look, not a finding of wrongdoing. What git cannot tell is listed as not checked below; it is not a clean result.</p>
     </div>
-    <ul class="checks" aria-label="What was checked"><li class="chk found"><span class="st">Found</span><span class="what">Guard gates loosened</span><span class="src">1 in 1 change(s)</span></li><li class="chk found"><span class="st">Found</span><span class="what">Hidden directives</span><span class="src">1 in 1 change(s)</span></li><li class="chk clean"><span class="st">Checked, none</span><span class="what">Unreadable configurations</span><span class="src">from git</span></li><li class="chk found"><span class="st">Found</span><span class="what">Loosened with no pull request</span><span class="src">1 in 1 change(s)</span></li><li class="chk clean"><span class="st">Checked, none</span><span class="what">Loosened with no waiver</span><span class="src">from git</span></li><li class="chk clean"><span class="st">Checked, none</span><span class="what">Waived, then loosened</span><span class="src">from git</span></li><li class="chk found"><span class="st">Found</span><span class="what">Loosenings not restored</span><span class="src">2 in 2 change(s)</span></li><li class="chk found"><span class="st">Found</span><span class="what">Baseline growth</span><span class="src">1 in 1 change(s)</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Waivers that lifted nothing</span><span class="src">needs `discipline replay`: a directive in a commit message may have lifted nothing</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Directives in pull request bodies</span><span class="src">pull request bodies are not read</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Owner ratification</span><span class="src">needs the forge: ratification comments live on issues</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Review by another person</span><span class="src">needs the forge: reviews live on pull requests</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Which agent made a change</span><span class="src">no record of which agent made a change is kept in history</span></li></ul>
+    <ul class="checks" aria-label="What was checked"><li class="chk found"><span class="st">Found</span><span class="what">Guard gates loosened</span><span class="src">1 in 1 change</span></li><li class="chk found"><span class="st">Found</span><span class="what">Hidden directives</span><span class="src">1 in 1 change</span></li><li class="chk found"><span class="st">Found</span><span class="what">Loosened with no pull request</span><span class="src">1 in 1 change</span></li><li class="chk found"><span class="st">Found</span><span class="what">Loosenings not restored</span><span class="src">2 in 2 changes</span></li><li class="chk found"><span class="st">Found</span><span class="what">Baseline growth</span><span class="src">1 in 1 change</span></li><li class="chk clean"><span class="st">Checked, none</span><span class="what">Unreadable configurations</span><span class="src">from git</span></li><li class="chk clean"><span class="st">Checked, none</span><span class="what">Loosened with no waiver</span><span class="src">from git</span></li><li class="chk clean"><span class="st">Checked, none</span><span class="what">Waived, then loosened</span><span class="src">from git</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Waivers that lifted nothing</span><span class="src">needs <code>discipline replay</code>: a directive in a commit message may have lifted nothing</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Directives in pull request bodies</span><span class="src">pull request bodies are not read</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Owner ratification</span><span class="src">needs the forge: ratification comments live on issues</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Review by another person</span><span class="src">needs the forge: reviews live on pull requests</span></li><li class="chk unchecked"><span class="st">Not checked</span><span class="what">Which agent made a change</span><span class="src">no record of which agent made a change is kept in history</span></li></ul>
   </header>
 
   <nav class="tabs" aria-label="Report views">
@@ -184,7 +185,7 @@ details:target { box-shadow: 0 0 0 2px var(--link); }
 
   <section class="view" id="overview">
     <div class="viewhead"><h2>Needs a decision</h2><p>Ranked by what the exception could hide. Each item is a prompt to look, not a finding of wrongdoing.</p></div>
-    <ol class="decisions"><li class="dec critical"><span class="sev">Look first</span><div><p>1 loosening(s) of <code>ratified-paths</code>, a gate that guards the other gates, in 1 change(s) (<a href="#c-0000000000" class="chg">#6</a>).</p><p class="act"><b>Next:</b> Open the change and confirm each loosened option of a gate that guards the other gates was intended.</p></div></li><li class="dec critical"><span class="sev">Look first</span><div><p>1 directive(s) hidden in an HTML comment, in 1 change(s) (<a href="#c-0000000000" class="chg">#5</a>).</p><p class="act"><b>Next:</b> Read the commit message as text: a directive inside an HTML comment does not show where the message is rendered.</p></div></li><li class="dec high"><span class="sev">Look soon</span><div><p>1 loosening(s) arrived in 1 push(es) with no pull request (<a href="#c-0000000000" class="chg">0000000000</a>).</p><p class="act"><b>Next:</b> Confirm the loosening with whoever pushed it: there was no pull request to review it in.</p></div></li><li class="dec medium"><span class="sev">Review</span><div><p>2 loosening(s) were never tightened back (<a href="#c-0000000000" class="chg">#6</a>, <a href="#c-0000000000" class="chg">0000000000</a>).</p><p class="act"><b>Next:</b> Tighten the option back, or record why the looser value stays.</p></div></li><li class="dec medium"><span class="sev">Review</span><div><p>the baseline grew for <code>stub-bodies</code> (<a href="#c-0000000000" class="chg">#2</a>).</p><p class="act"><b>Next:</b> Fix the grandfathered findings, or record why each stays in the baseline.</p></div></li></ol>
+    <ol class="decisions"><li class="dec critical"><span class="sev">Look first</span><div><p>1 loosening of <code>ratified-paths</code>, a gate that guards the other gates, in 1 change (<a href="#c-0000000000" class="chg">#6</a>).</p><p class="act"><b>Next:</b> Open the change and confirm each loosened option of a gate that guards the other gates was intended.</p></div></li><li class="dec critical"><span class="sev">Look first</span><div><p>1 directive hidden in an HTML comment, in 1 change (<a href="#c-0000000000" class="chg">#5</a>).</p><p class="act"><b>Next:</b> Read the commit message as text: a directive inside an HTML comment does not show where the message is rendered.</p></div></li><li class="dec high"><span class="sev">Look soon</span><div><p>1 loosening arrived in 1 push with no pull request (<a href="#c-0000000000" class="chg">0000000000</a>).</p><p class="act"><b>Next:</b> Confirm the loosening with whoever pushed it: there was no pull request to review it in.</p></div></li><li class="dec medium"><span class="sev">Review</span><div><p>2 loosenings were never tightened back (<a href="#c-0000000000" class="chg">#6</a>, <a href="#c-0000000000" class="chg">0000000000</a>).</p><p class="act"><b>Next:</b> Tighten the option back, or record why the looser value stays.</p></div></li><li class="dec medium"><span class="sev">Review</span><div><p>the baseline grew for <code>stub-bodies</code> (<a href="#c-0000000000" class="chg">#2</a>).</p><p class="act"><b>Next:</b> Fix the grandfathered findings, or record why each stays in the baseline.</p></div></li></ol>
     <div class="figures" aria-label="Figures"><div class="fig"><b>2</b><span>config loosenings</span><small>2 not restored</small></div><div class="fig"><b>4/8</b><span>changes with an exception</span><small>beyond a skipped issue link</small></div><div class="fig"><b>0</b><span>protected-path edits</span><small>ratification not checked</small></div><div class="fig"><b>5</b><span>questions not checked</span><small>see the strip above</small></div></div>
     <div class="panel">
       <h3>Changes with an exception, over time</h3>
@@ -195,7 +196,7 @@ details:target { box-shadow: 0 0 0 2px var(--link); }
       <h3>Where the exceptions are</h3>
       <ul class="legend"><li><span class="dot k-detector"></span>Waived finding (directive)</li><li><span class="dot k-inline"></span>Inline marker outside tests and docs</li></ul>
       <p>Markers in tests and docs are left out. Gate names in red guard the other gates. Select a gate to see its history.</p>
-      <div class="chartbox"><svg viewBox="0 0 760 74" class="chart" role="img" aria-labelledby="t-gate"><title id="t-gate">Finding waivers and inline markers outside tests and docs, per gate</title><line x1="180.0" x2="180.0" y1="4" y2="50" class="grid"/><text x="180.0" y="66" class="tick" text-anchor="middle">0</text><line x1="720.0" x2="720.0" y1="4" y2="50" class="grid"/><text x="720.0" y="66" class="tick" text-anchor="middle">5</text><a href="#g-config-integrity"><text x="172" y="19" class="glabel guardname" text-anchor="end">config-integrity</text></a><rect x="180.0" y="6" width="108.0" height="14" class="k-detector"><title>config-integrity: 1 finding waivers</title></rect><text x="293.0" y="19" class="val">1</text><a href="#g-stub-bodies"><text x="172" y="41" class="glabel" text-anchor="end">stub-bodies</text></a><rect x="180.0" y="28" width="108.0" height="14" class="k-detector"><title>stub-bodies: 1 finding waivers</title></rect><text x="293.0" y="41" class="val">1</text></svg></div>
+      <div class="chartbox"><svg viewBox="0 0 760 74" class="chart" role="img" aria-labelledby="t-gate"><title id="t-gate">Finding waivers and inline markers outside tests and docs, per gate</title><line x1="180.0" x2="180.0" y1="4" y2="50" class="grid"/><text x="180.0" y="66" class="tick" text-anchor="middle">0</text><line x1="720.0" x2="720.0" y1="4" y2="50" class="grid"/><text x="720.0" y="66" class="tick" text-anchor="middle">5</text><a href="#g-config-integrity"><text x="172" y="19" class="glabel guardname" text-anchor="end">config-integrity</text></a><rect x="180.0" y="6" width="108.0" height="14" class="k-detector"><title>config-integrity: 1 finding waiver</title></rect><text x="293.0" y="19" class="val">1</text><a href="#g-stub-bodies"><text x="172" y="41" class="glabel" text-anchor="end">stub-bodies</text></a><rect x="180.0" y="28" width="108.0" height="14" class="k-detector"><title>stub-bodies: 1 finding waiver</title></rect><text x="293.0" y="41" class="val">1</text></svg></div>
     </div>
   </section>
 
@@ -266,7 +267,12 @@ details:target { box-shadow: 0 0 0 2px var(--link); }
   const route = () => {
     const h = decodeURIComponent(location.hash.slice(1));
     const el = h && document.getElementById(h);
-    if (el && el.classList.contains('view')) return show(h);
+    if (el && el.classList.contains('view')) {
+      show(h);
+      // The browser jumped to the view before the others were hidden: put the tabs on top.
+      document.querySelector('nav.tabs').scrollIntoView({ block: 'start' });
+      return;
+    }
     if (el && el.tagName === 'DETAILS') return show(el.closest('.view').id, el);
     show('overview');
   };

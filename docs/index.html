@@ -372,6 +372,14 @@
     }
 
     /* Section styling */
+    .audit-shot { width: 100%; height: auto; display: block; border: 1px solid var(--border); border-radius: 12px; }
+    .audit-shot.light { display: none; }
+    [data-theme="light"] .audit-shot.light { display: block; }
+    [data-theme="light"] .audit-shot.dark { display: none; }
+    .audit-grid { display: grid; gap: 1.25rem; }
+    .audit-points { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
+    .audit-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+
     .section-block {
       padding: 3rem 0;
       border-top: 1px solid var(--border);
@@ -922,6 +930,7 @@
     <li><a href="#features">Capabilities</a></li>
     <li><a href="#platforms">Platforms</a></li>
     <li><a href="#gates">Gate Reference</a></li>
+    <li><a href="#audit">Audit</a></li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#install">Install</a></li>
     <li><a href="tutorials/getting-started/">Tutorial</a></li>
@@ -1054,6 +1063,27 @@
           <span class="card-tag">JUnit XML</span>
           <span class="card-tag">Code Climate JSON</span>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Audit -->
+  <section class="section-block" id="audit">
+    <div class="section-head">
+      <div class="section-title">Audit the Escape Hatches</div>
+      <p class="section-desc">Every waiver, loosened option, grandfathered finding and protected-path edit your merged history carried, ranked by what it could hide, with a link to the exact line on your forge.</p>
+    </div>
+    <div class="audit-grid">
+      <img class="audit-shot dark" src="assets/img/audit-overview-dark.png" alt="discipline audit report: a ranked Needs a decision list led by a loosening of ratified-paths in #270, and a strip of checks marked found, checked or not checked" width="1280" height="960" loading="lazy">
+      <img class="audit-shot light" src="assets/img/audit-overview-light.png" alt="discipline audit report: a ranked Needs a decision list led by a loosening of ratified-paths in #270, and a strip of checks marked found, checked or not checked" width="1280" height="960" loading="lazy">
+      <div class="audit-points">
+        <div class="card"><div><h3>Ranked, not raw</h3><p>Signals such as a loosened guard gate, a loosening pushed without a pull request, or one never tightened back lead the page, each with the next thing to check.</p></div></div>
+        <div class="card"><div><h3>Honest about gaps</h3><p>What git alone cannot tell, such as owner ratification, review by someone else, or whether a waiver lifted anything, is marked not checked, never shown as clean.</p></div></div>
+        <div class="card"><div><h3>One page, linked to the source</h3><p><code>discipline audit --format html</code> writes a self-contained page that loads nothing. Each row opens the file and line, the diff or the commit on GitHub, GitLab, Gitea or Forgejo.</p></div></div>
+      </div>
+      <div class="audit-actions">
+        <a href="demo/audit.html" class="btn-primary">Open this repository's audit &rarr;</a>
+        <a href="configuration/#auditing-escape-hatches-discipline-audit" class="btn-secondary">Read the reference</a>
       </div>
     </div>
   </section>

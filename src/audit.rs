@@ -321,7 +321,11 @@ pub fn signals(records: &[Record], tightenings: &[Record]) -> (Vec<Signal>, Vec<
         checks.push(Check {
             id: def.id,
             state: "found",
-            detail: format!("{} in {} change(s)", hits.len(), changes.len()),
+            detail: format!(
+                "{} in {}",
+                hits.len(),
+                crate::audit_html::plural(changes.len(), "change", "changes")
+            ),
         });
         found.push(Signal {
             id: def.id,
@@ -486,9 +490,9 @@ impl Summary {
                 .map(|r| r.sha.as_str())
                 .collect();
             out.push_str(&format!(
-                "\nProtected paths: {} edit(s) in {} change(s); ratification not checked (needs the forge)\n",
-                self.protected_edits.len(),
-                changes.len()
+                "\nProtected paths: {} in {}; ratification not checked (needs the forge)\n",
+                crate::audit_html::plural(self.protected_edits.len(), "edit", "edits"),
+                crate::audit_html::plural(changes.len(), "change", "changes")
             ));
         }
         out.push_str("\nChecks:\n");
@@ -522,7 +526,10 @@ impl Summary {
                         .unwrap_or_default()
                 ),
                 "config-unreadable" => r.detail.clone().unwrap_or_default(),
-                "baseline" => format!("{} finding(s) grandfathered", r.count.unwrap_or(0)),
+                "baseline" => format!(
+                    "{} grandfathered",
+                    crate::audit_html::plural(r.count.unwrap_or(0), "finding", "findings")
+                ),
                 _ => format!(
                     "{}:{}",
                     r.file.as_deref().unwrap_or(""),

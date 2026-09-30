@@ -41,15 +41,15 @@ header { display: grid; gap: 10px; }
 .trust dd { margin: 0; }
 .trust .warnline { color: var(--warn); font-weight: 600; }
 
-.checks { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
-.chk { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; row-gap: 0; align-items: baseline; border: 1px solid var(--rule); border-radius: 6px; padding: 6px 9px; background: var(--surface); font-size: 13px; }
-.chk .st { font: 600 10.5px var(--sans); letter-spacing: 0.05em; text-transform: uppercase; border-radius: 4px; padding: 1px 5px; grid-row: span 2; align-self: start; margin-top: 2px; }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 4px 14px; font-size: 13px; }
+.chk { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; padding: 3px 0; border-bottom: 1px solid var(--rule); }
+.chk .st { font: 600 10px var(--sans); letter-spacing: 0.05em; text-transform: uppercase; border-radius: 4px; padding: 1px 5px; flex: none; }
 .chk.found .st { background: var(--warn-bg); color: var(--warn); }
 .chk.clean .st { background: var(--ok-bg); color: var(--ok); }
-.chk.unchecked { border-style: dashed; background: transparent; }
 .chk.unchecked .st { background: var(--mute-bg); color: var(--muted); }
 .chk.unchecked .what { color: var(--muted); }
-.chk .src { color: var(--muted); font-size: 11.5px; grid-column: 2; }
+.chk .src { color: var(--muted); font-size: 11.5px; }
+.chk .src::before { content: "· "; }
 
 nav.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; background: var(--bg); border-bottom: 1px solid var(--rule); display: flex; gap: 2px; overflow-x: auto; padding-top: 4px; }
 nav.tabs a { color: var(--muted); padding: 8px 12px; border-bottom: 2px solid transparent; white-space: nowrap; font-size: 14px; }
@@ -144,3 +144,4 @@ details:target { box-shadow: 0 0 0 2px var(--link); }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 .src-link { font-size: 12px; white-space: nowrap; margin-left: 6px; }
 .src-link:not(:hover) { color: var(--muted); }
+td:nth-child(2) { white-space: nowrap; }

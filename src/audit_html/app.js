@@ -13,7 +13,12 @@
   const route = () => {
     const h = decodeURIComponent(location.hash.slice(1));
     const el = h && document.getElementById(h);
-    if (el && el.classList.contains('view')) return show(h);
+    if (el && el.classList.contains('view')) {
+      show(h);
+      // The browser jumped to the view before the others were hidden: put the tabs on top.
+      document.querySelector('nav.tabs').scrollIntoView({ block: 'start' });
+      return;
+    }
     if (el && el.tagName === 'DETAILS') return show(el.closest('.view').id, el);
     show('overview');
   };

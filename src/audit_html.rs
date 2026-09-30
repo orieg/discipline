@@ -116,29 +116,59 @@ fn signal_sentence(s: &Signal, summary: &Summary) -> String {
         .map(|g| format!("<code>{}</code>", esc(g)))
         .collect::<Vec<_>>()
         .join(", ");
+    let loosenings = plural(n, "loosening", "loosenings");
+    let changes = plural(c, "change", "changes");
+    let (verb_carry, verb_were) = if n == 1 {
+        ("carries", "was")
+    } else {
+        ("carry", "were")
+    };
     match s.id {
-        "guard-gate-loosened" => format!(
-            "{n} loosening(s) of {gates}, a gate that guards the other gates, in {c} change(s)"
+        "guard-gate-loosened" => {
+            format!("{loosenings} of {gates}, a gate that guards the other gates, in {changes}")
+        }
+        "hidden-directive" => format!(
+            "{} hidden in an HTML comment, in {changes}",
+            plural(n, "directive", "directives")
         ),
-        "hidden-directive" => {
-            format!("{n} directive(s) hidden in an HTML comment, in {c} change(s)")
-        }
-        "config-unreadable" => {
-            format!("{n} historical configuration(s) this binary could not read")
-        }
-        "loosened-without-pull-request" => {
-            format!("{n} loosening(s) arrived in {c} push(es) with no pull request")
-        }
+        "config-unreadable" => format!(
+            "{} this binary could not read",
+            plural(n, "historical configuration", "historical configurations")
+        ),
+        "loosened-without-pull-request" => format!(
+            "{loosenings} arrived in {} with no pull request",
+            plural(c, "push", "pushes")
+        ),
         "loosening-without-waiver" => format!(
-            "{n} loosening(s) carry no <code>allow-gate-weakening</code> in the commit message"
+            "{loosenings} {verb_carry} no <code>allow-gate-weakening</code> in the commit message"
         ),
         "waived-then-loosened" => {
-            format!("{n} loosening(s) of {gates} followed waivers of the same gate")
+            format!("{loosenings} of {gates} followed waivers of the same gate")
         }
-        "loosened-not-restored" => format!("{n} loosening(s) were never tightened back"),
+        "loosened-not-restored" => format!("{loosenings} {verb_were} never tightened back"),
         "baseline-grew" => format!("the baseline grew for {gates}"),
-        _ => format!("{n} record(s)"),
+        _ => plural(n, "record", "records"),
     }
+}
+
+/// `1 change`, `2 changes`.
+pub fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// Escaped text with each `` `code` `` span set as `<code>`.
+fn prose(s: &str) -> String {
+    esc(s)
+        .split('`')
+        .enumerate()
+        .map(|(i, part)| {
+            if i % 2 == 1 {
+                format!("<code>{part}</code>")
+            } else {
+                part.to_string()
+            }
+        })
+        .collect()
 }
 
 fn change_links(s: &Signal, summary: &Summary) -> String {
@@ -395,23 +425,26 @@ fn gate_chart(s: &Summary) -> String {
             yy + 13.0,
             g = esc(g)));
         let mut xx = l;
-        for (count, cls, what) in [
+        for (count, cls, one, many) in [
             (
                 waivers.get(g).copied().unwrap_or(0),
                 "k-detector",
+                "finding waiver",
                 "finding waivers",
             ),
             (
                 markers.get(g).copied().unwrap_or(0),
                 "k-inline",
+                "marker outside tests and docs",
                 "markers outside tests and docs",
             ),
         ] {
             if count > 0 {
                 let ww = pw * count as f64 / top as f64;
-                o.push_str(&format!(r##"<rect x="{xx:.1}" y="{yy}" width="{ww:.1}" height="{}" class="{cls}"><title>{}: {count} {what}</title></rect>"##,
+                o.push_str(&format!(r##"<rect x="{xx:.1}" y="{yy}" width="{ww:.1}" height="{}" class="{cls}"><title>{}: {}</title></rect>"##,
                     rh - 8.0,
-                    esc(g)));
+                    esc(g),
+                    plural(count, one, many)));
                 xx += ww;
             }
         }
@@ -519,7 +552,11 @@ pub fn render(s: &Summary) -> String {
             let (l, _) = rank(first.rank);
             let others = s.signals.len() - 1;
             let rest = if others > 0 {
-                format!(" {others} more signal(s) follow.")
+                if others == 1 {
+                    " 1 more signal follows.".to_string()
+                } else {
+                    format!(" {others} more signals follow.")
+                }
             } else {
                 String::new()
             };
@@ -560,7 +597,13 @@ pub fn render(s: &Summary) -> String {
             changes.len()));
     }
     checks.push_str(&protected_check);
-    for c in &s.checks {
+    let mut ordered: Vec<&crate::audit::Check> = s.checks.iter().collect();
+    ordered.sort_by_key(|c| match c.state {
+        "found" => 0,
+        "clean" => 1,
+        _ => 2,
+    });
+    for c in ordered {
         let (cls, st) = match c.state {
             "found" => ("found", "Found"),
             "clean" => ("clean", "Checked, none"),
@@ -569,7 +612,7 @@ pub fn render(s: &Summary) -> String {
         let src = if c.state == "clean" {
             "from git".to_string()
         } else {
-            esc(&c.detail)
+            prose(&c.detail)
         };
         checks.push_str(&format!(r##"<li class="chk {cls}"><span class="st">{st}</span><span class="what">{}</span><span class="src">{src}</span></li>"##,
             esc(check_label(c.id))));
@@ -582,7 +625,7 @@ pub fn render(s: &Summary) -> String {
         decisions.push_str(&format!(r##"<li class="dec {cls}"><span class="sev">{l}</span><div><p>{} ({}).</p><p class="act"><b>Next:</b> {}</p></div></li>"##,
             signal_sentence(sg, s),
             change_links(sg, s),
-            esc(sg.next)));
+            prose(sg.next)));
     }
     if decisions.is_empty() {
         decisions.push_str(r##"<li class="dec low"><span class="sev">Clean</span><div><p>No signal found anything in these changes. The checks above say what was not looked at.</p></div></li>"##);
