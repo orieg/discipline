@@ -22,6 +22,9 @@ def check_no_prd_references():
     violations = []
     ignore_dirs = {".git", "target", ".cargo", "node_modules"}
     this_file = Path(__file__).resolve()
+    # Generated reports of this repository's history (`discipline audit --format html`)
+    # name files as they were when committed, the retired document among them.
+    history_reports = (ROOT / "docs" / "demo").resolve()
 
     for dirpath, dirnames, filenames in os.walk(ROOT):
         # Prune ignored directories
@@ -36,6 +39,8 @@ def check_no_prd_references():
                 continue
             fpath = Path(dirpath) / fname
             if fpath.resolve() == this_file:
+                continue
+            if history_reports in fpath.resolve().parents:
                 continue
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
