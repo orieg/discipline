@@ -50,7 +50,7 @@ The following operational characteristics are caller contracts, not vulnerabilit
 
 - **Subprocess Execution in `command` Gate:** The `command` gate executes commands explicitly declared by repository owners in `discipline.toml`. While Discipline bounds runtime with timeouts and passes arguments directly without shell string interpretation, it trusts the execution environment configured by the repository administrator.
 - **Local Filesystem Permissions:** Discipline operates with the privileges of the user running the CLI binary or CI runner. Protecting the host filesystem outside the repository checkout is the responsibility of the container runtime or CI host.
-- **Resource Consumption Proportional to Diff Size:** Analyzing large diffs or multi-gigabyte repositories consumes CPU and memory proportional to the number of AST nodes and files examined.
+- **Resource Consumption Proportional to Diff Size:** Analyzing large diffs or multi-gigabyte repositories consumes CPU and memory proportional to the number of AST nodes and files examined. Work out of proportion to the input (a file, history, configuration or forge answer built to exhaust the gate) is not this case: it is a denial of service and in scope.
 - **Secret Echo Prevention:** Discipline scans files for potential leaks (PII, hostnames, passwords). Findings identify file paths and line numbers only; secret values are never printed to terminal reports or CI summaries.
 
 ## Dependencies & Supply Chain
