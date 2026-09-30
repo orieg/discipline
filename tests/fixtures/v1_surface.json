@@ -72,6 +72,7 @@
       "self-test"
     ],
     "cli.flags": [
+      "audit --forge",
       "audit --format",
       "audit --json",
       "audit --last",

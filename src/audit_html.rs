@@ -473,10 +473,16 @@ fn source(r: &Record, s: &Summary) -> String {
         t
     };
     let (href, text) = match (r.kind, r.file.as_deref()) {
-        ("directive", _) => (
-            l.commit.replace("{sha}", &r.sha),
-            "commit message".to_string(),
-        ),
+        ("directive", _) => match (r.source, r.pr) {
+            (Some("pull-request-body"), Some(n)) => (
+                l.pull.replace("{n}", &n.to_string()),
+                "pull request body".to_string(),
+            ),
+            _ => (
+                l.commit.replace("{sha}", &r.sha),
+                "commit message".to_string(),
+            ),
+        },
         ("protected-edit", Some(p)) => match &l.file_diff {
             Some(d) => (
                 d.replace("{sha}", &r.sha).replace(
@@ -501,6 +507,21 @@ fn source(r: &Record, s: &Summary) -> String {
         esc(&href),
         esc(&text)
     )
+}
+
+/// Whether another login approved the change's pull request, as `--forge` read it.
+fn review_cell(r: &Record, s: &Summary) -> String {
+    if s.forge.is_none() {
+        return r##"<span class="badge muted">Not checked</span>"##.to_string();
+    }
+    match s.pulls.iter().find(|p| p.sha == r.sha) {
+        Some(p) if p.approved_by_other => r##"<span class="badge ok">Yes</span>"##.to_string(),
+        Some(_) => r##"<span class="badge warn">No</span>"##.to_string(),
+        None if s.forge.as_ref().is_some_and(|f| f.failed > 0) => {
+            r##"<span class="badge muted">Not checked</span>"##.to_string()
+        }
+        None => r##"<span class="badge warn">No pull request</span>"##.to_string(),
+    }
 }
 
 fn external(r: &Record, s: &Summary) -> String {
@@ -681,7 +702,7 @@ pub fn render(s: &Summary) -> String {
             let paths = rs.iter().map(|r| format!("<code>{}</code>{}", esc(r.file.as_deref().unwrap_or("")), source(r, s))).collect::<Vec<_>>().join("<br>");
             let gate = f.detail.as_deref().unwrap_or("");
             let gate_badge = if gate == "gate on" { r##"<span class="badge ok">on</span>"## } else { r##"<span class="badge muted">off</span>"## };
-            format!(r##"<tr><td>{}</td><td>{}</td><td>{paths}</td><td>{gate_badge}</td><td><span class="badge muted">Not checked</span></td><td>{}</td></tr>"##, ch(f), date(f.time), external(f, s))
+            format!(r##"<tr><td>{}</td><td>{}</td><td>{paths}</td><td>{gate_badge}</td><td><span class="badge muted">Not checked</span></td><td>{}</td><td>{}</td></tr>"##, ch(f), date(f.time), review_cell(f, s), external(f, s))
         })
         .collect();
     let protected_view = if by_change.is_empty() {
@@ -694,6 +715,7 @@ pub fn render(s: &Summary) -> String {
                 "Paths",
                 "Gate",
                 "Ratification",
+                "Approved by another login",
                 "Where to check",
             ],
             &prot_rows,
@@ -830,8 +852,13 @@ pub fn render(s: &Summary) -> String {
             let g = esc(r.gate.as_deref().unwrap_or(""));
             let item = match r.kind {
                 "directive" => format!(
-                    "Directive <code>{}</code> ({}), reason {} chars{}",
+                    "Directive <code>{}</code> in the {} ({}), reason {} chars{}",
                     esc(r.directive.as_deref().unwrap_or("")),
+                    if r.source == Some("pull-request-body") {
+                        "pull request body"
+                    } else {
+                        "commit message"
+                    },
                     if g.is_empty() {
                         "no gate".to_string()
                     } else {
@@ -886,6 +913,18 @@ pub fn render(s: &Summary) -> String {
             .map(|(k, v)| format!("{v} {k}"))
             .collect::<Vec<_>>()
             .join(" · ");
+        if let Some(p) = s.pulls.iter().find(|p| p.sha == f.sha) {
+            facts.push_str(&format!(
+                "<li>{}Merged through pull request #{}: {}</li>",
+                dot("process"),
+                p.pr,
+                if p.approved_by_other {
+                    r##"<span class="badge ok">approved by another login</span>"##
+                } else {
+                    r##"<span class="badge warn">no approval from another login</span>"##
+                }
+            ));
+        }
         changes_html.push_str(&format!(r##"<details id="{}"><summary><span class="lbl">{}</span><span class="d">{}</span><span class="s">{}</span><span class="cnt">{summary}</span></summary><ul class="facts">{facts}</ul><p class="gh">{} <code>{}</code></p></details>"##,
             anchor(f),
             esc(&label(f)),
@@ -1024,7 +1063,7 @@ pub fn render(s: &Summary) -> String {
       <dl>
         <dt>Audited</dt><dd><code>{reference}</code> at <code>{tip}</code></dd>
         <dt>Links</dt><dd>{links_line}</dd>
-        <dt>Read</dt><dd>Git objects only: commit messages, <code>discipline.toml</code>, <code>discipline-baseline.toml</code> and the changed files. Nothing was read from the network.</dd>
+        <dt>Read</dt><dd>{read_line}</dd>
         <dt>Written by</dt><dd>discipline {version}</dd>
       </dl>
       <p class="warnline">A record is a prompt to look, not a finding of wrongdoing. What git cannot tell is listed as not checked below; it is not a clean result.</p>
@@ -1116,6 +1155,15 @@ pub fn render(s: &Summary) -> String {
 </html>
 "##,
         version = esc(&s.version),
+        read_line = match &s.forge {
+            None => "Git objects only: commit messages, <code>discipline.toml</code>, <code>discipline-baseline.toml</code> and the changed files. Nothing was read from the network.".to_string(),
+            Some(f) => format!(
+                "Git objects, and from the forge each change's merged pull request and its reviews ({} of {} changes arrived through one{}).",
+                f.pulls,
+                f.changes,
+                if f.failed > 0 { format!("; the forge could not answer for {}", f.failed) } else { String::new() }
+            ),
+        },
         repo = esc(&repo_name),
         reference = esc(&s.reference),
         tip = esc(&s.tip[..s.tip.len().min(10)]),

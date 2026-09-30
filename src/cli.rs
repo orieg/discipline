@@ -169,6 +169,11 @@ pub struct AuditArgs {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
+    /// Read each change's merged pull request from the forge (its body's directives, and
+    /// whether another login approved it); needs a token that can read pull requests
+    #[arg(long)]
+    pub forge: bool,
+
     /// Include each directive's reason text (by default only its SHA-256 and length)
     #[arg(long)]
     pub reasons: bool,

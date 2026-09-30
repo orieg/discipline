@@ -121,6 +121,7 @@ fn run_command(command: Commands) -> Result<bool> {
                 last: args.last,
                 reference: args.reference,
                 reasons: args.reasons,
+                forge: args.forge,
             })?;
             use discipline::cli::AuditFormat;
             let format = if args.json {
