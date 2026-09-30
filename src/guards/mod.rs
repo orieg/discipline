@@ -11,6 +11,7 @@ pub mod citation_metadata;
 pub mod claim_registry;
 pub mod command;
 pub mod commit_provenance;
+pub mod confusables;
 pub mod dependency;
 pub mod error_swallowing;
 pub mod hygiene;

@@ -683,6 +683,9 @@ pub fn update_generated_regions(
                 "cli" => render_cli_markdown(),
                 "cli-options" => render_cli_options_markdown(),
                 "finding-codes" => render_finding_codes_markdown(),
+                "smuggling-prose-files" => {
+                    crate::guards::instruction_smuggling::prose_files_markdown()
+                }
                 other => bail!(
                     "unknown generated marker target '{}' in {}",
                     other,
