@@ -571,6 +571,30 @@
       "description": "The ref audited, as given or defaulted",
       "type": "string"
     },
+    "replay": {
+      "additionalProperties": false,
+      "description": "The `discipline replay --json` report `--replay` read; null without it",
+      "properties": {
+        "cases": {
+          "description": "Changes in the report",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "checked": {
+          "description": "Of those, the ones whose check ran (passed or blocked); the others judge nothing",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cases",
+        "checked"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "schema_version": {
       "const": 1,
       "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it"
@@ -617,7 +641,8 @@
     "pulls",
     "issues",
     "forge",
-    "identities"
+    "identities",
+    "replay"
   ],
   "title": "DisciplineAudit",
   "type": "object"

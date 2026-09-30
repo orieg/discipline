@@ -496,6 +496,17 @@ pub struct Summary {
     /// For each change with an exception (a record or a protected edit), newest first:
     /// whether anything records that an agent made it.
     pub identities: Vec<Identity>,
+    /// What `--replay` read; `None` without it.
+    pub replay: Option<ReplayRead>,
+}
+
+/// The replay report `--replay` read.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ReplayRead {
+    /// Changes in the report.
+    pub cases: usize,
+    /// Of those, the ones whose check ran (`passed` or `blocked`).
+    pub checked: usize,
 }
 
 /// Whether a change carries any record that an agent made it. A missing record is
@@ -1264,6 +1275,10 @@ pub fn run(opts: &Options) -> Result<Summary> {
         s.signals.extend(replay_signals(&s.records));
         s.signals.sort_by_key(|g| rank_order(g.rank));
         lifted_check(&mut s.checks, &s.records, &cases);
+        s.replay = Some(ReplayRead {
+            cases: cases.len(),
+            checked: cases.iter().filter(|c| c.judged).count(),
+        });
     }
     s.identities = identities(
         &s.records,
@@ -1393,12 +1408,12 @@ pub fn replay_signals(records: &[Record]) -> Vec<Signal> {
     }
     vec![Signal {
         id: "waiver-lifted-nothing",
-        rank: "look-soon",
+        rank: "review",
         count: hits.len(),
         changes,
         records: hits,
         list: "records",
-        next: "Ask why the change waived a finding it did not have: a waiver written in advance, just in case, is a habit to stop.",
+        next: "Check whether the waiver was needed when it was written. The replay re-checks with the discipline version that ran it, so a gate refined since, or a directive format that version no longer reads, also leaves nothing to lift; a waiver that was never needed was written in advance, which is a habit to stop.",
     }]
 }
 
@@ -2976,6 +2991,19 @@ mod tests {
             r#"{"schema_version":1,"cases_detail":[{"sha":"x","verdict":"passed"}]}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn the_protected_row_points_to_the_ratification_the_forge_read() {
+        let a = at(0, Some(10));
+        let mut edit = Record::new(&a.to_owned(), "protected-edit", "protected");
+        edit.file = Some("AGENTS.md".into());
+        let mut s = Summary::from_records("main".into(), 1, vec![], vec![]);
+        s.protected_edits = vec![edit];
+        assert!(crate::audit_html::render(&s).contains("from git; ratification not checked"));
+        s.forge = Some(ForgeRead::default());
+        assert!(crate::audit_html::render(&s)
+            .contains("from git; ratification under Owner ratification"));
     }
 
     #[test]
