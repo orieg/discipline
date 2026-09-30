@@ -493,11 +493,25 @@ pub enum Finding {
     },
 }
 
+/// A protected path a usable comment ratified: where, by whom and when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ratified {
+    pub path: String,
+    /// The repository of the issue carrying the comment, `owner/name`.
+    pub repo: String,
+    pub issue: u64,
+    pub comment_id: String,
+    pub author: String,
+    pub created_at: i64,
+}
+
 /// What the ratification check concluded.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Judgement {
     pub findings: Vec<Finding>,
     pub notes: Vec<String>,
+    /// The ratifications that stand, one per ratified protected path.
+    pub ratified: Vec<Ratified>,
 }
 
 /// Why `comment` cannot ratify, or `None` when it can.
@@ -621,6 +635,7 @@ pub fn judge(
     // path -> (comment anchor, author) of a ratification in its window.
     let mut ratified: std::collections::BTreeMap<String, String> = Default::default();
     let mut lapsed: std::collections::BTreeMap<String, String> = Default::default();
+    let mut by_path: std::collections::BTreeMap<String, Ratified> = Default::default();
     for r in &resolved {
         let usable = match r.verdict {
             Verdict::Issue => true,
@@ -702,6 +717,17 @@ pub fn judge(
                     match too_old {
                         None => {
                             lapsed.remove(&entry);
+                            by_path.insert(
+                                entry.clone(),
+                                Ratified {
+                                    path: entry.clone(),
+                                    repo: r.repo.clone(),
+                                    issue: r.reference.number,
+                                    comment_id: c.id.clone(),
+                                    author: c.author.clone(),
+                                    created_at: c.created_at,
+                                },
+                            );
                             ratified.insert(entry, format!("{anchor} by {}", c.author));
                         }
                         Some(why) => {
@@ -715,7 +741,10 @@ pub fn judge(
 
     for path in input.protected {
         match ratified.get(path) {
-            Some(by) => out.notes.push(format!("`{path}` ratified in {by}")),
+            Some(by) => {
+                out.notes.push(format!("`{path}` ratified in {by}"));
+                out.ratified.extend(by_path.remove(path));
+            }
             None => {
                 if let Some(l) = lapsed.get(path) {
                     let (anchor, why) = l.split_once(": ").unwrap_or((l, ""));
@@ -917,6 +946,18 @@ mod tests {
             j.notes.iter().any(|n| n.contains("#1162 → ref-not-found")),
             "{j:?}"
         );
+        // The standing ratification is named: issue, comment, author and time.
+        assert_eq!(
+            j.ratified,
+            vec![Ratified {
+                path: "scripts/check_x.py".into(),
+                repo: "o/r".into(),
+                issue: 12,
+                comment_id: "1".into(),
+                author: "owner".into(),
+                created_at: parse_time(T0).unwrap(),
+            }]
+        );
         assert!(!api.log().iter().any(|k| k.contains("1162/comments")));
     }
 
@@ -925,6 +966,7 @@ mod tests {
         let api = forge_with(vec![comment(1, "owner", "LGTM", T0, T0)]);
         let j = run(&api, &cfg(), "Closes #12", &["scripts/check_x.py"]).unwrap();
         assert_eq!(unratified(&j), vec!["scripts/check_x.py"]);
+        assert!(j.ratified.is_empty(), "{j:?}");
         // No closing reference at all.
         let j = run(&api, &cfg(), "Refs #12", &["scripts/check_x.py"]).unwrap();
         assert_eq!(unratified(&j), vec!["scripts/check_x.py"]);

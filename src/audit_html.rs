@@ -109,7 +109,11 @@ fn signal_sentence(s: &Signal, summary: &Summary) -> String {
     let gates: BTreeSet<&str> = s
         .records
         .iter()
-        .filter_map(|&i| summary.records.get(i).and_then(|r| r.gate.as_deref()))
+        .filter_map(|&i| {
+            signal_list(s, summary)
+                .get(i)
+                .and_then(|r| r.gate.as_deref())
+        })
         .collect();
     let gates = gates
         .iter()
@@ -147,6 +151,14 @@ fn signal_sentence(s: &Signal, summary: &Summary) -> String {
         }
         "loosened-not-restored" => format!("{loosenings} {verb_were} never tightened back"),
         "baseline-grew" => format!("the baseline grew for {gates}"),
+        "protected-edit-unratified" => format!(
+            "{} with no ratification the gate accepts, in {changes}",
+            plural(n, "protected-path edit", "protected-path edits")
+        ),
+        "protected-edit-self-ratified" => format!(
+            "{} ratified by the pull request's own author login, in {changes}",
+            plural(n, "protected-path edit", "protected-path edits")
+        ),
         _ => plural(n, "record", "records"),
     }
 }
@@ -171,11 +183,20 @@ fn prose(s: &str) -> String {
         .collect()
 }
 
+/// The list a signal's indexes point into.
+fn signal_list<'a>(s: &Signal, summary: &'a Summary) -> &'a [Record] {
+    if s.list == "protected_edits" {
+        &summary.protected_edits
+    } else {
+        &summary.records
+    }
+}
+
 fn change_links(s: &Signal, summary: &Summary) -> String {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for &i in &s.records {
-        let Some(r) = summary.records.get(i) else {
+        let Some(r) = signal_list(s, summary).get(i) else {
             continue;
         };
         if seen.insert(r.sha.clone()) {
@@ -216,6 +237,11 @@ const CHECK_LABEL: &[(&str, &str)] = &[
     ("waived-then-loosened", "Waived, then loosened"),
     ("loosened-not-restored", "Loosenings not restored"),
     ("baseline-grew", "Baseline growth"),
+    ("protected-edit-unratified", "Unratified protected edits"),
+    (
+        "protected-edit-self-ratified",
+        "Self-ratified protected edits",
+    ),
     ("directive-lifted-a-finding", "Waivers that lifted nothing"),
     (
         "pull-request-body-directives",
@@ -509,6 +535,49 @@ fn source(r: &Record, s: &Summary) -> String {
     )
 }
 
+/// Each path's ratification in one change, as `--forge` judged it, linked to the comment.
+fn ratification_cell(rs: &[&Record], s: &Summary) -> String {
+    let mut seen: Vec<String> = Vec::new();
+    for r in rs {
+        let cell = match &r.ratification {
+            None => r##"<span class="badge muted">Not checked</span>"##.to_string(),
+            Some(f) => {
+                let (cls, text) = match f.state {
+                    "ratified" => ("ok", "Ratified"),
+                    "self-ratified" => ("warn", "By the author's own login"),
+                    "unratified" => ("bad", "Unratified"),
+                    "not-required" => ("muted", "Not required"),
+                    "never-ratifiable" => ("bad", "Never ratifiable"),
+                    _ => ("muted", "Not checked"),
+                };
+                let link = match (&s.links, &f.issue_repo, f.issue, &f.comment_id) {
+                    (Some(l), Some(repo), Some(n), Some(id)) => format!(
+                        r##" <a class="src-link" href="{}" title="Open the ratifying comment">#{n} comment{} ↗</a>"##,
+                        esc(&l
+                            .issue_comment
+                            .replace("{repo}", repo)
+                            .replace("{n}", &n.to_string())
+                            .replace("{id}", id)),
+                        f.created
+                            .map(|t| format!(", {}", date(t)))
+                            .unwrap_or_default()
+                    ),
+                    _ => f
+                        .why
+                        .as_deref()
+                        .map(|w| format!(r##"<br><span class="muted">{}</span>"##, esc(w)))
+                        .unwrap_or_default(),
+                };
+                format!(r##"<span class="badge {cls}">{text}</span>{link}"##)
+            }
+        };
+        if !seen.contains(&cell) {
+            seen.push(cell);
+        }
+    }
+    seen.join("<br>")
+}
+
 /// Whether another login approved the change's pull request, as `--forge` read it.
 fn review_cell(r: &Record, s: &Summary) -> String {
     if s.forge.is_none() {
@@ -702,7 +771,7 @@ pub fn render(s: &Summary) -> String {
             let paths = rs.iter().map(|r| format!("<code>{}</code>{}", esc(r.file.as_deref().unwrap_or("")), source(r, s))).collect::<Vec<_>>().join("<br>");
             let gate = f.detail.as_deref().unwrap_or("");
             let gate_badge = if gate == "gate on" { r##"<span class="badge ok">on</span>"## } else { r##"<span class="badge muted">off</span>"## };
-            format!(r##"<tr><td>{}</td><td>{}</td><td>{paths}</td><td>{gate_badge}</td><td><span class="badge muted">Not checked</span></td><td>{}</td><td>{}</td></tr>"##, ch(f), date(f.time), review_cell(f, s), external(f, s))
+            format!(r##"<tr><td>{}</td><td>{}</td><td>{paths}</td><td>{gate_badge}</td><td>{}</td><td>{}</td><td>{}</td></tr>"##, ch(f), date(f.time), ratification_cell(rs, s), review_cell(f, s), external(f, s))
         })
         .collect();
     let protected_view = if by_change.is_empty() {
@@ -894,6 +963,11 @@ pub fn render(s: &Summary) -> String {
                     esc(r.file.as_deref().unwrap_or("")),
                     r.line.unwrap_or(0),
                     role(r.file.as_deref())
+                ),
+                "protected-edit" if r.ratification.is_some() => format!(
+                    "Edited protected path <code>{}</code>: {}",
+                    esc(r.file.as_deref().unwrap_or("")),
+                    ratification_cell(&[r], s)
                 ),
                 "protected-edit" => format!(
                     "Edited protected path <code>{}</code> (gate {}); ratification not checked",

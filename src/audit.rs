@@ -106,6 +106,9 @@ pub struct Record {
     /// Where a directive was read: `commit-message` or `pull-request-body`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<&'static str>,
+    /// A protected edit's ratification, read with `--forge`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ratification: Option<RatificationFact>,
     /// The change's position, 0 for the newest audited change.
     #[serde(rename = "change_index")]
     pub ord: usize,
@@ -143,6 +146,7 @@ impl Record {
             reason: None,
             detail: None,
             source: None,
+            ratification: None,
             ord: change.ord,
             subject: change.subject.clone(),
         }
@@ -174,8 +178,10 @@ pub struct Signal {
     pub count: usize,
     /// The changes they are in, newest first (`#N`, else a 10-character commit id).
     pub changes: Vec<String>,
-    /// Indexes into `records` (or `tightenings`, for none today).
+    /// Indexes into the list `list` names.
     pub records: Vec<usize>,
+    /// `records`, or `protected_edits` for the ratification signals.
+    pub list: &'static str,
     /// The next action a reviewer takes.
     pub next: &'static str,
 }
@@ -340,6 +346,7 @@ pub fn signals(records: &[Record], tightenings: &[Record]) -> (Vec<Signal>, Vec<
             count: hits.len(),
             changes,
             records: hits,
+            list: "records",
             next: def.next,
         });
     }
@@ -367,6 +374,8 @@ pub struct Links {
     pub file: String,
     /// One file's diff within a commit, with `{sha}` and `{path_sha256}`; GitHub only.
     pub file_diff: Option<String>,
+    /// A comment on an issue, with `{repo}` (`owner/name`), `{n}` and `{id}`.
+    pub issue_comment: String,
 }
 
 impl Links {
@@ -387,7 +396,12 @@ impl Links {
                 "src/commit/{sha}/{path}#L{line}",
             ),
         };
+        let issue_comment = match f.kind {
+            GitHub | Gitea | Forgejo => "issues/{n}#issuecomment-{id}",
+            GitLab => "-/issues/{n}#note_{id}",
+        };
         Links {
+            issue_comment: format!("{}/{{repo}}/{issue_comment}", f.url),
             pull: format!("{base}/{pull}"),
             commit: format!("{base}/{commit}"),
             file: format!("{base}/{file}"),
@@ -446,6 +460,35 @@ pub struct Pull {
     pub pr: u64,
     /// A login other than the pull request's author approved its head.
     pub approved_by_other: bool,
+    /// The author's login and the body, for the ratification judgement; never reported.
+    #[serde(skip)]
+    pub author: String,
+    #[serde(skip)]
+    pub body: String,
+}
+
+/// Whether a protected edit was ratified, as `ratified-paths` judges it on the forge.
+/// The ratifier's login is not carried; `self-ratified` compares it with the pull
+/// request's author.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RatificationFact {
+    /// `ratified`, `self-ratified` (by the pull request's own author login),
+    /// `unratified`, `not-required` (the gate was off in the parent configuration),
+    /// `never-ratifiable`, or `not-checked` (no pull request read, or the forge failed).
+    pub state: &'static str,
+    /// The issue carrying the ratifying comment, `owner/name`, and its number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_id: Option<String>,
+    /// When the ratifying comment was posted, seconds since the Unix epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<i64>,
+    /// Why it is unratified or not checked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// How the forge reads of `--forge` went.
@@ -460,6 +503,9 @@ pub struct ForgeRead {
     /// The first error, when one failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The changes that failed, for the ratification judgement.
+    #[serde(skip)]
+    pub failed_shas: Vec<String>,
 }
 
 impl Summary {
@@ -1082,8 +1128,17 @@ pub fn run(opts: &Options) -> Result<Summary> {
     } else {
         (Vec::new(), None)
     };
+    if let (true, Ok(f), Some(read)) = (opts.forge, &forge, &read) {
+        let api = crate::forge::HttpApi::from_env();
+        judge_protected(&repo, &api, f, &mut protected, &pulls, &read.failed_shas)?;
+    }
     let mut s = Summary::from_records(reference, commits.len(), records, tightenings);
     s.tip = tip.to_string();
+    if read.is_some() {
+        s.signals.extend(protected_signals(&protected));
+        s.signals.sort_by_key(|g| rank_order(g.rank));
+        ratification_check(&mut s.checks, &protected);
+    }
     s.protected_edits = protected;
     s.links = forge.ok().map(|f| Links::for_forge(&f));
     if let Some(read) = read {
@@ -1129,15 +1184,260 @@ pub fn read_pulls(
                     sha: c.sha.clone(),
                     pr: m.number,
                     approved_by_other: approvers.iter().any(|a| !a.eq_ignore_ascii_case(&m.author)),
+                    author: m.author.clone(),
+                    body: m.body.clone(),
                 });
             }
             Err(e) => {
                 read.failed += 1;
+                read.failed_shas.push(c.sha.clone());
                 read.error.get_or_insert(e);
             }
         }
     }
     (pulls, read, body_records)
+}
+
+/// When `path` last changed on the first-parent line ending at `from`: the committer
+/// time of the newest commit whose tree gives the path another blob than its parent's.
+/// The start of the `path-last-changed` ratification window.
+pub fn last_change_before(repo: &Repository, from: Oid, path: &str) -> Result<Option<i64>> {
+    let p = std::path::Path::new(path);
+    let blob =
+        |c: &Commit| -> Result<Option<Oid>> { Ok(c.tree()?.get_path(p).ok().map(|e| e.id())) };
+    let mut cur = repo.find_commit(from)?;
+    loop {
+        let here = blob(&cur)?;
+        let Ok(parent) = cur.parent(0) else {
+            return Ok(here.map(|_| cur.time().seconds()));
+        };
+        if here != blob(&parent)? {
+            return Ok(Some(cur.time().seconds()));
+        }
+        cur = parent;
+    }
+}
+
+/// Judge each protected edit as `ratified-paths` does, against the change's parent
+/// configuration and its merged pull request. The forge answers per change; a change
+/// the forge could not answer for is `not-checked`.
+pub fn judge_protected(
+    repo: &Repository,
+    api: &dyn crate::forge::ForgeApi,
+    forge: &crate::forge::Forge,
+    protected: &mut [Record],
+    pulls: &[Pull],
+    failed: &[String],
+) -> Result<()> {
+    let shas: std::collections::BTreeSet<String> =
+        protected.iter().map(|r| r.sha.clone()).collect();
+    for sha in shas {
+        let commit = repo.find_commit(Oid::from_str(&sha)?)?;
+        let parent = commit.parent(0)?;
+        let cfg = blob_text(repo, &parent.tree()?, CONFIG_NAME)?
+            .and_then(|t| DisciplineConfig::from_toml_str(&t).ok())
+            .map(|c| c.gates.ratified_paths)
+            .unwrap_or_default();
+        // The audit reads after the merge, which closed the issues the pull request
+        // closes: an issue that was open when the gate ran is closed now. An issue closed
+        // before the merge is not told apart until the audit reads issue timelines.
+        let cfg = crate::config::RatifiedPathsGate {
+            require_open_issue: false,
+            ..cfg
+        };
+        let never = crate::guards::PathFilter::new(&cfg.never_ratifiable)?;
+        let fact = |state: &'static str, why: Option<String>| RatificationFact {
+            state,
+            issue_repo: None,
+            issue: None,
+            comment_id: None,
+            created: None,
+            why,
+        };
+        let mine: Vec<&mut Record> = protected.iter_mut().filter(|r| r.sha == sha).collect();
+        let paths: Vec<String> = mine
+            .iter()
+            .filter_map(|r| r.file.clone())
+            .filter(|p| !never.matches(p))
+            .collect();
+        let verdicts: std::collections::BTreeMap<String, RatificationFact> = if !cfg.enabled {
+            Default::default()
+        } else if let Some(pull) = pulls.iter().find(|p| p.sha == sha) {
+            let last_change = |p: &str| last_change_before(repo, parent.id(), p);
+            let judged = crate::ratification::judge(
+                api,
+                forge,
+                &cfg,
+                &crate::ratification::Input {
+                    pull_number: pull.pr,
+                    pull_body: &pull.body,
+                    protected: &paths,
+                    never_ratifiable: &never,
+                    last_change: &last_change,
+                    now: commit.time().seconds(),
+                },
+            );
+            match judged {
+                Err(e) => paths
+                    .iter()
+                    .map(|p| (p.clone(), fact("not-checked", Some(e.to_string()))))
+                    .collect(),
+                Ok(j) => paths
+                    .iter()
+                    .map(|p| {
+                        let v = match j.ratified.iter().find(|r| &r.path == p) {
+                            Some(r) => RatificationFact {
+                                state: if r.author.eq_ignore_ascii_case(&pull.author) {
+                                    "self-ratified"
+                                } else {
+                                    "ratified"
+                                },
+                                issue_repo: Some(r.repo.clone()),
+                                issue: Some(r.issue),
+                                comment_id: Some(r.comment_id.clone()),
+                                created: Some(r.created_at),
+                                why: None,
+                            },
+                            None => fact(
+                                "unratified",
+                                j.findings.iter().find_map(|f| match f {
+                                    crate::ratification::Finding::Unratified { path, why }
+                                        if path == p =>
+                                    {
+                                        Some(why.clone())
+                                    }
+                                    _ => None,
+                                }),
+                            ),
+                        };
+                        (p.clone(), v)
+                    })
+                    .collect(),
+            }
+        } else if failed.contains(&sha) {
+            paths
+                .iter()
+                .map(|p| {
+                    (
+                        p.clone(),
+                        fact(
+                            "not-checked",
+                            Some("the forge could not answer for this change".into()),
+                        ),
+                    )
+                })
+                .collect()
+        } else {
+            paths
+                .iter()
+                .map(|p| (p.clone(), fact("unratified", Some("the change arrived with no pull request, so nothing could ratify it".into()))))
+                .collect()
+        };
+        for r in mine {
+            let path = r.file.clone().unwrap_or_default();
+            r.ratification = Some(if !cfg.enabled {
+                fact("not-required", None)
+            } else if never.matches(&path) {
+                fact("never-ratifiable", None)
+            } else {
+                verdicts
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or_else(|| fact("not-checked", None))
+            });
+        }
+    }
+    Ok(())
+}
+
+fn rank_order(rank: &str) -> u8 {
+    match rank {
+        "look-first" => 0,
+        "look-soon" => 1,
+        _ => 2,
+    }
+}
+
+/// The ratification signals, over the protected edits `--forge` judged.
+pub fn protected_signals(protected: &[Record]) -> Vec<Signal> {
+    let mut out = Vec::new();
+    for (id, rank, state, next) in [
+        (
+            "protected-edit-unratified",
+            "look-first",
+            "unratified",
+            "Open the change: a protected path was edited with no ratification the gate accepts.",
+        ),
+        (
+            "protected-edit-self-ratified",
+            "look-soon",
+            "self-ratified",
+            "Read the change: its protected edit was ratified by the pull request's own author login, which is not a second party.",
+        ),
+    ] {
+        let hits: Vec<usize> = (0..protected.len())
+            .filter(|&i| protected[i].ratification.as_ref().is_some_and(|f| f.state == state))
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        let mut changes: Vec<String> = Vec::new();
+        for &i in &hits {
+            let l = protected[i].label();
+            if !changes.contains(&l) {
+                changes.push(l);
+            }
+        }
+        out.push(Signal {
+            id,
+            rank,
+            count: hits.len(),
+            changes,
+            records: hits,
+            list: "protected_edits",
+            next,
+        });
+    }
+    out
+}
+
+/// The owner-ratification check, once `--forge` judged the protected edits.
+pub fn ratification_check(checks: &mut [Check], protected: &[Record]) {
+    let Some(c) = checks.iter_mut().find(|c| c.id == "owner-ratification") else {
+        return;
+    };
+    let states: Vec<&str> = protected
+        .iter()
+        .filter_map(|r| r.ratification.as_ref().map(|f| f.state))
+        .collect();
+    let count = |s: &str| states.iter().filter(|x| **x == s).count();
+    let edits = crate::audit_html::plural(states.len(), "protected edit", "protected edits");
+    if let Some(why) = protected
+        .iter()
+        .filter_map(|r| r.ratification.as_ref())
+        .find(|f| f.state == "not-checked")
+        .map(|f| f.why.clone().unwrap_or_default())
+    {
+        c.state = "not-checked";
+        c.detail = format!(
+            "{} of {edits} could not be judged: {why}",
+            count("not-checked")
+        );
+    } else if count("unratified") + count("self-ratified") > 0 {
+        c.state = "found";
+        c.detail = format!(
+            "{} unratified and {} ratified by the pull request's own author login, of {edits}",
+            count("unratified"),
+            count("self-ratified")
+        );
+    } else {
+        c.state = "clean";
+        c.detail = if states.is_empty() {
+            "no protected-path edit".to_string()
+        } else {
+            format!("every one of {edits} ratified by another login, or not required")
+        };
+    }
 }
 
 /// The checks `--forge` answers: pull-request-body directives and independent review.
@@ -1836,5 +2136,157 @@ mod tests {
                 .state,
             "clean"
         );
+    }
+
+    /// A repository with `commits`, each `(time, [(path, content)])`, on one line.
+    fn repo_with(commits: &[(i64, &[(&str, &str)])]) -> (crate::replay::TempDir, Vec<Oid>) {
+        let dir = crate::replay::TempDir::named("audit-test").unwrap();
+        let repo = Repository::init(&dir.0).unwrap();
+        let mut ids = Vec::new();
+        for (time, files) in commits {
+            let mut index = repo.index().unwrap();
+            for (path, content) in *files {
+                let full = dir.0.join(path);
+                std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+                std::fs::write(&full, content).unwrap();
+                index.add_path(std::path::Path::new(path)).unwrap();
+            }
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig =
+                git2::Signature::new("t", "t@example.invalid", &git2::Time::new(*time, 0)).unwrap();
+            let parents: Vec<Commit> = ids
+                .last()
+                .map(|id| repo.find_commit(*id).unwrap())
+                .into_iter()
+                .collect();
+            let parents: Vec<&Commit> = parents.iter().collect();
+            ids.push(
+                repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &parents)
+                    .unwrap(),
+            );
+        }
+        (dir, ids)
+    }
+
+    #[test]
+    fn a_path_last_changed_where_its_blob_last_differed_from_the_parent() {
+        let (dir, ids) = repo_with(&[
+            (1_000, &[("a.py", "1")]),
+            (2_000, &[("b.py", "1")]),
+            (3_000, &[("a.py", "2")]),
+        ]);
+        let repo = Repository::open(&dir.0).unwrap();
+        assert_eq!(
+            last_change_before(&repo, ids[2], "a.py").unwrap(),
+            Some(3_000)
+        );
+        assert_eq!(
+            last_change_before(&repo, ids[1], "a.py").unwrap(),
+            Some(1_000)
+        );
+        assert_eq!(
+            last_change_before(&repo, ids[2], "b.py").unwrap(),
+            Some(2_000)
+        );
+        assert_eq!(last_change_before(&repo, ids[2], "never.py").unwrap(), None);
+    }
+
+    #[test]
+    fn protected_edits_are_judged_as_the_gate_judges_them() {
+        let config = "[meta]\nversion = 1\nname = \"t\"\n[gates.ratified-paths]\nenabled = true\nprotected_paths = [\"scripts/*.py\"]\nratifiers = [\"owner\"]\nratification_valid_from = \"any\"\n";
+        let (dir, ids) = repo_with(&[
+            (1_000, &[("discipline.toml", config), ("scripts/a.py", "1")]),
+            (2_000, &[("scripts/a.py", "2")]),
+        ]);
+        let repo = Repository::open(&dir.0).unwrap();
+        let sha = ids[1].to_string();
+        let change = ChangeInfoRef {
+            sha: sha.clone(),
+            pr: Some(7),
+            time: 2_000,
+            ord: 0,
+            subject: "s".into(),
+        };
+        let c = repo.find_commit(ids[1]).unwrap();
+        let (pt, ct) = (c.parent(0).unwrap().tree().unwrap(), c.tree().unwrap());
+        let edits = protected_records(&repo, &pt, &ct, Some(config), &change).unwrap();
+        assert_eq!(edits.len(), 1);
+        let gitea = crate::forge::Forge {
+            kind: crate::forge::ForgeKind::Gitea,
+            url: "https://git.example.org".into(),
+            repo: "o/r".into(),
+        };
+        let api = |comments: serde_json::Value| {
+            let n = comments.as_array().unwrap().len().to_string();
+            canned(&[
+                ("gitea:repos/o/r", serde_json::json!({"full_name": "o/r"})),
+                (
+                    "gitea:repos/o/r/issues/12",
+                    serde_json::json!({"number": 12, "state": "closed"}),
+                ),
+                (
+                    "gitea:repos/o/r/issues/12/comments?limit=50&page=1",
+                    serde_json::json!({"__status": 200, "__headers": {"X-Total-Count": n}, "__body": comments}),
+                ),
+            ])
+        };
+        let ratifying = serde_json::json!([{"id": 5, "user": {"login": "owner"}, "body": "Owner-ratified-paths:\n- scripts/a.py\n", "created_at": "2026-09-27T10:00:00Z", "updated_at": "2026-09-27T10:00:00Z", "original_author": ""}]);
+        let pull = |author: &str| Pull {
+            sha: sha.clone(),
+            pr: 7,
+            approved_by_other: false,
+            author: author.into(),
+            body: "Closes #12".into(),
+        };
+        let judge = |api: &crate::forge::CannedApi, pulls: &[Pull], failed: &[String]| {
+            let mut e = edits.clone();
+            judge_protected(&repo, api, &gitea, &mut e, pulls, failed).unwrap();
+            e[0].ratification.clone().unwrap()
+        };
+        // Ratified by another login, on the issue the pull request closed at merge.
+        let r = judge(&api(ratifying.clone()), &[pull("dev")], &[]);
+        assert_eq!(
+            (r.state, r.issue, r.comment_id.as_deref()),
+            ("ratified", Some(12), Some("5"))
+        );
+        // The same comment, when the pull request's author is the ratifier.
+        assert_eq!(
+            judge(&api(ratifying.clone()), &[pull("OWNER")], &[]).state,
+            "self-ratified"
+        );
+        // No ratifying comment.
+        assert_eq!(
+            judge(&api(serde_json::json!([])), &[pull("dev")], &[]).state,
+            "unratified"
+        );
+        // A direct push, and a change the forge could not answer for.
+        assert_eq!(judge(&api(ratifying.clone()), &[], &[]).state, "unratified");
+        assert_eq!(
+            judge(&api(ratifying), &[], &[sha.clone()]).state,
+            "not-checked"
+        );
+
+        let mut judged = edits.clone();
+        judged[0].ratification = Some(RatificationFact {
+            state: "self-ratified",
+            issue_repo: None,
+            issue: None,
+            comment_id: None,
+            created: None,
+            why: None,
+        });
+        let sigs = protected_signals(&judged);
+        assert_eq!(
+            sigs.iter().map(|g| (g.id, g.list)).collect::<Vec<_>>(),
+            vec![("protected-edit-self-ratified", "protected_edits")]
+        );
+        let mut checks = signals(&[], &[]).1;
+        ratification_check(&mut checks, &judged);
+        let c = checks
+            .iter()
+            .find(|c| c.id == "owner-ratification")
+            .unwrap();
+        assert_eq!(c.state, "found", "{c:?}");
     }
 }
