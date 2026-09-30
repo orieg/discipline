@@ -9,7 +9,8 @@
       "code": "src/main.rs:run",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::clean_change_passes_and_reports_what_it_examined"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "tm-asset-policy-integrity",
@@ -20,7 +21,8 @@
       "pinning_tests": [
         "tests/test_gates_e2e.rs::policy_from_base_judges_a_change_by_the_configuration_it_did_not_write",
         "tests/test_gates_e2e.rs::ci_integrity_flags_a_discipline_step_moved_off_the_base_policy"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "tm-asset-historical-record",
@@ -31,7 +33,8 @@
       "pinning_tests": [
         "tests/test_audit.rs::each_kind_of_escape_hatch_is_recorded_against_its_change",
         "tests/test_audit.rs::signals_rank_what_needs_a_decision_and_a_tightening_restores_a_loosening"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "tm-asset-hygiene-protection",
@@ -42,7 +45,8 @@
       "pinning_tests": [
         "tests/test_gates_e2e.rs::pii_fires_on_home_paths_and_lan_ips_without_echoing_the_user",
         "tests/test_report_redaction.rs::test_cross_format_redaction_pins_sentinel_exclusion"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "tm-trust-boundary-change-not-judge",
@@ -53,7 +57,8 @@
       "pinning_tests": [
         "tests/test_gates_e2e.rs::policy_from_base_judges_a_change_by_the_configuration_it_did_not_write",
         "tests/test_pr_policy.rs::the_policy_must_come_from_the_base"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "tm-trust-boundary-author-claims-bounded",
@@ -64,7 +69,8 @@
       "pinning_tests": [
         "tests/test_gates_e2e.rs::override_budget_caps_what_one_change_may_excuse",
         "tests/test_gates_e2e.rs::required_approval_is_read_from_gitlab_at_the_merge_requests_head"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "tm-trust-boundary-forge-identity-separation",
@@ -74,7 +80,8 @@
       "code": "src/guards/ratified_paths.rs:evaluate",
       "pinning_tests": [
         "tests/test_pr_policy.rs::refuse_author_ratification_needs_a_login_other_than_the_pull_requests"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "tm-assumption-required-status-check",
@@ -84,7 +91,8 @@
       "code": "src/guards/ci_integrity.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::ci_integrity_flags_a_discipline_step_moved_off_the_base_policy"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "tm-assumption-forge-truthfulness",
@@ -95,7 +103,8 @@
       "pinning_tests": [
         "tests/test_pr_policy.rs::a_forge_outage_is_retried_then_a_labelled_failure_never_a_pass",
         "tests/test_pr_policy.rs::an_unreachable_forge_is_a_labelled_failure_never_a_pass"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f1-three-exit-states",
@@ -106,7 +115,8 @@
       "pinning_tests": [
         "tests/test_gates_e2e.rs::could_not_check_is_exit_2_never_a_pass",
         "tests/test_stability_contract.rs::a_signal_ends_the_run_by_the_signal_not_exit_2"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f2-three-state-inputs",
@@ -116,7 +126,8 @@
       "code": "src/gitctx.rs:open",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::could_not_check_is_exit_2_never_a_pass"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f3-merge-base-diffs",
@@ -127,7 +138,8 @@
       "pinning_tests": [
         "tests/test_gates_e2e.rs::rename_is_not_a_deletion_but_a_removed_test_is",
         "tests/test_gates_e2e.rs::rename_test_by_name_similarity_passes_without_removes_directive"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f4-no-vacuous-pass",
@@ -137,7 +149,8 @@
       "code": "src/engine.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::clean_change_passes_and_reports_what_it_examined"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f5-planned-not-passed",
@@ -147,7 +160,8 @@
       "code": "src/config.rs:validate",
       "pinning_tests": [
         "tests/test_config.rs::every_available_gate_has_settings_and_no_planned_gate_does"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f6-strict-configuration",
@@ -159,7 +173,8 @@
         "tests/test_config.rs::schema_is_strict",
         "tests/test_gates_e2e.rs::test_conflicting_cli_options_fail_closed_exit_2",
         "tests/test_gates_e2e.rs::could_not_check_is_exit_2_never_a_pass"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f7-named-degradation",
@@ -169,7 +184,8 @@
       "code": "src/ast/mod.rs:dispatch",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::unanalysed_languages_are_named_not_silently_passed"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f8-line-anchored-directives",
@@ -180,7 +196,8 @@
       "pinning_tests": [
         "tests/test_gates_e2e.rs::deletion_needs_a_scoped_line_anchored_rationale",
         "tests/test_gates_e2e.rs::test_directive_in_subject_line_rejected_q6"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f9-head-diffed-against-base",
@@ -190,7 +207,8 @@
       "code": "src/guards/integrity.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::policy_from_base_judges_a_change_by_the_configuration_it_did_not_write"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f10-secrets-not-echoed",
@@ -201,7 +219,8 @@
       "pinning_tests": [
         "tests/test_gates_e2e.rs::hostname_denylist_comes_from_config_or_secret_env_and_is_never_echoed",
         "tests/test_report_redaction.rs::test_cross_format_redaction_pins_sentinel_exclusion"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f11-untrusted-text-no-shell",
@@ -211,7 +230,8 @@
       "code": "action.yml:runs",
       "pinning_tests": [
         "tests/test_threat_model_claims.rs::action_yml_has_no_inline_shell_interpolation"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "fc-f12-installer-verifies",
@@ -221,7 +241,8 @@
       "code": "action.yml:runs",
       "pinning_tests": [
         "tests/test_action_version.rs::a_downloaded_archive_must_carry_the_release_workflow_attestation_for_its_tag"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "sec-libgit2-memory-safety",
@@ -231,7 +252,8 @@
       "code": "src/gitctx.rs:open",
       "pinning_tests": [
         "tests/test_threat_model_claims.rs::sec_libgit2_memory_safety"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "sec-tree-sitter-parse-safety",
@@ -241,7 +263,8 @@
       "code": "src/ast/mod.rs:parse",
       "pinning_tests": [
         "tests/test_threat_model_claims.rs::sec_tree_sitter_parse_safety"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "sec-toml-parser-safety",
@@ -251,7 +274,8 @@
       "code": "src/config.rs:from_toml",
       "pinning_tests": [
         "tests/test_config.rs::schema_is_strict"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "sec-forge-api-safety",
@@ -262,7 +286,8 @@
       "pinning_tests": [
         "tests/test_pr_policy.rs::a_forge_outage_is_retried_then_a_labelled_failure_never_a_pass",
         "tests/test_pr_policy.rs::a_bare_number_that_does_not_exist_is_a_verdict_not_a_crash"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "sec-directive-delimiter-injection",
@@ -272,7 +297,8 @@
       "code": "src/tokens.rs:extract_directives",
       "pinning_tests": [
         "tests/test_directive_scoping.rs::test_all_40_directives_table_driven_scoping"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "sec-offline-network-boundary",
@@ -282,7 +308,8 @@
       "code": "src/forge.rs:check_network_allowed",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::no_network_keeps_the_ci_base_fetch_off_the_network"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "kl-agent-prompt-fencing",
@@ -292,7 +319,8 @@
       "code": "src/report/agent_prompt.rs:render",
       "pinning_tests": [
         "tests/test_agent_hooks.rs::source_text_reaches_the_agent_only_inside_a_fence_it_cannot_close"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-agents-md",
@@ -302,7 +330,8 @@
       "code": "src/guards/agents_md.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::agents_md_gate_fires_when_missing_or_forked"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-assertion-reduction",
@@ -312,7 +341,8 @@
       "code": "src/guards/assertion_reduction.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::assertion_reduction_fires_on_weakening_and_on_removal"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-vacuous-tests",
@@ -322,7 +352,8 @@
       "code": "src/guards/vacuous_tests.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::vacuous_tests_fire_on_empty_and_tautological_tests_only"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-ignored-tests",
@@ -332,7 +363,8 @@
       "code": "src/guards/ignored_tests.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::ignored_tests_fire_and_accept_a_scoped_override"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-unsafe-safety-comment",
@@ -342,7 +374,8 @@
       "code": "src/guards/unsafe_safety.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::unsafe_gate_fires_on_undocumented_block_not_on_documented_one"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-deletion-rationale",
@@ -352,6 +385,19 @@
       "code": "src/guards/deletion_rationale.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::deletion_needs_a_scoped_line_anchored_rationale"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "gate-deletion-rationale-reason-required",
+      "category": "gates",
+      "claim": "a subject-scoped directive needs a non-empty, non-placeholder reason",
+      "source": "src/tokens.rs:7, docs/GATES.md:deletion-rationale",
+      "code": "src/tokens.rs:parse_directives_with_names",
+      "verdict": "gap",
+      "issue": 358,
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_directive_placeholder_gap_proof"
       ]
     },
     {
@@ -362,7 +408,8 @@
       "code": "src/guards/time_estimates.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::f2_repro_brief_time_estimates_all_fire_and_negative_controls_pass"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-pii",
@@ -372,7 +419,8 @@
       "code": "src/guards/pii.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::pii_fires_on_home_paths_and_lan_ips_without_echoing_the_user"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-agent-scratch",
@@ -382,7 +430,8 @@
       "code": "src/guards/agent_scratch.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::agent_scratch_fires_on_tracked_scratch_state"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-shell-secrets",
@@ -392,7 +441,8 @@
       "code": "src/guards/shell_secrets.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::shell_secrets_gate_e2e"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-issue-link",
@@ -402,7 +452,8 @@
       "code": "src/guards/issue_link.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::issue_link_gate_e2e"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-review-threads",
@@ -412,7 +463,8 @@
       "code": "src/guards/review_threads.rs:evaluate",
       "pinning_tests": [
         "tests/test_pr_policy.rs::an_unresolved_review_thread_fails_and_a_resolved_one_with_replies_passes"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-ratified-paths",
@@ -423,7 +475,8 @@
       "pinning_tests": [
         "tests/test_pr_policy.rs::a_glob_in_owner_ratified_paths_is_refused",
         "tests/test_pr_policy.rs::refuse_author_ratification_needs_a_login_other_than_the_pull_requests"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-citation-metadata",
@@ -433,7 +486,8 @@
       "code": "src/guards/citation_metadata.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::citation_metadata_judges_a_change_to_the_citation_record"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-commit-provenance",
@@ -443,7 +497,8 @@
       "code": "src/guards/commit_provenance.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::commit_provenance_reads_trailers_and_authorship_of_every_commit_in_the_range"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-config-integrity",
@@ -453,7 +508,8 @@
       "code": "src/guards/integrity.rs:evaluate",
       "pinning_tests": [
         "tests/test_baseline.rs::test_baseline_config_integrity_ratchet"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-stub-bodies",
@@ -463,7 +519,8 @@
       "code": "src/guards/stub_bodies.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::stub_bodies_reports_added_stubs_and_gutted_bodies_across_languages"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-error-swallowing",
@@ -473,7 +530,8 @@
       "code": "src/guards/error_swallowing.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::error_swallowing_is_a_delta_outside_tests_across_languages"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-instruction-smuggling",
@@ -483,7 +541,68 @@
       "code": "src/guards/instruction_smuggling.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::instruction_smuggling_reports_invisible_text_instruction_files_and_phrases_by_location_only"
-      ]
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "gate-instruction-smuggling-base64url",
+      "category": "gates",
+      "claim": "base64url (RFC 4648 \u00a75) alphabet in encoded blobs",
+      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "code": "src/guards/instruction_smuggling.rs:has_encoded_blob",
+      "verdict": "gap",
+      "issue": 354,
+      "pinning_tests": []
+    },
+    {
+      "id": "gate-instruction-smuggling-base64-slash",
+      "category": "gates",
+      "claim": "base64 run containing / without trailing = is not treated as a path and is detected as encoded blob",
+      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "code": "src/guards/instruction_smuggling.rs:has_encoded_blob",
+      "verdict": "gap",
+      "issue": 354,
+      "pinning_tests": []
+    },
+    {
+      "id": "gate-instruction-smuggling-split-markdown-lines",
+      "category": "gates",
+      "claim": "phrase split across Markdown lines is detected across line breaks",
+      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "code": "src/guards/instruction_smuggling.rs:phrase_classes",
+      "verdict": "gap",
+      "issue": 354,
+      "pinning_tests": []
+    },
+    {
+      "id": "gate-instruction-smuggling-split-line-comments",
+      "category": "gates",
+      "claim": "phrase split across // comments is detected across line breaks",
+      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "code": "src/guards/instruction_smuggling.rs:phrase_classes",
+      "verdict": "gap",
+      "issue": 354,
+      "pinning_tests": []
+    },
+    {
+      "id": "gate-instruction-smuggling-base64-wrapped-76",
+      "category": "gates",
+      "claim": "base64 wrapped at 76 columns (default base64 output) is detected across line breaks",
+      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "code": "src/guards/instruction_smuggling.rs:has_encoded_blob",
+      "verdict": "doc",
+      "issue": 354,
+      "pinning_tests": []
+    },
+    {
+      "id": "gate-instruction-smuggling-scanned-extensions",
+      "category": "gates",
+      "claim": "scanned-extension list in docs matches closed implementation list (.mdx, .ini, .ipynb, .svg, NOTES)",
+      "source": "docs/GATES.md:instruction-smuggling, issue:#354",
+      "code": "src/guards/instruction_smuggling.rs:is_prose_path",
+      "verdict": "doc",
+      "issue": 354,
+      "pinning_tests": []
     },
     {
       "id": "gate-build-hooks",
@@ -493,7 +612,8 @@
       "code": "src/guards/build_hooks.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::build_hooks_reports_install_hooks_build_scripts_and_manager_config_as_a_delta"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-toolchain-config",
@@ -503,7 +623,8 @@
       "code": "src/guards/toolchain_config.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::toolchain_config_reports_a_lowered_bar_and_lifts_it_by_key_or_path"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-sandbox-config",
@@ -513,7 +634,8 @@
       "code": "src/guards/sandbox_config.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::sandbox_config_reports_a_widened_agent_or_container_and_lifts_it_by_key_or_path"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-scope-confinement",
@@ -523,7 +645,8 @@
       "code": "src/guards/scope_confinement.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::scope_confinement_rejects_unauthorized_and_forbidden_paths"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-suppression-delta",
@@ -533,7 +656,8 @@
       "code": "src/guards/suppression_delta.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::suppression_delta_detects_new_suppression_and_accepts_waiver"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-provenance-tags",
@@ -543,7 +667,8 @@
       "code": "src/guards/provenance_tags.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::provenance_tags_changed_registry_sweeps_unchanged_documents"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-ci-integrity",
@@ -553,7 +678,8 @@
       "code": "src/guards/ci_integrity.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::ci_integrity_a_checked_set_plus_e_is_not_a_masked_exit_code"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-ci-skip-set",
@@ -563,7 +689,8 @@
       "code": "src/guards/ci_skip_set.rs:evaluate",
       "pinning_tests": [
         "tests/test_ci_skip_set.rs::consistent_skip_set_passes_from_inline_json"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-test-floor",
@@ -573,7 +700,8 @@
       "code": "src/guards/test_floor.rs:evaluate",
       "pinning_tests": [
         "tests/test_adoption.rs::test_floor_ratchet_compares_the_test_command_count_not_the_static_count"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-golden-output",
@@ -583,7 +711,8 @@
       "code": "src/guards/golden_output.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::golden_output_gate_fires_on_modified_snapshot_and_accepts_override"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-dependency-delta",
@@ -593,7 +722,8 @@
       "code": "src/guards/dependency_delta.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::dependency_delta_enforces_deny_toml_bans_and_git_pins"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-test-budget",
@@ -603,7 +733,8 @@
       "code": "src/guards/test_budget.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::test_budget_fires_on_hypothesis_and_fuzz_target_removal"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-pr-checklist",
@@ -613,7 +744,8 @@
       "code": "src/guards/pr_checklist.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::pr_checklist_reconciles_ticked_items_against_diff"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-command",
@@ -623,7 +755,8 @@
       "code": "src/guards/command.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::command_gate_forbid_output_and_canary_detected"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-sanitizers",
@@ -633,7 +766,8 @@
       "code": "src/guards/sanitizers.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::sanitizers_gate_handles_execution_and_override"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-msrv",
@@ -643,7 +777,8 @@
       "code": "src/guards/msrv.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::msrv_gate_validates_rust_version_and_accepts_waiver"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-miri",
@@ -653,7 +788,8 @@
       "code": "src/guards/miri.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::miri_gate_handles_execution_and_override"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-unsafe-budget",
@@ -663,7 +799,8 @@
       "code": "src/guards/unsafe_budget.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::test_unsafe_budget_max_unsafe_cap"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-bench-regression",
@@ -673,7 +810,8 @@
       "code": "src/guards/bench_regression.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::bench_regression_dual_file_mode_and_missing_baseline"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-archive-contents",
@@ -683,7 +821,8 @@
       "code": "src/guards/archive_contents.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::archive_contents_reads_every_package_format_by_magic_and_refuses_the_rest"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-manifest-sync",
@@ -693,7 +832,8 @@
       "code": "src/guards/manifest_sync.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::manifest_sync_reconciles_tracked_files_and_manifest_and_accepts_override"
-      ]
+      ],
+      "verdict": "holds"
     },
     {
       "id": "gate-version-lockstep",
@@ -703,7 +843,8 @@
       "code": "src/guards/version_lockstep.rs:evaluate",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::version_lockstep_does_not_blame_a_change_for_drift_the_base_already_had"
-      ]
+      ],
+      "verdict": "holds"
     }
   ]
 }

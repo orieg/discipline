@@ -16,12 +16,14 @@ struct Claim {
     claim: String,
     source: String,
     code: String,
+    verdict: String,
+    #[serde(default)]
+    issue: Option<u64>,
     pinning_tests: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ClaimsDoc {
-    description: String,
     claims: Vec<Claim>,
 }
 
@@ -31,33 +33,61 @@ fn root() -> &'static Path {
 
 fn collect_all_test_targets() -> BTreeMap<String, BTreeSet<String>> {
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let test_dir = root().join("tests");
-    let test_re =
-        regex::Regex::new(r"#\[test\]\s*(?:#\[[^\]]+\]\s*)*(?:async\s+)?fn\s+([a-zA-Z0-9_]+)")
-            .unwrap();
+    let fn_re = regex::Regex::new(
+        r"((?:#\[[^\]]+\]\s*)+)(?:pub(?:\([^\)]+\))?\s+)?(?:async\s+)?fn\s+([a-zA-Z0-9_]+)",
+    )
+    .unwrap();
+    let test_attr_re = regex::Regex::new(r"#\[\s*(?:[\w:]+::)?test\b").unwrap();
+    let ignore_attr_re = regex::Regex::new(r"#\[\s*ignore\b").unwrap();
 
-    fn walk(dir: PathBuf, re: &regex::Regex, out: &mut BTreeMap<String, BTreeSet<String>>) {
+    fn walk(
+        dir: PathBuf,
+        fn_re: &regex::Regex,
+        test_attr_re: &regex::Regex,
+        ignore_attr_re: &regex::Regex,
+        out: &mut BTreeMap<String, BTreeSet<String>>,
+    ) {
+        if !dir.exists() {
+            return;
+        }
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
-                walk(path, re, out);
+                walk(path, fn_re, test_attr_re, ignore_attr_re, out);
             } else if path.extension().is_some_and(|ext| ext == "rs") {
                 let content = std::fs::read_to_string(&path).unwrap();
                 let rel = path
                     .strip_prefix(root())
                     .unwrap()
                     .to_string_lossy()
-                    .to_string();
-                for cap in re.captures_iter(&content) {
-                    out.entry(rel.clone())
-                        .or_default()
-                        .insert(cap[1].to_string());
+                    .replace('\\', "/");
+                for cap in fn_re.captures_iter(&content) {
+                    let attrs = &cap[1];
+                    let fn_name = &cap[2];
+                    if test_attr_re.is_match(attrs) && !ignore_attr_re.is_match(attrs) {
+                        out.entry(rel.clone())
+                            .or_default()
+                            .insert(fn_name.to_string());
+                    }
                 }
             }
         }
     }
 
-    walk(test_dir, &test_re, &mut out);
+    walk(
+        root().join("tests"),
+        &fn_re,
+        &test_attr_re,
+        &ignore_attr_re,
+        &mut out,
+    );
+    walk(
+        root().join("src"),
+        &fn_re,
+        &test_attr_re,
+        &ignore_attr_re,
+        &mut out,
+    );
     out
 }
 
@@ -74,16 +104,12 @@ fn claims_fixture_is_valid() {
         serde_json::from_str(&content).expect("fixture must be valid JSON matching ClaimsDoc");
 
     assert!(
-        !doc.description.trim().is_empty(),
-        "claims doc description must not be empty"
-    );
-
-    assert!(
         doc.claims.len() >= 60,
         "expected at least 60 claims, found {}",
         doc.claims.len()
     );
 
+    let valid_verdicts = ["holds", "gap", "known", "doc"];
     let mut seen_ids = BTreeSet::new();
     for claim in &doc.claims {
         assert!(!claim.id.trim().is_empty(), "claim id must not be empty");
@@ -112,6 +138,28 @@ fn claims_fixture_is_valid() {
             "claim category must not be empty for {}",
             claim.id
         );
+        assert!(
+            valid_verdicts.contains(&claim.verdict.as_str()),
+            "claim {} has invalid verdict '{}'; allowed: {:?}",
+            claim.id,
+            claim.verdict,
+            valid_verdicts
+        );
+        if claim.verdict != "holds" {
+            assert!(
+                claim.issue.is_some() && claim.issue.unwrap() > 0,
+                "claim {} has verdict '{}' but does not specify an issue number",
+                claim.id,
+                claim.verdict
+            );
+        }
+        if claim.verdict == "holds" {
+            assert!(
+                !claim.pinning_tests.is_empty(),
+                "claim {} has verdict 'holds' but has no pinning tests",
+                claim.id
+            );
+        }
     }
 }
 
@@ -291,44 +339,64 @@ fn sec_libgit2_memory_safety() {
     assert!(is_bin, "binary file must be identified as binary");
 }
 
-/// Lists all claims without pinning tests. When run, acts as the definitive red-team target list.
+/// Reports threat model claims coverage and validates that every 'holds' claim is pinned
+/// and every 'gap' claim is tracked by an open issue.
 #[test]
 fn report_and_verify_claims_coverage() {
     let fixture_path = root().join("tests/fixtures/threat_model_claims.json");
     let content = std::fs::read_to_string(&fixture_path).unwrap();
     let doc: ClaimsDoc = serde_json::from_str(&content).unwrap();
 
-    let mut unpinned = Vec::new();
-    let mut pinned_count = 0;
+    let mut unpinned_holds = Vec::new();
+    let mut missing_gap_issues = Vec::new();
+    let mut holds_pinned_count = 0;
+    let mut gap_count = 0;
+    let mut known_count = 0;
+    let mut doc_count = 0;
 
     for claim in &doc.claims {
-        if claim.pinning_tests.is_empty() {
-            unpinned.push(format!("{} ({}): {}", claim.id, claim.source, claim.claim));
-        } else {
-            pinned_count += 1;
+        match claim.verdict.as_str() {
+            "holds" => {
+                if claim.pinning_tests.is_empty() {
+                    unpinned_holds
+                        .push(format!("{} ({}): {}", claim.id, claim.source, claim.claim));
+                } else {
+                    holds_pinned_count += 1;
+                }
+            }
+            "gap" => {
+                gap_count += 1;
+                if claim.issue.is_none() {
+                    missing_gap_issues.push(claim.id.clone());
+                }
+            }
+            "known" => {
+                known_count += 1;
+            }
+            "doc" => {
+                doc_count += 1;
+            }
+            _ => {}
         }
     }
 
     let total = doc.claims.len();
     eprintln!(
-        "\n=== Threat Model Claims Coverage ===\nTotal claims: {}\nPinned: {} ({:.1}%)\nUnpinned: {}\n",
-        total,
-        pinned_count,
-        (pinned_count as f64 / total as f64) * 100.0,
-        unpinned.len()
+        "\n=== Threat Model Claims Coverage ===\nHolds & pinned: {}/{}\nGaps: {}\nKnown misses: {}\nDoc misses: {}\n",
+        holds_pinned_count, total, gap_count, known_count, doc_count
     );
 
-    if !unpinned.is_empty() {
-        eprintln!("Untested claims target list:\n  {}", unpinned.join("\n  "));
-    }
+    assert!(
+        unpinned_holds.is_empty(),
+        "The following 'holds' claims lack pinning tests:\n  {}",
+        unpinned_holds.join("\n  ")
+    );
 
-    if std::env::var("DISCIPLINE_ALLOW_UNTESTED_CLAIMS").is_err() && !unpinned.is_empty() {
-        panic!(
-            "There are {} untested threat model claims that require discriminating tests or red-team verification:\n  {}\n\nSet DISCIPLINE_ALLOW_UNTESTED_CLAIMS=1 to bypass.",
-            unpinned.len(),
-            unpinned.join("\n  ")
-        );
-    }
+    assert!(
+        missing_gap_issues.is_empty(),
+        "The following 'gap' claims lack a tracking issue:\n  {}",
+        missing_gap_issues.join("\n  ")
+    );
 }
 
 /// Attack Probe: Directive parsing with CRLF line endings (Windows/RFC 2822).
@@ -404,8 +472,15 @@ fn sec_directive_subject_line_ignored() {
     );
 }
 
-/// Attack Probe: Documenting GAP where `removes: <subject>` with no reason or `removes: <subject> todo`
-/// is treated as non-empty reason and bypasses placeholder check.
+/// Attack Probe: Documents GAP in `gate-deletion-rationale-reason-required` (#358).
+///
+/// Current behavior: `removes: <subject>` with no reason or `removes: <subject> todo`
+/// is treated as having a non-empty reason and bypasses the placeholder check because
+/// the subject is stripped and the remainder is not validated as a non-placeholder.
+///
+/// Note: The remediation in #358 will invert this test: once #358 lands, `removes: <subject>`
+/// without a valid non-placeholder rationale will be rejected, this test will assert
+/// rejection (`dirs_subject.is_empty()`), and the claim will move to `holds`.
 #[test]
 fn sec_directive_placeholder_gap_proof() {
     let names = discipline::tokens::REMOVES;

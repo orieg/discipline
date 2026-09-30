@@ -533,6 +533,8 @@ Every gate implemented in Discipline must satisfy the 4-point testing contract b
 3. **Mutation evidence:** Detectors must be deliberately inverted or broken, with proof that the test suite fails on the mutant.
 4. **Self-test cases:** Compiled directly into the binary (`src/selftest.rs`) to allow deployed binaries to verify their own discriminators.
 
+Threat model claims, adversarial attack probes, and isolated container reproduction environments are documented under `tests/red_team/README.md`.
+
 ---
 
 ## 10. Known Limits
