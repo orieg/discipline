@@ -456,6 +456,50 @@ pub fn closing_references(
     }
 }
 
+/// The closing references a pull request's body names that the forge's own list leaves
+/// out, as written (`#345`). Only for `closing_source = "server"` on a forge that keeps
+/// such a list (GitHub, GitLab): the forge normally builds the list from these very
+/// keywords, so a gap means it did not link one. This only explains a verdict; the body
+/// never ratifies anything by itself.
+fn unlinked_closing(
+    forge: &Forge,
+    body: &str,
+    cfg: &RatifiedPathsGate,
+    listed: &[Reference],
+) -> Vec<String> {
+    if cfg.closing_source != ClosingSource::Server
+        || !matches!(forge.kind, ForgeKind::GitHub | ForgeKind::GitLab)
+    {
+        return Vec::new();
+    }
+    let key = |r: &Reference| {
+        (
+            r.repo
+                .as_deref()
+                .unwrap_or(&forge.repo)
+                .to_ascii_lowercase(),
+            r.number,
+        )
+    };
+    let listed: std::collections::BTreeSet<_> = listed.iter().map(key).collect();
+    let mut out: Vec<String> = Vec::new();
+    for r in references::parse(body, forge.kind, &cfg.closing_keywords) {
+        if r.closing && !r.pull && !listed.contains(&key(&r)) && !out.contains(&r.text) {
+            out.push(r.text);
+        }
+    }
+    out
+}
+
+fn forge_name(kind: ForgeKind) -> &'static str {
+    match kind {
+        ForgeKind::GitHub => "GitHub",
+        ForgeKind::GitLab => "GitLab",
+        ForgeKind::Gitea => "Gitea",
+        ForgeKind::Forgejo => "Forgejo",
+    }
+}
+
 /// When pull request `number` was opened.
 pub fn pull_created_at(api: &dyn ForgeApi, forge: &Forge, number: u64) -> Result<i64, ForgeError> {
     let path = match forge.kind {
@@ -623,9 +667,24 @@ pub fn judge(
     .map_err(|e| forge_err("the issues the pull request closes", e))?;
     let resolved = references::resolve_all(api, forge, &closing, &cfg.ratification_repos)
         .map_err(|e| forge_err("the issues the pull request closes", e))?;
+    let unlinked = unlinked_closing(forge, input.pull_body, cfg, &closing);
+    let unlinked_why = (!unlinked.is_empty()).then(|| {
+        format!(
+            "its body names {}, but {} did not link {it} to this pull request (link {it} {}, then re-run)",
+            unlinked.join(", "),
+            forge_name(forge.kind),
+            match forge.kind {
+                ForgeKind::GitHub => "in the pull request's Development sidebar",
+                _ => "from the merge request",
+            },
+            it = if unlinked.len() == 1 { "it" } else { "them" },
+        )
+    });
     if resolved.is_empty() {
-        out.notes
-            .push("the pull request closes no issue, so nothing can ratify its edits".into());
+        out.notes.push(match &unlinked_why {
+            Some(w) => format!("the pull request closes no issue on the forge: {w}"),
+            None => "the pull request closes no issue, so nothing can ratify its edits".into(),
+        });
     } else {
         out.notes.push(format!(
             "closing references: {}",
@@ -774,10 +833,17 @@ pub fn judge(
                 }
                 out.findings.push(Finding::Unratified {
                     path: path.clone(),
-                    why: if resolved.is_empty() {
-                        "the pull request closes no issue".into()
-                    } else {
-                        "no usable ratification on the issues it closes names it".into()
+                    why: match (resolved.is_empty(), &unlinked_why) {
+                        (true, Some(w)) => {
+                            format!("the pull request closes no issue on the forge: {w}")
+                        }
+                        (true, None) => "the pull request closes no issue".into(),
+                        (false, Some(w)) => format!(
+                            "no usable ratification on the issues it closes names it, and {w}"
+                        ),
+                        (false, None) => {
+                            "no usable ratification on the issues it closes names it".into()
+                        }
                     },
                 });
             }
@@ -1242,6 +1308,97 @@ mod tests {
             "github:graphql:{} {vars}",
             crate::forge::graphql_operation(query)
         )
+    }
+
+    #[test]
+    fn a_closing_reference_github_did_not_link_is_named_but_never_ratifies() {
+        let listed = |nodes: Value| {
+            let mut api = CannedApi::default();
+            api.responses.insert(
+                graphql_key(CLOSING_ISSUES_QUERY, &closing_issues_vars("o/r", 7)),
+                json!({"data": {"repository": {"pullRequest": {"closingIssuesReferences": {
+                    "totalCount": nodes.as_array().map_or(0, |n| n.len()), "nodes": nodes}}}}}),
+            );
+            api.responses
+                .insert("github:repos/o/r".into(), json!({"full_name": "o/r"}));
+            api.responses.insert(
+                "github:repos/o/r/issues/12".into(),
+                json!({"number": 12, "state": "open"}),
+            );
+            api.responses.insert(
+                graphql_key(ISSUE_COMMENTS_QUERY, &issue_comments_vars("o/r", 12, None)),
+                json!({"data": {"repository": {"issue": {"comments": {"totalCount": 0,
+                    "pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}}}}}),
+            );
+            api
+        };
+        let protected = vec!["scripts/check_x.py".to_string()];
+        let never = crate::guards::PathFilter::new(&cfg().never_ratifiable).unwrap();
+        let last = |_: &str| Ok(None);
+        let why = |api: &CannedApi, c: &RatifiedPathsGate, body: &str| {
+            let j = judge(
+                api,
+                &github(),
+                c,
+                &Input {
+                    pull_number: 7,
+                    pull_author: "agent",
+                    pull_body: body,
+                    protected: &protected,
+                    never_ratifiable: &never,
+                    last_change: &last,
+                    now: 1_790_600_000,
+                },
+            )
+            .unwrap();
+            let why: Vec<String> = j
+                .findings
+                .iter()
+                .filter_map(|f| match f {
+                    Finding::Unratified { why, .. } => Some(why.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(why.len(), 1, "{j:?}");
+            (why[0].clone(), j.notes.join(" | "))
+        };
+        // GitHub lists nothing, the body names #345: the reason says so and how to fix
+        // it, and #345 is never read, since the body ratifies nothing by itself.
+        let api = listed(json!([]));
+        let (w, notes) = why(
+            &api,
+            &cfg(),
+            "Closes #345.\n\nRefs #9, fixes #12 later? no: see #20",
+        );
+        assert_eq!(
+            w,
+            "the pull request closes no issue on the forge: its body names #345, #12, but GitHub \
+             did not link them to this pull request (link them in the pull request's Development \
+             sidebar, then re-run)"
+        );
+        assert!(notes.contains("its body names #345, #12"), "{notes}");
+        assert!(
+            !api.log().iter().any(|k| k.contains("345")),
+            "{:?}",
+            api.log()
+        );
+        // GitHub lists #12 and the body also names #345: both facts are given.
+        let api = listed(json!([{"number": 12, "repository": {"nameWithOwner": "O/R"}}]));
+        let (w, _) = why(&api, &cfg(), "Closes #12\nCloses #345");
+        assert_eq!(
+            w,
+            "no usable ratification on the issues it closes names it, and its body names #345, \
+             but GitHub did not link it to this pull request (link it in the pull request's \
+             Development sidebar, then re-run)"
+        );
+        // Everything the body names is linked: no extra words.
+        let (w, _) = why(&api, &cfg(), "Closes #12");
+        assert_eq!(w, "no usable ratification on the issues it closes names it");
+        // With `closing_source = "body"` the body is the list, so nothing can be unlinked.
+        let mut body = cfg();
+        body.closing_source = ClosingSource::Body;
+        let (w, _) = why(&api, &body, "Closes #12");
+        assert_eq!(w, "no usable ratification on the issues it closes names it");
     }
 
     #[test]
