@@ -40,6 +40,11 @@ impl std::fmt::Display for OverrideSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverrideRecord {
     pub gate: String,
+    /// The finding this override lifted (`gate/code`, `src/findings.rs`): the code the
+    /// run would have reported without the directive. Absent for an inline marker that
+    /// lifts no registered finding, and in reports written before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     pub subject: String,
     pub directive: String,
     pub reason: String,
@@ -95,9 +100,13 @@ impl ParsedDirective {
     }
 }
 
+/// The override one of `directives` grants `gate` for `subject`: a directive named in
+/// `names` whose reason names the subject. `lifts` is the finding the gate would report
+/// without it; the record carries its code.
 pub fn find_override(
     directives: &[ParsedDirective],
     gate: &str,
+    lifts: &crate::findings::FindingKind,
     names: &[&str],
     subject: &str,
 ) -> Option<OverrideRecord> {
@@ -109,6 +118,7 @@ pub fn find_override(
         if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive)) && d.covers(trimmed) {
             return Some(OverrideRecord {
                 gate: gate.to_string(),
+                code: Some(crate::findings::full_code(gate, lifts)),
                 subject: trimmed.to_string(),
                 directive: d.directive.clone(),
                 reason: d.reason.clone(),
@@ -1495,6 +1505,7 @@ removes: tests/old.rs inside a fence
         assert!(find_override(
             &dirs,
             "suppression-delta",
+            &crate::findings::SUPPRESSION_ADDED,
             ALLOW_SUPPRESSION,
             "suppression-delta"
         )
@@ -1578,6 +1589,7 @@ removes: tests/old.rs inside a fence
         let parsed = parse_directives(body, OverrideSource::PrBody);
         let from = |d: &ParsedDirective, source: OverrideSource, reason: &str| OverrideRecord {
             gate: "g".into(),
+            code: None,
             subject: "s".into(),
             directive: d.directive.to_ascii_uppercase(),
             reason: reason.into(),

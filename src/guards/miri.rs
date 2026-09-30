@@ -52,11 +52,44 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     if let Some(zero_pat) = preset.zero_items_pattern {
         if stdout.contains(zero_pat) || stderr.contains(zero_pat) {
             if let Some(ov) = ctx
-                .find_override(GATE, ALLOW_MIRI, "zero-tests")
-                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "tests"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "miri"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "cargo-miri"))
-                .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "toolchain"))
+                .find_override(
+                    GATE,
+                    &crate::findings::MIRI_ZERO_TESTS_EXECUTED,
+                    ALLOW_MIRI,
+                    "zero-tests",
+                )
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::MIRI_ZERO_TESTS_EXECUTED,
+                        ALLOW_MIRI,
+                        "tests",
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::MIRI_ZERO_TESTS_EXECUTED,
+                        ALLOW_MIRI,
+                        "miri",
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::MIRI_ZERO_TESTS_EXECUTED,
+                        ALLOW_MIRI,
+                        "cargo-miri",
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::MIRI_ZERO_TESTS_EXECUTED,
+                        ALLOW_MIRI,
+                        "toolchain",
+                    )
+                })
             {
                 out.overrides.push(ov.clone());
                 out.notes.push(format!(
@@ -90,10 +123,36 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
             ));
         }
         if let Some(ov) = ctx
-            .find_override(GATE, ALLOW_MIRI, "failure")
-            .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "miri"))
-            .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "cargo-miri"))
-            .or_else(|| ctx.find_override(GATE, ALLOW_MIRI, "toolchain"))
+            .find_override(
+                GATE,
+                &crate::findings::MIRI_UNDEFINED_BEHAVIOR,
+                ALLOW_MIRI,
+                "failure",
+            )
+            .or_else(|| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::MIRI_UNDEFINED_BEHAVIOR,
+                    ALLOW_MIRI,
+                    "miri",
+                )
+            })
+            .or_else(|| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::MIRI_UNDEFINED_BEHAVIOR,
+                    ALLOW_MIRI,
+                    "cargo-miri",
+                )
+            })
+            .or_else(|| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::MIRI_UNDEFINED_BEHAVIOR,
+                    ALLOW_MIRI,
+                    "toolchain",
+                )
+            })
         {
             out.overrides.push(ov.clone());
             out.notes.push(format!(

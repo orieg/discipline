@@ -103,6 +103,7 @@ pub fn report_schema() -> Value {
                 "required": ["gate", "subject", "directive", "reason", "source", "hidden"],
                 "properties": {
                     "gate": { "type": "string" },
+                    "code": { "type": "string", "pattern": "^[a-z0-9-]+/[a-z0-9-]+$", "description": "The finding the override lifted (`gate/code`, as a violation's `code`): what the run would have reported without the directive. Absent in reports written before it was recorded" },
                     "subject": { "type": "string", "description": "What the directive names: a test, path, rule, dependency, ..." },
                     "directive": { "type": "string" },
                     "reason": { "type": "string" },
@@ -248,6 +249,7 @@ pub fn replay_schema() -> Value {
                 "required": ["gate", "directive", "subject", "source", "hidden"],
                 "properties": {
                     "gate": { "type": "string", "description": "Gate id" },
+                    "code": { "type": "string", "pattern": "^[a-z0-9-]+/[a-z0-9-]+$", "description": "The finding the override lifted (`gate/code`); absent when the child report did not record it" },
                     "directive": { "type": "string", "description": "The directive's name, as written" },
                     "subject": { "type": "string", "description": "What the override covers: the path, test or dependency the finding named" },
                     "source": { "type": "string", "description": "Where the directive was read: `PR body` (under replay, the merged pull request's body), `commit <sha>`, `merged pull request #N body` or `inline <file>:<line>`" },

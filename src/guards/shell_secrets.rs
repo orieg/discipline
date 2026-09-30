@@ -666,11 +666,10 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
     out.examined = target_files.len();
 
     for (file, added_lines) in &target_files {
-        // Scoped file-level PR body override
-        if let Some(record) = ctx.find_override(GATE, tokens::SECRETS_ARGV_OK, file) {
-            out.overrides.push(record);
-            continue;
-        }
+        // A file-level directive (`secrets-argv-ok: <file> <reason>`) lifts every hit in the
+        // file; it is looked up at the first hit, so it records what it lifted, and a
+        // directive naming a file with no hit lifts nothing.
+        let mut file_lifted = false;
 
         let content = match ctx.git.head_content(file) {
             Ok(Some(c)) => c,
@@ -692,12 +691,22 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
             }
 
             if let Some(rule) = scanner.check_line(&log_line.content) {
+                if file_lifted {
+                    continue;
+                }
+                if let Some(record) =
+                    ctx.find_override(GATE, rule.kind(), tokens::SECRETS_ARGV_OK, file)
+                {
+                    out.overrides.push(record);
+                    file_lifted = true;
+                    continue;
+                }
                 // Check PR body overrides across all physical lines in this logical line
                 let mut overridden = false;
                 for &p_line in &log_line.physical_lines {
                     let line_subject = format!("{file}:{p_line}");
                     if let Some(record) =
-                        ctx.find_override(GATE, tokens::SECRETS_ARGV_OK, &line_subject)
+                        ctx.find_override(GATE, rule.kind(), tokens::SECRETS_ARGV_OK, &line_subject)
                     {
                         out.overrides.push(record);
                         overridden = true;
@@ -712,6 +721,7 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
                     out.inline_exemptions += 1;
                     out.overrides.push(OverrideRecord {
                         gate: GATE.to_string(),
+                        code: Some(crate::findings::full_code(GATE, rule.kind())),
                         subject: format!("{file}:{}", log_line.primary_line),
                         directive: "secrets-argv-ok".to_string(),
                         reason: "inline exemption marker".to_string(),

@@ -99,6 +99,11 @@
     "Override": {
       "additionalProperties": false,
       "properties": {
+        "code": {
+          "description": "The finding the override lifted (`gate/code`, as a violation's `code`): what the run would have reported without the directive. Absent in reports written before it was recorded",
+          "pattern": "^[a-z0-9-]+/[a-z0-9-]+$",
+          "type": "string"
+        },
         "directive": {
           "type": "string"
         },

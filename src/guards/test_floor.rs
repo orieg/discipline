@@ -52,7 +52,12 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                     base_floor_const = Some(val);
                 } else {
                     let subject = const_name.as_str();
-                    if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, subject) {
+                    if let Some(ov) = ctx.find_override(
+                        GATE,
+                        &crate::findings::FLOOR_CONSTANT_MISSING_IN_BASE,
+                        tokens::ALLOW_TEST_SHRINK,
+                        subject,
+                    ) {
                         out.overrides.push(ov);
                     } else {
                         out.violations.push(Violation {
@@ -78,7 +83,12 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                 }
             }
             Ok(None) => {
-                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, const_file) {
+                if let Some(ov) = ctx.find_override(
+                    GATE,
+                    &crate::findings::FLOOR_CONSTANT_FILE_MISSING_IN_BASE,
+                    tokens::ALLOW_TEST_SHRINK,
+                    const_file,
+                ) {
                     out.overrides.push(ov);
                 } else {
                     out.violations.push(Violation {
@@ -123,9 +133,12 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                     if let Some(caps) = re.captures(&head_src) {
                         if let Ok(head_val) = caps[1].parse::<usize>() {
                             if head_val < base_floor {
-                                if let Some(ov) =
-                                    ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, const_name)
-                                {
+                                if let Some(ov) = ctx.find_override(
+                                    GATE,
+                                    &crate::findings::FLOOR_CONSTANT_DECREASED,
+                                    tokens::ALLOW_TEST_SHRINK,
+                                    const_name,
+                                ) {
                                     out.overrides.push(ov);
                                 } else {
                                     out.violations.push(Violation {
@@ -162,7 +175,9 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             None => true,
         };
         if lowered {
-            if let Some(ov) = find_test_floor_override(ctx) {
+            if let Some(ov) =
+                find_test_floor_override(ctx, &crate::findings::CONFIGURED_FLOOR_DECREASED)
+            {
                 out.overrides.push(ov);
             } else {
                 let msg = match head_min_tests {
@@ -193,7 +208,12 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     for suite in &settings.required_suites {
         let full = Path::new(ctx.git.root()).join(suite);
         if !full.is_file() {
-            if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, suite) {
+            if let Some(ov) = ctx.find_override(
+                GATE,
+                &crate::findings::REQUIRED_SUITE_MISSING,
+                tokens::ALLOW_TEST_SHRINK,
+                suite,
+            ) {
                 out.overrides.push(ov);
             } else {
                 out.violations.push(Violation {
@@ -244,7 +264,9 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     // 6. Compare against the effective floor.
     if let Some(floor) = explicit_floor {
         if measured_count + settings.tolerance < floor {
-            if let Some(ov) = find_test_floor_override(ctx) {
+            if let Some(ov) =
+                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)
+            {
                 out.overrides.push(ov);
             } else {
                 out.violations.push(Violation {
@@ -273,7 +295,9 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         out.notes.extend(base.notes("base"));
         let base_count = base.running;
         if base_count > 0 && measured_count + settings.tolerance < base_count {
-            if let Some(ov) = find_test_floor_override(ctx) {
+            if let Some(ov) =
+                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)
+            {
                 out.overrides.push(ov);
             } else {
                 out.violations.push(Violation {
@@ -306,11 +330,16 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     Ok(out)
 }
 
-fn find_test_floor_override(ctx: &Context) -> Option<crate::tokens::OverrideRecord> {
-    if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_GATE_WEAKENING, GATE) {
+/// An override for the test floor: a directive naming the gate, `min_tests`, a changed
+/// file or a test it removed. `lifts` is the finding the caller would report.
+fn find_test_floor_override(
+    ctx: &Context,
+    lifts: &crate::findings::FindingKind,
+) -> Option<crate::tokens::OverrideRecord> {
+    if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_GATE_WEAKENING, GATE) {
         return Some(ov);
     }
-    if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, "min_tests") {
+    if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, "min_tests") {
         return Some(ov);
     }
     if let Ok(changed) = ctx.git.changed_files() {
@@ -318,21 +347,25 @@ fn find_test_floor_override(ctx: &Context) -> Option<crate::tokens::OverrideReco
         let v = crate::guards::agent_diff::assert_vocabulary(ctx.config);
 
         for cf in &changed {
-            if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, &cf.path) {
+            if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, &cf.path) {
                 return Some(ov);
             }
             if cf.old_path != cf.path {
-                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, &cf.old_path) {
+                if let Some(ov) =
+                    ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, &cf.old_path)
+                {
                     return Some(ov);
                 }
             }
             if let Some(file_name) = cf.path.rsplit('/').next() {
-                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, file_name) {
+                if let Some(ov) =
+                    ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, file_name)
+                {
                     return Some(ov);
                 }
             }
             if let Some(stem) = Path::new(&cf.path).file_stem().and_then(|s| s.to_str()) {
-                if let Some(ov) = ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, stem) {
+                if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, stem) {
                     return Some(ov);
                 }
             }
@@ -352,9 +385,12 @@ fn find_test_floor_override(ctx: &Context) -> Option<crate::tokens::OverrideReco
 
                         for t in base_facts.tests {
                             if !head_names.contains(&t.name) {
-                                if let Some(ov) =
-                                    ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, &t.name)
-                                {
+                                if let Some(ov) = ctx.find_override(
+                                    GATE,
+                                    lifts,
+                                    tokens::ALLOW_TEST_SHRINK,
+                                    &t.name,
+                                ) {
                                     return Some(ov);
                                 }
                             }

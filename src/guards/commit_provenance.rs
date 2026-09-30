@@ -154,8 +154,8 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
     ) {
         let short: String = f.sha.chars().take(7).collect();
         if let Some(ov) = ctx
-            .find_override(GATE, tokens::ALLOW_COMMIT_PROVENANCE, &short)
-            .or_else(|| ctx.find_override(GATE, tokens::ALLOW_COMMIT_PROVENANCE, &f.sha))
+            .find_override(GATE, f.kind, tokens::ALLOW_COMMIT_PROVENANCE, &short)
+            .or_else(|| ctx.find_override(GATE, f.kind, tokens::ALLOW_COMMIT_PROVENANCE, &f.sha))
         {
             out.overrides.push(ov);
             continue;

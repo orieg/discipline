@@ -242,7 +242,7 @@ pub fn build_hooks(ctx: &Context) -> Result<GateOutcome> {
         let head = ctx.git.head_content(&file.path)?;
         let base = ctx.git.base_content(&file.old_path)?;
         for f in judge(&file, base.as_deref(), head.as_deref()) {
-            let lift = |s: &str| ctx.find_override(GATE, tokens::ALLOW_BUILD_HOOK, s);
+            let lift = |s: &str| ctx.find_override(GATE, f.kind, tokens::ALLOW_BUILD_HOOK, s);
             if let Some(ov) = lift(&f.subject)
                 .or_else(|| lift(&file.path))
                 .or_else(|| lift(name))

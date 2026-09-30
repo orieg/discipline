@@ -106,9 +106,14 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
         // benchmark removal requires its own scoped directive (`allow-regression:`).
         if file.kind == ChangeKind::Deleted {
             let subjects = benchmark_subjects(&file.path, "");
-            let allowed = subjects
-                .iter()
-                .find_map(|s| ctx.find_override(GATE, tokens::ALLOW_REGRESSION, s));
+            let allowed = subjects.iter().find_map(|s| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::BENCHMARK_ARTIFACT_DELETED,
+                    tokens::ALLOW_REGRESSION,
+                    s,
+                )
+            });
 
             if let Some(ov) = allowed {
                 out.overrides.push(ov);
@@ -136,9 +141,14 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
 
         if file.kind == ChangeKind::Added {
             let subjects = benchmark_subjects(&file.path, "");
-            let allowed = subjects
-                .iter()
-                .find_map(|s| ctx.find_override(GATE, tokens::ALLOW_REGRESSION, s));
+            let allowed = subjects.iter().find_map(|s| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::NEW_ARTIFACT_BASELINE_MISSING,
+                    tokens::ALLOW_REGRESSION,
+                    s,
+                )
+            });
 
             let Some(head_raw) = head_bytes else {
                 bail!("missing benchmark artifact `{}` at head", file.path);
@@ -578,9 +588,15 @@ pub fn evaluate_metrics_regression_with_instruments(
     for b in base_metrics {
         if !head_metrics.iter().any(|h| h.name == b.name) {
             let subjects = benchmark_subjects(head_path, &b.name);
-            let allowed = subjects
-                .iter()
-                .find_map(|s| tokens::find_override(directives, GATE, tokens::ALLOW_REGRESSION, s));
+            let allowed = subjects.iter().find_map(|s| {
+                tokens::find_override(
+                    directives,
+                    GATE,
+                    &crate::findings::BENCHMARK_REMOVED,
+                    tokens::ALLOW_REGRESSION,
+                    s,
+                )
+            });
             if let Some(ov) = allowed {
                 out.overrides.push(ov);
             } else {
@@ -624,9 +640,15 @@ pub fn evaluate_metrics_regression_with_instruments(
         let matching_base = base_metrics.iter().find(|b| b.name == h.name);
         let Some(b) = matching_base else {
             let subjects = benchmark_subjects(head_path, &h.name);
-            let allowed = subjects
-                .iter()
-                .find_map(|s| tokens::find_override(directives, GATE, tokens::ALLOW_REGRESSION, s));
+            let allowed = subjects.iter().find_map(|s| {
+                tokens::find_override(
+                    directives,
+                    GATE,
+                    &crate::findings::NEW_OR_RENAMED_ARM_BASELINE_MISSING,
+                    tokens::ALLOW_REGRESSION,
+                    s,
+                )
+            });
             if let Some(ov) = allowed {
                 out.overrides.push(ov);
             } else {
@@ -689,7 +711,13 @@ pub fn evaluate_metrics_regression_with_instruments(
 
                 let subjects = benchmark_subjects(head_path, &h.name);
                 let allowed = subjects.iter().find_map(|s| {
-                    tokens::find_override(directives, GATE, tokens::ALLOW_REGRESSION, s)
+                    tokens::find_override(
+                        directives,
+                        GATE,
+                        &crate::findings::PERFORMANCE_REGRESSED,
+                        tokens::ALLOW_REGRESSION,
+                        s,
+                    )
                 });
 
                 if decision.is_regression {
@@ -847,6 +875,10 @@ pub fn evaluate_metrics_regression_with_instruments(
                                 }
                                 out.overrides.push(crate::tokens::OverrideRecord {
                                     gate: GATE.to_string(),
+                                    code: Some(crate::findings::full_code(
+                                        GATE,
+                                        &crate::findings::COUNTER_REGRESSED,
+                                    )),
                                     subject: regressed_arm_names
                                         .iter()
                                         .filter(|a| !unapproved.contains(&a.as_str()))
@@ -886,7 +918,13 @@ pub fn evaluate_metrics_regression_with_instruments(
                 for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
                     let subjects = benchmark_subjects(head_path, arm);
                     let allowed = subjects.iter().find_map(|s| {
-                        tokens::find_override(directives, GATE, tokens::ALLOW_REGRESSION, s)
+                        tokens::find_override(
+                            directives,
+                            GATE,
+                            &crate::findings::COUNTER_REGRESSED,
+                            tokens::ALLOW_REGRESSION,
+                            s,
+                        )
                     });
                     if let Some(ov) = allowed {
                         if !out.overrides.iter().any(|o| o.reason == ov.reason) {

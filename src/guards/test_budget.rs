@@ -273,8 +273,20 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     // Fuzz target removed from harness list
                     let subject = format!("fuzz target {target}");
                     if let Some(rec) = ctx
-                        .find_override(GATE, tokens::ALLOW_TEST_SHRINK, &subject)
-                        .or_else(|| ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, target))
+                        .find_override(
+                            GATE,
+                            &crate::findings::FUZZ_TARGET_REMOVED,
+                            tokens::ALLOW_TEST_SHRINK,
+                            &subject,
+                        )
+                        .or_else(|| {
+                            ctx.find_override(
+                                GATE,
+                                &crate::findings::FUZZ_TARGET_REMOVED,
+                                tokens::ALLOW_TEST_SHRINK,
+                                target,
+                            )
+                        })
                     {
                         outcome.overrides.push(rec);
                     } else {
@@ -312,9 +324,28 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 .unwrap_or(&f.old_path);
             let subject = format!("fuzz target {target_name}");
             if let Some(rec) = ctx
-                .find_override(GATE, tokens::ALLOW_TEST_SHRINK, &subject)
-                .or_else(|| ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, target_name))
-                .or_else(|| ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, &f.old_path))
+                .find_override(
+                    GATE,
+                    &crate::findings::FUZZ_TARGET_DELETED,
+                    tokens::ALLOW_TEST_SHRINK,
+                    &subject,
+                )
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::FUZZ_TARGET_DELETED,
+                        tokens::ALLOW_TEST_SHRINK,
+                        target_name,
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::FUZZ_TARGET_DELETED,
+                        tokens::ALLOW_TEST_SHRINK,
+                        &f.old_path,
+                    )
+                })
             {
                 outcome.overrides.push(rec);
             } else {
@@ -380,9 +411,28 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     .unwrap_or(&f.path);
 
                 if let Some(rec) = ctx
-                    .find_override(GATE, tokens::ALLOW_TEST_SHRINK, subject_key)
-                    .or_else(|| ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, path_key))
-                    .or_else(|| ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, file_stem))
+                    .find_override(
+                        GATE,
+                        &crate::findings::TEST_BUDGET_DECREASED,
+                        tokens::ALLOW_TEST_SHRINK,
+                        subject_key,
+                    )
+                    .or_else(|| {
+                        ctx.find_override(
+                            GATE,
+                            &crate::findings::TEST_BUDGET_DECREASED,
+                            tokens::ALLOW_TEST_SHRINK,
+                            path_key,
+                        )
+                    })
+                    .or_else(|| {
+                        ctx.find_override(
+                            GATE,
+                            &crate::findings::TEST_BUDGET_DECREASED,
+                            tokens::ALLOW_TEST_SHRINK,
+                            file_stem,
+                        )
+                    })
                 {
                     outcome.overrides.push(rec);
                 } else {
@@ -420,9 +470,28 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 .unwrap_or(&dir);
 
             if let Some(rec) = ctx
-                .find_override(GATE, tokens::ALLOW_TEST_SHRINK, &dir_subject)
-                .or_else(|| ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, &dir))
-                .or_else(|| ctx.find_override(GATE, tokens::ALLOW_TEST_SHRINK, dir_stem))
+                .find_override(
+                    GATE,
+                    &crate::findings::SEED_CORPUS_DECREASED,
+                    tokens::ALLOW_TEST_SHRINK,
+                    &dir_subject,
+                )
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::SEED_CORPUS_DECREASED,
+                        tokens::ALLOW_TEST_SHRINK,
+                        &dir,
+                    )
+                })
+                .or_else(|| {
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::SEED_CORPUS_DECREASED,
+                        tokens::ALLOW_TEST_SHRINK,
+                        dir_stem,
+                    )
+                })
             {
                 outcome.overrides.push(rec);
             } else {
