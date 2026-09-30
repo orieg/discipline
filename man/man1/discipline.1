@@ -811,6 +811,33 @@ Print the summary as JSON
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS "discipline audit"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+List the escape hatches the last N merged changes carried: directives, configuration loosenings, baseline growth, inline markers
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline audit\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-\-json\fR] [\fB\-\-reasons\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-last\fR \fI<LAST>\fR
+Number of first\-parent commits (merged changes) to audit, newest first
+.TP
+\fB\-\-ref\fR \fI<REFERENCE>\fR
+Branch whose history is audited (default: origin\*(Aqs default branch, else main / master)
+.TP
+\fB\-\-json\fR
+Print the records as JSON
+.TP
+\fB\-\-reasons\fR
+Include each directive\*(Aqs reason text (by default only its SHA\-256 and length)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS "discipline mcp"
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '

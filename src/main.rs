@@ -116,6 +116,19 @@ fn run_command(command: Commands) -> Result<bool> {
             }
             Ok(true)
         }
+        Commands::Audit(args) => {
+            let summary = discipline::audit::run(&discipline::audit::Options {
+                last: args.last,
+                reference: args.reference,
+                reasons: args.reasons,
+            })?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                print!("{}", summary.render());
+            }
+            Ok(true)
+        }
         Commands::Mcp => {
             let stdin = std::io::stdin();
             discipline::mcp::serve(

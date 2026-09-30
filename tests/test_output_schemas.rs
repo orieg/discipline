@@ -10,7 +10,7 @@
 mod common;
 
 use common::{FakeForge, Repo};
-use discipline::output_schema::{mcp_check_schema, replay_schema, report_schema};
+use discipline::output_schema::{audit_schema, mcp_check_schema, replay_schema, report_schema};
 use serde_json::Value;
 
 /// `path: type`, `?` marking a field that may be absent. `[]` is an array element,
@@ -93,6 +93,42 @@ const REPORT_FIELDS: &[&str] = &[
     "unused_directives[].source<MergedPrBody>.detail: integer",
     "unused_directives[].source<MergedPrBody>.type: const(MergedPrBody)",
     "warnings: integer",
+];
+
+const AUDIT_FIELDS: &[&str] = &[
+    "by_class: object",
+    "by_class{*}: integer",
+    "by_gate: object",
+    "by_gate{*}: integer",
+    "by_kind: object",
+    "by_kind{*}: integer",
+    "changes: integer",
+    "changes_with_records: integer",
+    "records: array",
+    "records[]: object",
+    "records[].after?: string",
+    "records[].before?: string",
+    "records[].change?: enum(changed|removed|increased|decreased|lowered|gained|lost|emptied)",
+    "records[].class: enum(process|detector|config|baseline|inline)",
+    "records[].count?: integer",
+    "records[].detail?: string",
+    "records[].directive?: string",
+    "records[].evidence: enum(claimed|applied)",
+    "records[].file?: string",
+    "records[].gate: string|null",
+    "records[].hidden?: boolean",
+    "records[].key?: string",
+    "records[].kind: enum(directive|config|config-unreadable|baseline|inline-marker)",
+    "records[].line?: integer",
+    "records[].pr: integer|null",
+    "records[].reason?: string",
+    "records[].reason_len?: integer",
+    "records[].reason_sha256?: string",
+    "records[].sha: string",
+    "records[].tier: enum(A|C)",
+    "records[].time: integer",
+    "reference: string",
+    "schema_version: const(1)",
 ];
 
 const REPLAY_FIELDS: &[&str] = &[
@@ -273,6 +309,11 @@ fn report_schema_fields_match_snapshot() {
 }
 
 #[test]
+fn audit_schema_fields_match_snapshot() {
+    assert_snapshot("audit", &audit_schema(), AUDIT_FIELDS);
+}
+
+#[test]
 fn replay_schema_fields_match_snapshot() {
     assert_snapshot("replay", &replay_schema(), REPLAY_FIELDS);
 }
@@ -336,6 +377,7 @@ fn committed_schema_files_match_the_generator() {
     for (file, schema) in [
         ("discipline.report.schema.json", report_schema()),
         ("discipline.replay.schema.json", replay_schema()),
+        ("discipline.audit.schema.json", audit_schema()),
     ] {
         let committed: Value =
             serde_json::from_str(&std::fs::read_to_string(root.join(file)).unwrap()).unwrap();
@@ -586,6 +628,65 @@ fn replay_output_conforms_to_the_replay_schema() {
     let summary: Value = serde_json::from_str(&run.stdout).unwrap();
     assert_eq!(summary["could_not_check"], 1, "{summary:#}");
     assert_valid(&replay_schema(), &summary);
+}
+
+#[test]
+fn audit_output_conforms_to_the_audit_schema() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nmax_overrides = 1\n",
+    );
+    repo.commit("chore: adopt (#1)");
+    // Every optional field is populated by one record or another.
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nmax_overrides = 3\n",
+    );
+    repo.write("src/b.rs", "// discipline:allow(pii): fixture host\n");
+    repo.write(
+        "discipline-baseline.toml",
+        "version = 2\n[[findings]]\ngate = \"pii\"\nrule = \"r\"\npath = \"src/b.rs\"\nfingerprint = \"\"\n",
+    );
+    repo.commit(
+        "chore: loosen (#2)\n\n<!-- allow-gate-weakening: directives budget for the release -->\n",
+    );
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\nnot_a_table = 1\n",
+    );
+    repo.commit("chore: break it");
+    let run = repo.run(
+        &[
+            "audit",
+            "--last",
+            "2",
+            "--ref",
+            "main",
+            "--json",
+            "--reasons",
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let summary: Value = serde_json::from_str(&run.stdout).unwrap();
+    let kinds: Vec<&str> = summary["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap())
+        .collect();
+    for kind in [
+        "config-unreadable",
+        "directive",
+        "config",
+        "baseline",
+        "inline-marker",
+    ] {
+        assert!(kinds.contains(&kind), "{kind} missing: {summary:#}");
+    }
+    assert_valid(&audit_schema(), &summary);
 }
 
 /// A repository whose check reports several findings across files and gates, with a note

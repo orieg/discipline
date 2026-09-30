@@ -17,6 +17,9 @@ pub const REPORT_SCHEMA_VERSION: u32 = 1;
 /// `schema_version` of the replay summary, under the same rule.
 pub const REPLAY_SCHEMA_VERSION: u32 = 1;
 
+/// Version of the `discipline audit --json` output; see [`REPORT_SCHEMA_VERSION`].
+pub const AUDIT_SCHEMA_VERSION: u32 = 1;
+
 /// `schema_version` of the MCP `check_diff` tool's `structuredContent`, under the same rule.
 pub const MCP_CHECK_SCHEMA_VERSION: u32 = 1;
 
@@ -269,6 +272,64 @@ pub fn replay_schema() -> Value {
                     "severity": { "enum": ["error", "warning"] },
                     "file": { "type": ["string", "null"] },
                     "line": { "type": ["integer", "null"], "minimum": 0 }
+                }
+            }
+        }
+    })
+}
+
+/// Schema of `discipline audit --json`.
+pub fn audit_schema() -> Value {
+    let counts = json!({
+        "type": "object",
+        "additionalProperties": { "type": "integer", "minimum": 0 }
+    });
+    let text = |d: &str| json!({ "type": "string", "description": d });
+    json!({
+        "$schema": DRAFT,
+        "title": "DisciplineAudit",
+        "description": "The records `discipline audit --json` prints: one per escape hatch a merged change carried, read from git objects only. A record says what was claimed or applied, not whether a check honoured it.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "reference", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "records"],
+        "properties": {
+            "schema_version": { "const": AUDIT_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
+            "reference": text("The ref audited, as given or defaulted"),
+            "changes": { "type": "integer", "minimum": 0, "description": "First-parent changes audited" },
+            "changes_with_records": { "type": "integer", "minimum": 0, "description": "Changes that carried at least one record" },
+            "by_kind": { "description": "Kind -> record count", "$ref": "#/$defs/Counts" },
+            "by_class": { "description": "Class -> record count", "$ref": "#/$defs/Counts" },
+            "by_gate": { "description": "Gate id (or configuration table) -> record count", "$ref": "#/$defs/Counts" },
+            "records": { "type": "array", "items": { "$ref": "#/$defs/Record" }, "description": "Newest change first" }
+        },
+        "$defs": {
+            "Counts": counts,
+            "Record": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sha", "pr", "time", "kind", "class", "evidence", "tier", "gate"],
+                "properties": {
+                    "sha": text("Full commit id of the change"),
+                    "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from the subject's `(#N)`" },
+                    "time": { "type": "integer", "description": "Commit time, seconds since the Unix epoch" },
+                    "kind": { "enum": ["directive", "config", "config-unreadable", "baseline", "inline-marker"] },
+                    "class": { "enum": ["process", "detector", "config", "baseline", "inline"], "description": "`process`: a waiver of a process rule (`no-issue`); `detector`: a waiver of a finding" },
+                    "evidence": { "enum": ["claimed", "applied"], "description": "`claimed`: text that asks for an exception; `applied`: a tree change that is one" },
+                    "tier": { "enum": ["A", "C"], "description": "Who controls the input: `A` git objects on the audited branch, `C` text the change's author wrote" },
+                    "gate": { "type": ["string", "null"], "description": "Gate id, or the configuration table a loosening is under; null for a directive this binary does not map to a gate" },
+                    "directive": text("The directive's name, as written"),
+                    "key": text("The configuration option a loosening changed"),
+                    "change": { "enum": ["changed", "removed", "increased", "decreased", "lowered", "gained", "lost", "emptied"] },
+                    "before": text("The value before, as the `config-integrity` finding shows it"),
+                    "after": text("The value after"),
+                    "count": { "type": "integer", "minimum": 0, "description": "List entries gained or lost, or baseline findings added" },
+                    "file": text("Where the exception is: the inline marker's file, the baseline, or `discipline.toml`"),
+                    "line": { "type": "integer", "minimum": 1 },
+                    "hidden": { "type": "boolean", "description": "The directive was inside an HTML comment" },
+                    "reason_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the directive's reason, to group reuse without the text" },
+                    "reason_len": { "type": "integer", "minimum": 0 },
+                    "reason": text("The directive's reason text: only under `--reasons`"),
+                    "detail": text("Why a configuration or baseline could not be compared")
                 }
             }
         }

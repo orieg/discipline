@@ -43,6 +43,7 @@
       "warnings"
     ],
     "cli.commands": [
+      "audit",
       "baseline",
       "bench",
       "bench derive",
@@ -71,6 +72,10 @@
       "self-test"
     ],
     "cli.flags": [
+      "audit --json",
+      "audit --last",
+      "audit --reasons",
+      "audit --ref",
       "baseline --all-severities",
       "baseline --base",
       "baseline --baseline-file",
