@@ -1,0 +1,709 @@
+{
+  "description": "Threat model claims and their pinning tests (docs/ARCHITECTURE.md \u00a71.4, \u00a73, \u00a710, SECURITY.md, docs/GATES.md). tests/test_threat_model_claims.rs verifies that every named pinning test exists and tracks untested claims as targets for adversarial red-teaming.",
+  "claims": [
+    {
+      "id": "tm-asset-merge-verdict",
+      "category": "threat_model_assets",
+      "claim": "The merge gate verdict: a change that erodes tests, safety comments or policy is blocked, or it lands with its waiver on record.",
+      "source": "docs/ARCHITECTURE.md:48",
+      "code": "src/main.rs:run",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::clean_change_passes_and_reports_what_it_examined"
+      ]
+    },
+    {
+      "id": "tm-asset-policy-integrity",
+      "category": "threat_model_assets",
+      "claim": "The policy (discipline.toml, CI workflows, action inputs, hook/sandbox settings, protected paths) is guarded against unauthorized weakening.",
+      "source": "docs/ARCHITECTURE.md:49",
+      "code": "src/guards/integrity.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::policy_from_base_judges_a_change_by_the_configuration_it_did_not_write",
+        "tests/test_gates_e2e.rs::ci_integrity_flags_a_discipline_step_moved_off_the_base_policy"
+      ]
+    },
+    {
+      "id": "tm-asset-historical-record",
+      "category": "threat_model_assets",
+      "claim": "The record of waivers, loosenings and ratifications is preserved and auditable across history via discipline audit.",
+      "source": "docs/ARCHITECTURE.md:50",
+      "code": "src/audit.rs:run",
+      "pinning_tests": [
+        "tests/test_audit.rs::each_kind_of_escape_hatch_is_recorded_against_its_change",
+        "tests/test_audit.rs::signals_rank_what_needs_a_decision_and_a_tightening_restores_a_loosening"
+      ]
+    },
+    {
+      "id": "tm-asset-hygiene-protection",
+      "category": "threat_model_assets",
+      "claim": "Repository hygiene prevents publication of secrets, personal data, and private hosts/paths.",
+      "source": "docs/ARCHITECTURE.md:51",
+      "code": "src/guards/pii.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::pii_fires_on_home_paths_and_lan_ips_without_echoing_the_user",
+        "tests/test_report_redaction.rs::test_cross_format_redaction_pins_sentinel_exclusion"
+      ]
+    },
+    {
+      "id": "tm-trust-boundary-change-not-judge",
+      "category": "threat_model_boundaries",
+      "claim": "The change does not judge itself: policy is read from base ref and loosenings are reported against base.",
+      "source": "docs/ARCHITECTURE.md:65",
+      "code": "src/gitctx.rs:read_base_config",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::policy_from_base_judges_a_change_by_the_configuration_it_did_not_write",
+        "tests/test_pr_policy.rs::the_policy_must_come_from_the_base"
+      ]
+    },
+    {
+      "id": "tm-trust-boundary-author-claims-bounded",
+      "category": "threat_model_boundaries",
+      "claim": "What an author writes is a claim: directives are counted (max_overrides), visible in audit, and can require forge approval.",
+      "source": "docs/ARCHITECTURE.md:66",
+      "code": "src/tokens.rs:extract_directives",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::override_budget_caps_what_one_change_may_excuse",
+        "tests/test_gates_e2e.rs::required_approval_is_read_from_gitlab_at_the_merge_requests_head"
+      ]
+    },
+    {
+      "id": "tm-trust-boundary-forge-identity-separation",
+      "category": "threat_model_boundaries",
+      "claim": "A forge fact is as strong as the login behind it: refuse_author_ratification refuses self-ratification by the pull request author.",
+      "source": "docs/ARCHITECTURE.md:67",
+      "code": "src/guards/ratified_paths.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_pr_policy.rs::refuse_author_ratification_needs_a_login_other_than_the_pull_requests"
+      ]
+    },
+    {
+      "id": "tm-assumption-required-status-check",
+      "category": "threat_model_assumptions",
+      "claim": "Discipline runs as a required check with policy_from: base, and ci-integrity protects the workflow that runs it.",
+      "source": "docs/ARCHITECTURE.md:73",
+      "code": "src/guards/ci_integrity.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::ci_integrity_flags_a_discipline_step_moved_off_the_base_policy"
+      ]
+    },
+    {
+      "id": "tm-assumption-forge-truthfulness",
+      "category": "threat_model_assumptions",
+      "claim": "When the forge fails to link or answers with an error, discipline refuses rather than guesses.",
+      "source": "docs/ARCHITECTURE.md:76",
+      "code": "src/forge.rs:request",
+      "pinning_tests": [
+        "tests/test_pr_policy.rs::a_forge_outage_is_retried_then_a_labelled_failure_never_a_pass",
+        "tests/test_pr_policy.rs::an_unreachable_forge_is_a_labelled_failure_never_a_pass"
+      ]
+    },
+    {
+      "id": "fc-f1-three-exit-states",
+      "category": "fail_closed_contract",
+      "claim": "Three exit states (0 = pass, 1 = violations found, 2 = could not check) with structured could_not_check reasons.",
+      "source": "docs/ARCHITECTURE.md:230",
+      "code": "src/main.rs:run",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::could_not_check_is_exit_2_never_a_pass",
+        "tests/test_stability_contract.rs::a_signal_ends_the_run_by_the_signal_not_exit_2"
+      ]
+    },
+    {
+      "id": "fc-f2-three-state-inputs",
+      "category": "fail_closed_contract",
+      "claim": "Three-state inputs: an unresolvable base ref, shallow clone lacking merge base, missing repo, or unreadable file exits 2.",
+      "source": "docs/ARCHITECTURE.md:231",
+      "code": "src/gitctx.rs:open",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::could_not_check_is_exit_2_never_a_pass"
+      ]
+    },
+    {
+      "id": "fc-f3-merge-base-diffs",
+      "category": "fail_closed_contract",
+      "claim": "Merge-base diffs with rename detection: moved files tracked as modifications, not deletions.",
+      "source": "docs/ARCHITECTURE.md:232",
+      "code": "src/gitctx.rs:diff",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::rename_is_not_a_deletion_but_a_removed_test_is",
+        "tests/test_gates_e2e.rs::rename_test_by_name_similarity_passes_without_removes_directive"
+      ]
+    },
+    {
+      "id": "fc-f4-no-vacuous-pass",
+      "category": "fail_closed_contract",
+      "claim": "No vacuous pass: report prints exact examined count per gate; zero available gates or empty tracked tree is an error.",
+      "source": "docs/ARCHITECTURE.md:233",
+      "code": "src/engine.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::clean_change_passes_and_reports_what_it_examined"
+      ]
+    },
+    {
+      "id": "fc-f5-planned-not-passed",
+      "category": "fail_closed_contract",
+      "claim": "Planned is not passed: a gate not shipped in binary cannot be enabled or configured (exits 2).",
+      "source": "docs/ARCHITECTURE.md:234",
+      "code": "src/config.rs:validate",
+      "pinning_tests": [
+        "tests/test_config.rs::every_available_gate_has_settings_and_no_planned_gate_does"
+      ]
+    },
+    {
+      "id": "fc-f6-strict-configuration",
+      "category": "fail_closed_contract",
+      "claim": "Strict configuration: unknown keys, unknown gates, invalid regexes, malformed globs, contradictory switches exit 2.",
+      "source": "docs/ARCHITECTURE.md:235",
+      "code": "src/config.rs:from_toml",
+      "pinning_tests": [
+        "tests/test_config.rs::schema_is_strict",
+        "tests/test_gates_e2e.rs::test_conflicting_cli_options_fail_closed_exit_2",
+        "tests/test_gates_e2e.rs::could_not_check_is_exit_2_never_a_pass"
+      ]
+    },
+    {
+      "id": "fc-f7-named-degradation",
+      "category": "fail_closed_contract",
+      "claim": "Named degradation: when gate cannot inspect file (unanalysed language pack, size limits), explicitly names file.",
+      "source": "docs/ARCHITECTURE.md:236",
+      "code": "src/ast/mod.rs:dispatch",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::unanalysed_languages_are_named_not_silently_passed"
+      ]
+    },
+    {
+      "id": "fc-f8-line-anchored-directives",
+      "category": "fail_closed_contract",
+      "claim": "Gate not satisfied by prose: directives strictly line-anchored; mentions in tables, sentences, or code blocks never arm override.",
+      "source": "docs/ARCHITECTURE.md:237",
+      "code": "src/tokens.rs:extract_directives",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::deletion_needs_a_scoped_line_anchored_rationale",
+        "tests/test_gates_e2e.rs::test_directive_in_subject_line_rejected_q6"
+      ]
+    },
+    {
+      "id": "fc-f9-head-diffed-against-base",
+      "category": "fail_closed_contract",
+      "claim": "Change cannot lower its own bar: configuration on head diffed against base; loosening requires explicit allow-gate-weakening:.",
+      "source": "docs/ARCHITECTURE.md:238",
+      "code": "src/guards/integrity.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::policy_from_base_judges_a_change_by_the_configuration_it_did_not_write"
+      ]
+    },
+    {
+      "id": "fc-f10-secrets-not-echoed",
+      "category": "fail_closed_contract",
+      "claim": "Secrets are not echoed: denylisted hostnames, local paths, PII patterns reported by file location only, never printed.",
+      "source": "docs/ARCHITECTURE.md:239",
+      "code": "src/report/mod.rs:format",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::hostname_denylist_comes_from_config_or_secret_env_and_is_never_echoed",
+        "tests/test_report_redaction.rs::test_cross_format_redaction_pins_sentinel_exclusion"
+      ]
+    },
+    {
+      "id": "fc-f11-untrusted-text-no-shell",
+      "category": "fail_closed_contract",
+      "claim": "Untrusted text never reaches shell parser: all action inputs pass through env:, never inline ${{ }}.",
+      "source": "docs/ARCHITECTURE.md:240",
+      "code": "action.yml:runs",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::action_yml_has_no_inline_shell_interpolation"
+      ]
+    },
+    {
+      "id": "fc-f12-installer-verifies",
+      "category": "fail_closed_contract",
+      "claim": "Installer verifies what it runs: release archive downloaded by action verified against SHA256SUMS with no opt-out.",
+      "source": "docs/ARCHITECTURE.md:241",
+      "code": "action.yml:runs",
+      "pinning_tests": [
+        "tests/test_action_version.rs::a_downloaded_archive_must_carry_the_release_workflow_attestation_for_its_tag"
+      ]
+    },
+    {
+      "id": "sec-libgit2-memory-safety",
+      "category": "security_policy",
+      "claim": "Malformed git repositories, crafted packfiles, or invalid diffs do not cause panics or memory corruption.",
+      "source": "SECURITY.md:41",
+      "code": "src/gitctx.rs:open",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_libgit2_memory_safety"
+      ]
+    },
+    {
+      "id": "sec-tree-sitter-parse-safety",
+      "category": "security_policy",
+      "claim": "Untrusted, malformed, or hostile source code parses safely or records parse errors without crashing.",
+      "source": "SECURITY.md:42",
+      "code": "src/ast/mod.rs:parse",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_tree_sitter_parse_safety"
+      ]
+    },
+    {
+      "id": "sec-toml-parser-safety",
+      "category": "security_policy",
+      "claim": "Invalid, deeply nested, or malicious TOML files fail closed without panics.",
+      "source": "SECURITY.md:43",
+      "code": "src/config.rs:from_toml",
+      "pinning_tests": [
+        "tests/test_config.rs::schema_is_strict"
+      ]
+    },
+    {
+      "id": "sec-forge-api-safety",
+      "category": "security_policy",
+      "claim": "Malformed, partial, or oversized forge responses fail closed (exit 2) without following redirects on write.",
+      "source": "SECURITY.md:44",
+      "code": "src/forge.rs:request",
+      "pinning_tests": [
+        "tests/test_pr_policy.rs::a_forge_outage_is_retried_then_a_labelled_failure_never_a_pass",
+        "tests/test_pr_policy.rs::a_bare_number_that_does_not_exist_is_a_verdict_not_a_crash"
+      ]
+    },
+    {
+      "id": "sec-directive-delimiter-injection",
+      "category": "security_policy",
+      "claim": "Directive parser enforces line-anchored syntax, rejects malformed strings, and disallows delimiter injection.",
+      "source": "SECURITY.md:45",
+      "code": "src/tokens.rs:extract_directives",
+      "pinning_tests": [
+        "tests/test_directive_scoping.rs::test_all_40_directives_table_driven_scoping"
+      ]
+    },
+    {
+      "id": "sec-offline-network-boundary",
+      "category": "security_policy",
+      "claim": "DISCIPLINE_NO_NETWORK=1 keeps all requests off the network (except loopback).",
+      "source": "docs/ARCHITECTURE.md:128",
+      "code": "src/forge.rs:check_network_allowed",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::no_network_keeps_the_ci_base_fetch_off_the_network"
+      ]
+    },
+    {
+      "id": "kl-agent-prompt-fencing",
+      "category": "known_limits",
+      "claim": "Agent-prompt output quotes every problem/message in fenced blocks one backtick longer than any backtick inside, single-line titles/paths.",
+      "source": "docs/ARCHITECTURE.md:543",
+      "code": "src/report/agent_prompt.rs:render",
+      "pinning_tests": [
+        "tests/test_agent_hooks.rs::source_text_reaches_the_agent_only_inside_a_fence_it_cannot_close"
+      ]
+    },
+    {
+      "id": "gate-agents-md",
+      "category": "gates",
+      "claim": "AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it",
+      "source": "docs/GATES.md:agents-md",
+      "code": "src/guards/agents_md.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::agents_md_gate_fires_when_missing_or_forked"
+      ]
+    },
+    {
+      "id": "gate-assertion-reduction",
+      "category": "gates",
+      "claim": "assertion count / strength must not drop in an existing test",
+      "source": "docs/GATES.md:assertion-reduction",
+      "code": "src/guards/assertion_reduction.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::assertion_reduction_fires_on_weakening_and_on_removal"
+      ]
+    },
+    {
+      "id": "gate-vacuous-tests",
+      "category": "gates",
+      "claim": "new tests must carry a non-tautological assertion",
+      "source": "docs/GATES.md:vacuous-tests",
+      "code": "src/guards/vacuous_tests.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::vacuous_tests_fire_on_empty_and_tautological_tests_only"
+      ]
+    },
+    {
+      "id": "gate-ignored-tests",
+      "category": "gates",
+      "claim": "tests must not be newly #[ignore]d or skipped without directive",
+      "source": "docs/GATES.md:ignored-tests",
+      "code": "src/guards/ignored_tests.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::ignored_tests_fire_and_accept_a_scoped_override"
+      ]
+    },
+    {
+      "id": "gate-unsafe-safety-comment",
+      "category": "gates",
+      "claim": "unsafe blocks / impls carry a // SAFETY: comment",
+      "source": "docs/GATES.md:unsafe-safety-comment",
+      "code": "src/guards/unsafe_safety.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::unsafe_gate_fires_on_undocumented_block_not_on_documented_one"
+      ]
+    },
+    {
+      "id": "gate-deletion-rationale",
+      "category": "gates",
+      "claim": "deleted files and removed tests need a scoped removes: rationale",
+      "source": "docs/GATES.md:deletion-rationale",
+      "code": "src/guards/deletion_rationale.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::deletion_needs_a_scoped_line_anchored_rationale"
+      ]
+    },
+    {
+      "id": "gate-time-estimates",
+      "category": "gates",
+      "claim": "no calendar / duration estimates in markdown or the PR body",
+      "source": "docs/GATES.md:time-estimates",
+      "code": "src/guards/time_estimates.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::f2_repro_brief_time_estimates_all_fire_and_negative_controls_pass"
+      ]
+    },
+    {
+      "id": "gate-pii",
+      "category": "gates",
+      "claim": "no home paths, LAN IPs, or denylisted hostnames in tracked text",
+      "source": "docs/GATES.md:pii",
+      "code": "src/guards/pii.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::pii_fires_on_home_paths_and_lan_ips_without_echoing_the_user"
+      ]
+    },
+    {
+      "id": "gate-agent-scratch",
+      "category": "gates",
+      "claim": "agent scratch state is never tracked",
+      "source": "docs/GATES.md:agent-scratch",
+      "code": "src/guards/agent_scratch.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::agent_scratch_fires_on_tracked_scratch_state"
+      ]
+    },
+    {
+      "id": "gate-shell-secrets",
+      "category": "gates",
+      "claim": "no command-line secrets or unverified piped scripts in shell, docker, or CI",
+      "source": "docs/GATES.md:shell-secrets",
+      "code": "src/guards/shell_secrets.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::shell_secrets_gate_e2e"
+      ]
+    },
+    {
+      "id": "gate-issue-link",
+      "category": "gates",
+      "claim": "PR title or description links a tracking issue",
+      "source": "docs/GATES.md:issue-link",
+      "code": "src/guards/issue_link.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::issue_link_gate_e2e"
+      ]
+    },
+    {
+      "id": "gate-review-threads",
+      "category": "gates",
+      "claim": "the pull request has no unresolved review thread",
+      "source": "docs/GATES.md:review-threads",
+      "code": "src/guards/review_threads.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_pr_policy.rs::an_unresolved_review_thread_fails_and_a_resolved_one_with_replies_passes"
+      ]
+    },
+    {
+      "id": "gate-ratified-paths",
+      "category": "gates",
+      "claim": "edits to protected paths carry an owner ratification on closed issue",
+      "source": "docs/GATES.md:ratified-paths",
+      "code": "src/guards/ratified_paths.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_pr_policy.rs::a_glob_in_owner_ratified_paths_is_refused",
+        "tests/test_pr_policy.rs::refuse_author_ratification_needs_a_login_other_than_the_pull_requests"
+      ]
+    },
+    {
+      "id": "gate-citation-metadata",
+      "category": "gates",
+      "claim": "CITATION.cff and .zenodo.json are valid, agree, and cite concept DOI",
+      "source": "docs/GATES.md:citation-metadata",
+      "code": "src/guards/citation_metadata.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::citation_metadata_judges_a_change_to_the_citation_record"
+      ]
+    },
+    {
+      "id": "gate-commit-provenance",
+      "category": "gates",
+      "claim": "commits carry required trailers; agent commit carries review by someone else",
+      "source": "docs/GATES.md:commit-provenance",
+      "code": "src/guards/commit_provenance.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::commit_provenance_reads_trailers_and_authorship_of_every_commit_in_the_range"
+      ]
+    },
+    {
+      "id": "gate-config-integrity",
+      "category": "gates",
+      "claim": "a change cannot weaken its own discipline.toml without a token",
+      "source": "docs/GATES.md:config-integrity",
+      "code": "src/guards/integrity.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_baseline.rs::test_baseline_config_integrity_ratchet"
+      ]
+    },
+    {
+      "id": "gate-stub-bodies",
+      "category": "gates",
+      "claim": "added functions are not stubs; existing bodies are not replaced by stub markers",
+      "source": "docs/GATES.md:stub-bodies",
+      "code": "src/guards/stub_bodies.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::stub_bodies_reports_added_stubs_and_gutted_bodies_across_languages"
+      ]
+    },
+    {
+      "id": "gate-error-swallowing",
+      "category": "gates",
+      "claim": "no new empty error handler or discarded Result outside tests",
+      "source": "docs/GATES.md:error-swallowing",
+      "code": "src/guards/error_swallowing.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::error_swallowing_is_a_delta_outside_tests_across_languages"
+      ]
+    },
+    {
+      "id": "gate-instruction-smuggling",
+      "category": "gates",
+      "claim": "no invisible Unicode, unreviewed agent-instruction edits, or smuggling phrases",
+      "source": "docs/GATES.md:instruction-smuggling",
+      "code": "src/guards/instruction_smuggling.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reports_invisible_text_instruction_files_and_phrases_by_location_only"
+      ]
+    },
+    {
+      "id": "gate-build-hooks",
+      "category": "gates",
+      "claim": "install and build hooks that gain network or shell access need token",
+      "source": "docs/GATES.md:build-hooks",
+      "code": "src/guards/build_hooks.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::build_hooks_reports_install_hooks_build_scripts_and_manager_config_as_a_delta"
+      ]
+    },
+    {
+      "id": "gate-toolchain-config",
+      "category": "gates",
+      "claim": "compiler, linter, test-runner and coverage configuration cannot be loosened without token",
+      "source": "docs/GATES.md:toolchain-config",
+      "code": "src/guards/toolchain_config.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::toolchain_config_reports_a_lowered_bar_and_lifts_it_by_key_or_path"
+      ]
+    },
+    {
+      "id": "gate-sandbox-config",
+      "category": "gates",
+      "claim": "agent permissions/sandboxes or container isolation cannot be widened without token",
+      "source": "docs/GATES.md:sandbox-config",
+      "code": "src/guards/sandbox_config.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::sandbox_config_reports_a_widened_agent_or_container_and_lifts_it_by_key_or_path"
+      ]
+    },
+    {
+      "id": "gate-scope-confinement",
+      "category": "gates",
+      "claim": "changes stay inside authorized paths",
+      "source": "docs/GATES.md:scope-confinement",
+      "code": "src/guards/scope_confinement.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::scope_confinement_rejects_unauthorized_and_forbidden_paths"
+      ]
+    },
+    {
+      "id": "gate-suppression-delta",
+      "category": "gates",
+      "claim": "newly added linter / compiler suppression annotations require directive",
+      "source": "docs/GATES.md:suppression-delta",
+      "code": "src/guards/suppression_delta.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::suppression_delta_detects_new_suppression_and_accepts_waiver"
+      ]
+    },
+    {
+      "id": "gate-provenance-tags",
+      "category": "gates",
+      "claim": "published numerics carry (measured|target|projected) provenance tags",
+      "source": "docs/GATES.md:provenance-tags",
+      "code": "src/guards/provenance_tags.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::provenance_tags_changed_registry_sweeps_unchanged_documents"
+      ]
+    },
+    {
+      "id": "gate-ci-integrity",
+      "category": "gates",
+      "claim": "workflow weakening: continue-on-error, || true, unpinned actions",
+      "source": "docs/GATES.md:ci-integrity",
+      "code": "src/guards/ci_integrity.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::ci_integrity_a_checked_set_plus_e_is_not_a_masked_exit_code"
+      ]
+    },
+    {
+      "id": "gate-ci-skip-set",
+      "category": "gates",
+      "claim": "rollup skip set matches each job if: under observed filter outputs",
+      "source": "docs/GATES.md:ci-skip-set",
+      "code": "src/guards/ci_skip_set.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_ci_skip_set.rs::consistent_skip_set_passes_from_inline_json"
+      ]
+    },
+    {
+      "id": "gate-test-floor",
+      "category": "gates",
+      "claim": "test-count ratchet read from the base ref",
+      "source": "docs/GATES.md:test-floor",
+      "code": "src/guards/test_floor.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_adoption.rs::test_floor_ratchet_compares_the_test_command_count_not_the_static_count"
+      ]
+    },
+    {
+      "id": "gate-golden-output",
+      "category": "gates",
+      "claim": "prevents stealth edits to committed golden/test output files without explicit override",
+      "source": "docs/GATES.md:golden-output",
+      "code": "src/guards/golden_output.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::golden_output_gate_fires_on_modified_snapshot_and_accepts_override"
+      ]
+    },
+    {
+      "id": "gate-dependency-delta",
+      "category": "gates",
+      "claim": "manifest diff inspection: zero wildcards, source/license allowlists, deny.toml",
+      "source": "docs/GATES.md:dependency-delta",
+      "code": "src/guards/dependency_delta.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::dependency_delta_enforces_deny_toml_bans_and_git_pins"
+      ]
+    },
+    {
+      "id": "gate-test-budget",
+      "category": "gates",
+      "claim": "property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)",
+      "source": "docs/GATES.md:test-budget",
+      "code": "src/guards/test_budget.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::test_budget_fires_on_hypothesis_and_fuzz_target_removal"
+      ]
+    },
+    {
+      "id": "gate-pr-checklist",
+      "category": "gates",
+      "claim": "ticked PR checkboxes are reconciled against the diff",
+      "source": "docs/GATES.md:pr-checklist",
+      "code": "src/guards/pr_checklist.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::pr_checklist_reconciles_ticked_items_against_diff"
+      ]
+    },
+    {
+      "id": "gate-command",
+      "category": "gates",
+      "claim": "fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet",
+      "source": "docs/GATES.md:command",
+      "code": "src/guards/command.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::command_gate_forbid_output_and_canary_detected"
+      ]
+    },
+    {
+      "id": "gate-sanitizers",
+      "category": "gates",
+      "claim": "ASan / TSan preset with audited suppressions and a race canary",
+      "source": "docs/GATES.md:sanitizers",
+      "code": "src/guards/sanitizers.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::sanitizers_gate_handles_execution_and_override"
+      ]
+    },
+    {
+      "id": "gate-msrv",
+      "category": "gates",
+      "claim": "cargo check under the pinned MSRV",
+      "source": "docs/GATES.md:msrv",
+      "code": "src/guards/msrv.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::msrv_gate_validates_rust_version_and_accepts_waiver"
+      ]
+    },
+    {
+      "id": "gate-miri",
+      "category": "gates",
+      "claim": "Miri tiers with zero-tests guard",
+      "source": "docs/GATES.md:miri",
+      "code": "src/guards/miri.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::miri_gate_handles_execution_and_override"
+      ]
+    },
+    {
+      "id": "gate-unsafe-budget",
+      "category": "gates",
+      "claim": "unsafe count ratchet",
+      "source": "docs/GATES.md:unsafe-budget",
+      "code": "src/guards/unsafe_budget.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::test_unsafe_budget_max_unsafe_cap"
+      ]
+    },
+    {
+      "id": "gate-bench-regression",
+      "category": "gates",
+      "claim": "benchmark drift via harness adapters (deterministic counts or BCa intervals)",
+      "source": "docs/GATES.md:bench-regression",
+      "code": "src/guards/bench_regression.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::bench_regression_dual_file_mode_and_missing_baseline"
+      ]
+    },
+    {
+      "id": "gate-archive-contents",
+      "category": "gates",
+      "claim": "distribution archive must contain required paths and zero forbidden developer artifacts",
+      "source": "docs/GATES.md:archive-contents",
+      "code": "src/guards/archive_contents.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::archive_contents_reads_every_package_format_by_magic_and_refuses_the_rest"
+      ]
+    },
+    {
+      "id": "gate-manifest-sync",
+      "category": "gates",
+      "claim": "reconcile git-tracked files against packaging manifest declarations",
+      "source": "docs/GATES.md:manifest-sync",
+      "code": "src/guards/manifest_sync.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::manifest_sync_reconciles_tracked_files_and_manifest_and_accepts_override"
+      ]
+    },
+    {
+      "id": "gate-version-lockstep",
+      "category": "gates",
+      "claim": "version declarations across headers, manifests, and files must remain in lockstep",
+      "source": "docs/GATES.md:version-lockstep",
+      "code": "src/guards/version_lockstep.rs:evaluate",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::version_lockstep_does_not_blame_a_change_for_drift_the_base_already_had"
+      ]
+    }
+  ]
+}

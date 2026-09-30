@@ -1,0 +1,2 @@
+discipline exit: 1
+"code":"config-integrity/gate-disabled"
