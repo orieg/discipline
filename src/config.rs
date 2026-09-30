@@ -1411,6 +1411,10 @@ pub struct RatifiedPathsGate {
     pub accept_edited: AcceptEdited,
     /// Whether a comment created by an email reply (GitHub) can ratify.
     pub accept_email_replies: bool,
+    /// A ratification written by the pull request's own author is refused, so a second
+    /// login must agree. Off by default: it only means something once the agents open
+    /// pull requests under a login of their own.
+    pub refuse_author_ratification: bool,
 }
 
 impl Default for RatifiedPathsGate {
@@ -1438,6 +1442,7 @@ impl Default for RatifiedPathsGate {
             ratification_max_age_days: None,
             accept_edited: AcceptEdited::Never,
             accept_email_replies: false,
+            refuse_author_ratification: false,
         }
     }
 }

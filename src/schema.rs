@@ -530,7 +530,8 @@ pub fn generate_schema() -> Value {
                     "ratification_valid_from": { "type": "string", "enum": ["path-last-changed", "pull-created", "any"], "description": "How old a ratification may be: newer than the path's last change on the base branch (default), newer than the pull request, or any age" },
                     "ratification_max_age_days": { "type": "integer", "minimum": 1, "description": "Most days a ratification stays valid (default: no cap)" },
                     "accept_edited": { "type": "string", "enum": ["never", "by-author"], "description": "Whether an edited comment ratifies: never (default), or when the forge names the author as editor (GitHub only)" },
-                    "accept_email_replies": { "type": "boolean", "description": "Whether a GitHub comment created by an email reply ratifies (default: false)" }
+                    "accept_email_replies": { "type": "boolean", "description": "Whether a GitHub comment created by an email reply ratifies (default: false)" },
+                    "refuse_author_ratification": { "type": "boolean", "description": "Refuse a ratification written by the pull request's own author, so a second login must agree (default: false; turn on once agents open pull requests under their own login)" }
                 }
             },
             "TestFloorGate": {

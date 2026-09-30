@@ -393,6 +393,41 @@ fn a_ratification_by_an_agent_login_does_not_count() {
     );
 }
 
+/// Phase 15 Step 8: with `refuse_author_ratification`, the pull request's own author
+/// cannot ratify it; a ratifier who did not open it still can.
+#[test]
+fn refuse_author_ratification_needs_a_login_other_than_the_pull_requests() {
+    let policy = format!("{RATIFY}refuse_author_ratification = true\n");
+    let (repo, event) = protected_change(&policy, &[("scripts/check_x.py", "print('new')\n")]);
+    let api = gitea_with(serde_json::json!([comment("owner", BLOCK, LATER, LATER)]));
+    // Opened by `agent`, ratified by `owner`: it stands.
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    // Opened by `owner` (whatever the case), ratified by `owner`: refused.
+    std::fs::write(
+        &event,
+        r#"{"pull_request":{"number":7,"user":{"login":"Owner"},"head":{"sha":"abc"}}}"#,
+    )
+    .unwrap();
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let c = codes(&run, "ratified-paths");
+    assert!(
+        c.contains(&"ratified-paths/protected-path-unratified".to_string())
+            && c.contains(&"ratified-paths/ratification-by-pull-author".to_string()),
+        "{c:?}"
+    );
+    // Without the option, the same run passes: today's behaviour is unchanged.
+    let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
+    std::fs::write(
+        &event,
+        r#"{"pull_request":{"number":7,"user":{"login":"owner"},"head":{"sha":"abc"}}}"#,
+    )
+    .unwrap();
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
 #[test]
 fn a_glob_in_owner_ratified_paths_is_refused() {
     let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
