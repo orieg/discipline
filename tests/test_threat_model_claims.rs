@@ -21,7 +21,6 @@ struct Claim {
 
 #[derive(Debug, Deserialize)]
 struct ClaimsDoc {
-    #[allow(dead_code)]
     description: String,
     claims: Vec<Claim>,
 }
@@ -73,6 +72,11 @@ fn claims_fixture_is_valid() {
     let content = std::fs::read_to_string(&fixture_path).unwrap();
     let doc: ClaimsDoc =
         serde_json::from_str(&content).expect("fixture must be valid JSON matching ClaimsDoc");
+
+    assert!(
+        !doc.description.trim().is_empty(),
+        "claims doc description must not be empty"
+    );
 
     assert!(
         doc.claims.len() >= 60,
