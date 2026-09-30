@@ -793,8 +793,8 @@ fn copilot_user_install_keeps_observe_mode() {
 }
 
 /// A user-level file an earlier release wrote (it runs discipline, without the pre-tool
-/// entry) is reported and kept, and rewritten with `--upgrade`; a file that does not run
-/// discipline is never rewritten.
+/// entry) is reported and kept, and rewritten with `--upgrade`; a file with a hook of its
+/// own, or one that does not run discipline, is never rewritten.
 #[test]
 fn copilot_user_file_from_an_earlier_release_is_rewritten_only_with_upgrade() {
     let repo = Repo::new();
@@ -846,6 +846,42 @@ fn copilot_user_file_from_an_earlier_release_is_rewritten_only_with_upgrade() {
         "{}",
         again.stdout
     );
+
+    // A hook of its own beside discipline's, in the earlier file: never rewritten, and
+    // --upgrade refuses it with the entries to merge.
+    let mut own: serde_json::Value = serde_json::from_str(&earlier).unwrap();
+    own["hooks"]["agentStop"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({ "type": "command", "bash": "./notify.sh" }));
+    let own = own.to_string();
+    std::fs::write(&path, &own).unwrap();
+    let plain = repo.run(&["hook", "install", "--agent", "copilot", "--user"], &env);
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
+    assert!(
+        plain.stdout.contains("already runs discipline"),
+        "{}",
+        plain.stdout
+    );
+    let refused = repo.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "copilot",
+            "--user",
+            "--upgrade",
+        ],
+        &env,
+    );
+    assert_ne!(refused.code, 0, "{}", refused.stdout);
+    assert!(
+        refused.stdout.contains("Merge this into it")
+            && refused.stdout.contains("--event pre-tool --if-configured"),
+        "{}",
+        refused.stdout
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), own);
 
     let foreign = r#"{"version":1,"hooks":{}}"#;
     std::fs::write(&path, foreign).unwrap();
@@ -1223,6 +1259,62 @@ fn install_upgrade_rewrites_only_files_an_earlier_release_generated() {
     );
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(read(&own, boot), hand);
+}
+
+/// A JSON hook file v0.15.0 wrote (no generated header) is reported by `hook install`
+/// and rewritten by `--upgrade`, in its own mode; one with a hook or setting of its own is
+/// refused with the snippet to merge and left byte for byte.
+#[test]
+fn install_upgrade_rewrites_a_json_hook_file_a_release_generated_and_nothing_else() {
+    let fixture = |name: &str| {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/hook_install/v0.15.0/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    };
+    let read = |r: &Repo, f: &str| std::fs::read_to_string(r.file(f)).unwrap();
+    let repo = Repo::new();
+    let qwen = ".qwen/settings.json";
+    let old = fixture("qwen.observe.json");
+    repo.write(qwen, &old);
+
+    let plain = repo.run(&["hook", "install", "--agent", "qwen"], &[]);
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
+    assert!(
+        plain
+            .stdout
+            .contains("was written by an earlier discipline release"),
+        "{}",
+        plain.stdout
+    );
+    assert_eq!(read(&repo, qwen), old, "left as it is without --upgrade");
+
+    let up = repo.run(&["hook", "install", "--agent", "qwen", "--upgrade"], &[]);
+    assert_eq!(up.code, 0, "{}", up.stderr);
+    assert!(up.stdout.contains("upgraded"), "{}", up.stdout);
+    let now = read(&repo, qwen);
+    assert_eq!(now, discipline::hook::config_for_mode(Agent::Qwen, true).1);
+    assert!(now.contains("--event pre-tool --observe"), "{now}");
+    assert!(now.contains("--event session-start"), "{now}");
+
+    // Control: the same file with a setting of its own is refused and kept.
+    let mut settings: serde_json::Value = serde_json::from_str(&old).unwrap();
+    settings["model"] = serde_json::json!({ "name": "qwen3-coder" });
+    let merged = serde_json::to_string_pretty(&settings).unwrap() + "\n";
+    let own = Repo::new();
+    own.write(qwen, &merged);
+    let refused = own.run(&["hook", "install", "--agent", "qwen", "--upgrade"], &[]);
+    assert_ne!(refused.code, 0, "{}", refused.stdout);
+    assert!(
+        refused
+            .stdout
+            .contains("was not changed. Merge this into it")
+            && refused.stdout.contains("--event pre-tool --observe"),
+        "{}",
+        refused.stdout
+    );
+    assert_eq!(read(&own, qwen), merged);
 }
 
 #[test]
