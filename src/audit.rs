@@ -2478,9 +2478,10 @@ mod tests {
             let n = comments.as_array().unwrap().len().to_string();
             canned(&[
                 ("gitea:repos/o/r", serde_json::json!({"full_name": "o/r"})),
+                // Closed by the merge itself (the change is dated 2000 s).
                 (
                     "gitea:repos/o/r/issues/12",
-                    serde_json::json!({"number": 12, "state": "closed"}),
+                    serde_json::json!({"number": 12, "state": "closed", "closed_at": "1970-01-01T00:33:25Z"}),
                 ),
                 (
                     "gitea:repos/o/r/issues/12/comments?limit=50&page=1",
