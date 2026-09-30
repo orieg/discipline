@@ -224,7 +224,7 @@ const SIGNALS: &[SignalDef] = &[
     SignalDef {
         id: "guard-gate-loosened",
         rank: "look-first",
-        next: "Open the change and confirm each loosened option of a gate that guards the other gates was intended.",
+        next: "Open the change and check that each loosened setting was intended.",
         test: |i, all, _| {
             let r = &all[i];
             is_config(r) && r.gate.as_deref().is_some_and(|g| GUARD_GATES.contains(&g))
@@ -233,25 +233,25 @@ const SIGNALS: &[SignalDef] = &[
     SignalDef {
         id: "hidden-directive",
         rank: "look-first",
-        next: "Read the commit message as text: a directive inside an HTML comment does not show where the message is rendered.",
+        next: "Read the commit message or pull request as plain text and check that the hidden waiver was meant.",
         test: |i, all, _| all[i].hidden == Some(true),
     },
     SignalDef {
         id: "config-unreadable",
         rank: "look-soon",
-        next: "Compare that change's discipline.toml by hand: this binary could not read one side, so its loosenings are unknown.",
+        next: "Compare that change's discipline.toml by hand: this version of discipline could not read it.",
         test: |i, all, _| all[i].kind == "config-unreadable",
     },
     SignalDef {
         id: "loosened-without-pull-request",
         rank: "look-soon",
-        next: "Confirm the loosening with whoever pushed it: there was no pull request to review it in.",
+        next: "Ask whoever pushed it why: nobody reviewed the change.",
         test: |i, all, _| is_config(&all[i]) && all[i].pr.is_none(),
     },
     SignalDef {
         id: "loosening-without-waiver",
         rank: "review",
-        next: "Read the pull request body for the allow-gate-weakening this audit did not find in the commit message; if it is not there, find out how config-integrity passed.",
+        next: "Look for the reason in the pull request description; if there is none, find out why the configuration check let it through.",
         test: |i, all, _| {
             let r = &all[i];
             is_config(r) && r.pr.is_some() && !waived_in_change(r, all)
@@ -260,7 +260,7 @@ const SIGNALS: &[SignalDef] = &[
     SignalDef {
         id: "waived-then-loosened",
         rank: "review",
-        next: "Decide whether the loosening fixed the rule or only stopped it asking.",
+        next: "Check whether the loosening fixed a real problem with the check, or only stopped it from reporting.",
         test: |i, all, _| {
             let r = &all[i];
             is_config(r)
@@ -272,7 +272,7 @@ const SIGNALS: &[SignalDef] = &[
     SignalDef {
         id: "loosened-not-restored",
         rank: "review",
-        next: "Tighten the option back, or record why the looser value stays.",
+        next: "Tighten each setting back, or write down why it stays loose.",
         test: |i, all, tightenings| {
             let r = &all[i];
             is_config(r)
@@ -284,7 +284,7 @@ const SIGNALS: &[SignalDef] = &[
     SignalDef {
         id: "baseline-grew",
         rank: "review",
-        next: "Fix the grandfathered findings, or record why each stays in the baseline.",
+        next: "Fix the findings, or write down why each one stays in the baseline.",
         test: |i, all, _| all[i].kind == "baseline" && all[i].count.is_some_and(|n| n > 0),
     },
 ];
@@ -1312,13 +1312,13 @@ pub fn citation_signals(records: &[Record], issues: &[IssueFact]) -> Vec<Signal>
         (
             "waiver-cites-missing-issue",
             "look-soon",
-            "Open the waiver: the issue its reason cites does not exist, so nothing tracks the follow-up.",
+            "Open the waiver and find, or create, the issue it meant to point to.",
             &|_, f| f.state == "not-found",
         ),
         (
             "waiver-cites-issue-closed-before",
             "look-soon",
-            "Open the waiver: the issue its reason cites was already closed when it was written, so it tracks nothing.",
+            "Open the waiver and link an open issue for the follow-up it promises.",
             // A finding waiver's cited issue is its promise to follow up; a skipped issue
             // link citing a closed issue is context ("follows #12").
             &|r, f| {
@@ -1330,7 +1330,7 @@ pub fn citation_signals(records: &[Record], issues: &[IssueFact]) -> Vec<Signal>
         (
             "waiver-cites-issue-not-planned",
             "review",
-            "Decide what replaces the follow-up: the issue the waiver cites was closed as not planned.",
+            "Decide what replaces the follow-up the waiver promised.",
             &|r, f| {
                 r.class == "detector"
                     && f.state == "closed"
@@ -1636,17 +1636,22 @@ pub fn protected_signals(protected: &[Record]) -> Vec<Signal> {
             "protected-edit-unratified",
             "look-first",
             "unratified",
-            "Open the change: a protected path was edited with no ratification the gate accepts.",
+            "Open the change: a protected file was edited with no owner approval.",
         ),
         (
             "protected-edit-self-ratified",
             "look-soon",
             "self-ratified",
-            "Read the change: its protected edit was ratified by the pull request's own author login, which is not a second party.",
+            "Review the change yourself: the only approval came from the account that opened it.",
         ),
     ] {
         let hits: Vec<usize> = (0..protected.len())
-            .filter(|&i| protected[i].ratification.as_ref().is_some_and(|f| f.state == state))
+            .filter(|&i| {
+                protected[i]
+                    .ratification
+                    .as_ref()
+                    .is_some_and(|f| f.state == state)
+            })
             .collect();
         if hits.is_empty() {
             continue;

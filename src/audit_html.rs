@@ -120,58 +120,79 @@ fn signal_sentence(s: &Signal, summary: &Summary) -> String {
         .map(|g| format!("<code>{}</code>", esc(g)))
         .collect::<Vec<_>>()
         .join(", ");
-    let loosenings = plural(n, "loosening", "loosenings");
-    let changes = plural(c, "change", "changes");
-    let (verb_carry, verb_were) = if n == 1 {
-        ("carries", "was")
-    } else {
-        ("carry", "were")
-    };
+    let settings = plural(n, "setting", "settings");
+    let waivers = plural(n, "waiver", "waivers");
+    let were = if n == 1 { "was" } else { "were" };
     match s.id {
         "guard-gate-loosened" => {
-            format!("{loosenings} of {gates}, a gate that guards the other gates, in {changes}")
+            let what: Vec<String> = s
+                .records
+                .iter()
+                .filter_map(|&i| signal_list(s, summary).get(i).and_then(|r| r.gate.as_deref()))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(|g| format!("<code>{}</code> {}", esc(g), guard_role(g)))
+                .collect();
+            format!(
+                "{settings} {were} loosened in a check that protects the others: {}",
+                what.join("; ")
+            )
         }
         "hidden-directive" => format!(
-            "{} hidden in an HTML comment, in {changes}",
-            plural(n, "directive", "directives")
+            "{waivers} {were} written inside an HTML comment, where someone reading the commit or pull request would not see {}",
+            if n == 1 { "it" } else { "them" }
         ),
         "config-unreadable" => format!(
-            "{} this binary could not read",
-            plural(n, "historical configuration", "historical configurations")
+            "{} of <code>discipline.toml</code> could not be read, so what {} changed is unknown",
+            plural(n, "past version", "past versions"),
+            if n == 1 { "it" } else { "they" }
         ),
         "loosened-without-pull-request" => format!(
-            "{loosenings} arrived in {} with no pull request",
-            plural(c, "push", "pushes")
+            "{settings} {were} loosened in {} straight to the branch, with no pull request where anyone could review {}",
+            plural(c, "push", "pushes"),
+            if n == 1 { "it" } else { "them" }
         ),
         "loosening-without-waiver" => format!(
-            "{loosenings} {verb_carry} no <code>allow-gate-weakening</code> in the commit message"
+            "{settings} {were} loosened with no written reason (an <code>allow-gate-weakening</code> line) in the commit message"
         ),
-        "waived-then-loosened" => {
-            format!("{loosenings} of {gates} followed waivers of the same gate")
-        }
-        "loosened-not-restored" => format!("{loosenings} {verb_were} never tightened back"),
-        "baseline-grew" => format!("the baseline grew for {gates}"),
+        "waived-then-loosened" => format!(
+            "Findings of {gates} were waived one change at a time, and later the check itself was loosened ({})",
+            plural(n, "time", "times")
+        ),
+        "loosened-not-restored" => format!("{settings} loosened in the past {were} never tightened back"),
+        "baseline-grew" => format!(
+            "Existing findings of {gates} were added to the baseline, so they no longer block a change"
+        ),
         "waiver-cites-missing-issue" => format!(
-            "{} cite an issue that does not exist, in {changes}",
-            plural(n, "waiver", "waivers")
+            "{waivers} point to an issue that does not exist"
         ),
         "waiver-cites-issue-closed-before" => format!(
-            "{} cite an issue already closed when the waiver was written, in {changes}",
-            plural(n, "waiver", "waivers")
+            "{waivers} point to an issue that was already closed when {} written, so nothing tracks the promised follow-up",
+            if n == 1 { "it was" } else { "they were" }
         ),
         "waiver-cites-issue-not-planned" => format!(
-            "{} cite an issue closed as not planned, in {changes}",
-            plural(n, "waiver", "waivers")
+            "{waivers} point to an issue later closed as not planned, so the promised follow-up will not happen"
         ),
         "protected-edit-unratified" => format!(
-            "{} with no ratification the gate accepts, in {changes}",
-            plural(n, "protected-path edit", "protected-path edits")
+            "{} to protected files had no owner approval the check accepts",
+            plural(n, "edit", "edits")
         ),
         "protected-edit-self-ratified" => format!(
-            "{} ratified by the pull request's own author login, in {changes}",
-            plural(n, "protected-path edit", "protected-path edits")
+            "{} to protected files {were} approved only by the account that opened the pull request, so no second person agreed",
+            plural(n, "edit", "edits")
         ),
         _ => plural(n, "record", "records"),
+    }
+}
+
+/// What a gate that guards the other gates protects, in plain words.
+fn guard_role(gate: &str) -> &'static str {
+    match gate {
+        "ratified-paths" => "decides which edits to protected files, such as CI workflows and discipline's own configuration, need an owner's approval",
+        "config-integrity" => "reports every change that loosens discipline's own configuration",
+        "ci-integrity" => "reports every change that weakens the CI workflows that run the checks",
+        "instruction-smuggling" => "reports edits to the instruction files coding agents read",
+        _ => "protects the other checks",
     }
 }
 
@@ -703,38 +724,38 @@ pub fn render(s: &Summary) -> String {
         .unwrap_or_else(|| "this repository".to_string());
 
     // --- lede ---
-    let lede = match s.signals.first() {
-        None => format!("No escape hatch in the last {n} merged changes needs a decision."),
-        Some(first) => {
-            let (l, _) = rank(first.rank);
-            let others = s.signals.len() - 1;
-            let rest = if others > 0 {
-                if others == 1 {
-                    " 1 more signal follows.".to_string()
-                } else {
-                    format!(" {others} more signals follow.")
-                }
+    let lede = if s.signals.is_empty() {
+        format!("Nothing in the last {n} merged changes needs a look.")
+    } else {
+        format!(
+            "{} in the last {n} merged changes {} a look.",
+            plural(s.signals.len(), "finding", "findings"),
+            if s.signals.len() == 1 {
+                "needs"
             } else {
-                String::new()
-            };
-            format!(
-                "{l}: {} ({}).{rest}",
-                signal_sentence(first, s),
-                change_links(first, s)
-            )
-        }
+                "need"
+            }
+        )
     };
+    let top = s.signals.first().map(|first| {
+        format!(
+            "Start here: {} ({}).",
+            signal_sentence(first, s),
+            change_links(first, s)
+        )
+    });
     let nonroutine: BTreeSet<&str> = s
         .records
         .iter()
         .filter(|r| r.class != "process")
         .map(|r| r.sha.as_str())
         .collect();
-    let claimed = s.records.iter().filter(|r| r.evidence == "claimed").count();
+    let top = top
+        .map(|t| format!(r##"<p class="top">{t}</p>"##))
+        .unwrap_or_default();
     let sublede = format!(
-        "{} of {n} merged changes carried an exception beyond a skipped issue link. {claimed} of {} records are requests in text, not effects anyone verified.",
+        "{} of {n} merged changes used an escape hatch, not counting pull requests that skipped linking an issue. Waivers are shown as their authors wrote them; the report does not say whether each one was needed.",
         nonroutine.len(),
-        s.records.len()
     );
 
     // --- trust panel and checks ---
@@ -1204,6 +1225,7 @@ pub fn render(s: &Summary) -> String {
   <header>
     <div class="eyebrow">discipline audit · {repo} · {n} merged changes{span}</div>
     <h1>{lede}</h1>
+    {top}
     <p class="sub">{sublede}</p>
     <div class="trust" aria-label="What this report rests on">
       <dl>
