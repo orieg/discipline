@@ -171,6 +171,10 @@ fn signal_sentence(s: &Signal, summary: &Summary) -> String {
             "{waivers} {point} to an issue that was already closed when {} written; check that the issue still supports the waiver",
             if n == 1 { "it was" } else { "they were" }
         ),
+        "waiver-lifted-nothing" => format!(
+            "{waivers} lifted nothing when the change was replayed: the finding {} for was not there",
+            if n == 1 { "it was written" } else { "they were written" }
+        ),
         "waiver-cites-issue-not-planned" => format!(
             "{waivers} {point} to an issue later closed as not planned, so the promised follow-up will not happen"
         ),
@@ -285,6 +289,7 @@ const CHECK_LABEL: &[(&str, &str)] = &[
         "waiver-cites-issue-not-planned",
         "Waivers citing an issue not planned",
     ),
+    ("waiver-lifted-nothing", "Waivers that lifted nothing"),
     ("cited-issues", "Issues waivers cite"),
     (
         "protected-edit-self-ratified",
@@ -595,6 +600,19 @@ fn source(r: &Record, s: &Summary) -> String {
             ""
         }
     )
+}
+
+/// Whether the replay applied a waiver: empty when it did not judge it.
+fn lifted_badge(r: &Record) -> &'static str {
+    match r.lifted {
+        Some(true) => {
+            r##" <span class="badge ok" title="The replayed check applied it to a finding">lifted a finding</span>"##
+        }
+        Some(false) => {
+            r##" <span class="badge warn" title="The replayed check had no finding for it to lift">lifted nothing</span>"##
+        }
+        None => "",
+    }
 }
 
 /// The issues a waiver cites, each linked, with its state when `--forge` read it.
@@ -1032,7 +1050,7 @@ pub fn render(s: &Summary) -> String {
             let g = esc(r.gate.as_deref().unwrap_or(""));
             let item = match r.kind {
                 "directive" => format!(
-                    "Directive <code>{}</code> in the {} ({}), reason {} chars{}{}",
+                    "Directive <code>{}</code> in the {} ({}), reason {} chars{}{}{}",
                     esc(r.directive.as_deref().unwrap_or("")),
                     if r.source == Some("pull-request-body") {
                         "pull request body"
@@ -1054,7 +1072,8 @@ pub fn render(s: &Summary) -> String {
                         String::new()
                     } else {
                         format!("; cites {}", cites_cell(r, s))
-                    }
+                    },
+                    lifted_badge(r)
                 ),
                 "config" => format!(
                     "Loosened <code>{g}.{}</code>: {} {}",

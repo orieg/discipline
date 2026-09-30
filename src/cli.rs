@@ -177,6 +177,11 @@ pub struct AuditArgs {
     /// Include each directive's reason text (by default only its SHA-256 and length)
     #[arg(long)]
     pub reasons: bool,
+
+    /// A `discipline replay --json` report of the same history: says which waivers lifted a
+    /// finding and which lifted nothing
+    #[arg(long, value_name = "FILE")]
+    pub replay: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
