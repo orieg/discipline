@@ -1934,7 +1934,7 @@ Discipline provides universal static binary drop-in replacements for the legacy 
 
 ## Repository Security Boundary & Workspace Ownership
 
-Discipline inspects git history and diffs using `libgit2`. In CI (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `GITEA_ACTIONS` or `FORGEJO_ACTIONS` set), when the base ref cannot be resolved, it runs `git fetch --no-tags` against `origin` (30-second timeout) to deepen a shallow checkout; that is the only external `git` process it starts. Access to the underlying git repository enforces strict security boundaries that differ between host workstations and containerized environments:
+Discipline inspects git history and diffs using `libgit2`. In CI (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `GITEA_ACTIONS` or `FORGEJO_ACTIONS` set), when the base ref cannot be resolved, it runs `git fetch --no-tags` against `origin` (30-second timeout) to deepen a shallow checkout; that is the only external `git` process it starts. The repository's own `.git/config` is untrusted input, so the fetch runs with hooks, the file-system monitor, command transports (`ext::`, `fd::`, `git://`) and the upload-pack program overridden, and a command the repository's own configuration sets for ssh, credentials or a password prompt (`core.sshCommand`, `credential.helper`, `core.askPass`) replaced by the runner's global or system value (#364). `DISCIPLINE_NO_NETWORK=1` skips it. Access to the underlying git repository enforces strict security boundaries that differ between host workstations and containerized environments:
 
 ### Host Binary Enforcement (CVE-2022-24765 Protection)
 On developer workstations and multi-tenant hosts, the native `discipline` binary enforces strict repository owner validation by default.
@@ -1947,7 +1947,7 @@ The official container image (`ghcr.io/orieg/discipline`) intentionally relaxes 
 - **Operational Reality:** In containerized CI/CD runners (Docker volume mounts, Gitea Act Runner, Forgejo Runner, GitLab CI `/builds`, Kubernetes/Argo `/workspace`), checkout volumes are frequently owned by root (`0:0`) or the host runner UID, while the container executes as unprivileged `USER 10001:10001`. Requiring manual `--user` overrides or volume-mounted git configs adds significant friction and causes false-positive failures on normal setups.
 - **Security Assessment:** Relaxing owner validation within the official container image is safe because:
   1. **Ephemeral Single-Purpose Sandbox:** The container executes inside an isolated container namespace with a dedicated filesystem and unprivileged user credentials (`USER 10001:10001`).
-  2. **No Hook or Pager Execution:** apart from the CI-only `git fetch` above, which runs the `git` binary with the repository's configuration, `discipline` and `libgit2` do not invoke external git hooks, custom diff filters, or pager binaries, which eliminated the execution vector exploited in CVE-2022-24765.
+  2. **No Hook or Pager Execution:** apart from the CI-only `git fetch` above, which runs the `git` binary with the commands the repository's configuration can name overridden, `discipline` and `libgit2` do not invoke external git hooks, custom diff filters, or pager binaries, which eliminated the execution vector exploited in CVE-2022-24765.
   3. **No Root Escalation:** The container lacks `setuid` binaries or root escalation capabilities.
 
 ---

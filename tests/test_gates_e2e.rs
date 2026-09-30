@@ -14343,6 +14343,140 @@ fn no_network_keeps_the_ci_base_fetch_off_the_network() {
     );
 }
 
+/// A repository's own git configuration can name commands: hooks, a file-system monitor, an
+/// upload-pack program, a credential helper, an `ext::` transport. The fetch discipline starts
+/// in CI must run none of them, and must still fetch the base (#364).
+#[cfg(unix)]
+#[test]
+fn the_ci_base_fetch_runs_no_command_the_repository_configuration_names() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = Repo::new();
+    let markers = tempfile::tempdir().unwrap();
+    let marker = |n: &str| markers.path().join(n).to_string_lossy().into_owned();
+    // A remote that holds `main`: the fetch succeeds and moves a ref, so hooks would run.
+    let remote = tempfile::tempdir().unwrap();
+    let remote_path = remote.path().to_string_lossy().into_owned();
+    repo.git(&["clone", "-q", "--bare", ".", &remote_path]);
+    // A branch only the remote holds, so the base cannot resolve locally.
+    repo.git(&["--git-dir", &remote_path, "branch", "release", "main"]);
+    repo.git(&["remote", "add", "origin", &remote_path]);
+    let hooks = repo.file(".git/hostile-hooks");
+    for dir in [hooks.clone(), repo.file(".git/hooks")] {
+        std::fs::create_dir_all(&dir).unwrap();
+        for hook in [
+            "reference-transaction",
+            "post-checkout",
+            "post-merge",
+            "pre-auto-gc",
+            "post-index-change",
+            "fsmonitor-watchman",
+        ] {
+            let path = dir.join(hook);
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\ntouch {}\n", marker(&format!("hook-{hook}"))),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    repo.git(&["config", "core.hooksPath", &hooks.to_string_lossy()]);
+    repo.git(&[
+        "config",
+        "remote.origin.uploadpack",
+        &format!("touch {}; git-upload-pack", marker("uploadpack")),
+    ]);
+    repo.git(&[
+        "config",
+        "credential.helper",
+        &format!("!touch {}", marker("credential-helper")),
+    ]);
+    repo.git(&[
+        "config",
+        "core.sshCommand",
+        &format!("touch {}; ssh", marker("ssh-command")),
+    ]);
+    repo.git(&["config", "gc.auto", "1"]);
+    // Last: the harness's own git commands would run it.
+    repo.git(&[
+        "config",
+        "core.fsmonitor",
+        &format!("touch {}; true", marker("fsmonitor")),
+    ]);
+    let fired = || {
+        let mut names: Vec<String> = std::fs::read_dir(markers.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    assert!(fired().is_empty(), "{:?}", fired());
+    let ci = [("CI", "true"), ("DISCIPLINE_NO_NETWORK", "0")];
+
+    // The base is not local: the fetch brings it in, and the run judges the change.
+    let run = repo.run(
+        &["check", "--format", "json", "--base", "origin/release"],
+        &ci,
+    );
+    assert_ne!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(fired().is_empty(), "the fetch ran {:?}", fired());
+
+    // An `ext::` remote runs a shell command as its transport.
+    repo.git(&["config", "protocol.ext.allow", "always"]);
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        &format!("ext::sh -c touch% {}", marker("ext-remote")),
+    ]);
+    let run = repo.run(
+        &[
+            "check",
+            "--format",
+            "json",
+            "--base",
+            "origin/no-such-branch",
+        ],
+        &ci,
+    );
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(fired().is_empty(), "the fetch ran {:?}", fired());
+
+    // An ssh remote runs `core.sshCommand`: the repository's own value is dropped, the
+    // runner's global one is kept (`actions/checkout` and `gh auth setup-git` set these).
+    repo.git(&["remote", "set-url", "origin", "ssh://127.0.0.1:9/repo.git"]);
+    // Read the command as OpenSSH, so a port in the URL is accepted.
+    repo.git(&["config", "ssh.variant", "ssh"]);
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join(".gitconfig"),
+        format!(
+            "[core]\n\tsshCommand = \"touch {}; false\"\n",
+            marker("global-ssh-command")
+        ),
+    )
+    .unwrap();
+    let home_path = home.path().to_string_lossy().into_owned();
+    let run = repo.run(
+        &[
+            "check",
+            "--format",
+            "json",
+            "--base",
+            "origin/no-such-branch",
+        ],
+        &[
+            ("CI", "true"),
+            ("DISCIPLINE_NO_NETWORK", "0"),
+            ("HOME", &home_path),
+            ("XDG_CONFIG_HOME", &home_path),
+        ],
+    );
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(fired(), vec!["global-ssh-command"], "{}", run.stderr);
+}
+
 #[test]
 fn a_parse_error_blocks_only_where_it_could_hide_a_test() {
     // A construct the bundled Swift grammar does not read: an empty tuple argument.

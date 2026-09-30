@@ -84,6 +84,18 @@
       "verdict": "holds"
     },
     {
+      "id": "tm-trust-boundary-local-git-config",
+      "category": "threat_model_boundaries",
+      "claim": "The repository's local git configuration is untrusted input: the CI base fetch runs no hook, file-system monitor, command transport or upload-pack program it names, and replaces a repository-set ssh command, credential helper or askpass with the runner's own",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 trust boundaries, SECURITY.md",
+      "code": "src/gitctx.rs:fetch_overrides",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::the_ci_base_fetch_runs_no_command_the_repository_configuration_names",
+        "src/gitctx.rs::the_base_fetch_overrides_repository_commands_and_keeps_the_runners"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "tm-assumption-required-status-check",
       "category": "threat_model_assumptions",
       "claim": "Discipline runs as a required check with policy_from: base, and ci-integrity protects the workflow that runs it.",

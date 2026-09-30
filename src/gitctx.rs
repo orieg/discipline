@@ -980,6 +980,108 @@ fn is_ci_environment() -> bool {
         || std::env::var("FORGEJO_ACTIONS").is_ok()
 }
 
+/// Transports the base fetch may use. `ext::` and `fd::` run a command as the transport, and
+/// `git://` can go through `core.gitProxy`.
+const FETCH_TRANSPORTS: &[&str] = &["https", "http", "ssh", "file"];
+
+/// `-c` arguments for the base fetch. `git` reads the repository's own `.git/config`, which a
+/// hostile repository controls, and several keys there name a command: hooks, the file-system
+/// monitor, a transport. A fetch needs none of them, so they are overridden (`-c` wins over
+/// every configuration file). The upload-pack program is not among them: git reads
+/// `remote.<name>.uploadpack` first value first, so the fetch passes `--upload-pack` instead. The runner legitimately sets three
+/// other command keys (`core.sshCommand`, `credential.helper`, `core.askPass`), so only a
+/// value the repository's own configuration sets is replaced, by the global or system value
+/// (#364). `entries` is every configuration entry in priority order: name, value, and whether
+/// it comes from the repository (local or worktree scope).
+fn fetch_overrides_from(entries: &[(String, String, bool)]) -> Vec<String> {
+    let mut out: Vec<String> = [
+        "core.fsmonitor=false",
+        "core.hooksPath=/dev/null",
+        "fetch.recurseSubmodules=false",
+        "gc.auto=0",
+        "maintenance.auto=false",
+        "protocol.allow=never",
+        "protocol.ext.allow=never",
+        "protocol.fd.allow=never",
+        "protocol.git.allow=never",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    out.extend(
+        FETCH_TRANSPORTS
+            .iter()
+            .map(|t| format!("protocol.{t}.allow=always")),
+    );
+    let global = |name: &str| {
+        entries
+            .iter()
+            .filter(|(n, _, l)| !*l && n == name)
+            .map(|(_, v, _)| v.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut seen: Vec<&str> = Vec::new();
+    for (name, _, is_local) in entries {
+        if !*is_local || seen.contains(&name.as_str()) {
+            continue;
+        }
+        seen.push(name);
+        let lower = name.to_ascii_lowercase();
+        // A transport the repository allows for itself.
+        if let Some(t) = lower
+            .strip_prefix("protocol.")
+            .and_then(|r| r.strip_suffix(".allow"))
+        {
+            if !FETCH_TRANSPORTS.contains(&t) {
+                out.push(format!("{name}=never"));
+            }
+        } else if lower.starts_with("credential.") && lower.ends_with(".helper") {
+            // Multi-valued: an empty value clears the list, then the runner's own helpers.
+            out.push(format!("{name}="));
+            out.extend(global(name).into_iter().map(|v| format!("{name}={v}")));
+        } else if lower == "core.sshcommand" || lower == "core.askpass" {
+            let fallback = if lower == "core.sshcommand" {
+                "ssh"
+            } else {
+                ""
+            };
+            let value = global(name).pop().unwrap_or_else(|| fallback.to_string());
+            out.push(format!("{name}={value}"));
+        }
+    }
+    out
+}
+
+/// [`fetch_overrides_from`] over the repository's configuration. When it cannot be read, the
+/// three runner keys are overridden in every scope.
+fn fetch_overrides(repo: &Repository) -> Vec<String> {
+    let entries: Option<Vec<(String, String, bool)>> = repo.config().ok().and_then(|config| {
+        let mut out = Vec::new();
+        let mut iter = config.entries(None).ok()?;
+        while let Some(entry) = iter.next() {
+            let entry = entry.ok()?;
+            let is_local = matches!(
+                entry.level(),
+                git2::ConfigLevel::Local | git2::ConfigLevel::Worktree | git2::ConfigLevel::App
+            );
+            out.push((
+                entry.name().ok()?.to_string(),
+                entry.value().unwrap_or("").to_string(),
+                is_local,
+            ));
+        }
+        Some(out)
+    });
+    let strict = || {
+        vec![
+            ("credential.helper".to_string(), String::new(), true),
+            ("core.sshCommand".to_string(), String::new(), true),
+            ("core.askPass".to_string(), String::new(), true),
+        ]
+    };
+    fetch_overrides_from(&entries.unwrap_or_else(strict))
+}
+
 fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) -> Vec<String> {
     let mut fetch_errors = Vec::new();
     if !is_ci_environment() {
@@ -1002,12 +1104,20 @@ fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) 
     // repo.path() resolves the real gitdir even in worktrees where .git is a gitdir reference file
     let is_shallow = repo.path().join("shallow").exists();
 
+    let overrides = fetch_overrides(repo);
     let mut run_fetch = |args: &[&str]| {
         use std::process::Stdio;
         use std::time::{Duration, Instant};
         let mut cmd = std::process::Command::new("git");
+        for o in &overrides {
+            cmd.arg("-c").arg(o);
+        }
+        // `--upload-pack` on the command line: `-c` cannot outrank the repository's value.
+        let (sub, rest) = args.split_first().expect("a git subcommand");
         cmd.current_dir(root)
-            .args(args)
+            .arg(sub)
+            .arg("--upload-pack=git-upload-pack")
+            .args(rest)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -1212,6 +1322,56 @@ pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_base_fetch_overrides_repository_commands_and_keeps_the_runners() {
+        let e = |n: &str, v: &str, local: bool| (n.to_string(), v.to_string(), local);
+        let fixed = fetch_overrides_from(&[]);
+        for want in [
+            "core.fsmonitor=false",
+            "core.hooksPath=/dev/null",
+            "protocol.allow=never",
+            "protocol.ext.allow=never",
+            "protocol.https.allow=always",
+        ] {
+            assert!(fixed.contains(&want.to_string()), "{want}: {fixed:?}");
+        }
+        // Nothing the repository sets: the runner's own values are left alone.
+        let runner = [
+            e("credential.helper", "!gh auth git-credential", false),
+            e("core.sshCommand", "ssh -i key", false),
+        ];
+        assert_eq!(fetch_overrides_from(&runner), fixed);
+        // The repository's helper is cleared and the runner's put back, in order.
+        let mut both = runner.to_vec();
+        both.push(e("credential.helper", "!touch pwn", true));
+        both.push(e(
+            "credential.https://example.com.helper",
+            "!touch pwn",
+            true,
+        ));
+        both.push(e("core.sshCommand", "touch pwn; ssh", true));
+        both.push(e("core.askPass", "touch pwn", true));
+        both.push(e("protocol.ext.allow", "always", true));
+        both.push(e("protocol.file.allow", "always", true));
+        let got = fetch_overrides_from(&both);
+        let extra: Vec<&str> = got[fixed.len()..].iter().map(String::as_str).collect();
+        assert_eq!(
+            extra,
+            [
+                "credential.helper=",
+                "credential.helper=!gh auth git-credential",
+                "credential.https://example.com.helper=",
+                "core.sshCommand=ssh -i key",
+                "core.askPass=",
+                "protocol.ext.allow=never",
+            ]
+        );
+        // With no runner value, ssh falls back to plain `ssh`.
+        let only = fetch_overrides_from(&[e("core.sshCommand", "touch pwn; ssh", true)]);
+        assert_eq!(only.last().unwrap(), "core.sshCommand=ssh");
+    }
+
     use super::*;
 
     #[test]
