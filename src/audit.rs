@@ -1332,9 +1332,10 @@ pub fn citation_signals(records: &[Record], issues: &[IssueFact]) -> Vec<Signal>
         (
             "waiver-cites-issue-closed-before",
             "look-soon",
-            "Open the waiver and link an open issue for the follow-up it promises.",
-            // A finding waiver's cited issue is its promise to follow up; a skipped issue
-            // link citing a closed issue is context ("follows #12").
+            "Open the waiver and the issue: an approval should say so there, and a follow-up needs an open issue.",
+            // A finding waiver cites an issue as a follow-up or as the approval; either
+            // way, a closed one deserves a look. A skipped issue link citing a closed
+            // issue is context ("follows #12").
             &|r, f| {
                 r.class == "detector"
                     && f.state == "closed"
