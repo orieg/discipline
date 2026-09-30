@@ -493,6 +493,10 @@
             "description": "A login other than the pull request's author approved its head",
             "type": "boolean"
           },
+          "body_edited_after_merge": {
+            "description": "Its body was edited after the merge (GitHub's `lastEditedAt`), so the directives read from it now may not be the ones the gates read; absent when not known",
+            "type": "boolean"
+          },
           "pr": {
             "minimum": 1,
             "type": "integer"
