@@ -319,6 +319,10 @@ const NOT_CHECKED: &[(&str, &str)] = &[
         "reviews live on the forge: run with `--forge`",
     ),
     (
+        "pull-request-body-edited",
+        "a pull request body's edit time is read with `--forge`, on GitHub",
+    ),
+    (
         "agent-identity",
         "no record of which agent made a change is kept in history",
     ),
@@ -489,6 +493,13 @@ pub struct Pull {
     pub pr: u64,
     /// A login other than the pull request's author approved its head.
     pub approved_by_other: bool,
+    /// Its body was edited after the merge, so the directives read from it now may not be
+    /// the ones the gates read. Absent when not known (not GitHub, or no merge time).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_edited_after_merge: Option<bool>,
+    /// When it merged, for the edit comparison; not reported.
+    #[serde(skip)]
+    pub merged_at: Option<i64>,
     /// The author's login and the body, for the ratification judgement; never reported.
     #[serde(skip)]
     pub author: String,
@@ -535,6 +546,9 @@ pub struct ForgeRead {
     /// The changes that failed, for the ratification judgement.
     #[serde(skip)]
     pub failed_shas: Vec<String>,
+    /// Why the pull request bodies' edit times were not read, when they were not.
+    #[serde(skip)]
+    pub edits_error: Option<String>,
 }
 
 impl Summary {
@@ -1456,6 +1470,8 @@ pub fn read_pulls(
                     sha: c.sha.clone(),
                     pr: m.number,
                     approved_by_other: approvers.iter().any(|a| !a.eq_ignore_ascii_case(&m.author)),
+                    body_edited_after_merge: None,
+                    merged_at: m.merged_at,
                     author: m.author.clone(),
                     body: m.body.clone(),
                 });
@@ -1465,6 +1481,22 @@ pub fn read_pulls(
                 read.failed_shas.push(c.sha.clone());
                 read.error.get_or_insert(e);
             }
+        }
+    }
+    let numbers: Vec<u64> = pulls.iter().map(|p| p.pr).collect();
+    if !numbers.is_empty() {
+        match crate::forge::pull_body_edits(api, forge, &numbers) {
+            Ok(edits) => {
+                for p in &mut pulls {
+                    let edited = edits.get(&p.pr).copied().flatten();
+                    p.body_edited_after_merge = match (edited, p.merged_at) {
+                        (None, _) => Some(false),
+                        (Some(at), Some(merged)) => Some(at > merged),
+                        (Some(_), None) => None,
+                    };
+                }
+            }
+            Err(e) => read.edits_error = Some(e),
         }
     }
     (pulls, read, body_records)
@@ -1512,7 +1544,7 @@ pub fn judge_protected(
             .unwrap_or_default();
         // The audit reads after the merge, which closed the issues the pull request
         // closes: an issue that was open when the gate ran is closed now. An issue closed
-        // before the merge is not told apart until the audit reads issue timelines.
+        // before the merge is told apart by its close time (`closed_before_merge`).
         let cfg = crate::config::RatifiedPathsGate {
             require_open_issue: false,
             ..cfg
@@ -1753,7 +1785,8 @@ pub fn forge_checks(checks: &mut [Check], read: &ForgeRead, pulls: &[Pull], reco
             "not-checked",
             why.clone(),
         );
-        set(checks, "independent-review", "not-checked", why);
+        set(checks, "independent-review", "not-checked", why.clone());
+        set(checks, "pull-request-body-edited", "not-checked", why);
         return;
     }
     let n = pulls.len();
@@ -1798,6 +1831,50 @@ pub fn forge_checks(checks: &mut [Check], read: &ForgeRead, pulls: &[Pull], reco
             "independent-review",
             "clean",
             format!("every one of {prs} approved by another login"),
+        );
+    }
+    let unknown = pulls
+        .iter()
+        .filter(|p| p.body_edited_after_merge.is_none())
+        .count();
+    let edited: Vec<String> = pulls
+        .iter()
+        .filter(|p| p.body_edited_after_merge == Some(true))
+        .map(|p| format!("#{}", p.pr))
+        .collect();
+    if let Some(e) = &read.edits_error {
+        set(checks, "pull-request-body-edited", "not-checked", e.clone());
+    } else if unknown > 0 {
+        set(
+            checks,
+            "pull-request-body-edited",
+            "not-checked",
+            format!("the forge gave no merge time for {unknown} of {prs}"),
+        );
+    } else if !edited.is_empty() {
+        set(
+            checks,
+            "pull-request-body-edited",
+            "found",
+            format!(
+                "{} of {prs} edited after the merge: {}",
+                edited.len(),
+                edited.join(", ")
+            ),
+        );
+    } else if n == 0 {
+        set(
+            checks,
+            "pull-request-body-edited",
+            "clean",
+            "no change arrived through a pull request".to_string(),
+        );
+    } else {
+        set(
+            checks,
+            "pull-request-body-edited",
+            "clean",
+            format!("none of {prs} edited after the merge"),
         );
     }
 }
@@ -2416,6 +2493,84 @@ mod tests {
     }
 
     #[test]
+    fn a_body_edited_after_the_merge_is_found_on_github_only() {
+        let a = at(0, None);
+        let b = at(1, None);
+        let c = at(2, None);
+        let pr = |n: u64| serde_json::json!([{"number": n, "merged_at": "2026-09-20T00:00:00Z", "user": {"login": "dev"}, "body": "", "head": {"sha": format!("h{n}")}}]);
+        let mut answers: Vec<(String, serde_json::Value)> = Vec::new();
+        for (ch, n) in [(&a, 7u64), (&b, 8), (&c, 9)] {
+            answers.push((format!("github:repos/o/r/commits/{}/pulls", ch.sha), pr(n)));
+            answers.push((
+                format!("github:repos/o/r/pulls/{n}/reviews?per_page=100"),
+                serde_json::json!([]),
+            ));
+        }
+        let vars = serde_json::json!({"owner": "o", "name": "r", "n0": 7, "n1": 8, "n2": 9});
+        // #7 was edited before its merge, #8 after it, #9 never.
+        answers.push((
+            format!("github:graphql:BodyEdits {vars}"),
+            serde_json::json!({"data": {"repository": {
+                "p0": {"lastEditedAt": "2026-09-19T23:00:00Z"},
+                "p1": {"lastEditedAt": "2026-09-20T00:00:01Z"},
+                "p2": {"lastEditedAt": null}
+            }}}),
+        ));
+        let refs: Vec<(&str, serde_json::Value)> = answers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.clone()))
+            .collect();
+        let api = canned(&refs);
+        let changes = [a.clone(), b.clone(), c.clone()];
+        let (pulls, read, _) = read_pulls(&api, &github(), &changes, &[], false);
+        assert_eq!(
+            pulls
+                .iter()
+                .map(|p| (p.pr, p.body_edited_after_merge))
+                .collect::<Vec<_>>(),
+            vec![(7, Some(false)), (8, Some(true)), (9, Some(false))]
+        );
+        let check = |pulls: &[Pull], read: &ForgeRead| {
+            let mut checks = signals(&[], &[]).1;
+            forge_checks(&mut checks, read, pulls, &[]);
+            checks
+                .into_iter()
+                .find(|c| c.id == "pull-request-body-edited")
+                .map(|c| (c.state, c.detail))
+                .unwrap()
+        };
+        assert_eq!(
+            check(&pulls, &read),
+            (
+                "found",
+                "1 of 3 pull requests edited after the merge: #8".to_string()
+            )
+        );
+        // The same history on Gitea: the edit time is not read, so not checked.
+        let gitea = crate::forge::Forge {
+            kind: crate::forge::ForgeKind::Gitea,
+            url: "https://gitea.example".into(),
+            repo: "o/r".into(),
+        };
+        let api = canned(&[
+            (
+                &format!("gitea:repos/o/r/commits/{}/pull", a.sha),
+                serde_json::json!({"number": 7, "merged": true, "merged_at": "2026-09-20T00:00:00Z", "user": {"login": "dev"}, "body": "", "head": {"sha": "h7"}}),
+            ),
+            (
+                "gitea:repos/o/r/pulls/7/reviews?limit=50&page=1",
+                serde_json::json!([]),
+            ),
+        ]);
+        let (pulls, read, _) = read_pulls(&api, &gitea, &[a], &[], false);
+        assert_eq!(read.failed, 0, "{:?}", read.error);
+        assert_eq!(pulls[0].body_edited_after_merge, None);
+        let (state, detail) = check(&pulls, &read);
+        assert_eq!(state, "not-checked");
+        assert!(detail.contains("on GitHub only"), "{detail}");
+    }
+
+    #[test]
     fn a_forge_that_cannot_answer_leaves_the_questions_not_checked() {
         let a = at(0, None);
         let api = canned(&[(
@@ -2557,6 +2712,8 @@ mod tests {
             sha: sha.clone(),
             pr: 7,
             approved_by_other: false,
+            body_edited_after_merge: None,
+            merged_at: None,
             author: author.into(),
             body: "Closes #12".into(),
         };
