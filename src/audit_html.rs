@@ -172,7 +172,7 @@ fn signal_sentence(s: &Signal, summary: &Summary) -> String {
             if n == 1 { "it was" } else { "they were" }
         ),
         "waiver-lifted-nothing" => format!(
-            "{waivers} lifted nothing when the change was replayed: the finding {} for was not there",
+            "{waivers} lifted nothing when the change was re-checked with the current discipline: either the finding was never there, or the gate has changed since {}",
             if n == 1 { "it was written" } else { "they were written" }
         ),
         "waiver-cites-issue-not-planned" => format!(
@@ -791,8 +791,13 @@ pub fn render(s: &Summary) -> String {
         .map(|t| format!(r##"<p class="top">{t}</p>"##))
         .unwrap_or_default();
     let sublede = format!(
-        "{} of {n} merged changes used an escape hatch, not counting pull requests that skipped linking an issue. Waivers are shown as their authors wrote them; the report does not say whether each one was needed.",
+        "{} of {n} merged changes used an escape hatch, not counting pull requests that skipped linking an issue. Waivers are shown as their authors wrote them; {}",
         nonroutine.len(),
+        if s.replay.is_some() {
+            "the replay says which ones lifted a finding when re-checked with the current discipline."
+        } else {
+            "the report does not say whether each one was needed."
+        }
     );
 
     // --- trust panel and checks ---
@@ -807,9 +812,14 @@ pub fn render(s: &Summary) -> String {
     let mut protected_check = String::new();
     if !s.protected_edits.is_empty() {
         let changes: BTreeSet<&str> = s.protected_edits.iter().map(|r| r.sha.as_str()).collect();
-        protected_check.push_str(&format!(r##"<li class="chk found"><span class="st">Found</span><span class="what">{} protected-path edits in {} changes</span><span class="src">from git; ratification not checked</span></li>"##,
+        protected_check.push_str(&format!(r##"<li class="chk found"><span class="st">Found</span><span class="what">{} protected-path edits in {} changes</span><span class="src">from git; {}</span></li>"##,
             s.protected_edits.len(),
-            changes.len()));
+            changes.len(),
+            if s.forge.is_some() {
+                "ratification under Owner ratification"
+            } else {
+                "ratification not checked"
+            }));
     }
     checks.push_str(&protected_check);
     let mut ordered: Vec<&crate::audit::Check> = s.checks.iter().collect();
@@ -1393,6 +1403,12 @@ pub fn render(s: &Summary) -> String {
                 f.changes,
                 if f.failed > 0 { format!("; the forge could not answer for {}", f.failed) } else { String::new() }
             ),
+        } + &match &s.replay {
+            Some(r) => format!(
+                " A <code>discipline replay</code> report of {} changes ({} checked) says which waivers lifted a finding.",
+                r.cases, r.checked
+            ),
+            None => String::new(),
         },
         repo = esc(&repo_name),
         reference = esc(&s.reference),

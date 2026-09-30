@@ -223,7 +223,7 @@ Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java
 
 ## Auditing What Got Through
 
-`discipline audit` reads a branch's merged history and lists every escape hatch it carried: directive waivers, loosened `discipline.toml` options, grandfathered findings, inline markers and edits to protected paths. It ranks them by what they could hide and says what it could not check. `--format html` writes one self-contained page with each row linked to the file and line, diff or commit on your forge. [Open the report for this repository](https://orieg.github.io/discipline/demo/audit.html).
+`discipline audit` reads a branch's merged history and lists every escape hatch it carried: directive waivers, loosened `discipline.toml` options, grandfathered findings, inline markers and edits to protected paths. It ranks them by what they could hide and says what it could not check. `--forge` adds what lives on the forge (owner ratifications, reviews, pull-request descriptions, the issues waivers cite), and `--replay` a `discipline replay --json` report, to say which waivers lifted a finding. `--format html` writes one self-contained page with each row linked to the file and line, diff or commit on your forge. [Open the report for this repository](https://orieg.github.io/discipline/demo/audit.html).
 
 ```bash
 discipline audit --last 200 --format html -o audit.html

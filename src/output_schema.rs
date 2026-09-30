@@ -293,7 +293,7 @@ pub fn audit_schema() -> Value {
         "description": "The records `discipline audit --json` prints: one per escape hatch a merged change carried, read from git objects only. A record says what was claimed or applied, not whether a check honoured it.",
         "type": "object",
         "additionalProperties": false,
-        "required": ["schema_version", "version", "reference", "tip", "links", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings", "protected_edits", "pulls", "issues", "forge", "identities"],
+        "required": ["schema_version", "version", "reference", "tip", "links", "changes", "changes_with_records", "by_kind", "by_class", "by_gate", "signals", "checks", "records", "tightenings", "protected_edits", "pulls", "issues", "forge", "identities", "replay"],
         "properties": {
             "schema_version": { "const": AUDIT_SCHEMA_VERSION, "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it" },
             "version": text("The discipline version that wrote the report"),
@@ -336,6 +336,16 @@ pub fn audit_schema() -> Value {
                         "approved_by_other": { "type": "boolean", "description": "A login other than the pull request's author approved its head" },
                         "body_edited_after_merge": { "type": "boolean", "description": "Its body was edited after the merge (GitHub's `lastEditedAt`), so the directives read from it now may not be the ones the gates read; absent when not known" }
                     }
+                }
+            },
+            "replay": {
+                "type": ["object", "null"],
+                "description": "The `discipline replay --json` report `--replay` read; null without it",
+                "additionalProperties": false,
+                "required": ["cases", "checked"],
+                "properties": {
+                    "cases": { "type": "integer", "minimum": 0, "description": "Changes in the report" },
+                    "checked": { "type": "integer", "minimum": 0, "description": "Of those, the ones whose check ran (passed or blocked); the others judge nothing" }
                 }
             },
             "identities": {
