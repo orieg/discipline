@@ -1198,7 +1198,7 @@ fn closed_before_merge(
 ) -> Option<String> {
     match crate::references::issue_facts(api, forge, repo, issue, false) {
         Err(e) => Some(format!("could not read issue #{issue}: {e}")),
-        // The merge closes it within seconds; two minutes of slack for clock skew.
+        // The merge closes it at once; the margin allows for clock skew.
         Ok(f) => f
             .closed_at
             .filter(|t| *t < merged - 120)
