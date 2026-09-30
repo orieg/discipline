@@ -648,8 +648,7 @@
       "claim": "a subject-scoped directive needs a non-empty, non-placeholder reason",
       "source": "src/tokens.rs:7, docs/GATES.md:deletion-rationale",
       "code": "src/tokens.rs:parse_directives_with_names",
-      "verdict": "gap",
-      "issue": 358,
+      "verdict": "holds",
       "pinning_tests": [
         "tests/test_threat_model_claims.rs::sec_directive_placeholder_gap_proof"
       ]

@@ -477,15 +477,15 @@ fn sec_directive_subject_line_ignored() {
 /// Current behavior: `removes: <subject>` with no reason or `removes: <subject> todo`
 /// is treated as having a non-empty reason and bypasses the placeholder check because
 /// the subject is stripped and the remainder is not validated as a non-placeholder.
+/// Attack Probe (esc-03): Directives requiring a scoped subject and a rationale
+/// reject empty rationale and placeholder reasons.
 ///
-/// Note: The remediation in #358 will invert this test: once #358 lands, `removes: <subject>`
-/// without a valid non-placeholder rationale will be rejected, this test will assert
-/// rejection (`dirs_subject.is_empty()`), and the claim will move to `holds`.
+/// Pinned by claim `gate-deletion-rationale-reason-required` (#358).
 #[test]
 fn sec_directive_placeholder_gap_proof() {
     let names = discipline::tokens::REMOVES;
 
-    // A bare placeholder without subject IS caught:
+    // 1. Bare placeholder without subject is rejected at parse time:
     let bare_todo = "removes: todo\n";
     let dirs_bare = discipline::tokens::parse_directives_with_names(
         bare_todo,
@@ -494,22 +494,45 @@ fn sec_directive_placeholder_gap_proof() {
     );
     assert!(dirs_bare.is_empty(), "bare placeholder must be rejected");
 
-    // However, when a subject is included before placeholder, e.g. `removes: tests/old.rs todo`:
-    let subject_todo = "removes: tests/old.rs todo\n";
-    let dirs_subject = discipline::tokens::parse_directives_with_names(
-        subject_todo,
+    // 2. Subject with empty reason: `removes: tests/old.rs` must NOT cover tests/old.rs:
+    let subject_no_reason = "removes: tests/old.rs\n";
+    let dirs_no_reason = discipline::tokens::parse_directives_with_names(
+        subject_no_reason,
         names,
         discipline::tokens::OverrideSource::PrBody,
     );
-    // Verified finding / GAP: dirs_subject currently parses because reason is "tests/old.rs todo"
-    // and is not in PLACEHOLDERS list.
     assert!(
-        !dirs_subject.is_empty(),
-        "proves GAP: subject+todo is currently parsed as valid directive"
+        dirs_no_reason.is_empty() || !dirs_no_reason[0].covers("tests/old.rs"),
+        "removes: tests/old.rs without reason must be rejected"
     );
+
+    // 3. Subject with placeholder reason: `removes: tests/old.rs todo` must NOT cover tests/old.rs:
+    for placeholder in [
+        "todo", "TODO", "tbd", "TBD", "n/a", "N/A", "fixme", "<reason>", "...", "-",
+    ] {
+        let line = format!("removes: tests/old.rs {placeholder}\n");
+        let dirs_ph = discipline::tokens::parse_directives_with_names(
+            &line,
+            names,
+            discipline::tokens::OverrideSource::PrBody,
+        );
+        assert!(
+            dirs_ph.is_empty() || !dirs_ph[0].covers("tests/old.rs"),
+            "placeholder '{placeholder}' after subject must be rejected"
+        );
+    }
+
+    // 4. Valid non-empty, non-placeholder reason DOES cover tests/old.rs:
+    let subject_valid = "removes: tests/old.rs superseded by tests/new_suite.rs\n";
+    let dirs_valid = discipline::tokens::parse_directives_with_names(
+        subject_valid,
+        names,
+        discipline::tokens::OverrideSource::PrBody,
+    );
+    assert_eq!(dirs_valid.len(), 1);
     assert!(
-        dirs_subject[0].covers("tests/old.rs"),
-        "proves GAP: covers tests/old.rs despite placeholder reason"
+        dirs_valid[0].covers("tests/old.rs"),
+        "valid rationale must cover"
     );
 }
 

@@ -579,6 +579,87 @@ fn deletion_needs_a_scoped_line_anchored_rationale() {
 }
 
 #[test]
+fn deletion_rationale_enforces_non_empty_non_placeholder_reason() {
+    let repo = Repo::new();
+
+    // 1. None: deleted file with no waiver -> Exit 1, waiver applied: no
+    repo.git(&["rm", "-q", "tests/a.rs"]);
+    repo.commit("feat: delete tests/a.rs without waiver");
+    let run_none = repo.check(&[]);
+    assert_eq!(run_none.code, 1, "deletion without waiver must fail");
+    assert_eq!(
+        run_none.titles("deletion-rationale"),
+        vec!["File Deleted Without Rationale"]
+    );
+    assert_eq!(run_none.json()["overrides"], 0);
+
+    // 2. Subject only: `removes: tests/a.rs` (no reason) -> Exit 1, waiver applied: no
+    repo.commit("feat: delete with subject only\n\nremoves: tests/a.rs");
+    let run_no_reason = repo.check(&[]);
+    assert_eq!(
+        run_no_reason.code, 1,
+        "removes: tests/a.rs with no reason must fail"
+    );
+    assert_eq!(
+        run_no_reason.titles("deletion-rationale"),
+        vec!["File Deleted Without Rationale"]
+    );
+    assert_eq!(run_no_reason.json()["overrides"], 0);
+
+    // 3. Subject with placeholder reasons: `removes: tests/a.rs todo` / TBD / n/a -> Exit 1, waiver applied: no
+    for ph in [
+        "todo", "TODO", "tbd", "TBD", "n/a", "N/A", "fixme", "<reason>", "...",
+    ] {
+        repo.commit(&format!(
+            "feat: delete with placeholder\n\nremoves: tests/a.rs {ph}"
+        ));
+        let run_ph = repo.check(&[]);
+        assert_eq!(
+            run_ph.code, 1,
+            "removes: tests/a.rs with placeholder '{ph}' must fail"
+        );
+        assert_eq!(
+            run_ph.titles("deletion-rationale"),
+            vec!["File Deleted Without Rationale"]
+        );
+        assert_eq!(run_ph.json()["overrides"], 0);
+    }
+
+    // 4. Bare placeholder: `removes: todo` -> Exit 1, waiver applied: no
+    repo.commit("feat: delete with bare placeholder\n\nremoves: todo");
+    let run_bare = repo.check(&[]);
+    assert_eq!(run_bare.code, 1, "removes: todo must fail");
+    assert_eq!(
+        run_bare.titles("deletion-rationale"),
+        vec!["File Deleted Without Rationale"]
+    );
+    assert_eq!(run_bare.json()["overrides"], 0);
+
+    // 5. Valid rationale: `removes: tests/a.rs superseded by tests/new_suite.rs` -> Exit 0, waiver applied: yes
+    repo.commit(
+        "feat: delete with valid rationale\n\nremoves: tests/a.rs superseded by tests/new_suite.rs\nallow-test-shrink: tests/a.rs superseded by tests/new_suite.rs",
+    );
+    let run_valid = repo.check(&[]);
+    assert_eq!(
+        run_valid.code, 0,
+        "removes: tests/a.rs with valid rationale must pass: {}",
+        run_valid.stdout
+    );
+    assert!(run_valid.titles("deletion-rationale").is_empty());
+    assert!(run_valid.titles("test-floor").is_empty());
+    assert!(run_valid.json()["overrides"].as_u64().unwrap() >= 1);
+    let outcomes = &run_valid.json()["outcomes"];
+    let del_outcome = outcomes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "deletion-rationale")
+        .unwrap();
+    assert_eq!(del_outcome["overrides"].as_array().unwrap().len(), 1);
+    assert_eq!(del_outcome["overrides"][0]["subject"], "tests/a.rs");
+}
+
+#[test]
 fn rename_is_not_a_deletion_but_a_removed_test_is() {
     let repo = Repo::new();
     repo.git(&["mv", "tests/a.rs", "tests/arith.rs"]);
@@ -975,7 +1056,7 @@ fn r1_forced_pair_allow_assertion_drop_must_name_old_test() {
         "#[test]\nfn zq() {\n    let x = 1;\n    assert!(x > 0);\n}\n",
     );
     // Naming new test zq must FAIL:
-    repo.commit("test: drop\n\nallow-assertion-drop: zq reason");
+    repo.commit("test: drop\n\nallow-assertion-drop: zq replaced by zq");
     let run = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(run.code, 1, "naming new test should fail");
 
@@ -990,7 +1071,7 @@ fn r1_forced_pair_allow_assertion_drop_must_name_old_test() {
         "tests/a.rs",
         "#[test]\nfn zq() {\n    let x = 1;\n    assert!(x > 0);\n}\n",
     );
-    repo2.commit("test: drop\n\nallow-assertion-drop: adds reason");
+    repo2.commit("test: drop\n\nallow-assertion-drop: adds replaced by zq");
     let run2 = repo2.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run2.code, 0,
