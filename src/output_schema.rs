@@ -333,7 +333,8 @@ pub fn audit_schema() -> Value {
                     "properties": {
                         "sha": text("The change's commit"),
                         "pr": { "type": "integer", "minimum": 1 },
-                        "approved_by_other": { "type": "boolean", "description": "A login other than the pull request's author approved its head" }
+                        "approved_by_other": { "type": "boolean", "description": "A login other than the pull request's author approved its head" },
+                        "body_edited_after_merge": { "type": "boolean", "description": "Its body was edited after the merge (GitHub's `lastEditedAt`), so the directives read from it now may not be the ones the gates read; absent when not known" }
                     }
                 }
             },

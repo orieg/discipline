@@ -1509,6 +1509,8 @@ pub struct MergedPull {
     pub body: String,
     /// The pull request's head commit, for `require_approval`.
     pub head_sha: String,
+    /// When it merged, seconds since the Unix epoch, when the forge says.
+    pub merged_at: Option<i64>,
 }
 
 /// The merged pull request (or merge request) that carried `sha`, if the forge knows one.
@@ -1554,6 +1556,7 @@ pub fn merged_pull_for_commit(
                     author: str_of(pr, &["user", "login"]),
                     body: str_of(pr, &["body"]),
                     head_sha: str_of(pr, &["head", "sha"]),
+                    merged_at: crate::ratification::parse_time(&str_of(pr, &["merged_at"])),
                 })),
                 many => Err(format!(
                     "commit {sha} belongs to {} merged pull requests; refusing to pick one",
@@ -1575,6 +1578,7 @@ pub fn merged_pull_for_commit(
                 author: str_of(&pr, &["user", "login"]),
                 body: str_of(&pr, &["body"]),
                 head_sha: str_of(&pr, &["head", "sha"]),
+                merged_at: crate::ratification::parse_time(&str_of(&pr, &["merged_at"])),
             }))
         }
         ForgeKind::GitLab => {
@@ -1599,6 +1603,7 @@ pub fn merged_pull_for_commit(
                     author: str_of(mr, &["author", "username"]),
                     body: str_of(mr, &["description"]),
                     head_sha: str_of(mr, &["sha"]),
+                    merged_at: crate::ratification::parse_time(&str_of(mr, &["merged_at"])),
                 })),
                 many => Err(format!(
                     "commit {sha} belongs to {} merged merge requests; refusing to pick one",
@@ -1607,6 +1612,64 @@ pub fn merged_pull_for_commit(
             }
         }
     }
+}
+
+/// Pull requests per [`pull_body_edits`] query.
+const EDITS_PER_QUERY: usize = 50;
+
+/// When each pull request's body was last edited, seconds since the Unix epoch (`None`
+/// when it never was), for the audit's post-merge edit check. GitHub keeps this as
+/// `lastEditedAt` on its edit history, read with GraphQL, up to 50 pull requests a
+/// query. On the other forges it is not read: they answer `Err`.
+pub fn pull_body_edits(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    numbers: &[u64],
+) -> Result<std::collections::BTreeMap<u64, Option<i64>>, String> {
+    if forge.kind != ForgeKind::GitHub {
+        return Err(format!(
+            "a pull request body's edit time is read on GitHub only, and this repository is on {}",
+            forge.kind.label()
+        ));
+    }
+    let (owner, name) = forge
+        .repo
+        .split_once('/')
+        .ok_or_else(|| format!("{} is not owner/name", forge.repo))?;
+    let mut out = std::collections::BTreeMap::new();
+    for chunk in numbers.chunks(EDITS_PER_QUERY) {
+        let decls: String = (0..chunk.len()).map(|i| format!(", $n{i}: Int!")).collect();
+        let fields: String = (0..chunk.len())
+            .map(|i| format!(" p{i}: pullRequest(number: $n{i}) {{ lastEditedAt }}"))
+            .collect();
+        let query = format!(
+            "query BodyEdits($owner: String!, $name: String!{decls}) {{ repository(owner: $owner, name: $name) {{{fields} }} }}"
+        );
+        let mut vars = serde_json::json!({"owner": owner, "name": name});
+        for (i, n) in chunk.iter().enumerate() {
+            vars[format!("n{i}")] = serde_json::json!(n);
+        }
+        let data = api
+            .graphql(forge, &query, &vars)
+            .map_err(|e| e.to_string())?;
+        for (i, n) in chunk.iter().enumerate() {
+            let pr = data
+                .get("repository")
+                .and_then(|r| r.get(format!("p{i}")))
+                .filter(|p| p.is_object())
+                .ok_or_else(|| format!("pull request #{n} is missing from the edit answer"))?;
+            let at = match pr.get("lastEditedAt") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(t) => Some(
+                    t.as_str()
+                        .and_then(crate::ratification::parse_time)
+                        .ok_or_else(|| format!("pull request #{n} has an unreadable edit time"))?,
+                ),
+            };
+            out.insert(*n, at);
+        }
+    }
+    Ok(out)
 }
 
 /// GitLab: usernames that approve merge request `iid` **at** `head_sha`. The merge request's
@@ -2258,6 +2321,46 @@ mod tests {
     }
 
     #[test]
+    fn body_edit_times_are_read_fifty_pull_requests_a_query() {
+        use super::{pull_body_edits, CannedApi};
+        let gh = Forge {
+            kind: ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        };
+        let numbers: Vec<u64> = (1..=51).collect();
+        let mut first = serde_json::json!({"owner": "o", "name": "r"});
+        let mut answer = serde_json::Map::new();
+        for (i, n) in numbers[..50].iter().enumerate() {
+            first[format!("n{i}")] = serde_json::json!(n);
+            answer.insert(format!("p{i}"), serde_json::json!({"lastEditedAt": null}));
+        }
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            format!("github:graphql:BodyEdits {first}"),
+            serde_json::json!({"data": {"repository": answer}}),
+        );
+        let second = serde_json::json!({"owner": "o", "name": "r", "n0": 51});
+        api.responses.insert(
+            format!("github:graphql:BodyEdits {second}"),
+            serde_json::json!({"data": {"repository": {"p0": {"lastEditedAt": "2026-09-21T00:00:00Z"}}}}),
+        );
+        let edits = pull_body_edits(&api, &gh, &numbers).unwrap();
+        assert_eq!(edits.len(), 51);
+        assert_eq!(edits[&1], None);
+        assert_eq!(edits[&51], Some(1_789_948_800));
+        // A pull request the answer leaves out is an error, never "not edited".
+        let mut short = CannedApi::default();
+        short.responses.insert(
+            format!("github:graphql:BodyEdits {second}"),
+            serde_json::json!({"data": {"repository": {"p0": null}}}),
+        );
+        assert!(pull_body_edits(&short, &gh, &[51])
+            .unwrap_err()
+            .contains("#51 is missing"));
+    }
+
+    #[test]
     fn merged_pull_lookup_per_forge_and_the_direct_push_case() {
         use super::{merged_pull_for_commit, CannedApi, MergedPull};
         let f = |kind: ForgeKind, url: &str| Forge {
@@ -2315,7 +2418,8 @@ mod tests {
                 number: 12,
                 author: "agent".into(),
                 body: "allow-agent-instructions: AGENTS.md ok".into(),
-                head_sha: "h12".into()
+                head_sha: "h12".into(),
+                merged_at: Some(1_789_948_800),
             })
         );
         assert_eq!(merged_pull_for_commit(&api, &gh, "bbb").unwrap(), None);

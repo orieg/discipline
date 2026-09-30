@@ -296,6 +296,10 @@ const CHECK_LABEL: &[(&str, &str)] = &[
     ),
     ("owner-ratification", "Owner ratification"),
     ("independent-review", "Review by another person"),
+    (
+        "pull-request-body-edited",
+        "Pull request bodies edited after the merge",
+    ),
     ("agent-identity", "Which agent made a change"),
 ];
 
@@ -575,10 +579,20 @@ fn source(r: &Record, s: &Summary) -> String {
         ),
         _ => (l.commit.replace("{sha}", &r.sha), "commit".to_string()),
     };
+    // A waiver read from a body edited after the merge may not be what the gates read.
+    let edited = r.source == Some("pull-request-body")
+        && s.pulls
+            .iter()
+            .any(|p| Some(p.pr) == r.pr && p.body_edited_after_merge == Some(true));
     format!(
-        r##" <a class="src-link" href="{}" title="Open where this is">{} ↗</a>"##,
+        r##" <a class="src-link" href="{}" title="Open where this is">{} ↗</a>{}"##,
         esc(&href),
-        esc(&text)
+        esc(&text),
+        if edited {
+            r##" <span class="badge warn" title="Compare the pull request's edit history with the waiver">edited after the merge</span>"##
+        } else {
+            ""
+        }
     )
 }
 

@@ -171,6 +171,7 @@ const AUDIT_FIELDS: &[&str] = &[
     "pulls: array",
     "pulls[]: object",
     "pulls[].approved_by_other: boolean",
+    "pulls[].body_edited_after_merge: boolean",
     "pulls[].pr: integer",
     "pulls[].sha: string",
     "records: array",
