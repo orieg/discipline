@@ -107,6 +107,247 @@
       "verdict": "holds"
     },
     {
+      "id": "tm-llm01",
+      "category": "threat_model_coverage",
+      "claim": "LLM01 Prompt Injection: text aimed at an agent in the diff or the change description is reported by location and class, and repository text reaches an agent only inside a fence it cannot close",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/instruction_smuggling.rs:instruction_smuggling",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reports_invisible_text_instruction_files_and_phrases_by_location_only",
+        "tests/test_agent_hooks.rs::source_text_reaches_the_agent_only_inside_a_fence_it_cannot_close"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-llm02",
+      "category": "threat_model_coverage",
+      "claim": "LLM02 Sensitive Information Disclosure: personal data, hosts and secrets added by a change are reported by location, never echoed",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/hygiene.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::pii_fires_on_home_paths_and_lan_ips_without_echoing_the_user",
+        "tests/test_gates_e2e.rs::shell_secrets_gate_e2e",
+        "tests/test_report_redaction.rs::test_cross_format_redaction_pins_sentinel_exclusion"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-llm03",
+      "category": "threat_model_coverage",
+      "claim": "LLM03:2026 Excessive Agency: a change that widens an agent's permissions or sandbox is reported, and the pre-tool hook refuses an edit in another worktree",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/sandbox_config.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::sandbox_config_reports_a_widened_agent_or_container_and_lifts_it_by_key_or_path",
+        "tests/test_pretool.rs::each_agent_is_refused_an_edit_in_another_worktree_and_allowed_its_own"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-llm04",
+      "category": "threat_model_coverage",
+      "claim": "LLM04:2026 Supply Chain / CICD-SEC-3: a new or loosened dependency, lockfile source or install hook is reported, and the action runs only an attested release",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/dependency.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::dependency_delta_reads_the_lockfile_not_only_its_size",
+        "tests/test_gates_e2e.rs::build_hooks_reports_install_hooks_build_scripts_and_manager_config_as_a_delta",
+        "tests/test_action_version.rs::a_downloaded_archive_must_carry_the_release_workflow_attestation_for_its_tag"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-llm05",
+      "category": "threat_model_coverage",
+      "claim": "LLM05:2026 Data and Model Poisoning (repository part): every edit or deletion of an agent-instruction file is reported",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/instruction_smuggling.rs:is_instruction_file",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reports_invisible_text_instruction_files_and_phrases_by_location_only"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-llm10",
+      "category": "threat_model_coverage",
+      "claim": "LLM10:2026 Improper Output Handling: action inputs never reach shell parsing, and the agent-facing report emits repairs, never directives or matched text",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "action.yml",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::action_yml_has_no_inline_shell_interpolation",
+        "tests/test_gates_e2e.rs::agent_prompt_format_produces_repair_and_never_emits_directives"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-asi01",
+      "category": "threat_model_coverage",
+      "claim": "ASI01 Agent Goal Hijack: instruction-file edits and instruction text, including folded and encoded forms, are reported",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/instruction_smuggling.rs:text_classes",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reports_invisible_text_instruction_files_and_phrases_by_location_only",
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-asi02",
+      "category": "threat_model_coverage",
+      "claim": "ASI02 Tool Misuse and Exploitation (configuration part): widened tool permissions are reported, and a command acting on another worktree is refused",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/pretool.rs",
+      "pinning_tests": [
+        "tests/test_pretool.rs::each_agent_is_refused_a_shell_command_that_acts_on_another_worktree",
+        "tests/test_gates_e2e.rs::sandbox_config_reports_a_widened_agent_or_container_and_lifts_it_by_key_or_path"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-asi03",
+      "category": "threat_model_coverage",
+      "claim": "ASI03 Identity and Privilege Abuse (distinct logins): an agent login's ratification does not count, and with refuse_author_ratification neither does the pull request author's",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/ratification.rs",
+      "pinning_tests": [
+        "tests/test_pr_policy.rs::a_ratification_by_an_agent_login_does_not_count",
+        "tests/test_pr_policy.rs::refuse_author_ratification_needs_a_login_other_than_the_pull_requests"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-asi04",
+      "category": "threat_model_coverage",
+      "claim": "ASI04 Agentic Supply Chain (declared part): agent hook, skill and settings files and MCP server lists are reported when changed, and the hook bootstrap pins release digests",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/instruction_smuggling.rs:INSTRUCTION_FILES",
+      "pinning_tests": [
+        "tests/test_agent_hooks.rs::claude_code_bootstrap_pins_release_digests",
+        "tests/test_gates_e2e.rs::sandbox_config_reports_a_widened_agent_or_container_and_lifts_it_by_key_or_path"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-asi05",
+      "category": "threat_model_coverage",
+      "claim": "ASI05 Unexpected Code Execution: install and build hooks that gain network or shell are reported, and configured commands come from the base policy only",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/build_hooks.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::build_hooks_reports_install_hooks_build_scripts_and_manager_config_as_a_delta",
+        "tests/test_gates_e2e.rs::policy_from_base_judges_a_change_by_the_configuration_it_did_not_write"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-asi06",
+      "category": "threat_model_coverage",
+      "claim": "ASI06 Memory & Context Poisoning (repository part): agent-instruction and declared instruction files are reported when changed",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/instruction_smuggling.rs:is_instruction_file",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reports_invisible_text_instruction_files_and_phrases_by_location_only"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-asi07",
+      "category": "threat_model_coverage",
+      "claim": "ASI07 Insecure Inter-Agent Communication: the change description is scanned, and one agent cannot move a branch another worktree leased",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/lease.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::sleeps_trivial_assertions_and_injected_pr_bodies_are_reported",
+        "tests/test_lease.rs::the_ref_guard_refuses_moving_a_branch_another_worktree_leased"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-asi10",
+      "category": "threat_model_coverage",
+      "claim": "ASI10 Rogue Agents: a change cannot weaken the policy that judges it",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/integrity.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::a_change_cannot_weaken_its_own_config_without_a_scoped_token",
+        "tests/test_gates_e2e.rs::policy_from_base_judges_a_change_by_the_configuration_it_did_not_write"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-cicd01",
+      "category": "threat_model_coverage",
+      "claim": "CICD-SEC-1 Insufficient Flow Control: doctor reports a required check that does not run discipline, bypass actors and review rules",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/doctor.rs",
+      "pinning_tests": [
+        "tests/test_doctor.rs::doctor_required_check_without_discipline_fails",
+        "src/doctor.rs::review_rules_are_read_from_rulesets_and_classic_protection"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-cicd04",
+      "category": "threat_model_coverage",
+      "claim": "CICD-SEC-4 Poisoned Pipeline Execution: a change to the pipeline that judges it is judged by the base, and doctor reports settings that let mutable code run",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/ci_integrity.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::ci_integrity_flags_a_discipline_step_moved_off_the_base_policy",
+        "tests/test_gates_e2e.rs::ci_integrity_reports_workflow_changes_that_expose_secrets_or_a_write_token",
+        "tests/test_doctor.rs::doctor_reports_the_repository_settings_that_let_mutable_code_run"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-cicd05",
+      "category": "threat_model_coverage",
+      "claim": "CICD-SEC-5 Insufficient PBAC: a workflow gaining a write token or exposing secrets is reported, and doctor reads the job token policy",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/ci_integrity.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::ci_integrity_reports_workflow_changes_that_expose_secrets_or_a_write_token",
+        "src/doctor_settings.rs::gitlab_job_token_passes_only_with_the_allowlist_on_and_no_push"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-cicd07",
+      "category": "threat_model_coverage",
+      "claim": "CICD-SEC-7 Insecure System Configuration (repository part): widened container isolation is reported, and doctor warns on unsafe Actions policy values",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/guards/sandbox_config.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::sandbox_config_reports_a_widened_agent_or_container_and_lifts_it_by_key_or_path",
+        "src/doctor_settings.rs::actions_policy_warns_on_each_unsafe_value"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-cicd08",
+      "category": "threat_model_coverage",
+      "claim": "CICD-SEC-8 Ungoverned Usage of 3rd Party Services: third-party actions near secrets and imposter pins are reported",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/doctor_pins.rs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::ci_integrity_a_third_party_action_in_a_job_with_secrets_warns_without_failing",
+        "tests/test_doctor.rs::doctor_fails_an_imposter_pin_and_warns_on_a_tag_pinned_nested_action"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "tm-cicd09",
+      "category": "threat_model_coverage",
+      "claim": "CICD-SEC-9 Improper Artifact Integrity Validation: the action requires the release attestation, and doctor requires a tag rule that blocks update and deletion",
+      "source": "docs/ARCHITECTURE.md:\u00a71.4 coverage",
+      "code": "src/doctor_settings.rs",
+      "pinning_tests": [
+        "tests/test_action_version.rs::a_downloaded_archive_must_carry_the_release_workflow_attestation_for_its_tag",
+        "src/doctor_settings.rs::tag_ruleset_must_cover_the_release_tag_and_block_update_and_deletion"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "fc-f1-three-exit-states",
       "category": "fail_closed_contract",
       "claim": "Three exit states (0 = pass, 1 = violations found, 2 = could not check) with structured could_not_check reasons.",
