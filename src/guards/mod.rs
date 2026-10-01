@@ -619,7 +619,16 @@ pub fn run_checks(
     }
 
     for note in &ctx.directive_notes {
-        let target_gate = if note.contains("removes") || note.contains("deletes") {
+        // A refused hidden directive's note names the directive and nothing it says (#362):
+        // it belongs to that directive's gate alone.
+        let hidden_gate = note
+            .strip_prefix("hidden directive `")
+            .and_then(|rest| rest.split_once('`'))
+            .and_then(|(name, _)| crate::tokens::spec_for_directive(name))
+            .map(|spec| spec.gate);
+        let target_gate = if let Some(gate) = hidden_gate {
+            gate
+        } else if note.contains("removes") || note.contains("deletes") {
             "deletion-rationale"
         } else if note.contains("allow-assertion-drop") {
             "assertion-reduction"
