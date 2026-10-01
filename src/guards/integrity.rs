@@ -49,6 +49,11 @@ pub enum Direction {
 
 /// Every option accepted under `[gates.<id>]`, classified. An option missing from this
 /// table is a hole in the gate: `every_gate_option_is_classified` fails until it is added.
+/// Optional `Tolerance` keys whose absence means no limit, so removing one loosens. Others
+/// fall back to a default (`noise_floor_pct`, filled before comparison) or to the strictest
+/// reading (`noise_margin_pct` absent is 0).
+pub const ABSENT_IS_UNLIMITED: &[&str] = &["max_noise_cv"];
+
 pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     // Common to every gate.
     ("enabled", Direction::LooserWhenFalse),
@@ -1022,9 +1027,24 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
             // An option this binary does not know is judged as a plain switch, so a
             // stale table degrades to the strict reading rather than to silence.
             let dir = direction_of(key).unwrap_or(Direction::LooserWhenFalse);
+            // Only an optional key can be absent on the head side. Its removal is a
+            // weakening when the absent reading is looser than the value removed.
             let Some(hv) = h.get(key) else {
                 match dir {
                     Direction::Evidence | Direction::Floor | Direction::Cap => {
+                        note(w(key, Change::Removed).was(bv))
+                    }
+                    // Absent means no limit at all (`max_noise_cv`: no noise check).
+                    Direction::Tolerance if ABSENT_IS_UNLIMITED.contains(&key.as_str()) => {
+                        note(w(key, Change::Removed).was(bv))
+                    }
+                    // A gate's `allow_hidden = false` removed: the gate then inherits
+                    // `[directives] allow_hidden`, a loosening when that is `true`.
+                    Direction::LooserWhenTrue
+                        if *bv == Value::Boolean(false)
+                            && key == "allow_hidden"
+                            && head.directives.allow_hidden =>
+                    {
                         note(w(key, Change::Removed).was(bv))
                     }
                     _ => {}
@@ -1116,6 +1136,50 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn removing_an_optional_key_is_judged_by_what_absent_means() {
+        let cfg = |body: &str| {
+            DisciplineConfig::from_toml_str(&format!("[meta]\nversion = 1\nname = \"t\"\n{body}"))
+                .unwrap()
+        };
+        let keys = |base: &str, head: &str| -> Vec<String> {
+            diff_configs(&cfg(base), &cfg(head))
+                .unwrap()
+                .iter()
+                .map(|w| format!("{}.{}", w.gate, w.key()))
+                .collect()
+        };
+        // `max_noise_cv` absent is no noise check: a weakening.
+        assert_eq!(
+            keys(
+                "[gates.bench-regression]\nmax_noise_cv = 0.05\n",
+                "[gates.bench-regression]\n"
+            ),
+            ["bench-regression.max_noise_cv"]
+        );
+        // `noise_margin_pct` absent is 0: stricter, not reported.
+        assert!(keys(
+            "[gates.bench-regression]\nnoise_margin_pct = 2.0\n",
+            "[gates.bench-regression]\n"
+        )
+        .is_empty());
+        // A gate's `allow_hidden = false` removed loosens only when the global is `true`.
+        let hidden = |global: bool, gate: &str| {
+            format!("[directives]\nallow_hidden = {global}\n[gates.deletion-rationale]\n{gate}")
+        };
+        assert_eq!(
+            keys(&hidden(true, "allow_hidden = false\n"), &hidden(true, "")),
+            ["deletion-rationale.allow_hidden"]
+        );
+        assert!(keys(&hidden(false, "allow_hidden = false\n"), &hidden(false, "")).is_empty());
+        assert!(keys(&hidden(true, "allow_hidden = true\n"), &hidden(true, "")).is_empty());
+        // Every listed key is a real optional tolerance.
+        for k in ABSENT_IS_UNLIMITED {
+            assert_eq!(direction_of(k), Some(Direction::Tolerance), "{k}");
+        }
+    }
+
     use super::*;
 
     fn cfg(body: &str) -> DisciplineConfig {

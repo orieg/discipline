@@ -1242,6 +1242,18 @@
         "tests/test_doctor.rs::doctor_reads_gitlab_settings_and_audits_the_token"
       ],
       "verdict": "holds"
+    },
+    {
+      "id": "gate-config-integrity-optional-removal",
+      "category": "gates",
+      "claim": "removing an optional configuration key whose absence reads looser (max_noise_cv; a gate's allow_hidden = false under a global allow_hidden = true) is reported as a weakening",
+      "source": "docs/GATES.md:config-integrity",
+      "code": "src/guards/integrity.rs:diff_configs",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::removing_an_optional_limit_or_a_stricter_switch_is_a_weakening",
+        "src/guards/integrity.rs::removing_an_optional_key_is_judged_by_what_absent_means"
+      ],
+      "verdict": "holds"
     }
   ]
 }
