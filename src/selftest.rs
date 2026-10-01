@@ -220,6 +220,16 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "issue-link: exempt_authors exempts the listed author only, never a run without one",
+        || {
+            use crate::guards::issue_link::exempt_author;
+            let listed = vec!["dependabot[bot]".to_string()];
+            Ok(exempt_author(Some("Dependabot[bot]"), &listed).is_some()
+                && exempt_author(Some("someone"), &listed).is_none()
+                && exempt_author(None, &listed).is_none())
+        },
+    ),
+    (
         "issue-link: a missing issue is a verdict, an outage is an error, never a pass",
         || {
             use crate::forge::{CannedApi, Forge, ForgeErrorKind, ForgeKind};

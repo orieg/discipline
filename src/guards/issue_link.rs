@@ -11,6 +11,8 @@
 //! - With `verify_references`, looks every reference up on the forge
 //!   ([`crate::references`]): at least one must be an issue of this repository. A forge
 //!   that cannot be read is exit 2, never a pass.
+//! - A pull request whose author is in `exempt_authors` (dependency-update bots) needs no
+//!   reference. The author comes from the forge's event payload, never the run's actor.
 
 use crate::config::{GateSettings, IssueLinkGate, IssueWaiver};
 use crate::could_not_check::{tag, Reason};
@@ -30,6 +32,16 @@ pub fn has_issue_reference(text: &str, re: &Regex) -> bool {
 
 pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.issue_link;
+    if let Some(bad) = settings
+        .exempt_authors
+        .iter()
+        .find(|a| a.trim().is_empty() || a.chars().any(char::is_whitespace))
+    {
+        return Err(tag(
+            Reason::Configuration,
+            anyhow!("`gates.issue-link.exempt_authors` entry {bad:?} is not a login"),
+        ));
+    }
     let exempt = exempt_filter(settings)?;
     let mut out = GateOutcome::new(GATE);
 
@@ -203,6 +215,18 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
 
     out.examined = 1;
 
+    let pull_author = ctx
+        .forge
+        .as_ref()
+        .and_then(|f| f.pull.as_ref())
+        .map(|p| p.author.as_str());
+    if let Some(author) = exempt_author(pull_author, &settings.exempt_authors) {
+        out.notes.push(format!(
+            "pull request opened by `{author}`, listed in `exempt_authors`: no tracking issue required"
+        ));
+        return Ok(out);
+    }
+
     if settings.verify_references {
         return verify_references(ctx, settings, pr_title, pr_body, out);
     }
@@ -234,6 +258,17 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
     );
 
     Ok(out)
+}
+
+/// The pull request's author when `exempt_authors` lists it. `author` is the one the
+/// forge's event payload names (`pull_request.user.login`; on GitLab the login that started
+/// the pipeline); a run with no pull request has none, so nothing is exempt.
+pub fn exempt_author<'a>(author: Option<&'a str>, exempt_authors: &[String]) -> Option<&'a str> {
+    let author = author.filter(|a| !a.is_empty())?;
+    exempt_authors
+        .iter()
+        .any(|a| a.eq_ignore_ascii_case(author))
+        .then_some(author)
 }
 
 /// The accepted `no-issue:` waiver, unless `waiver = "none"`. `lifts` is the finding the
@@ -422,6 +457,23 @@ mod tests {
         ));
         assert!(!has_issue_reference("Ticket 123", &re));
         assert!(!has_issue_reference("#abc", &re));
+    }
+
+    #[test]
+    fn exempt_author_matches_the_listed_login_only() {
+        let listed = vec!["dependabot[bot]".to_string()];
+        // Positive controls: the listed login, in any case.
+        assert_eq!(
+            exempt_author(Some("dependabot[bot]"), &listed),
+            Some("dependabot[bot]")
+        );
+        assert!(exempt_author(Some("DEPENDABOT[BOT]"), &listed).is_some());
+        // Negative controls: another login, a prefix, no author, an empty author, no list.
+        assert!(exempt_author(Some("someone"), &listed).is_none());
+        assert!(exempt_author(Some("dependabot"), &listed).is_none());
+        assert!(exempt_author(None, &listed).is_none());
+        assert!(exempt_author(Some(""), &listed).is_none());
+        assert!(exempt_author(Some("dependabot[bot]"), &[]).is_none());
     }
 
     #[test]

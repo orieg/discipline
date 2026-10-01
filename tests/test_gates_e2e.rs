@@ -9957,6 +9957,99 @@ fn issue_link_gate_e2e() {
     assert_eq!(run_waiver_bad.code, 1);
 }
 
+/// `exempt_authors` lifts the reference requirement for the pull request's author as the
+/// event payload names it, and only for that author: never the run's actor, never a run
+/// with no pull request, and never `Directive In Subject Line`.
+#[test]
+fn issue_link_exempt_authors_follow_the_event_author_not_the_actor() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.issue-link]\nenabled = true\nexempt_authors = [\"dependabot[bot]\"]\n",
+    );
+    repo.write("Cargo.lock", "# bumped\n");
+    repo.commit("build(deps): bump serde");
+    let dir = tempfile::tempdir().unwrap();
+    let event = |author: &str, title: &str| {
+        let path = dir
+            .path()
+            .join(format!("{}.json", author.replace(['[', ']'], "_")));
+        let payload = serde_json::json!({"pull_request": {
+            "number": 9, "user": {"login": author}, "head": {"sha": "abc123"},
+            "title": title, "body": "Bumps serde from 1.0.1 to 1.0.2."}});
+        std::fs::write(&path, payload.to_string()).unwrap();
+        path.to_str().unwrap().to_string()
+    };
+    let run =
+        |env: &[(&str, &str)]| repo.run(&["check", "--format", "json", "--base", "HEAD~1"], env);
+    let missing = |r: &Run| {
+        r.titles("issue-link")
+            .iter()
+            .any(|t| t == "Tracking Issue Link Missing")
+    };
+
+    // The listed bot opened it: no reference needed, and the note says why.
+    let bot = event("dependabot[bot]", "build(deps): bump serde");
+    let ok = run(&[("GITHUB_EVENT_PATH", bot.as_str())]);
+    assert_eq!(ok.code, 0, "stdout: {}\nstderr: {}", ok.stdout, ok.stderr);
+    let outcome = ok.outcome("issue-link");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+    assert!(
+        outcome["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("exempt_authors")),
+        "{outcome}"
+    );
+
+    // Logins compare case-insensitively.
+    let upper = event("Dependabot[bot]", "build(deps): bump serde");
+    assert_eq!(run(&[("GITHUB_EVENT_PATH", upper.as_str())]).code, 0);
+
+    // Anyone else, even when the run's actor is the bot: the actor is not the author.
+    let human = event("someone", "build(deps): bump serde");
+    let refused = run(&[
+        ("GITHUB_EVENT_PATH", human.as_str()),
+        ("GITHUB_ACTOR", "dependabot[bot]"),
+    ]);
+    assert_eq!(refused.code, 1, "stdout: {}", refused.stdout);
+    assert!(missing(&refused), "{:?}", refused.titles("issue-link"));
+
+    // No pull request (title and body from the environment only): no author, no exemption.
+    let local = repo.check_with_pr_metadata(
+        &["--base", "HEAD~1"],
+        Some("build(deps): bump serde"),
+        Some("Bumps serde."),
+    );
+    assert_eq!(local.code, 1, "stdout: {}", local.stdout);
+
+    // A directive in the title is still reported for an exempt author.
+    let directive = event("dependabot[bot]", "build(deps): bump serde no-issue: bot");
+    let subject = run(&[("GITHUB_EVENT_PATH", directive.as_str())]);
+    assert_eq!(subject.code, 1, "stdout: {}", subject.stdout);
+    assert!(
+        subject
+            .titles("issue-link")
+            .iter()
+            .any(|t| t.contains("Directive In Subject Line")),
+        "{:?}",
+        subject.titles("issue-link")
+    );
+
+    // An entry that is not a login is a configuration error, not an empty match.
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.issue-link]\nenabled = true\nexempt_authors = [\" \"]\n",
+    );
+    let bad = run(&[("GITHUB_EVENT_PATH", bot.as_str())]);
+    assert_eq!(
+        bad.code, 2,
+        "stdout: {}\nstderr: {}",
+        bad.stdout, bad.stderr
+    );
+}
+
 // ---- Phase A Parity Extensions ----------------------------------------------
 
 #[test]

@@ -153,6 +153,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("accept_pull_references", Direction::LooserWhenTrue),
     ("reference_repos", Direction::Grown),
     ("waiver", Direction::StrictMode("none")),
+    ("exempt_authors", Direction::Grown),
     ("protected_paths", Direction::Shrunk),
     ("never_ratifiable", Direction::Shrunk),
     ("ratifiers", Direction::Grown),
