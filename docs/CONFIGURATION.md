@@ -319,10 +319,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.test-floor.min_tests` | integer | *(unset)* | Minimum required workspace test count |
 | `gates.test-floor.required_suites` | list | `[]` | Required test suite files that must exist |
 | `gates.test-floor.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.test-floor.base_report` | string | *(unset)* | In-job base test report XML file for test-floor identity ratcheting |
-| `gates.test-floor.head_report` | string | *(unset)* | In-job head test report XML file for test-floor identity ratcheting |
 | `gates.test-floor.test_command` | string | *(unset)* | Custom command to list or count tests |
-| `gates.test-floor.test_report` | string | *(unset)* | Test report XML file path (relative to repo root) for test-floor identity ratcheting |
 | `gates.test-floor.tolerance` | integer | `0` | Allowed test count decrease below floor or base before violation (default: 0) |
 | `gates.time-estimates.allow_patterns` | list | `[]` | Regex patterns permitted as operational exceptions; matched per line and across soft-wrapped lines of a paragraph, exempting only the matched text |
 | `gates.time-estimates.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
@@ -497,6 +494,9 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--allow-cross-host-bench` | `DISCIPLINE_ALLOW_CROSS_HOST_BENCH` |  | Allow benchmark comparison across mismatched host/runner provenance tags |
 | `--bench-base-file` | `DISCIPLINE_BENCH_BASE_FILE` |  | In-job base benchmark result file for bench-regression dual-mode |
 | `--bench-head-file` | `DISCIPLINE_BENCH_HEAD_FILE` |  | In-job head benchmark result file for bench-regression dual-mode |
+| `--test-base-report` | `DISCIPLINE_TEST_BASE_REPORT` |  | In-job base test report XML file for test-floor identity ratcheting |
+| `--test-head-report` | `DISCIPLINE_TEST_HEAD_REPORT` |  | In-job head test report XML file for test-floor identity ratcheting |
+| `--test-report` | `DISCIPLINE_TEST_REPORT` |  | Test report XML file path (relative to repo root) for test-floor identity ratcheting |
 | `--baseline-file` |  |  | Path to grandfathering baseline file (defaults to discipline-baseline.toml if present) |
 | `--no-baseline` |  |  | Ignore grandfathering baseline even if present |
 

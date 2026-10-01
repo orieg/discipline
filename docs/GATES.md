@@ -233,6 +233,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `test-floor/configured-floor-decreased` | Configured Test Floor Decreased |
 | `test-floor/required-suite-missing` | Required Test Suite Missing |
 | `test-floor/test-count-below-floor` | Test Count Below Floor |
+| `test-floor/test-dropped-from-suite` | Test Dropped From Suite |
 | `dependency-delta/lockfile-deleted` | Lockfile Deleted |
 | `dependency-delta/lockfile-entry-from-new-source` | Lockfile Entry From New Source |
 | `dependency-delta/lockfile-integrity-hash-removed` | Lockfile Integrity Hash Removed |

@@ -80,6 +80,9 @@ complete -c discipline -n "__fish_discipline_using_subcommand check" -l report-s
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l bench-provenance -d 'Expected host or runner provenance tag for benchmark artifacts' -r
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l bench-base-file -d 'In-job base benchmark result file for bench-regression dual-mode' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l bench-head-file -d 'In-job head benchmark result file for bench-regression dual-mode' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand check" -l test-base-report -d 'In-job base test report XML file for test-floor identity ratcheting' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand check" -l test-head-report -d 'In-job head test report XML file for test-floor identity ratcheting' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand check" -l test-report -d 'Test report XML file path (relative to repo root) for test-floor identity ratcheting' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l baseline-file -d 'Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l staged -d 'Inspect the index against HEAD instead (pre-commit hook mode)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l fail-on-warnings -d 'Treat warnings as failures'

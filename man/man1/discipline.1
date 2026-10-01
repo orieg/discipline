@@ -30,7 +30,7 @@ Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline check\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-commit\fR] [\fB\-\-commit\-range\fR] [\fB\-\-staged\fR] [\fB\-\-pr\-body\-file\fR] [\fB\-\-pr\-title\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-fail\-on\-overrides\fR] [\fB\-\-advisory\fR] [\fB\-\-comment\fR] [\fB\-\-policy\-from\fR] [\fB\-\-actor\fR] [\fB\-\-directive\-sources\fR] [\fB\-\-trust\-workspace\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-bench\-provenance\fR] [\fB\-\-allow\-cross\-host\-bench\fR] [\fB\-\-bench\-base\-file\fR] [\fB\-\-bench\-head\-file\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline check\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-commit\fR] [\fB\-\-commit\-range\fR] [\fB\-\-staged\fR] [\fB\-\-pr\-body\-file\fR] [\fB\-\-pr\-title\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-fail\-on\-overrides\fR] [\fB\-\-advisory\fR] [\fB\-\-comment\fR] [\fB\-\-policy\-from\fR] [\fB\-\-actor\fR] [\fB\-\-directive\-sources\fR] [\fB\-\-trust\-workspace\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-bench\-provenance\fR] [\fB\-\-allow\-cross\-host\-bench\fR] [\fB\-\-bench\-base\-file\fR] [\fB\-\-bench\-head\-file\fR] [\fB\-\-test\-base\-report\fR] [\fB\-\-test\-head\-report\fR] [\fB\-\-test\-report\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -237,6 +237,24 @@ May also be specified with the \fBDISCIPLINE_BENCH_BASE_FILE\fR environment vari
 In\-job head benchmark result file for bench\-regression dual\-mode
 .RS
 May also be specified with the \fBDISCIPLINE_BENCH_HEAD_FILE\fR environment variable. 
+.RE
+.TP
+\fB\-\-test\-base\-report\fR \fI<TEST_BASE_REPORT>\fR
+In\-job base test report XML file for test\-floor identity ratcheting
+.RS
+May also be specified with the \fBDISCIPLINE_TEST_BASE_REPORT\fR environment variable. 
+.RE
+.TP
+\fB\-\-test\-head\-report\fR \fI<TEST_HEAD_REPORT>\fR
+In\-job head test report XML file for test\-floor identity ratcheting
+.RS
+May also be specified with the \fBDISCIPLINE_TEST_HEAD_REPORT\fR environment variable. 
+.RE
+.TP
+\fB\-\-test\-report\fR \fI<TEST_REPORT>\fR
+Test report XML file path (relative to repo root) for test\-floor identity ratcheting
+.RS
+May also be specified with the \fBDISCIPLINE_TEST_REPORT\fR environment variable. 
 .RE
 .TP
 \fB\-\-baseline\-file\fR \fI<BASELINE_FILE>\fR
