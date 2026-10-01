@@ -59,6 +59,9 @@ impl LanguagePack for RustPack {
             in_fn: 0,
             in_const: 0,
             in_test: 0,
+            test_file: super::functions::test_path(path)
+                || super::functions::declared_test_path(path, &vocab.test_paths),
+            library_helper: false,
             facts: ParsedFileFacts {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
@@ -154,6 +157,12 @@ struct Extractor<'a> {
     in_fn: usize,
     in_const: usize,
     in_test: usize,
+    /// The whole file is test code (a test directory or a declared test path).
+    test_file: bool,
+    /// Counting a library function's checks: one outside `#[cfg(test)]` in a non-test
+    /// file. Its `unwrap` / `expect` is the library's own error handling, not a check a
+    /// test that calls it makes (#392); its assertions and panics still count.
+    library_helper: bool,
     facts: ParsedFileFacts,
     helpers: std::collections::HashMap<String, HelperFacts>,
     test_calls: Vec<Vec<String>>,
@@ -256,12 +265,17 @@ impl<'a> Extractor<'a> {
                         .unwrap_or(false);
                     let mut dummy_calls = Vec::new();
                     if let Some(body) = node.child_by_field_name("body") {
+                        let src = std::str::from_utf8(self.src).unwrap_or("");
+                        self.library_helper = !self.test_file
+                            && !rust_fn_skip(node, src)
+                            && !has_cfg_test_attribute(node, src);
                         self.count_asserts(
                             body,
                             &mut helper_test,
                             is_fallible_return,
                             &mut dummy_calls,
                         );
+                        self.library_helper = false;
                         helper_test.total_asserts += super::count_failure_exits(
                             body,
                             self.src,
@@ -539,7 +553,7 @@ impl<'a> Extractor<'a> {
                     if f.kind() == "field_expression" {
                         if let Some(field) = f.child_by_field_name("field") {
                             let method = self.text(field);
-                            if method == "unwrap" || method == "expect" {
+                            if (method == "unwrap" || method == "expect") && !self.library_helper {
                                 test.total_asserts += 1;
                             }
                         }
@@ -1174,6 +1188,22 @@ fn rust_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
     false
 }
 
+/// The item itself carries `#[cfg(test)]` (an attribute right above it).
+fn has_cfg_test_attribute(node: tree_sitter::Node, src: &str) -> bool {
+    let mut prev = node.prev_sibling();
+    while let Some(a) = prev {
+        if a.kind() != "attribute_item" {
+            break;
+        }
+        let text = a.utf8_text(src.as_bytes()).unwrap_or("");
+        if is_cfg_test_suppression(text) || text.replace(' ', "") == "#[cfg(test)]" {
+            return true;
+        }
+        prev = a.prev_sibling();
+    }
+    false
+}
+
 /// A trait method with a default body is a real body; one without is not a `function_item`
 /// with a `body` field, so nothing to skip here beyond `#[cfg(test)]` modules.
 fn rust_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
@@ -1446,7 +1476,7 @@ fn t_dropped() {
     assert!(bin.exists());
 }
 "##;
-        let f = facts(src);
+        let f = test_file_facts(src);
         let counts: Vec<(&str, usize, usize)> = f
             .tests
             .iter()
@@ -1648,7 +1678,7 @@ fn t_other_call() {
     assert!(other(1) > 0);
 }
 "##;
-        let f = facts(src);
+        let f = test_file_facts(src);
         let counts: Vec<(&str, usize, usize)> = f
             .tests
             .iter()
@@ -1671,6 +1701,63 @@ fn t_other_call() {
     fn facts(src: &str) -> ParsedFileFacts {
         RustPack
             .extract("test.rs", src, &AssertVocabulary::default())
+            .expect("analyze")
+    }
+
+    #[test]
+    fn a_library_functions_expect_is_not_a_check_of_the_test_that_calls_it() {
+        // #392: `parse` is library code, so its `expect` is its own error handling; the
+        // same `expect` in a test helper is a check.
+        let src = r##"pub fn parse(s: &str) -> u32 {
+    s.parse().expect("digits")
+}
+#[cfg(test)]
+fn marked(s: &str) -> u32 {
+    s.parse().expect("digits")
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn helper(s: &str) -> u32 {
+        s.parse().expect("digits")
+    }
+    #[test]
+    fn t_library() {
+        assert_eq!(parse("7"), 7);
+    }
+    #[test]
+    fn t_test_helper() {
+        assert_eq!(helper("7"), 7);
+    }
+    #[test]
+    fn t_marked_helper() {
+        assert_eq!(marked("7"), 7);
+    }
+}
+"##;
+        let f = facts(src);
+        let counts: Vec<(&str, usize, usize)> = f
+            .tests
+            .iter()
+            .map(|t| (t.name.as_str(), t.total_asserts, t.helper_checks))
+            .collect();
+        assert_eq!(
+            counts,
+            vec![
+                ("tests::t_library", 1, 0),
+                ("tests::t_test_helper", 2, 1),
+                ("tests::t_marked_helper", 2, 1),
+            ]
+        );
+        // In a test file every helper is test code, so its `expect` counts.
+        let f = test_file_facts(src);
+        assert_eq!(f.tests[0].total_asserts, 2, "{:?}", f.tests[0]);
+    }
+
+    /// `facts` for a file in a test directory, where top-level helpers are test code.
+    fn test_file_facts(src: &str) -> ParsedFileFacts {
+        RustPack
+            .extract("tests/t.rs", src, &AssertVocabulary::default())
             .expect("analyze")
     }
 
