@@ -676,7 +676,7 @@ The step is then reported as `info`, naming the reason. A marker with no reason,
 |---|---|---|
 | `0` | **Pass** | Every enabled gate ran and detected no blocking violations; also a run with violations in advisory mode (`--advisory`, or `meta.mode = "advisory"` once merged). |
 | `1` | **Violations** | Gate violations found (blocking errors, or warnings under `--fail-on-warnings`), an applied override under `fail_on_overrides`, or a `max_overrides` / `require_approval` refusal (`policy_failures`). |
-| `2` | **Could not check** | Engine failed to check: missing repository, unresolvable base ref, shallow clone with unreachable merge base, unreadable configuration, or syntax errors. |
+| `2` | **Could not check** | Engine failed to check: missing repository, unresolvable base ref, shallow clone with unreachable merge base, unreadable configuration, or syntax errors. When `--base main` or `origin/main` does not resolve, the default branch is guessed from `origin/HEAD`, `master` and `trunk`; a guess that already holds `HEAD` (after `git clone --branch <change>`, `origin/HEAD` is the change's own branch) is refused rather than compared with the change itself. |
 
 ---
 

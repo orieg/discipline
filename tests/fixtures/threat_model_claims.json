@@ -582,6 +582,18 @@
       "verdict": "holds"
     },
     {
+      "id": "fc-f2-guessed-base-not-head",
+      "category": "fail_closed_contract",
+      "claim": "A guessed default branch (origin/HEAD, master, trunk) that already holds HEAD is not a base: a clone of the change's own branch exits 2 instead of comparing the change with itself",
+      "source": "docs/ARCHITECTURE.md:F2, docs/CONFIGURATION.md:exit codes",
+      "code": "src/gitctx.rs:open",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::a_fallback_base_that_holds_the_change_itself_does_not_resolve",
+        "tests/test_gates_e2e.rs::could_not_check_is_exit_2_never_a_pass"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "sec-audit-html-links-stay-in-repository",
       "category": "security_policy",
       "claim": "The audit page escapes text the repository wrote, and its source links stay in the audited repository whatever the file path",
@@ -983,11 +995,14 @@
     {
       "id": "gate-instruction-smuggling-visible-directive-reason",
       "category": "gates",
-      "claim": "the reason text of a visible directive line in the change description is not scanned for phrases (documented)",
+      "claim": "a visible directive line in the change description is scanned for phrases, its reason included; only an allow-agent-instructions line that parsed as a directive and names a location of this change is exempt, so a fenced, subject-line or fake-subject line is scanned",
       "source": "docs/GATES.md:instruction-smuggling, issue:#363",
       "code": "src/guards/instruction_smuggling.rs:instruction_smuggling",
-      "pinning_tests": [],
-      "verdict": "known",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases",
+        "tests/test_gates_e2e.rs::sleeps_trivial_assertions_and_injected_pr_bodies_are_reported"
+      ],
+      "verdict": "holds",
       "issue": 363
     },
     {
