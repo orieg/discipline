@@ -91,6 +91,8 @@ Discipline stands between a change and the branch it merges into. This section s
 - A webhook's secret on GitLab, Gitea and Forgejo, which their APIs do not show, so `doctor` counts their webhooks without judging the secret.
 - No central log. `audit` reads the record back from git and the forge, and the hooks' observe log stays on the machine that wrote it; nothing alerts on a pattern as it happens.
 - Anything outside the diff: the agent's runtime behaviour, its network access, and what it does with credentials (§1.3).
+- Code inside a git submodule. A change that moves a submodule's pointer is named in the `deletion-rationale` notes, not judged, so tests kept in a submodule can be dropped by moving its pointer (red-team `git-02`). Tests deleted from the repository itself still need `removes:`, even when a submodule takes their path.
+- A pull-request workflow runs from the change's head: an agent that can push can mask the step that runs discipline (`continue-on-error`) and turn the required check green. `ci-integrity` reports it but cannot fail a step it no longer controls; the forge's protected file patterns stop the merge, in a form the forge applies (`.gitea/workflows/**`, not `.gitea/workflows/*`; red-team `ci-04`, #428).
 
 **Coverage against published taxonomies.** Every category of four taxonomies is resolved to exactly one of three outcomes:
 - **in scope:** an asset above, an actor above, a control, and the test that pins it, with a claim id for the claims registry;

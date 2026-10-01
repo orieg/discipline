@@ -1,0 +1,3 @@
+blockquote exit: 1
+fenced exit: 1
+html_comment exit: 1

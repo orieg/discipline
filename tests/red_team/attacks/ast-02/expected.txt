@@ -1,0 +1,4 @@
+error [deletion-rationale] Test Removed Without Rationale [tests/suite.rs]
+error [test-floor] Test Count Below Floor
+stealth test delete exit: 1
+stealth test delete with directive exit: 1

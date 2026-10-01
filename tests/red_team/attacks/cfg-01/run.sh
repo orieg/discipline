@@ -44,6 +44,6 @@ git commit -qm "feat: disable gates in discipline.toml"
 # Run discipline check with --policy-from base
 discipline check --base main --policy-from base --format json > result.json 2> stderr.txt || rc=$?
 echo "discipline exit: ${rc:-0}"
-grep -o "\"code\":\"[^\"]*\"" result.json || true
+grep -o "\"code\": *\"[^\"]*\"" result.json || true
 cat stderr.txt
 cat result.json

@@ -1,0 +1,2 @@
+error [deletion-rationale] File Deleted Without Rationale [tests/old.rs]
+pr title directive exit: 1

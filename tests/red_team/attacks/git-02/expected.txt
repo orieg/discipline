@@ -1,0 +1,15 @@
+same path exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale', 'test-floor/test-count-below-floor']
+overrides: 0
+same path, removes: exit: 1
+failing: ['test-floor/test-count-below-floor']
+overrides: 1
+bare gitlink exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale', 'test-floor/test-count-below-floor']
+overrides: 0
+pointer bump exit: 0
+failing: []
+overrides: 0
+submodule named in notes: True
+HOLDS: tests replaced by a submodule or a bare gitlink are reported as deleted
+KNOWN: a pointer move inside an existing submodule is named, not judged

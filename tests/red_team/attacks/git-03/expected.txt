@@ -1,5 +1,5 @@
 discipline exit: 0
 traversal leak: none
-status: pass
+errors: 0
 failing: []
 HOLDS: symlink handled safely without traversal leak

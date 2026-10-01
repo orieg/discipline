@@ -24,6 +24,8 @@ The attack scripts rewrite the global git configuration (`user.name lab`) and de
 - `lab/`:
   - `up.sh`: Sets up internal Docker network `discipline-rt-net`, spins up mock forges (`rt-gitea`, `rt-forgejo`), and initializes test accounts (`owner`, `agent`, `stranger`).
   - `run.sh`: Executes a specific attack in a throwaway container (`rust:1.98` base, dropped privileges, isolated `/tmp` workspace).
+  - `runner.sh`: Registers an `act_runner` (`rt-act`) with `rt-gitea` for `ci-04`. Jobs run in host mode inside the runner's own container (same image, user and dropped capabilities as `run.sh`); no Docker socket is mounted.
+  - `run-all.sh`: Runs every attack (or the ids given) and checks each against its `expected.txt`: the container exits 0 and every expected line appears in the output. An attack whose forge or runner is not up is reported as not run, never as passed.
 - `attacks/`:
   - `cfg-01` to `cfg-03`: Configuration tampering and `policy_from: base` evasion probes.
   - `cfg-04` to `cfg-09`: `config-integrity` key forms and removals: an optional limit or switch removed (`max_noise_cv`, a gate's `allow_hidden`), a default filled in (`noise_floor_pct`), dotted and inline-table forms, a deleted table falling back to a default-off gate, a misspelt key (exit 2).
@@ -31,15 +33,16 @@ The attack scripts rewrite the global git configuration (`user.name lab`) and de
   - `esc-06` to `esc-09`: a directive in an indented code block, a directive after a shorter fence nested in a longer one, a directive name spelt with a long s (`removeſ:`), and a second waiver past `directives.max_overrides = 1`.
   - `esc-10` to `esc-11`: punctuation and single-character rationales, and homoglyph/invisible placeholder bypass.
   - `esc-12`: inline marker budget evasion probe (`directives.max_inline_overrides`).
-  - `ci-01` to `ci-03`: CI loop and workflow poisoning probes (`continue-on-error: true` step suppression, `ci-gate` rollup rename bypass, `[skip ci]` / `[ci skip]` commit message evasion).
+  - `ci-01` to `ci-03`: CI loop and workflow poisoning probes (`continue-on-error: true` step suppression, `ci-gate` rollup rename bypass, `[skip ci]` / `[ci skip]` commit message evasion), as discipline reports them.
+  - `ci-04`: the same three through a real CI loop on `rt-gitea` and `rt-act`: `main` requires the rollup's status check, and the agent (a write collaborator) tries to merge its own pull request. A clean change merges (the twin); `ci-02`, `ci-03` and a red discipline run are refused; `ci-01` merges unless the workflows are protected files in a form the forge applies (#428).
   - `fc-01` to `fc-05`: fail-closed inputs: a shallow clone with no base or no merge base, a base that does not resolve, a test dropped in a rename and in a case-only rename, and a test file whose first bytes are a binary format's magic number (`MZ = 0`).
   - `aud-01`, `aud-02`: `audit --format html` with markup in every text a repository controls, and a file path whose `%2e%2e` segments walk a source link out of the repository.
   - `fc-06`: gates that read whole files, on source files starting with `MZ = 0` (valid Python, and the DOS/PE header).
-  - `git-01`, `git-03`: Git and filesystem boundary probes (`.gitattributes` diff masking, symlink traversal outside workspace).
+  - `git-01` to `git-03`: Git and filesystem boundary probes (`.gitattributes` diff masking; tests replaced by a submodule or a bare gitlink, and a pointer move inside an existing submodule; symlink traversal outside workspace).
   - `rat-01` to `rat-04`: Protected path owner ratification probes on live Gitea (author self-ratification, `refuse_author_ratification`, legitimate owner ratification, edited comments).
   - `sec-01`: `DISCIPLINE_NO_NETWORK=1` fail-closed verification.
   - `ast-01` to `ast-02`: AST assertion reduction and stealth test deletion probes.
-- `findings.md`: Complete summary of attack results, verdicts (HOLDS / GAP / KNOWN / DOC), and remediation plans.
+- Each attack's `expected.txt`: the lines its output must contain (verdicts HOLDS / GAP / KNOWN, exit codes, finding titles or codes). Results and remediation are tracked in issue #359 and `docs/ROADMAP.md`.
 
 ## Running the Lab
 
@@ -68,9 +71,19 @@ bash tests/red_team/lab/up.sh
 # Offline attack (no forge needed):
 bash tests/red_team/lab/run.sh esc-01 none
 
-# Forge attack on Gitea as agent:
+# Forge attack on Gitea as agent (its setup.sh runs first, as owner):
+RT_SCRIPT=setup.sh bash tests/red_team/lab/run.sh rat-01 gitea owner
 bash tests/red_team/lab/run.sh rat-01 gitea agent
+
+# CI loop (needs runner.sh; acts as owner and agent):
+bash tests/red_team/lab/runner.sh
+bash tests/red_team/lab/run.sh ci-04 gitea all
+
+# Every attack, checked against its expected.txt:
+bash tests/red_team/lab/run-all.sh
 ```
+
+`RT_TARGET_VOLUME` names the volume holding the build (default `discipline-rt-target`) for `run.sh`, `runner.sh` and `run-all.sh`; `DISCIPLINE_RT_LAB` the directory `up.sh` writes the lab tokens to.
 
 ### 4. Automated Contract Tests
 
