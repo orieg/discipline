@@ -779,14 +779,21 @@ pub const JS_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
         "return null",
         "return undefined",
         "return false",
+        "return 0",
+        "return \"\"",
+        "return ''",
+        "return []",
+        "return {}",
         "continue",
     ],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
     classify_discard: None,
     call_value_kinds: &[],
-    silence_kinds: &[],
-    silences: super::handlers::no_discard,
+    // `p.catch(() => {})`: a rejection handler that does nothing drops the error.
+    silence_kinds: &["call_expression"],
+    silences: super::handlers::js_catch_text,
+    silence_node: Some(super::handlers::js_catch_silences),
 };
 
 pub const JS_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

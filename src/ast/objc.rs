@@ -508,6 +508,7 @@ pub const OBJC_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     call_value_kinds: &["call_expression", "message_expression"],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
+    silence_node: None,
 };
 
 pub const OBJC_REACH: super::reach::ReachSpec = super::reach::ReachSpec {

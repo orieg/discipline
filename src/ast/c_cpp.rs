@@ -301,6 +301,7 @@ pub const C_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpe
     trivial: &[
         "return",
         "return false",
+        "return 0",
         "return nullptr",
         "return NULL",
         "return {}",
@@ -314,6 +315,7 @@ pub const C_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpe
     call_value_kinds: &["call_expression"],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
+    silence_node: None,
 };
 
 pub const C_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

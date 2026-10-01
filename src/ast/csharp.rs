@@ -706,13 +706,24 @@ pub const CSHARP_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     arm_of: &[],
     body_fields: &["body", "block"],
     ignored_kinds: &["comment"],
-    trivial: &["return", "return null", "return false", "continue"],
+    trivial: &[
+        "return",
+        "return null",
+        "return false",
+        "return 0",
+        "return \"\"",
+        "return string.Empty",
+        "return String.Empty",
+        "return default",
+        "continue",
+    ],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
     classify_discard: None,
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
+    silence_node: None,
 };
 
 pub const CSHARP_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

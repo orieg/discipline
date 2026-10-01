@@ -631,6 +631,7 @@ pub const SCALA_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handle
     // `Try(f).getOrElse(x)` and `Try(f).toOption` turn any failure into a value.
     silence_kinds: &["call_expression", "field_expression"],
     silences: super::handlers::scala_silences,
+    silence_node: None,
 };
 
 pub const SCALA_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

@@ -623,6 +623,7 @@ pub const GO_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
+    silence_node: None,
 };
 
 pub const GO_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

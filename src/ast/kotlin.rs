@@ -771,6 +771,7 @@ pub const KOTLIN_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     // `runCatching { }.getOrNull()` / `.getOrDefault(x)` replace the failure with a value.
     silence_kinds: &["call_expression"],
     silences: super::handlers::kotlin_silences,
+    silence_node: None,
 };
 
 pub const KOTLIN_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
