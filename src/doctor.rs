@@ -1658,6 +1658,62 @@ fn context_matches(required: &str, candidate: &str, patterns: bool) -> bool {
             .unwrap_or(false)
 }
 
+/// A Gitea / Forgejo protected file pattern as the forge applies it (#428): lowercased and
+/// compiled by gobwas/glob with `.` and `/` both separators, so `*` and `?` stop at either
+/// and `.gitea/workflows/*` does not match `ci.yml`; `**` crosses both. `[...]` / `[!...]`
+/// classes and `{a,b}` alternatives keep their meaning. The caller lowercases the path. A
+/// pattern the forge could not compile protects nothing (the forge skips it): `None`.
+fn forge_file_glob(pattern: &str) -> Option<regex::Regex> {
+    let mut re = String::from("^");
+    let lowered = pattern.trim().to_lowercase();
+    let mut chars = lowered.chars().peekable();
+    let mut braces = 0usize;
+    while let Some(c) = chars.next() {
+        match c {
+            '*' if chars.peek() == Some(&'*') => {
+                chars.next();
+                re.push_str(".*");
+            }
+            '*' => re.push_str("[^./]*"),
+            '?' => re.push_str("[^./]"),
+            '[' => {
+                re.push('[');
+                if chars.peek() == Some(&'!') {
+                    chars.next();
+                    re.push('^');
+                }
+                loop {
+                    match chars.next()? {
+                        ']' => break,
+                        d @ ('\\' | '[' | '^' | '&' | '~') => {
+                            re.push('\\');
+                            re.push(d);
+                        }
+                        d => re.push(d),
+                    }
+                }
+                re.push(']');
+            }
+            '{' => {
+                braces += 1;
+                re.push_str("(?:");
+            }
+            '}' if braces > 0 => {
+                braces -= 1;
+                re.push(')');
+            }
+            ',' if braces > 0 => re.push('|'),
+            '\\' => re.push_str(&regex::escape(&chars.next()?.to_string())),
+            c => re.push_str(&regex::escape(&c.to_string())),
+        }
+    }
+    if braces > 0 {
+        return None;
+    }
+    re.push('$');
+    regex::Regex::new(&re).ok()
+}
+
 /// Findings for a branch's protection against the jobs that run discipline.
 pub fn protection_findings(
     kind: ForgeKind,
@@ -1979,15 +2035,12 @@ pub fn protection_findings(
             }
             None => {}
             Some(patterns) => {
-                // Gitea and Forgejo match these globs with `/` as a separator.
                 let covered = |path: &str| {
-                    patterns.iter().any(|pat| {
-                        globset::GlobBuilder::new(pat)
-                            .literal_separator(true)
-                            .build()
-                            .map(|g| g.compile_matcher().is_match(path))
-                            .unwrap_or(false)
-                    })
+                    let path = path.to_lowercase();
+                    patterns
+                        .iter()
+                        .filter_map(|pat| forge_file_glob(pat))
+                        .any(|g| g.is_match(&path))
                 };
                 let open: Vec<&str> = workflows.iter().copied().filter(|w| !covered(w)).collect();
                 out.push(if open.is_empty() {
@@ -2005,7 +2058,7 @@ pub fn protection_findings(
                             open.join(", ")
                         ),
                     )
-                    .fix("Add the workflow directories (`.gitea/workflows/*`, `.forgejo/workflows/*`, `.github/workflows/*`) to the branch rule's protected file patterns.")
+                    .fix("Add the workflow directories (`.gitea/workflows/**`, `.forgejo/workflows/**`, `.github/workflows/**`) to the branch rule's protected file patterns. A single `*` stops at a `.`, so `.gitea/workflows/*` does not match `ci.yml`.")
                 });
             }
         }
@@ -3510,6 +3563,59 @@ jobs:
         assert_eq!(get("required-check"), Status::Fail);
     }
 
+    /// Each row is a merge the lab ran against Gitea 1.24.7 or Forgejo 12 (#428): `true` when
+    /// the forge refused the pull request for changing protected files.
+    #[test]
+    fn protected_file_patterns_match_as_gitea_and_forgejo_apply_them() {
+        let protects = |pat: &str, path: &str| {
+            forge_file_glob(pat).is_some_and(|g| g.is_match(&path.to_lowercase()))
+        };
+        for (pat, path, refused) in [
+            (".gitea/workflows/*", ".gitea/workflows/ci.yml", false),
+            (".gitea/workflows/**", ".gitea/workflows/ci.yml", true),
+            (".gitea/workflows/*.yml", ".gitea/workflows/ci.yml", true),
+            (".gitea/**", ".gitea/workflows/ci.yml", true),
+            (".forgejo/workflows/*", ".forgejo/workflows/ci.yml", false),
+            (".forgejo/workflows/**", ".forgejo/workflows/ci.yml", true),
+            (
+                ".forgejo/workflows/*.yml",
+                ".forgejo/workflows/ci.yml",
+                true,
+            ),
+            (".forgejo/workflows/ci.*", ".forgejo/workflows/ci.yml", true),
+            ("*.toml", "discipline.toml", true),
+            ("**.toml", "discipline.toml", true),
+        ] {
+            assert_eq!(protects(pat, path), refused, "{pat} on {path}");
+        }
+        // Read from the forge's rules rather than run: case folds, `?` stops at a
+        // separator, classes and alternatives keep their meaning, a malformed pattern
+        // protects nothing.
+        assert!(protects(".GITEA/Workflows/**", ".gitea/workflows/CI.yml"));
+        assert!(!protects(
+            ".gitea/workflows/c?.yml",
+            ".gitea/workflows/c..yml"
+        ));
+        assert!(protects(
+            ".gitea/workflows/c?.yml",
+            ".gitea/workflows/ci.yml"
+        ));
+        assert!(protects(
+            ".{gitea,forgejo}/workflows/**",
+            ".forgejo/workflows/ci.yml"
+        ));
+        assert!(protects(
+            ".gitea/workflows/[a-c]i.yml",
+            ".gitea/workflows/ci.yml"
+        ));
+        assert!(!protects(
+            ".gitea/workflows/[!c]i.yml",
+            ".gitea/workflows/ci.yml"
+        ));
+        assert!(forge_file_glob(".gitea/{workflows/**").is_none());
+        assert!(forge_file_glob(".gitea/[workflows/**").is_none());
+    }
+
     #[test]
     fn workflow_files_must_be_protected_on_gitea_and_forgejo() {
         let jobs = analyse_workflows(&wf(WF), false).jobs;
@@ -3530,9 +3636,11 @@ jobs:
         let dir = workflow.rsplit_once('/').unwrap().0.to_string();
         assert_eq!(status(""), Some(Status::Warn), "{workflow}");
         assert_eq!(status("docs/*"), Some(Status::Warn));
-        assert_eq!(status(&format!("{dir}/*;docs/*")), Some(Status::Pass));
-        // `*` does not cross `/` on these forges.
+        assert_eq!(status(&format!("{dir}/**;docs/*")), Some(Status::Pass));
+        // `*` does not cross `/` on these forges, nor `.` (#428): `{dir}/*` leaves
+        // `ci.yml` open, and the PR that edits it merges.
         assert_eq!(status("*"), Some(Status::Warn));
+        assert_eq!(status(&format!("{dir}/*")), Some(Status::Warn));
         // GitHub has no such setting: no finding.
         let p = Protection::default();
         assert!(!protection_findings(ForgeKind::GitHub, &p, &jobs)
