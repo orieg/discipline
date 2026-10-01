@@ -96,6 +96,12 @@ fn pattern_of(site: &Site) -> String {
         "#[allow(".into()
     } else if starts("#[expect(") || starts("#![expect(") {
         "#[expect(".into()
+    } else if starts("#pragma GCC diagnostic") {
+        "#pragma GCC diagnostic ignored".into()
+    } else if starts("#pragma clang diagnostic") {
+        "#pragma clang diagnostic ignored".into()
+    } else if starts("#pragma warning(") || starts("#pragma warning (") {
+        "#pragma warning(disable)".into()
     } else if t.contains("# noqa") {
         "# noqa".into()
     } else if t.contains("type: ignore") {
