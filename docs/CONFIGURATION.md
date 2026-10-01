@@ -319,7 +319,10 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.test-floor.min_tests` | integer | *(unset)* | Minimum required workspace test count |
 | `gates.test-floor.required_suites` | list | `[]` | Required test suite files that must exist |
 | `gates.test-floor.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.test-floor.base_report` | string | *(unset)* | In-job base test report XML file for test-floor identity ratcheting |
+| `gates.test-floor.head_report` | string | *(unset)* | In-job head test report XML file for test-floor identity ratcheting |
 | `gates.test-floor.test_command` | string | *(unset)* | Custom command to list or count tests |
+| `gates.test-floor.test_report` | string | *(unset)* | Test report XML file path (relative to repo root) for test-floor identity ratcheting |
 | `gates.test-floor.tolerance` | integer | `0` | Allowed test count decrease below floor or base before violation (default: 0) |
 | `gates.time-estimates.allow_patterns` | list | `[]` | Regex patterns permitted as operational exceptions; matched per line and across soft-wrapped lines of a paragraph, exempting only the matched text |
 | `gates.time-estimates.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
