@@ -1622,6 +1622,9 @@ pub struct TestFloorGate {
     pub constant_name: Option<String>,
     pub required_suites: Vec<String>,
     pub test_command: Option<String>,
+    pub test_report: Option<String>,
+    pub base_report: Option<String>,
+    pub head_report: Option<String>,
 }
 
 impl Default for TestFloorGate {
@@ -1636,6 +1639,9 @@ impl Default for TestFloorGate {
             constant_name: None,
             required_suites: Vec::new(),
             test_command: None,
+            test_report: None,
+            base_report: None,
+            head_report: None,
         }
     }
 }

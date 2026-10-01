@@ -504,6 +504,18 @@ pub struct CheckArgs {
     #[arg(long = "bench-head-file", env = "DISCIPLINE_BENCH_HEAD_FILE")]
     pub bench_head_file: Option<PathBuf>,
 
+    /// In-job base test report XML file for test-floor identity ratcheting
+    #[arg(long = "test-base-report", env = "DISCIPLINE_TEST_BASE_REPORT")]
+    pub test_base_report: Option<PathBuf>,
+
+    /// In-job head test report XML file for test-floor identity ratcheting
+    #[arg(long = "test-head-report", env = "DISCIPLINE_TEST_HEAD_REPORT")]
+    pub test_head_report: Option<PathBuf>,
+
+    /// Test report XML file path (relative to repo root) for test-floor identity ratcheting
+    #[arg(long = "test-report", env = "DISCIPLINE_TEST_REPORT")]
+    pub test_report: Option<PathBuf>,
+
     /// Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)
     #[arg(long)]
     pub baseline_file: Option<PathBuf>,

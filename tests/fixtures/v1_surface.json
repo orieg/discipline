@@ -131,6 +131,9 @@
       "check --report-sarif",
       "check --staged",
       "check --suite",
+      "check --test-base-report",
+      "check --test-head-report",
+      "check --test-report",
       "check --trust-workspace",
       "check -b",
       "check -c",
@@ -975,6 +978,9 @@
       "DISCIPLINE_REPORT_GITLAB",
       "DISCIPLINE_REPORT_JUNIT",
       "DISCIPLINE_REPORT_SARIF",
+      "DISCIPLINE_TEST_BASE_REPORT",
+      "DISCIPLINE_TEST_HEAD_REPORT",
+      "DISCIPLINE_TEST_REPORT",
       "DISCIPLINE_TRUST_WORKSPACE"
     ],
     "exit_codes": [
@@ -1199,6 +1205,7 @@
       "test-floor/floor-constant-missing-in-base",
       "test-floor/required-suite-missing",
       "test-floor/test-count-below-floor",
+      "test-floor/test-dropped-from-suite",
       "time-estimates/time-estimate",
       "toolchain-config/toolchain-config-change-not-analysed",
       "toolchain-config/toolchain-config-deleted",

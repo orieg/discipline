@@ -358,6 +358,9 @@ pub struct Context<'a> {
     pub allow_cross_host_bench: bool,
     pub bench_base_file: Option<std::path::PathBuf>,
     pub bench_head_file: Option<std::path::PathBuf>,
+    pub test_base_report: Option<std::path::PathBuf>,
+    pub test_head_report: Option<std::path::PathBuf>,
+    pub test_report: Option<std::path::PathBuf>,
     /// The forge, for the gates that read facts from it (`issue-link` with
     /// `verify_references`). `None` where a run has no forge to ask (a baseline write).
     pub forge: Option<ForgeAccess<'a>>,

@@ -11191,6 +11191,215 @@ fn test_floor_zero_config_and_base_config_e2e() {
 }
 
 #[test]
+fn test_floor_identity_gap_probe() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/alpha.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n#[test]\nfn test_critical() { assert_eq!(2, 2); }\n",
+    );
+    repo.commit("feat: initial 2 tests");
+
+    // Rename test_critical out of runner pattern and add a trivial test (count preserved at 2)
+    repo.write(
+        "tests/alpha.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\nfn helper_critical() { assert_eq!(2, 2); }\n#[test]\nfn test_trivial() {}\n",
+    );
+    repo.commit("test: rename critical test out of runner pattern and add trivial test");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    // GAP DEMONSTRATION: test-floor currently passes because count is preserved (2 >= 2)
+    assert!(
+        run.titles("test-floor").is_empty(),
+        "Probe shows test-floor currently passes when a test is dropped if count is preserved"
+    );
+}
+
+#[test]
+fn test_floor_identity_ratchet_committed_report_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\ntest_report = \"reports/junit.xml\"\n",
+    );
+    repo.write(
+        "reports/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="unit">
+    <testcase classname="pkg::auth" name="test_login"/>
+    <testcase classname="pkg::auth" name="test_logout"/>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo.commit("feat: initial test report with login and logout");
+
+    // Case 1: Drop test_logout and add test_status (count preserved at 2) without directive -> violation!
+    repo.write(
+        "reports/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="unit">
+    <testcase classname="pkg::auth" name="test_login"/>
+    <testcase classname="pkg::auth" name="test_status"/>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo.commit("test: replace test_logout with test_status");
+    let run_dropped = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_dropped.titles("test-floor"),
+        vec!["Test Dropped From Suite"],
+        "Must flag test_logout dropped even though count is preserved"
+    );
+    let violations = run_dropped.violations("test-floor");
+    assert_eq!(violations[0]["code"], "test-floor/test-dropped-from-suite");
+    assert!(
+        violations[0]["message"].as_str().unwrap().contains(
+            "'pkg::auth::test_logout' passed on base ref but is missing from head test report"
+        ),
+        "Violation message must describe missing test: {:?}",
+        violations[0]["message"]
+    );
+
+    // Case 2: Excuse with allow-test-shrink: test_logout -> passes
+    repo.commit("test: excuse dropped test\n\nallow-test-shrink: test_logout merged into status");
+    let run_ov = repo.check(&["--base", "HEAD~2"]);
+    assert_eq!(
+        run_ov.titles("test-floor").len(),
+        0,
+        "allow-test-shrink must excuse dropped test: {}",
+        run_ov.stdout
+    );
+
+    // Case 3: Excuse with removes: test_logout -> passes
+    repo.git(&["reset", "--hard", "HEAD~1"]); // back to unexcused drop commit
+    repo.commit(
+        "test: excuse dropped test with removes\n\nremoves: test_logout removed in cleanup",
+    );
+    let run_removes = repo.check(&["--base", "HEAD~2"]);
+    assert_eq!(
+        run_removes.titles("test-floor").len(),
+        0,
+        "removes: must excuse dropped test: {}",
+        run_removes.stdout
+    );
+
+    // Case 4: Test skipped on head -> violation!
+    repo.git(&["reset", "--hard", "HEAD~2"]); // back to initial commit
+    repo.write(
+        "reports/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="unit">
+    <testcase classname="pkg::auth" name="test_login"/>
+    <testcase classname="pkg::auth" name="test_logout">
+      <skipped message="temporarily disabled"/>
+    </testcase>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo.commit("test: mark test_logout as skipped");
+    let run_skipped = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_skipped.titles("test-floor"),
+        vec!["Test Dropped From Suite"]
+    );
+    let v_skip = run_skipped.violations("test-floor");
+    assert!(
+        v_skip[0]["message"].as_str().unwrap().contains(
+            "'pkg::auth::test_logout' passed on base ref but is skipped in head test report"
+        ),
+        "Must flag test as skipped: {:?}",
+        v_skip[0]["message"]
+    );
+
+    // Case 5: Test failed on head -> violation!
+    repo.git(&["reset", "--hard", "HEAD~1"]); // back to initial commit
+    repo.write(
+        "reports/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="unit">
+    <testcase classname="pkg::auth" name="test_login"/>
+    <testcase classname="pkg::auth" name="test_logout">
+      <failure message="assertion failed">stack trace</failure>
+    </testcase>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo.commit("test: test_logout failing");
+    let run_failed = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_failed.titles("test-floor"),
+        vec!["Test Dropped From Suite"]
+    );
+    let v_fail = run_failed.violations("test-floor");
+    assert!(
+        v_fail[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("'pkg::auth::test_logout' passed on base ref but failed in head test report"),
+        "Must flag test as failed: {:?}",
+        v_fail[0]["message"]
+    );
+}
+
+#[test]
+fn test_floor_identity_ratchet_dual_report_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\n",
+    );
+    repo.commit("feat: initial config");
+
+    let base_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase name="test_alpha"/>
+  <testcase name="test_beta"/>
+</testsuite>
+"#;
+    let head_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase name="test_alpha"/>
+  <testcase name="test_gamma"/>
+</testsuite>
+"#;
+
+    repo.write("base_report.xml", base_xml);
+    repo.write("head_report.xml", head_xml);
+
+    let run_dropped = repo.check(&[
+        "--base",
+        "HEAD",
+        "--test-base-report",
+        "base_report.xml",
+        "--test-head-report",
+        "head_report.xml",
+    ]);
+    assert_eq!(
+        run_dropped.titles("test-floor"),
+        vec!["Test Dropped From Suite"]
+    );
+
+    // Excuse with allow-test-shrink
+    repo.commit("test: excuse test_beta\n\nallow-test-shrink: test_beta dropped");
+    let run_ov = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--test-base-report",
+        "base_report.xml",
+        "--test-head-report",
+        "head_report.xml",
+    ]);
+    assert_eq!(run_ov.titles("test-floor").len(), 0);
+}
+
+#[test]
 fn ci_integrity_gate_e2e() {
     let repo = Repo::new();
     // Case 1: Incomplete rollup job needs

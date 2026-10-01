@@ -494,6 +494,9 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--allow-cross-host-bench` | `DISCIPLINE_ALLOW_CROSS_HOST_BENCH` |  | Allow benchmark comparison across mismatched host/runner provenance tags |
 | `--bench-base-file` | `DISCIPLINE_BENCH_BASE_FILE` |  | In-job base benchmark result file for bench-regression dual-mode |
 | `--bench-head-file` | `DISCIPLINE_BENCH_HEAD_FILE` |  | In-job head benchmark result file for bench-regression dual-mode |
+| `--test-base-report` | `DISCIPLINE_TEST_BASE_REPORT` |  | In-job base test report XML file for test-floor identity ratcheting |
+| `--test-head-report` | `DISCIPLINE_TEST_HEAD_REPORT` |  | In-job head test report XML file for test-floor identity ratcheting |
+| `--test-report` | `DISCIPLINE_TEST_REPORT` |  | Test report XML file path (relative to repo root) for test-floor identity ratcheting |
 | `--baseline-file` |  |  | Path to grandfathering baseline file (defaults to discipline-baseline.toml if present) |
 | `--no-baseline` |  |  | Ignore grandfathering baseline even if present |
 
