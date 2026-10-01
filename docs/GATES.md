@@ -263,6 +263,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `command/zero-items-executed` | Zero Items Selected Or Executed |
 | `command/count-below-ratchet` | Command Count Below Ratchet Floor |
 | `command/count-pattern-unmatched` | Count Pattern Unmatched |
+| `command/base-test-failed` | Base Test Failed Against Head Code |
 | `sanitizers/canary-diagnostic-missing` | Canary Diagnostic Missing |
 | `sanitizers/violation-detected` | Sanitizer Violation Detected |
 | `msrv/msrv-declaration-missing` | MSRV Declaration Missing |

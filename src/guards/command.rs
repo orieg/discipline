@@ -847,7 +847,7 @@ fn evaluate_base_tests(
     struct TempDirGuard(std::path::PathBuf);
     impl Drop for TempDirGuard {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_dir_all(&self.0); // discipline:allow(error-swallowing): best-effort temporary directory cleanup on drop
         }
     }
     let _guard = TempDirGuard(temp_path.clone());
@@ -884,7 +884,7 @@ fn evaluate_base_tests(
             {
                 let dst = temp_path.join(&cf.path);
                 if dst.exists() {
-                    let _ = std::fs::remove_file(&dst);
+                    let _ = std::fs::remove_file(&dst); // discipline:allow(error-swallowing): best-effort removal of newly added head test file
                 }
             }
         }
