@@ -1,0 +1,13 @@
+{
+  "agent": "Codex 0.159.0",
+  "event": "PreToolUse",
+  "observed": "RUN 2026-09-29",
+  "answers": [
+    {
+      "exit_code": 2,
+      "stderr": "<reason>",
+      "stdout": null,
+      "result": "apply_patch and Bash blocked (\"Command blocked by PreToolUse hook: <reason>\"); the model reads the reason. Hooks run only once approved in an interactive session (hooks.state.<hook>.trusted_hash)"
+    }
+  ]
+}

@@ -449,7 +449,7 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Scorecard Contributors | out of scope |
 | Scorecard Dangerous-Workflow | `workflow-protection`, `trigger`; the `ci-integrity` gate |
 | Scorecard Dependency-Update-Tool | `dependency-alerts` (automated security updates); an update tool's own configuration is not read |
-| Scorecard Fuzzing | out of scope; the `test-budget` gate keeps existing fuzz targets |
+| Scorecard Fuzzing | out of scope; the `test-budget` gate keeps existing fuzz targets. This repository's own cargo-fuzz targets: `docs/ARCHITECTURE.md` §8.6 |
 | Scorecard License | out of scope |
 | Scorecard Maintained | out of scope |
 | Scorecard Packaging | out of scope |

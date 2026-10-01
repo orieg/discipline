@@ -125,7 +125,12 @@ pub fn map_refs(text: &str) -> Vec<MapRef> {
         .captures_iter(text)
         .map(|c| {
             let url = &c[1];
-            if url.len() >= 5 && url[..5].eq_ignore_ascii_case("data:") {
+            // `get` is `None` when byte 5 is inside a multi-byte character, which is
+            // not `data:` either.
+            if url
+                .get(..5)
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+            {
                 match decode_data_url(&url[5..]) {
                     Ok(bytes) => MapRef::Inline(bytes),
                     Err(why) => MapRef::InlineUndecodable(why),
@@ -207,6 +212,25 @@ mod tests {
 
     fn b64(s: &str) -> String {
         base64::engine::general_purpose::STANDARD.encode(s)
+    }
+
+    /// Found by the `artifact_parsers` fuzz target: a `sourceMappingURL` whose fifth byte
+    /// falls inside a multi-byte character was sliced mid-character to test for `data:`,
+    /// and panicked, so a changed file could abort the check.
+    #[test]
+    fn a_url_with_a_multibyte_character_early_on_is_an_external_reference() {
+        for url in [
+            "d\u{fffd}",
+            "\u{fffd}\u{fffd}",
+            "日本語.map",
+            "a\u{e9}\u{e9}b.map",
+        ] {
+            let refs = map_refs(&format!("//# sourceMappingURL={url}\n"));
+            assert_eq!(refs, vec![MapRef::External(url.to_string())]);
+        }
+        // An inline map is still recognised, whatever the case of the scheme.
+        let refs = map_refs("//# sourceMappingURL=DATA:application/json,{}\n");
+        assert_eq!(refs, vec![MapRef::Inline(b"{}".to_vec())]);
     }
 
     #[test]
