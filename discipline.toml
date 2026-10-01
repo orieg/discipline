@@ -35,6 +35,9 @@ exempt_paths = ["tests/fixtures/**"]
 
 [gates.issue-link]
 enabled = true
+# Dependabot cannot write an issue reference into its pull requests; every other
+# gate still judges them (#412).
+exempt_authors = ["dependabot[bot]"]
 
 [gates.provenance-tags]
 enabled = true

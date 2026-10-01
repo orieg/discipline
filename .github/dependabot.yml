@@ -1,0 +1,35 @@
+# Dependency updates (#412). One grouped pull request per ecosystem, weekly.
+# dependabot[bot] is in `issue-link` `exempt_authors` (discipline.toml); every other
+# gate judges its pull requests. Action pins are not updated here: an action bump
+# edits .github/workflows/**, a ratified path.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # Cargo.toml ranges stay as written; the `msrv` job catches a dependency that
+    # needs a newer rustc.
+    versioning-strategy: lockfile-only
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      cargo:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    # Digests only: the builder tag tracks the MSRV and the runtime tag is chosen.
+    ignore:
+      - dependency-name: rust
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: alpine
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      docker:
+        patterns: ["*"]
