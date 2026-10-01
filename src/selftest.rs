@@ -996,6 +996,26 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a Python expected value edited from 1 to 2 is a changed expectation, the same value is not",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expectations::changed;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let at = |n: &str| -> anyhow::Result<Vec<crate::ast::expectations::Expectation>> {
+                let src = format!("def test_t():\n    assert parse(\"1\") == {n}\n");
+                Ok(pack.extract("tests/test_t.py", &src, &v)?.tests[0]
+                    .expectations
+                    .clone())
+            };
+            let (one, two) = (at("1")?, at("2")?);
+            Ok(changed(&one, &two).len() == 1 && changed(&one, &one).is_empty())
+        },
+    ),
+    (
         "error-swallowing: a Python handler for SystemExit or KeyboardInterrupt alone is not a site",
         || {
             use crate::ast::default_registry;

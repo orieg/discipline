@@ -102,6 +102,7 @@ impl LanguagePack for GoPack {
             super::calls::trivial_asserts,
         );
         super::bounds::go(root, src, &mut extractor.facts.tests);
+        super::expectations::go(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,

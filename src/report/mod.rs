@@ -572,6 +572,7 @@ pub const REPAIRS: &[(&str, &str)] = &[
     ("assertion-reduction/source-parsed-with-errors-preprocessor", "Fix the syntax error so that the file parses cleanly."),
     ("assertion-reduction/nul-byte-added", "Remove the NUL bytes the change added to the file."),
     ("assertion-reduction/assertion-bound-loosened", "Restore the original bound in the assertion; a looser bound accepts results the old one rejected."),
+    ("assertion-reduction/expected-value-changed", "Restore the expected value and fix the code until the test passes; an expected value edited to agree with the code no longer tests it."),
     ("assertion-reduction/mocking-increased-without-stronger-assertions", "Assert on what the code returns or changes, not only on the test doubles the change added."),
     ("assertion-reduction/fatal-assertions-weakened", "Restore the fatal form of the assertions, which stops the test at the first failure."),
     ("vacuous-tests/asserts-only-on-mocks", "Assert on what the code returns or changes, not only on how its test doubles were called."),

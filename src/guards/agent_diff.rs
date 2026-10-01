@@ -683,8 +683,10 @@ pub fn evaluate_assertion_reduction(
             && h_eff.saturating_sub(h.mock_asserts) <= b_eff.saturating_sub(b.mock_asserts);
         // The same assertion with its numeric bound moved the loose way: the count holds.
         let loosened = crate::ast::bounds::loosened(&b.bounds, &h.bounds);
+        // The same assertion expecting a different value: the count and strength hold.
+        let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
         let dropped = total_drop || strong_drop || fatal_drop || mock_growth;
-        if !dropped && loosened.is_empty() {
+        if !dropped && loosened.is_empty() && changed.is_empty() {
             continue;
         }
 
@@ -700,8 +702,10 @@ pub fn evaluate_assertion_reduction(
             &crate::findings::FATAL_ASSERTIONS_WEAKENED
         } else if mock_growth {
             &crate::findings::MOCKING_INCREASED
-        } else {
+        } else if !loosened.is_empty() {
             &crate::findings::ASSERTION_BOUND_LOOSENED
+        } else {
+            &crate::findings::EXPECTED_VALUE_CHANGED
         };
         let lift = |subject: &str| {
             tokens::find_override(
@@ -752,6 +756,28 @@ pub fn evaluate_assertion_reduction(
                     directive_name
                 ),
             );
+        }
+        for &line in &changed {
+            out.push(
+                if is_staged {
+                    crate::config::Severity::Warning
+                } else {
+                    settings.severity()
+                },
+                &crate::findings::EXPECTED_VALUE_CHANGED,
+                Some(p.path),
+                Some(line),
+                // The line only: an expected value is the change's own text (a string can
+                // carry anything) and is not echoed into a report agents read.
+                format!(
+                    "{test_label}: the assertion on line {line} now expects a different value; the assertion is otherwise unchanged."
+                ),
+                &format!(
+                    "Restore the expected value, or justify the new one on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
+            out.anchor_last(h.name.clone());
         }
         if !dropped {
             continue;
