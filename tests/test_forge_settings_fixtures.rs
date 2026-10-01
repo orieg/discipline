@@ -206,3 +206,36 @@ fn gitea_and_forgejo_expose_deploy_key_write_access_and_no_access_settings() {
         }
     }
 }
+
+/// #366 Step 0: Gitea and Forgejo return a webhook created with a secret without it, and
+/// with nothing that says one is set, so `doctor` counts their webhooks and does not judge
+/// the secret: information, never a pass.
+#[test]
+fn gitea_and_forgejo_do_not_say_whether_a_webhook_has_a_secret() {
+    use discipline::doctor::Status;
+    use discipline::forge::ForgeKind;
+    for (forge, kind) in [("gitea", ForgeKind::Gitea), ("forgejo", ForgeKind::Forgejo)] {
+        let v = &fixture(forge)["doctor_webhooks_366"];
+        assert!(
+            v["observed"].as_str().unwrap().starts_with("RUN "),
+            "{forge}"
+        );
+        assert!(v["request_config_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k == "secret"));
+        let hooks = v["response"].as_array().unwrap();
+        for h in hooks {
+            assert!(h["config"].get("secret").is_none(), "{forge}");
+            assert!(h.get("secret").is_none(), "{forge}");
+        }
+        let f = discipline::doctor_settings::webhooks_finding(kind, hooks);
+        assert_eq!(f.status, Status::Info, "{forge}");
+        assert!(
+            f.summary
+                .contains("does not return whether a webhook has a secret"),
+            "{forge}"
+        );
+    }
+}

@@ -127,6 +127,24 @@
     ],
     "version": "1.24.7"
   },
+  "doctor_webhooks_366": {
+    "note": "#366: a webhook created with config {url, content_type, secret} through POST /repos/{owner}/{repo}/hooks, then read back with GET. The secret is not returned, and nothing says whether one is set.",
+    "observed": "RUN 2026-09-30, Gitea 1.24 in a throwaway container",
+    "request_config_keys": [
+      "content_type",
+      "secret",
+      "url"
+    ],
+    "response": [
+      {
+        "authorization_header": "",
+        "config": {
+          "content_type": "json",
+          "url": "https://hooks.example.invalid/x"
+        }
+      }
+    ]
+  },
   "endpoints": {
     "/orgs/{org}/actions/secrets": [
       "GET"
