@@ -196,6 +196,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.instruction-smuggling.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.issue-link.accept_pull_references` | boolean | `false` | With verify_references: a reference to a pull or merge request satisfies the gate |
 | `gates.issue-link.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.issue-link.exempt_authors` | list | `[]` | Pull-request authors (exact logins, case-insensitive) that need no tracking-issue reference, e.g. dependabot[bot]; matched against the event payload's author, never the run's actor |
 | `gates.issue-link.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.issue-link.pattern` | string | *(unset)* | Custom regex pattern required in PR title or body |
 | `gates.issue-link.reference_repos` | list | `[]` | With verify_references: other repositories a reference may resolve in |

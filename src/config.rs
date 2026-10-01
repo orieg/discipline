@@ -1381,6 +1381,10 @@ pub struct IssueLinkGate {
     pub accept_pull_references: bool,
     /// Whether `no-issue: <reason>` is accepted.
     pub waiver: IssueWaiver,
+    /// Pull-request authors (exact logins, case-insensitive) whose pull requests need no
+    /// tracking-issue reference: dependency-update bots. Matched against the author the
+    /// forge's event payload names, never the actor of the run.
+    pub exempt_authors: Vec<String>,
 }
 
 /// Edits to protected paths need an owner's ratification: a comment, by a listed human
@@ -1596,6 +1600,7 @@ impl Default for IssueLinkGate {
             reference_repos: Vec::new(),
             accept_pull_references: false,
             waiver: IssueWaiver::Directive,
+            exempt_authors: Vec::new(),
         }
     }
 }
