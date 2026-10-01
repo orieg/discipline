@@ -1279,9 +1279,28 @@ pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
         "gitignore",
         "gitattributes",
         "editorconfig",
+        // Language-pack extensions not listed above: a gate that reads them must not lose
+        // one to a NUL byte.
+        "cs",
+        "cts",
+        "mts",
+        "dart",
+        "inc",
+        "m",
+        "mm",
+        "phtml",
+        "rake",
+        "sc",
+        "gemspec",
     ];
 
-    if KNOWN_TEXT_EXTS.contains(&ext.as_str()) {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if KNOWN_TEXT_EXTS.contains(&ext.as_str())
+        || matches!(name, "Gemfile" | "Rakefile" | "Dockerfile" | "Makefile")
+    {
         return false;
     }
 
@@ -1342,6 +1361,16 @@ mod tests {
         assert!(!is_binary_file("data", b"%PDF-like text\n"));
         // A known text extension stays text even with a non-printable magic number.
         assert!(!is_binary_file("src/a.py", b"\x7fELF\x02\x01"));
+        // Language-pack sources and build files stay text even with a NUL byte.
+        for path in [
+            "src/Svc.cs",
+            "lib/a.dart",
+            "src/a.m",
+            "Dockerfile",
+            "Gemfile",
+        ] {
+            assert!(!is_binary_file(path, b"x\0y"), "{path}");
+        }
         // Real files of these formats.
         assert!(is_binary_file("tool", b"MZ\x90\x00\x03\x00"));
         assert!(is_binary_file("tool", b"\x7fELF\x02\x01\x01\x00"));

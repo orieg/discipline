@@ -1208,10 +1208,18 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                     }
                     scan(&f.path, &text, Some(&f.added_lines), &mut out);
                 }
-                None => binary += 1,
+                None => out.notes.push(super::unread_note(&f.path)),
             }
         }
     } else {
+        // Binary files this change touched are named; the rest of the tree is counted.
+        let changed: std::collections::HashSet<String> = ctx
+            .git
+            .changed_files()?
+            .into_iter()
+            .filter(|f| !f.is_deleted())
+            .map(|f| f.path)
+            .collect();
         for path in ctx.git.tracked_files()? {
             if exempt.matches(&path) {
                 continue;
@@ -1232,13 +1240,14 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                     }
                     scan(&path, &text, None, &mut out);
                 }
+                None if changed.contains(&path) => out.notes.push(super::unread_note(&path)),
                 None => binary += 1,
             }
         }
     }
     if binary > 0 {
         out.notes
-            .push(format!("{binary} binary file(s) not scanned"));
+            .push(format!("{binary} other binary file(s) not scanned"));
     }
     let mut scan_body = |label: &str, text: &str, out: &mut GateOutcome| {
         scan(label, text, None, out);

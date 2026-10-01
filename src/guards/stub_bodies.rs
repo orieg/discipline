@@ -106,6 +106,7 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
             continue;
         }
         let Some(head_src) = ctx.git.head_content(&file.path)? else {
+            out.notes.push(super::unread_note(&file.path));
             continue;
         };
         let head = match pack.extract(&file.path, &head_src, &vocab) {

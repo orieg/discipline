@@ -631,6 +631,18 @@
       "verdict": "holds"
     },
     {
+      "id": "fc-f7-unread-files-named",
+      "category": "fail_closed_contract",
+      "claim": "A gate that skips a changed file it cannot read as text names the file, and a language-pack source file is read as text even with a NUL byte",
+      "source": "docs/ARCHITECTURE.md:F7",
+      "code": "src/guards/mod.rs:unread_note",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::a_changed_file_a_gate_cannot_read_as_text_is_named",
+        "tests/test_gates_e2e.rs::a_text_file_that_starts_like_an_executable_is_still_read"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "sec-hidden-directive-note-no-echo",
       "category": "security_policy",
       "claim": "A refused hidden directive is noted once, on its directive's gate, by name and location only: the report never repeats text that was hidden from reviewers",
