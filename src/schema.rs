@@ -278,7 +278,7 @@ pub fn generate_schema() -> Value {
                     "home_paths": { "type": "boolean", "description": "Check for leaked home directory paths" },
                     "lan_ips": { "type": "boolean", "description": "Check for leaked private LAN IPs" },
                     "redact_lan_ips": { "type": "boolean", "description": "Mask a matched LAN IP in the report instead of echoing it (default: false)" },
-                    "secrets": { "type": "boolean", "description": "Check for leaked private keys and high-entropy API tokens" },
+                    "secrets": { "type": "boolean", "description": "Check every text file for fixed-format credentials: private-key headers, AWS, GitHub, Slack and OpenAI/Anthropic tokens, and literal Authorization Bearer values. Matches the token format only; there is no entropy check" },
                     "allowed_users": { "$ref": "#/$defs/StringListOrReset", "description": "Username tokens permitted inside home-directory paths" },
                     "hostname_denylist": { "$ref": "#/$defs/StringListOrReset", "description": "Whole-token, case-insensitive hostnames that must not appear" },
                     "extra_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional regex patterns to reject" },

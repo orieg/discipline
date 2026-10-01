@@ -8,9 +8,16 @@
 //! - `INJECT-XARGS`: Command injection via `xargs -I {} sh -c '... {} ...'`
 //! - `INJECT-PIPE`: Piping remote downloads directly into shell interpreters `curl ... | sh`
 //!
+//! The fixed-format token classes (GitHub, AWS, Slack, OpenAI/Anthropic, private keys,
+//! literal Bearer) come from `guards::token_formats`, the table `pii` shares. The
+//! heuristic rules above and the password and named-secret rules live only here.
+//!
 //! Security Invariant: Matched lines containing secret tokens MUST NEVER be echoed in reports.
 
 use crate::config::{GateSettings, Severity, ShellSecretsGate};
+use crate::guards::token_formats::{
+    compile_token_classes, is_placeholder_or_var, CompiledTokenClass,
+};
 use crate::guards::{exempt_filter, line_allows, Context, GateOutcome};
 use crate::tokens::{self, OverrideRecord, OverrideSource};
 use anyhow::Result;
@@ -158,62 +165,14 @@ impl ShellRuleId {
     }
 }
 
-fn is_placeholder_or_var(val: &str) -> bool {
-    let s = val.trim().trim_matches(|c| c == '\'' || c == '"');
-    if s.is_empty() || s == "--password-stdin" {
-        return true;
-    }
-    if s.starts_with('$') || s.starts_with("${{") || s.contains("${{ secrets.") {
-        return true;
-    }
-    if s.starts_with("$(") || s.starts_with('`') {
-        return true;
-    }
-    if s.starts_with('<') && s.ends_with('>') {
-        return true;
-    }
-    if s.len() >= 4 && s.chars().all(|c| c == 'x' || c == 'X') {
-        return true;
-    }
-    let lower = s.to_ascii_lowercase();
-    let known_placeholders = [
-        "changeme",
-        "dummy",
-        "example",
-        "sample",
-        "test",
-        "foo",
-        "bar",
-        "placeholder",
-        "your_api_key",
-        "your-api-key",
-        "your_token",
-        "your-token",
-        "password",
-        "secret",
-        "token",
-    ];
-    if known_placeholders
-        .iter()
-        .any(|&p| lower == p || lower.starts_with("todo") || lower.starts_with("fixme"))
-    {
-        return true;
-    }
-    false
-}
-
 pub struct ShellSecretScanner {
     re_env: Regex,
     re_docker: Regex,
     re_inline: Regex,
     re_xargs: Regex,
     re_pipe: Regex,
-    re_token_github: Regex,
-    re_token_aws: Regex,
-    re_token_slack: Regex,
-    re_token_openai: Regex,
-    re_private_key: Regex,
-    re_bearer: Regex,
+    /// The fixed-format credential table `pii` shares.
+    token_classes: Vec<CompiledTokenClass>,
     re_password_flag: Regex,
     re_short_password: Regex,
     re_aws_secret: Regex,
@@ -252,19 +211,7 @@ impl ShellSecretScanner {
             r#"(?i)\b(?:curl|wget)\b[^|;\n\r]*\|\s*(?:sudo\s+)?(?:\/bin\/|\/usr\/bin\/)?(?:sh|bash|zsh)\b"#,
         )?;
 
-        let re_token_github =
-            Regex::new(r"\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82})\b")?;
-
-        let re_token_aws = Regex::new(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")?;
-
-        let re_token_slack = Regex::new(r"\bxox[baprs]-[0-9a-zA-Z-]{10,}\b")?;
-
-        let re_token_openai = Regex::new(r"\bsk-(?:proj-|ant-api[0-9]{2}-)?[a-zA-Z0-9_-]{20,}\b")?;
-
-        let re_private_key = Regex::new(r"-----BEGIN (?:[A-Z0-9 ]+)?PRIVATE KEY(?: BLOCK)?-----")?;
-
-        let re_bearer =
-            Regex::new(r#"(?i)\bAuthorization:\s*Bearer\s+['"]?([A-Za-z0-9_\-\.]{12,})['"]?"#)?;
+        let token_classes = compile_token_classes()?;
 
         let re_password_flag =
             Regex::new(r#"(?i)(?:--password|--passwd)(?:=|\s+)(?:['"]([^'"]+)['"]|([^\s'"]+))"#)?;
@@ -292,12 +239,7 @@ impl ShellSecretScanner {
             re_inline,
             re_xargs,
             re_pipe,
-            re_token_github,
-            re_token_aws,
-            re_token_slack,
-            re_token_openai,
-            re_private_key,
-            re_bearer,
+            token_classes,
             re_password_flag,
             re_short_password,
             re_aws_secret,
@@ -323,29 +265,18 @@ impl ShellSecretScanner {
             return None;
         }
 
-        // 1. Specific Provider Tokens (high confidence)
-        if self.re_token_github.is_match(line) {
-            return Some(ShellRuleId::TokenGitHub);
-        }
-        if self.re_token_aws.is_match(line) {
-            return Some(ShellRuleId::TokenAws);
-        }
-        if self.re_token_slack.is_match(line) {
-            return Some(ShellRuleId::TokenSlack);
-        }
-        if self.re_token_openai.is_match(line) {
-            return Some(ShellRuleId::TokenOpenAi);
-        }
-        if self.re_private_key.is_match(line) {
-            return Some(ShellRuleId::PrivateKeyBlock);
-        }
-
-        // 2. Authorization Bearer literal
-        if let Some(caps) = self.re_bearer.captures(line) {
-            if let Some(val) = caps.get(1) {
-                if !is_placeholder_or_var(val.as_str()) {
-                    return Some(ShellRuleId::LiteralBearer);
-                }
+        // 1. Fixed-format provider tokens and literal Authorization Bearer values (high
+        // confidence), from the table `pii` shares.
+        for tc in &self.token_classes {
+            if tc.matches_literal(line) {
+                return Some(match tc.class.id {
+                    "github-token" => ShellRuleId::TokenGitHub,
+                    "aws-access-key" => ShellRuleId::TokenAws,
+                    "slack-token" => ShellRuleId::TokenSlack,
+                    "llm-api-token" => ShellRuleId::TokenOpenAi,
+                    "private-key" => ShellRuleId::PrivateKeyBlock,
+                    _ => ShellRuleId::LiteralBearer,
+                });
             }
         }
 

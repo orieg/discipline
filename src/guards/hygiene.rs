@@ -3,6 +3,7 @@
 
 use super::{exempt_filter, line_allows, Context, GateOutcome, PathFilter};
 use crate::config::{GateSettings, PiiGate};
+use crate::guards::token_formats::{compile_token_classes, is_literal_hit, TokenClass};
 use anyhow::{Context as _, Result};
 use regex::Regex;
 
@@ -775,6 +776,9 @@ pub struct PiiRule {
     pub user_group: bool,
     /// Echoing the match would repeat the secret in CI logs.
     pub redact: bool,
+    /// The shared fixed-format credential class this rule is, when it is one. A match
+    /// whose captured value is a variable reference or placeholder is not a hit.
+    pub token_class: Option<&'static TokenClass>,
 }
 
 pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
@@ -789,6 +793,7 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
                 label: "home-directory path",
                 user_group: true,
                 redact: true,
+                token_class: None,
             });
         }
     }
@@ -800,33 +805,20 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             label: "private LAN address",
             user_group: false,
             redact: settings.redact_lan_ips,
+            token_class: None,
         });
     }
     if settings.secrets {
-        rules.push(PiiRule {
-            re: Regex::new(r"-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----")?,
-            label: "private key header",
-            user_group: false,
-            redact: true,
-        });
-        rules.push(PiiRule {
-            re: Regex::new(r"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b")?,
-            label: "AWS access key ID",
-            user_group: false,
-            redact: true,
-        });
-        rules.push(PiiRule {
-            re: Regex::new(r"\bgh[pousr]_[A-Za-z0-9_]{36,255}\b")?,
-            label: "GitHub personal access token",
-            user_group: false,
-            redact: true,
-        });
-        rules.push(PiiRule {
-            re: Regex::new(r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b")?,
-            label: "Slack token",
-            user_group: false,
-            redact: true,
-        });
+        // One fixed-format table, shared with `shell-secrets`.
+        for tc in compile_token_classes()? {
+            rules.push(PiiRule {
+                re: tc.re,
+                label: tc.class.label,
+                user_group: false,
+                redact: true,
+                token_class: Some(tc.class),
+            });
+        }
     }
     if settings.agent_config_refs {
         let agent_dirs = [
@@ -842,6 +834,7 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             label: "home agent-config path",
             user_group: false,
             redact: false,
+            token_class: None,
         });
         let res_disc = format!(r"\b{}{}\b", "RESEARCH_DISCIPLINES", r"\.md");
         rules.push(PiiRule {
@@ -849,6 +842,7 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             label: "personal methodology doc",
             user_group: false,
             redact: false,
+            token_class: None,
         });
         let playbook = format!(r"\b{}{}\b", r"[A-Z0-9_]*_PLAYBOOK", r"\.md");
         rules.push(PiiRule {
@@ -856,6 +850,7 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             label: "personal playbook",
             user_group: false,
             redact: false,
+            token_class: None,
         });
     }
     for host in &settings.hostname_denylist {
@@ -871,6 +866,7 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             label: "denylisted hostname",
             user_group: false,
             redact: true,
+            token_class: None,
         });
     }
     for p in &settings.extra_patterns {
@@ -879,6 +875,7 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             label: "configured pattern",
             user_group: false,
             redact: true,
+            token_class: None,
         });
     }
     Ok(rules)
@@ -978,6 +975,12 @@ fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bo
                 let m = caps.get(0).unwrap();
                 if rule.label == "private LAN address"
                     && is_exempt_lan_ip(m.as_str(), token, m.start(), m.end())
+                {
+                    continue;
+                }
+                if rule
+                    .token_class
+                    .is_some_and(|class| !is_literal_hit(class, &caps))
                 {
                     continue;
                 }
@@ -1129,6 +1132,12 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                     let m = caps.get(0).unwrap();
                     if rule.label == "private LAN address"
                         && is_exempt_lan_ip(m.as_str(), line, m.start(), m.end())
+                    {
+                        return None;
+                    }
+                    if rule
+                        .token_class
+                        .is_some_and(|class| !is_literal_hit(class, &caps))
                     {
                         return None;
                     }
@@ -1573,6 +1582,108 @@ mod tests {
         assert!(!rule_hits(&PiiGate::default(), "measured on buildbox"));
     }
 
+    /// One live-format line per fixed-format class, assembled at run time so this file
+    /// holds no token-shaped literal. Each must be reported by `pii` and by `shell-secrets`.
+    fn fixed_format_samples() -> Vec<(&'static str, String)> {
+        vec![
+            (
+                "GitHub token",
+                format!("t = \"{}_{}\"", "ghp", "a1B2".repeat(9)),
+            ),
+            (
+                "GitHub token",
+                format!("t = \"{}_{}\"", "github_pat", "A1b2C3d4E5".repeat(8) + "xy"),
+            ),
+            (
+                "AWS access key ID",
+                format!("id = {}ABCDEF0123456789", "AKIA"),
+            ),
+            (
+                "AWS access key ID",
+                format!("id = {}ABCDEF0123456789", "ASIA"),
+            ),
+            (
+                "AWS access key ID",
+                format!("id = {}ABCDEF0123456789", "ABIA"),
+            ),
+            (
+                "AWS access key ID",
+                format!("id = {}ABCDEF0123456789", "ACCA"),
+            ),
+            (
+                "Slack token",
+                format!("t = {}-123456789012-123456789012-abcdefABCDEF", "xoxb"),
+            ),
+            (
+                "OpenAI or Anthropic API key",
+                format!("k = {}-{}", "sk", "abcdefghijklmnopqrstuvwx"),
+            ),
+            (
+                "OpenAI or Anthropic API key",
+                format!("k = {}-ant-api03-{}", "sk", "abcdefghijklmnopqrstuvwx"),
+            ),
+            (
+                "private key header",
+                format!("{}BEGIN OPENSSH PRIVATE KEY{}", "-----", "-----"),
+            ),
+            (
+                "literal Authorization Bearer token",
+                format!("{}: Bearer {}", "Authorization", "abcdef0123456789"),
+            ),
+        ]
+    }
+
+    #[test]
+    fn pii_checks_every_fixed_format_class_shell_secrets_knows() {
+        use crate::config::ShellSecretsGate;
+        use crate::guards::shell_secrets::ShellSecretScanner;
+        let rules = pii_rules(&PiiGate::default()).unwrap();
+        let scanner = ShellSecretScanner::new(&ShellSecretsGate::default()).unwrap();
+        for (label, line) in fixed_format_samples() {
+            let rule = rules
+                .iter()
+                .filter(|r| r.label == label)
+                .find(|r| {
+                    let class = r.token_class.unwrap();
+                    r.re.captures_iter(&line)
+                        .any(|c| crate::guards::token_formats::is_literal_hit(class, &c))
+                })
+                .unwrap_or_else(|| panic!("pii misses the {label} sample: {line}"));
+            assert!(rule.redact, "{label} must not be echoed");
+            assert!(
+                scanner.check_line(&line).is_some(),
+                "shell-secrets misses the {label} sample: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn pii_ignores_placeholders_variables_and_hashes() {
+        let rules = pii_rules(&PiiGate::default()).unwrap();
+        let hits = |line: &str| {
+            rules.iter().filter(|r| r.token_class.is_some()).any(|r| {
+                let class = r.token_class.unwrap();
+                r.re.captures_iter(line)
+                    .any(|c| crate::guards::token_formats::is_literal_hit(class, &c))
+            })
+        };
+        for line in [
+            "export OPENAI_API_KEY=sk-...",
+            "export OPENAI_API_KEY=<your-key>",
+            "curl -H \"Authorization: Bearer $TOKEN\" https://example.com",
+            "curl -H \"Authorization: Bearer ${API_TOKEN}\" https://example.com",
+            "Authorization: Bearer ${{ secrets.API_TOKEN }}",
+            "Authorization: Bearer <token>",
+            "Authorization: Bearer xxxxxxxxxxxxxxxx",
+            "checksum = \"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"",
+            "integrity sha512-Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4==",
+            "id = 123e4567-e89b-12d3-a456-426614174000",
+            "gh_token_name = \"ghp_<token>\"",
+        ] {
+            assert!(!hits(line), "false positive on: {line}");
+        }
+    }
+
     #[test]
     fn toggles_and_extra_patterns_change_the_rule_set() {
         let off = PiiGate {
@@ -1590,7 +1701,10 @@ mod tests {
             agent_config_refs: false,
             ..PiiGate::default()
         };
-        assert_eq!(pii_rules(&secrets_only).unwrap().len(), 4);
+        assert_eq!(
+            pii_rules(&secrets_only).unwrap().len(),
+            crate::guards::token_formats::TOKEN_CLASSES.len()
+        );
         let agent_cfg_only = PiiGate {
             home_paths: false,
             lan_ips: false,
