@@ -612,6 +612,7 @@
       "code": "src/audit_html.rs:source",
       "pinning_tests": [
         "tests/test_audit_html.rs::a_source_link_stays_in_the_repository_whatever_the_path",
+        "src/audit.rs::forge_facts_on_the_page_are_escaped_and_link_only_into_the_repository",
         "tests/test_audit_html.rs::the_page_loads_nothing_and_escapes_what_authors_wrote",
         "src/audit_html.rs::author_text_is_escaped"
       ],

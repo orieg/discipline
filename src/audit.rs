@@ -3007,6 +3007,88 @@ mod tests {
     }
 
     #[test]
+    fn forge_facts_on_the_page_are_escaped_and_link_only_into_the_repository() {
+        // What `--forge` adds to the page: issue states, ratifications and their reasons. A
+        // reference to another repository is never read, so it is never linked; a reason is
+        // escaped; a close reason is compared, never printed.
+        use crate::forge::{Forge, ForgeKind};
+        let a = at(0, Some(10));
+        let mut unratified = Record::new(&a.to_owned(), "protected-edit", "protected");
+        unratified.file = Some("AGENTS.md".into());
+        unratified.ratification = Some(RatificationFact {
+            state: "unratified",
+            issue_repo: None,
+            issue: None,
+            comment_id: None,
+            created: None,
+            why: Some("<img src=x onerror=alert(1)> no owner comment".into()),
+        });
+        let mut ratified = Record::new(&a.to_owned(), "protected-edit", "protected");
+        ratified.file = Some("discipline.toml".into());
+        ratified.ratification = Some(RatificationFact {
+            state: "ratified",
+            issue_repo: Some("o/r".into()),
+            issue: Some(3),
+            comment_id: Some("42".into()),
+            created: Some(1),
+            why: None,
+        });
+        let mut waiver =
+            directive_records("s\n\nno-issue: release bookkeeping", &a, false).remove(0);
+        waiver.cites = vec!["x/../../evil/r#1".into(), "#2".into()];
+        let mut s = Summary::from_records("main".into(), 1, vec![waiver], vec![]);
+        s.protected_edits = vec![unratified, ratified];
+        s.forge = Some(ForgeRead::default());
+        s.links = Some(Links::for_forge(&Forge {
+            kind: ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        }));
+        s.issues = vec![
+            IssueFact {
+                reference: "x/../../evil/r#1".into(),
+                repo: String::new(),
+                number: 1,
+                state: "cross-repo",
+                state_reason: None,
+                closed_at: None,
+                error: None,
+            },
+            IssueFact {
+                reference: "#2".into(),
+                repo: "o/r".into(),
+                number: 2,
+                state: "closed",
+                state_reason: Some("<b>done</b>".into()),
+                closed_at: Some(1),
+                error: None,
+            },
+        ];
+        let page = crate::audit_html::render(&s);
+        assert!(
+            page.contains("&lt;img src=x onerror=alert(1)&gt; no owner comment"),
+            "the reason is shown, escaped"
+        );
+        assert!(!page.contains("<img") && !page.contains("<b>done"));
+        assert!(page.contains("<code>x/../../evil/r#1</code>"), "not a link");
+        assert!(page.contains("https://github.com/o/r/issues/3#issuecomment-42"));
+        assert!(page.contains("https://github.com/o/r/issues/2"));
+        for href in page
+            .split("href=\"")
+            .skip(1)
+            .map(|r| &r[..r.find('"').unwrap()])
+        {
+            assert!(
+                href.starts_with('#')
+                    || href == "https://github.com/o/r"
+                    || href.starts_with("https://github.com/o/r/"),
+                "{href}"
+            );
+            assert!(!href.contains(".."), "{href}");
+        }
+    }
+
+    #[test]
     fn a_marker_that_lifted_nothing_leaves_the_markers_table() {
         let a = at(0, Some(10));
         let marker = |file: &str, lifted: Option<bool>| {
