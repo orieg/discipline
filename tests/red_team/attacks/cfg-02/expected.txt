@@ -1,2 +1,3 @@
-# Documented residual risk (§1.4): if policy_from is not base, head is evaluated.
-# config-integrity is evaluated against head configuration.
+error [config-integrity] Gate Weakened By This Change [discipline.toml]
+   [config-integrity] `enabled` changed from true to false.
+discipline exit: 1

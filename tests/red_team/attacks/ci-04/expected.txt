@@ -1,0 +1,14 @@
+clean change, workflows protected: merged by agent: yes
+test deleted: checks: CI / ci-gate (pull_request)=failure,CI / discipline (pull_request)=failure
+test deleted: merged by agent: no
+ci-01 continue-on-error, protected: check: checks: CI / ci-gate (pull_request)=success,CI / discipline (pull_request)=success
+ci-01 continue-on-error, protected: check: merged by agent: yes
+ci-01 continue-on-error, protected: .gitea/workflows/*;discipline.toml: merged by agent: yes
+ci-01 continue-on-error, protected: .gitea/workflows/**;discipline.toml: merged by agent: no
+ci-02 rollup renamed: checks: CI / ci-gate-bypass (pull_request)=failure,CI / discipline (pull_request)=failure
+ci-02 rollup renamed: merged by agent: no
+ci-03 [skip ci]: checks: none
+ci-03 [skip ci]: merged by agent: no
+HOLDS: a required rollup check refuses ci-02, ci-03 and a red discipline run
+KNOWN: ci-01 merges unless the workflows are protected files (docs/CONFIGURATION.md residual gap)
+GAP: .gitea/workflows/* does not protect ci.yml, and doctor passed it (#428)

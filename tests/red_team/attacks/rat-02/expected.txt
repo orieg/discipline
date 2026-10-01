@@ -1,0 +1,3 @@
+Ratification By The Pull Request's Author
+Protected Path Edited Without Ratification
+discipline exit: 1
