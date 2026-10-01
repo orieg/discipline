@@ -15,6 +15,8 @@
 //! - **Access and identity** (#366): deploy keys that can push and outside collaborators,
 //!   counted and never named; on GitHub, the owning organisation's base permission, its
 //!   two-factor requirement and whether members may change a repository's visibility.
+//! - **Webhooks and environments** (#366): webhooks with no secret or with TLS verification
+//!   off, by host; on GitHub, deployment environments that hold secrets and need no reviewer.
 //!
 //! Reads go through `crate::forge` (AGENTS.md §3.3). A setting the token cannot see is a
 //! warning naming the access it needs, never a pass; a forge that cannot be reached is
@@ -44,6 +46,8 @@ pub const IDS: &[&str] = &[
     "org-base-permission",
     "two-factor",
     "visibility-change",
+    "webhooks",
+    "environment-reviewers",
 ];
 
 /// The organisation settings this module reads on GitHub, in report order.
@@ -133,6 +137,15 @@ pub fn findings(
                     "the collaborators",
                     "a token with admin access to the repository",
                     |users| collaborators_finding(forge.kind, users),
+                ),
+                "webhooks" => listed(
+                    api,
+                    forge,
+                    &format!("repos/{}/hooks", forge.repo),
+                    "webhooks",
+                    "the webhooks",
+                    "a token with admin access to the repository",
+                    |hooks| webhooks_finding(forge.kind, hooks),
                 ),
                 other => unavailable(other, forge.kind),
             })
@@ -255,6 +268,16 @@ fn github(
         |users| collaborators_finding(forge.kind, users),
     ));
     out.extend(github_org(api, forge, &repo));
+    out.push(listed(
+        api,
+        forge,
+        &format!("repos/{r}/hooks"),
+        "webhooks",
+        "the webhooks",
+        GITHUB_ADMIN,
+        |hooks| webhooks_finding(forge.kind, hooks),
+    ));
+    out.push(github_environment_reviewers(api, forge));
     out
 }
 
@@ -606,6 +629,195 @@ pub fn org_settings(org: &serde_json::Value) -> Vec<Finding> {
         .fix("Turn off \"Allow members to change repository visibilities\" in the organisation's member privileges."),
     };
     vec![base, two_factor, visibility]
+}
+
+/// The host of a webhook URL, without scheme, credentials, port or path.
+fn url_host(url: &str) -> String {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("");
+    host.split(':').next().unwrap_or("").to_string()
+}
+
+/// `webhooks`: a webhook with no secret, or with TLS verification off, delivers events a
+/// forged sender can imitate or a network can read (OpenSSF Scorecard Webhooks). GitHub shows
+/// whether a secret is set; GitLab returns no secret token, only `enable_ssl_verification`;
+/// Gitea and Forgejo return neither (RUN, 1.24 and 12). Reported by host only.
+pub fn webhooks_finding(kind: ForgeKind, hooks: &[serde_json::Value]) -> Finding {
+    if hooks.is_empty() {
+        return Finding::new("webhooks", Status::Pass, "no webhooks");
+    }
+    let host = |h: &serde_json::Value| {
+        h.pointer("/config/url")
+            .or_else(|| h.get("url"))
+            .and_then(|u| u.as_str())
+            .map(url_host)
+            .unwrap_or_default()
+    };
+    let weak: Vec<&serde_json::Value> = match kind {
+        ForgeKind::GitHub => hooks
+            .iter()
+            .filter(|h| {
+                let config = h.get("config");
+                let no_secret = config.and_then(|c| c.get("secret")).is_none();
+                let insecure = matches!(
+                    config.and_then(|c| c.get("insecure_ssl")),
+                    Some(v) if v == "1" || v == 1
+                );
+                no_secret || insecure
+            })
+            .collect(),
+        ForgeKind::GitLab => hooks
+            .iter()
+            .filter(|h| h.get("enable_ssl_verification").and_then(|v| v.as_bool()) == Some(false))
+            .collect(),
+        ForgeKind::Gitea | ForgeKind::Forgejo => Vec::new(),
+    };
+    if !weak.is_empty() {
+        let hosts: BTreeSet<String> = weak.iter().map(|h| host(h)).collect();
+        let what = match kind {
+            ForgeKind::GitHub => "have no secret or skip TLS verification",
+            _ => "skip TLS verification",
+        };
+        return Finding::new(
+            "webhooks",
+            Status::Warn,
+            format!(
+                "{} of {} webhook(s) {what} ({})",
+                weak.len(),
+                hooks.len(),
+                hosts.into_iter().collect::<Vec<_>>().join(", ")
+            ),
+        )
+        .fix("Give each webhook a secret and keep TLS verification on, or delete the webhooks no one uses.");
+    }
+    match kind {
+        ForgeKind::GitHub => Finding::new(
+            "webhooks",
+            Status::Pass,
+            format!(
+                "{} webhook(s), each with a secret and TLS verification",
+                hooks.len()
+            ),
+        ),
+        ForgeKind::GitLab => Finding::new(
+            "webhooks",
+            Status::Info,
+            format!(
+                "{} webhook(s) verify TLS; GitLab does not return whether a secret token is set",
+                hooks.len()
+            ),
+        ),
+        ForgeKind::Gitea | ForgeKind::Forgejo => Finding::new(
+            "webhooks",
+            Status::Info,
+            format!(
+                "{} webhook(s); {} does not return whether a webhook has a secret",
+                hooks.len(),
+                kind.label()
+            ),
+        ),
+    }
+}
+
+/// Percent-encode a path segment (environment names may hold spaces).
+fn path_segment(s: &str) -> String {
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+/// `environment-reviewers` on GitHub: a deployment environment that holds secrets but needs
+/// no reviewer lets any job bound to it read them once its branch rule allows (OWASP CI/CD
+/// Security Cheat Sheet: manual approval before production deploys). Information.
+fn github_environment_reviewers(api: &dyn ForgeApi, forge: &Forge) -> Finding {
+    let r = &forge.repo;
+    let envs = match ask(api, forge, &format!("repos/{r}/environments?per_page=100")) {
+        Answer::Ok(v) => v
+            .get("environments")
+            .and_then(|e| e.as_array())
+            .cloned()
+            .unwrap_or_default(),
+        Answer::Hidden(why) => {
+            return hidden(
+                "environment-reviewers",
+                "the environments",
+                &why,
+                GITHUB_ADMIN,
+            )
+        }
+        Answer::Down(why) => return down("environment-reviewers", forge.kind, &why),
+    };
+    let mut unreviewed: Vec<(String, u64)> = Vec::new();
+    for env in &envs {
+        let reviewed = env
+            .get("protection_rules")
+            .and_then(|p| p.as_array())
+            .is_some_and(|rules| {
+                rules.iter().any(|rule| {
+                    rule.get("type").and_then(|t| t.as_str()) == Some("required_reviewers")
+                })
+            });
+        let Some(name) = env.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+        if reviewed {
+            continue;
+        }
+        match ask(
+            api,
+            forge,
+            &format!("repos/{r}/environments/{}/secrets", path_segment(name)),
+        ) {
+            Answer::Ok(v) => {
+                let n = v.get("total_count").and_then(|t| t.as_u64()).unwrap_or(0);
+                if n > 0 {
+                    unreviewed.push((name.to_string(), n));
+                }
+            }
+            Answer::Hidden(why) => {
+                return hidden(
+                    "environment-reviewers",
+                    "the environments' secrets",
+                    &why,
+                    GITHUB_ADMIN,
+                )
+            }
+            Answer::Down(why) => return down("environment-reviewers", forge.kind, &why),
+        }
+    }
+    environment_reviewers_finding(envs.len(), &unreviewed)
+}
+
+/// `environment-reviewers` from the environments that hold secrets and need no reviewer
+/// (name, secret count) among `total` environments.
+pub fn environment_reviewers_finding(total: usize, unreviewed: &[(String, u64)]) -> Finding {
+    if unreviewed.is_empty() {
+        return Finding::new(
+            "environment-reviewers",
+            Status::Pass,
+            format!("{total} environment(s): none holds secrets without a required reviewer"),
+        );
+    }
+    Finding::new(
+        "environment-reviewers",
+        Status::Info,
+        format!(
+            "environment(s) holding secrets with no required reviewer: {}",
+            unreviewed
+                .iter()
+                .map(|(n, c)| format!("`{n}` ({c} secret(s))"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    )
+    .fix("Add required reviewers to an environment whose secrets deploy or publish, so a person approves each job that reads them.")
 }
 
 /// `actions-sha-pinning` and `allowed-actions` from `actions/permissions`.
@@ -1287,6 +1499,16 @@ fn gitlab(api: &dyn ForgeApi, forge: &Forge) -> Vec<Finding> {
     ] {
         out.push(unavailable(i, forge.kind));
     }
+    out.push(listed(
+        api,
+        forge,
+        &format!("projects/{id}/hooks"),
+        "webhooks",
+        "the project's webhooks",
+        &gitlab_need("", "the Maintainer role"),
+        |hooks| webhooks_finding(forge.kind, hooks),
+    ));
+    out.push(unavailable("environment-reviewers", forge.kind));
     out
 }
 
@@ -1573,6 +1795,59 @@ fn gitea_secret_scoping(
 mod tests {
 
     #[test]
+    fn webhooks_are_judged_where_the_forge_says_and_reported_by_host_only() {
+        use serde_json::json;
+        let gh = [
+            json!({"config": {"url": "https://user:pw@hooks.example.com:8443/path?t=1", "insecure_ssl": "0"}}),
+            json!({"config": {"url": "https://ok.example.org/x", "secret": "********", "insecure_ssl": "1"}}),
+            json!({"config": {"url": "https://good.example.net/x", "secret": "********", "insecure_ssl": "0"}}),
+        ];
+        let f = webhooks_finding(ForgeKind::GitHub, &gh);
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.summary.starts_with("2 of 3"), "{}", f.summary);
+        assert!(
+            f.summary.contains("hooks.example.com") && f.summary.contains("ok.example.org"),
+            "{}",
+            f.summary
+        );
+        for leak in ["user", "pw", "8443", "/path", "t=1", "good.example.net"] {
+            assert!(!f.summary.contains(leak), "{leak}: {}", f.summary);
+        }
+        assert_eq!(
+            webhooks_finding(ForgeKind::GitHub, &gh[2..]).status,
+            Status::Pass
+        );
+        assert_eq!(
+            webhooks_finding(ForgeKind::GitHub, &[]).status,
+            Status::Pass
+        );
+        let gl = [json!({"url": "https://a.example.com/h", "enable_ssl_verification": false})];
+        assert_eq!(
+            webhooks_finding(ForgeKind::GitLab, &gl).status,
+            Status::Warn
+        );
+        let gl_ok = [json!({"url": "https://a.example.com/h", "enable_ssl_verification": true})];
+        assert_eq!(
+            webhooks_finding(ForgeKind::GitLab, &gl_ok).status,
+            Status::Info
+        );
+        assert_eq!(
+            webhooks_finding(ForgeKind::Forgejo, &gl_ok).status,
+            Status::Info
+        );
+        // Environments that hold secrets and need no reviewer: information, by name.
+        let f = environment_reviewers_finding(3, &[("package-signing".to_string(), 2)]);
+        assert_eq!(f.status, Status::Info);
+        assert!(
+            f.summary.contains("`package-signing` (2 secret(s))"),
+            "{}",
+            f.summary
+        );
+        assert_eq!(environment_reviewers_finding(3, &[]).status, Status::Pass);
+        assert_eq!(path_segment("prod eu/1"), "prod%20eu%2F1");
+    }
+
+    #[test]
     fn access_is_counted_never_named_and_org_settings_warn_or_say_what_they_need() {
         use serde_json::json;
         // Deploy keys: GitHub, Gitea and Forgejo `read_only`, GitLab `can_push`.
@@ -1829,6 +2104,14 @@ mod tests {
         put(
             "repos/o/r/collaborators?affiliation=outside&per_page=100&page=1",
             json!([]),
+        );
+        put(
+            "repos/o/r/hooks?per_page=100&page=1",
+            json!([{"id": 4, "config": {"url": "https://ci.example.com/hook", "secret": "********", "insecure_ssl": "0"}}]),
+        );
+        put(
+            "repos/o/r/environments?per_page=100",
+            json!({"total_count": 1, "environments": [{"name": "release", "protection_rules": [{"type": "required_reviewers"}]}]}),
         );
         put(
             "orgs/o",
@@ -2121,6 +2404,12 @@ mod tests {
             "gitea:repos/o/r/collaborators?limit=50&page=2".into(),
             json!([]),
         );
+        api.responses.insert(
+            "gitea:repos/o/r/hooks?limit=50&page=1".into(),
+            json!([{"id": 5, "config": {"url": "https://ci.example.com/x"}}]),
+        );
+        api.responses
+            .insert("gitea:repos/o/r/hooks?limit=50&page=2".into(), json!([]));
         let forge = Forge {
             kind: ForgeKind::Gitea,
             ..gh()
@@ -2132,6 +2421,8 @@ mod tests {
         // Deploy keys and collaborators are read on Gitea and Forgejo: counted, never named.
         assert_eq!(status_of(&f, "deploy-keys"), Status::Warn, "{f:?}");
         assert_eq!(status_of(&f, "outside-collaborators"), Status::Info);
+        // Gitea and Forgejo do not say whether a webhook has a secret: counted, information.
+        assert_eq!(status_of(&f, "webhooks"), Status::Info);
         assert!(!f.iter().any(|x| x.summary.contains("`c`")), "{f:?}");
         // `secret-scoping` is read on Gitea and Forgejo (its own tests below); auto-merge has
         // no repository setting there and is always offered.
@@ -2146,6 +2437,7 @@ mod tests {
                     | "auto-merge"
                     | "deploy-keys"
                     | "outside-collaborators"
+                    | "webhooks"
             )
         }) {
             let x = f.iter().find(|x| x.id == *id).unwrap();

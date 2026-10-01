@@ -345,7 +345,8 @@
       "code": "src/doctor_pins.rs",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::ci_integrity_a_third_party_action_in_a_job_with_secrets_warns_without_failing",
-        "tests/test_doctor.rs::doctor_fails_an_imposter_pin_and_warns_on_a_tag_pinned_nested_action"
+        "tests/test_doctor.rs::doctor_fails_an_imposter_pin_and_warns_on_a_tag_pinned_nested_action",
+        "tests/test_doctor.rs::doctor_reports_weak_webhooks_and_unreviewed_environments_with_secrets"
       ],
       "verdict": "holds"
     },
@@ -1202,6 +1203,19 @@
       "pinning_tests": [
         "tests/test_doctor.rs::doctor_counts_deploy_keys_and_collaborators_and_reads_the_organisation",
         "src/doctor_settings.rs::access_is_counted_never_named_and_org_settings_warn_or_say_what_they_need",
+        "tests/test_doctor.rs::doctor_reads_gitlab_settings_and_audits_the_token"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "doctor-webhooks-environments",
+      "category": "doctor",
+      "claim": "doctor reports webhooks with no secret or with TLS verification off by host only, and on GitHub the deployment environments that hold secrets and need no required reviewer, without naming a secret",
+      "source": "docs/guides/ci-platforms.md:\u00a78 webhooks and environments",
+      "code": "src/doctor_settings.rs:webhooks_finding",
+      "pinning_tests": [
+        "tests/test_doctor.rs::doctor_reports_weak_webhooks_and_unreviewed_environments_with_secrets",
+        "src/doctor_settings.rs::webhooks_are_judged_where_the_forge_says_and_reported_by_host_only",
         "tests/test_doctor.rs::doctor_reads_gitlab_settings_and_audits_the_token"
       ],
       "verdict": "holds"
