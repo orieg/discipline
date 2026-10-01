@@ -264,6 +264,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `command/zero-items-executed` | Zero Items Selected Or Executed |
 | `command/count-below-ratchet` | Command Count Below Ratchet Floor |
 | `command/count-pattern-unmatched` | Count Pattern Unmatched |
+| `command/base-test-failed` | Base Test Failed Against Head Code |
 | `sanitizers/canary-diagnostic-missing` | Canary Diagnostic Missing |
 | `sanitizers/violation-detected` | Sanitizer Violation Detected |
 | `msrv/msrv-declaration-missing` | MSRV Declaration Missing |
@@ -1614,6 +1615,7 @@ Notes for adapting it:
   - **Supply Chain & Advisory Wrappers:** `cargo-deny` (`cargo deny check`, guarded policy file `deny.toml`), `pip-audit` (`pip-audit`), `npm-audit` (`npm audit --audit-level=high`), `govulncheck` (`govulncheck ./...`).
   - **Deterministic Concurrency Testing:** `loom` (`cargo test --test loom -- --nocapture`, zero-tests guard `running 0 tests`).
   - **Rust Runtime Checks:** `miri` (`cargo miri test`, zero-tests guard `running 0 tests`), `sanitizers` (`cargo test -Zsanitizer=address`), `cargo-public-api` (`cargo public-api diff`).
+  - **Base Tests Against Head Code:** `base-tests` (`cargo test -- --format=junit` or configured `command`). Checks out the base branch's test paths over the head code tree in an isolated temporary worktree, executes the test suite, parses JUnit XML results, and reports tests that passed on base but failed on head (`command/base-test-failed`). Lifted via `allow-behavior-change: <test-id> <reason>` in PR description or commit message.
 - **Languages:** any.
 - **What it catches:**
   - Non-zero command exit codes (exit 1).
@@ -1624,11 +1626,16 @@ Notes for adapting it:
   - Stealth deletion of preset policy files (e.g. `deny.toml`, `api.snapshot`).
   - Extracted count dropping below the `min_count` ratchet floor established on the merge base ref.
   - Negative-control canaries failing to produce their declared diagnostic message or unexpectedly succeeding.
+  - Tests passing on the base ref that fail when executed against the head code under the `base-tests` preset (`command/base-test-failed`).
 - **Passing override directive (accepted):**
   ```text
   allow-command: cargo-mutants no mutants generated on documentation diff
   ```
-- **Lifting directive:** `allow-command: <command-or-preset-name> <reason>`.
+  or, for the `base-tests` preset:
+  ```text
+  allow-behavior-change: test_calc intentional change to calculator behavior
+  ```
+- **Lifting directive:** `allow-command: <command-or-preset-name> <reason>` for command execution failures; `allow-behavior-change: <test-name> <reason>` for `command/base-test-failed` under the `base-tests` preset.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `preset`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `commands`.
 
 #### `sanitizers`

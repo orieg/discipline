@@ -278,6 +278,7 @@ fn get_base_min_count(ctx: &Context, name: &str) -> Option<u64> {
 
 struct ResolvedCommand {
     name: String,
+    is_base_tests: bool,
     command: String,
     timeout_seconds: u64,
     count_pattern: Option<String>,
@@ -355,8 +356,10 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         });
         let policy_files = preset_def.map(|d| d.policy_files).unwrap_or(&[]);
 
+        let is_base = gate.preset.as_deref() == Some("base-tests");
         resolved.push(ResolvedCommand {
             name: gate.preset.clone().unwrap_or_else(|| "default".to_string()),
+            is_base_tests: is_base,
             command: cmd,
             timeout_seconds: timeout,
             count_pattern: gate.count_pattern.clone(),
@@ -443,8 +446,10 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
 
         let policy_files = preset_def.map(|d| d.policy_files).unwrap_or(&[]);
 
+        let is_base = entry.preset.as_deref() == Some("base-tests") || entry.name == "base-tests";
         resolved.push(ResolvedCommand {
             name: entry.name.clone(),
+            is_base_tests: is_base,
             command: effective_cmd,
             timeout_seconds: timeout,
             count_pattern: entry
@@ -467,6 +472,11 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     }
 
     for item in resolved {
+        if item.is_base_tests {
+            evaluate_base_tests(ctx, &item, gate, &mut outcome)?;
+            continue;
+        }
+
         let mut command_violations = Vec::new();
 
         // 0. Check required policy files for stealth deletion
@@ -683,6 +693,330 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     Ok(outcome)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestStatus {
+    Passed,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestCaseReport {
+    pub id: String,
+    pub name: String,
+    pub classname: Option<String>,
+    pub status: TestStatus,
+    pub failure_message: Option<String>,
+}
+
+fn unescape_xml(s: &str) -> String {
+    s.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+pub fn parse_junit_cases(xml: &str) -> Vec<TestCaseReport> {
+    let re_case = regex::Regex::new(r"(?s)<testcase\b([^>]*?)(?:/>|>(.*?)</testcase>)").unwrap();
+    let re_attr = regex::Regex::new(r#"([a-zA-Z0-9_:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap();
+    let re_failure =
+        regex::Regex::new(r"(?s)<(?:failure|error)\b([^>]*?)(?:/>|>(.*?)</(?:failure|error)>)")
+            .unwrap();
+    let re_skipped = regex::Regex::new(r"(?s)<skipped\b").unwrap();
+
+    let mut cases = Vec::new();
+    for cap in re_case.captures_iter(xml) {
+        let attr_str = &cap[1];
+        let body_opt = cap.get(2).map(|m| m.as_str());
+
+        let mut name = String::new();
+        let mut classname = None;
+        let mut id_attr = None;
+
+        for attr in re_attr.captures_iter(attr_str) {
+            let k = &attr[1];
+            let v = attr
+                .get(2)
+                .or_else(|| attr.get(3))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            let val = unescape_xml(v);
+            match k {
+                "name" => name = val,
+                "classname" if !val.trim().is_empty() => {
+                    classname = Some(val);
+                }
+                "id" if !val.trim().is_empty() => {
+                    id_attr = Some(val);
+                }
+                _ => {}
+            }
+        }
+
+        if name.is_empty() {
+            if let Some(id) = id_attr.as_ref() {
+                name = id.clone();
+            } else {
+                continue;
+            }
+        }
+
+        let id = match &classname {
+            Some(c) => format!("{c}::{name}"),
+            None => name.clone(),
+        };
+
+        let mut failure_message = None;
+        let status = if let Some(body) = body_opt {
+            if let Some(f_cap) = re_failure.captures(body) {
+                let msg_attr = re_attr
+                    .captures_iter(&f_cap[1])
+                    .find(|a| &a[1] == "message")
+                    .and_then(|a| a.get(2).or_else(|| a.get(3)))
+                    .map(|m| unescape_xml(m.as_str()));
+                let body_text = f_cap.get(2).map(|m| unescape_xml(m.as_str().trim()));
+                failure_message = msg_attr.or(body_text);
+                TestStatus::Failed
+            } else if re_skipped.is_match(body) {
+                TestStatus::Skipped
+            } else {
+                TestStatus::Passed
+            }
+        } else {
+            TestStatus::Passed
+        };
+
+        cases.push(TestCaseReport {
+            id,
+            name,
+            classname,
+            status,
+            failure_message,
+        });
+    }
+
+    cases
+}
+
+fn evaluate_base_tests(
+    ctx: &Context,
+    cmd: &ResolvedCommand,
+    gate: &crate::config::CommandGate,
+    outcome: &mut GateOutcome,
+) -> Result<()> {
+    if !ctx.git.has_base() {
+        outcome
+            .notes
+            .push("command: preset 'base-tests' skipped: no base ref".to_string());
+        return Ok(());
+    }
+
+    let base_files = ctx.git.base_tracked_files()?;
+    let base_test_files: Vec<String> = base_files
+        .into_iter()
+        .filter(|p| {
+            crate::ast::functions::declared_test_path(p, &ctx.config.tests.paths)
+                || crate::ast::functions::test_path(p)
+        })
+        .collect();
+
+    if base_test_files.is_empty() {
+        outcome
+            .notes
+            .push("command: preset 'base-tests': no base test files found".to_string());
+        return Ok(());
+    }
+
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_name = format!(
+        "discipline-base-tests-{}-{}-{}",
+        std::process::id(),
+        nanos,
+        count
+    );
+    let temp_path = std::env::temp_dir().join(temp_name);
+    std::fs::create_dir_all(&temp_path)
+        .context("failed to create temporary worktree for base-tests")?;
+
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0); // discipline:allow(error-swallowing): best-effort temporary directory cleanup on drop
+        }
+    }
+    let _guard = TempDirGuard(temp_path.clone());
+
+    // Copy all tracked files from head working tree into temp_path
+    for file in ctx.git.tracked_files()? {
+        let src = ctx.git.root().join(&file);
+        let dst = temp_path.join(&file);
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if src.is_file() {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+
+    // Overlay base test files onto head code
+    for tf in &base_test_files {
+        if let Ok(Some(content)) = ctx.git.base_content(tf) {
+            let dst = temp_path.join(tf);
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&dst, content)?;
+        }
+    }
+
+    // Remove any test files that were added newly in head (did not exist in base)
+    if let Ok(changed) = ctx.git.changed_files() {
+        for cf in changed {
+            if cf.kind == crate::gitctx::ChangeKind::Added
+                && (crate::ast::functions::declared_test_path(&cf.path, &ctx.config.tests.paths)
+                    || crate::ast::functions::test_path(&cf.path))
+            {
+                let dst = temp_path.join(&cf.path);
+                if dst.exists() {
+                    let _ = std::fs::remove_file(&dst); // discipline:allow(error-swallowing): best-effort removal of newly added head test file
+                }
+            }
+        }
+    }
+
+    // Execute the test command bounded in temp_path
+    let run_res = run_command_bounded(&cmd.name, &cmd.command, cmd.timeout_seconds, &temp_path)?;
+    outcome.examined += 1;
+
+    let combined_output = format!("{}\n{}", run_res.stdout, run_res.stderr);
+    let mut cases = parse_junit_cases(&combined_output);
+
+    // Also look for test report XML files generated in temp_path if stdout did not contain JUnit XML
+    if cases.is_empty() {
+        if let Ok(entries) = std::fs::read_dir(temp_path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().is_some_and(|e| e == "xml") {
+                    if let Ok(content) = std::fs::read_to_string(&p) {
+                        let f_cases = parse_junit_cases(&content);
+                        if !f_cases.is_empty() {
+                            cases = f_cases;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let failed_cases: Vec<&TestCaseReport> = cases
+        .iter()
+        .filter(|c| c.status == TestStatus::Failed)
+        .collect();
+
+    if run_res.status.success() && failed_cases.is_empty() {
+        outcome.notes.push(format!(
+            "command: preset 'base-tests': {} base tests passed against head code",
+            cases.len()
+        ));
+        return Ok(());
+    }
+
+    if !failed_cases.is_empty() {
+        for failed in failed_cases {
+            let mut excused = false;
+            for subj in &[&failed.id, &failed.name] {
+                if let Some(ov) = ctx.find_override(
+                    "command",
+                    &crate::findings::BASE_TEST_FAILED,
+                    tokens::ALLOW_BEHAVIOR_CHANGE,
+                    subj,
+                ) {
+                    outcome.overrides.push(ov);
+                    excused = true;
+                    break;
+                }
+            }
+            if !excused {
+                let msg = format!(
+                    "Base test `{}` failed when executed against head code: {}",
+                    failed.id,
+                    failed
+                        .failure_message
+                        .as_deref()
+                        .unwrap_or("assertion failure")
+                );
+                let rem = format!(
+                    "Restore expected behavior or excuse intentional behavior change with `allow-behavior-change: {} <reason>`.",
+                    failed.name
+                );
+                outcome.push(
+                    gate.severity(),
+                    &crate::findings::BASE_TEST_FAILED,
+                    None,
+                    None,
+                    msg,
+                    &rem,
+                );
+            }
+        }
+    } else {
+        // Test runner failed (e.g. compilation error or exit failure without parsed JUnit failure)
+        let mut excused = false;
+        for subj in &["compile", "base-tests"] {
+            if let Some(ov) = ctx.find_override(
+                "command",
+                &crate::findings::BASE_TEST_FAILED,
+                tokens::ALLOW_BEHAVIOR_CHANGE,
+                subj,
+            ) {
+                outcome.overrides.push(ov);
+                excused = true;
+                break;
+            }
+        }
+        if !excused {
+            let sample_err = run_res
+                .stderr
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .take(5)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let msg = format!(
+                "Base test suite failed against head code (exit code {:?}):\n{}",
+                run_res.status.code(),
+                if sample_err.is_empty() {
+                    run_res
+                        .stdout
+                        .lines()
+                        .take(5)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    sample_err
+                }
+            );
+            outcome.push(
+                gate.severity(),
+                &crate::findings::BASE_TEST_FAILED,
+                None,
+                None,
+                msg,
+                "Fix base test compilation error against head API or excuse with `allow-behavior-change: compile <reason>`.",
+            );
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -757,5 +1091,50 @@ mod tests {
         let deny = presets::resolve_preset("cargo-deny").expect("cargo-deny preset exists");
         assert_eq!(deny.category, "supply-chain");
         assert_eq!(deny.policy_files, &["deny.toml"]);
+    }
+
+    #[test]
+    fn test_parse_junit_cases_elements_and_statuses() {
+        let xml = r#"
+            <testsuites>
+                <testsuite name="suite1">
+                    <testcase name="test_ok" classname="pkg::mod" time="0.01" />
+                    <testcase name="test_fail" classname="pkg::mod" time="0.02">
+                        <failure message="assertion failed: 1 == 2">details</failure>
+                    </testcase>
+                    <testcase name="test_skip" classname="pkg::mod" time="0.00">
+                        <skipped message="ignored" />
+                    </testcase>
+                </testsuite>
+            </testsuites>
+        "#;
+        let cases = parse_junit_cases(xml);
+        assert_eq!(cases.len(), 3);
+        assert_eq!(cases[0].id, "pkg::mod::test_ok");
+        assert_eq!(cases[0].status, TestStatus::Passed);
+
+        assert_eq!(cases[1].id, "pkg::mod::test_fail");
+        assert_eq!(cases[1].status, TestStatus::Failed);
+        assert_eq!(
+            cases[1].failure_message.as_deref(),
+            Some("assertion failed: 1 == 2")
+        );
+
+        assert_eq!(cases[2].id, "pkg::mod::test_skip");
+        assert_eq!(cases[2].status, TestStatus::Skipped);
+    }
+
+    #[test]
+    fn test_parse_junit_cases_escaped_entities_and_ids() {
+        let xml = r#"
+            <testcase id="test_custom_id" name="&quot;quoted&quot; &amp; &lt;tagged&gt;">
+                <error message="&quot;failed&quot;">error body</error>
+            </testcase>
+        "#;
+        let cases = parse_junit_cases(xml);
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].id, "\"quoted\" & <tagged>");
+        assert_eq!(cases[0].status, TestStatus::Failed);
+        assert_eq!(cases[0].failure_message.as_deref(), Some("\"failed\""));
     }
 }
