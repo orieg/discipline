@@ -511,6 +511,22 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "suppression-delta: a C diagnostic pragma that silences is a site, push/pop and comments are not",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("src/a.c")
+                .ok_or_else(|| anyhow::anyhow!("no c pack"))?;
+            let sites = |src: &str| -> anyhow::Result<usize> {
+                Ok(pack.extract("src/a.c", src, &v)?.escape_hatches.len())
+            };
+            Ok(sites("#pragma GCC diagnostic ignored \"-Wunused\"\n#pragma clang diagnostic ignored \"-Wx\"\n#pragma warning(disable: 4996)\nint a;\n")? == 3
+                && sites("#pragma GCC diagnostic push\n#pragma GCC diagnostic pop\n#pragma once\n// #pragma warning(disable: 4996)\nconst char *s = \"#pragma GCC diagnostic ignored\";\n")? == 0)
+        },
+    ),
+    (
         "stub-bodies: a body replaced by todo!() is reported, a body given to a stub is not",
         || {
             use crate::guards::stub_bodies::judge;

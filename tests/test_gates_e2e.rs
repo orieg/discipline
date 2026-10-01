@@ -2898,6 +2898,77 @@ fn suppression_delta_is_a_delta_read_from_the_syntax_tree() {
 }
 
 #[test]
+fn suppression_delta_counts_c_and_cpp_diagnostic_pragmas_as_added_sites() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/old.c",
+        "#pragma GCC diagnostic ignored \"-Wunused\"\nint a;\n",
+    );
+    repo.commit("chore: an existing pragma");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // The existing pragma moves, and pragmas that do not silence anything, or sit in a
+    // comment or a string, are not suppressions: nothing is reported.
+    repo.write(
+        "src/old.c",
+        "int a;\n#pragma GCC diagnostic ignored \"-Wunused\"\n",
+    );
+    repo.write(
+        "src/new.cpp",
+        "#pragma once\n#pragma GCC diagnostic push\n#pragma GCC diagnostic pop\n#pragma warning(push)\n// #pragma GCC diagnostic ignored \"-Wunused\"\nconst char *s = \"#pragma warning(disable: 4996)\";\n",
+    );
+    repo.commit("refactor: move a pragma, add inert ones");
+    let run = repo.check(SUPPRESSION_BLOCKING);
+    assert!(
+        run.titles("suppression-delta").is_empty(),
+        "{:?}",
+        run.violations("suppression-delta")
+    );
+    assert_eq!(run.outcome("suppression-delta")["examined"], 1);
+
+    // Control: each of the three forms, added, is reported, in C and in C++.
+    repo.write(
+        "src/a.c",
+        "#pragma GCC diagnostic ignored \"-Wcast-qual\"\nint a;\n",
+    );
+    repo.write(
+        "src/b.cpp",
+        "#pragma clang diagnostic ignored \"-Wdeprecated\"\nint b;\n",
+    );
+    repo.write("src/c.cpp", "#pragma warning(disable : 4996)\nint c;\n");
+    repo.write("src/d.c", "int d;\n#pragma warning(disable: 4100)\n");
+    repo.commit("chore: silence warnings");
+    let run = repo.check(SUPPRESSION_BLOCKING);
+    let found: Vec<(String, u64)> = run
+        .violations("suppression-delta")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("src/a.c".to_string(), 1),
+            ("src/b.cpp".to_string(), 1),
+            ("src/c.cpp".to_string(), 1),
+            ("src/d.c".to_string(), 2)
+        ],
+        "{}",
+        run.stdout
+    );
+
+    // Naming the rule lifts the one site it names.
+    repo.commit("chore: explain\n\nallow-suppression: -Wcast-qual vendor header cast");
+    let lifted = repo.check(SUPPRESSION_BLOCKING);
+    assert_eq!(lifted.violations("suppression-delta").len(), 3);
+}
+
+#[test]
 fn java_suppress_warnings_counts_only_as_an_annotation() {
     let repo = Repo::new();
     repo.write(

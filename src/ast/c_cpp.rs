@@ -348,6 +348,57 @@ pub fn is_c_cpp_test_path(path: &str) -> bool {
         || path.contains("/testing/")
 }
 
+/// The rule a `#pragma` directive silences, when the directive is a compiler-diagnostic
+/// suppression; `None` for every other pragma.
+///
+/// Counted: GCC and clang `#pragma GCC|clang diagnostic ignored "-Wname"` (the rule is the
+/// quoted option, `all` when none is given) and MSVC `#pragma warning(disable: 4996)` or
+/// `#pragma warning(suppress: 4996)`, with any spacing around the colon (the rule is the
+/// code list). Not counted: `diagnostic push|pop|warning|error`, `#pragma once`,
+/// `#pragma warning(push|pop|default|error|once: ..)`. The node's directive must be
+/// `#pragma`; its argument is read from the parse, never from the line's raw text.
+fn pragma_suppression_rule(node: Node, src: &[u8]) -> Option<String> {
+    let text_of = |n: Node| n.utf8_text(src).unwrap_or("").to_string();
+    let directive = node.child_by_field_name("directive")?;
+    // `#pragma` and `#  pragma` are the same directive.
+    let directive: String = text_of(directive)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if directive != "#pragma" {
+        return None;
+    }
+    let argument = text_of(node.child_by_field_name("argument")?)
+        .replace("\\\r\n", " ")
+        .replace("\\\n", " ");
+    let argument = argument.trim();
+    let mut words = argument.split_whitespace();
+    match words.next()? {
+        "GCC" | "clang" => {
+            if words.next() != Some("diagnostic") || words.next() != Some("ignored") {
+                return None;
+            }
+            Some(
+                argument
+                    .split('"')
+                    .nth(1)
+                    .map_or_else(|| "all".to_string(), str::to_string),
+            )
+        }
+        first if first == "warning" || first.starts_with("warning(") => {
+            let rest = argument["warning".len()..].trim_start().strip_prefix('(')?;
+            // Up to the first closing parenthesis (a code list has none); a trailing comment
+            // after it is not read.
+            let inner = &rest[..rest.find(')')?];
+            inner.split(';').find_map(|part| {
+                let (verb, codes) = part.split_once(':')?;
+                matches!(verb.trim(), "disable" | "suppress").then(|| codes.trim().to_string())
+            })
+        }
+        _ => None,
+    }
+}
+
 struct CCppExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
@@ -370,6 +421,20 @@ impl<'a> CCppExtractor<'a> {
 
     fn collect_comments_and_escape_hatches(&mut self, node: Node) {
         let kind = node.kind();
+        if kind == "preproc_call" {
+            // A `#pragma` directive is its own node, so the same words in a comment or a
+            // string literal never reach here. The node has no children worth walking.
+            if let Some(rule) = pragma_suppression_rule(node, self.src) {
+                self.facts
+                    .escape_hatches
+                    .push(EscapeHatchSite::LinterDisable {
+                        line: node.start_position().row + 1,
+                        rule,
+                        snippet: self.text(node).trim().to_string(),
+                    });
+            }
+            return;
+        }
         if kind == "comment" {
             let text = self.text(node);
             let line = node.start_position().row + 1;
@@ -1406,6 +1471,99 @@ void test_custom() {
             &facts.escape_hatches[1],
             EscapeHatchSite::LinterDisable { rule, .. } if rule.contains("NOLINTNEXTLINE")
         ));
+    }
+
+    /// The rule of every linter-disable site `src` yields, read as C and as C++.
+    fn pragma_rules(path: &str, src: &str) -> Vec<String> {
+        let vocab = AssertVocabulary::default();
+        let facts = if path.ends_with(".c") {
+            CPack.extract(path, src, &vocab).unwrap()
+        } else {
+            CppPack.extract(path, src, &vocab).unwrap()
+        };
+        facts
+            .escape_hatches
+            .iter()
+            .filter_map(|h| match h {
+                EscapeHatchSite::LinterDisable { rule, .. } => Some(rule.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn diagnostic_pragmas_that_silence_a_warning_are_suppressions() {
+        let src = r##"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma clang diagnostic ignored "-Wdeprecated"
+#pragma warning(disable: 4996)
+#pragma warning (disable : 4100 4101)
+#pragma warning( disable:4200 )
+#pragma warning(suppress: 4244)
+#pragma warning(push, 3)
+#pragma warning(disable: 4996; once: 4101)
+#pragma warning(disable: 4005) // legacy (see ticket)
+#pragma GCC diagnostic \
+    ignored "-Wlong"
+int f(void) {
+#pragma GCC diagnostic ignored "-Wcast-qual"
+    return 0;
+}
+"##;
+        for path in ["a.c", "a.cpp"] {
+            assert_eq!(
+                pragma_rules(path, src),
+                [
+                    "-Wunused-variable",
+                    "-Wdeprecated",
+                    "4996",
+                    "4100 4101",
+                    "4200",
+                    "4244",
+                    "4996",
+                    "4005",
+                    "-Wlong",
+                    "-Wcast-qual"
+                ],
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_pragmas_that_do_not_silence_are_not_suppressions() {
+        let src = r##"
+#pragma once
+#pragma GCC diagnostic push
+#pragma GCC diagnostic pop
+#pragma GCC diagnostic warning "-Wformat"
+#pragma GCC diagnostic error "-Wformat"
+#pragma clang diagnostic push
+#pragma clang diagnostic pop
+#pragma warning(push)
+#pragma warning(pop)
+#pragma warning(default: 4996)
+#pragma warning(error: 4996)
+#pragma pack(push, 1)
+#pragma omp parallel for
+#pragma GCC optimize("O3")
+#error GCC diagnostic ignored "-Wunused"
+#line 1 "warning(disable: 4996)"
+// #pragma GCC diagnostic ignored "-Wunused"
+/* #pragma warning(disable: 4996) */
+const char *a = "#pragma GCC diagnostic ignored \"-Wunused\"";
+const char *b = "#pragma warning(disable: 4996)";
+#define QUIET _Pragma("GCC diagnostic push")
+"##;
+        for path in ["a.c", "a.cpp"] {
+            assert!(pragma_rules(path, src).is_empty(), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_pragma_guarded_by_the_preprocessor_is_still_read() {
+        let src = "#if defined(_MSC_VER)\n#pragma warning(disable: 4996)\n#elif defined(__GNUC__)\n#pragma GCC diagnostic ignored \"-Wunused\"\n#endif\n";
+        assert_eq!(pragma_rules("a.cpp", src), ["4996", "-Wunused"]);
     }
 
     #[test]
