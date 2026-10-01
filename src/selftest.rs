@@ -1324,6 +1324,8 @@ const CASES: &[Case] = &[
                 extract_directives(Some(hidden_directive), &[], &permissive_policy);
             Ok(active_default.is_empty()
                 && !notes_default.is_empty()
+                // The note names the directive, never what it says (#362).
+                && notes_default.iter().all(|n| n.contains("`removes`") && !n.contains("replaced"))
                 && active_permissive.len() == 1
                 && active_permissive[0].hidden
                 && notes_permissive.is_empty())

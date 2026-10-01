@@ -567,6 +567,19 @@
       "verdict": "holds"
     },
     {
+      "id": "sec-hidden-directive-note-no-echo",
+      "category": "security_policy",
+      "claim": "A refused hidden directive is noted once, on its directive's gate, by name and location only: the report never repeats text that was hidden from reviewers",
+      "source": "docs/CONFIGURATION.md:hidden directive policy, SECURITY.md:secret echo prevention",
+      "code": "src/tokens.rs:extract_directives_with_merged",
+      "pinning_tests": [
+        "src/tokens.rs::a_refused_hidden_directive_is_named_without_its_reason",
+        "tests/test_gates_e2e.rs::a_refused_hidden_no_issue_directive_is_noted_once_on_issue_link",
+        "tests/test_gates_e2e.rs::hidden_directives_rejected_by_default_and_accepted_when_configured"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "kl-agent-prompt-fencing",
       "category": "known_limits",
       "claim": "Agent-prompt output quotes every problem/message in fenced blocks one backtick longer than any backtick inside, single-line titles/paths.",
