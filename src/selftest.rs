@@ -3293,6 +3293,28 @@ smoke_cost::set_contains
         },
     ),
     (
+        "doctor: a Gitea protected file pattern `workflows/*` leaves `ci.yml` open, `workflows/**` covers it",
+        || {
+            use crate::doctor::{analyse_workflows, protection_findings, Protection, Status};
+            let wf = "on: pull_request\njobs:\n  d:\n    steps: [{uses: orieg/discipline@v0}]\n";
+            let jobs =
+                analyse_workflows(&[(".gitea/workflows/ci.yml".to_string(), wf.to_string())], false)
+                    .jobs;
+            let status = |pattern: &str| {
+                let p = Protection {
+                    protected_file_patterns: Some(vec![pattern.to_string()]),
+                    ..Protection::default()
+                };
+                protection_findings(crate::forge::ForgeKind::Gitea, &p, &jobs)
+                    .iter()
+                    .find(|x| x.id == "workflow-protection")
+                    .map(|x| x.status)
+            };
+            Ok(status(".gitea/workflows/*") == Some(Status::Warn)
+                && status(".gitea/workflows/**") == Some(Status::Pass))
+        },
+    ),
+    (
         "presets: cargo-public-api, miri, and sanitizers preset resolution",
         || {
             use crate::guards::presets::resolve_preset;
