@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Removing bench-regression max_noise_cv (Tolerance, optional) switches the noise check off.
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name lab
 git config --global user.email lab@lab.invalid

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Removing deletion-rationale allow_hidden = false lets the global allow_hidden = true admit hidden deletion directives.
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name lab
 git config --global user.email lab@lab.invalid

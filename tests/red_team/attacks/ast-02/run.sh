@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name lab
 git config --global user.email lab@lab.invalid
