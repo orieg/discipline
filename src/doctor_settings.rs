@@ -1464,7 +1464,7 @@ mod tests {
             github_secret_scanning(&json!({})),
             dependency_alerts(false, None),
         ] {
-            assert_ne!(f.status, Status::Fail, "{}", f.summary);
+            assert_ne!(f.status, Status::Fail, "{}", f.id);
         }
     }
 
