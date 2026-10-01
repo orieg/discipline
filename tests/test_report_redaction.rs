@@ -22,8 +22,24 @@ const SENTINEL_GHP_TOKEN: &str = "ghp_0123456789abcdef0123456789abcdef_SENTINEL"
 const SENTINEL_PASSWORD: &str = "super_secret_password_sentinel_xyz123";
 const SENTINEL_HOSTNAME: &str = "internal-production-vault.corp.sentinel";
 const SENTINEL_HOMEPATH: &str = "/Users/secretdeveloperuser_sentinel/projects"; // discipline:allow(pii)
-const SENTINEL_SLACK_TOKEN: &str = "xoxb-012345678901-0123456789012-SENTINEL_TOKEN_SECRET";
+const SENTINEL_SLACK_TOKEN: &str =
+    concat!("xoxb", "-012345678901-0123456789012-SENTINEL_TOKEN_SECRET");
 const SENTINEL_LAN_IP: &str = "192.168.1.99"; // discipline:allow(pii)
+
+// The fixed-format classes `pii` shares with `shell-secrets`. Assembled at compile time so
+// this file carries no token-shaped literal.
+const SENTINEL_LLM_KEY: &str = concat!("sk", "-", "SENTINELllmkey0123456789abc");
+const SENTINEL_FINE_GRAINED: &str = concat!(
+    "github_pat",
+    "_",
+    "SENTINELfinegrained0123456789",
+    "SENTINELfinegrained0123456789",
+    "SENTINELfinegrained01234"
+);
+const SENTINEL_ABIA_KEY: &str = concat!("ABIA", "SENTINEL01234567");
+const SENTINEL_BEARER: &str = "SENTINELbearer0123456789";
+const SENTINEL_PRIVATE_KEY_HEADER: &str =
+    concat!("-----", "BEGIN SENTINELPGP PRIVATE KEY", "-----");
 
 /// Compile-time check ensuring every variant of `OutputFormat` is handled.
 /// Adding an 8th format will cause this function to fail to compile.
@@ -89,6 +105,23 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
             format!("Target LAN IP: {SENTINEL_LAN_IP}"),
             "private LAN address",
         ),
+        (
+            format!("key = {SENTINEL_LLM_KEY}"),
+            "OpenAI or Anthropic API key",
+        ),
+        (
+            format!("token = \"{SENTINEL_FINE_GRAINED}\""),
+            "GitHub token",
+        ),
+        (format!("id = {SENTINEL_ABIA_KEY}"), "AWS access key ID"),
+        (
+            format!("Authorization: Bearer {SENTINEL_BEARER}"),
+            "literal Authorization Bearer token",
+        ),
+        (
+            SENTINEL_PRIVATE_KEY_HEADER.to_string(),
+            "private key header",
+        ),
     ];
 
     for (idx, (line, expected_rule)) in pii_samples.iter().enumerate() {
@@ -110,14 +143,14 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
             "Redact before committing.",
         );
     }
-    assert_eq!(pii_outcome.violations.len(), 3);
+    assert_eq!(pii_outcome.violations.len(), 8);
 
     // Assemble summary
     let summary = CheckSummary {
         schema_version: discipline::output_schema::REPORT_SCHEMA_VERSION,
         could_not_check: None,
         base: "origin/main".to_string(),
-        errors: 7,
+        errors: 12,
         warnings: 0,
         notes: 0,
         overrides: 0,
@@ -137,6 +170,11 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
         SENTINEL_HOMEPATH,
         SENTINEL_SLACK_TOKEN,
         SENTINEL_LAN_IP,
+        SENTINEL_LLM_KEY,
+        SENTINEL_FINE_GRAINED,
+        SENTINEL_ABIA_KEY,
+        SENTINEL_BEARER,
+        SENTINEL_PRIVATE_KEY_HEADER,
     ];
 
     // Assert that EVERY OutputFormat excludes ALL sentinels
@@ -180,6 +218,26 @@ fn test_live_repository_cross_format_redaction_pins_sentinel_exclusion() {
         ),
     );
 
+    // 3. Fixed-format tokens in files `shell-secrets` never reads (markdown, Python,
+    // YAML, plain text): `pii` is the only gate that sees them.
+    repo.write(
+        "docs/setup.md",
+        &format!("Set the key to {SENTINEL_LLM_KEY} first.\n"),
+    );
+    repo.write(
+        "src/client.py",
+        &format!("TOKEN = \"{SENTINEL_FINE_GRAINED}\"\n"),
+    );
+    repo.write("notes/ids.txt", &format!("id {SENTINEL_ABIA_KEY}\n"));
+    repo.write(
+        "keys/header.txt",
+        &format!("{SENTINEL_PRIVATE_KEY_HEADER}\n"),
+    );
+    repo.write(
+        "config/api.yaml",
+        &format!("Authorization: Bearer {SENTINEL_BEARER}\n"),
+    );
+
     repo.commit("feat: add service configs");
 
     let all_sentinels = [
@@ -190,6 +248,11 @@ fn test_live_repository_cross_format_redaction_pins_sentinel_exclusion() {
         SENTINEL_HOMEPATH,
         SENTINEL_SLACK_TOKEN,
         SENTINEL_LAN_IP,
+        SENTINEL_LLM_KEY,
+        SENTINEL_FINE_GRAINED,
+        SENTINEL_ABIA_KEY,
+        SENTINEL_BEARER,
+        SENTINEL_PRIVATE_KEY_HEADER,
     ];
 
     let formats = [
@@ -216,6 +279,28 @@ fn test_live_repository_cross_format_redaction_pins_sentinel_exclusion() {
             "format `{fmt_str}` must fail due to secrets/pii violations\nstdout:\n{}\nstderr:\n{}",
             run.stdout, run.stderr
         );
+
+        if fmt_str == "json" {
+            // `pii` reports each file `shell-secrets` never reads, by location and class.
+            let report: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+            let outcomes = report["outcomes"].as_array().unwrap();
+            let pii = outcomes.iter().find(|o| o["gate"] == "pii").unwrap();
+            let files: Vec<&str> = pii["violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v["file"].as_str().unwrap())
+                .collect();
+            for expected in [
+                "docs/setup.md",
+                "src/client.py",
+                "notes/ids.txt",
+                "config/api.yaml",
+                "keys/header.txt",
+            ] {
+                assert!(files.contains(&expected), "{expected} not in {files:?}");
+            }
+        }
 
         for sentinel in all_sentinels {
             assert!(

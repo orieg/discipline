@@ -24,7 +24,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`unsafe-safety-comment`](#unsafe-safety-comment) | agent-guard | **shipped** | Rust | unsafe blocks / impls carry a // SAFETY: comment |
 | [`deletion-rationale`](#deletion-rationale) | agent-guard | **shipped** | any | deleted files and removed tests need a scoped removes: rationale |
 | [`time-estimates`](#time-estimates) | hygiene | **shipped** | any | no calendar / duration estimates in markdown or the PR body |
-| [`pii`](#pii) | hygiene | **shipped** | any | no home paths, LAN IPs, or denylisted hostnames in tracked text |
+| [`pii`](#pii) | hygiene | **shipped** | any | no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text |
 | [`agent-scratch`](#agent-scratch) | hygiene | **shipped** | any | agent scratch state is never tracked |
 | [`shell-secrets`](#shell-secrets) | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
 | [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
@@ -361,7 +361,7 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `ignored-tests` | on, `error` (conditional skips: `note`) | High: AST skip markers on tests added or changed in the diff. | False block: an intentional skip needs `allow-ignore:`. Miss: a disabled test counted as passing. | Platform-predicated skips are already downgraded to `note`; unconditional skips are rare and deliberate. |
 | `unsafe-safety-comment` | on, `error` | High: AST `unsafe` block or impl without a preceding `// SAFETY:` comment. | False block: a missing comment on a sound block, fixed by writing it. Miss: an undocumented soundness invariant. | Only diff-touched unsafe sites are checked; writing the comment is the fix. |
 | `deletion-rationale` | on, `error` | High: git records the deletion exactly. | False block: a planned removal needs one `removes:` line. Miss: a stealth deletion of tests or benchmarks. | Deletions are infrequent and the fix is a single scoped line. |
-| `pii` | on, `error` | High for home paths, LAN IPs and denylisted hosts; `diff_only = false`, so the whole tracked tree is swept. | False block: a pre-existing documentation path. Miss: a leaked workstation path or internal host in a public repository. | A leak is not reversible once published. Brownfield adopters use `diff_only = true`, `allowed_users`, or the grandfathering baseline. |
+| `pii` | on, `error` | High for home paths, LAN IPs, denylisted hosts and fixed-format tokens; `diff_only = false`, so the whole tracked tree is swept. | False block: a pre-existing documentation path. Miss: a leaked workstation path or internal host in a public repository. | A leak is not reversible once published. Brownfield adopters use `diff_only = true`, `allowed_users`, or the grandfathering baseline. |
 | `agent-scratch` | on, `error` | High: a tracked path matching agent state directories. | False block: a deliberately committed directory of the same name, exempted by path. Miss: private agent state in history. | The path set is narrow and the committed state is not reversible once pushed. |
 | `shell-secrets` | on, `error` (token rules) / `warning` (heuristic rules) | High for structured tokens; heuristic for argv and pipe patterns. | False block: a token-shaped test fixture, exempted by path. Miss: a live credential in history. | The split already downgrades the heuristic rules at finding level. |
 | `config-integrity` | on, `error` | High: base and head configuration are diffed structurally. | False block: an intended loosening needs `allow-gate-weakening:`. Miss: a change lowering its own bar (F9). | The gate protects every other gate; it cannot be advisory. |
@@ -794,7 +794,13 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Local home directory paths: `/Users/<username>/...`, `/home/<username>/...`, `C:\Users\<username>\...`.
   - Private IPv4 LAN addresses: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`.
   - Whole-token matches of denylisted internal hostnames.
-  - With `secrets` (on by default): private-key headers, AWS access key ids, GitHub and Slack tokens (the match is never echoed).
+  - With `secrets` (on by default): fixed-format credentials in every text file, from the one token table `shell-secrets` shares (`src/guards/token_formats.rs`). The report names the file, the line and the token class; the matched value is never echoed in any output format. The classes:
+    - private-key headers (`-----BEGIN [<label> ]PRIVATE KEY-----`, including `PGP PRIVATE KEY BLOCK`);
+    - AWS access key ids (`AKIA`, `ASIA`, `ABIA`, `ACCA` plus 16 characters);
+    - GitHub tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`);
+    - Slack tokens (`xoxb-`, `xoxa-`, `xoxp-`, `xoxr-`, `xoxs-`);
+    - OpenAI and Anthropic API keys (`sk-`, `sk-proj-`, `sk-ant-api<nn>-`);
+    - a literal `Authorization: Bearer <value>` header. A variable reference or placeholder (`$TOKEN`, `${{ secrets.X }}`, `<token>`, `xxxxxxxx`, `changeme`) is not a hit.
   - References to personal maintainer agent configuration (`~/.claude/CLAUDE.md`, `$HOME/.gemini/NOTES.md`, `RESEARCH_DISCIPLINES.md`, `*_PLAYBOOK.md`) across tracked text files. With `agent_config_standard_paths` (default `true`), a reference to an agent tool's home directory itself or to a configuration entry the tool documents there (`settings.json`, `settings.local.json`, `config.json`, `config.toml`, `hooks/`, `hooks.json`, `plugins/`, `mcp.json`, `mcp_config.json`, `keybindings.json`) documents the tool and is not reported; instruction files, skills, agents, commands, rules, session history and any other file there still are. `agent_config_standard_paths = false` reports every `~/.<agent>` or `$HOME/.<agent>` path. <!-- discipline:allow(pii) -->
   - Leaks inside decoded JSON keys and string literals, including escaped slashes (`\/`).
 - **Failing diff example (rejected):**
@@ -811,6 +817,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - Standard documentation placeholders: `runner`, `user`, `username`, `you`, `me`, `name`, `example`, `shared` (the default `allowed_users`).
   - Lines inside a function `[tests] functions` declares (Python and Rust files), and files under `[tests] paths`: declared test scope holds fixtures by definition.
+  - **Decision (#404): the declared-test-scope exemption covers the fixed-format tokens too.** It is kept unchanged. A fixture holds token-shaped values by definition, and carving the token classes out of the exemption would make every detector test and example payload an inline-marker case. A live token committed inside a fixture is still caught where it matters: the forge's secret scanning (`discipline doctor` reports whether `secret-scanning` is on) and `shell-secrets`, which reads shell, Dockerfile and CI files regardless of test scope.
+  - Secrets that have no fixed format: a password, a hex or base64 key, a bearer value inside a URL or a query string, a database connection string. Entropy-based detection is deliberately absent. It is not planned until a false-positive rate is measured on this repository and a replay corpus, because hashes, UUIDs, lockfile integrity strings and base64 test data all score high and a fail-closed gate pays for every false positive. The `secrets` key checks a token's format, nothing about how random it looks.
   - RFC 1918 CIDR network notations in routing documentation (`10.0.0.0/8`, `192.168.0.0/16`).
   - Binary files (non-text).
   *(Note: Other test code is explicitly scanned because test fixtures are where paths and IPs frequently leak. Self-referential fixtures must use runtime assembly, inline `discipline:allow(pii)`, or `exempt_paths`).*
@@ -844,6 +852,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 #### `shell-secrets`
 - **Rule:** No command-line argument secrets or unverified piped script execution in shell scripts, Dockerfiles, or CI workflow files.
 - **Languages:** Shell (`*.sh`, `*.bash`, `*.zsh`), Dockerfiles, CI workflows (`.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/`, `.gitlab-ci.yml`).
+- **Shared token table:** the fixed-format token classes (GitHub, AWS access key, Slack, OpenAI and Anthropic, private-key header, literal `Authorization: Bearer`) come from the table [`pii`](#pii) also uses for every text file, so the two gates cannot drift apart. The heuristic rules below (password flags, named-secret assignments, argv and pipe patterns) exist only here.
 - **What it catches:**
   - `ARGV-ENV`: Passing secrets via command-line arguments to `env` (e.g. `env TOKEN=$MY_TOKEN ./script.sh`).
   - `ARGV-DOCKER`: Passing secret arguments via `docker run -e TOKEN=$SECRET` or `-e TOKEN="secret"`.

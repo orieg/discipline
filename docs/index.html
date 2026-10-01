@@ -1429,7 +1429,7 @@ Test `adds`: effective assertions dropped from 2 to 0.
             <td>Hygiene</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>no home paths, LAN IPs, or denylisted hostnames in tracked text</td>
+            <td>no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text</td>
           </tr>
           <tr>
             <td class="gate-id">agent-scratch</td>

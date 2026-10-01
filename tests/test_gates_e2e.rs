@@ -10129,6 +10129,112 @@ fn pii_secrets_detection_and_redaction() {
 }
 
 #[test]
+fn pii_checks_every_text_file_for_the_fixed_format_tokens_shell_secrets_knows() {
+    // Token-shaped values are assembled at run time so this file holds none.
+    let llm_key = format!("{}-{}", "sk", "abcdefghijklmnopqrstuvwx");
+    let fine_grained = format!("{}_{}", "github_pat", "A1b2C3d4E5".repeat(8) + "xy");
+    let aws_id = format!("{}ABCDEF0123456789", "ABIA");
+    let bearer = "abcdef0123456789";
+    let header = format!("{}: Bearer {bearer}", "Authorization");
+
+    let repo = Repo::new();
+    // Files `shell-secrets` never reads: markdown, Python, plain text, YAML, JSON.
+    repo.write(
+        "docs/setup.md",
+        &format!("Set the key to {llm_key} first.\n"),
+    );
+    repo.write("src/client.py", &format!("TOKEN = \"{fine_grained}\"\n"));
+    repo.write("notes/ids.txt", &format!("id {aws_id}\n"));
+    repo.write("config/api.yaml", &format!("{header}\n"));
+    repo.write("data/headers.json", &format!("{{\"h\": \"{header}\"}}\n"));
+    // Documented placeholders, a variable reference and a lockfile hash are not leaks.
+    repo.write(
+        "docs/examples.md",
+        "export OPENAI_API_KEY=sk-...\nAuthorization: Bearer $TOKEN\nAuthorization: Bearer ${{ secrets.API_TOKEN }}\nAuthorization: Bearer <token>\nAuthorization: Bearer xxxxxxxxxxxxxxxx\nAuthorization: Bearer your_api_key\n",
+    );
+    // A placeholder that has the shape of a value is spared in decoded JSON strings too.
+    repo.write(
+        "data/example.json",
+        "{\"h\": \"Authorization: Bearer xxxxxxxxxxxxxxxx\"}\n",
+    );
+    repo.write(
+        "Cargo.lock",
+        "checksum = \"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"\n",
+    );
+    repo.commit("docs: add setup notes");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let mut files: Vec<String> = run
+        .violations("pii")
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_string())
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "config/api.yaml",
+            "data/headers.json",
+            "docs/setup.md",
+            "notes/ids.txt",
+            "src/client.py"
+        ],
+        "{}",
+        run.stdout
+    );
+    let messages: Vec<String> = run
+        .violations("pii")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap().to_string())
+        .collect();
+    for class in [
+        "OpenAI or Anthropic API key",
+        "GitHub token",
+        "AWS access key ID",
+        "literal Authorization Bearer token",
+    ] {
+        assert!(
+            messages.iter().any(|m| m.contains(class)),
+            "{class}: {messages:?}"
+        );
+    }
+    // The class and location are reported, never the value.
+    for value in [
+        llm_key.as_str(),
+        fine_grained.as_str(),
+        aws_id.as_str(),
+        bearer,
+    ] {
+        assert!(!run.stdout.contains(value), "value echoed: {}", run.stdout);
+        assert!(!run.stderr.contains(value), "value echoed: {}", run.stderr);
+    }
+}
+
+#[test]
+fn pii_keeps_declared_test_scope_exempt_from_the_fixed_format_tokens() {
+    let llm_key = format!("{}-{}", "sk", "abcdefghijklmnopqrstuvwx");
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[tests]\npaths = [\"fixtures/**\"]\n"),
+    );
+    repo.write("fixtures/payload.txt", &format!("{llm_key}\n"));
+    repo.commit("test: add a fixture payload");
+    let declared = repo.check(&["--base", "HEAD~1"]);
+    assert!(
+        declared.violations("pii").is_empty(),
+        "{:?}",
+        declared.violations("pii")
+    );
+
+    repo.write("payload.txt", &format!("{llm_key}\n"));
+    repo.commit("docs: add the same payload outside test scope");
+    let outside = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(outside.violations("pii").len(), 1, "{}", outside.stdout);
+}
+
+#[test]
 fn shell_secrets_gate_e2e() {
     let repo = Repo::new();
 

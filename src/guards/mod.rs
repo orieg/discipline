@@ -38,6 +38,7 @@ pub mod stub_bodies;
 pub mod suppression_delta;
 pub mod test_budget;
 pub mod test_floor;
+pub mod token_formats;
 pub mod toolchain_config;
 pub mod unsafe_budget;
 pub mod version_lockstep;

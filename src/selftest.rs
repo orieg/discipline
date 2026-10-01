@@ -2551,12 +2551,49 @@ command = "cargo test"
             let aws_rule = rules.iter().find(|r| r.label == "AWS access key ID").unwrap();
             let aws_match = aws_rule.re.is_match(aws_key);
 
-            // 3. GitHub personal access token
+            // 3. GitHub token
             let gh_token = "ghp_123456789012345678901234567890123456"; // discipline:allow(pii)
-            let gh_rule = rules.iter().find(|r| r.label == "GitHub personal access token").unwrap();
+            let gh_rule = rules.iter().find(|r| r.label == "GitHub token").unwrap();
             let gh_match = gh_rule.re.is_match(gh_token);
 
             Ok(priv_match && aws_match && gh_match && priv_rule.redact && aws_rule.redact && gh_rule.redact)
+        },
+    ),
+    (
+        "pii: shared token table covers the classes shell-secrets knows and spares placeholders",
+        || {
+            use crate::config::{PiiGate, ShellSecretsGate};
+            use crate::guards::hygiene::pii_rules;
+            use crate::guards::shell_secrets::ShellSecretScanner;
+            use crate::guards::token_formats::is_literal_hit;
+
+            let rules = pii_rules(&PiiGate::default())?;
+            let scanner = ShellSecretScanner::new(&ShellSecretsGate::default())?;
+            let pii_hit = |line: &str| {
+                rules.iter().any(|r| {
+                    r.token_class.is_some_and(|class| {
+                        r.re.captures_iter(line).any(|c| is_literal_hit(class, &c))
+                    })
+                })
+            };
+            // Built at run time so this file holds no token-shaped literal.
+            let live = [
+                format!("k = {}-{}", "sk", "abcdefghijklmnopqrstuvwx"),
+                format!("t = {}_{}", "github_pat", "A1b2C3d4E5".repeat(8) + "xy"),
+                format!("id = {}ABCDEF0123456789", "ABIA"),
+                format!("{}: Bearer {}", "Authorization", "abcdef0123456789"),
+            ];
+            let placeholders = [
+                "k = sk-...",
+                "Authorization: Bearer $TOKEN",
+                "Authorization: Bearer <token>",
+                "Authorization: Bearer xxxxxxxxxxxxxxxx",
+                "checksum = \"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"",
+            ];
+            Ok(live
+                .iter()
+                .all(|l| pii_hit(l) && scanner.check_line(l).is_some())
+                && placeholders.iter().all(|l| !pii_hit(l)))
         },
     ),
     (

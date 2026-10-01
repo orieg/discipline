@@ -237,7 +237,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.pii.lan_ips` | boolean | `true` | Check for leaked private LAN IPs |
 | `gates.pii.redact_lan_ips` | boolean | `false` | Mask a matched LAN IP in the report instead of echoing it (default: false) |
 | `gates.pii.scan_pr_body` | boolean | `true` | Whether to scan PR description text |
-| `gates.pii.secrets` | boolean | `true` | Check for leaked private keys and high-entropy API tokens |
+| `gates.pii.secrets` | boolean | `true` | Check every text file for fixed-format credentials: private-key headers, AWS, GitHub, Slack and OpenAI/Anthropic tokens, and literal Authorization Bearer values. Matches the token format only; there is no entropy check |
 | `gates.pii.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.pr-checklist.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.pr-checklist.exempt_paths` | list | `[]` | File path globs exempted from this gate |
