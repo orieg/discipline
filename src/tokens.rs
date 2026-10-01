@@ -277,6 +277,13 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_doc: "Subcommand or command line invocation, plus non-empty rationale",
     },
     DirectiveSpec {
+        canonical: "allow-behavior-change",
+        deprecated: None,
+        gate: "command",
+        subject_kind: DirectiveSubjectKind::TestName,
+        subject_doc: "Test identifier or function name, plus non-empty rationale",
+    },
+    DirectiveSpec {
         canonical: "allow-dependency",
         deprecated: None,
         gate: "dependency-delta",
@@ -406,9 +413,9 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     },
 ];
 
-/// The 43 named directives recognized by discipline (33 canonical + 10 deprecated aliases).
+/// The 44 named directives recognized by discipline (34 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 33 Canonical
+    // 34 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
@@ -424,6 +431,7 @@ pub const KNOWN_DIRECTIVES: &[&str] = &[
     "allow-golden-update",
     "allow-regression",
     "allow-command",
+    "allow-behavior-change",
     "allow-dependency",
     "allow-test-shrink",
     "allow-ci-weakening",
@@ -538,6 +546,12 @@ pub const ALLOW_COMMAND: &[&str] = &[
     "allow-command",
     "discipline:allow(command)",
     "allow(command)",
+];
+
+pub const ALLOW_BEHAVIOR_CHANGE: &[&str] = &[
+    "allow-behavior-change",
+    "discipline:allow(behavior-change)",
+    "allow(behavior-change)",
 ];
 
 pub const ALLOW_DEPENDENCY: &[&str] = &[
@@ -665,6 +679,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-build-hook" => ALLOW_BUILD_HOOK,
         "allow-regression" => ALLOW_REGRESSION,
         "allow-command" => ALLOW_COMMAND,
+        "allow-behavior-change" => ALLOW_BEHAVIOR_CHANGE,
         "allow-dependency" => ALLOW_DEPENDENCY,
         "allow-test-shrink" | "allow-floor-drop" => ALLOW_TEST_SHRINK,
         "allow-ci-weakening" | "allow-unpinned-action" => ALLOW_CI_WEAKENING,
@@ -697,7 +712,7 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 33 Canonical
+    // 34 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-ignore",
@@ -713,6 +728,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-golden-update",
     "allow-regression",
     "allow-command",
+    "allow-behavior-change",
     "allow-dependency",
     "allow-test-shrink",
     "allow-ci-weakening",
@@ -773,6 +789,8 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow(bench-regression)",
     "discipline:allow(command)",
     "allow(command)",
+    "discipline:allow(behavior-change)",
+    "allow(behavior-change)",
     "discipline:allow(dependency-delta)",
     "allow(dependency-delta)",
     "discipline:allow(test-budget)",

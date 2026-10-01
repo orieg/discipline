@@ -16806,3 +16806,112 @@ fn a_directive_naming_something_with_no_finding_lifts_nothing() {
         "the clean script's: {json}"
     );
 }
+
+#[test]
+fn command_preset_base_tests_e2e() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+
+    // Base branch setup:
+    // A source file and a test file
+    repo.write("src/calc.py", "def add(a, b):\n    return a + b\n");
+    repo.write(
+        "tests/test_calc.py",
+        "import unittest\nfrom src.calc import add\n\nclass TestCalc(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 2), 4)\n",
+    );
+
+    // A runner script that executes against the current tree and outputs JUnit XML
+    repo.write(
+        "run_tests.py",
+        r#"import sys
+
+with open("src/calc.py") as f:
+    code = f.read()
+
+# Evaluates add(2, 2)
+ns = {}
+exec(code, ns)
+res = ns["add"](2, 2)
+
+# Check what tests/test_calc.py expects
+with open("tests/test_calc.py") as f:
+    content = f.read()
+
+expected = 4 if "4" in content else 5
+if res == expected:
+    sys.stdout.write('<testsuites><testsuite name="calc"><testcase name="test_add" classname="tests::test_calc" /></testsuite></testsuites>\n')
+    sys.exit(0)
+else:
+    sys.stdout.write('<testsuites><testsuite name="calc"><testcase name="test_add" classname="tests::test_calc"><failure message="assertion failed">expected ' + str(expected) + ', got ' + str(res) + '</failure></testcase></testsuite></testsuites>\n')
+    sys.exit(1)
+"#,
+    );
+
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+enabled = true
+preset = "base-tests"
+command = "python3 run_tests.py"
+"#,
+    );
+    repo.commit("feat: initial calculator with base-tests preset");
+
+    // Case 1: Positive control - untouched behavior passes
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("docs/README.md", "# Calculator\nDocumentation update.\n");
+    repo.commit("docs: update readme");
+
+    let run_clean = repo.check(&["--base", "main"]);
+    assert_eq!(
+        run_clean.code, 0,
+        "clean change with untouched behavior must pass: {}{}",
+        run_clean.stdout, run_clean.stderr
+    );
+    let outcome_clean = run_clean.outcome("command");
+    assert_eq!(outcome_clean["violations"].as_array().unwrap().len(), 0);
+
+    // Case 2: Negative control - code edited and head test rewritten to mask regression
+    repo.write("src/calc.py", "def add(a, b):\n    return a + b + 1\n");
+    repo.write(
+        "tests/test_calc.py",
+        "import unittest\nfrom src.calc import add\n\nclass TestCalc(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 2), 5)\n",
+    );
+    repo.commit("feat: altered addition behavior and adjusted test expectation");
+
+    let run_regression = repo.check(&["--base", "main"]);
+    assert_eq!(
+        run_regression.code, 1,
+        "regression must fail base-tests: {}{}",
+        run_regression.stdout, run_regression.stderr
+    );
+    let violations = run_regression.violations("command");
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0]["code"], "command/base-test-failed");
+    assert!(
+        violations[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("tests::test_calc::test_add"),
+        "violation message must cite failing test ID: {:?}",
+        violations[0]["message"]
+    );
+
+    // Case 3: Override directive lifts the violation
+    let run_ov = repo.check_with_pr(
+        &["--base", "main"],
+        "Fixes #123\n\nallow-behavior-change: test_add intentional arithmetic adjustment\nallow-assertion-drop: test_add intentional arithmetic adjustment\n",
+    );
+    assert_eq!(
+        run_ov.code, 0,
+        "directive must lift base-test-failed: {}{}",
+        run_ov.stdout, run_ov.stderr
+    );
+    let outcome_ov = run_ov.outcome("command");
+    assert_eq!(outcome_ov["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 1);
+}

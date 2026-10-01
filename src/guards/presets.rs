@@ -218,6 +218,20 @@ pub static PRESETS: &[PresetDefinition] = &[
         policy_files: &[],
         description: "Runtime address and thread sanitizer runner with diagnostic verification",
     },
+    // 7. Base Branch Test Overlay
+    PresetDefinition {
+        id: "base-tests",
+        category: "behavior",
+        default_command: "cargo test -- --format=junit",
+        default_timeout_seconds: 300,
+        zero_items_pattern: None,
+        forbid_output: &[],
+        canary_command: None,
+        canary_expected_diagnostic: None,
+        policy_files: &[],
+        description:
+            "Executes base branch test files against head code to detect behavior regressions",
+    },
 ];
 
 /// Resolves a preset by its unique identifier.
@@ -248,6 +262,7 @@ mod tests {
             "miri",
             "cargo-public-api",
             "sanitizers",
+            "base-tests",
         ];
 
         for id in expected_ids {

@@ -515,6 +515,10 @@ impl GitCtx {
         self.base.is_some()
     }
 
+    pub fn base_oid(&self) -> Option<Oid> {
+        self.base
+    }
+
     pub fn root(&self) -> &std::path::Path {
         self.repo
             .workdir()

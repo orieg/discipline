@@ -339,6 +339,7 @@ findings! {
     ZERO_ITEMS_EXECUTED = ["command"], "zero-items-executed", "Zero Items Selected Or Executed", Same;
     COUNT_BELOW_RATCHET = ["command"], "count-below-ratchet", "Command Count Below Ratchet Floor", Was("Count Ratchet Regression");
     COUNT_PATTERN_UNMATCHED = ["command"], "count-pattern-unmatched", "Count Pattern Unmatched", Was("Count Pattern Did Not Match");
+    BASE_TEST_FAILED = ["command"], "base-test-failed", "Base Test Failed Against Head Code", Same;
 
     // sanitizers
     SANITIZER_CANARY_DIAGNOSTIC_MISSING = ["sanitizers"], "canary-diagnostic-missing", "Canary Diagnostic Missing", Message;
