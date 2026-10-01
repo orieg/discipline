@@ -109,6 +109,9 @@ request whose author is not listed are ignored. Default is empty.
 Most pull-request-body and commit-body overrides one change may apply; inline
 markers are not counted. Default is unset (no cap).
 .TP
+.BI max_inline_overrides " = N"
+Most inline exemption markers one change may apply. Default is unset (no cap).
+.TP
 .BI require_approval " = false"
 When \fBtrue\fR, pull-request-body and commit-body overrides fail the run until
 the forge shows an approving review of the head commit by an

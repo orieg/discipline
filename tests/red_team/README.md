@@ -30,6 +30,8 @@ The attack scripts rewrite the global git configuration (`user.name lab`) and de
   - `esc-01` to `esc-05`: Directive escape hatch evasion probes (CRLF, Markdown formatting smuggling, placeholder reasons, commit subject vs body scoping).
   - `esc-06` to `esc-09`: a directive in an indented code block, a directive after a shorter fence nested in a longer one, a directive name spelt with a long s (`removeſ:`), and a second waiver past `directives.max_overrides = 1`.
   - `esc-10` to `esc-11`: punctuation and single-character rationales, and homoglyph/invisible placeholder bypass.
+  - `esc-12`: inline marker budget evasion probe (`directives.max_inline_overrides`).
+  - `ci-01` to `ci-03`: CI loop and workflow poisoning probes (`continue-on-error: true` step suppression, `ci-gate` rollup rename bypass, `[skip ci]` / `[ci skip]` commit message evasion).
   - `fc-01` to `fc-05`: fail-closed inputs: a shallow clone with no base or no merge base, a base that does not resolve, a test dropped in a rename and in a case-only rename, and a test file whose first bytes are a binary format's magic number (`MZ = 0`).
   - `aud-01`, `aud-02`: `audit --format html` with markup in every text a repository controls, and a file path whose `%2e%2e` segments walk a source link out of the repository.
   - `fc-06`: gates that read whole files, on source files starting with `MZ = 0` (valid Python, and the DOS/PE header).

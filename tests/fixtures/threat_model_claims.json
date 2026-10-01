@@ -523,6 +523,50 @@
       "verdict": "holds"
     },
     {
+      "id": "sec-inline-override-budget-enforced",
+      "category": "security_policy",
+      "claim": "Inline source marker exemptions exceeding directives.max_inline_overrides fail the run with exit 1",
+      "source": "docs/CONFIGURATION.md:max_inline_overrides",
+      "code": "src/override_policy.rs:judge",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_inline_override_budget_enforced"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "sec-ci-step-continue-on-error-detected",
+      "category": "security_policy",
+      "claim": "Workflow verification step failure masking via continue-on-error: true is detected and rejected by ci-integrity",
+      "source": "docs/GATES.md:ci-integrity",
+      "code": "src/guards/ci_integrity.rs:evaluate_ci_integrity",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_ci_step_continue_on_error_detected"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "sec-ci-rollup-rename-bypass-detected",
+      "category": "security_policy",
+      "claim": "Renaming or removing the required rollup verification job (ci-gate) is detected as a removed verification job and rejected by ci-integrity",
+      "source": "docs/GATES.md:ci-integrity",
+      "code": "src/guards/ci_integrity.rs:evaluate_ci_integrity",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_ci_rollup_rename_bypass_detected"
+      ],
+      "verdict": "holds"
+    },
+    {
+      "id": "sec-ci-skip-sentinel-evasion-blocked",
+      "category": "security_policy",
+      "claim": "Commit message [skip ci] / [ci skip] markers do not evade discipline sentinels or act as waiver directives",
+      "source": "docs/ARCHITECTURE.md:ci-integrity",
+      "code": "src/guards/ci_integrity.rs:evaluate_ci_integrity",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_ci_skip_sentinel_evasion_blocked"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "sec-tree-sitter-parse-safety",
       "category": "security_policy",
       "claim": "Untrusted, malformed, or hostile source code parses safely or records parse errors without crashing.",

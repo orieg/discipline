@@ -271,6 +271,13 @@ impl CheckSummary {
             .count()
     }
 
+    /// Overrides granted by an inline source marker (`// discipline:allow(...)`, `# discipline:allow(...)`).
+    pub fn inline_overrides(&self) -> usize {
+        self.overrides()
+            .filter(|o| matches!(o.source, crate::tokens::OverrideSource::Inline { .. }))
+            .count()
+    }
+
     pub fn violations(&self) -> impl Iterator<Item = &Violation> {
         self.outcomes.iter().flat_map(|o| o.violations.iter())
     }

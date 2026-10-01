@@ -870,6 +870,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     summary.policy_failures = discipline::override_policy::judge(
         &config.directives,
         summary.directive_overrides(),
+        summary.inline_overrides(),
         pull.as_ref(),
         &|| discipline::forge::detect_for(&git),
         &discipline::forge::HttpApi::from_env(),

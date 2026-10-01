@@ -1,0 +1,7 @@
+probe '[skip ci]' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+probe '[ci skip]' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+HOLDS: [skip ci] and [ci skip] markers do not evade discipline sentinels

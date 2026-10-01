@@ -964,6 +964,16 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
         }
         _ => {}
     }
+    match (
+        base.directives.max_inline_overrides,
+        head.directives.max_inline_overrides,
+    ) {
+        (Some(b), None) => dir_note(dir("max_inline_overrides", Change::Removed).was(b)),
+        (Some(b), Some(h)) if h > b => {
+            dir_note(dir("max_inline_overrides", Change::Increased).values(b, h))
+        }
+        _ => {}
+    }
     if base.directives.require_approval && !head.directives.require_approval {
         dir_note(dir("require_approval", Change::Changed).values(true, false));
     }
@@ -1708,6 +1718,7 @@ mod tests {
             "fail_on_overrides",
             "allowed_override_actors",
             "max_overrides",
+            "max_inline_overrides",
             "require_approval",
             "degrade_offline",
         ];
@@ -1734,7 +1745,7 @@ mod tests {
             ))
             .unwrap()
         };
-        let base = cfg("max_overrides = 1\nrequire_approval = true\n");
+        let base = cfg("max_overrides = 1\nmax_inline_overrides = 2\nrequire_approval = true\n");
         let whats = |head: &DisciplineConfig| -> Vec<String> {
             diff_configs(&base, head)
                 .unwrap()
@@ -1743,17 +1754,24 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            whats(&cfg("max_overrides = 4\n")),
+            whats(&cfg("max_overrides = 4\nmax_inline_overrides = 5\n")),
             vec![
                 "`max_overrides` increased from 1 to 4",
+                "`max_inline_overrides` increased from 2 to 5",
                 "`require_approval` changed from true to false"
             ]
         );
         assert_eq!(
             whats(&cfg("require_approval = true\n")),
-            vec!["`max_overrides` removed (was 1)"]
+            vec![
+                "`max_overrides` removed (was 1)",
+                "`max_inline_overrides` removed (was 2)"
+            ]
         );
-        assert!(whats(&cfg("max_overrides = 0\nrequire_approval = true\n")).is_empty());
+        assert!(whats(&cfg(
+            "max_overrides = 0\nmax_inline_overrides = 1\nrequire_approval = true\n"
+        ))
+        .is_empty());
         // Switching the failed-lookup degrade on is a loosening; off is a tightening.
         let off = cfg("degrade_offline = false\n");
         let on = cfg("degrade_offline = true\n");

@@ -60,18 +60,26 @@ impl PullContext {
     }
 }
 
-/// Why this run's directive overrides are refused; empty when they stand.
+/// Why this run's directive overrides or inline overrides are refused; empty when they stand.
 ///
 /// `Err` means the policy could not be evaluated (no pull-request context, forge
 /// unreachable): the caller exits 2, never passes.
 pub fn judge(
     cfg: &DirectivesConfig,
     directive_overrides: usize,
+    inline_overrides: usize,
     pull: Option<&PullContext>,
     forge: &dyn Fn() -> Result<Forge, String>,
     api: &dyn ForgeApi,
 ) -> Result<Vec<String>> {
     let mut failures = Vec::new();
+    if let Some(max) = cfg.max_inline_overrides {
+        if inline_overrides > max {
+            failures.push(format!(
+                "{inline_overrides} inline override(s) applied; `directives.max_inline_overrides` allows {max}"
+            ));
+        }
+    }
     if directive_overrides == 0 {
         return Ok(failures);
     }
@@ -178,11 +186,30 @@ mod tests {
             ..Default::default()
         };
         let none = api(Value::Null);
-        assert!(judge(&cfg, 0, None, &forge, &none).unwrap().is_empty());
-        assert!(judge(&cfg, 1, None, &forge, &none).unwrap().is_empty());
-        let over = judge(&cfg, 2, None, &forge, &none).unwrap();
+        assert!(judge(&cfg, 0, 0, None, &forge, &none).unwrap().is_empty());
+        assert!(judge(&cfg, 1, 0, None, &forge, &none).unwrap().is_empty());
+        let over = judge(&cfg, 2, 0, None, &forge, &none).unwrap();
         assert_eq!(over.len(), 1);
         assert!(over[0].contains("allows 1"), "{over:?}");
+    }
+
+    #[test]
+    fn the_inline_budget_counts_inline_overrides() {
+        let cfg = DirectivesConfig {
+            max_inline_overrides: Some(1),
+            ..Default::default()
+        };
+        let none = api(Value::Null);
+        assert!(judge(&cfg, 0, 0, None, &forge, &none).unwrap().is_empty());
+        assert!(judge(&cfg, 0, 1, None, &forge, &none).unwrap().is_empty());
+        let over = judge(&cfg, 0, 2, None, &forge, &none).unwrap();
+        assert_eq!(over.len(), 1);
+        assert!(
+            over[0].contains(
+                "2 inline override(s) applied; `directives.max_inline_overrides` allows 1"
+            ),
+            "{over:?}"
+        );
     }
 
     #[test]
@@ -193,13 +220,13 @@ mod tests {
             ..Default::default()
         };
         let p = pull();
-        let ok = judge(&cfg, 1, Some(&p), &forge, &api(approved_by("lead"))).unwrap();
+        let ok = judge(&cfg, 1, 0, Some(&p), &forge, &api(approved_by("lead"))).unwrap();
         assert!(ok.is_empty(), "{ok:?}");
         for refused in ["agent", "stranger"] {
-            let got = judge(&cfg, 1, Some(&p), &forge, &api(approved_by(refused))).unwrap();
+            let got = judge(&cfg, 1, 0, Some(&p), &forge, &api(approved_by(refused))).unwrap();
             assert_eq!(got.len(), 1, "{refused}: {got:?}");
         }
-        let none = judge(&cfg, 1, Some(&p), &forge, &api(serde_json::json!([]))).unwrap();
+        let none = judge(&cfg, 1, 0, Some(&p), &forge, &api(serde_json::json!([]))).unwrap();
         assert_eq!(none.len(), 1);
     }
 
@@ -229,6 +256,7 @@ mod tests {
         let refused = judge(
             &cfg,
             1,
+            0,
             Some(&unnamed),
             &forge,
             &with_author(approved_by("agent"), agent.clone()),
@@ -238,6 +266,7 @@ mod tests {
         let stands = judge(
             &cfg,
             1,
+            0,
             Some(&unnamed),
             &forge,
             &with_author(approved_by("lead"), agent),
@@ -251,6 +280,7 @@ mod tests {
             reason(judge(
                 &cfg,
                 1,
+                0,
                 Some(&unnamed),
                 &forge,
                 &api(approved_by("lead"))
@@ -261,6 +291,7 @@ mod tests {
             reason(judge(
                 &cfg,
                 1,
+                0,
                 Some(&unnamed),
                 &forge,
                 &with_author(approved_by("lead"), Value::Null)
@@ -276,6 +307,7 @@ mod tests {
             reason(judge(
                 &cfg,
                 1,
+                0,
                 Some(&empty),
                 &forge,
                 &api(approved_by("lead"))
@@ -296,12 +328,12 @@ mod tests {
         use crate::could_not_check::Reason;
         // No pull-request payload.
         assert_eq!(
-            reason(judge(&cfg, 1, None, &forge, &api(approved_by("lead")))),
+            reason(judge(&cfg, 1, 0, None, &forge, &api(approved_by("lead")))),
             Reason::Configuration
         );
         // Forge cannot be reached.
         assert_eq!(
-            reason(judge(&cfg, 1, Some(&p), &forge, &CannedApi::default())),
+            reason(judge(&cfg, 1, 0, Some(&p), &forge, &CannedApi::default())),
             Reason::Forge
         );
         // Forge cannot be identified.
@@ -310,6 +342,7 @@ mod tests {
             reason(judge(
                 &cfg,
                 1,
+                0,
                 Some(&p),
                 &unknown,
                 &api(approved_by("lead"))
@@ -325,6 +358,7 @@ mod tests {
             reason(judge(
                 &empty,
                 1,
+                0,
                 Some(&p),
                 &forge,
                 &api(approved_by("lead"))
@@ -332,7 +366,7 @@ mod tests {
             Reason::Configuration
         );
         // Without overrides there is nothing to approve and nothing to look up.
-        assert!(judge(&cfg, 0, None, &unknown, &CannedApi::default())
+        assert!(judge(&cfg, 0, 0, None, &unknown, &CannedApi::default())
             .unwrap()
             .is_empty());
     }

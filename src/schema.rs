@@ -153,6 +153,11 @@ pub fn generate_schema() -> Value {
                         "minimum": 0,
                         "description": "Most PR-body / commit-body overrides one change may apply; inline markers are not counted (default: unset, no cap)"
                     },
+                    "max_inline_overrides": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Most inline exemption markers one change may apply (default: unset, no cap)"
+                    },
                     "require_approval": {
                         "type": "boolean",
                         "description": "PR-body / commit-body overrides fail the run until the forge shows an approving review of the head commit by an allowed_override_actors member other than the author (default: false)"

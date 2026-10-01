@@ -1418,6 +1418,11 @@
           "description": "Treat applied overrides as failures requiring human sign-off (default: false)",
           "type": "boolean"
         },
+        "max_inline_overrides": {
+          "description": "Most inline exemption markers one change may apply (default: unset, no cap)",
+          "minimum": 0,
+          "type": "integer"
+        },
         "max_overrides": {
           "description": "Most PR-body / commit-body overrides one change may apply; inline markers are not counted (default: unset, no cap)",
           "minimum": 0,

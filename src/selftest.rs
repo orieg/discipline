@@ -212,7 +212,7 @@ const CASES: &[Case] = &[
                     "github:repos/o/r/pulls/7/reviews?per_page=100".into(),
                     serde_json::json!([{"user": {"login": login}, "state": "APPROVED", "commit_id": sha}]),
                 );
-                Ok(!judge(&cfg, 1, Some(&pull), &forge, &api)?.is_empty())
+                Ok(!judge(&cfg, 1, 0, Some(&pull), &forge, &api)?.is_empty())
             };
             Ok(!refused("lead", "abc123")?
                 && refused("agent", "abc123")?
@@ -400,8 +400,23 @@ const CASES: &[Case] = &[
                 ..Default::default()
             };
             let forge = || Err("unused".to_string());
-            Ok(judge(&cfg, 2, None, &forge, &NoApi)?.is_empty()
-                && judge(&cfg, 3, None, &forge, &NoApi)?.len() == 1)
+            Ok(judge(&cfg, 2, 0, None, &forge, &NoApi)?.is_empty()
+                && judge(&cfg, 3, 0, None, &forge, &NoApi)?.len() == 1)
+        },
+    ),
+    (
+        "overrides: the inline override budget refuses the marker past it, not the one at it",
+        || {
+            use crate::config::DirectivesConfig;
+            use crate::forge::NoApi;
+            use crate::override_policy::judge;
+            let cfg = DirectivesConfig {
+                max_inline_overrides: Some(2),
+                ..Default::default()
+            };
+            let forge = || Err("unused".to_string());
+            Ok(judge(&cfg, 0, 2, None, &forge, &NoApi)?.is_empty()
+                && judge(&cfg, 0, 3, None, &forge, &NoApi)?.len() == 1)
         },
     ),
     (
