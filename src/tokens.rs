@@ -203,7 +203,7 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         gate: "toolchain-config",
         subject_kind: DirectiveSubjectKind::RuleName,
         subject_doc:
-            "Option key path (e.g. `compilerOptions.strict`), its last segment, or the file path",
+            "Option key path (e.g. `compilerOptions.strict`), its last segment, a build-file flag (`-Wno-error`) or what carries it (`CFLAGS`), or the file path",
     },
     DirectiveSpec {
         canonical: "allow-sandbox-widening",

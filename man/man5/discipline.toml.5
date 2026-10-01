@@ -236,7 +236,7 @@ no invisible Unicode, unreviewed agent\-instruction edits, or instruction\-like 
 install and build hooks that gain network or shell access, and package\-manager configuration edits, need a token (integrity; default: on, error; languages: package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env*)
 .TP
 .B [gates.toolchain-config]
-compiler, linter, type\-checker, test\-runner and coverage configuration cannot be loosened without a token (integrity; default: on, error; languages: tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit)
+compiler, linter, type\-checker, test\-runner and coverage configuration cannot be loosened without a token (integrity; default: on, error; languages: tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit, and compiler warning flags in Makefile, CMake, setup.py and build.rs)
 .TP
 .B [gates.sandbox-config]
 a change cannot widen an agent's permissions or sandbox, or a container's isolation, without a token (integrity; default: on, error; languages: Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor and Copilot CLI settings, MCP server lists, devcontainer.json, Docker Compose, CI job and service containers)

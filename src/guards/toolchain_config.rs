@@ -8,7 +8,7 @@
 //! direction. A configuration written as code (`eslint.config.js`, `jest.config.ts`) has no
 //! tree to compare: a change to it is reported as not analysed, never passed in silence.
 
-use super::{Context, GateOutcome, PathFilter};
+use super::{build_flags, Context, GateOutcome, PathFilter};
 use crate::config::{GateSettings, Severity};
 use crate::gitctx::ChangeKind;
 use crate::tokens;
@@ -1070,9 +1070,14 @@ const LAX_FLAGS: &[&str] = &[
     "--allow",
     "--cap-lints",
     "-w",
+    "-Wno-error",
     "--no-verify",
     "--no-strict",
 ];
+
+/// Prefixes of flags whose gain loosens the run: `-Wno-<diagnostic>` and
+/// `-Wno-error[=<diagnostic>]` switch a compiler warning, or its promotion to an error, off.
+pub const LAX_FLAG_PREFIXES: &[&str] = &["-Wno-"];
 
 /// Whether `path` is one of the rule files (by basename, or `dir/basename` for the dotted
 /// directories), or an executable configuration.
@@ -1506,7 +1511,7 @@ fn lax_flags(tokens: &[String]) -> Vec<String> {
         .iter()
         .filter(|t| {
             let bare = t.split_once('=').map_or(t.as_str(), |(k, _)| k);
-            LAX_FLAGS.contains(&bare)
+            LAX_FLAGS.contains(&bare) || LAX_FLAG_PREFIXES.iter().any(|p| t.starts_with(p))
         })
         .cloned()
         .collect()
@@ -1752,6 +1757,101 @@ fn sample(items: &[&String]) -> String {
     )
 }
 
+/// A build file (`Makefile`, `CMakeLists.txt`, `setup.py`, `build.rs`): compiler warning
+/// flags it gained that lower the bar, and strict ones it lost
+/// ([`build_flags`]). A deleted file is not judged: removing a build file is a change of
+/// build system, not a lowered flag.
+fn build_file(
+    ctx: &Context,
+    severity: Severity,
+    out: &mut GateOutcome,
+    file: &crate::gitctx::ChangedFile,
+    kind: build_flags::BuildKind,
+) -> Result<()> {
+    const GATE: &str = "toolchain-config";
+    let Some(head_src) = ctx.git.head_content(&file.path)? else {
+        return Ok(());
+    };
+    let base_src = ctx.git.base_content(&file.old_path)?;
+    let read = |src: &str| build_flags::extract(kind, src);
+    let head = read(&head_src);
+    let base = match &base_src {
+        Some(src) => read(src),
+        None => Ok(Vec::new()),
+    };
+    let (base, head) = match (base, head) {
+        (Ok(base), Ok(head)) => (base, head),
+        (Err(build_flags::ExtractError::GrammarAbsent), _)
+        | (_, Err(build_flags::ExtractError::GrammarAbsent)) => {
+            out.notes.push(format!(
+                "`{}` was not read: this build of discipline lacks the grammar it needs",
+                file.path
+            ));
+            return Ok(());
+        }
+        _ => {
+            out.examined += 1;
+            out.push(
+                severity,
+                &crate::findings::TOOLCHAIN_CONFIG_UNREADABLE,
+                Some(&file.path),
+                None,
+                format!(
+                    "`{}` could not be parsed on one side, so its warning flags could not be checked.",
+                    file.path
+                ),
+                "Fix the file so it parses.",
+            );
+            return Ok(());
+        }
+    };
+    out.examined += 1;
+    for change in build_flags::judge(&base, &head) {
+        let lift = |subject: &str| {
+            ctx.find_override(
+                GATE,
+                &crate::findings::TOOLCHAIN_CONFIG_WEAKENED,
+                tokens::ALLOW_TOOLCHAIN_WEAKENING,
+                subject,
+            )
+        };
+        if let Some(ov) = lift(&change.flag)
+            .or_else(|| lift(&change.context))
+            .or_else(|| lift(&file.path))
+        {
+            out.overrides.push(ov);
+            continue;
+        }
+        let (what, remedy) = if change.gained {
+            (
+                "gained",
+                "Drop it, or justify it on its own line in the PR body or a commit message",
+            )
+        } else {
+            (
+                "lost",
+                "Restore it, or justify the loss on its own line in the PR body or a commit message",
+            )
+        };
+        out.push(
+            ctx.overridable(severity),
+            &crate::findings::TOOLCHAIN_CONFIG_WEAKENED,
+            Some(&file.path),
+            change.line,
+            format!(
+                "`{}` {what} `{}` in `{}`; the compiler warning bar is lower.",
+                change.context, change.flag, file.path
+            ),
+            &format!(
+                "{remedy}: `allow-toolchain-weakening: {} <reason>`.",
+                change.flag
+            ),
+        );
+        out.anchor_last(format!("{} {}", change.context, change.flag));
+    }
+    Ok(())
+}
+
 pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
     const GATE: &str = "toolchain-config";
     let settings = &ctx.config.gates.toolchain_config;
@@ -1763,6 +1863,9 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
             continue;
         }
         let Some(class) = classify(&file.path) else {
+            if let Some(kind) = build_flags::classify_build(&file.path) {
+                build_file(ctx, settings.severity(), &mut out, &file, kind)?;
+            }
             continue;
         };
         out.examined += 1;
@@ -2212,5 +2315,18 @@ mod tests {
         assert_eq!(got.len(), 2, "{got:?}");
         // Losing an entry is `Shrunk`'s finding, not this one.
         assert!(inherited_changes(".eslintrc.json", &h, &b).is_empty());
+    }
+
+    #[test]
+    fn the_lax_list_names_the_warning_silencers() {
+        let words = |s: &str| s.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            lax_flags(&words(
+                "-w -Wno-error -Wno-error=format -Wno-unused -Wall -Werror"
+            )),
+            words("-w -Wno-error -Wno-error=format -Wno-unused")
+        );
+        // A strict flag, or a word that merely contains `-Wno-`, is not lax.
+        assert!(lax_flags(&words("-Wall -Werror=format -DX-Wno-y")).is_empty());
     }
 }

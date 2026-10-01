@@ -459,6 +459,23 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "toolchain-config: a build file gaining -Wno-error or losing -Werror is a weakening, a stricter one is not",
+        || {
+            use crate::guards::build_flags::{extract, judge, BuildKind};
+            let read = |kind: BuildKind, src: &str| {
+                extract(kind, src).map_err(|e| anyhow::anyhow!("unread: {e:?}"))
+            };
+            let strict = read(BuildKind::Make, "CFLAGS = -O2 -Wall -Werror\n")?;
+            let lax = read(BuildKind::Make, "CFLAGS = -O2 -Wall -Wno-error\n")?;
+            let commented = read(BuildKind::Make, "CFLAGS = -O2 -Wall -Werror # not -Wno-error\n")?;
+            let cmake = read(BuildKind::CMake, "add_compile_options(-Wno-unused)\n")?;
+            Ok(judge(&strict, &lax).len() == 2
+                && judge(&lax, &strict).is_empty()
+                && judge(&strict, &commented).is_empty()
+                && judge(&[], &cmake).len() == 1)
+        },
+    ),
+    (
         "sandbox-config: a workflow container gaining --privileged widens, a resource limit does not",
         || {
             use crate::guards::sandbox_config::{classify, widenings};
