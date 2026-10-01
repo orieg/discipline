@@ -36,7 +36,7 @@ pub struct Loosened {
     pub to: String,
 }
 
-fn text<'a>(node: Node, src: &'a str) -> &'a str {
+pub(super) fn text<'a>(node: Node, src: &'a str) -> &'a str {
     node.utf8_text(src.as_bytes()).unwrap_or("")
 }
 
@@ -58,7 +58,7 @@ pub fn numeric(literal: &str) -> Option<f64> {
     t.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
-fn skeleton(whole: Node, lit: Node, src: &str) -> String {
+pub(super) fn skeleton(whole: Node, lit: Node, src: &str) -> String {
     let (s, e) = (whole.start_byte(), whole.end_byte());
     let (ls, le) = (lit.start_byte(), lit.end_byte());
     let raw = format!("{}#{}", &src[s..ls], &src[le..e]);
@@ -115,7 +115,7 @@ fn comparison<'a>(
     }
 }
 
-fn walk(root: Node, f: &mut dyn FnMut(Node) -> bool) {
+pub(super) fn walk(root: Node, f: &mut dyn FnMut(Node) -> bool) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if !f(node) {

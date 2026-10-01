@@ -1765,6 +1765,45 @@ fn a_change_cannot_disable_or_demote_the_gate_that_judges_its_config() {
     assert_eq!(run.outcome("config-integrity")["enabled"], false);
 }
 
+/// An optional key has no value when it is absent. Removing one is a weakening when the
+/// absent reading is looser than the value removed: `max_noise_cv` (no noise check at all) and
+/// a gate's own `allow_hidden = false` (the global `allow_hidden` applies). Removing
+/// `noise_margin_pct` tightens (absent is 0) and is not reported. Found by the lab run
+/// `tests/red_team/attacks/cfg-04` and `cfg-06`.
+#[test]
+fn removing_an_optional_limit_or_a_stricter_switch_is_a_weakening() {
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[directives]\nallow_hidden = true\n\
+         [gates.bench-regression]\nmax_noise_cv = 0.05\nnoise_margin_pct = 2.0\n\
+         [gates.deletion-rationale]\nallow_hidden = false\n"
+    ));
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[directives]\nallow_hidden = true\n\
+             [gates.bench-regression]\n\
+             [gates.deletion-rationale]\n"
+        ),
+    );
+    repo.commit("chore: tidy");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let mut messages: Vec<String> = run
+        .violations("config-integrity")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap().to_string())
+        .collect();
+    messages.sort();
+    assert_eq!(
+        messages,
+        [
+            "[bench-regression] `max_noise_cv` removed (was 0.05).",
+            "[deletion-rationale] `allow_hidden` removed (was false).",
+        ],
+        "{messages:?}"
+    );
+}
+
 #[test]
 fn lowered_floors_and_repointed_commands_are_weakenings() {
     let repo = repo_with_base_config(&format!(
@@ -14400,6 +14439,71 @@ fn a_loosened_assertion_bound_is_reported_and_a_tightened_one_is_not() {
     repo.git(&["checkout", "-q", "-B", "work"]);
     repo.write("tests/test_batch.py", &loose.replace("5.0", "1.5"));
     repo.commit("test: tighten");
+    assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
+}
+
+#[test]
+fn an_expected_value_edited_to_match_changed_code_is_reported() {
+    // The code changes, and the test's expected values are edited to agree with it: the
+    // assertion count and strength hold, so only the expected value tells.
+    let base_src = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
+    let base_test = "use p::add;\n\n#[test]\nfn adds() {\n    assert_eq!(add(2, 2), 4);\n    assert_eq!(add(1, 2), 3, \"small sums\");\n}\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("src/lib.rs", base_src);
+    repo.write("tests/add.rs", base_test);
+    repo.commit("feat: add");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("src/lib.rs", &base_src.replace("a + b", "a + b + 1"));
+    repo.write(
+        "tests/add.rs",
+        &base_test
+            .replace("add(2, 2), 4", "add(2, 2), 5")
+            .replace("add(1, 2), 3", "add(1, 2), 4"),
+    );
+    repo.commit("fix: adjust");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(
+        run.titles("assertion-reduction"),
+        vec![
+            "Expected Value Changed In Existing Test",
+            "Expected Value Changed In Existing Test"
+        ]
+    );
+    let found = run.violations("assertion-reduction");
+    assert_eq!(found[0]["line"], 5);
+    assert_eq!(found[1]["line"], 6);
+    for v in &found {
+        let msg = v["message"].as_str().unwrap();
+        assert!(
+            !msg.contains("add(") && !msg.contains("small sums"),
+            "the assertion is not echoed: {msg}"
+        );
+    }
+
+    // The directive that lifts an assertion drop lifts it.
+    repo.commit("chore: record\n\nallow-assertion-drop: adds sums now count the carry, by design");
+    assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
+
+    // An added assertion, an unchanged expected value on a moved line, and a changed call
+    // under test (a different assertion) are not this finding.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/add.rs", base_test);
+    repo.commit("test: add");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "tests/add.rs",
+        &base_test
+            .replace("fn adds() {\n", "fn adds() {\n    let _setup = 1;\n")
+            .replace("add(1, 2), 3", "add(1, 3), 4")
+            .replace(
+                "small sums\");\n",
+                "small sums\");\n    assert_eq!(add(0, 0), 0);\n",
+            ),
+    );
+    repo.commit("test: more");
     assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
 }
 
