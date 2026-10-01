@@ -548,6 +548,40 @@ fn unsafe_gate_fires_when_a_safety_comment_is_deleted() {
 
 // ---- deletion-rationale ----------------------------------------------------
 
+/// F8: a directive quoted as code never arms an override. An indented (four-column) code
+/// block and a longer fence that holds a shorter fence line are code, as fenced blocks are
+/// (lab runs `tests/red_team/attacks/esc-06` and `esc-07`).
+#[test]
+fn a_directive_in_an_indented_block_or_a_nested_fence_does_not_arm() {
+    let repo = Repo::new();
+    repo.remove("tests/a.rs");
+    repo.commit("test: drop a");
+    let deleted = |body: &str| {
+        repo.check_with_pr(&[], body)
+            .titles("deletion-rationale")
+            .contains(&"File Deleted Without Rationale".to_string())
+    };
+    // Control: the same directive on its own line arms.
+    assert!(!deleted(
+        "removes: tests/a.rs the cases moved to tests/b.rs\n"
+    ));
+    for body in [
+        "Example:\n\n    removes: tests/a.rs the cases moved to tests/b.rs\n",
+        "Example:\n\n\tremoves: tests/a.rs the cases moved to tests/b.rs\n",
+        "Docs:\n````md\n```\nremoves: tests/a.rs the cases moved to tests/b.rs\n````\n",
+        "Docs:\n~~~\n```\nremoves: tests/a.rs the cases moved to tests/b.rs\n~~~\n",
+    ] {
+        assert!(deleted(body), "armed from code: {body:?}");
+    }
+    // A directive after a properly closed fence, or indented by up to three spaces, arms.
+    assert!(!deleted(
+        "```\nexample\n```\nremoves: tests/a.rs the cases moved to tests/b.rs\n"
+    ));
+    assert!(!deleted(
+        "   removes: tests/a.rs the cases moved to tests/b.rs\n"
+    ));
+}
+
 #[test]
 fn deletion_needs_a_scoped_line_anchored_rationale() {
     let repo = Repo::new();

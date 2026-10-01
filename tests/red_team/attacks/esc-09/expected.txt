@@ -1,0 +1,4 @@
+discipline exit: 1
+failing: []
+overrides: 2
+budget mentions: ['2 directive override(s) applied; `directives.max_overrides` allows 1', 'test-budget', 'unsafe-budget']

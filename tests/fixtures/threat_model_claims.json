@@ -569,6 +569,19 @@
       "verdict": "holds"
     },
     {
+      "id": "sec-directive-code-blocks",
+      "category": "security_policy",
+      "claim": "A directive inside an indented code block, or inside a fence that a shorter fence quoted in it appears to close, never arms an override",
+      "source": "docs/ARCHITECTURE.md:F8, docs/CONFIGURATION.md:directive rules",
+      "code": "src/tokens.rs:parse_directives_with_names",
+      "pinning_tests": [
+        "src/tokens.rs::indented_blocks_and_nested_fences_stay_code",
+        "src/tokens.rs::prose_table_and_code_mentions_do_not_arm_the_override",
+        "tests/test_gates_e2e.rs::a_directive_in_an_indented_block_or_a_nested_fence_does_not_arm"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "sec-hidden-directive-note-no-echo",
       "category": "security_policy",
       "claim": "A refused hidden directive is noted once, on its directive's gate, by name and location only: the report never repeats text that was hidden from reviewers",

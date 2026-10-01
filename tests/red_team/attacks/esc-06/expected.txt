@@ -1,0 +1,3 @@
+discipline exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0

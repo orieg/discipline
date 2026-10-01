@@ -3,7 +3,10 @@
 //! Grammar rules:
 //!   - a directive must **begin its own line** (optionally inside `<!-- -->`);
 //!     a mention mid-sentence, in a table cell, or in a code span never arms it
-//!   - lines inside fenced code blocks are ignored
+//!   - lines inside fenced code blocks are ignored; a fence closes only on a line of the
+//!     same character at least as long, so a shorter fence quoted inside it stays code
+//!   - a line indented four or more columns (a tab counts as four) is an indented code
+//!     block and is ignored; up to three spaces of indentation is allowed
 //!   - the reason must be non-empty and must not be a template placeholder
 //!   - an override is **scoped**: it only covers a subject that its reason names
 //!
@@ -836,7 +839,9 @@ pub fn parse_directives_with_names(
     .expect("directive regex is static");
 
     let mut directives = Vec::new();
-    let mut fence: Option<&str> = None;
+    // The open fence's character and length: CommonMark closes it only with a fence of the
+    // same character at least as long, on a line of its own.
+    let mut fence: Option<(char, usize)> = None;
     let mut in_html_comment = false;
     let is_commit = matches!(source, OverrideSource::Commit(_));
     for (line_idx, line) in text.lines().enumerate() {
@@ -845,18 +850,24 @@ pub fn parse_directives_with_names(
             continue;
         }
         let trimmed = line.trim_start();
-        let marker = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m));
+        let marker = fence_marker(line);
         match (fence, marker) {
             (None, Some(m)) => {
                 fence = Some(m);
                 continue;
             }
-            (Some(open), Some(m)) if open == m => {
+            (Some((c, n)), Some((mc, mn)))
+                if c == mc && mn >= n && trimmed.trim_start_matches(mc).trim().is_empty() =>
+            {
                 fence = None;
                 continue;
             }
             (Some(_), _) => continue,
             (None, None) => {}
+        }
+        // An indented code block (four columns, a tab counting as four) is quoted code (F8).
+        if indent_columns(line) >= 4 {
+            continue;
         }
 
         let line_has_open_comment =
@@ -883,6 +894,31 @@ pub fn parse_directives_with_names(
         }
     }
     directives
+}
+
+/// The fence a line opens or closes: three or more backticks or tildes after at most three
+/// columns of indentation, as `(character, length)`.
+fn fence_marker(line: &str) -> Option<(char, usize)> {
+    if indent_columns(line) > 3 {
+        return None;
+    }
+    let trimmed = line.trim_start();
+    let c = trimmed.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let n = trimmed.chars().take_while(|x| *x == c).count();
+    (n >= 3).then_some((c, n))
+}
+
+/// Leading indentation in columns, a tab counting as four (CommonMark's tab stop).
+fn indent_columns(line: &str) -> usize {
+    let mut cols = 0;
+    for ch in line.chars() {
+        match ch {
+            ' ' => cols += 1,
+            '\t' => cols += 4 - cols % 4,
+            _ => break,
+        }
+    }
+    cols
 }
 
 /// Returns the first directive name found in `text` (e.g. commit subject line or PR title), if any.
@@ -1445,6 +1481,32 @@ removes: tests/old.rs inside a fence
 ```
 ";
         assert!(directive_reasons(body, REMOVES).is_empty());
+    }
+
+    #[test]
+    fn indented_blocks_and_nested_fences_stay_code() {
+        let armed = |body: &str| !directive_reasons(body, REMOVES).is_empty();
+        // Positive controls: up to three spaces, and a line after a closed fence.
+        assert!(armed("   removes: tests/old.rs moved\n"));
+        assert!(armed("```\nexample\n```\nremoves: tests/old.rs moved\n"));
+        assert!(armed("````\nexample\n`````\nremoves: tests/old.rs moved\n"));
+        assert!(armed("~~~\nexample\n~~~\nremoves: tests/old.rs moved\n"));
+        // Negative controls: an indented block, and a fence quoting a shorter or other fence.
+        for body in [
+            "    removes: tests/old.rs moved\n",
+            "\tremoves: tests/old.rs moved\n",
+            "  \tremoves: tests/old.rs moved\n",
+            "````md\n```\nremoves: tests/old.rs moved\n````\n",
+            "~~~\n```\nremoves: tests/old.rs moved\n~~~\n",
+            "```\n``` not a close\nremoves: tests/old.rs moved\n```\n",
+            "```\n    ```\nremoves: tests/old.rs moved\n```\n",
+        ] {
+            assert!(!armed(body), "armed from code: {body:?}");
+        }
+        assert_eq!(fence_marker("   ````md"), Some(('`', 4)));
+        assert_eq!(fence_marker("    ```"), None);
+        assert_eq!(fence_marker("``"), None);
+        assert_eq!(indent_columns("  \tx"), 4);
     }
 
     #[test]
