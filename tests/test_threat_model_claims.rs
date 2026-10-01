@@ -163,6 +163,65 @@ fn claims_fixture_is_valid() {
     }
 }
 
+/// Why a `code` anchor (`path` or `path:item`) does not resolve, or `None` when it does.
+/// `item` may be qualified (`HttpApi::guard`); its last segment must be declared in a Rust
+/// file (`fn`, `struct`, `enum`, `trait`, `const`, `static`, `mod`, `type`) or be a
+/// top-level key of any other file (`runs:` in `action.yml`).
+fn unresolved_anchor(anchor: &str) -> Option<String> {
+    let (path, item) = match anchor.split_once(':') {
+        Some((p, i)) => (p.trim(), Some(i.trim())),
+        None => (anchor.trim(), None),
+    };
+    let Ok(src) = std::fs::read_to_string(root().join(path)) else {
+        return Some(format!("file `{path}` does not exist"));
+    };
+    let item = item?;
+    let name = item.rsplit("::").next().unwrap_or(item);
+    let pattern = if path.ends_with(".rs") {
+        format!(
+            r"(?m)\b(fn|struct|enum|trait|const|static|mod|type)\s+{}\b",
+            regex::escape(name)
+        )
+    } else {
+        format!(r"(?m)^{}\s*:", regex::escape(name))
+    };
+    if regex::Regex::new(&pattern).unwrap().is_match(&src) {
+        None
+    } else {
+        Some(format!("`{name}` is not declared in `{path}`"))
+    }
+}
+
+#[test]
+fn every_code_anchor_resolves() {
+    // The resolver itself: a real item, a qualified method, a YAML key and a bare file
+    // resolve; a missing item and a missing file do not.
+    assert_eq!(
+        unresolved_anchor("src/tokens.rs:parse_directives_with_names"),
+        None
+    );
+    assert_eq!(unresolved_anchor("src/forge.rs:HttpApi::guard"), None);
+    assert_eq!(unresolved_anchor("action.yml:runs"), None);
+    assert_eq!(unresolved_anchor("src/doctor.rs"), None);
+    assert!(unresolved_anchor("src/guards/integrity.rs:evaluate").is_some());
+    assert!(unresolved_anchor("src/guards/pii.rs:evaluate").is_some());
+
+    let fixture_path = root().join("tests/fixtures/threat_model_claims.json");
+    let content = std::fs::read_to_string(&fixture_path).unwrap();
+    let doc: ClaimsDoc = serde_json::from_str(&content).unwrap();
+    let broken: Vec<String> = doc
+        .claims
+        .iter()
+        .filter_map(|c| unresolved_anchor(&c.code).map(|why| format!("{}: {}", c.id, why)))
+        .collect();
+    assert!(
+        broken.is_empty(),
+        "{} claim(s) in threat_model_claims.json cite a code anchor that does not exist:\n  {}",
+        broken.len(),
+        broken.join("\n  ")
+    );
+}
+
 #[test]
 fn every_pinning_test_exists() {
     let fixture_path = root().join("tests/fixtures/threat_model_claims.json");
