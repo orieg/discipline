@@ -986,6 +986,26 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: a JS `.catch` callback that only logs is a logged-and-dropped error, one that logs then rethrows is not",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let ts = default_registry()
+                .find_pack("web/a.ts")
+                .ok_or_else(|| anyhow::anyhow!("no javascript pack"))?
+                .extract(
+                    "web/a.ts",
+                    "function f(p) {\n  p.catch((e) => console.error(e));\n  p.catch((e) => { console.error(e); });\n  p.catch((e) => { console.error(e); throw e; });\n  p.catch((e) => { console.error(e); return compute(e); });\n  p.catch(handle);\n}\n",
+                    &v,
+                )?
+                .swallowed;
+            Ok(ts.len() == 2
+                && ts.iter().all(|s| s.kind == "logging-handler")
+                && ts[0].line == 2
+                && ts[1].line == 3)
+        },
+    ),
+    (
         "error-swallowing: a JS `.catch(() => {})` is a silenced error, a `.catch` that handles it is not; `return []` is a swallow",
         || {
             use crate::ast::default_registry;

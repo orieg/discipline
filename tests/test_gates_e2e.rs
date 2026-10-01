@@ -3556,6 +3556,58 @@ fn error_swallowing_reads_default_literal_returns_and_js_promise_catch() {
 }
 
 #[test]
+fn error_swallowing_reports_a_js_promise_catch_that_only_logs() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "web/api.ts",
+        "export function warm(p: Promise<void>) {\n  p.catch((e) => console.error(e));\n}\n",
+    );
+    repo.commit("feat: best-effort logging");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative controls: the existing logging callback moves; a callback that logs and
+    // rethrows, logs and returns a computed value, calls another function, or is a named
+    // handler handles the rejection.
+    repo.write(
+        "web/api.ts",
+        "export const n = 1;\n\nexport function warm(p: Promise<void>) {\n  p.catch((e) => console.error(e));\n}\n\nexport function a(p: Promise<void>) {\n  p.catch((e) => { console.error(e); throw e; });\n  p.catch((e) => { console.error(e); return compute(e); });\n  p.catch((e) => report(e));\n  p.catch(handle);\n}\n",
+    );
+    repo.commit("refactor: tidy");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("error-swallowing").is_empty(),
+        "{:?}",
+        quiet.violations("error-swallowing")
+    );
+
+    // Three new logging-only callbacks: expression body, block body, `function` form.
+    repo.write(
+        "web/api.ts",
+        "export function warm(p: Promise<void>) {\n  p.catch((e) => console.error(e));\n}\n\nexport function b(p: Promise<void>, logger: Logger) {\n  p.catch((e) => console.warn(e));\n  p.catch((e) => {\n    console.error(e);\n  });\n  p.catch(function (e) { logger.warn(e) });\n}\n",
+    );
+    repo.commit("fix: log the failures");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut got: Vec<(u64, String)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["line"].as_u64().unwrap(),
+                v["title"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    let logged = "Error Logged And Dropped".to_string();
+    assert_eq!(
+        got,
+        vec![(6, logged.clone()), (7, logged.clone()), (10, logged)]
+    );
+}
+
+#[test]
 fn a_test_that_gains_a_retry_marker_is_reported_through_ignored_tests() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);

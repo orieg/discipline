@@ -790,10 +790,10 @@ pub const JS_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
     discards: super::handlers::no_discard,
     classify_discard: None,
     call_value_kinds: &[],
-    // `p.catch(() => {})`: a rejection handler that does nothing drops the error.
+    // `p.catch(() => {})`: a rejection handler that does nothing, or only logs, drops the error.
     silence_kinds: &["call_expression"],
     silences: super::handlers::js_catch_text,
-    silence_node: Some(super::handlers::js_catch_silences),
+    silence_node: Some(super::handlers::js_catch_site_kind),
 };
 
 pub const JS_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
