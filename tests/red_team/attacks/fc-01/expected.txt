@@ -1,0 +1,5 @@
+no base fetched, exit: 2
+discipline check: error: base ref `origin/main` does not resolve. If working locally on a non-main branch, pass `--base <branch>` (e.g. `--base master` or `--base HEAD~1`). In CI, check out with `fetc
+base fetched, no merge base, exit: 2
+discipline check: error: no merge base between `origin/main` and HEAD (no merge base found; class=Merge (22); code=NotFound (-3)); the clone is probably shallow — fetch full history.
+

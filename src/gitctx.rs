@@ -413,6 +413,13 @@ impl GitCtx {
             } else {
                 candidates.push(format!("origin/{base_ref}"));
             }
+            // The candidates after these two are guesses at the default branch. A guess that
+            // already holds HEAD compares the change with itself: `origin/HEAD` is the change's
+            // own branch after `git clone --branch <change>`, an empty diff every gate passes.
+            let named = candidates.len();
+            let holds_head = |i: usize, commit: Oid| {
+                i >= named && repo.merge_base(commit, head).is_ok_and(|m| m == head)
+            };
             if base_ref == "origin/main" || base_ref == "main" {
                 for fallback in &[
                     "refs/remotes/origin/HEAD",
@@ -427,10 +434,13 @@ impl GitCtx {
                 }
             }
             let resolve_base = |candidates: &[String]| -> Option<(String, Oid, Oid)> {
-                for name in candidates {
+                for (i, name) in candidates.iter().enumerate() {
                     if let Ok(obj) = repo.revparse_single(name) {
                         if let Ok(commit) = obj.peel_to_commit() {
                             let base_commit = commit.id();
+                            if holds_head(i, base_commit) {
+                                continue;
+                            }
                             if let Ok(merge_base) = repo.merge_base(base_commit, head) {
                                 return Some((name.clone(), base_commit, merge_base));
                             }
@@ -451,9 +461,10 @@ impl GitCtx {
                     };
                     let (found_name, base_commit) = candidates
                         .iter()
-                        .find_map(|name| {
+                        .enumerate()
+                        .find_map(|(i, name)| {
                             let c = repo.revparse_single(name).ok()?.peel_to_commit().ok()?.id();
-                            Some((name.clone(), c))
+                            (!holds_head(i, c)).then(|| (name.clone(), c))
                         })
                         .ok_or_else(|| {
                             anyhow!(

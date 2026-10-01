@@ -5967,6 +5967,40 @@ fn policy_from_base_judges_a_change_by_the_configuration_it_did_not_write() {
 // ---- fail-closed behavior --------------------------------------------------
 
 #[test]
+fn a_fallback_base_that_holds_the_change_itself_does_not_resolve() {
+    // `git clone --branch <change>` points `origin/HEAD` at the change's own branch. With
+    // no `main` to compare against, that fallback base is HEAD itself: an empty diff that
+    // every gate passes.
+    let repo = Repo::new();
+    repo.remove("tests/a.rs");
+    repo.commit("test: drop a");
+    repo.git(&["update-ref", "refs/remotes/origin/work", "HEAD"]);
+    repo.git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/work",
+    ]);
+    repo.git(&["branch", "-D", "main"]);
+    for base in ["origin/main", "main"] {
+        let run = repo.check(&["--base", base]);
+        assert_eq!(run.code, 2, "{base}: {}{}", run.stdout, run.stderr);
+        assert!(run.stderr.contains("does not resolve"), "{}", run.stderr);
+    }
+    // `origin/HEAD` naming another branch is still a fallback.
+    repo.git(&["update-ref", "refs/remotes/origin/develop", "HEAD~1"]);
+    repo.git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/develop",
+    ]);
+    let run = repo.check(&["--base", "origin/main"]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(run
+        .titles("deletion-rationale")
+        .contains(&"File Deleted Without Rationale".to_string()));
+}
+
+#[test]
 fn could_not_check_is_exit_2_never_a_pass() {
     let repo = Repo::new();
 
