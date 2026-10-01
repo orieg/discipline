@@ -2838,6 +2838,171 @@ fn toolchain_config_reports_a_lowered_bar_and_lifts_it_by_key_or_path() {
 }
 
 #[test]
+fn toolchain_config_reports_warning_flags_lowered_in_build_files() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "Makefile",
+        "CFLAGS = -O2 -Wall -Werror\nall:\n\tcc $(CFLAGS) -c a.c\n",
+    );
+    repo.write(
+        "CMakeLists.txt",
+        "project(a C)\nadd_compile_options(-Wall -Werror)\n",
+    );
+    repo.write(
+        "setup.py",
+        "from setuptools import Extension, setup\next = Extension('a', ['a.c'], extra_compile_args=['-O2', '-Werror'])\nsetup(ext_modules=[ext])\n",
+    );
+    repo.write(
+        "build.rs",
+        "fn main() {\n    cc::Build::new().file(\"a.c\").flag(\"-Werror\").compile(\"a\");\n}\n",
+    );
+    repo.write("vendor/legacy.mk", "CFLAGS = -w\n");
+    repo.commit("chore: build files");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: stricter flags, an unchanged `-w`, and `-Wno-` in a comment, a
+    // string that is not a flag, and a variable that carries no flags.
+    repo.write(
+        "Makefile",
+        "# was -Wno-error\nCFLAGS = -O3 -Wall -Werror -Wextra\nNAME = -w\nall:\n\tcc $(CFLAGS) -c a.c\n",
+    );
+    repo.write(
+        "CMakeLists.txt",
+        "project(a C)\n# add_compile_options(-w)\nadd_compile_options(-Wall -Werror -Wextra)\n",
+    );
+    repo.write(
+        "setup.py",
+        "from setuptools import Extension, setup\n# extra_compile_args=['-w']\next = Extension('a', ['a.c'], extra_compile_args=['-O3', '-Werror'])\nsetup(ext_modules=[ext])\n",
+    );
+    repo.write(
+        "build.rs",
+        "fn main() {\n    let _note = \"-w\";\n    cc::Build::new().file(\"a.c\").flag(\"-Werror\").flag(\"-Wall\").compile(\"a\");\n}\n",
+    );
+    repo.write("vendor/legacy.mk", "# legacy\nCFLAGS := -w\n");
+    repo.commit("chore: stricter");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("toolchain-config").is_empty(),
+        "{:?}",
+        quiet.titles("toolchain-config")
+    );
+    assert_eq!(quiet.outcome("toolchain-config")["examined"], 5);
+
+    // Each file type loses a strict flag or gains a lax one.
+    repo.write(
+        "Makefile",
+        "CFLAGS = -O3 -Wall -Wno-error\nall:\n\tcc $(CFLAGS) -c a.c\n",
+    );
+    repo.write(
+        "CMakeLists.txt",
+        "project(a C)\nadd_compile_options(-Wall -Werror -Wextra)\ntarget_compile_options(a PRIVATE -Wno-unused)\n",
+    );
+    repo.write(
+        "setup.py",
+        "from setuptools import Extension, setup\next = Extension('a', ['a.c'], extra_compile_args=['-O3', '-w'])\nsetup(ext_modules=[ext])\n",
+    );
+    repo.write(
+        "build.rs",
+        "fn main() {\n    cc::Build::new()\n        .file(\"a.c\")\n        .flag(\"-Werror\")\n        .warnings(false)\n        .compile(\"a\");\n}\n",
+    );
+    repo.commit("chore: relax");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let v = run.violations("toolchain-config");
+    let messages: Vec<(String, String)> = v
+        .iter()
+        .map(|x| {
+            (
+                x["file"].as_str().unwrap().to_string(),
+                x["message"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let has = |file: &str, needle: &str| {
+        messages
+            .iter()
+            .any(|(f, m)| f == file && m.contains(needle))
+    };
+    assert!(
+        has("Makefile", "`CFLAGS` gained `-Wno-error`"),
+        "{messages:?}"
+    );
+    assert!(has("Makefile", "`CFLAGS` lost `-Werror`"), "{messages:?}");
+    assert!(
+        has(
+            "CMakeLists.txt",
+            "`target_compile_options:a` gained `-Wno-unused`"
+        ),
+        "{messages:?}"
+    );
+    assert!(
+        has("setup.py", "`extra_compile_args` gained `-w`"),
+        "{messages:?}"
+    );
+    assert!(
+        has("setup.py", "`extra_compile_args` lost `-Werror`"),
+        "{messages:?}"
+    );
+    assert!(
+        has("build.rs", "`cc::Build` gained `.warnings(false)`"),
+        "{messages:?}"
+    );
+    assert_eq!(messages.len(), 6, "{messages:?}");
+    assert!(v
+        .iter()
+        .all(|x| x["title"] == "Toolchain Configuration Weakened"));
+    // A gained flag is anchored to the line that adds it; the build.rs one is line 5.
+    let line_of = |file: &str| {
+        v.iter()
+            .find(|x| x["file"] == file && x["message"].as_str().unwrap().contains("gained"))
+            .and_then(|x| x["line"].as_u64())
+    };
+    assert_eq!(line_of("build.rs"), Some(5));
+    assert_eq!(line_of("Makefile"), Some(1));
+
+    // The flag, the variable or command, and the file path each lift their own finding.
+    repo.commit(
+        "chore: explain\n\nallow-toolchain-weakening: -Wno-error the vendored sources do not build clean\n\
+         allow-toolchain-weakening: -Werror the vendored sources do not build clean\n\
+         allow-toolchain-weakening: target_compile_options:a generated bindings warn\n\
+         allow-toolchain-weakening: setup.py the extension wraps third-party C\n\
+         allow-toolchain-weakening: cc::Build the generated C warns",
+    );
+    let lifted = repo.check(&[]);
+    assert!(
+        lifted.titles("toolchain-config").is_empty(),
+        "{:?}",
+        lifted.titles("toolchain-config")
+    );
+    assert_eq!(
+        lifted.outcome("toolchain-config")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        6
+    );
+    assert_eq!(lifted.code, 0);
+
+    // Removing a build file is a change of build system, not a lowered flag.
+    repo.remove("Makefile");
+    repo.commit("chore: drop the makefile");
+    assert!(repo.check(&[]).titles("toolchain-config").is_empty());
+
+    // A build.rs or CMake file that no longer parses cannot be read.
+    repo.write("build.rs", "fn main( {\n");
+    repo.write("CMakeLists.txt", "add_compile_options(-Wall\n");
+    repo.commit("chore: break");
+    assert_eq!(
+        repo.check(&[]).titles("toolchain-config"),
+        vec![
+            "Toolchain Configuration Unreadable",
+            "Toolchain Configuration Unreadable"
+        ]
+    );
+}
+
+#[test]
 fn suppression_delta_is_a_delta_read_from_the_syntax_tree() {
     // A suppression that moves within a file, or sits inside a string, is not new.
     let repo = Repo::new();

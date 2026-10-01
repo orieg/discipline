@@ -198,7 +198,7 @@ pub const GATES: &[GateInfo] = &[
         id: "toolchain-config",
         suite: Suite::Integrity,
         summary: "compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token",
-        languages: "tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit",
+        languages: "tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit, and compiler warning flags in Makefile, CMake, setup.py and build.rs",
         available: true,
     },
     GateInfo {
