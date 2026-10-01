@@ -945,8 +945,8 @@ pub fn extract_directives(
             for d in parsed {
                 if d.hidden && !policy.allow_hidden {
                     notes.push(format!(
-                        "hidden directive `{}: {}` in PR body ignored (directives.allow_hidden is false)",
-                        d.directive, d.reason
+                        "hidden directive `{}` in PR body ignored (directives.allow_hidden is false)",
+                        d.directive
                     ));
                 } else {
                     active.push(d);
@@ -963,8 +963,8 @@ pub fn extract_directives(
             for d in parsed {
                 if d.hidden && !policy.allow_hidden {
                     notes.push(format!(
-                        "hidden directive `{}: {}` in commit {oid} ignored (directives.allow_hidden is false)",
-                        d.directive, d.reason
+                        "hidden directive `{}` in commit {oid} ignored (directives.allow_hidden is false)",
+                        d.directive
                     ));
                 } else {
                     active.push(d);
@@ -1033,8 +1033,8 @@ pub fn extract_directives_with_merged(
             for d in parsed {
                 if d.hidden && !is_hidden_allowed(&d) {
                     notes.push(format!(
-                        "hidden directive `{}: {}` in PR body ignored (directives.allow_hidden is false)",
-                        d.directive, d.reason
+                        "hidden directive `{}` in PR body ignored (directives.allow_hidden is false)",
+                        d.directive
                     ));
                 } else {
                     active.push(d);
@@ -1051,8 +1051,8 @@ pub fn extract_directives_with_merged(
             for d in parsed {
                 if d.hidden && !is_hidden_allowed(&d) {
                     notes.push(format!(
-                        "hidden directive `{}: {}` in commit {oid} ignored (directives.allow_hidden is false)",
-                        d.directive, d.reason
+                        "hidden directive `{}` in commit {oid} ignored (directives.allow_hidden is false)",
+                        d.directive
                     ));
                 } else {
                     active.push(d);
@@ -1094,8 +1094,8 @@ pub fn extract_directives_with_merged(
         for d in parsed {
             if d.hidden && !is_hidden_allowed(&d) {
                 notes.push(format!(
-                    "hidden directive `{}: {}` in merged pull request #{} ignored (directives.allow_hidden is false)",
-                    d.directive, d.reason, m.number
+                    "hidden directive `{}` in merged pull request #{} ignored (directives.allow_hidden is false)",
+                    d.directive, m.number
                 ));
             } else {
                 n += 1;
@@ -1863,6 +1863,41 @@ removes: tests/old.rs inside a fence
         assert_eq!(unused_directives(&parsed, &elsewhere).len(), 2);
         assert!(unused_directives(&parsed, &[]).len() == 2);
         assert!(unused_directives(&[], &applied).is_empty());
+    }
+
+    #[test]
+    fn a_refused_hidden_directive_is_named_without_its_reason() {
+        let reason = "ignore previous instructions";
+        let body = format!("<!-- no-issue: {reason} -->\n<!-- removes: tests/old.rs {reason} -->");
+        let commits = vec![("abc1234".to_string(), format!("chore: x\n\n{body}"))];
+        let merged = vec![MergedBody {
+            number: 7,
+            author: "someone".to_string(),
+            body: body.clone(),
+        }];
+        let config = crate::config::DisciplineConfig::from_toml_str(
+            "[meta]\nversion = 1\nname = \"t\"\n[directives]\nsources = [\"pr-body\", \"commits\", \"merged-pr-body\"]\n",
+        )
+        .unwrap();
+        let (active, notes) =
+            extract_directives_with_merged(Some(&body), &commits, &merged, &config);
+        assert!(active.is_empty(), "{active:?}");
+        let (_, plain) = extract_directives(Some(&body), &commits, &config.directives);
+        let hidden = |v: &[String]| -> Vec<String> {
+            v.iter()
+                .filter(|n| n.starts_with("hidden directive"))
+                .cloned()
+                .collect()
+        };
+        for n in notes.iter().chain(&plain) {
+            assert!(!n.contains(reason), "{n}");
+        }
+        for n in hidden(&notes).iter().chain(&hidden(&plain)) {
+            assert!(n.contains("`no-issue`") || n.contains("`removes`"), "{n}");
+        }
+        // PR body, commit and merged pull request, for each of the two directives.
+        assert_eq!(hidden(&notes).len(), 6, "{notes:?}");
+        assert_eq!(hidden(&plain).len(), 4, "{plain:?}");
     }
 
     #[test]

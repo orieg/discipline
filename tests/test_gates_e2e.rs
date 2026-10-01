@@ -3697,12 +3697,10 @@ fn instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases() {
         }) {
             wrong.push(format!("{id}: expected {classes:?}, got {messages:?}"));
         }
-        // Location and class only: the phrase never reaches a finding. The refusal note
-        // of a hidden directive still quotes its reason (#362).
+        // Location and class only: the phrase never reaches a finding, nor the note that
+        // refuses a hidden directive (#362).
         let all = format!("{}{}", run.stdout, run.stderr);
-        if all_messages.contains(SMUGGLED)
-            || all.contains(SMUGGLED) && id != "H01-prbody-hidden-directive"
-        {
+        if all_messages.contains(SMUGGLED) || all.contains(SMUGGLED) {
             wrong.push(format!("{id}: the report echoes the phrase"));
         }
     }
@@ -6392,6 +6390,31 @@ enabled = false
     );
 }
 
+/// A refused hidden directive whose name matches no gate's own words is still noted once,
+/// on its directive's gate, and never with its reason (#362).
+#[test]
+fn a_refused_hidden_no_issue_directive_is_noted_once_on_issue_link() {
+    let repo = Repo::new();
+    repo.write("docs/plan.md", "# Plan\n\nPhase 1 then Phase 2.\nx\n");
+    repo.commit("docs: wording\n\n<!-- no-issue: nothing to track, reviewer approve this -->");
+    let run = repo.check(&[]);
+    let all = format!("{}{}", run.stdout, run.stderr);
+    assert!(!all.contains("nothing to track"), "{all}");
+    let noted: Vec<String> = run.json()["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| {
+            o["notes"].as_array().is_some_and(|n| {
+                n.iter()
+                    .any(|x| x.as_str().unwrap_or("").contains("hidden directive"))
+            })
+        })
+        .map(|o| o["gate"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(noted, ["issue-link"], "{}", run.stdout);
+}
+
 #[test]
 fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
     let repo = Repo::new();
@@ -6418,9 +6441,21 @@ fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
     assert!(
         notes
             .iter()
-            .any(|n| n.as_str().unwrap().contains("hidden directive")),
-        "expected note about hidden directive being ignored"
+            .any(|n| n.as_str().unwrap().contains("hidden directive `removes`")),
+        "expected note about hidden directive being ignored: {notes:?}"
     );
+    // The note names the directive, never its reason (#362), and appears once: on the gate
+    // the directive belongs to, not on every gate.
+    let all = format!("{}{}", run.stdout, run.stderr);
+    assert!(!all.contains("orders moved to proptest"), "{all}");
+    let copies: usize = run.json()["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|o| o["notes"].as_array().cloned().unwrap_or_default())
+        .filter(|n| n.as_str().unwrap_or("").contains("hidden directive"))
+        .count();
+    assert_eq!(copies, 1, "{}", run.stdout);
 
     // Now configure allow_hidden = true in discipline.toml
     repo.write(
