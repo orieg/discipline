@@ -1731,6 +1731,45 @@ fn a_change_cannot_disable_or_demote_the_gate_that_judges_its_config() {
     assert_eq!(run.outcome("config-integrity")["enabled"], false);
 }
 
+/// An optional key has no value when it is absent. Removing one is a weakening when the
+/// absent reading is looser than the value removed: `max_noise_cv` (no noise check at all) and
+/// a gate's own `allow_hidden = false` (the global `allow_hidden` applies). Removing
+/// `noise_margin_pct` tightens (absent is 0) and is not reported. Found by the lab run
+/// `tests/red_team/attacks/cfg-04` and `cfg-06`.
+#[test]
+fn removing_an_optional_limit_or_a_stricter_switch_is_a_weakening() {
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[directives]\nallow_hidden = true\n\
+         [gates.bench-regression]\nmax_noise_cv = 0.05\nnoise_margin_pct = 2.0\n\
+         [gates.deletion-rationale]\nallow_hidden = false\n"
+    ));
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[directives]\nallow_hidden = true\n\
+             [gates.bench-regression]\n\
+             [gates.deletion-rationale]\n"
+        ),
+    );
+    repo.commit("chore: tidy");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let mut messages: Vec<String> = run
+        .violations("config-integrity")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap().to_string())
+        .collect();
+    messages.sort();
+    assert_eq!(
+        messages,
+        [
+            "[bench-regression] `max_noise_cv` removed (was 0.05).",
+            "[deletion-rationale] `allow_hidden` removed (was false).",
+        ],
+        "{messages:?}"
+    );
+}
+
 #[test]
 fn lowered_floors_and_repointed_commands_are_weakenings() {
     let repo = repo_with_base_config(&format!(
