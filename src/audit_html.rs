@@ -551,7 +551,14 @@ fn source(r: &Record, s: &Summary) -> String {
         return String::new();
     };
     let file_link = |path: &str| {
-        let mut t = l.file.replace("{sha}", &r.sha).replace("{path}", path);
+        // Each segment percent-encoded: a browser reads a `%2e%2e` segment as `..`, which
+        // would walk the link out of the repository, and `#` or `?` would cut it short.
+        let path = path
+            .split('/')
+            .map(crate::forge::encode_segment)
+            .collect::<Vec<_>>()
+            .join("/");
+        let mut t = l.file.replace("{sha}", &r.sha).replace("{path}", &path);
         t = match r.line {
             Some(n) => t.replace("{line}", &n.to_string()),
             None => t.replace("#L{line}", ""),

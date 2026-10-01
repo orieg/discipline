@@ -1,0 +1,8 @@
+discipline exit: 0
+script tags: 1
+img/b/i tags: [('b', ())]
+svg tags: 0
+event attributes: []
+non-http links: []
+alert( in script: False
+payloads on the page, escaped: [3, 4, 8, 9]
