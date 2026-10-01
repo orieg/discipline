@@ -6392,6 +6392,55 @@ enabled = false
 
 /// A refused hidden directive whose name matches no gate's own words is still noted once,
 /// on its directive's gate, and never with its reason (#362).
+/// #362: a refused hidden directive's reason is text a reviewer cannot see in the rendered
+/// body, so no output format repeats it; the note still names the directive and its source.
+#[test]
+fn a_refused_hidden_directive_reason_is_in_no_output_format() {
+    let repo = Repo::new();
+    repo.write("docs/plan.md", "# Plan\n\nPhase 1 then Phase 2.\nx\n");
+    repo.commit("docs: wording\n\n<!-- no-issue: COMMIT-MARKER-362 -->");
+    let body = "Fix.\n<!-- no-issue: trivial. BODY-MARKER-362 -->\n";
+    for format in [
+        "terminal",
+        "github-summary",
+        "json",
+        "junit",
+        "sarif",
+        "gitlab",
+        "agent-prompt",
+    ] {
+        let run = repo.run(
+            &["check", "--base", "main", "--format", format],
+            &[("PR_BODY", body), ("PR_TITLE", "docs: wording")],
+        );
+        let all = format!("{}{}", run.stdout, run.stderr);
+        assert!(
+            !all.contains("MARKER-362"),
+            "{format} repeats a hidden directive's reason: {all}"
+        );
+        if format == "json" {
+            let notes: Vec<String> = run.json()["outcomes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|o| o["notes"].as_array().cloned().unwrap_or_default())
+                .filter_map(|n| n.as_str().map(str::to_string))
+                .filter(|n| n.contains("hidden directive"))
+                .collect();
+            assert!(
+                notes
+                    .iter()
+                    .any(|n| n.contains("`no-issue` in PR body ignored")),
+                "{notes:?}"
+            );
+            assert!(
+                notes.iter().any(|n| n.contains("`no-issue` in commit")),
+                "{notes:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_refused_hidden_no_issue_directive_is_noted_once_on_issue_link() {
     let repo = Repo::new();

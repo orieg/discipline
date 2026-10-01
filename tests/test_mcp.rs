@@ -120,6 +120,23 @@ fn an_mcp_client_checks_a_weakened_test_and_never_sees_a_waiver() {
     }
 }
 
+/// #362: a directive hidden in an HTML comment in a commit is refused, and its reason, which
+/// a reviewer cannot see, never reaches the client: not in the structured content, not in
+/// the text.
+#[test]
+fn check_diff_never_returns_a_hidden_directive_reason() {
+    let repo = Repo::new();
+    repo.write("docs/plan.md", "# Plan\n\nPhase 1 then Phase 2.\nx\n");
+    repo.commit("docs: wording\n\n<!-- no-issue: MCP-MARKER-362 -->");
+    let replies = session(&repo, &[call(1, "check_diff", json!({}))]);
+    let reply = replies[0].to_string();
+    assert!(
+        replies[0]["result"]["structuredContent"].is_object(),
+        "{reply}"
+    );
+    assert!(!reply.contains("MCP-MARKER-362"), "{reply}");
+}
+
 #[test]
 fn a_clean_change_passes_and_a_broken_config_is_an_error_not_a_pass() {
     let repo = Repo::new();
