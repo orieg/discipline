@@ -970,11 +970,14 @@
     {
       "id": "gate-instruction-smuggling-visible-directive-reason",
       "category": "gates",
-      "claim": "the reason text of a visible directive line in the change description is not scanned for phrases (documented)",
+      "claim": "a visible directive line in the change description is scanned for phrases, its reason included; only an allow-agent-instructions line that parsed as a directive and names a location of this change is exempt, so a fenced, subject-line or fake-subject line is scanned",
       "source": "docs/GATES.md:instruction-smuggling, issue:#363",
       "code": "src/guards/instruction_smuggling.rs:instruction_smuggling",
-      "pinning_tests": [],
-      "verdict": "known",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::instruction_smuggling_reads_encoded_folded_split_and_hidden_phrases",
+        "tests/test_gates_e2e.rs::sleeps_trivial_assertions_and_injected_pr_bodies_are_reported"
+      ],
+      "verdict": "holds",
       "issue": 363
     },
     {

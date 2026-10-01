@@ -821,6 +821,24 @@ pub fn parse_directives_with_names(
     names: &[&str],
     source: OverrideSource,
 ) -> Vec<ParsedDirective> {
+    directive_lines_with_names(text, names, source)
+        .into_iter()
+        .map(|(_, d)| d)
+        .collect()
+}
+
+/// Every directive in `text` that parses, with the index of the line it is on: a line in
+/// a code fence, the subject line of a commit message, and one whose reason is empty or a
+/// placeholder are not directives and are not listed.
+pub fn directive_lines(text: &str, source: OverrideSource) -> Vec<(usize, ParsedDirective)> {
+    directive_lines_with_names(text, ALL_DIRECTIVE_NAMES, source)
+}
+
+fn directive_lines_with_names(
+    text: &str,
+    names: &[&str],
+    source: OverrideSource,
+) -> Vec<(usize, ParsedDirective)> {
     let patterns = names
         .iter()
         .map(|n| {
@@ -878,12 +896,15 @@ pub fn parse_directives_with_names(
             let reason = clean_reason(&caps[3]);
             if !is_placeholder(&reason) {
                 let directive_str = caps[2].trim_end_matches(':').trim().to_string();
-                directives.push(ParsedDirective {
-                    directive: directive_str,
-                    reason,
-                    source: source.clone(),
-                    hidden: in_html_comment || caps.get(1).is_some() || line_has_open_comment,
-                });
+                directives.push((
+                    line_idx,
+                    ParsedDirective {
+                        directive: directive_str,
+                        reason,
+                        source: source.clone(),
+                        hidden: in_html_comment || caps.get(1).is_some() || line_has_open_comment,
+                    },
+                ));
             }
         }
 
