@@ -617,6 +617,18 @@
       "verdict": "holds"
     },
     {
+      "id": "gate-assertion-reduction-expected-value",
+      "category": "gates",
+      "claim": "an existing assertion whose expected value is edited, with its count and strength unchanged, is reported",
+      "source": "docs/GATES.md:assertion-reduction",
+      "code": "src/ast/expectations.rs:changed",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::an_expected_value_edited_to_match_changed_code_is_reported",
+        "src/ast/expectations.rs::changed_pairs_by_skeleton_and_skips_ambiguous_ones"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "gate-vacuous-tests",
       "category": "gates",
       "claim": "new tests must carry a non-tautological assertion",
