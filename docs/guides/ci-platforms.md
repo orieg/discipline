@@ -442,7 +442,7 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Cheat sheet: integrity assurance | `immutable-releases`, `tag-protection`; the action checks the release attestation |
 | Cheat sheet: visibility and monitoring | out of scope; `discipline audit` reads the record back |
 | Scorecard Binary-Artifacts | partly the `archive-contents` gate (archives in the diff); not a setting |
-| Scorecard Branch-Protection | `required-check`, `force-push`, `deletion`, `review`, `bypass` |
+| Scorecard Branch-Protection | `required-check`, `up-to-date`, `force-push`, `deletion`, `pull-request`, `review`, `code-owner-review`, `last-push-approval`, `bypass`. Scorecard scores "last push approval" and "stale review dismissal" separately; `last-push-approval` passes on either, so the two can disagree on a branch that dismisses stale reviews only |
 | Scorecard CI-Tests | out of scope (project history) |
 | Scorecard CII-Best-Practices | out of scope |
 | Scorecard Code-Review | `pull-request`, `review`, `bypass` (the rule, not past merges) |
@@ -457,7 +457,7 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Scorecard SAST | out of scope |
 | Scorecard SBOM | out of scope |
 | Scorecard Security-Policy | `security-policy` (local: `SECURITY.md` at the root, in `.github/` or `docs/`; information when absent) |
-| Scorecard Signed-Releases | `immutable-releases`, `tag-protection`; the action checks the release attestation |
+| Scorecard Signed-Releases | `immutable-releases`, `tag-protection`; the action checks the release attestation. Scorecard reads release asset names, not the attestation store, so an attestation counts only when its bundle is also a release asset (`*.intoto.jsonl`) |
 | Scorecard Token-Permissions | `default-token`; the `ci-integrity` gate (workflow token permissions) |
 | Scorecard Vulnerabilities | `dependency-alerts` (information) |
 | Scorecard Webhooks | `webhooks` |
