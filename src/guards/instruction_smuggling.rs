@@ -807,33 +807,86 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         }
     }
     // 4. The PR description, title and commit messages: what a review bot reads first.
-    //    A visible directive line is the repository's own vocabulary and is not scanned
-    //    for phrases; one inside an HTML comment is read by a bot and not by a reviewer,
-    //    so it is. Every line is checked for invisible characters.
-    let mut texts: Vec<(String, String)> = Vec::new();
+    //    Every line is scanned, directive lines and their reasons included, since a bot
+    //    reads them like any other (#363). One line is exempt: an `allow-agent-instructions`
+    //    directive that parsed (not fenced, not a commit subject, not hidden, a real reason)
+    //    and whose subject is a location of this change (`pr-body`, `pr-title`, a
+    //    `commit:<sha7>` in the range, or a changed path): it is the visible, counted waiver
+    //    that records a quoted injection. A fake subject is scanned. Every line is checked
+    //    for invisible characters.
+    let mut texts: Vec<(String, String, Option<tokens::OverrideSource>)> = Vec::new();
     if let Some(t) = &ctx.pr_title {
-        texts.push(("pr-title".to_string(), t.clone()));
+        texts.push(("pr-title".to_string(), t.clone(), None));
     }
     if let Some(b) = &ctx.pr_body {
-        texts.push(("pr-body".to_string(), b.clone()));
+        texts.push((
+            "pr-body".to_string(),
+            b.clone(),
+            Some(tokens::OverrideSource::PrBody),
+        ));
     }
-    for c in ctx.git.commit_details().unwrap_or_default() {
+    let commits = ctx.git.commit_details().unwrap_or_default();
+    let shorts: Vec<String> = commits
+        .iter()
+        .map(|c| c.sha.chars().take(7).collect())
+        .collect();
+    for c in commits {
         let short: String = c.sha.chars().take(7).collect();
-        texts.push((format!("commit:{short}"), c.message));
+        texts.push((
+            format!("commit:{short}"),
+            c.message,
+            Some(tokens::OverrideSource::Commit(c.sha.clone())),
+        ));
     }
+    let changed: std::collections::BTreeSet<String> = ctx
+        .git
+        .changed_files()?
+        .into_iter()
+        .map(|f| f.path)
+        .collect();
+    // A subject an `allow-agent-instructions` quote may name: a description location of
+    // this change, or a path it changed (optionally `path:line`).
+    let real_subject = |subject: &str| match subject {
+        "pr-body" | "pr-title" => true,
+        s if s.starts_with("commit:") => shorts.iter().any(|x| *x == s["commit:".len()..]),
+        s => {
+            let path = s
+                .rsplit_once(':')
+                .filter(|(_, n)| n.parse::<usize>().is_ok())
+                .map(|(p, _)| p)
+                .unwrap_or(s);
+            changed.contains(path)
+        }
+    };
     let heuristic_sev = match settings.severity() {
         Severity::Error => Severity::Warning,
         other => other,
     };
-    for (where_, text) in texts {
+    for (where_, text, source) in texts {
         out.examined += 1;
+        let quoting: std::collections::BTreeSet<usize> = source
+            .map(|src| {
+                tokens::directive_lines(&text, src)
+                    .into_iter()
+                    .filter(|(_, d)| {
+                        !d.hidden
+                            && tokens::ALLOW_SMUGGLING
+                                .iter()
+                                .any(|n| n.eq_ignore_ascii_case(&d.directive))
+                            && d.reason
+                                .split_whitespace()
+                                .next()
+                                .is_some_and(|subject| real_subject(subject) && d.covers(subject))
+                    })
+                    .map(|(i, _)| i)
+                    .collect()
+            })
+            .unwrap_or_default();
         let kept: Vec<&str> = text
             .lines()
-            .filter(|l| {
-                !l.trim()
-                    .split_once(':')
-                    .is_some_and(|(k, _)| tokens::spec_for_directive(k.trim()).is_some())
-            })
+            .enumerate()
+            .filter(|(i, _)| !quoting.contains(i))
+            .map(|(_, l)| l)
             .collect();
         let joined = kept.join("\n");
         // GitHub writes `@\u{200B}name` in bot-generated bodies (Dependabot release notes)
