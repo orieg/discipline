@@ -1,0 +1,2 @@
+`protected.txt` ratified in issue:owner/rat-test-3#1/comment:
+discipline exit: 0

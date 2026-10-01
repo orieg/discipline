@@ -5,7 +5,7 @@ set -eu
 cd /tmp
 rm -rf repo
 mkdir repo && cd repo
-git init -q
+git init -q -b main
 git config user.name lab
 git config user.email lab@lab.invalid
 
@@ -39,11 +39,10 @@ fi
 python3 - <<'PY' || exit $?
 import json, sys
 d = json.load(open("result.json"))
-status = d.get("status", "")
-if status != "pass":
-    print(f"FAIL: expected status pass, got {status}")
+if d.get("errors") != 0:
+    print(f"FAIL: expected no errors, got {d.get('errors')}")
     sys.exit(1)
-print("status:", status)
+print("errors:", d["errors"])
 violations = sorted({
     v.get("code")
     for o in d.get("outcomes", [])

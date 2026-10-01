@@ -1,0 +1,3 @@
+weaken assert without directive exit: 1
+error [assertion-reduction] Assertion Count Decreased In Existing Test [tests/sample_test.rs:2]
+weaken assert with directive exit: 0

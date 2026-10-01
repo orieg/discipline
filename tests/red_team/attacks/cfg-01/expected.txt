@@ -1,2 +1,2 @@
 discipline exit: 1
-"code":"config-integrity/gate-disabled"
+"code": "config-integrity/gate-weakened"

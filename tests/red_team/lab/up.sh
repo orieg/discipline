@@ -25,6 +25,10 @@ start() { # name image cli env-prefix
     printf 'GITEA_TOKEN=%s\n' "$(docker exec -u git "$1" "$3" admin user generate-access-token \
       --username "$u" --token-name lab --scopes all --raw)" > "$LAB/$1.$u.env"
   done
+  # Every user's token under its own name, for attacks that act as two users (ci-04).
+  for u in owner agent stranger; do
+    sed "s/^GITEA_TOKEN=/$(echo "$u" | tr a-z A-Z)_TOKEN=/" "$LAB/$1.$u.env"
+  done > "$LAB/$1.all.env"
 }
 
 EXTRA=(-e GITEA__actions__ENABLED=true -e GITEA__actions__DEFAULT_ACTIONS_URL=self)

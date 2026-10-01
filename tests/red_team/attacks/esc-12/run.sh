@@ -5,7 +5,7 @@ set -eu
 cd /tmp
 rm -rf repo
 mkdir repo && cd repo
-git init -q
+git init -q -b main
 git config user.name lab
 git config user.email lab@lab.invalid
 

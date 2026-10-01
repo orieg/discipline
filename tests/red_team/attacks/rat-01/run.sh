@@ -16,12 +16,18 @@ git add protected.txt
 git commit -qm "feat: agent modifies protected path"
 git push -q -u origin agent-branch
 
-# Open PR #2 closing Issue #1
-pr_resp=$(curl -s -X POST -H "Authorization: token $GITEA_TOKEN" -H "Content-Type: application/json" \
-  "$DISCIPLINE_FORGE_URL/api/v1/repos/owner/rat-test/pulls" \
-  -d '{"title":"Agent PR","body":"Closes #1","head":"agent-branch","base":"main"}')
-
-pr_num=$(echo "$pr_resp" | grep -o "\"number\":[0-9]*" | head -1 | cut -d: -f2)
+# Open PR #2 closing Issue #1. Gitea records a pushed branch asynchronously, so a
+# pull request opened right after the push can be refused with 404: retry.
+pr_num=""
+for _ in $(seq 1 30); do
+  pr_resp=$(curl -s -X POST -H "Authorization: token $GITEA_TOKEN" -H "Content-Type: application/json" \
+    "$DISCIPLINE_FORGE_URL/api/v1/repos/owner/rat-test/pulls" \
+    -d '{"title":"Agent PR","body":"Closes #1","head":"agent-branch","base":"main"}')
+  pr_num=$(echo "$pr_resp" | grep -o "\"number\":[0-9]*" | head -1 | cut -d: -f2 || true)
+  [ -n "$pr_num" ] && break
+  sleep 1
+done
+[ -n "$pr_num" ] || { echo "FAIL: the pull request was not created"; exit 1; }
 head_sha=$(git rev-parse HEAD)
 
 # Agent attempts self-ratification by commenting on Issue #1

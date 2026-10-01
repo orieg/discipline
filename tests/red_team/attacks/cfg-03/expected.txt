@@ -1,0 +1,2 @@
+error [deletion-rationale] File Deleted Without Rationale [discipline.toml]
+discipline exit: 1
