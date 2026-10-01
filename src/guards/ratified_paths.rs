@@ -102,6 +102,15 @@ pub fn evaluate_ratified_paths(ctx: &Context) -> Result<GateOutcome> {
             anyhow!("ratified-paths cannot identify the forge: {e}"),
         )
     })?;
+    // `refuse_author_ratification` compares each ratifier with the pull request's author.
+    // A GitLab pipeline does not name the author, so it is read from the forge, and a run
+    // that cannot read it stops (exit 2) rather than compare with the pipeline starter.
+    let author = if cfg.refuse_author_ratification {
+        pull.author_on(access.api, &forge)
+            .map_err(|e| tag(Reason::Forge, anyhow!("ratified-paths {e:#}")))?
+    } else {
+        pull.author.clone().unwrap_or_default()
+    };
     let last_change = |p: &str| ctx.git.last_change_on_base(p);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -113,7 +122,7 @@ pub fn evaluate_ratified_paths(ctx: &Context) -> Result<GateOutcome> {
         cfg,
         &Input {
             pull_number: pull.number,
-            pull_author: &pull.author,
+            pull_author: &author,
             pull_body: ctx.pr_body.as_deref().unwrap_or(""),
             protected: &changed_protected,
             never_ratifiable: &never,

@@ -501,7 +501,7 @@ pub fn generate_schema() -> Value {
                     "reference_repos": { "$ref": "#/$defs/StringListOrReset", "description": "With verify_references: other repositories a reference may resolve in" },
                     "accept_pull_references": { "type": "boolean", "description": "With verify_references: a reference to a pull or merge request satisfies the gate" },
                     "waiver": { "type": "string", "enum": ["directive", "none"], "description": "Whether `no-issue: <reason>` is accepted (default: directive)" },
-                    "exempt_authors": { "$ref": "#/$defs/StringListOrReset", "description": "Pull-request authors (exact logins, case-insensitive) that need no tracking-issue reference, e.g. dependabot[bot]; matched against the event payload's author, never the run's actor" }
+                    "exempt_authors": { "$ref": "#/$defs/StringListOrReset", "description": "Pull-request authors (exact logins, case-insensitive) that need no tracking-issue reference, e.g. dependabot[bot]; matched against the event payload's author (on GitLab, the merge request's, read from the forge), never the run's actor" }
                 }
             },
             "ReviewThreadsGate": {

@@ -14,7 +14,11 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullContext {
     pub number: u64,
-    pub author: String,
+    /// The login that opened the pull request, when the run's context names it (an
+    /// Actions event payload's `pull_request.user.login`, a merged pull request read
+    /// from the forge). `None` on a GitLab merge-request pipeline, which names only the
+    /// login that started the pipeline: [`PullContext::author_on`] reads it from the forge.
+    pub author: Option<String>,
     /// The pull request's head commit. On a `pull_request` event `HEAD` is a merge
     /// commit, so this is read from the payload, never from the checkout.
     pub head_sha: String,
@@ -25,9 +29,35 @@ pub fn pull_context(event: &Value) -> Option<PullContext> {
     let pr = event.get("pull_request")?;
     Some(PullContext {
         number: pr.get("number")?.as_u64()?,
-        author: pr.get("user")?.get("login")?.as_str()?.to_string(),
+        author: Some(pr.get("user")?.get("login")?.as_str()?.to_string()),
         head_sha: pr.get("head")?.get("sha")?.as_str()?.to_string(),
     })
+}
+
+impl PullContext {
+    /// The pull request's author: the one the context names, else the one the forge
+    /// names ([`forge::pull_author`]). `Err` (tagged `forge`, exit 2) when the forge
+    /// cannot say: a check that compares logins with the author never guesses it, and
+    /// never takes the pipeline starter for it.
+    pub fn author_on(&self, api: &dyn ForgeApi, forge: &Forge) -> Result<String> {
+        match &self.author {
+            Some(login) => Ok(login.clone()),
+            None => forge::pull_author(api, forge, self.number).map_err(|e| {
+                tag(
+                    Reason::Forge,
+                    anyhow!("cannot read the author of {}: {e}", self.describe(forge)),
+                )
+            }),
+        }
+    }
+
+    /// `merge request !7` on GitLab, `pull request #7` elsewhere.
+    pub fn describe(&self, forge: &Forge) -> String {
+        match forge.kind {
+            forge::ForgeKind::GitLab => format!("merge request !{}", self.number),
+            _ => format!("pull request #{}", self.number),
+        }
+    }
 }
 
 /// Why this run's directive overrides are refused; empty when they stand.
@@ -70,6 +100,17 @@ pub fn judge(
         })?;
         let forge =
             forge().map_err(|e| tag(Reason::Forge, anyhow!("cannot identify the forge: {e}")))?;
+        let author = pull.author_on(api, &forge)?;
+        if author.trim().is_empty() {
+            // Nothing could tell the author's own approval apart from a reviewer's.
+            return Err(tag(
+                Reason::Forge,
+                anyhow!(
+                    "`directives.require_approval`: the author of {} is not known, so their own approval cannot be told apart",
+                    pull.describe(&forge)
+                ),
+            ));
+        }
         let approvers =
             forge::pull_approvers(api, &forge, pull.number, &pull.head_sha).map_err(|e| {
                 tag(
@@ -78,7 +119,7 @@ pub fn judge(
                 )
             })?;
         let approved = approvers.iter().any(|login| {
-            !login.eq_ignore_ascii_case(&pull.author)
+            !login.eq_ignore_ascii_case(&author)
                 && cfg
                     .allowed_override_actors
                     .iter()
@@ -121,7 +162,7 @@ mod tests {
     fn pull() -> PullContext {
         PullContext {
             number: 7,
-            author: "agent".into(),
+            author: Some("agent".into()),
             head_sha: "abc123".into(),
         }
     }
@@ -160,6 +201,87 @@ mod tests {
         }
         let none = judge(&cfg, 1, Some(&p), &forge, &api(serde_json::json!([]))).unwrap();
         assert_eq!(none.len(), 1);
+    }
+
+    /// A context that names no author (a GitLab merge-request pipeline) has it read from
+    /// the forge: the author's approval is refused even though the context never named
+    /// them, a reviewer's stands, and an author the forge cannot give is exit 2.
+    #[test]
+    fn an_author_the_context_does_not_name_is_read_from_the_forge() {
+        let cfg = DirectivesConfig {
+            require_approval: true,
+            allowed_override_actors: vec!["lead".into(), "agent".into()],
+            ..Default::default()
+        };
+        let unnamed = PullContext {
+            author: None,
+            ..pull()
+        };
+        let with_author = |reviews: Value, author: Value| {
+            let mut a = api(reviews);
+            a.responses.insert(
+                "github:repos/o/r/pulls/7".into(),
+                serde_json::json!({"user": author}),
+            );
+            a
+        };
+        let agent = serde_json::json!({"login": "agent"});
+        let refused = judge(
+            &cfg,
+            1,
+            Some(&unnamed),
+            &forge,
+            &with_author(approved_by("agent"), agent.clone()),
+        )
+        .unwrap();
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        let stands = judge(
+            &cfg,
+            1,
+            Some(&unnamed),
+            &forge,
+            &with_author(approved_by("lead"), agent),
+        )
+        .unwrap();
+        assert!(stands.is_empty(), "{stands:?}");
+
+        let reason = |r: Result<Vec<String>>| crate::could_not_check::classify(&r.unwrap_err()).0;
+        // The forge does not answer for the pull request, or names no author.
+        assert_eq!(
+            reason(judge(
+                &cfg,
+                1,
+                Some(&unnamed),
+                &forge,
+                &api(approved_by("lead"))
+            )),
+            Reason::Forge
+        );
+        assert_eq!(
+            reason(judge(
+                &cfg,
+                1,
+                Some(&unnamed),
+                &forge,
+                &with_author(approved_by("lead"), Value::Null)
+            )),
+            Reason::Forge
+        );
+        // A context whose author is empty cannot tell the author's approval apart.
+        let empty = PullContext {
+            author: Some(String::new()),
+            ..pull()
+        };
+        assert_eq!(
+            reason(judge(
+                &cfg,
+                1,
+                Some(&empty),
+                &forge,
+                &api(approved_by("lead"))
+            )),
+            Reason::Forge
+        );
     }
 
     #[test]

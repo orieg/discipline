@@ -1677,6 +1677,40 @@ pub fn pull_body_edits(
     Ok(out)
 }
 
+/// The login that opened pull request (or merge request) `number`, read from the forge.
+///
+/// A GitLab merge-request pipeline names no author: `GITLAB_USER_LOGIN` is the login that
+/// started the pipeline (a push to the source branch, a re-run, a manual job), so the
+/// author is read from `projects/:id/merge_requests/:iid` (`author.username`). GitHub,
+/// Gitea and Forgejo answer `pulls/{number}` (`user.login`). A pull request that is
+/// missing, or that names no author, is an error: the callers compare logins against it.
+pub fn pull_author(api: &dyn ForgeApi, forge: &Forge, number: u64) -> Result<String, String> {
+    let (path, field, what) = match forge.kind {
+        ForgeKind::GitLab => (
+            format!(
+                "projects/{}/merge_requests/{number}",
+                gitlab_project_id(&forge.repo)
+            ),
+            ["author", "username"],
+            format!("merge request !{number}"),
+        ),
+        ForgeKind::GitHub | ForgeKind::Gitea | ForgeKind::Forgejo => (
+            format!("repos/{}/pulls/{number}", forge.repo),
+            ["user", "login"],
+            format!("pull request #{number}"),
+        ),
+    };
+    let pull = api
+        .get(forge, &path)?
+        .ok_or_else(|| format!("{what} does not exist or is not visible"))?;
+    pull.get(field[0])
+        .and_then(|a| a.get(field[1]))
+        .and_then(|u| u.as_str())
+        .filter(|u| !u.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{what} names no author"))
+}
+
 /// GitLab: usernames that approve merge request `iid` **at** `head_sha`. The merge request's
 /// `sha` is its current head; an approval is only read when it is the head being checked
 /// (GitLab resets approvals on a new push when the project says so, and the check does not
@@ -2485,6 +2519,50 @@ mod tests {
         assert!(pull_approvers(&api, &forge, 8, "abc123")
             .unwrap_err()
             .contains("!8"));
+    }
+
+    #[test]
+    fn pull_author_is_the_opener_on_the_forge_and_never_guessed() {
+        use super::{pull_author, CannedApi};
+        let gitlab = Forge {
+            kind: ForgeKind::GitLab,
+            url: "https://gitlab.com".into(),
+            repo: "g/sub/p".into(),
+        };
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "gitlab:projects/g%2Fsub%2Fp/merge_requests/7".into(),
+            serde_json::json!({"iid": 7, "author": {"username": "owner"}}),
+        );
+        api.responses.insert(
+            "gitlab:projects/g%2Fsub%2Fp/merge_requests/8".into(),
+            serde_json::json!({"iid": 8, "author": {"username": " "}}),
+        );
+        api.responses.insert(
+            "gitlab:projects/g%2Fsub%2Fp/merge_requests/9".into(),
+            serde_json::Value::Null,
+        );
+        assert_eq!(pull_author(&api, &gitlab, 7).unwrap(), "owner");
+        assert!(pull_author(&api, &gitlab, 8)
+            .unwrap_err()
+            .contains("names no author"));
+        assert!(pull_author(&api, &gitlab, 9).unwrap_err().contains("!9"));
+        // Not canned: the forge could not be read.
+        assert!(pull_author(&api, &gitlab, 10).is_err());
+
+        let gitea = gitea();
+        api.responses.insert(
+            "gitea:repos/o/r/pulls/7".into(),
+            serde_json::json!({"number": 7, "user": {"login": "agent"}}),
+        );
+        api.responses.insert(
+            "gitea:repos/o/r/pulls/8".into(),
+            serde_json::json!({"number": 8, "user": null}),
+        );
+        assert_eq!(pull_author(&api, &gitea, 7).unwrap(), "agent");
+        assert!(pull_author(&api, &gitea, 8)
+            .unwrap_err()
+            .contains("#8 names no author"));
     }
 
     fn gitea() -> Forge {

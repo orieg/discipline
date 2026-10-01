@@ -428,6 +428,115 @@ fn refuse_author_ratification_needs_a_login_other_than_the_pull_requests() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
 
+/// A loopback GitLab: merge request !7 opened by `mr_author` (`None`: the merge request
+/// answers 404) closes issue 12, whose one note is `owner`'s ratification block.
+fn gitlab_ratified_by_owner(mr_author: Option<&str>) -> FakeForge {
+    let api = FakeForge::start();
+    match mr_author {
+        Some(a) => api.serve(
+            "projects/o%2Fr/merge_requests/7",
+            serde_json::json!({"iid": 7, "sha": "abc", "author": {"username": a}}),
+        ),
+        None => api.serve_raw(
+            "projects/o%2Fr/merge_requests/7",
+            404,
+            &[],
+            r#"{"message":"404 Not found"}"#,
+        ),
+    }
+    api.serve(
+        "projects/o%2Fr/merge_requests/7/closes_issues?per_page=100&page=1",
+        serde_json::json!([{"iid": 12, "web_url": "https://gitlab.example/o/r/-/issues/12"}]),
+    );
+    api.serve("projects/o%2Fr", serde_json::json!({"id": 1}));
+    api.serve(
+        "projects/o%2Fr/issues/12",
+        serde_json::json!({"iid": 12, "state": "opened"}),
+    );
+    api.serve(
+        "projects/o%2Fr/issues/12/notes?per_page=100&page=1",
+        serde_json::json!([{"id": 5, "author": {"username": "owner"}, "system": false,
+            "body": BLOCK, "created_at": LATER, "updated_at": LATER}]),
+    );
+    api
+}
+
+/// A GitLab merge-request pipeline, started by `starter` (`GITLAB_USER_LOGIN`).
+fn gitlab_ratify_check(repo: &Repo, api: &FakeForge, starter: &str) -> common::Run {
+    let url = api.url();
+    repo.run(
+        &[
+            "check",
+            "--base",
+            "main",
+            "--format",
+            "json",
+            "--policy-from",
+            "base",
+        ],
+        &[
+            ("GITLAB_CI", "true"),
+            ("CI_SERVER_URL", "https://gitlab.example"),
+            ("CI_PROJECT_PATH", "o/r"),
+            ("CI_MERGE_REQUEST_IID", "7"),
+            ("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "abc"),
+            ("GITLAB_USER_LOGIN", starter),
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ("GITLAB_TOKEN", "t"),
+            ("PR_BODY", "Closes #12"),
+            ("PR_TITLE", "chore: edit"),
+        ],
+    )
+}
+
+/// GitLab names no merge-request author in a pipeline: `GITLAB_USER_LOGIN` is whoever
+/// started it. `refuse_author_ratification` reads the author from the merge request, so
+/// the owner's ratification of their own merge request is refused when an agent's push
+/// started the pipeline, and stands when the owner re-ran the agent's merge request.
+#[test]
+fn refuse_author_ratification_reads_the_gitlab_author_from_the_merge_request() {
+    let policy = format!("{RATIFY}refuse_author_ratification = true\n");
+    let (repo, _) = protected_change(&policy, &[("scripts/check_x.py", "print('new')\n")]);
+
+    // Opened by `owner`, pipeline started by `agent`: the owner's own ratification.
+    let api = gitlab_ratified_by_owner(Some("owner"));
+    let run = gitlab_ratify_check(&repo, &api, "agent");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let c = codes(&run, "ratified-paths");
+    assert!(
+        c.contains(&"ratified-paths/protected-path-unratified".to_string())
+            && c.contains(&"ratified-paths/ratification-by-pull-author".to_string()),
+        "{c:?}"
+    );
+
+    // Opened by `agent`, pipeline re-run by `owner`: a second party ratified.
+    let api = gitlab_ratified_by_owner(Some("agent"));
+    let run = gitlab_ratify_check(&repo, &api, "owner");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(asked_for_the_merge_request(&api));
+
+    // The merge request cannot be read: exit 2, never the pipeline starter instead.
+    let api = gitlab_ratified_by_owner(None);
+    let run = gitlab_ratify_check(&repo, &api, "agent");
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.could_not_check().0, "forge");
+    let detail = run.json()["could_not_check"]["detail"].to_string();
+    assert!(detail.contains("author of merge request !7"), "{detail}");
+
+    // Without the option the author is not needed, and not asked for.
+    let (repo, _) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
+    let api = gitlab_ratified_by_owner(None);
+    let run = gitlab_ratify_check(&repo, &api, "agent");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!asked_for_the_merge_request(&api));
+}
+
+fn asked_for_the_merge_request(api: &FakeForge) -> bool {
+    api.requests()
+        .iter()
+        .any(|(p, _)| p.trim_start_matches('/') == "projects/o%2Fr/merge_requests/7")
+}
+
 #[test]
 fn a_glob_in_owner_ratified_paths_is_refused() {
     let (repo, event) = protected_change(RATIFY, &[("scripts/check_x.py", "print('new')\n")]);
