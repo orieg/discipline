@@ -268,6 +268,89 @@ impl TestFn {
     pub fn is_vacuous(&self) -> bool {
         self.effective_asserts() == 0 && !self.should_panic
     }
+
+    /// Whether this test is conditionally skipped under a CI environment check.
+    pub fn is_ci_skip(&self) -> bool {
+        self.conditional_ignore
+            .as_deref()
+            .is_some_and(is_ci_condition)
+    }
+}
+
+/// Returns whether the given variable or identifier represents a known CI environment variable name.
+pub fn is_ci_env_var_name(name: &str) -> bool {
+    let trimmed = name
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_matches('`');
+    let upper = trimmed.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CI" | "GITHUB_ACTIONS"
+            | "GITLAB_CI"
+            | "GITEA_ACTIONS"
+            | "FORGEJO_ACTIONS"
+            | "CONTINUOUS_INTEGRATION"
+            | "TRAVIS"
+            | "CIRCLECI"
+            | "BITBUCKET_BUILD_NUMBER"
+            | "BUILDKITE"
+            | "TEAMCITY_VERSION"
+            | "TF_BUILD"
+            | "APPVEYOR"
+            | "CIRRUS_CI"
+    )
+}
+
+/// Returns whether the condition text mentions a known CI environment variable name with word boundaries.
+pub fn is_ci_condition(cond: &str) -> bool {
+    const CI_VARS: &[&str] = &[
+        "CI",
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "GITEA_ACTIONS",
+        "FORGEJO_ACTIONS",
+        "CONTINUOUS_INTEGRATION",
+        "TRAVIS",
+        "CIRCLECI",
+        "BITBUCKET_BUILD_NUMBER",
+        "BUILDKITE",
+        "TEAMCITY_VERSION",
+        "TF_BUILD",
+        "APPVEYOR",
+        "CIRRUS_CI",
+    ];
+
+    CI_VARS.iter().any(|&var| cond_contains_ci_var(cond, var))
+}
+
+fn cond_contains_ci_var(text: &str, var: &str) -> bool {
+    let bytes = text.as_bytes();
+    let var_bytes = var.as_bytes();
+    if var_bytes.is_empty() || bytes.len() < var_bytes.len() {
+        return false;
+    }
+    for i in 0..=(bytes.len() - var_bytes.len()) {
+        if bytes[i..i + var_bytes.len()].eq_ignore_ascii_case(var_bytes) {
+            let ok_before = if i == 0 {
+                true
+            } else {
+                let b = bytes[i - 1];
+                !b.is_ascii_alphanumeric() && b != b'_'
+            };
+            let ok_after = if i + var_bytes.len() == bytes.len() {
+                true
+            } else {
+                let b = bytes[i + var_bytes.len()];
+                !b.is_ascii_alphanumeric() && b != b'_'
+            };
+            if ok_before && ok_after {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Aggregated assertion facts for non-test helper functions resolved in the same file.

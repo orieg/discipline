@@ -521,10 +521,63 @@ impl<'a> PythonExtractor<'a> {
         if let Some(body) = node.child_by_field_name("body") {
             self.scan_test_body(body, &mut test_fn, BodyMode::Test);
             self.collect_calls(body, scope, &mut calls);
+            if test_fn.conditional_ignore.is_none() && !test_fn.ignored {
+                if let Some(cond) = self.detect_python_conditional_early_exit(body) {
+                    test_fn.conditional_ignore = Some(cond);
+                }
+            }
         }
 
         self.facts.tests.push(test_fn);
         self.test_calls.push(calls);
+    }
+
+    fn detect_python_conditional_early_exit(&self, body: Node) -> Option<String> {
+        let mut cursor = body.walk();
+        let mut env_bindings = std::collections::HashSet::new();
+
+        for child in body.children(&mut cursor) {
+            if child.kind() == "expression_statement" {
+                if let Some(assign) = child.child(0) {
+                    if assign.kind() == "assignment" {
+                        let text = self.text(assign);
+                        if is_python_env_check(text) {
+                            if let Some(left) = assign.child_by_field_name("left") {
+                                let name = self.text(left).trim();
+                                if !name.is_empty() {
+                                    env_bindings.insert(name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if child.kind() == "if_statement" {
+                let cond_node = child.child_by_field_name("condition")?;
+                let cond_text = self.text(cond_node).trim();
+
+                let is_env_check = is_python_env_check(cond_text)
+                    || env_bindings.iter().any(|v| {
+                        cond_text == v
+                            || cond_text
+                                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                                .any(|t| t == v)
+                    });
+
+                let consequence = child.child_by_field_name("consequence")?;
+                let calls_skip = python_block_calls_skip(consequence, self.src);
+
+                if calls_skip {
+                    return Some(cond_text.to_string());
+                }
+
+                if is_env_check && python_block_returns_early(consequence) {
+                    return Some(cond_text.to_string());
+                }
+            }
+        }
+        None
     }
 
     /// pytest and unittest collection rules, with their default settings.
@@ -788,7 +841,14 @@ impl<'a> PythonExtractor<'a> {
                         || func_name == "pytest.xfail"
                         || func_name == "self.skipTest"
                     {
-                        test.ignored = true;
+                        match enclosing_python_if_condition(node, self.src) {
+                            Some(cond) if cond != "True" && cond != "1" => {
+                                if test.conditional_ignore.is_none() {
+                                    test.conditional_ignore = Some(cond);
+                                }
+                            }
+                            _ => test.ignored = true,
+                        }
                     } else if self
                         .vocab
                         .helper_fns
@@ -912,6 +972,67 @@ impl<'a> PythonExtractor<'a> {
         }
         false
     }
+}
+
+fn is_python_env_check(text: &str) -> bool {
+    text.contains("os.environ")
+        || text.contains("os.getenv")
+        || text.contains("environ.get")
+        || super::is_ci_condition(text)
+}
+
+fn python_block_returns_early(consequence: Node) -> bool {
+    let mut cursor = consequence.walk();
+    for child in consequence.children(&mut cursor) {
+        if child.kind() == "return_statement" {
+            return true;
+        }
+    }
+    false
+}
+
+fn python_block_calls_skip(consequence: Node, src: &[u8]) -> bool {
+    let mut cursor = consequence.walk();
+    for child in consequence.children(&mut cursor) {
+        if child.kind() == "expression_statement" {
+            if let Some(call) = child.child(0) {
+                if call.kind() == "call" {
+                    if let Some(func) = call.child_by_field_name("function") {
+                        if let Ok(name) = func.utf8_text(src) {
+                            if name == "pytest.skip"
+                                || name == "pytest.xfail"
+                                || name == "self.skipTest"
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn enclosing_python_if_condition(node: Node, src: &[u8]) -> Option<String> {
+    let mut cur = node;
+    while let Some(p) = cur.parent() {
+        match p.kind() {
+            "function_definition" | "lambda" => return None,
+            "if_statement" => {
+                let cond = p.child_by_field_name("condition")?;
+                let in_body = p
+                    .child_by_field_name("consequence")
+                    .is_some_and(|c| c.id() == cur.id());
+                if in_body {
+                    return cond.utf8_text(src).ok().map(|t| t.trim().to_string());
+                }
+            }
+            _ => {}
+        }
+        cur = p;
+    }
+    None
 }
 
 /// Abstract methods, overload signatures, Protocol members and `.pyi` stubs are
@@ -1834,5 +1955,84 @@ class ContractMixin:
             .unwrap();
         assert_eq!(facts.tests.len(), 1);
         assert_eq!(facts.tests[0].name, "ContractMixin::test_status");
+    }
+
+    #[test]
+    fn early_exit_in_python_test_under_env_or_ci_check_detected() {
+        let src = r#"
+import os
+import pytest
+
+def test_ci_return():
+    if os.getenv("CI"):
+        return
+    assert 1 == 1
+
+def test_ci_skip():
+    if os.environ.get("GITHUB_ACTIONS"):
+        pytest.skip("skipping in github actions")
+    assert 1 == 1
+
+def test_generic_env_return():
+    if "SKIP_SLOW" in os.environ:
+        return None
+    assert 1 == 1
+
+def test_guard_without_exit():
+    if os.getenv("CI"):
+        print("in CI")
+    assert 1 == 1
+
+def helper_guard():
+    if os.getenv("CI"):
+        return
+"#;
+        let pack = PythonPack;
+        let facts = pack
+            .extract("tests/test_env_check.py", src, &AssertVocabulary::default())
+            .unwrap();
+
+        let ci_return = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_ci_return")
+            .unwrap();
+        assert!(!ci_return.ignored);
+        assert_eq!(
+            ci_return.conditional_ignore.as_deref(),
+            Some("os.getenv(\"CI\")")
+        );
+
+        let ci_skip = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_ci_skip")
+            .unwrap();
+        assert!(!ci_skip.ignored);
+        assert_eq!(
+            ci_skip.conditional_ignore.as_deref(),
+            Some("os.environ.get(\"GITHUB_ACTIONS\")")
+        );
+
+        let generic_test = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_generic_env_return")
+            .unwrap();
+        assert!(!generic_test.ignored);
+        assert_eq!(
+            generic_test.conditional_ignore.as_deref(),
+            Some("\"SKIP_SLOW\" in os.environ")
+        );
+
+        let no_exit_test = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_guard_without_exit")
+            .unwrap();
+        assert!(!no_exit_test.ignored);
+        assert_eq!(no_exit_test.conditional_ignore, None);
+
+        assert!(facts.tests.iter().all(|t| t.name != "helper_guard"));
     }
 }

@@ -1213,8 +1213,13 @@ pub fn evaluate_ignored_tests(
             out.overrides.push(record);
             continue;
         }
+        let severity = if crate::ast::is_ci_condition(cond) {
+            crate::config::Severity::Warning
+        } else {
+            crate::config::Severity::Note
+        };
         out.push(
-            crate::config::Severity::Note,
+            severity,
             &crate::findings::TEST_CONDITIONALLY_SKIPPED,
             Some(path),
             Some(test.line),

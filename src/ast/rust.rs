@@ -506,8 +506,60 @@ impl<'a> Extractor<'a> {
             self.count_asserts(body, &mut test, is_fallible_return, direct_calls);
             self.macro_argument_calls(body, &mut test, direct_calls);
             super::dispatch_calls(body, self.src, &RS_DISPATCH, direct_calls);
+            if test.conditional_ignore.is_none() && !test.ignored {
+                if let Some(cond) = self.detect_conditional_early_exit(body) {
+                    test.conditional_ignore = Some(cond);
+                }
+            }
         }
         Some(test)
+    }
+
+    fn detect_conditional_early_exit(&self, body: Node) -> Option<String> {
+        let mut cursor = body.walk();
+        let mut env_bindings = std::collections::HashSet::new();
+
+        for child in body.children(&mut cursor) {
+            let stmt = if child.kind() == "expression_statement" {
+                child.child(0).unwrap_or(child)
+            } else {
+                child
+            };
+
+            if stmt.kind() == "let_declaration" {
+                let text = self.text(stmt);
+                if is_rust_env_check(text) {
+                    if let Some(pat) = stmt.child_by_field_name("pattern") {
+                        let name = self.text(pat).trim();
+                        if !name.is_empty() {
+                            env_bindings.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+
+            if stmt.kind() == "if_expression" {
+                let cond_node = stmt.child_by_field_name("condition")?;
+                let cond_text = self.text(cond_node).trim();
+
+                let is_env_check = is_rust_env_check(cond_text)
+                    || super::is_ci_condition(cond_text)
+                    || env_bindings.iter().any(|v| {
+                        cond_text == v
+                            || cond_text
+                                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                                .any(|t| t == v)
+                    });
+
+                if is_env_check {
+                    let consequence = stmt.child_by_field_name("consequence")?;
+                    if rust_block_returns_early(consequence) {
+                        return Some(cond_text.to_string());
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn count_asserts(
@@ -937,6 +989,31 @@ fn attribute_name(attr_text: &str) -> String {
         .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | ':'))
         .collect();
     last_segment(&path).to_string()
+}
+
+fn is_rust_env_check(text: &str) -> bool {
+    text.contains("env::var")
+        || text.contains("std::env::var")
+        || text.contains("option_env!")
+        || text.contains("env::var_os")
+        || text.contains("std::env::var_os")
+        || text.contains("var_os")
+        || super::is_ci_condition(text)
+}
+
+fn rust_block_returns_early(consequence: Node) -> bool {
+    let mut cursor = consequence.walk();
+    for child in consequence.children(&mut cursor) {
+        let node = if child.kind() == "expression_statement" {
+            child.child(0).unwrap_or(child)
+        } else {
+            child
+        };
+        if node.kind() == "return_expression" {
+            return true;
+        }
+    }
+    false
 }
 
 /// Macros that run none of their arguments: they read them as tokens or names.
@@ -2285,5 +2362,95 @@ fn test_via_helper() {
         );
         assert_eq!(test.total_asserts, 2);
         assert_eq!(test.strong_asserts, 2);
+    }
+
+    #[test]
+    fn early_exit_in_test_under_env_or_ci_check_detected() {
+        let src = r#"
+#[test]
+fn test_ci_return() {
+    if std::env::var("CI").is_ok() {
+        return;
+    }
+    assert_eq!(1, 1);
+}
+
+#[test]
+fn test_option_env_return() {
+    if option_env!("GITHUB_ACTIONS").is_some() {
+        return ();
+    }
+    assert_eq!(1, 1);
+}
+
+#[test]
+fn test_generic_env_return() {
+    if env::var("SKIP_SLOW").is_ok() {
+        return;
+    }
+    assert_eq!(1, 1);
+}
+
+#[test]
+fn test_guard_without_exit() {
+    if std::env::var("CI").is_ok() {
+        println!("in CI");
+    }
+    assert_eq!(1, 1);
+}
+
+fn helper_guard() {
+    if std::env::var("CI").is_ok() {
+        return;
+    }
+}
+"#;
+        let pack = RustPack;
+        let facts = pack
+            .extract("tests/env_check.rs", src, &AssertVocabulary::default())
+            .unwrap();
+
+        let ci_test = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_ci_return")
+            .unwrap();
+        assert!(!ci_test.ignored);
+        assert_eq!(
+            ci_test.conditional_ignore.as_deref(),
+            Some("std::env::var(\"CI\").is_ok()")
+        );
+
+        let opt_test = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_option_env_return")
+            .unwrap();
+        assert!(!opt_test.ignored);
+        assert_eq!(
+            opt_test.conditional_ignore.as_deref(),
+            Some("option_env!(\"GITHUB_ACTIONS\").is_some()")
+        );
+
+        let generic_test = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_generic_env_return")
+            .unwrap();
+        assert!(!generic_test.ignored);
+        assert_eq!(
+            generic_test.conditional_ignore.as_deref(),
+            Some("env::var(\"SKIP_SLOW\").is_ok()")
+        );
+
+        let no_exit_test = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_guard_without_exit")
+            .unwrap();
+        assert!(!no_exit_test.ignored);
+        assert_eq!(no_exit_test.conditional_ignore, None);
+
+        assert!(facts.tests.iter().all(|t| t.name != "helper_guard"));
     }
 }
