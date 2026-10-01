@@ -1423,7 +1423,9 @@ mod tests {
             )),
             Status::Info
         );
-        // secret scanning: hidden without an admin token; information when off.
+        // secret scanning: hidden without an admin token; information when off; never a
+        // failure (asserted here, not in the loop below: CodeQL's cleartext-logging query
+        // reads any formatted value of this finding as a secret).
         assert_eq!(st(github_secret_scanning(&json!({}))), Status::Warn);
         let sa = |a: &str, b: &str| json!({"security_and_analysis": {"secret_scanning": {"status": a}, "secret_scanning_push_protection": {"status": b}}});
         assert_eq!(
@@ -1461,7 +1463,6 @@ mod tests {
         for f in [
             github_auto_merge(&json!({"allow_auto_merge": true}), Some(0)),
             github_forking(&json!({"visibility": "private", "allow_forking": true})),
-            github_secret_scanning(&json!({})),
             dependency_alerts(false, None),
         ] {
             assert_ne!(f.status, Status::Fail, "{}", f.id);
