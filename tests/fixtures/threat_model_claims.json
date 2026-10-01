@@ -1230,6 +1230,18 @@
         "tests/test_doctor.rs::doctor_says_whether_the_repository_has_a_security_policy"
       ],
       "verdict": "holds"
+    },
+    {
+      "id": "doctor-gitlab-groups-environments",
+      "category": "doctor",
+      "claim": "on GitLab, doctor reports a top-level group that does not require two-factor authentication, and the environments that masked or hidden variables are scoped to without a deployment approval",
+      "source": "docs/guides/ci-platforms.md:\u00a78 access and identity, webhooks and environments",
+      "code": "src/doctor_settings.rs:gitlab_environment_reviewers",
+      "pinning_tests": [
+        "src/doctor_settings.rs::gitlab_reads_the_top_level_group_and_environment_approvals",
+        "tests/test_doctor.rs::doctor_reads_gitlab_settings_and_audits_the_token"
+      ],
+      "verdict": "holds"
     }
   ]
 }

@@ -88,7 +88,7 @@ Discipline stands between a change and the branch it merges into. This section s
 - A waiver pattern repeated from change to change: `max_overrides` caps each change and `audit` shows the pattern, but nothing blocks it.
 - A reviewer who trusts a fluent description or a green check.
 - A crafted repository that makes discipline do work out of proportion to its size: `SECURITY.md` treats it as a vulnerability, but no test bounds it.
-- Repository and organisation settings `doctor` does not read yet: GitLab group settings and environments, and a webhook's secret on GitLab, Gitea and Forgejo, which their APIs do not show (#366).
+- A webhook's secret on GitLab, Gitea and Forgejo, which their APIs do not show, so `doctor` counts their webhooks without judging the secret.
 - No central log. `audit` reads the record back from git and the forge, and the hooks' observe log stays on the machine that wrote it; nothing alerts on a pattern as it happens.
 - Anything outside the diff: the agent's runtime behaviour, its network access, and what it does with credentials (§1.3).
 
