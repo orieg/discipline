@@ -727,6 +727,7 @@ Directives must begin on their own line. Mentions mid-sentence or inside markdow
 | `allow-build-hook:` / `discipline:allow(build-hooks)` / `allow(build-hooks)` | `build-hooks` | Hook name (`postinstall`) or file path |
 | `allow-regression:` / `discipline:allow(bench-regression)` / `allow(bench-regression)` | `bench-regression` | Benchmark name, file stem, or arm, plus non-empty rationale |
 | `allow-command:` / `discipline:allow(command)` / `allow(command)` | `command` | Subcommand or command line invocation, plus non-empty rationale |
+| `allow-behavior-change:` / `discipline:allow(behavior-change)` / `allow(behavior-change)` | `command` (`base-tests` preset) | Test identifier or function name, plus non-empty rationale |
 | `allow-dependency:` / `discipline:allow(dependency-delta)` / `allow(dependency-delta)` | `dependency-delta` | Dependency package name or manifest path |
 | `allow-test-shrink:` / `allow-floor-drop:` / `discipline:allow(test-budget)` / `allow(test-budget)` / `discipline:allow(test-floor)` / `allow(test-floor)` | `test-budget`, `test-floor` | Test count delta, budget parameter, or suite name |
 | `allow-ci-weakening:` / `allow-unpinned-action:` / `discipline:allow(ci-integrity)` / `allow(ci-integrity)` | `ci-integrity` | Workflow path, job id, or security check rationale |
