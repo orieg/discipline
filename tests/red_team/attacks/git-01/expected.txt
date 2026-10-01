@@ -1,0 +1,4 @@
+discipline exit: 1
+failing: ['unsafe-safety-comment/safety-comment-missing']
+overrides: 0
+HOLDS: modification detected despite .gitattributes * -diff with unsafe-safety-comment finding

@@ -67,7 +67,7 @@ pub fn is_instruction_file(path: &str) -> bool {
 }
 
 /// Code points that render as nothing or reorder what renders.
-fn invisible_class(c: char) -> Option<&'static str> {
+pub(crate) fn invisible_class(c: char) -> Option<&'static str> {
     match c as u32 {
         0x200B..=0x200F | 0x2060..=0x2064 | 0xFEFF | 0x180E | 0x00AD => Some("zero-width"),
         0x202A..=0x202E | 0x2066..=0x2069 => Some("bidirectional-control"),

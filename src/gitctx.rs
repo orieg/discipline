@@ -558,6 +558,7 @@ impl GitCtx {
         let tree = self.base_tree()?;
         let mut opts = DiffOptions::new();
         opts.context_lines(0);
+        opts.force_text(true);
         let mut diff = if self.staged {
             self.repo
                 .diff_tree_to_index(tree.as_ref(), None, Some(&mut opts))?

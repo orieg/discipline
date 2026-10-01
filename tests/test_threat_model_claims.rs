@@ -5,6 +5,9 @@
 //! - Every test named in `pinning_tests` must actually exist in the test suite (no stale or renamed references).
 //! - When untested claims exist, the test suite reports them as the target list for adversarial red-teaming.
 
+mod common;
+
+use common::Repo;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -621,5 +624,82 @@ fn sec_ratified_paths_adversarial_blocks() {
     assert_eq!(
         parsed[0].refused[0].1,
         "it is a glob; name each path exactly"
+    );
+}
+
+/// Attack Probe (esc-10): Directives with punctuation-only or single-character rationale are rejected.
+///
+/// Pinned by claim `gate-directive-rationale-punctuation-rejected` (#385).
+#[test]
+fn sec_directive_punctuation_rationale_rejected() {
+    let names = discipline::tokens::REMOVES;
+    for punct in [".", "?", "!", "/", "_", "*", "::", "x", "1"] {
+        let line = format!("removes: tests/old.rs {punct}\n");
+        let dirs = discipline::tokens::parse_directives_with_names(
+            &line,
+            names,
+            discipline::tokens::OverrideSource::PrBody,
+        );
+        assert!(
+            dirs.is_empty() || !dirs[0].covers("tests/old.rs"),
+            "punctuation/single-char '{punct}' after subject must be rejected"
+        );
+    }
+}
+
+/// Attack Probe (esc-11): Directives using homoglyphs, confusables, or invisible characters to spell placeholders are rejected.
+///
+/// Pinned by claim `gate-directive-placeholder-confusables-rejected` (#385).
+#[test]
+fn sec_directive_confusable_placeholder_rejected() {
+    let names = discipline::tokens::REMOVES;
+    for confusable in [
+        "t\u{043e}d\u{043e}",                        // Cyrillic small letter o
+        "t\u{200b}o\u{200b}d\u{200b}o",              // zero-width space
+        "ｔｏｄｏ",                                  // fullwidth Latin
+        "ｆｉｘｍｅ",                                // fullwidth Latin
+        "t\u{043e}d\u{043e} f\u{0456}xme",           // mixed Cyrillic/Latin multi-token
+        "n/a\u{feff}",                               // byte order mark
+        "todo\u{200b}fixme",                         // zero-width space between placeholder words
+        "todo\u{200b}tbd",                           // zero-width separator
+        "t\u{200b}o\u{200b}d\u{200b}o\u{200b}fixme", // zero-width inside and between words
+        "\u{1D42D}\u{1D428}\u{1D41D}\u{1D428}",      // mathematical bold todo
+        "to\u{0301}do",                              // combining acute mark
+        "t0d0",                                      // leetspeak digits
+        "todo.",                                     // trailing sentence period
+        "TBD!",                                      // trailing sentence exclamation
+    ] {
+        let line = format!("removes: tests/old.rs {confusable}\n");
+        let dirs = discipline::tokens::parse_directives_with_names(
+            &line,
+            names,
+            discipline::tokens::OverrideSource::PrBody,
+        );
+        assert!(
+            dirs.is_empty() || !dirs[0].covers("tests/old.rs"),
+            "confusable placeholder '{confusable}' after subject must be rejected"
+        );
+    }
+}
+
+/// Attack Probe (git-01): .gitattributes `* -diff` does not mask file modifications or changes.
+///
+/// Pinned by claim `sec-gitattributes-diff-masking-rejected` (#385).
+#[test]
+fn sec_gitattributes_diff_masking_rejected() {
+    let repo = Repo::new();
+    repo.write(".gitattributes", "* -diff\n");
+    repo.write(
+        "src/lib.rs",
+        "pub fn foo() {\n    unsafe { std::ptr::null::<i32>().read(); }\n}\n",
+    );
+    repo.commit("chore: mask diff and inject unsafe block");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "unsafe code must not pass despite * -diff");
+    let violations = run.violations("unsafe-safety-comment");
+    assert!(
+        violations.iter().any(|v| v["code"] == "unsafe-safety-comment/safety-comment-missing"),
+        "unsafe-safety-comment must report undocumented unsafe despite .gitattributes * -diff: {:?}",
+        violations
     );
 }

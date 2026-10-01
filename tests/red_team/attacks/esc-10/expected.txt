@@ -1,0 +1,10 @@
+probe '.' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+probe '?' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+probe 'x' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+HOLDS: all punctuation/single-char rationales rejected with deletion-rationale diagnostic

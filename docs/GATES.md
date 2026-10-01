@@ -535,7 +535,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Conditional runtime early-returns (`if condition { return; }`).
   - Dynamic test framework skips invoked within function bodies (`pytest.skip(...)`).
   - Commented-out test functions in languages other than Rust (the Rust pack reports them here).
-- **Lifting directive:** `allow-ignore: <test-name> <reason>`. A reason that is empty or a placeholder (`todo`, `tbd`, `fix later`, `temporary`, `wip`) does not lift the skip: it is reported as `Skip Justification Insufficient`.
+- **Lifting directive:** `allow-ignore: <test-name> <reason>`. A reason that is empty, a placeholder (`todo`, `tbd`, `none`, `n/a`, `...`, `<reason>`, `ok`, `temp`, `dummy`, `null`, `placeholder`, `asdf`, folded across Unicode confusables, combining marks, invisible characters, and leetspeak), or contains fewer than two alphanumeric characters does not lift the skip: it is reported as `Skip Justification Insufficient`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `approved_predicates`.
 
 #### `error-swallowing`
@@ -696,7 +696,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - File renames where `git` detects similarity above rename thresholds (properly treated as modifications).
   - Unscoped deletions when `require_scope = false` is configured (waives all deletions in the PR).
-- **Lifting directive:** `removes: <path-or-test> <reason>`, `deletes: <path-or-test> <reason>`, or namespaced `discipline: removes: <path-or-test> <reason>`.
+- **Lifting directive:** `removes: <path-or-test> <reason>`, `deletes: <path-or-test> <reason>`, or namespaced `discipline: removes: <path-or-test> <reason>`. A reason that is empty, a placeholder (`todo`, `tbd`, `none`, `n/a`, `...`, `<reason>`, `ok`, `temp`, `dummy`, `null`, `placeholder`, `asdf`), or contains fewer than two alphanumeric characters does not lift the finding.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `paths`, `require_scope`, `allow_hidden`.
 
 #### `agents-md`

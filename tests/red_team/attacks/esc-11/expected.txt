@@ -1,0 +1,22 @@
+probe 'zero-width space in placeholder' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+probe 'Cyrillic homoglyph' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+probe 'fullwidth Latin' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+probe 'zero-width separator between placeholders' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+probe 'mathematical bold' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+probe 'combining acute mark' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+probe 'leetspeak digits' exit: 1
+failing: ['deletion-rationale/file-deleted-without-rationale']
+overrides: 0
+HOLDS: all confusable/invisible placeholder evasions rejected with deletion-rationale diagnostic
