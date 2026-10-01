@@ -6199,6 +6199,42 @@ fn md_file_with_nul_byte_still_fires_time_estimates() {
 }
 
 #[test]
+fn a_text_file_that_starts_like_an_executable_is_still_read() {
+    // `MZ = 0` is valid Python and is also the DOS/PE header. Read as binary, the file was
+    // skipped by every gate that reads whole files, so one prefix line hid its content.
+    let repo = Repo::new();
+    let leak = format!("MZ = 0\nHOME_DIR = \"/{}/alice/project\"\n", "Users");
+    repo.write("src/paths.py", &leak);
+    repo.write("notes", &leak);
+    repo.write(
+        "src/load.py",
+        "MZ = 0\ndef load():\n    try:\n        open(\"x\")\n    except Exception:\n        pass\n",
+    );
+    // A real executable's header carries NUL bytes: still binary, never scanned.
+    let mut exe = b"MZ\x90\x00\x03\x00\x00\x00".to_vec();
+    exe.extend(leak.as_bytes());
+    std::fs::write(repo.file("tool"), exe).unwrap();
+    repo.commit("feat: add");
+    let run = repo.check(&[]);
+    for (gate, file) in [
+        ("pii", "src/paths.py"),
+        ("pii", "notes"),
+        ("error-swallowing", "src/load.py"),
+    ] {
+        assert!(
+            run.violations(gate).iter().any(|v| v["file"] == file),
+            "{gate} skipped {file}: {}",
+            run.stdout
+        );
+    }
+    assert!(
+        !run.violations("pii").iter().any(|v| v["file"] == "tool"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
 fn md_file_with_nul_byte_still_fires_pii() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);

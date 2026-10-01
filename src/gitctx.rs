@@ -1208,38 +1208,9 @@ fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) 
 }
 
 pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
-    // 1. Check known binary magic bytes
-    if bytes.starts_with(b"\x7fELF") // ELF
-        || bytes.starts_with(b"\xfe\xed\xfa\xce") // Mach-O 32-bit
-        || bytes.starts_with(b"\xfe\xed\xfa\xcf") // Mach-O 64-bit
-        || bytes.starts_with(b"\xce\xfa\xed\xfe") // Mach-O 32-bit rev
-        || bytes.starts_with(b"\xcf\xfa\xed\xfe") // Mach-O 64-bit rev
-        || bytes.starts_with(b"\xca\xfe\xba\xbe") // Mach-O fat / Java class
-        || bytes.starts_with(b"MZ") // Windows PE / DOS
-        || bytes.starts_with(b"\0asm") // WebAssembly
-        || bytes.starts_with(b"%PDF-") // PDF
-        || bytes.starts_with(b"\x89PNG\r\n\x1a\n") // PNG
-        || bytes.starts_with(b"\xff\xd8\xff") // JPEG
-        || bytes.starts_with(b"GIF87a") // GIF
-        || bytes.starts_with(b"GIF89a") // GIF
-        || (bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP") // WebP
-        || bytes.starts_with(b"PK\x03\x04") // Zip / Jar
-        || bytes.starts_with(b"PK\x05\x06") // Empty Zip
-        || bytes.starts_with(b"PK\x07\x08") // Spanned Zip
-        || bytes.starts_with(b"\x1f\x8b") // Gzip
-        || bytes.starts_with(b"BZh") // Bzip2
-        || bytes.starts_with(b"\xfd7zXZ\x00") // XZ
-        || bytes.starts_with(b"7z\xbc\xaf\x27\x1c") // 7z
-        || (bytes.len() >= 262 && &bytes[257..262] == b"ustar") // Tar
-        || bytes.starts_with(b"SQLite format 3\0") // SQLite
-        || bytes.starts_with(b"PAR1") // Parquet
-        || bytes.starts_with(b"ARROW1")
-    // Arrow
-    {
-        return true;
-    }
-
-    // 2. Check file extension
+    // 1. A known text extension is text, whatever its first bytes: `MZ = 0` is valid Python
+    //    and the DOS/PE header, and a file read as binary is skipped by every gate that reads
+    //    whole files.
     let ext = std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -1313,6 +1284,32 @@ pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
         return false;
     }
 
+    // 2. Magic numbers with a non-printable byte cannot open a text file. Printable ones
+    //    (`MZ`, `%PDF-`, `GIF89a`, `BZh`, `PAR1`, `ARROW1`) are left to the NUL check below,
+    //    which every real file of those formats meets in its first kilobyte.
+    if bytes.starts_with(b"\x7fELF") // ELF
+        || bytes.starts_with(b"\xfe\xed\xfa\xce") // Mach-O 32-bit
+        || bytes.starts_with(b"\xfe\xed\xfa\xcf") // Mach-O 64-bit
+        || bytes.starts_with(b"\xce\xfa\xed\xfe") // Mach-O 32-bit rev
+        || bytes.starts_with(b"\xcf\xfa\xed\xfe") // Mach-O 64-bit rev
+        || bytes.starts_with(b"\xca\xfe\xba\xbe") // Mach-O fat / Java class
+        || bytes.starts_with(b"\0asm") // WebAssembly
+        || bytes.starts_with(b"\x89PNG\r\n\x1a\n") // PNG
+        || bytes.starts_with(b"\xff\xd8\xff") // JPEG
+        || (bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP") // WebP
+        || bytes.starts_with(b"PK\x03\x04") // Zip / Jar
+        || bytes.starts_with(b"PK\x05\x06") // Empty Zip
+        || bytes.starts_with(b"PK\x07\x08") // Spanned Zip
+        || bytes.starts_with(b"\x1f\x8b") // Gzip
+        || bytes.starts_with(b"\xfd7zXZ\x00") // XZ
+        || bytes.starts_with(b"7z\xbc\xaf\x27\x1c") // 7z
+        || (bytes.len() >= 262 && &bytes[257..262] == b"ustar") // Tar
+        || bytes.starts_with(b"SQLite format 3\0")
+    // SQLite
+    {
+        return true;
+    }
+
     const KNOWN_BINARY_EXTS: &[&str] = &[
         "png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "tiff", "tif", "mp4", "mp3", "wav",
         "ogg", "avi", "mov", "webm", "flac", "aac", "m4a", "pdf", "doc", "docx", "ppt", "pptx",
@@ -1333,6 +1330,24 @@ pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_known_text_extension_is_text_and_printable_magic_needs_a_nul() {
+        // Text that starts with a printable magic number.
+        assert!(!is_binary_file("tests/test_calc.py", b"MZ = 0\n"));
+        assert!(!is_binary_file("docs/plan.md", b"MZ ships later\n"));
+        assert!(!is_binary_file("notes", b"MZ = 0\n"));
+        assert!(!is_binary_file("NOTES", b"BZh is a prefix\n"));
+        assert!(!is_binary_file("data", b"%PDF-like text\n"));
+        // A known text extension stays text even with a non-printable magic number.
+        assert!(!is_binary_file("src/a.py", b"\x7fELF\x02\x01"));
+        // Real files of these formats.
+        assert!(is_binary_file("tool", b"MZ\x90\x00\x03\x00"));
+        assert!(is_binary_file("tool", b"\x7fELF\x02\x01\x01\x00"));
+        assert!(is_binary_file("image", b"\x89PNG\r\n\x1a\nIHDR"));
+        assert!(is_binary_file("a.pdf", b"%PDF-1.7\n"));
+        assert!(is_binary_file("blob", b"plain then \0"));
+    }
 
     #[test]
     fn the_base_fetch_overrides_repository_commands_and_keeps_the_runners() {

@@ -607,6 +607,19 @@
       "verdict": "holds"
     },
     {
+      "id": "fc-f7-text-extension-read-as-text",
+      "category": "fail_closed_contract",
+      "claim": "A source file is not hidden from the gates by starting with a binary format's printable magic number: a known text extension is read as text, and a printable magic number counts only with a NUL byte",
+      "source": "docs/ARCHITECTURE.md:F7",
+      "code": "src/gitctx.rs:is_binary_file",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::a_text_file_that_starts_like_an_executable_is_still_read",
+        "src/gitctx.rs::a_known_text_extension_is_text_and_printable_magic_needs_a_nul",
+        "tests/test_gates_e2e.rs::md_file_with_nul_byte_still_fires_pii"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "sec-hidden-directive-note-no-echo",
       "category": "security_policy",
       "claim": "A refused hidden directive is noted once, on its directive's gate, by name and location only: the report never repeats text that was hidden from reviewers",

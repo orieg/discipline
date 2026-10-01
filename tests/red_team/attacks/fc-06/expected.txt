@@ -1,0 +1,6 @@
+[none] discipline exit: 1
+  findings: ['error-swallowing/empty-error-handler-added', 'instruction-smuggling/instruction-like-text-added', 'pii/host-or-pii-leak', 'stub-bodies/stub-body-added', 'time-estimates/time-estimate', 'vacuous-tests/vacuous-test-added']
+  notes naming a file: []
+[MZ] discipline exit: 1
+  findings: ['error-swallowing/empty-error-handler-added', 'instruction-smuggling/instruction-like-text-added', 'pii/host-or-pii-leak', 'stub-bodies/stub-body-added', 'time-estimates/time-estimate', 'vacuous-tests/vacuous-test-added']
+  notes naming a file: []
