@@ -401,6 +401,13 @@ discipline doctor --strict       # warnings fail too (exit 1)
 
   GitHub shows the base permission and the two-factor requirement to an organisation owner's token only, so other tokens get `could not check` (RUN, 2026-09-30, owner and member tokens). A repository owned by a personal account has no organisation settings (information). Gitea and Forgejo expose no such organisation settings (RUN, `swagger.v1.json`); GitLab's group settings are not read yet.
 
+**Webhooks and environments** (#366):
+- `webhooks`, reported by host only (never the path, which often carries a token, or credentials in the URL):
+  - GitHub: a warning for a webhook with no secret or with TLS verification off (`insecure_ssl`);
+  - GitLab: a warning when TLS verification is off (`enable_ssl_verification`). GitLab returns no secret token, so its presence is not judged;
+  - Gitea and Forgejo: information with a count, since they return neither (RUN, 1.24 and 12, with a webhook created with a secret).
+- `environment-reviewers`: on GitHub, information naming the deployment environments that hold secrets but need no required reviewer, with their secret counts (never the secrets' names). Not available elsewhere: Gitea and Forgejo have no environments, and GitLab's are not read yet.
+
 GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to an admin token only (RUN, 2026-09-30, against a public repository with an admin and a read token). Gitea 1.24 and Forgejo 12 expose none of these four settings in their API description (RUN, `swagger.v1.json`).
 
 **Coverage against the OWASP CI/CD Security Cheat Sheet and OpenSSF Scorecard.** Every recommendation of the [cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/CI_CD_Security_Cheat_Sheet.html) and every [Scorecard check](https://github.com/ossf/scorecard/blob/main/docs/checks.md), mapped to a `doctor` finding, a gate, "not checked" with the reason, or out of scope. Scorecard measures a repository's history and practices; `doctor` reads the settings that exist now.
@@ -422,14 +429,14 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Cheat sheet, pipeline: protect the CI configuration | `workflow-protection`; the `ci-integrity` gate and `policy_from: base` |
 | Cheat sheet, pipeline: logging | out of scope; `discipline audit` reads the record back |
 | Cheat sheet, pipeline: SAST, DAST, IaC scanning | out of scope; the `command` gate can run a scanner |
-| Cheat sheet, pipeline: manual approval before production deploys | not checked yet (#366, environments) |
+| Cheat sheet, pipeline: manual approval before production deploys | `environment-reviewers` (GitHub) |
 | Cheat sheet, pipeline: no `--privileged` containers | the `sandbox-config` gate (workflow job and service containers) |
 | Cheat sheet, pipeline: version-controlled pipeline configuration | the `ci-integrity` gate |
 | Cheat sheet, IAM: secrets management | `secret-scoping`, `forge-token`, `secret-scanning`; the `shell-secrets` gate |
 | Cheat sheet, IAM: least privilege | `default-token`, `actions-approve-prs`, `agent-permission`, `org-base-permission`, `deploy-keys` |
 | Cheat sheet, IAM: identity lifecycle | out of scope (identity provider) |
 | Cheat sheet, third-party code: dependency management | `dependency-alerts`, `actions-sha-pinning`; the `dependency-delta` gate |
-| Cheat sheet, third-party code: plug-ins and integrations | `allowed-actions`, `imposter-commit`, `nested-action-pins`; MCP server lists in the `sandbox-config` gate; webhooks not checked yet (#366) |
+| Cheat sheet, third-party code: plug-ins and integrations | `allowed-actions`, `imposter-commit`, `nested-action-pins`; MCP server lists in the `sandbox-config` gate; `webhooks` |
 | Cheat sheet: integrity assurance | `immutable-releases`, `tag-protection`; the action checks the release attestation |
 | Cheat sheet: visibility and monitoring | out of scope; `discipline audit` reads the record back |
 | Scorecard Binary-Artifacts | partly the `archive-contents` gate (archives in the diff); not a setting |
@@ -451,7 +458,7 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Scorecard Signed-Releases | `immutable-releases`, `tag-protection`; the action checks the release attestation |
 | Scorecard Token-Permissions | `default-token`; the `ci-integrity` gate (workflow token permissions) |
 | Scorecard Vulnerabilities | `dependency-alerts` (information) |
-| Scorecard Webhooks | not checked yet (#366) |
+| Scorecard Webhooks | `webhooks` |
 
 ### Protection checklist
 
