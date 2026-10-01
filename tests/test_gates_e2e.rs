@@ -3316,6 +3316,81 @@ fn error_swallowing_is_a_delta_outside_tests_across_languages() {
 }
 
 #[test]
+fn error_swallowing_reads_default_literal_returns_and_js_promise_catch() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "pkg/io.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        return []\n",
+    );
+    repo.write(
+        "web/api.ts",
+        "export function warm(p: Promise<void>) {\n  p.catch(() => {});\n}\n",
+    );
+    repo.commit("feat: best-effort handlers");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative controls: the existing handlers move, a handler returns a computed value,
+    // and a rejection handler does something with the error.
+    repo.write(
+        "pkg/io.py",
+        "def head(p):\n    return p[:1]\n\n\ndef load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        return []\n\n\ndef size(p):\n    try:\n        return len(open(p).read())\n    except OSError as e:\n        return fallback(e)\n",
+    );
+    repo.write(
+        "web/api.ts",
+        "export const n = 1;\n\nexport function warm(p: Promise<void>) {\n  p.catch(() => {});\n}\n\nexport function cool(p: Promise<void>) {\n  p.catch((err) => report(err));\n}\n",
+    );
+    repo.commit("refactor: tidy");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("error-swallowing").is_empty(),
+        "{:?}",
+        quiet.violations("error-swallowing")
+    );
+
+    // New default-literal handlers and a new silenced promise.
+    repo.write(
+        "pkg/io.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        return []\n\n\ndef count(p):\n    try:\n        return len(open(p).read())\n    except OSError:\n        return 0\n",
+    );
+    repo.write(
+        "web/api.ts",
+        "export function warm(p: Promise<void>) {\n  p.catch(() => {});\n}\n\nexport function more(p: Promise<number[]>) {\n  return p.catch(() => []);\n}\n\nexport async function size(q: string) {\n  try { return await len(q); } catch (e) { return 0; }\n}\n",
+    );
+    repo.commit("fix: quiet the failures");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut got: Vec<(String, u64, String)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+                v["title"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "pkg/io.py".to_string(),
+                11,
+                "Empty Error Handler Added".to_string()
+            ),
+            ("web/api.ts".to_string(), 6, "Error Silenced".to_string()),
+            (
+                "web/api.ts".to_string(),
+                10,
+                "Empty Error Handler Added".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
 fn a_test_that_gains_a_retry_marker_is_reported_through_ignored_tests() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);

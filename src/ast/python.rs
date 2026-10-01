@@ -1042,13 +1042,27 @@ pub const PYTHON_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     arm_of: &[],
     body_fields: &["block"],
     ignored_kinds: &["comment"],
-    trivial: &["pass", "...", "return", "return None", "continue"],
+    trivial: &[
+        "pass",
+        "...",
+        "return",
+        "return None",
+        "return False",
+        "return 0",
+        "return \"\"",
+        "return ''",
+        "return []",
+        "return {}",
+        "return ()",
+        "continue",
+    ],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
     classify_discard: None,
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
+    silence_node: None,
 };
 
 pub const PYTHON_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

@@ -1260,6 +1260,7 @@ pub const RUST_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     ],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
+    silence_node: None,
 };
 
 pub const RUST_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

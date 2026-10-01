@@ -45,6 +45,9 @@ pub struct HandlerSpec {
     pub silence_kinds: &'static [&'static str],
     /// Whether a silencing expression's text drops the error rather than handling it.
     pub silences: fn(&str) -> bool,
+    /// A syntax-tree check a silencing expression must also pass (JS/TS `.catch(...)`:
+    /// the callback's body is read from the tree, not from text). `None`: `silences` alone.
+    pub silence_node: Option<fn(Node, &str, &HandlerSpec) -> bool>,
 }
 
 /// Statement heads that only record: a logging or printing call. A handler made of these
@@ -109,6 +112,13 @@ fn text<'a>(node: Node, src: &'a str) -> &'a str {
     node.utf8_text(src.as_bytes()).unwrap_or("")
 }
 
+/// Whether `t` is one of the pack's trivial statements. Runs of whitespace are folded to
+/// one space, so `return  []` and `return\n[]` match the `return []` entry.
+fn is_trivial(spec: &HandlerSpec, t: &str) -> bool {
+    let folded = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    spec.trivial.contains(&folded.as_str())
+}
+
 fn first_line(t: &str) -> String {
     t.lines().next().unwrap_or("").trim().to_string()
 }
@@ -134,7 +144,7 @@ fn body_swallows(body: Node, src: &str, spec: &HandlerSpec) -> Option<&'static s
                 .trim_end_matches('}')
                 .trim();
             let inner = inner.trim_end_matches(';').trim();
-            if inner.is_empty() || spec.trivial.contains(&inner) {
+            if inner.is_empty() || is_trivial(spec, inner) {
                 Some("empty-handler")
             } else if is_logging_statement(inner) {
                 Some("logging-handler")
@@ -144,7 +154,7 @@ fn body_swallows(body: Node, src: &str, spec: &HandlerSpec) -> Option<&'static s
         }
         1 => {
             let t = text(stmts[0], src).trim().trim_end_matches(';').trim();
-            if spec.trivial.contains(&t) {
+            if is_trivial(spec, t) {
                 Some("empty-handler")
             } else if is_logging_statement(t) {
                 Some("logging-handler")
@@ -203,7 +213,7 @@ pub fn extract(
                     let after = t.split_once([':', '{']).map(|(_, r)| r).unwrap_or("");
                     let after = after.trim().trim_end_matches('}').trim();
                     let after = after.trim_end_matches(';').trim();
-                    if after.is_empty() || spec.trivial.contains(&after) {
+                    if after.is_empty() || is_trivial(spec, after) {
                         Some("empty-handler")
                     } else if is_logging_statement(after) {
                         Some("logging-handler")
@@ -248,7 +258,10 @@ pub fn extract(
             }
         } else if spec.silence_kinds.contains(&node.kind()) && !is_test_line(line) {
             let t = text(node, src);
-            if (spec.silences)(t) && !result_is_tested(node, src) {
+            if (spec.silences)(t)
+                && spec.silence_node.is_none_or(|f| f(node, src, spec))
+                && !result_is_tested(node, src)
+            {
                 out.push(SwallowSite {
                     line,
                     kind: "silenced-error",
@@ -451,6 +464,65 @@ pub fn no_discard(_: &str) -> bool {
 /// (`error_suppression_expression`), so any text qualifies.
 pub fn php_silences(_: &str) -> bool {
     true
+}
+
+/// JS/TS: a `.catch(...)` call is a candidate; `js_catch_silences` reads the callback.
+pub fn js_catch_text(t: &str) -> bool {
+    t.contains(".catch(") || t.contains(".catch (")
+}
+
+/// JS/TS: `p.catch(() => {})`, `p.catch(() => null)`, `p.catch(function () {})`: a
+/// `.catch` call whose only argument is an arrow or function expression with an empty
+/// body, a trivial statement body (`return null`, `return []`), or an expression body that
+/// is one of the pack's default values. A callback that computes something
+/// (`e => handle(e)`), logs only, or rethrows is handling the rejection; a named handler
+/// (`.catch(noop)`) is not read.
+pub fn js_catch_silences(node: Node, src: &str, spec: &HandlerSpec) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let is_catch = node
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "member_expression")
+        .and_then(|f| f.child_by_field_name("property"))
+        .is_some_and(|p| text(p, src) == "catch");
+    if !is_catch {
+        return false;
+    }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    let named: Vec<Node> = args
+        .named_children(&mut cursor)
+        .filter(|a| a.kind() != "comment")
+        .collect();
+    let [callback] = named[..] else {
+        return false;
+    };
+    if !matches!(
+        callback.kind(),
+        "arrow_function" | "function_expression" | "function"
+    ) {
+        return false;
+    }
+    let Some(body) = callback.child_by_field_name("body") else {
+        return false;
+    };
+    if body.kind() == "statement_block" {
+        return body_swallows(body, src, spec) == Some("empty-handler");
+    }
+    // An expression body: `() => null`, `() => ({})`, `() => []`. The value is silent when
+    // `return <value>` is one of the pack's trivial statements.
+    let mut value = text(body, src).trim();
+    while let Some(inner) = value.strip_prefix('(').and_then(|v| v.strip_suffix(')')) {
+        value = inner.trim();
+    }
+    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    spec.trivial
+        .iter()
+        .filter_map(|t| t.strip_prefix("return "))
+        .any(|v| v == value)
 }
 
 /// Ruby: `call rescue nil` (and `rescue false` / `[]` / `{}` / `0` / `""`) replaces an
@@ -981,7 +1053,8 @@ mod tests {
     feature = "lang-ruby",
     feature = "lang-c",
     feature = "lang-cpp",
-    feature = "lang-kotlin"
+    feature = "lang-kotlin",
+    feature = "lang-csharp"
 ))]
 mod pack_tests {
     use crate::ast::{default_registry, AssertVocabulary, Fact};
@@ -1253,5 +1326,75 @@ mod pack_tests {
             "fun f() {\n    try { g() } catch (e: Exception) { println(e) }\n    try { g() } catch (e: Exception) { log.error(e); throw e }\n}\n",
         );
         assert_eq!(kt, vec![(2, "logging-handler")]);
+    }
+
+    #[test]
+    fn python_default_literal_returns_swallow_and_a_computed_value_does_not() {
+        let src = "def f():\n    try:\n        g()\n    except A:\n        return []\n    try:\n        g()\n    except B:\n        return {}\n    try:\n        g()\n    except C:\n        return 0\n    try:\n        g()\n    except D:\n        return \"\"\n    try:\n        g()\n    except E:\n        return False\n    try:\n        g()\n    except F:\n        return  ''\n    try:\n        g()\n    except G:\n        return compute(1)\n    try:\n        g()\n    except H:\n        return {\"error\": 1}\n    try:\n        g()\n    except I:\n        return 1\n    try:\n        g()\n    except J as e:\n        return str(e)\n";
+        let got = sites("pkg/a.py", src);
+        let lines: Vec<usize> = got.iter().map(|(l, _)| *l).collect();
+        assert_eq!(lines, vec![4, 8, 12, 16, 20, 24], "{got:?}");
+    }
+
+    #[test]
+    fn js_ts_default_literal_returns_swallow_and_a_computed_value_does_not() {
+        let src = "function f() {\n  try { g(); } catch (e) { return []; }\n  try { g(); } catch (e) { return {}; }\n  try { g(); } catch (e) { return 0; }\n  try { g(); } catch (e) { return \"\"; }\n  try { g(); } catch (e) { return ''; }\n  try { g(); } catch (e) { return  []  }\n  try { g(); } catch (e) { return fallback(e); }\n  try { g(); } catch (e) { return { error: e }; }\n  try { g(); } catch (e) { return 1; }\n}\n";
+        let lines: Vec<usize> = sites("src/a.ts", src).iter().map(|(l, _)| *l).collect();
+        assert_eq!(lines, vec![2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn js_ts_promise_catch_with_an_empty_or_default_callback_is_silenced() {
+        let src = "async function f(p) {\n  p.catch(() => {});\n  p.catch(() => null);\n  p.catch(() => []);\n  p.catch(function () {});\n  p.catch(() => undefined);\n  p.catch(() => ({}));\n  p.catch((e) => { return null; });\n  await p.then(go).catch(() => false);\n  p.catch(async () => {});\n  p?.catch(() => 0);\n  p.catch(function (e) { /* ignore */ });\n}\n";
+        let got = sites("src/a.ts", src);
+        assert!(got.iter().all(|(_, k)| *k == "silenced-error"), "{got:?}");
+        let lines: Vec<usize> = got.iter().map(|(l, _)| *l).collect();
+        assert_eq!(lines, vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        // The same in a plain `.js` file.
+        let js = sites("src/a.js", "p.catch(() => {});\n");
+        assert_eq!(js, vec![(1, "silenced-error")]);
+    }
+
+    #[test]
+    fn js_ts_promise_catch_that_handles_the_rejection_is_not_silenced() {
+        let src = "async function f(p, q) {\n  p.catch((err) => handle(err));\n  p.catch((err) => { handle(err); });\n  p.catch((e) => { throw e; });\n  p.catch(() => compute());\n  p.catch(() => 1);\n  p.catch(() => ({ ok: false }));\n  p.catch(noop);\n  p.catch();\n  p.catch(() => {}, extra);\n  p.then(() => {});\n  p.finally(() => {});\n  q.cache(() => {});\n  const catchIt = () => {};\n  p.then(ok, () => {});\n  p.catch(handle).then(() => {});\n  p.catch((e) => { console.error(e); });\n  p.catch((e) => console.error(e));\n}\n";
+        let got = sites("src/a.ts", src);
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn js_ts_promise_catch_in_a_test_is_not_a_site() {
+        let got = sites(
+            "src/a.test.ts",
+            "it('x', async () => {\n  p.catch(() => {});\n});\n",
+        );
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn java_csharp_php_and_cpp_default_literal_returns_swallow() {
+        let java = sites(
+            "src/main/java/A.java",
+            "class A {\n  int f() {\n    try { g(); } catch (IOException e) { return 0; }\n    try { g(); } catch (IOException e) { return \"\"; }\n    try { g(); } catch (IOException e) { return Collections.emptyList(); }\n    try { g(); } catch (IOException e) { return List.of(); }\n    try { g(); } catch (IOException e) { return Optional.empty(); }\n    try { g(); } catch (IOException e) { return 1; }\n    try { g(); } catch (IOException e) { return List.of(e); }\n    return 2;\n  }\n}\n",
+        );
+        let lines: Vec<usize> = java.iter().map(|(l, _)| *l).collect();
+        assert_eq!(lines, vec![3, 4, 5, 6, 7], "{java:?}");
+        let cs = sites(
+            "src/A.cs",
+            "class A {\n  int F() {\n    try { G(); } catch (Exception e) { return 0; }\n    try { G(); } catch (Exception e) { return \"\"; }\n    try { G(); } catch (Exception e) { return string.Empty; }\n    try { G(); } catch (Exception e) { return default; }\n    try { G(); } catch (Exception e) { return Compute(e); }\n    return 2;\n  }\n}\n",
+        );
+        let lines: Vec<usize> = cs.iter().map(|(l, _)| *l).collect();
+        assert_eq!(lines, vec![3, 4, 5, 6], "{cs:?}");
+        let php = sites(
+            "src/a.php",
+            "<?php\nfunction f() {\n  try { g(); } catch (Exception $e) { return 0; }\n  try { g(); } catch (Exception $e) { return \"\"; }\n  try { g(); } catch (Exception $e) { return []; }\n  try { g(); } catch (Exception $e) { return array(); }\n  try { g(); } catch (Exception $e) { return $e->getCode(); }\n}\n",
+        );
+        let lines: Vec<usize> = php.iter().map(|(l, _)| *l).collect();
+        assert_eq!(lines, vec![3, 4, 5, 6], "{php:?}");
+        let cpp = sites(
+            "src/a.cpp",
+            "int f() {\n  try { g(); } catch (...) { return 0; }\n  try { g(); } catch (...) { return 1; }\n  try { g(); } catch (const E& e) { return code(e); }\n  return 2;\n}\n",
+        );
+        assert_eq!(cpp, vec![(2, "empty-handler")]);
     }
 }

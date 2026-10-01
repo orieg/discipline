@@ -158,6 +158,7 @@ pub const RUBY_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     // `call rescue nil`: the modifier form, when its handler is a constant.
     silence_kinds: &["rescue_modifier"],
     silences: super::handlers::ruby_silences,
+    silence_node: None,
 };
 
 pub const RUBY_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

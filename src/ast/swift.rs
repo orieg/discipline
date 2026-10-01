@@ -571,6 +571,7 @@ pub const SWIFT_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handle
     call_value_kinds: &[],
     silence_kinds: &[],
     silences: super::handlers::no_discard,
+    silence_node: None,
 };
 
 pub const SWIFT_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

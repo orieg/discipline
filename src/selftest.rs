@@ -969,6 +969,38 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: a JS `.catch(() => {})` is a silenced error, a `.catch` that handles it is not; `return []` is a swallow",
+        || {
+            use crate::ast::default_registry;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let ts = reg
+                .find_pack("web/a.ts")
+                .ok_or_else(|| anyhow::anyhow!("no javascript pack"))?
+                .extract(
+                    "web/a.ts",
+                    "function f(p) {\n  p.catch(() => {});\n  p.catch(() => null);\n  p.catch((e) => handle(e));\n  p.catch(() => compute());\n}\n",
+                    &v,
+                )?
+                .swallowed;
+            let py = reg
+                .find_pack("pkg/a.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?
+                .extract(
+                    "pkg/a.py",
+                    "def f():\n    try:\n        g()\n    except OSError:\n        return []\n    try:\n        g()\n    except OSError as e:\n        return str(e)\n",
+                    &v,
+                )?
+                .swallowed;
+            Ok(ts.len() == 2
+                && ts.iter().all(|s| s.kind == "silenced-error")
+                && ts[0].line == 2
+                && ts[1].line == 3
+                && py.len() == 1
+                && py[0].kind == "empty-handler")
+        },
+    ),
+    (
         "error-swallowing: a PHP `@call()` whose result is tested reads the failure, `?:` does not",
         || {
             use crate::ast::default_registry;

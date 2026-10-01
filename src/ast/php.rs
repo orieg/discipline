@@ -147,7 +147,17 @@ pub const PHP_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerS
     arm_of: &[],
     body_fields: &["body"],
     ignored_kinds: &["comment"],
-    trivial: &["return", "return null", "return false", "continue"],
+    trivial: &[
+        "return",
+        "return null",
+        "return false",
+        "return 0",
+        "return \"\"",
+        "return ''",
+        "return []",
+        "return array()",
+        "continue",
+    ],
     discard_kinds: &[],
     discards: super::handlers::no_discard,
     classify_discard: None,
@@ -155,6 +165,7 @@ pub const PHP_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerS
     // `@call()`: the error-control operator drops every diagnostic the call raises.
     silence_kinds: &["error_suppression_expression"],
     silences: super::handlers::php_silences,
+    silence_node: None,
 };
 
 pub const PHP_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
