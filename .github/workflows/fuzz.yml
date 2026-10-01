@@ -1,0 +1,73 @@
+name: "Fuzzing"
+
+# cargo-fuzz targets for the parsers whose input is attacker-influenced (fuzz/, and
+# docs/ARCHITECTURE.md §8.6). Each target runs for a bounded time from its seed corpus on
+# a nightly toolchain pinned by date. Advisory: not in the `ci-gate` rollup.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '30 2 * * 1'
+
+concurrency:
+  group: fuzz-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: read-all
+
+env:
+  # libFuzzer needs a nightly rustc. Bump the date deliberately, with the cargo-fuzz version.
+  FUZZ_TOOLCHAIN: nightly-2026-09-05
+  CARGO_FUZZ_VERSION: 0.13.2
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - language_packs
+          - config_toml
+          - directives
+          - pr_text
+          - pretool_payload
+          - archive_walk
+          - artifact_parsers
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ env.FUZZ_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+          key: ${{ matrix.target }}
+      - name: Install cargo-fuzz (pinned)
+        run: cargo install cargo-fuzz --version "${CARGO_FUZZ_VERSION}" --locked
+      - name: Fuzz the target
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          # A pull request or push gets a short run; the weekly run goes deeper.
+          FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '300' || '60' }}
+        run: |
+          set -euo pipefail
+          cargo "+${FUZZ_TOOLCHAIN}" fuzz run "${TARGET}" -- \
+            -max_total_time="${FUZZ_SECONDS}" -timeout=30 -rss_limit_mb=2048 -max_len=65536
+      # A crash, hang or out-of-memory input is written to fuzz/artifacts/<target>/.
+      - name: Keep the failing input
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore

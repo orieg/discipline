@@ -1,0 +1,13 @@
+{
+  "agent": "Qwen Code 0.24.7",
+  "event": "PreToolUse",
+  "observed": "RUN 2026-09-29",
+  "answers": [
+    {
+      "exit_code": 2,
+      "stderr": "<reason>",
+      "stdout": null,
+      "result": "write_file and run_shell_command blocked; the model reads and quotes the stderr reason"
+    }
+  ]
+}

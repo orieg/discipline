@@ -1,0 +1,7 @@
+Closes #12
+
+allow-stub: placeholder body kept for a documented reason
+
+```
+allow-swallow: inside a fence
+```

@@ -1,0 +1,16 @@
+{
+  "cwd": "/work/repo",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "yolo",
+  "prompt_id": "00000000-0000-0000-0000-000000000000",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "timestamp": "1970-01-01T00:00:00.000Z",
+  "tool_call_id": "00000000-0000-0000-0000-000000000000",
+  "tool_input": {
+    "command": "echo hi > shell.txt",
+    "description": "Write 'hi' to shell.txt using shell redirection"
+  },
+  "tool_name": "run_shell_command",
+  "tool_use_id": "00000000-0000-0000-0000-000000000000",
+  "transcript_path": "/home/user/.agent/transcript"
+}

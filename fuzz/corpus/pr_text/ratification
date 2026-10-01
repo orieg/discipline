@@ -1,0 +1,8 @@
+Fixes owner/repo#7, resolves #8
+
+Owner-ratified-paths:
+- .github/workflows/ci.yml
+- `action.yml`
+
+> Owner-ratified-paths:
+> - quoted.txt

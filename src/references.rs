@@ -115,9 +115,12 @@ fn ends_with_keyword(before: &str, keywords: &[String]) -> bool {
         return false; // no whitespace between the keyword and the reference
     }
     let trimmed = trimmed.strip_suffix(':').unwrap_or(trimmed);
+    // The word starts after the last separator, whatever its width in bytes.
     let word_start = trimmed
-        .rfind(|c: char| !c.is_alphanumeric() && c != '_')
-        .map(|i| i + 1)
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !c.is_alphanumeric() && *c != '_')
+        .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(0);
     let word = &trimmed[word_start..];
     keywords.iter().any(|k| k.eq_ignore_ascii_case(word))
@@ -439,6 +442,30 @@ mod tests {
             url: "https://git.example.com".into(),
             repo: "o/r".into(),
         }
+    }
+
+    /// Found by the `directives` fuzz target: a multi-byte character right before the
+    /// whitespace that precedes a reference put the keyword's start offset inside that
+    /// character and panicked, so a pull request body could abort the whole check.
+    #[test]
+    fn a_multibyte_character_before_a_reference_does_not_panic() {
+        for body in [
+            "\u{fffd} #1",
+            "日本語 #1",
+            "caf\u{e9} #7",
+            "\u{2014} Fixes #3",
+            "Fixes \u{fffd}: #4",
+        ] {
+            for kind in [ForgeKind::GitHub, ForgeKind::GitLab] {
+                let refs = parse(body, kind, &[]);
+                assert_eq!(refs.len(), 1, "{body:?} names exactly one reference");
+            }
+        }
+        // The keyword is still found after a multi-byte word.
+        let refs = parse("caf\u{e9} fixes #5", ForgeKind::GitHub, &[]);
+        assert!(refs[0].closing);
+        let refs = parse("\u{2014} #6", ForgeKind::GitHub, &[]);
+        assert!(!refs[0].closing);
     }
 
     fn texts(refs: &[Reference]) -> Vec<(String, bool)> {

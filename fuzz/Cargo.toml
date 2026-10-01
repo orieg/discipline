@@ -1,0 +1,70 @@
+[package]
+name = "discipline-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.discipline]
+path = ".."
+
+# Its own workspace root, so `libfuzzer-sys` (licence `(MIT OR Apache-2.0) AND NCSA`)
+# never enters the main package's dependency graph or `deny.toml`'s allow-list.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "language_packs"
+path = "fuzz_targets/language_packs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_toml"
+path = "fuzz_targets/config_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "directives"
+path = "fuzz_targets/directives.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pr_text"
+path = "fuzz_targets/pr_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pretool_payload"
+path = "fuzz_targets/pretool_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "archive_walk"
+path = "fuzz_targets/archive_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "artifact_parsers"
+path = "fuzz_targets/artifact_parsers.rs"
+test = false
+doc = false
+bench = false

@@ -28,3 +28,8 @@ scratch/
 # Python bytecode from the CI helper scripts
 __pycache__/
 *.pyc
+
+# cargo-fuzz build output, crashes and coverage (fuzz/Cargo.lock and fuzz/corpus are tracked)
+fuzz/target/
+fuzz/artifacts/
+fuzz/coverage/

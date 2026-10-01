@@ -1,0 +1,189 @@
+# discipline.toml — dogfood configuration for orieg/discipline.
+#
+# Most available gates are on at severity "error" by default, so this file only
+# needs to state what differs. In dogfood, we configure time-estimates,
+# bench-regression, agents-md, and suppression-delta to severity "error" for
+# maximum verification rigor.
+# `discipline gates` prints the effective state; the annotated reference lives in
+# docs/CONFIGURATION.md.
+
+[meta]
+version = 1
+name = "discipline"
+description = "Universal CI/CD gatekeeper and AI coding agent diff sentinel"
+
+[gates.agents-md]
+severity = "error"
+
+[gates.time-estimates]
+severity = "error"
+
+[gates.bench-regression]
+severity = "error"
+
+[gates.suppression-delta]
+severity = "error"
+
+[gates.assertion-reduction]
+exempt_paths = ["tests/fixtures/**"]
+
+[gates.vacuous-tests]
+exempt_paths = ["tests/fixtures/**"]
+
+[gates.ignored-tests]
+exempt_paths = ["tests/fixtures/**"]
+
+[gates.issue-link]
+enabled = true
+# Dependabot cannot write an issue reference into its pull requests; every other
+# gate still judges them (#412).
+exempt_authors = ["dependabot[bot]"]
+
+[gates.provenance-tags]
+enabled = true
+
+# An edit to the agent contract, the gate policy, the action or a workflow needs an
+# owner ratification on an issue the pull request closes. The workflow files are
+# ratifiable here: with the default never_ratifiable list they could only change by an
+# administrator merge, which this repository does not use.
+[gates.ratified-paths]
+enabled = true
+protected_paths = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+  "discipline.toml",
+  "action.yml",
+  "deny.toml",
+  ".github/workflows/**",
+  ".gitea/workflows/**",
+  ".forgejo/workflows/**",
+  ".github/hooks/**",
+  ".claude/settings.json",
+  ".claude/hooks/**",
+  ".agents/hooks.json",
+]
+never_ratifiable = []
+ratifiers = ["orieg"]
+agent_logins = [
+  "github-actions[bot]",
+  "dependabot[bot]",
+  "renovate[bot]",
+  "Copilot",
+  "copilot-swe-agent[bot]",
+  "github-advanced-security[bot]",
+]
+
+# The pull request has no unresolved review thread.
+[gates.review-threads]
+enabled = true
+
+# CITATION.cff and .zenodo.json are valid and agree (on by default; stated for the record).
+[gates.citation-metadata]
+enabled = true
+
+# An agent-produced commit (by trailer or authorship) carries a review by someone else.
+[gates.commit-provenance]
+enabled = true
+
+[gates.pii]
+exempt_paths = ["tests/fixtures/**"]
+
+# This workflow has no path-filtered jobs and no change-detection job; every job
+# in the ci-gate rollup is unconditional, so each is checked through GitHub's
+# implicit success() on its dependencies.
+[gates.ci-skip-set]
+change_job = ""
+
+[gates.dependency-delta]
+allow_dependencies = ["serde_yaml", "tar", "flate2", "zip", "bzip2-rs", "libc", "clap_mangen", "clap_complete"]
+
+
+
+# Every place a release version is written must say the same version. A bump
+# that misses one fails this gate instead of shipping stale instructions.
+[gates.version-lockstep]
+enabled = true
+
+[[gates.version-lockstep.groups]]
+name = "release"
+
+[[gates.version-lockstep.groups.sources]]
+path = "Cargo.toml"
+regex = '''(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "CITATION.cff"
+regex = '''(?m)^version: ([0-9]+\.[0-9]+\.[0-9]+)$'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "README.md"
+regex = '''install\.sh --to ~/\.local/bin --version v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "README.md"
+regex = '''Pin `@v([0-9]+\.[0-9]+\.[0-9]+)`'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/CONFIGURATION.md"
+regex = '''rev: v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/CONFIGURATION.md"
+regex = '''orieg/discipline/v([0-9]+\.[0-9]+\.[0-9]+)/templates'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/CONFIGURATION.md"
+regex = '''ghcr\.io/orieg/discipline:v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/guides/ci-platforms.md"
+regex = '''rev: v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/guides/ci-platforms.md"
+regex = '''orieg/discipline/v([0-9]+\.[0-9]+\.[0-9]+)/templates'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/guides/ci-platforms.md"
+regex = '''ghcr\.io/orieg/discipline:v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/index.html"
+regex = '''rev:</span> v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "docs/index.html"
+regex = '''orieg/discipline/v([0-9]+\.[0-9]+\.[0-9]+)/templates'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "man/man5/discipline.toml.5"
+regex = '''"Discipline v([0-9]+\.[0-9]+\.[0-9]+)"'''
+
+[[gates.version-lockstep.groups.sources]]
+path = ".pre-commit-hooks.yaml"
+regex = '''rev: v([0-9]+\.[0-9]+\.[0-9]+)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/Jenkinsfile"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/argo-workflow-template.yaml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/azure-pipelines.yml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/bitbucket-pipelines.yml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/circleci-config.yml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''
+
+[[gates.version-lockstep.groups.sources]]
+path = "templates/discipline.gitlab-ci.yml"
+regex = '''pin an exact version \(v([0-9]+\.[0-9]+\.[0-9]+)\)'''

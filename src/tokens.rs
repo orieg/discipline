@@ -1455,8 +1455,13 @@ fn is_segmented_placeholder(s: &str) -> bool {
     let mut dp = vec![false; n + 1];
     dp[0] = true;
     for i in 1..=n {
+        // A segment starts and ends on a character boundary: slicing inside a
+        // multi-byte character panics.
+        if !s.is_char_boundary(i) {
+            continue;
+        }
         for j in 0..i {
-            if dp[j] && PLACEHOLDERS.contains(&&s[j..i]) {
+            if dp[j] && s.is_char_boundary(j) && PLACEHOLDERS.contains(&&s[j..i]) {
                 dp[i] = true;
                 break;
             }
@@ -1633,6 +1638,28 @@ removes: tests/old.rs inside a fence
         ] {
             assert_eq!(workflow_marker_reason(comment, m), None, "{comment:?}");
         }
+    }
+
+    /// Found by the `directives` fuzz target: a reason holding a multi-byte character
+    /// that confusable folding leaves alone sliced the segmentation table mid-character
+    /// and panicked, so a pull request body could abort the whole check.
+    #[test]
+    fn rationale_with_multibyte_characters_does_not_panic() {
+        for reason in [
+            "cu\u{fffd}",
+            "\u{fffd}",
+            "日本語のテスト理由",
+            "tod\u{fffd}o",
+            "todo\u{fffd}",
+            "caf\u{e9} au lait, for a documented reason",
+        ] {
+            let _ = is_valid_rationale(reason);
+            let _ = is_placeholder(reason);
+        }
+        // Segmentation still reads a run of placeholders written without spaces, and
+        // still does not mistake a non-placeholder for one.
+        assert!(!is_valid_rationale("todotbd"));
+        assert!(is_valid_rationale("caf\u{e9} au lait, kept on purpose"));
     }
 
     #[test]

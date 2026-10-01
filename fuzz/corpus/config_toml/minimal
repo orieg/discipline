@@ -1,0 +1,6 @@
+[meta]
+version = 1
+
+[gates.test-erosion]
+enabled = true
+severity = "error"
