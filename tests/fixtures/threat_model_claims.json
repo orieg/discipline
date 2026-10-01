@@ -582,6 +582,18 @@
       "verdict": "holds"
     },
     {
+      "id": "fc-f2-guessed-base-not-head",
+      "category": "fail_closed_contract",
+      "claim": "A guessed default branch (origin/HEAD, master, trunk) that already holds HEAD is not a base: a clone of the change's own branch exits 2 instead of comparing the change with itself",
+      "source": "docs/ARCHITECTURE.md:F2, docs/CONFIGURATION.md:exit codes",
+      "code": "src/gitctx.rs:open",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::a_fallback_base_that_holds_the_change_itself_does_not_resolve",
+        "tests/test_gates_e2e.rs::could_not_check_is_exit_2_never_a_pass"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "sec-audit-html-links-stay-in-repository",
       "category": "security_policy",
       "claim": "The audit page escapes text the repository wrote, and its source links stay in the audited repository whatever the file path",

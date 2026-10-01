@@ -1,0 +1,4 @@
+discipline exit: 1
+failing: ['deletion-rationale/test-removed-without-rationale', 'test-floor/test-count-below-floor']
+could not check: []
+notes naming it: []

@@ -1,0 +1,8 @@
+[none] discipline exit: 1
+failing: ['assertion-reduction/assertions-reduced']
+could not check: []
+notes naming it: []
+[MZ] discipline exit: 1
+failing: ['assertion-reduction/assertions-reduced']
+could not check: []
+notes naming it: []
