@@ -256,6 +256,7 @@ mod tests {
         let refused = judge(
             &cfg,
             1,
+            0,
             Some(&unnamed),
             &forge,
             &with_author(approved_by("agent"), agent.clone()),
@@ -265,6 +266,7 @@ mod tests {
         let stands = judge(
             &cfg,
             1,
+            0,
             Some(&unnamed),
             &forge,
             &with_author(approved_by("lead"), agent),
@@ -278,6 +280,7 @@ mod tests {
             reason(judge(
                 &cfg,
                 1,
+                0,
                 Some(&unnamed),
                 &forge,
                 &api(approved_by("lead"))
@@ -288,6 +291,7 @@ mod tests {
             reason(judge(
                 &cfg,
                 1,
+                0,
                 Some(&unnamed),
                 &forge,
                 &with_author(approved_by("lead"), Value::Null)
@@ -303,6 +307,7 @@ mod tests {
             reason(judge(
                 &cfg,
                 1,
+                0,
                 Some(&empty),
                 &forge,
                 &api(approved_by("lead"))
