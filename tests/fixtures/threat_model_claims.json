@@ -512,6 +512,17 @@
       "verdict": "holds"
     },
     {
+      "id": "sec-gitattributes-diff-masking-rejected",
+      "category": "security_policy",
+      "claim": "git diff suppression via .gitattributes * -diff does not mask added line diffs or hunk inspection in surviving files",
+      "source": "docs/GATES.md:deletion-rationale",
+      "code": "src/gitctx.rs:changed_files",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_gitattributes_diff_masking_rejected"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "sec-tree-sitter-parse-safety",
       "category": "security_policy",
       "claim": "Untrusted, malformed, or hostile source code parses safely or records parse errors without crashing.",
@@ -732,6 +743,28 @@
       "verdict": "holds",
       "pinning_tests": [
         "tests/test_threat_model_claims.rs::sec_directive_placeholder_gap_proof"
+      ]
+    },
+    {
+      "id": "gate-directive-rationale-punctuation-rejected",
+      "category": "gates",
+      "claim": "a directive rationale consisting of punctuation only or single characters is rejected",
+      "source": "docs/GATES.md:deletion-rationale",
+      "code": "src/tokens.rs:is_valid_rationale",
+      "verdict": "holds",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_directive_punctuation_rationale_rejected"
+      ]
+    },
+    {
+      "id": "gate-directive-placeholder-confusables-rejected",
+      "category": "gates",
+      "claim": "a directive rationale using homoglyphs, confusables, or invisible characters to spell a placeholder is rejected",
+      "source": "docs/GATES.md:deletion-rationale",
+      "code": "src/tokens.rs:is_placeholder",
+      "verdict": "holds",
+      "pinning_tests": [
+        "tests/test_threat_model_claims.rs::sec_directive_confusable_placeholder_rejected"
       ]
     },
     {

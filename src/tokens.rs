@@ -812,7 +812,23 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
 ];
 
 const PLACEHOLDERS: &[&str] = &[
-    "todo", "tbd", "none", "n/a", "na", "reason", "why", "...", "xxx", "fixme", "-",
+    "todo",
+    "tbd",
+    "none",
+    "n/a",
+    "na",
+    "reason",
+    "why",
+    "...",
+    "xxx",
+    "fixme",
+    "-",
+    "ok",
+    "temp",
+    "dummy",
+    "null",
+    "placeholder",
+    "asdf",
 ];
 
 /// Parses all directives from `text` matching any names in `names`.
@@ -1387,37 +1403,105 @@ fn clean_reason(raw: &str) -> String {
     r.to_string()
 }
 
+fn is_invisible(c: char) -> bool {
+    crate::guards::instruction_smuggling::invisible_class(c).is_some()
+}
+
+fn normalize_placeholder_token(token: &str) -> String {
+    crate::guards::instruction_smuggling::fold(token)
+}
+
 pub fn is_valid_rationale(rest: &str) -> bool {
     let cleaned = rest
         .trim()
-        .trim_matches(|c: char| matches!(c, ':' | '-' | ',' | ';' | '"' | '\'' | '`'))
+        .trim_matches(|c: char| {
+            matches!(
+                c,
+                ':' | '-' | ',' | ';' | '.' | '?' | '!' | '"' | '\'' | '`'
+            )
+        })
         .trim();
-    !cleaned.is_empty() && !is_placeholder(cleaned)
+    if cleaned.chars().filter(|c| c.is_alphanumeric()).count() < 2 {
+        return false;
+    }
+    !is_placeholder(cleaned)
+}
+
+fn is_placeholder_word(w: &str) -> bool {
+    let cw = w.trim_matches(|c: char| {
+        matches!(
+            c,
+            ':' | '-' | ',' | ';' | '.' | '?' | '!' | '"' | '\'' | '`'
+        )
+    });
+    let ncw = normalize_placeholder_token(cw);
+    let ncw_trimmed = ncw.trim_matches(|c: char| {
+        matches!(
+            c,
+            ':' | '-' | ',' | ';' | '.' | '?' | '!' | '"' | '\'' | '`'
+        )
+    });
+    ncw_trimmed.is_empty()
+        || ncw_trimmed.chars().filter(|c| c.is_alphanumeric()).count() == 0
+        || (w.starts_with('<') && w.ends_with('>'))
+        || PLACEHOLDERS.contains(&ncw_trimmed)
+}
+
+fn is_segmented_placeholder(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let n = s.len();
+    let mut dp = vec![false; n + 1];
+    dp[0] = true;
+    for i in 1..=n {
+        for j in 0..i {
+            if dp[j] && PLACEHOLDERS.contains(&&s[j..i]) {
+                dp[i] = true;
+                break;
+            }
+        }
+    }
+    dp[n]
 }
 
 fn is_placeholder(reason: &str) -> bool {
-    let r = reason.trim().trim_matches(['"', '\'', '`']).trim();
+    let r = reason
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .trim_matches(|c: char| {
+            matches!(
+                c,
+                ':' | '-' | ',' | ';' | '.' | '?' | '!' | '"' | '\'' | '`'
+            )
+        })
+        .trim();
     if r.is_empty() {
         return true;
     }
     if r.starts_with('<') && r.ends_with('>') {
         return true;
     }
-    let lower = r.to_lowercase();
-    if PLACEHOLDERS.contains(&lower.as_str()) {
+    let norm = normalize_placeholder_token(r);
+    let norm_trimmed = norm.trim_matches(|c: char| {
+        matches!(
+            c,
+            ':' | '-' | ',' | ';' | '.' | '?' | '!' | '"' | '\'' | '`'
+        )
+    });
+    if norm_trimmed.chars().filter(|c| c.is_alphanumeric()).count() == 0 {
         return true;
     }
-    let words: Vec<&str> = r.split_whitespace().collect();
-    if words.len() > 1
-        && words.iter().all(|w| {
-            let cw = w
-                .trim_matches(|c: char| matches!(c, ':' | '-' | ',' | ';' | '.' | '"' | '\'' | '`'))
-                .to_lowercase();
-            cw.is_empty()
-                || (w.starts_with('<') && w.ends_with('>'))
-                || PLACEHOLDERS.contains(&cw.as_str())
-        })
-    {
+    if PLACEHOLDERS.contains(&norm_trimmed) || is_segmented_placeholder(norm_trimmed) {
+        return true;
+    }
+    // Splitting by whitespace OR invisible/zero-width characters preserves
+    // invisible characters as token boundaries (e.g. `todo\u{200b}fixme`).
+    let words: Vec<&str> = r
+        .split(|c: char| c.is_whitespace() || is_invisible(c))
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.len() > 1 && words.iter().all(|w| is_placeholder_word(w)) {
         return true;
     }
     false
@@ -1665,6 +1749,48 @@ removes: tests/old.rs inside a fence
             assert!(!covers(&r_ph, "tests/old.rs"));
         }
 
+        // Punctuation and single-character non-rationales:
+        for punctuation in [".", "?", "!", "/", "_", "*", "::", "x", "1"] {
+            let line = format!("removes: tests/old.rs {punctuation}");
+            let r_punct = directive_reasons(&line, REMOVES);
+            assert!(
+                !covers(&r_punct, "tests/old.rs"),
+                "punctuation/single-char '{punctuation}' must not satisfy rationale requirement"
+            );
+        }
+
+        // Homoglyphs, confusables, and invisible character placeholder evasions:
+        for confusable in [
+            "t\u{043e}d\u{043e}",                        // Cyrillic small letter o
+            "t\u{200b}o\u{200b}d\u{200b}o",              // zero-width space
+            "ｔｏｄｏ",                                  // fullwidth Latin
+            "ｆｉｘｍｅ",                                // fullwidth Latin
+            "t\u{043e}d\u{043e} f\u{0456}xme",           // mixed Cyrillic/Latin multi-token
+            "n/a\u{feff}",                               // byte order mark
+            "todo\u{200b}fixme", // zero-width space between placeholder words
+            "todo\u{200b}tbd",   // zero-width separator
+            "t\u{200b}o\u{200b}d\u{200b}o\u{200b}fixme", // zero-width inside and between words
+            "\u{1D42D}\u{1D428}\u{1D41D}\u{1D428}", // mathematical bold todo
+            "to\u{0301}do",      // combining acute mark
+            "t0d0",              // leetspeak digits
+            "todo.",             // trailing sentence period
+            "TBD!",              // trailing sentence exclamation
+        ] {
+            let line = format!("removes: tests/old.rs {confusable}");
+            let r_conf = directive_reasons(&line, REMOVES);
+            assert!(
+                !covers(&r_conf, "tests/old.rs"),
+                "confusable placeholder '{confusable}' must not satisfy rationale requirement"
+            );
+        }
+
+        // Valid issue reference rationale:
+        let r_issue = directive_reasons("removes: tests/old.rs #123", REMOVES);
+        assert!(covers(&r_issue, "tests/old.rs"));
+
+        let r_gh = directive_reasons("removes: tests/old.rs GH-45", REMOVES);
+        assert!(covers(&r_gh, "tests/old.rs"));
+
         // Valid rationale with filename:
         let r_valid = directive_reasons(
             "removes: tests/old.rs superseded by tests/new_suite.rs",
@@ -1690,6 +1816,23 @@ removes: tests/old.rs inside a fence
 
         let r_test_todo = directive_reasons("allow-ignore: my test name todo", ALLOW_IGNORE);
         assert!(!covers(&r_test_todo, "my test name"));
+
+        for ph in [
+            "ok",
+            "temp",
+            "dummy",
+            "null",
+            "placeholder",
+            "asdf",
+            "t\u{043e}d\u{043e}",
+        ] {
+            let line = format!("allow-ignore: my test name {ph}");
+            let r_ph = directive_reasons(&line, ALLOW_IGNORE);
+            assert!(
+                !covers(&r_ph, "my test name"),
+                "allow-ignore placeholder '{ph}' must not lift"
+            );
+        }
 
         let r_test_quoted_empty = directive_reasons("allow-ignore: 'my test name'", ALLOW_IGNORE);
         assert!(!covers(&r_test_quoted_empty, "my test name"));

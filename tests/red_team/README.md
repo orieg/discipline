@@ -27,9 +27,11 @@ Host machines never execute untrusted attack repositories directly. All attacks 
   - `cfg-04` to `cfg-09`: `config-integrity` key forms and removals: an optional limit or switch removed (`max_noise_cv`, a gate's `allow_hidden`), a default filled in (`noise_floor_pct`), dotted and inline-table forms, a deleted table falling back to a default-off gate, a misspelt key (exit 2).
   - `esc-01` to `esc-05`: Directive escape hatch evasion probes (CRLF, Markdown formatting smuggling, placeholder reasons, commit subject vs body scoping).
   - `esc-06` to `esc-09`: a directive in an indented code block, a directive after a shorter fence nested in a longer one, a directive name spelt with a long s (`removeſ:`), and a second waiver past `directives.max_overrides = 1`.
+  - `esc-10` to `esc-11`: punctuation and single-character rationales, and homoglyph/invisible placeholder bypass.
   - `fc-01` to `fc-05`: fail-closed inputs: a shallow clone with no base or no merge base, a base that does not resolve, a test dropped in a rename and in a case-only rename, and a test file whose first bytes are a binary format's magic number (`MZ = 0`).
   - `aud-01`, `aud-02`: `audit --format html` with markup in every text a repository controls, and a file path whose `%2e%2e` segments walk a source link out of the repository.
   - `fc-06`: gates that read whole files, on source files starting with `MZ = 0` (valid Python, and the DOS/PE header).
+  - `git-01`, `git-03`: Git and filesystem boundary probes (`.gitattributes` diff masking, symlink traversal outside workspace).
   - `rat-01` to `rat-04`: Protected path owner ratification probes on live Gitea (author self-ratification, `refuse_author_ratification`, legitimate owner ratification, edited comments).
   - `sec-01`: `DISCIPLINE_NO_NETWORK=1` fail-closed verification.
   - `ast-01` to `ast-02`: AST assertion reduction and stealth test deletion probes.
@@ -41,7 +43,12 @@ Host machines never execute untrusted attack repositories directly. All attacks 
 
 ```bash
 docker volume create discipline-rt-target
-docker run --rm --platform linux/arm64 -v "$PWD":/src:ro -v discipline-rt-target:/target \
+ARCH=$(uname -m)
+PLATFORM="linux/amd64"
+if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+  PLATFORM="linux/arm64"
+fi
+docker run --rm --platform "$PLATFORM" -v "$PWD":/src:ro -v discipline-rt-target:/target \
   -e CARGO_TARGET_DIR=/target -w /src rust:1.98 cargo build --locked
 ```
 
