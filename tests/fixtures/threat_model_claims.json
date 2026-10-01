@@ -1219,6 +1219,17 @@
         "tests/test_doctor.rs::doctor_reads_gitlab_settings_and_audits_the_token"
       ],
       "verdict": "holds"
+    },
+    {
+      "id": "doctor-security-policy",
+      "category": "doctor",
+      "claim": "doctor reports whether the repository has a SECURITY.md where a forge looks for it, as information when it has none",
+      "source": "docs/guides/ci-platforms.md:\u00a78 security policy",
+      "code": "src/doctor.rs:security_policy_finding",
+      "pinning_tests": [
+        "tests/test_doctor.rs::doctor_says_whether_the_repository_has_a_security_policy"
+      ],
+      "verdict": "holds"
     }
   ]
 }

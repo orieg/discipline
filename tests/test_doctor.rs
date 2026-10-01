@@ -352,6 +352,30 @@ fn doctor_reports_weak_webhooks_and_unreviewed_environments_with_secrets() {
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
 }
 
+/// `security-policy` (#366, OpenSSF Scorecard Security-Policy): a local file check,
+/// information when the repository has no SECURITY.md.
+#[test]
+fn doctor_says_whether_the_repository_has_a_security_policy() {
+    let status = |stdout: &str| {
+        statuses(stdout)
+            .into_iter()
+            .find(|(i, _)| i == "security-policy")
+            .map(|(_, s)| s)
+            .unwrap_or_else(|| panic!("no security-policy: {stdout}"))
+    };
+    let repo = protected_repo();
+    let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(status(&run.stdout), "info", "{}", run.stdout);
+    repo.write(".github/SECURITY.md", "# Security\n\nReport privately.\n");
+    let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(status(&run.stdout), "pass", "{}", run.stdout);
+    assert!(
+        run.stdout.contains(".github/SECURITY.md is present"),
+        "{}",
+        run.stdout
+    );
+}
+
 #[test]
 fn doctor_healthy_repository_passes() {
     let repo = protected_repo();
