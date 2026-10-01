@@ -1447,27 +1447,27 @@ fn gitlab(api: &dyn ForgeApi, forge: &Forge) -> Vec<Finding> {
         out.push(unavailable(i, forge.kind));
     }
     out.push(protected_tags(api, forge));
-    out.push(
-        match read_all(api, forge, &format!("projects/{id}/variables")) {
-            Ok(vars) => gitlab_variables_finding(
-                &vars,
-                project
-                    .get("ci_allow_fork_pipelines_to_run_in_parent_project")
-                    .and_then(|f| f.as_bool())
-                    == Some(true),
-            ),
-            Err(e) if matches!(e.kind, ForgeErrorKind::NotFound | ForgeErrorKind::Denied) => {
-                let why = e.to_string();
-                hidden(
-                    "secret-scoping",
-                    "the project's CI/CD variables",
-                    &why,
-                    &gitlab_need(&why, "the Maintainer role"),
-                )
-            }
-            Err(e) => down("secret-scoping", forge.kind, &e.to_string()),
-        },
-    );
+    // Read once: `secret-scoping` and `environment-reviewers` both judge them.
+    let variables = read_all(api, forge, &format!("projects/{id}/variables"));
+    out.push(match &variables {
+        Ok(vars) => gitlab_variables_finding(
+            vars,
+            project
+                .get("ci_allow_fork_pipelines_to_run_in_parent_project")
+                .and_then(|f| f.as_bool())
+                == Some(true),
+        ),
+        Err(e) if matches!(e.kind, ForgeErrorKind::NotFound | ForgeErrorKind::Denied) => {
+            let why = e.to_string();
+            hidden(
+                "secret-scoping",
+                "the project's CI/CD variables",
+                &why,
+                &gitlab_need(&why, "the Maintainer role"),
+            )
+        }
+        Err(e) => down("secret-scoping", forge.kind, &e.to_string()),
+    });
     out.push(match ask(api, forge, "personal_access_tokens/self") {
         Answer::Ok(v) => gitlab_token_finding(&v, crate::lease::now()),
         // A CI job token, a deploy token or an OAuth token has no self-description.
@@ -1491,14 +1491,11 @@ fn gitlab(api: &dyn ForgeApi, forge: &Forge) -> Vec<Finding> {
         &gitlab_need("", "the Maintainer role"),
         |keys| deploy_keys_finding(forge.kind, keys),
     ));
-    for i in [
-        "outside-collaborators",
-        "org-base-permission",
-        "two-factor",
-        "visibility-change",
-    ] {
+    for i in ["outside-collaborators", "org-base-permission"] {
         out.push(unavailable(i, forge.kind));
     }
+    out.push(gitlab_two_factor(api, forge, &project));
+    out.push(unavailable("visibility-change", forge.kind));
     out.push(listed(
         api,
         forge,
@@ -1508,8 +1505,132 @@ fn gitlab(api: &dyn ForgeApi, forge: &Forge) -> Vec<Finding> {
         &gitlab_need("", "the Maintainer role"),
         |hooks| webhooks_finding(forge.kind, hooks),
     ));
-    out.push(unavailable("environment-reviewers", forge.kind));
+    out.push(gitlab_environment_reviewers(api, forge, &variables));
     out
+}
+
+/// `two-factor` on GitLab: the top-level group's `require_two_factor_authentication`, where
+/// GitLab enforces the requirement for every subgroup and project. A project in a personal
+/// namespace has no group settings.
+fn gitlab_two_factor(api: &dyn ForgeApi, forge: &Forge, project: &serde_json::Value) -> Finding {
+    let Some(ns) = project.get("namespace") else {
+        return hidden(
+            "two-factor",
+            "the project's namespace",
+            "absent from the project object",
+            "a token that can read the project",
+        );
+    };
+    if ns.get("kind").and_then(|k| k.as_str()) != Some("group") {
+        return Finding::new(
+            "two-factor",
+            Status::Info,
+            "owned by a personal namespace: no group settings",
+        );
+    }
+    let full = ns.get("full_path").and_then(|p| p.as_str()).unwrap_or("");
+    let top = full.split('/').next().unwrap_or(full);
+    let need = |why: &str| gitlab_need(why, "the Owner role in the top-level group");
+    match ask(api, forge, &format!("groups/{}", path_segment(top))) {
+        Answer::Ok(g) => match g
+            .get("require_two_factor_authentication")
+            .and_then(|v| v.as_bool())
+        {
+            Some(true) => Finding::new(
+                "two-factor",
+                Status::Pass,
+                "the top-level group requires two-factor authentication",
+            ),
+            Some(false) => Finding::new(
+                "two-factor",
+                Status::Warn,
+                "the top-level group does not require two-factor authentication",
+            )
+            .fix("Require two-factor authentication in the top-level group (Settings > General > Permissions and group features)."),
+            None => hidden(
+                "two-factor",
+                "the group's two-factor requirement",
+                "absent from the group object",
+                &need(""),
+            ),
+        },
+        Answer::Hidden(why) => hidden("two-factor", "the top-level group", &why, &need(&why)),
+        Answer::Down(why) => down("two-factor", forge.kind, &why),
+    }
+}
+
+/// `environment-reviewers` on GitLab: an environment that masked or hidden CI/CD variables
+/// are scoped to, and that needs no deployment approval (a protected environment with
+/// `required_approval_count` or `approval_rules`), lets any job deploying to it read them.
+/// Variables scoped to every environment (`*`) are `secret-scoping`'s.
+fn gitlab_environment_reviewers(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    variables: &Result<Vec<serde_json::Value>, crate::forge::ForgeError>,
+) -> Finding {
+    let vars = match variables {
+        Ok(v) => v,
+        Err(e) if matches!(e.kind, ForgeErrorKind::NotFound | ForgeErrorKind::Denied) => {
+            let why = e.to_string();
+            return hidden(
+                "environment-reviewers",
+                "the project's CI/CD variables",
+                &why,
+                &gitlab_need(&why, "the Maintainer role"),
+            );
+        }
+        Err(e) => return down("environment-reviewers", forge.kind, &e.to_string()),
+    };
+    let mut scoped: BTreeMap<String, u64> = BTreeMap::new();
+    for v in vars {
+        let secret = ["masked", "hidden"]
+            .iter()
+            .any(|k| v.get(*k).and_then(|b| b.as_bool()) == Some(true));
+        let scope = v
+            .get("environment_scope")
+            .and_then(|s| s.as_str())
+            .unwrap_or("*");
+        if secret && scope != "*" {
+            *scoped.entry(scope.to_string()).or_default() += 1;
+        }
+    }
+    if scoped.is_empty() {
+        return environment_reviewers_finding(0, &[]);
+    }
+    let id = gitlab_project_id(&forge.repo);
+    let protected = match read_all(api, forge, &format!("projects/{id}/protected_environments")) {
+        Ok(p) => p,
+        Err(e) if matches!(e.kind, ForgeErrorKind::NotFound | ForgeErrorKind::Denied) => {
+            let why = e.to_string();
+            return hidden(
+                "environment-reviewers",
+                "the protected environments",
+                &why,
+                &gitlab_need(&why, "the Maintainer role"),
+            );
+        }
+        Err(e) => return down("environment-reviewers", forge.kind, &e.to_string()),
+    };
+    let approved = |name: &str| {
+        protected.iter().any(|pe| {
+            pe.get("name").and_then(|n| n.as_str()) == Some(name)
+                && (pe
+                    .get("required_approval_count")
+                    .and_then(|c| c.as_u64())
+                    .unwrap_or(0)
+                    > 0
+                    || pe
+                        .get("approval_rules")
+                        .and_then(|r| r.as_array())
+                        .is_some_and(|r| !r.is_empty()))
+        })
+    };
+    let unreviewed: Vec<(String, u64)> = scoped
+        .iter()
+        .filter(|(name, _)| !approved(name))
+        .map(|(n, c)| (n.clone(), *c))
+        .collect();
+    environment_reviewers_finding(scoped.len(), &unreviewed)
 }
 
 /// `default-token` on GitLab: other projects' CI job tokens are kept out by the inbound
@@ -1793,6 +1914,81 @@ fn gitea_secret_scoping(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn gitlab_reads_the_top_level_group_and_environment_approvals() {
+        let gl = Forge {
+            kind: ForgeKind::GitLab,
+            ..gh()
+        };
+        let mut api = CannedApi::default();
+        let project = |ns: serde_json::Value| json!({"namespace": ns});
+        // Two-factor: personal namespace, group that requires it, group that does not.
+        assert_eq!(
+            gitlab_two_factor(
+                &api,
+                &gl,
+                &project(json!({"kind": "user", "full_path": "me"}))
+            )
+            .status,
+            Status::Info
+        );
+        assert_eq!(
+            gitlab_two_factor(&api, &gl, &json!({})).status,
+            Status::Warn
+        );
+        api.responses.insert(
+            "gitlab:groups/top".into(),
+            json!({"require_two_factor_authentication": true}),
+        );
+        let sub = project(json!({"kind": "group", "full_path": "top/sub"}));
+        assert_eq!(gitlab_two_factor(&api, &gl, &sub).status, Status::Pass);
+        api.responses.insert(
+            "gitlab:groups/top".into(),
+            json!({"require_two_factor_authentication": false}),
+        );
+        assert_eq!(gitlab_two_factor(&api, &gl, &sub).status, Status::Warn);
+        // Environments: a masked variable scoped to `prod`, one to every environment, one
+        // unmasked; `prod` needs an approval, then it does not.
+        let vars = Ok(vec![
+            json!({"key": "A", "masked": true, "environment_scope": "prod"}),
+            json!({"key": "B", "masked": true, "environment_scope": "*"}),
+            json!({"key": "C", "masked": false, "hidden": false, "environment_scope": "staging"}),
+        ]);
+        for page in [1, 2] {
+            api.responses.insert(
+                format!("gitlab:projects/o%2Fr/protected_environments?per_page=100&page={page}"),
+                if page == 1 {
+                    json!([{"name": "prod", "required_approval_count": 1}])
+                } else {
+                    json!([])
+                },
+            );
+        }
+        assert_eq!(
+            gitlab_environment_reviewers(&api, &gl, &vars).status,
+            Status::Pass
+        );
+        api.responses.insert(
+            "gitlab:projects/o%2Fr/protected_environments?per_page=100&page=1".into(),
+            json!([{"name": "prod", "required_approval_count": 0, "approval_rules": []}]),
+        );
+        let f = gitlab_environment_reviewers(&api, &gl, &vars);
+        assert_eq!(f.status, Status::Info);
+        assert!(
+            f.summary.contains("`prod` (1 secret(s))") && !f.summary.contains("staging"),
+            "{}",
+            f.summary
+        );
+        // No secret scoped to one environment: nothing to approve.
+        let none = Ok(vec![
+            json!({"key": "B", "masked": true, "environment_scope": "*"}),
+        ]);
+        assert_eq!(
+            gitlab_environment_reviewers(&api, &gl, &none).status,
+            Status::Pass
+        );
+    }
 
     #[test]
     fn webhooks_are_judged_where_the_forge_says_and_reported_by_host_only() {

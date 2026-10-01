@@ -1296,7 +1296,18 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
     project["visibility"] = serde_json::json!("private");
     project["forking_access_level"] = serde_json::json!("enabled");
     project["secret_push_protection_enabled"] = serde_json::json!(false);
+    project["namespace"] = serde_json::json!({"kind": "group", "full_path": "o"});
     api.serve("projects/o%2Fr", project);
+    // The top-level group does not require two-factor authentication.
+    api.serve(
+        "groups/o",
+        serde_json::json!({"id": 5, "full_path": "o", "require_two_factor_authentication": false}),
+    );
+    // The recorded protected environment needs no approval.
+    api.serve(
+        "projects/o%2Fr/protected_environments?per_page=100&page=1",
+        recorded["protected_environments"].clone(),
+    );
     api.serve(
         "projects/o%2Fr/deploy_keys?per_page=100&page=1",
         serde_json::json!([{"id": 3, "title": "deploy", "can_push": true}]),
@@ -1315,6 +1326,11 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
             v["environment_scope"] = serde_json::json!("*");
         }
     }
+    // A masked variable scoped to the recorded `production` environment.
+    vars.as_array_mut().unwrap().push(serde_json::json!({
+        "key": "PROD_DEPLOY_KEY", "masked": true, "hidden": false, "protected": true,
+        "environment_scope": "production", "variable_type": "env_var", "raw": false, "description": null
+    }));
     api.serve("projects/o%2Fr/variables?per_page=100&page=1", vars);
     api.serve(
         "projects/o%2Fr/protected_tags?per_page=100&page=1",
@@ -1351,7 +1367,7 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
         ("dependency-alerts", "info"),
         ("deploy-keys", "warn"),
         ("outside-collaborators", "info"),
-        ("two-factor", "info"),
+        ("two-factor", "warn"),
         ("webhooks", "warn"),
         ("environment-reviewers", "info"),
     ] {
@@ -1361,6 +1377,11 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
         );
     }
     assert!(run.stdout.contains("`DEPLOY_TOKEN`"), "{}", run.stdout);
+    assert!(
+        run.stdout.contains("`production` (1 secret(s))"),
+        "{}",
+        run.stdout
+    );
     assert!(run.stdout.contains("`api`"), "{}", run.stdout);
     assert!(!run.stdout.contains("glpat-secret-123") && !run.stderr.contains("glpat-secret-123"));
 

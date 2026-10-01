@@ -399,14 +399,14 @@ discipline doctor --strict       # warnings fail too (exit 1)
   - `two-factor` warns when two-factor authentication is not required;
   - `visibility-change` warns when members may change a repository's visibility.
 
-  GitHub shows the base permission and the two-factor requirement to an organisation owner's token only, so other tokens get `could not check` (RUN, 2026-09-30, owner and member tokens). A repository owned by a personal account has no organisation settings (information). Gitea and Forgejo expose no such organisation settings (RUN, `swagger.v1.json`); GitLab's group settings are not read yet.
+  GitHub shows the base permission and the two-factor requirement to an organisation owner's token only, so other tokens get `could not check` (RUN, 2026-09-30, owner and member tokens). A repository owned by a personal account has no organisation settings (information). Gitea and Forgejo expose no such organisation settings (RUN, `swagger.v1.json`). On GitLab, `two-factor` reads the project's top-level group, where GitLab enforces the requirement for every subgroup and project (`require_two_factor_authentication`): a warning when it is off, `could not check` when the token cannot read the group, information for a personal namespace; GitLab has no base permission or visibility-change setting to read (READ, Groups API).
 
 **Webhooks and environments** (#366):
 - `webhooks`, reported by host only (never the path, which often carries a token, or credentials in the URL):
   - GitHub: a warning for a webhook with no secret or with TLS verification off (`insecure_ssl`);
   - GitLab: a warning when TLS verification is off (`enable_ssl_verification`). GitLab returns no secret token, so its presence is not judged;
   - Gitea and Forgejo: information with a count, since they return neither (RUN, 1.24 and 12, with a webhook created with a secret).
-- `environment-reviewers`: on GitHub, information naming the deployment environments that hold secrets but need no required reviewer, with their secret counts (never the secrets' names). Not available elsewhere: Gitea and Forgejo have no environments, and GitLab's are not read yet.
+- `environment-reviewers`: on GitHub, information naming the deployment environments that hold secrets but need no required reviewer, with their secret counts (never the secrets' names). On GitLab, the environments that masked or hidden CI/CD variables are scoped to (not `*`, which `secret-scoping` reports) and that need no deployment approval (a protected environment with `required_approval_count` or `approval_rules`; READ, Protected Environments API) are named the same way. Gitea and Forgejo have no environments.
 
 **Security policy** (#366): `security-policy` is a local check: a pass when `SECURITY.md` is at the root, in `.github/` or in `docs/`, and information otherwise, since a reporter is then not told how to report a vulnerability privately.
 
@@ -421,7 +421,7 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Cheat sheet, SCM: protected branches | `required-check`, `up-to-date`, `force-push`, `deletion` |
 | Cheat sheet, SCM: signed commits | `signed-commits` (information) |
 | Cheat sheet, SCM: limit external contributors | `outside-collaborators`, `deploy-keys` |
-| Cheat sheet, SCM: MFA | `two-factor` (GitHub organisations) |
+| Cheat sheet, SCM: MFA | `two-factor` (GitHub organisations, GitLab top-level groups) |
 | Cheat sheet, SCM: no default permissions | `org-base-permission` (GitHub organisations) |
 | Cheat sheet, SCM: restrict forking of private or internal repositories | `forking` |
 | Cheat sheet, SCM: limit changing visibility to public | `visibility-change` (GitHub organisations) |
@@ -431,7 +431,7 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Cheat sheet, pipeline: protect the CI configuration | `workflow-protection`; the `ci-integrity` gate and `policy_from: base` |
 | Cheat sheet, pipeline: logging | out of scope; `discipline audit` reads the record back |
 | Cheat sheet, pipeline: SAST, DAST, IaC scanning | out of scope; the `command` gate can run a scanner |
-| Cheat sheet, pipeline: manual approval before production deploys | `environment-reviewers` (GitHub) |
+| Cheat sheet, pipeline: manual approval before production deploys | `environment-reviewers` (GitHub, GitLab) |
 | Cheat sheet, pipeline: no `--privileged` containers | the `sandbox-config` gate (workflow job and service containers) |
 | Cheat sheet, pipeline: version-controlled pipeline configuration | the `ci-integrity` gate |
 | Cheat sheet, IAM: secrets management | `secret-scoping`, `forge-token`, `secret-scanning`; the `shell-secrets` gate |
