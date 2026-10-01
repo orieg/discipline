@@ -561,7 +561,8 @@
       "source": "docs/ARCHITECTURE.md:128",
       "code": "src/forge.rs:check_network_allowed",
       "pinning_tests": [
-        "tests/test_gates_e2e.rs::no_network_keeps_the_ci_base_fetch_off_the_network"
+        "tests/test_gates_e2e.rs::no_network_keeps_the_ci_base_fetch_off_the_network",
+        "tests/test_gates_e2e.rs::no_network_keeps_every_forge_read_off_the_network"
       ],
       "verdict": "holds"
     },

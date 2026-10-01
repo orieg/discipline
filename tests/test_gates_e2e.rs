@@ -14497,6 +14497,39 @@ fn no_network_keeps_the_ci_base_fetch_off_the_network() {
     );
 }
 
+/// `DISCIPLINE_NO_NETWORK=1` keeps every forge read off the network, not only the base
+/// fetch: each command that reads the forge refuses before it connects, and says why. The
+/// API base is a non-loopback host that does not resolve, so a request that got past the
+/// guard would fail with a lookup error instead of the guard's reason.
+#[test]
+fn no_network_keeps_every_forge_read_off_the_network() {
+    let repo = Repo::new();
+    repo.write("src/g.rs", "pub fn g() {}\n");
+    repo.commit("feat: g (#7)\n\nno-issue: fixture");
+    repo.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    let env = [
+        ("DISCIPLINE_NO_NETWORK", "1"),
+        ("DISCIPLINE_FORGE_API_URL", "https://forge.invalid"),
+        ("GH_TOKEN", "t"),
+    ];
+    let guard = "network access is disabled (DISCIPLINE_NO_NETWORK)";
+    for args in [
+        &["audit", "--ref", "work", "--last", "1", "--forge", "--json"][..],
+        &["replay", "--ref", "work", "--last", "1", "--json"][..],
+        &["doctor"][..],
+    ] {
+        let run = repo.run(args, &env);
+        let out = format!("{}{}", run.stdout, run.stderr);
+        assert!(out.contains(guard), "{args:?}: {out}");
+        assert!(
+            !out.contains("forge.invalid:")
+                && !out.to_lowercase().contains("dns")
+                && !out.to_lowercase().contains("lookup"),
+            "{args:?} tried to connect: {out}"
+        );
+    }
+}
+
 /// A repository's own git configuration can name commands: hooks, a file-system monitor, an
 /// upload-pack program, a credential helper, an `ext::` transport. The fetch discipline starts
 /// in CI must run none of them, and must still fetch the base (#364).
