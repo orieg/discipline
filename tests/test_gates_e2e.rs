@@ -6235,6 +6235,37 @@ fn a_text_file_that_starts_like_an_executable_is_still_read() {
 }
 
 #[test]
+fn a_changed_file_a_gate_cannot_read_as_text_is_named() {
+    // F7: a gate that skips a changed file it cannot read as text names it. A NUL byte makes
+    // a file of unknown type binary; a language-pack extension stays text whatever it holds.
+    let repo = Repo::new();
+    std::fs::create_dir_all(repo.file("assets")).unwrap();
+    std::fs::write(repo.file("assets/data.weird"), b"header\0 payload\n").unwrap();
+    std::fs::write(
+        repo.file("src/Svc.cs"),
+        b"// \0\nclass Svc { void Run() { try { Go(); } catch (Exception) { } } }\n",
+    )
+    .unwrap();
+    repo.commit("feat: add");
+    let run = repo.check(&[]);
+    let notes = |gate: &str| run.outcome(gate)["notes"].to_string();
+    for gate in ["instruction-smuggling", "pii"] {
+        assert!(
+            notes(gate).contains("skipped `assets/data.weird`"),
+            "{gate}: {}",
+            notes(gate)
+        );
+    }
+    assert!(
+        run.violations("error-swallowing")
+            .iter()
+            .any(|v| v["file"] == "src/Svc.cs"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
 fn md_file_with_nul_byte_still_fires_pii() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);

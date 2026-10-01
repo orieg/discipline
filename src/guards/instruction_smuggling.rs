@@ -605,6 +605,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             continue;
         }
         let Some(head) = ctx.git.head_content(&file.path)? else {
+            out.notes.push(super::unread_note(&file.path));
             continue;
         };
         out.examined += 1;

@@ -93,6 +93,12 @@ pub struct GateOutcome {
     pub overrides: Vec<crate::tokens::OverrideRecord>,
 }
 
+/// The note for a changed file a gate could not read as text (F7): binary content, or a
+/// symlink that leaves the repository.
+pub fn unread_note(path: &str) -> String {
+    format!("skipped `{path}` (binary or unreadable file)")
+}
+
 impl GateOutcome {
     /// Enabled, examined nothing, found nothing, and says why: "not evaluated: ...".
     pub fn is_not_evaluated(&self) -> bool {
