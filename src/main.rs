@@ -78,6 +78,9 @@ fn run_command(command: Commands) -> Result<bool> {
             allow_cross_host_bench: false,
             bench_base_file: None,
             bench_head_file: None,
+            test_base_report: None,
+            test_head_report: None,
+            test_report: None,
             baseline_file: args.baseline_file,
             no_baseline: args.no_baseline,
             trust_workspace: args.trust_workspace,
@@ -806,6 +809,9 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         allow_cross_host_bench: args.allow_cross_host_bench,
         bench_base_file: args.bench_base_file.clone(),
         bench_head_file: args.bench_head_file.clone(),
+        test_base_report: args.test_base_report.clone(),
+        test_head_report: args.test_head_report.clone(),
+        test_report: args.test_report.clone(),
         forge: Some(discipline::guards::ForgeAccess {
             api: &forge_api,
             identify: &identify_forge,
@@ -1158,6 +1164,9 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         allow_cross_host_bench: false,
         bench_base_file: None,
         bench_head_file: None,
+        test_base_report: None,
+        test_head_report: None,
+        test_report: None,
         forge: None,
     };
 

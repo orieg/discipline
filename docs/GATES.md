@@ -233,6 +233,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `test-floor/configured-floor-decreased` | Configured Test Floor Decreased |
 | `test-floor/required-suite-missing` | Required Test Suite Missing |
 | `test-floor/test-count-below-floor` | Test Count Below Floor |
+| `test-floor/test-dropped-from-suite` | Test Dropped From Suite |
 | `dependency-delta/lockfile-deleted` | Lockfile Deleted |
 | `dependency-delta/lockfile-entry-from-new-source` | Lockfile Entry From New Source |
 | `dependency-delta/lockfile-integrity-hash-removed` | Lockfile Integrity Hash Removed |
@@ -1339,10 +1340,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Config keys:** `enabled`, `severity`, `exempt_paths` (matched against `workflow`), `workflow` (default `.github/workflows/ci.yml`), `change_job` (default `detect-changes`; `""` = the workflow has no change-detection job), `unconditional_jobs` (default `[]`).
 
 #### `test-floor`
-- **Rule:** Universal test count ratchet and floor sentinel. Operates in zero-config mode by default to prevent any drop in workspace AST test count across all supported languages relative to the base ref (with configurable `tolerance = 0`). When explicit floors are configured, reads test count floor constants and `min_tests` from the base ref (preventing PRs from silently lowering their own floor), enforces configured test count minimums, and ensures required test suite files exist. Complete test file deletions are detected and blocked.
+- **Rule:** Universal test count ratchet and floor sentinel. Operates in zero-config mode by default to prevent any drop in workspace AST test count across all supported languages relative to the base ref (with configurable `tolerance = 0`). When test reports are present (e.g. JUnit XML), ratchets test identities: every test ID that passed on base must pass on head, preventing count-preserving test removal or deselection evasion. When explicit floors are configured, reads test count floor constants and `min_tests` from the base ref (preventing PRs from silently lowering their own floor), enforces configured test count minimums, and ensures required test suite files exist. Complete test file deletions are detected and blocked.
 - **Languages:** Any supported language pack (Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C) or external test listing command (see [Counting basis](#counting-basis-static-or-runtime)).
 - **What it catches:**
   - Workspace test count dropping below merge base ref count in zero-config mode (with `tolerance = 0` default). The static count is of tests that **run**: an unconditionally ignored or skipped test is not counted on either side (a conditional skip still is), so replacing running tests with parked ones lowers the count. The notes state how many were left out, and name files that could not be read or that parse with errors.
+  - Test dropped, missing, skipped, or failed relative to the base test report (`test-dropped-from-suite`), even if the total count is preserved.
   - Workspace test count dropping below configured `min_tests` or base floor constant.
   - Complete deletion of test files causing total test count reduction.
   - Lowering of floor constant value in `constant_file` below merge base ref.
@@ -1360,9 +1362,9 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - Test count increases (ratchet permits additions).
   - Reductions within configured `tolerance`.
-  - Reductions excused with `allow-test-shrink: <subject> <reason>` or `allow-gate-weakening: test-floor <reason>`.
-- **Lifting directive:** `allow-gate-weakening: test-floor <reason>`, or `allow-test-shrink: <subject> <reason>` where the subject is what shrank: for a count below the floor, `min_tests`, a changed test file's path or name, or a removed test's name; for a lowered floor constant, its `constant_name`; for a missing suite, its `required_suites` path.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `min_tests`, `tolerance`, `constant_file`, `constant_name`, `required_suites`, `test_command`.
+  - Reductions excused with `allow-test-shrink: <subject> <reason>`, `removes: <subject> <reason>`, or `allow-gate-weakening: test-floor <reason>`.
+- **Lifting directive:** `allow-gate-weakening: test-floor <reason>`, or `allow-test-shrink: <subject> <reason>` or `removes: <subject> <reason>` where the subject is what shrank: for a dropped, missing, skipped, or failed test identity, its `test-id` or test function name; for a count below the floor, `min_tests`, a changed test file's path or name, or a removed test's name; for a lowered floor constant, its `constant_name`; for a missing suite, its `required_suites` path.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `min_tests`, `tolerance`, `constant_file`, `constant_name`, `required_suites`, `test_command`, `test_report`, `base_report`, `head_report`.
 
 ##### Counting basis: static or runtime
 
@@ -1396,6 +1398,28 @@ min_tests = 300
 The gate counts the lines ending in `: test` (`: benchmark` lines and the `N tests, M benchmarks` summaries are not counted), and that count is what `min_tests` is compared against: the gate reports it as the outcome's `examined` value and quotes it in a `Test Count Below Floor` finding. A failing command (non-zero exit, or a binary not on `PATH`) is a gate error with exit 2, never a count of zero. `tests/test_adoption.rs` pins this: a repository with two static test functions and a five-test listing passes a floor of 5 and fails a floor of 6 with the listing's count in the message.
 
 To port the other way, adopting the static basis instead, run `discipline check` once with the gate enabled and no floor; the outcome's `examined` value is the static count to set as `min_tests`.
+
+##### Test identity ratcheting (JUnit XML)
+
+When test reports are present, `test-floor` enforces identity-based ratcheting in addition to test counts. It parses JUnit XML test reports and asserts:
+
+> **Identity Invariant:** Every test ID that passed on the base ref must pass on the head ref.
+
+A test that was passing on base and becomes missing, skipped, or failed on head is reported as **`Test Dropped From Suite`** (`test-floor/test-dropped-from-suite`), preventing count-preserving test removal or deselection evasion (e.g. dropping a complex test and adding a trivial passing test).
+
+**Configuring test reports:**
+- `test_report`: path to a test report XML file relative to the repo root (e.g. `reports/junit.xml`). In default git mode, base report content is retrieved from the merge base ref in git, and head report is read from disk.
+- Dual-report mode: in CI environments where base and head test runs produce separate artifact files, configure `base_report` and `head_report` (or pass `--test-base-report` and `--test-head-report` CLI flags / `DISCIPLINE_TEST_BASE_REPORT` and `DISCIPLINE_TEST_HEAD_REPORT` environment variables).
+
+**Lifting an intentional test removal:**
+An intentional test removal, rename, or drop must be excused with an explicit directive naming the test:
+```text
+allow-test-shrink: test_logout merged into unified session test
+```
+or
+```text
+removes: test_logout deprecated legacy endpoint test
+```
 
 #### `archive-contents`
 - **Rule:** Distribution archives produced during packaging or release must contain all required files and zero forbidden developer artifacts, private files, or CI scripts.

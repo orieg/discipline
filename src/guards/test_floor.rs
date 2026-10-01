@@ -10,7 +10,7 @@ use crate::guards::{exempt_filter, Context, GateOutcome, Violation};
 use crate::tokens;
 use anyhow::{bail, Context as _, Result};
 use regex::Regex;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const GATE: &str = "test-floor";
 
@@ -251,9 +251,186 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         );
     }
 
-    // 5. Calculate measured test count.
+    // 5. Resolve test reports for identity-based ratcheting
+    let env_head = std::env::var("DISCIPLINE_TEST_HEAD_REPORT").ok();
+    let env_report = std::env::var("DISCIPLINE_TEST_REPORT").ok();
+    let head_report_path: Option<&str> = ctx
+        .test_head_report
+        .as_deref()
+        .and_then(|p| p.to_str())
+        .or(env_head.as_deref())
+        .or(settings.head_report.as_deref())
+        .or_else(|| ctx.test_report.as_deref().and_then(|p| p.to_str()))
+        .or(env_report.as_deref())
+        .or(settings.test_report.as_deref());
+
+    let env_base = std::env::var("DISCIPLINE_TEST_BASE_REPORT").ok();
+    let base_report_path: Option<&str> = ctx
+        .test_base_report
+        .as_deref()
+        .and_then(|p| p.to_str())
+        .or(env_base.as_deref())
+        .or(settings.base_report.as_deref());
+
+    if base_report_path.is_some() && head_report_path.is_none() {
+        bail!("test-floor: `base_report` was configured or provided, but `head_report` is missing");
+    }
+
+    let mut head_cases_opt: Option<Vec<TestCaseReport>> = None;
+    let mut base_cases_opt: Option<Vec<TestCaseReport>> = None;
+
+    if let Some(h_path) = head_report_path {
+        let full_head = if Path::new(h_path).is_absolute() {
+            PathBuf::from(h_path)
+        } else {
+            Path::new(ctx.git.root()).join(h_path)
+        };
+        if !full_head.is_file() {
+            bail!("test-floor: head test report file '{h_path}' not found");
+        }
+        let head_xml = std::fs::read_to_string(&full_head)
+            .with_context(|| format!("failed to read head test report '{h_path}'"))?;
+        let parsed_head = parse_junit_xml(&head_xml)
+            .with_context(|| format!("failed to parse head test report '{h_path}'"))?;
+        head_cases_opt = Some(parsed_head);
+
+        // Load base report
+        if let Some(b_path) = base_report_path {
+            let full_base = if Path::new(b_path).is_absolute() {
+                PathBuf::from(b_path)
+            } else {
+                Path::new(ctx.git.root()).join(b_path)
+            };
+            if !full_base.is_file() {
+                bail!("test-floor: base test report file '{b_path}' not found");
+            }
+            let base_xml = std::fs::read_to_string(&full_base)
+                .with_context(|| format!("failed to read base test report '{b_path}'"))?;
+            let parsed_base = parse_junit_xml(&base_xml)
+                .with_context(|| format!("failed to parse base test report '{b_path}'"))?;
+            base_cases_opt = Some(parsed_base);
+        } else if let Some(configured_report) = settings.test_report.as_deref().or_else(|| {
+            ctx.test_report
+                .as_deref()
+                .and_then(|p| p.to_str())
+                .or(env_report.as_deref())
+        }) {
+            if !Path::new(configured_report).is_absolute() {
+                match ctx.git.base_content(configured_report) {
+                    Ok(Some(base_xml)) => {
+                        let parsed_base = parse_junit_xml(&base_xml).with_context(|| {
+                            format!("failed to parse base ref test report '{configured_report}'")
+                        })?;
+                        base_cases_opt = Some(parsed_base);
+                    }
+                    Ok(None) => {
+                        out.notes.push(format!(
+                            "test-floor: test report '{configured_report}' not present in base ref; identity ratchet will be enforced on subsequent changes"
+                        ));
+                    }
+                    Err(e) => {
+                        bail!("Failed to read '{configured_report}' from base ref: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    // 6. Test Identity Ratchet
+    if let (Some(base_cases), Some(head_cases)) = (&base_cases_opt, &head_cases_opt) {
+        let identity_violations = compare_test_identities(base_cases, head_cases);
+        let base_passed_count = base_cases
+            .iter()
+            .filter(|c| c.status == TestStatus::Passed)
+            .count();
+        out.notes.push(format!(
+            "test-floor: verified {base_passed_count} passed base test identity/identities against head report"
+        ));
+
+        for viol in identity_violations {
+            if let Some(ov) = ctx.find_override(
+                GATE,
+                &crate::findings::TEST_IDENTITY_DROPPED,
+                tokens::ALLOW_GATE_WEAKENING,
+                GATE,
+            ) {
+                out.overrides.push(ov);
+                continue;
+            }
+
+            let mut candidate_subjects = vec![viol.id.as_str(), viol.name.as_str()];
+            let dot_fmt;
+            let colon_fmt;
+            if let Some(cn) = &viol.classname {
+                candidate_subjects.push(cn.as_str());
+                dot_fmt = format!("{cn}.{}", viol.name);
+                candidate_subjects.push(&dot_fmt);
+                colon_fmt = format!("{cn}::{}", viol.name);
+                if colon_fmt != viol.id {
+                    candidate_subjects.push(&colon_fmt);
+                }
+            }
+
+            let mut found_override = None;
+            for subj in candidate_subjects {
+                if let Some(ov) = ctx.find_override(
+                    GATE,
+                    &crate::findings::TEST_IDENTITY_DROPPED,
+                    tokens::ALLOW_TEST_SHRINK,
+                    subj,
+                ) {
+                    found_override = Some(ov);
+                    break;
+                }
+                if let Some(ov) = ctx.find_override(
+                    GATE,
+                    &crate::findings::TEST_IDENTITY_DROPPED,
+                    tokens::REMOVES,
+                    subj,
+                ) {
+                    found_override = Some(ov);
+                    break;
+                }
+            }
+
+            if let Some(ov) = found_override {
+                out.overrides.push(ov);
+            } else {
+                let (action_msg, remediation_verb) = match viol.issue {
+                    TestIdentityIssue::Missing => {
+                        ("is missing from head test report", "Restore the test")
+                    }
+                    TestIdentityIssue::Skipped => {
+                        ("is skipped in head test report", "Re-enable the test")
+                    }
+                    TestIdentityIssue::Failed => {
+                        ("failed in head test report", "Fix the test failure")
+                    }
+                };
+                out.violations.push(Violation {
+                    gate: GATE,
+                    severity: ctx.overridable(settings.severity),
+                    code: crate::findings::full_code(GATE, &crate::findings::TEST_IDENTITY_DROPPED),
+                    fingerprint: String::new(),
+                    title: crate::findings::TEST_IDENTITY_DROPPED.title.to_string(),
+                    anchor: None,
+                    legacy_title: crate::findings::TEST_IDENTITY_DROPPED.was_title(),
+                    file: None,
+                    line: None,
+                    message: format!("Test '{}' passed on base ref but {action_msg}.", viol.id),
+                    remediation: Some(format!(
+                        "{remediation_verb} or provide an allow-test-shrink: <test-id> <reason> directive in the PR description."
+                    )),
+                });
+            }
+        }
+    }
+
+    // 7. Calculate measured test count.
     let measured_count = if let Some(cmd) = &settings.test_command {
         count_tests_via_command(cmd, Path::new(ctx.git.root()))?
+    } else if let Some(head_cases) = &head_cases_opt {
+        head_cases.len()
     } else {
         let head = count_workspace_ast_tests(ctx, &filter)?;
         out.notes.extend(head.notes("head"));
@@ -261,7 +438,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     };
     out.examined = measured_count;
 
-    // 6. Compare against the effective floor.
+    // 8. Compare against the effective floor.
     if let Some(floor) = explicit_floor {
         if measured_count + settings.tolerance < floor {
             if let Some(ov) =
@@ -281,6 +458,35 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                     line: None,
                     message: format!(
                         "Workspace test count ({measured_count}) is below the required floor of {floor}."
+                    ),
+                    remediation: Some(
+                        "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+    } else if let Some(base_cases) = &base_cases_opt {
+        let base_count = base_cases.len();
+        if base_count > 0 && measured_count + settings.tolerance < base_count {
+            if let Some(ov) =
+                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)
+            {
+                out.overrides.push(ov);
+            } else {
+                out.violations.push(Violation {
+                    gate: GATE,
+                    severity: ctx.overridable(settings.severity),
+                    code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
+                    fingerprint: String::new(),
+                    title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
+                    anchor: None,
+                    legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
+                    file: None,
+                    line: None,
+                    message: format!(
+                        "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
+                        settings.tolerance
                     ),
                     remediation: Some(
                         "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
@@ -559,6 +765,195 @@ pub fn parse_test_count_output(output: &str) -> usize {
     count
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestStatus {
+    Passed,
+    Failed,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestCaseReport {
+    pub id: String,
+    pub name: String,
+    pub classname: Option<String>,
+    pub status: TestStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestIdentityIssue {
+    Missing,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestIdentityViolation {
+    pub id: String,
+    pub name: String,
+    pub classname: Option<String>,
+    pub issue: TestIdentityIssue,
+}
+
+/// Parses JUnit XML string and returns list of test case records.
+pub fn parse_junit_xml(xml: &str) -> Result<Vec<TestCaseReport>> {
+    let trimmed = xml.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if !xml.contains("<testcase") && !xml.contains("<testsuite") {
+        bail!("Content does not contain JUnit XML <testsuite> or <testcase> elements");
+    }
+
+    let re_comment = Regex::new(r#"(?s)<!--.*?-->"#)?;
+    let cleaned_xml = re_comment.replace_all(xml, "");
+
+    let mut cases = Vec::new();
+    let re_case = Regex::new(r#"(?s)<testcase\b([^>]*?)(?:/>|>(.*?)</testcase>)"#)?;
+    let re_attr = Regex::new(r#"([a-zA-Z0-9_\-:]+)\s*=\s*(?:"([^"]*)"|'([^']*)')"#)?;
+    let re_sysout = Regex::new(r#"(?s)<system-out\b[^>]*>.*?</system-out>"#)?;
+    let re_syserr = Regex::new(r#"(?s)<system-err\b[^>]*>.*?</system-err>"#)?;
+    let re_failure = Regex::new(r#"(?i)<failure[\s>/]"#)?;
+    let re_error = Regex::new(r#"(?i)<error[\s>/]"#)?;
+    let re_skipped = Regex::new(r#"(?i)<skipped[\s>/]"#)?;
+
+    for cap in re_case.captures_iter(&cleaned_xml) {
+        let attr_str = &cap[1];
+        let body_opt = cap.get(2).map(|m| m.as_str());
+
+        let mut name = String::new();
+        let mut classname = None;
+        let mut id_attr = None;
+
+        for attr in re_attr.captures_iter(attr_str) {
+            let k = &attr[1];
+            let v = attr
+                .get(2)
+                .or_else(|| attr.get(3))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            let val = unescape_xml(v);
+            match k {
+                "name" => name = val,
+                "classname" if !val.trim().is_empty() => {
+                    classname = Some(val);
+                }
+                "id" if !val.trim().is_empty() => {
+                    id_attr = Some(val);
+                }
+                _ => {}
+            }
+        }
+
+        if name.is_empty() {
+            if let Some(id) = id_attr.as_ref() {
+                name = id.clone();
+            } else {
+                continue;
+            }
+        }
+
+        let id = if let Some(id) = id_attr {
+            id
+        } else if let Some(cn) = &classname {
+            format!("{cn}::{name}")
+        } else {
+            name.clone()
+        };
+
+        let status = if let Some(body) = body_opt {
+            let cleaned_body = re_sysout.replace_all(body, "");
+            let cleaned_body = re_syserr.replace_all(&cleaned_body, "");
+
+            if re_failure.is_match(&cleaned_body) || re_error.is_match(&cleaned_body) {
+                TestStatus::Failed
+            } else if re_skipped.is_match(&cleaned_body) {
+                TestStatus::Skipped
+            } else {
+                TestStatus::Passed
+            }
+        } else {
+            TestStatus::Passed
+        };
+
+        cases.push(TestCaseReport {
+            id,
+            name,
+            classname,
+            status,
+        });
+    }
+
+    Ok(cases)
+}
+
+fn unescape_xml(s: &str) -> String {
+    s.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// Compares base passed test cases with head test cases.
+///
+/// Invariant: Every test case that passed on base ref must pass on head ref.
+/// A missing, skipped, or failed test is returned as a violation.
+pub fn compare_test_identities(
+    base_cases: &[TestCaseReport],
+    head_cases: &[TestCaseReport],
+) -> Vec<TestIdentityViolation> {
+    use std::collections::BTreeMap;
+
+    let mut base_passed: BTreeMap<String, &TestCaseReport> = BTreeMap::new();
+    for c in base_cases {
+        if c.status == TestStatus::Passed {
+            base_passed.insert(c.id.clone(), c);
+        }
+    }
+
+    let mut head_by_id: BTreeMap<String, Vec<&TestCaseReport>> = BTreeMap::new();
+    for c in head_cases {
+        head_by_id.entry(c.id.clone()).or_default().push(c);
+    }
+
+    let mut violations = Vec::new();
+    for (id, base_test) in base_passed {
+        match head_by_id.get(&id) {
+            None => {
+                violations.push(TestIdentityViolation {
+                    id,
+                    name: base_test.name.clone(),
+                    classname: base_test.classname.clone(),
+                    issue: TestIdentityIssue::Missing,
+                });
+            }
+            Some(runs) => {
+                if runs.iter().any(|r| r.status == TestStatus::Passed) {
+                    continue;
+                } else if runs.iter().all(|r| r.status == TestStatus::Skipped) {
+                    violations.push(TestIdentityViolation {
+                        id,
+                        name: base_test.name.clone(),
+                        classname: base_test.classname.clone(),
+                        issue: TestIdentityIssue::Skipped,
+                    });
+                } else {
+                    violations.push(TestIdentityViolation {
+                        id,
+                        name: base_test.name.clone(),
+                        classname: base_test.classname.clone(),
+                        issue: TestIdentityIssue::Failed,
+                    });
+                }
+            }
+        }
+    }
+
+    violations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,5 +977,216 @@ test_blob_compact: test
     #[test]
     fn parses_numeric_output() {
         assert_eq!(parse_test_count_output("305\n"), 305);
+    }
+
+    #[test]
+    fn test_parse_junit_xml_various_elements() {
+        let sample = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="0" errors="0">
+  <testsuite name="unit_tests" tests="3">
+    <testcase classname="tests::auth" name="test_login" time="0.04"/>
+    <testcase name="test_bare" time="0.01"/>
+    <testcase id="custom_id_123" classname="tests::api" name="test_endpoint"/>
+  </testsuite>
+</testsuites>
+"#;
+        let cases = parse_junit_xml(sample).unwrap();
+        assert_eq!(cases.len(), 3);
+
+        assert_eq!(cases[0].id, "tests::auth::test_login");
+        assert_eq!(cases[0].name, "test_login");
+        assert_eq!(cases[0].classname.as_deref(), Some("tests::auth"));
+        assert_eq!(cases[0].status, TestStatus::Passed);
+
+        assert_eq!(cases[1].id, "test_bare");
+        assert_eq!(cases[1].name, "test_bare");
+        assert_eq!(cases[1].classname, None);
+        assert_eq!(cases[1].status, TestStatus::Passed);
+
+        assert_eq!(cases[2].id, "custom_id_123");
+        assert_eq!(cases[2].name, "test_endpoint");
+        assert_eq!(cases[2].status, TestStatus::Passed);
+    }
+
+    #[test]
+    fn test_parse_junit_xml_statuses() {
+        let sample = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="status_tests">
+  <testcase classname="suite" name="test_passed">
+    <system-out>this test outputs failure log text inside stdout</system-out>
+  </testcase>
+  <testcase classname="suite" name="test_failed">
+    <failure message="assertion failed: `(left == right)`">details here</failure>
+  </testcase>
+  <testcase classname="suite" name="test_error">
+    <error message="runtime exception">stack trace</error>
+  </testcase>
+  <testcase classname="suite" name="test_skipped_tag">
+    <skipped message="pending fix"/>
+  </testcase>
+  <testcase classname="suite" name="test_skipped_body">
+    <skipped>disabled in this configuration</skipped>
+  </testcase>
+</testsuite>
+"#;
+        let cases = parse_junit_xml(sample).unwrap();
+        assert_eq!(cases.len(), 5);
+
+        assert_eq!(cases[0].id, "suite::test_passed");
+        assert_eq!(cases[0].status, TestStatus::Passed);
+
+        assert_eq!(cases[1].id, "suite::test_failed");
+        assert_eq!(cases[1].status, TestStatus::Failed);
+
+        assert_eq!(cases[2].id, "suite::test_error");
+        assert_eq!(cases[2].status, TestStatus::Failed);
+
+        assert_eq!(cases[3].id, "suite::test_skipped_tag");
+        assert_eq!(cases[3].status, TestStatus::Skipped);
+
+        assert_eq!(cases[4].id, "suite::test_skipped_body");
+        assert_eq!(cases[4].status, TestStatus::Skipped);
+    }
+
+    #[test]
+    fn test_parse_junit_xml_entities_and_comments() {
+        let sample = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="entities">
+  <!-- <testcase classname="commented" name="test_ignored"/> -->
+  <testcase classname='pkg&amp;sub' name='test&quot;quoted&quot;'/>
+</testsuite>
+"#;
+        let cases = parse_junit_xml(sample).unwrap();
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].id, "pkg&sub::test\"quoted\"");
+        assert_eq!(cases[0].name, "test\"quoted\"");
+        assert_eq!(cases[0].classname.as_deref(), Some("pkg&sub"));
+    }
+
+    #[test]
+    fn test_compare_test_identities_missing() {
+        let base = vec![
+            TestCaseReport {
+                id: "test_a".into(),
+                name: "test_a".into(),
+                classname: None,
+                status: TestStatus::Passed,
+            },
+            TestCaseReport {
+                id: "test_b".into(),
+                name: "test_b".into(),
+                classname: None,
+                status: TestStatus::Passed,
+            },
+        ];
+        let head = vec![TestCaseReport {
+            id: "test_a".into(),
+            name: "test_a".into(),
+            classname: None,
+            status: TestStatus::Passed,
+        }];
+
+        let violations = compare_test_identities(&base, &head);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].id, "test_b");
+        assert_eq!(violations[0].issue, TestIdentityIssue::Missing);
+    }
+
+    #[test]
+    fn test_compare_test_identities_skipped() {
+        let base = vec![TestCaseReport {
+            id: "test_a".into(),
+            name: "test_a".into(),
+            classname: None,
+            status: TestStatus::Passed,
+        }];
+        let head = vec![TestCaseReport {
+            id: "test_a".into(),
+            name: "test_a".into(),
+            classname: None,
+            status: TestStatus::Skipped,
+        }];
+
+        let violations = compare_test_identities(&base, &head);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].id, "test_a");
+        assert_eq!(violations[0].issue, TestIdentityIssue::Skipped);
+    }
+
+    #[test]
+    fn test_compare_test_identities_failed() {
+        let base = vec![TestCaseReport {
+            id: "test_a".into(),
+            name: "test_a".into(),
+            classname: None,
+            status: TestStatus::Passed,
+        }];
+        let head = vec![TestCaseReport {
+            id: "test_a".into(),
+            name: "test_a".into(),
+            classname: None,
+            status: TestStatus::Failed,
+        }];
+
+        let violations = compare_test_identities(&base, &head);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].id, "test_a");
+        assert_eq!(violations[0].issue, TestIdentityIssue::Failed);
+    }
+
+    #[test]
+    fn test_compare_test_identities_non_passing_base_not_ratcheted() {
+        let base = vec![
+            TestCaseReport {
+                id: "test_fail".into(),
+                name: "test_fail".into(),
+                classname: None,
+                status: TestStatus::Failed,
+            },
+            TestCaseReport {
+                id: "test_skip".into(),
+                name: "test_skip".into(),
+                classname: None,
+                status: TestStatus::Skipped,
+            },
+        ];
+        // Head doesn't run either of them
+        let head = vec![];
+
+        let violations = compare_test_identities(&base, &head);
+        assert!(
+            violations.is_empty(),
+            "Tests that failed or were skipped on base are not ratcheted"
+        );
+    }
+
+    #[test]
+    fn test_compare_test_identities_retry_passed() {
+        let base = vec![TestCaseReport {
+            id: "test_retry".into(),
+            name: "test_retry".into(),
+            classname: None,
+            status: TestStatus::Passed,
+        }];
+        let head = vec![
+            TestCaseReport {
+                id: "test_retry".into(),
+                name: "test_retry".into(),
+                classname: None,
+                status: TestStatus::Failed,
+            },
+            TestCaseReport {
+                id: "test_retry".into(),
+                name: "test_retry".into(),
+                classname: None,
+                status: TestStatus::Passed,
+            },
+        ];
+
+        let violations = compare_test_identities(&base, &head);
+        assert!(
+            violations.is_empty(),
+            "Test that passed on retry is considered passed on head"
+        );
     }
 }
