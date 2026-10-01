@@ -717,7 +717,7 @@ Directives must begin on their own line. Mentions mid-sentence or inside markdow
 | `allow-ignore:` / `discipline:allow(ignored-tests)` / `allow(ignored-tests)` | `ignored-tests` | Test function name |
 | `allow-gate-weakening:` / `discipline:allow(config-integrity)` / `allow(config-integrity)` | `config-integrity`; with subject `ci-integrity` or `test-floor`, that gate too | Gate id, or `directives`, `tests`, `languages`, `meta`, `baseline` |
 | `allow-golden-update:` / `discipline:allow(golden-output)` / `allow(golden-output)` | `golden-output` | Snapshot/fixture file path or directory prefix |
-| `allow-toolchain-weakening:` / `discipline:allow(toolchain-config)` / `allow(toolchain-config)` | `toolchain-config` | Option key path (`compilerOptions.strict`), its last segment, or the configuration file path |
+| `allow-toolchain-weakening:` / `discipline:allow(toolchain-config)` / `allow(toolchain-config)` | `toolchain-config` | Option key path (`compilerOptions.strict`), its last segment, a build-file flag (`-Wno-error`) or what carries it (`CFLAGS`), or the configuration file path |
 | `allow-sandbox-widening:` / `discipline:allow(sandbox-config)` / `allow(sandbox-config)` | `sandbox-config` | Setting key path (`permissions.defaultMode`), its last segment, or the file path |
 | `allow-stub:` / `discipline:allow(stub-bodies)` / `allow(stub-bodies)` | `stub-bodies` | Function name, or the file path |
 | `allow-swallow:` / `discipline:allow(error-swallowing)` / `allow(error-swallowing)` | `error-swallowing` | File path, or `path:line` of the handler |
