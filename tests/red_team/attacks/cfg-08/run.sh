@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Control: deleting the [gates.unsafe-budget] table that enabled a default-off gate falls back to the default and is reported.
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name lab
 git config --global user.email lab@lab.invalid

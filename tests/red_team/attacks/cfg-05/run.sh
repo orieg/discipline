@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Removing noise_floor_pct 0.1 falls back to the 0.5 default, a looser floor.
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name lab
 git config --global user.email lab@lab.invalid

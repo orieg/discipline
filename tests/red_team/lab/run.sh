@@ -30,6 +30,7 @@ args=(
   --security-opt no-new-privileges
   --user 1000:1000
   -e HOME=/tmp
+  -e DISCIPLINE_RT_IN_CONTAINER=1
   -e GIT_CONFIG_NOSYSTEM=1
   -e PATH=/target/debug:/usr/local/cargo/bin:/usr/bin:/bin
   -v "${RT_TARGET_VOLUME:-discipline-rt-target}":/target:ro

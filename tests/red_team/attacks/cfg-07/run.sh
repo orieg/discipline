@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Control: a gate disabled through dotted keys and an inline table is read like the table form.
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name lab
 git config --global user.email lab@lab.invalid

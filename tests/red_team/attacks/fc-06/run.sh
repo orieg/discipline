@@ -3,6 +3,7 @@
 # magic number. `MZ = 0` is valid Python and `MZ` is the DOS/PE header, which
 # `is_binary_file` checks before the extension. Each finding must fire with the prefix as
 # it does without it, or the file must be named as not inspected.
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name lab
 git config --global user.email lab@lab.invalid

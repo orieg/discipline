@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Control: a misspelt key is a configuration error, not a silent default (fail closed).
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name lab
 git config --global user.email lab@lab.invalid

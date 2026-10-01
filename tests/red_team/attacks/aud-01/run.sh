@@ -4,6 +4,7 @@
 # the origin remote's host, the author, the subject, directive reasons (with --reasons),
 # a cross-repository reference, a file path, an inline marker and a configuration key.
 # The page must hold no tag, event attribute or link the repository wrote.
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name 'lab<img src=x onerror=alert(1)>'
 git config --global user.email 'lab"><svg onload=alert(2)>@lab.invalid'

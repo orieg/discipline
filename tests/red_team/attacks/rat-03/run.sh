@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. /work/lab-guard.sh || exit 99
 set -euo pipefail
 git config --global user.name agent
 git config --global user.email agent@lab.invalid

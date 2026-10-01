@@ -17,6 +17,8 @@ Host machines never execute untrusted attack repositories directly. All attacks 
  └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+The attack scripts rewrite the global git configuration (`user.name lab`) and delete directories under `/tmp`, so each one sources `attacks/lab-guard.sh` before its first command (`. /work/lab-guard.sh || exit 99`). The guard exits 99 unless `DISCIPLINE_RT_IN_CONTAINER=1`, `/.dockerenv` exists and `HOME=/tmp`, which only a container started by `lab/run.sh` provides; on a host there is no `/work` and the script stops at that line. `tests/test_red_team_lab.rs` fails when an attack script lacks the guard line, so a new attack must start with it.
+
 ## Directory Layout
 
 - `lab/`:

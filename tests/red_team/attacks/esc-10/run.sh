@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. /work/lab-guard.sh || exit 99
 set -eu
 
 cd /tmp

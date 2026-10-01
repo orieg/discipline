@@ -3,6 +3,7 @@
 # A browser reads a `%2e%2e` path segment as `..` (WHATWG URL standard, "double-dot URL path
 # segment"), so a marker in a file under directories of that name links, unencoded, to
 # another repository on the same forge.
+. /work/lab-guard.sh || exit 99
 set -u
 git config --global user.name lab
 git config --global user.email lab@lab.invalid
