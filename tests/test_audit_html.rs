@@ -196,3 +196,64 @@ fn the_command_writes_the_page_and_links_to_the_origin_forge() {
         "no GitHub link for a GitLab remote"
     );
 }
+
+#[test]
+fn a_source_link_stays_in_the_repository_whatever_the_path() {
+    // A browser reads a `%2e%2e` segment as `..`: unencoded, a directory with that name
+    // walks the link out of the repository to another one on the same forge, and `#` or
+    // `?` in a file name cuts the link short.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    repo.write("discipline.toml", CFG);
+    repo.commit("chore: adopt (#1)");
+    let marker = "fn a() {} // discipline:allow(time-estimates) a quoted release plan\n";
+    for path in [
+        "%2e%2e/%2e%2e/%2e%2e/%2e%2e/evil/r/blob/main/x.rs",
+        "src/a #?.rs",
+        "src/plain.rs",
+    ] {
+        repo.write(path, marker);
+    }
+    repo.commit("feat: markers (#2)");
+    let out = repo.file("audit.html");
+    let run = repo.run(
+        &[
+            "audit",
+            "--last",
+            "1",
+            "--ref",
+            "main",
+            "--format",
+            "html",
+            "--output",
+            out.to_str().unwrap(),
+        ],
+        &[("DISCIPLINE_NO_NETWORK", "1")],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let page = std::fs::read_to_string(&out).unwrap();
+    let open = r#"class="src-link" href=""#;
+    let hrefs: Vec<&str> = page
+        .match_indices(open)
+        .map(|(i, _)| {
+            let rest = &page[i + open.len()..];
+            &rest[..rest.find('"').unwrap()]
+        })
+        .collect();
+    let ends = |tail: &str| hrefs.iter().any(|h| h.ends_with(tail));
+    assert!(ends("/src/plain.rs#L1"), "{hrefs:?}");
+    assert!(
+        ends("/%252e%252e/%252e%252e/%252e%252e/%252e%252e/evil/r/blob/main/x.rs#L1"),
+        "{hrefs:?}"
+    );
+    assert!(ends("/src/a%20%23%3F.rs#L1"), "{hrefs:?}");
+    for h in &hrefs {
+        assert!(h.starts_with("https://github.com/o/r/blob/"), "{h}");
+        assert!(
+            !h.to_ascii_lowercase().contains("%2e"),
+            "a dot segment: {h}"
+        );
+        assert_eq!(h.matches('#').count(), 1, "{h}");
+    }
+}
