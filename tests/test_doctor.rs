@@ -561,7 +561,7 @@ fn doctor_checks_what_owner_ratification_relies_on_gitea() {
     };
     let writer =
         r#"{"permission":"write","role_name":"write","user":{"login":"agent","is_admin":false}}"#;
-    let ok = run(".gitea/workflows/*", writer);
+    let ok = run(".gitea/workflows/**", writer);
     assert_eq!(ok.code, 0, "{}\n{}", ok.stdout, ok.stderr);
     let st = statuses(&ok.stdout);
     assert!(
@@ -579,9 +579,21 @@ fn doctor_checks_what_owner_ratification_relies_on_gitea() {
         "{}",
         open.stdout
     );
+    // #428: Gitea's `*` stops at a `.`, so this pattern leaves `ci.yml` open.
+    let star = run(".gitea/workflows/*", writer);
+    assert!(
+        statuses(&star.stdout).contains(&("workflow-protection".into(), "warn".into())),
+        "{}",
+        star.stdout
+    );
+    assert!(
+        star.stdout.contains(".gitea/workflows/**"),
+        "{}",
+        star.stdout
+    );
 
     let admin = run(
-        ".gitea/workflows/*",
+        ".gitea/workflows/**",
         r#"{"permission":"admin","role_name":"admin","user":{"login":"agent"}}"#,
     );
     assert_eq!(admin.code, 1, "{}\n{}", admin.stdout, admin.stderr);
@@ -605,7 +617,7 @@ fn a_bot_agent_login_is_looked_up_not_refused() {
         ],
         "base",
     );
-    let rule = r#"[{"rule_name":"main","enable_push":false,"enable_status_check":true,"status_check_contexts":["CI / ci-gate (pull_request)"],"block_on_outdated_branch":true,"block_admin_merge_override":true,"protected_file_patterns":".gitea/workflows/*"}]"#;
+    let rule = r#"[{"rule_name":"main","enable_push":false,"enable_status_check":true,"status_check_contexts":["CI / ci-gate (pull_request)"],"block_on_outdated_branch":true,"block_admin_merge_override":true,"protected_file_patterns":".gitea/workflows/**"}]"#;
     let api = FakeForge::start();
     api.serve_raw("repos/o/r/branch_protections", 200, &[], rule);
     api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));

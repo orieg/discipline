@@ -1434,6 +1434,18 @@
         "tests/test_gates_e2e.rs::moving_a_library_functions_question_marks_to_another_module_is_not_an_assertion_drop"
       ],
       "verdict": "holds"
+    },
+    {
+      "id": "doctor-workflow-protection-matches-forge-globs",
+      "category": "doctor",
+      "claim": "on Gitea and Forgejo, doctor reports a workflow that runs discipline as protected only when a protected file pattern covers it as the forge matches it (case folded, * and ? stopping at . and /), so .gitea/workflows/* is not reported as protecting ci.yml",
+      "source": "docs/guides/ci-platforms.md:Gitea & Forgejo, issue:#428",
+      "code": "src/doctor.rs:forge_file_glob",
+      "pinning_tests": [
+        "src/doctor.rs::protected_file_patterns_match_as_gitea_and_forgejo_apply_them",
+        "tests/test_doctor.rs::doctor_checks_what_owner_ratification_relies_on_gitea"
+      ],
+      "verdict": "holds"
     }
   ]
 }
