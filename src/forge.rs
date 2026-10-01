@@ -1412,6 +1412,11 @@ impl ForgeApi for HttpApi<'_> {
             insecure_ok,
             None,
         )?;
+        // 204 No Content is an answer with no body (GitHub's `vulnerability-alerts` when on);
+        // any other empty 2xx is still malformed.
+        if a.status == 204 && a.body.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
         serde_json::from_str(&a.body).map_err(|e| {
             ForgeError::new(
                 ForgeErrorKind::Malformed,
