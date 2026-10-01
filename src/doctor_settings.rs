@@ -12,6 +12,9 @@
 //!   forking of a private repository, secret scanning and push protection, dependency
 //!   alerts. Read from the repository object `doctor` already fetches, plus GitHub's two
 //!   alert endpoints.
+//! - **Access and identity** (#366): deploy keys that can push and outside collaborators,
+//!   counted and never named; on GitHub, the owning organisation's base permission, its
+//!   two-factor requirement and whether members may change a repository's visibility.
 //!
 //! Reads go through `crate::forge` (AGENTS.md §3.3). A setting the token cannot see is a
 //! warning naming the access it needs, never a pass; a forge that cannot be reached is
@@ -36,7 +39,19 @@ pub const IDS: &[&str] = &[
     "forking",
     "secret-scanning",
     "dependency-alerts",
+    "deploy-keys",
+    "outside-collaborators",
+    "org-base-permission",
+    "two-factor",
+    "visibility-change",
 ];
+
+/// The organisation settings this module reads on GitHub, in report order.
+const ORG_IDS: &[&str] = &["org-base-permission", "two-factor", "visibility-change"];
+
+/// The access GitHub needs for an organisation's settings.
+const GITHUB_ORG_ADMIN: &str =
+    "a token of an organisation owner (fine-grained: organisation `Administration` read)";
 
 /// The access GitHub needs for the admin-only settings endpoints.
 const GITHUB_ADMIN: &str =
@@ -101,6 +116,24 @@ pub fn findings(
                 "tag-protection" => protected_tags(api, forge),
                 "secret-scoping" => gitea_secret_scoping(api, forge, workflows),
                 "auto-merge" => auto_merge_always_offered(forge.kind),
+                "deploy-keys" => listed(
+                    api,
+                    forge,
+                    &format!("repos/{}/keys", forge.repo),
+                    "deploy-keys",
+                    "the deploy keys",
+                    "a token with admin access to the repository",
+                    |keys| deploy_keys_finding(forge.kind, keys),
+                ),
+                "outside-collaborators" => listed(
+                    api,
+                    forge,
+                    &format!("repos/{}/collaborators", forge.repo),
+                    "outside-collaborators",
+                    "the collaborators",
+                    "a token with admin access to the repository",
+                    |users| collaborators_finding(forge.kind, users),
+                ),
                 other => unavailable(other, forge.kind),
             })
             .collect(),
@@ -203,6 +236,25 @@ fn github(
             Answer::Down(why) => down("dependency-alerts", forge.kind, &why),
         },
     );
+    out.push(listed(
+        api,
+        forge,
+        &format!("repos/{r}/keys"),
+        "deploy-keys",
+        "the deploy keys",
+        GITHUB_ADMIN,
+        |keys| deploy_keys_finding(forge.kind, keys),
+    ));
+    out.push(listed(
+        api,
+        forge,
+        &format!("repos/{r}/collaborators?affiliation=outside"),
+        "outside-collaborators",
+        "the outside collaborators",
+        GITHUB_ADMIN,
+        |users| collaborators_finding(forge.kind, users),
+    ));
+    out.extend(github_org(api, forge, &repo));
     out
 }
 
@@ -391,6 +443,169 @@ pub fn dependency_alerts(alerts: bool, updates: Option<bool>) -> Finding {
         )
         .fix("Turn on Dependabot alerts in Settings > Code security.")
     }
+}
+
+/// A finding over a whole list (every page), or `could not check` when the list is hidden,
+/// partial or unreachable.
+fn listed(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    path: &str,
+    id: &'static str,
+    what: &str,
+    need: &str,
+    judge: impl Fn(&[serde_json::Value]) -> Finding,
+) -> Finding {
+    match read_all(api, forge, path) {
+        Ok(items) => judge(&items),
+        Err(e) if matches!(e.kind, ForgeErrorKind::NotFound | ForgeErrorKind::Denied) => {
+            hidden(id, what, &e.to_string(), need)
+        }
+        Err(e) => down(id, forge.kind, &e.to_string()),
+    }
+}
+
+/// `deploy-keys`: keys that can push (GitHub, Gitea, Forgejo `read_only: false`; GitLab
+/// `can_push: true`). A deploy key is a credential no login stands behind: a push with it
+/// is attributed to no person. Counted, never named.
+pub fn deploy_keys_finding(kind: ForgeKind, keys: &[serde_json::Value]) -> Finding {
+    let writes = keys
+        .iter()
+        .filter(|k| match kind {
+            ForgeKind::GitLab => k.get("can_push").and_then(|v| v.as_bool()) == Some(true),
+            _ => k.get("read_only").and_then(|v| v.as_bool()) == Some(false),
+        })
+        .count();
+    match writes {
+        0 => Finding::new(
+            "deploy-keys",
+            Status::Pass,
+            format!("{} deploy key(s), none can push", keys.len()),
+        ),
+        n => Finding::new(
+            "deploy-keys",
+            Status::Warn,
+            format!("{n} of {} deploy key(s) can push: a push with one is attributed to no person", keys.len()),
+        )
+        .fix("Make each deploy key read-only unless a deployment must push, and remove keys no deployment uses."),
+    }
+}
+
+/// `outside-collaborators`: on GitHub, outside collaborators (not organisation members) who
+/// can push; on Gitea and Forgejo, the repository's collaborators (the list carries no
+/// permission). Information: whether an outside contributor belongs is a judgement. Counted,
+/// never named.
+pub fn collaborators_finding(kind: ForgeKind, users: &[serde_json::Value]) -> Finding {
+    let can_push = |u: &serde_json::Value| {
+        ["push", "maintain", "admin"].iter().any(|p| {
+            u.pointer(&format!("/permissions/{p}"))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+        })
+    };
+    let (n, what) = match kind {
+        ForgeKind::GitHub => (
+            users.iter().filter(|u| can_push(u)).count(),
+            "outside collaborator(s) can push",
+        ),
+        _ => (users.len(), "collaborator(s) outside the owner's teams"),
+    };
+    if n == 0 {
+        Finding::new("outside-collaborators", Status::Pass, format!("no {what}"))
+    } else {
+        Finding::new("outside-collaborators", Status::Info, format!("{n} {what}"))
+            .fix("Review who outside the organisation can push, and remove access no one uses.")
+    }
+}
+
+/// The owning organisation's settings on GitHub: `org-base-permission`, `two-factor`,
+/// `visibility-change`. A repository owned by a personal account has none.
+fn github_org(api: &dyn ForgeApi, forge: &Forge, repo: &serde_json::Value) -> Vec<Finding> {
+    if repo.pointer("/owner/type").and_then(|t| t.as_str()) != Some("Organization") {
+        return ORG_IDS
+            .iter()
+            .map(|id| {
+                Finding::new(
+                    id,
+                    Status::Info,
+                    "owned by a personal account: no organisation settings",
+                )
+            })
+            .collect();
+    }
+    let owner = forge.repo.split('/').next().unwrap_or(&forge.repo);
+    match ask(api, forge, &format!("orgs/{owner}")) {
+        Answer::Ok(org) => org_settings(&org),
+        Answer::Hidden(why) => ORG_IDS
+            .iter()
+            .map(|id| hidden(id, "the organisation's settings", &why, GITHUB_ORG_ADMIN))
+            .collect(),
+        Answer::Down(why) => ORG_IDS
+            .iter()
+            .map(|id| down(id, forge.kind, &why))
+            .collect(),
+    }
+}
+
+/// The three organisation findings from `orgs/{org}`. GitHub sets the base permission and
+/// the two-factor requirement to null for a token that is not an owner's.
+pub fn org_settings(org: &serde_json::Value) -> Vec<Finding> {
+    let absent = |id: &'static str, what: &str| {
+        hidden(
+            id,
+            what,
+            "absent from the organisation object",
+            GITHUB_ORG_ADMIN,
+        )
+    };
+    let base = match org
+        .get("default_repository_permission")
+        .and_then(|v| v.as_str())
+    {
+        None => absent("org-base-permission", "the organisation's base permission"),
+        Some(p @ ("write" | "admin")) => Finding::new(
+            "org-base-permission",
+            Status::Warn,
+            format!("every organisation member has `{p}` on every repository by default"),
+        )
+        .fix("Set the organisation's base permission to `read` or `none` and grant write access by team."),
+        Some(p) => Finding::new(
+            "org-base-permission",
+            Status::Pass,
+            format!("organisation base permission is `{p}`"),
+        ),
+    };
+    let two_factor = match org
+        .get("two_factor_requirement_enabled")
+        .and_then(|v| v.as_bool())
+    {
+        None => absent("two-factor", "the organisation's two-factor requirement"),
+        Some(true) => Finding::new("two-factor", Status::Pass, "the organisation requires two-factor authentication"),
+        Some(false) => Finding::new(
+            "two-factor",
+            Status::Warn,
+            "the organisation does not require two-factor authentication",
+        )
+        .fix("Require two-factor authentication in the organisation's authentication security settings."),
+    };
+    let visibility = match org
+        .get("members_can_change_repo_visibility")
+        .and_then(|v| v.as_bool())
+    {
+        None => absent("visibility-change", "who may change a repository's visibility"),
+        Some(false) => Finding::new(
+            "visibility-change",
+            Status::Pass,
+            "only organisation owners can change a repository's visibility",
+        ),
+        Some(true) => Finding::new(
+            "visibility-change",
+            Status::Warn,
+            "members with admin access can change a repository's visibility, private to public included",
+        )
+        .fix("Turn off \"Allow members to change repository visibilities\" in the organisation's member privileges."),
+    };
+    vec![base, two_factor, visibility]
 }
 
 /// `actions-sha-pinning` and `allowed-actions` from `actions/permissions`.
@@ -1055,6 +1270,23 @@ fn gitlab(api: &dyn ForgeApi, forge: &Forge) -> Vec<Finding> {
     out.push(gitlab_forking(&project));
     out.push(gitlab_secret_push_protection(&project));
     out.push(unavailable("dependency-alerts", forge.kind));
+    out.push(listed(
+        api,
+        forge,
+        &format!("projects/{id}/deploy_keys"),
+        "deploy-keys",
+        "the project's deploy keys",
+        &gitlab_need("", "the Maintainer role"),
+        |keys| deploy_keys_finding(forge.kind, keys),
+    ));
+    for i in [
+        "outside-collaborators",
+        "org-base-permission",
+        "two-factor",
+        "visibility-change",
+    ] {
+        out.push(unavailable(i, forge.kind));
+    }
     out
 }
 
@@ -1341,6 +1573,93 @@ fn gitea_secret_scoping(
 mod tests {
 
     #[test]
+    fn access_is_counted_never_named_and_org_settings_warn_or_say_what_they_need() {
+        use serde_json::json;
+        // Deploy keys: GitHub, Gitea and Forgejo `read_only`, GitLab `can_push`.
+        let gh_keys = [
+            json!({"read_only": true}),
+            json!({"read_only": false, "title": "ci-deploy"}),
+        ];
+        let f = deploy_keys_finding(ForgeKind::GitHub, &gh_keys);
+        assert_eq!(f.status, Status::Warn);
+        assert!(
+            f.summary.contains("1 of 2") && !f.summary.contains("ci-deploy"),
+            "{}",
+            f.summary
+        );
+        assert_eq!(
+            deploy_keys_finding(ForgeKind::Gitea, &gh_keys[..1]).status,
+            Status::Pass
+        );
+        assert_eq!(
+            deploy_keys_finding(ForgeKind::GitLab, &[json!({"can_push": true})]).status,
+            Status::Warn
+        );
+        assert_eq!(
+            deploy_keys_finding(ForgeKind::GitLab, &[json!({"can_push": false})]).status,
+            Status::Pass
+        );
+        assert_eq!(
+            deploy_keys_finding(ForgeKind::GitHub, &[]).status,
+            Status::Pass
+        );
+        // Collaborators: GitHub counts those who can push; the login is never in the report.
+        let users = [
+            json!({"login": "alice", "permissions": {"pull": true, "push": true}}),
+            json!({"login": "bob", "permissions": {"pull": true, "push": false}}),
+        ];
+        let f = collaborators_finding(ForgeKind::GitHub, &users);
+        assert_eq!(f.status, Status::Info);
+        assert!(
+            f.summary.starts_with("1 ") && !f.summary.contains("alice"),
+            "{}",
+            f.summary
+        );
+        assert_eq!(
+            collaborators_finding(ForgeKind::GitHub, &users[1..]).status,
+            Status::Pass
+        );
+        assert_eq!(
+            collaborators_finding(ForgeKind::Gitea, &users[..1]).status,
+            Status::Info
+        );
+        // Organisation settings.
+        let st = |org: serde_json::Value| -> Vec<Status> {
+            org_settings(&org).into_iter().map(|f| f.status).collect()
+        };
+        assert_eq!(
+            st(
+                json!({"default_repository_permission": "write", "two_factor_requirement_enabled": false, "members_can_change_repo_visibility": true})
+            ),
+            [Status::Warn, Status::Warn, Status::Warn]
+        );
+        assert_eq!(
+            st(
+                json!({"default_repository_permission": "read", "two_factor_requirement_enabled": true, "members_can_change_repo_visibility": false})
+            ),
+            [Status::Pass, Status::Pass, Status::Pass]
+        );
+        assert_eq!(
+            st(json!({"default_repository_permission": "none"}))[0],
+            Status::Pass
+        );
+        assert_eq!(
+            st(json!({"default_repository_permission": "admin"}))[0],
+            Status::Warn
+        );
+        // A member's token sees nulls: could not check, never a pass.
+        let hidden = org_settings(
+            &json!({"default_repository_permission": null, "two_factor_requirement_enabled": null}),
+        );
+        assert!(
+            hidden[..2]
+                .iter()
+                .all(|f| f.status == Status::Warn && f.summary.contains("could not check")),
+            "{hidden:?}"
+        );
+    }
+
+    #[test]
     fn repository_settings_the_cheat_sheet_names_are_warnings_or_information() {
         use serde_json::json;
         let st = |f: Finding| f.status;
@@ -1496,12 +1815,26 @@ mod tests {
         };
         put(
             "repos/o/r",
-            json!({"permissions": {"admin": true}, "visibility": "private", "allow_forking": false,
+            json!({"permissions": {"admin": true}, "owner": {"type": "Organization"},
+                   "visibility": "private", "allow_forking": false,
                    "allow_auto_merge": false,
                    "security_and_analysis": {"secret_scanning": {"status": "enabled"},
                        "secret_scanning_push_protection": {"status": "enabled"}}}),
         );
         put("repos/o/r/vulnerability-alerts", json!({"__status": 204}));
+        put(
+            "repos/o/r/keys?per_page=100&page=1",
+            json!([{"id": 1, "read_only": true}]),
+        );
+        put(
+            "repos/o/r/collaborators?affiliation=outside&per_page=100&page=1",
+            json!([]),
+        );
+        put(
+            "orgs/o",
+            json!({"default_repository_permission": "read", "two_factor_requirement_enabled": true,
+                   "members_can_change_repo_visibility": false}),
+        );
         put(
             "repos/o/r/automated-security-fixes",
             json!({"enabled": true}),
@@ -1774,6 +2107,20 @@ mod tests {
             "gitea:repos/o/r/releases/latest".into(),
             json!({"tag_name": "v2.0.0"}),
         );
+        api.responses.insert(
+            "gitea:repos/o/r/keys?limit=50&page=1".into(),
+            json!([{"id": 1, "read_only": false}, {"id": 2, "read_only": true}]),
+        );
+        api.responses
+            .insert("gitea:repos/o/r/keys?limit=50&page=2".into(), json!([]));
+        api.responses.insert(
+            "gitea:repos/o/r/collaborators?limit=50&page=1".into(),
+            json!([{"id": 9, "login": "c"}]),
+        );
+        api.responses.insert(
+            "gitea:repos/o/r/collaborators?limit=50&page=2".into(),
+            json!([]),
+        );
         let forge = Forge {
             kind: ForgeKind::Gitea,
             ..gh()
@@ -1782,15 +2129,25 @@ mod tests {
         let ids: Vec<&str> = f.iter().map(|x| x.id).collect();
         assert_eq!(ids, IDS);
         assert_eq!(status_of(&f, "tag-protection"), Status::Pass);
+        // Deploy keys and collaborators are read on Gitea and Forgejo: counted, never named.
+        assert_eq!(status_of(&f, "deploy-keys"), Status::Warn, "{f:?}");
+        assert_eq!(status_of(&f, "outside-collaborators"), Status::Info);
+        assert!(!f.iter().any(|x| x.summary.contains("`c`")), "{f:?}");
         // `secret-scoping` is read on Gitea and Forgejo (its own tests below); auto-merge has
         // no repository setting there and is always offered.
         assert!(f.iter().any(|x| x.id == "auto-merge"
             && x.status == Status::Info
             && x.summary.contains("always offered")));
-        for id in IDS
-            .iter()
-            .filter(|i| !matches!(**i, "tag-protection" | "secret-scoping" | "auto-merge"))
-        {
+        for id in IDS.iter().filter(|i| {
+            !matches!(
+                **i,
+                "tag-protection"
+                    | "secret-scoping"
+                    | "auto-merge"
+                    | "deploy-keys"
+                    | "outside-collaborators"
+            )
+        }) {
             let x = f.iter().find(|x| x.id == *id).unwrap();
             assert_eq!(x.status, Status::Info, "{id}");
             assert!(x.summary.contains("not available on this forge"), "{id}");

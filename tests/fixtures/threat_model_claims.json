@@ -1192,6 +1192,19 @@
         "tests/test_doctor.rs::doctor_reads_gitlab_settings_and_audits_the_token"
       ],
       "verdict": "holds"
+    },
+    {
+      "id": "doctor-access-identity",
+      "category": "doctor",
+      "claim": "doctor counts deploy keys that can push and outside collaborators without naming them, and on GitHub reports the owning organisation's base permission, two-factor requirement and visibility-change setting, as could not check when the token cannot see them",
+      "source": "docs/guides/ci-platforms.md:\u00a78 access and identity",
+      "code": "src/doctor_settings.rs:org_settings",
+      "pinning_tests": [
+        "tests/test_doctor.rs::doctor_counts_deploy_keys_and_collaborators_and_reads_the_organisation",
+        "src/doctor_settings.rs::access_is_counted_never_named_and_org_settings_warn_or_say_what_they_need",
+        "tests/test_doctor.rs::doctor_reads_gitlab_settings_and_audits_the_token"
+      ],
+      "verdict": "holds"
     }
   ]
 }
