@@ -62,6 +62,59 @@ fn refactoring_a_library_wrapper_chain_is_not_an_assertion_drop() {
     );
 }
 
+/// #422: moving a library function's `?`s into another module, with no test touched, is
+/// not an assertion drop (#420 moved token compilation into `token_formats` and 12 unchanged
+/// tests read as dropping). Deleting an assertion, or a fallible test's own `?`, in the
+/// same move still is.
+#[test]
+fn moving_a_library_functions_question_marks_to_another_module_is_not_an_assertion_drop() {
+    let repo = Repo::new();
+    let base = "pub fn rules() -> Result<Vec<u32>, std::num::ParseIntError> {\n    let a = \"1\".parse::<u32>()?;\n    let b = \"2\".parse::<u32>()?;\n    let c = \"3\".parse::<u32>()?;\n    Ok(vec![a, b, c])\n}\n\n\
+                #[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn has_three_rules() {\n        assert_eq!(rules().unwrap().len(), 3);\n        assert!(rules().is_ok());\n    }\n\n    \
+                #[test]\n    fn sums() -> Result<(), std::num::ParseIntError> {\n        let n = \"4\".parse::<u32>()?;\n        let m = \"5\".parse::<u32>()?;\n        assert_eq!(n + m, 9);\n        Ok(())\n    }\n}\n";
+    repo.commit_base_files(&[("src/rules.rs", base)], "feat: rules");
+    let moved = base.replace(
+        "    let a = \"1\".parse::<u32>()?;\n    let b = \"2\".parse::<u32>()?;\n    let c = \"3\".parse::<u32>()?;\n    Ok(vec![a, b, c])",
+        "    crate::table::compile()",
+    );
+    assert_ne!(moved, base);
+    repo.write(
+        "src/table.rs",
+        "pub fn compile() -> Result<Vec<u32>, std::num::ParseIntError> {\n    let a = \"1\".parse::<u32>()?;\n    let b = \"2\".parse::<u32>()?;\n    let c = \"3\".parse::<u32>()?;\n    Ok(vec![a, b, c])\n}\n",
+    );
+    repo.write("src/rules.rs", &moved);
+    repo.commit("refactor: compile the rules in their own module");
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+
+    // The same move, with an assertion and a fallible test's `?` deleted: both reported.
+    let weakened = moved
+        .replace("        assert!(rules().is_ok());\n", "")
+        .replace(
+            "        let m = \"5\".parse::<u32>()?;\n",
+            "        let m = \"5\".parse::<u32>().unwrap_or(5);\n",
+        );
+    assert_ne!(weakened, moved);
+    repo.write("src/rules.rs", &weakened);
+    repo.commit("refactor: trim the rule tests");
+    let run = repo.check(&[]);
+    let drops: Vec<String> = run
+        .violations("assertion-reduction")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(drops.len(), 2, "{drops:?}");
+    assert!(
+        drops.iter().any(|m| m.contains("tests::has_three_rules")),
+        "{drops:?}"
+    );
+    assert!(drops.iter().any(|m| m.contains("tests::sums")), "{drops:?}");
+}
+
 #[test]
 fn assertion_reduction_override_must_name_the_test() {
     let repo = Repo::new();

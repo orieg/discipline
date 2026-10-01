@@ -2465,6 +2465,37 @@ command = "cargo test"
         },
     ),
     (
+        "assertion-reduction: a Rust library function's `?` moved to another module is not a drop, a deleted assertion is",
+        || {
+            use crate::ast::LanguagePack;
+            use crate::guards::agent_diff::{evaluate_assertion_reduction, TestPair};
+            let vocab = AssertVocabulary::default();
+            let test = "#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn sums() {\n        assert_eq!(rules().unwrap(), 3);\n        assert!(rules().is_ok());\n    }\n}\n";
+            let base = format!("pub fn rules() -> Result<u32, std::num::ParseIntError> {{\n    let a: u32 = \"1\".parse()?;\n    let b: u32 = \"2\".parse()?;\n    Ok(a + b)\n}}\n{test}");
+            let moved = format!("pub fn rules() -> Result<u32, std::num::ParseIntError> {{\n    crate::table::compile()\n}}\n{test}");
+            let deleted = moved.replace("        assert!(rules().is_ok());\n", "");
+            let t = |src: &str| -> Result<crate::ast::TestFn> {
+                Ok(crate::ast::rust::RustPack
+                    .extract("src/rules.rs", src, &vocab)?
+                    .tests
+                    .remove(0))
+            };
+            let (base, moved, deleted) = (t(&base)?, t(&moved)?, t(&deleted)?);
+            let settings = crate::config::AssertionGate::default();
+            let run = |b, h| {
+                evaluate_assertion_reduction(
+                    &[TestPair { path: "src/rules.rs", base: b, head: h, forced: false }],
+                    &[],
+                    &settings,
+                    &[],
+                    false,
+                )
+            };
+            Ok(run(&base, &moved)?.violations.is_empty()
+                && run(&moved, &deleted)?.violations.len() == 1)
+        },
+    ),
+    (
         "ast: compile-time assertions in Rust and C/C++ are extracted outside tests",
         || {
             use crate::ast::LanguagePack;
