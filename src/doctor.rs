@@ -842,6 +842,25 @@ pub fn codeowners_covers(content: &str, path: &str) -> bool {
         .is_some_and(|r| r.owned)
 }
 
+/// Where a forge looks for a repository's security policy (GitHub: the root, `.github/` or
+/// `docs/`).
+pub const SECURITY_POLICY_PATHS: &[&str] =
+    &["SECURITY.md", ".github/SECURITY.md", "docs/SECURITY.md"];
+
+/// `security-policy`: whether the repository says how to report a vulnerability privately
+/// (OpenSSF Scorecard Security-Policy). Information when absent.
+pub fn security_policy_finding(path: Option<&str>) -> Finding {
+    match path {
+        Some(p) => Finding::new("security-policy", Status::Pass, format!("{p} is present")),
+        None => Finding::new(
+            "security-policy",
+            Status::Info,
+            "no SECURITY.md: a reporter is not told how to report a vulnerability privately",
+        )
+        .fix("Add SECURITY.md with a private reporting channel (GitHub: the repository's security advisories)."),
+    }
+}
+
 /// Check `CODEOWNERS` against the files that configure the gate.
 pub fn codeowners_finding(codeowners: Option<(&str, &str)>, targets: &[String]) -> Finding {
     let Some((path, content)) = codeowners else {
@@ -2475,6 +2494,12 @@ pub fn run(input: &DoctorInput) -> Report {
         )
         .fix("Run `discipline init` to pin the configuration in the repository.")
     });
+    findings.push(security_policy_finding(
+        SECURITY_POLICY_PATHS
+            .iter()
+            .copied()
+            .find(|p| root.join(p).is_file()),
+    ));
 
     if let Some(f) = copilot_trust_finding(root, input.copilot_home.as_deref()) {
         findings.push(f);
@@ -3047,6 +3072,11 @@ jobs:
             ".github/workflows/ci.yml".to_string(),
         ];
         assert_eq!(codeowners_finding(None, &targets).status, Status::Warn);
+        assert_eq!(
+            security_policy_finding(Some(".github/SECURITY.md")).status,
+            Status::Pass
+        );
+        assert_eq!(security_policy_finding(None).status, Status::Info);
         assert_eq!(
             codeowners_finding(Some(("CODEOWNERS", "/discipline.toml @x\n")), &targets).status,
             Status::Warn

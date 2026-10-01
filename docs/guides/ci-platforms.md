@@ -408,6 +408,8 @@ discipline doctor --strict       # warnings fail too (exit 1)
   - Gitea and Forgejo: information with a count, since they return neither (RUN, 1.24 and 12, with a webhook created with a secret).
 - `environment-reviewers`: on GitHub, information naming the deployment environments that hold secrets but need no required reviewer, with their secret counts (never the secrets' names). Not available elsewhere: Gitea and Forgejo have no environments, and GitLab's are not read yet.
 
+**Security policy** (#366): `security-policy` is a local check: a pass when `SECURITY.md` is at the root, in `.github/` or in `docs/`, and information otherwise, since a reporter is then not told how to report a vulnerability privately.
+
 GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to an admin token only (RUN, 2026-09-30, against a public repository with an admin and a read token). Gitea 1.24 and Forgejo 12 expose none of these four settings in their API description (RUN, `swagger.v1.json`).
 
 **Coverage against the OWASP CI/CD Security Cheat Sheet and OpenSSF Scorecard.** Every recommendation of the [cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/CI_CD_Security_Cheat_Sheet.html) and every [Scorecard check](https://github.com/ossf/scorecard/blob/main/docs/checks.md), mapped to a `doctor` finding, a gate, "not checked" with the reason, or out of scope. Scorecard measures a repository's history and practices; `doctor` reads the settings that exist now.
@@ -454,7 +456,7 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Scorecard Pinned-Dependencies | `actions-sha-pinning`; the `ci-integrity` and `dependency-delta` gates; container image digests are not checked |
 | Scorecard SAST | out of scope |
 | Scorecard SBOM | out of scope |
-| Scorecard Security-Policy | not checked yet (#366) |
+| Scorecard Security-Policy | `security-policy` (local: `SECURITY.md` at the root, in `.github/` or `docs/`; information when absent) |
 | Scorecard Signed-Releases | `immutable-releases`, `tag-protection`; the action checks the release attestation |
 | Scorecard Token-Permissions | `default-token`; the `ci-integrity` gate (workflow token permissions) |
 | Scorecard Vulnerabilities | `dependency-alerts` (information) |
