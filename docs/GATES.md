@@ -524,6 +524,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Ruby: `xit`, `xdescribe`, `xcontext`, `:skip`, `skip: true` (including hierarchical propagation from outer blocks).
   - Kotlin: `@Disabled`, `@Ignore`, `@Test(enabled = false)`, Kotest `"!name"`, `xtest` / `xit` / `xdescribe` / `xcontext`, `.config(enabled = false)` (a class-level `@Disabled` and an `x`-container propagate).
   - C / C++: `DISABLED_` test or suite prefix, `GTEST_SKIP()`, Catch2 `SKIP()` or `[.]`/`[!hide]` hidden tags.
+  - Conditional early exits under environment or CI checks: a test that returns early or invokes framework skips (`pytest.skip`, `t.Skip*`) under an environment check (`std::env::var`, `os.environ`, `process.env`, `os.Getenv`) or CI environment check (`CI`, `GITHUB_ACTIONS`, etc.) is flagged as `Test Conditionally Skipped` (`Warning` for CI checks, `Note` for generic environment checks). In Rust, Python, JavaScript / TypeScript, and Go. Liftable via `allow-ignore: <test> <reason>`.
 - **Failing diff example (rejected):**
   ```typescript
   // Skipping failing test instead of fixing — rejected by ignored-tests:
@@ -532,8 +533,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   });
   ```
 - **What it does NOT catch:**
-  - Conditional runtime early-returns (`if condition { return; }`).
-  - Dynamic test framework skips invoked within function bodies (`pytest.skip(...)`).
+  - Conditional runtime early-returns (`if condition { return; }`) that do not inspect environment variables or CI flags, or are nested inside loops/helper closures.
+  - Dynamic test framework skips invoked deep within helper logic or outside test functions.
   - Commented-out test functions in languages other than Rust (the Rust pack reports them here).
 - **Lifting directive:** `allow-ignore: <test-name> <reason>`. A reason that is empty, a placeholder (`todo`, `tbd`, `none`, `n/a`, `...`, `<reason>`, `ok`, `temp`, `dummy`, `null`, `placeholder`, `asdf`, folded across Unicode confusables, combining marks, invisible characters, and leetspeak), or contains fewer than two alphanumeric characters does not lift the skip: it is reported as `Skip Justification Insufficient`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `approved_predicates`.
