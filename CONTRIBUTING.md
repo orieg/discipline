@@ -17,6 +17,16 @@ This guide outlines our engineering and quality standards so proposed changes al
 
 ---
 
+## Governance
+
+Discipline is maintained by `orieg` as project lead and repository administrator.
+
+- **Roles & Permissions:** The maintainer holds repository administrator privileges, manages repository settings and rulesets (`main protection`, `release tags`, `major tags`), and holds sole access to protected environment secrets and deploy keys (`release` environment deploy keys `HOMEBREW_TAP_DEPLOY_KEY` and `MAJOR_TAG_DEPLOY_KEY`, and `package-signing` environment secrets `REPO_SIGNING_KEY` and `REPO_SIGNING_PASSPHRASE` as detailed in [`docs/ARCHITECTURE.md` §8.4](docs/ARCHITECTURE.md#84-repository-settings-the-pipelines-rely-on)). Gate-weakening paths are assigned to `@orieg` in [`CODEOWNERS`](CODEOWNERS).
+- **Collaborator Access:** Any future collaborator or reviewer access requires vetting before granting write or administrative privileges, adhering to the principle of least privilege. Permissions and branch ruleset review requirements (such as required approving pull request reviews) will be revisited when a second regular reviewer joins the project.
+- **Decision-Making:** Architectural choices, gate additions, and contract changes follow the RFC and issue-driven consensus model documented in [`AGENTS.md`](AGENTS.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Suspected vulnerabilities and security disclosures follow the private reporting process documented in [`SECURITY.md`](SECURITY.md).
+
+---
+
 ## Local Quality Gates
 
 Every pull request must pass all four quality checks locally before submission:
@@ -62,6 +72,22 @@ When adding or modifying a gate, the contribution must satisfy the complete 4-po
 - **Label Claims RUN or READ:** In pull request bodies, indicate whether behaviour was observed by executing commands (**RUN**) or inferred from source inspection (**READ**).
 - **No Agent Scratch State:** Never commit scratch notes, planner files, session logs, or temporary directories ([`AGENTS.md`](AGENTS.md) §4).
 - **Privacy & Host Leaks:** Never leak local paths (`/Users/...`, `/home/...`), internal hostnames, or LAN IPs.
+
+### Developer Certificate of Origin (DCO)
+
+All contributions to Discipline must comply with the [Developer Certificate of Origin (DCO)](https://developercertificate.org/). Contributors certify that they wrote the code or have the right to submit it under the project's open source licenses (MIT OR Apache-2.0).
+
+To certify compliance, include a `Signed-off-by` trailer in every commit message using the `-s` / `--signoff` flag:
+
+```bash
+git commit -s -S -m "type(scope): description"
+```
+
+Commits should also be cryptographically signed with `-S` per repository conventions.
+
+- **Merge Commits:** When updating a local branch via a merge commit, ensure the merge commit also carries the signoff trailer by running `git merge --signoff` (or rebase using `git rebase --signoff`).
+- **Dependabot Commits:** Automated dependency updates opened by Dependabot automatically include a `Signed-off-by: dependabot[bot] <support@github.com>` trailer in compliance with DCO policies.
+- **Enforcement:** Compliance is enforced by the `commit-provenance` gate configured in `discipline.toml` (`required_trailers = ["Signed-off-by"]`). Pull requests containing commits without a valid signoff trailer are blocked by CI.
 
 ---
 

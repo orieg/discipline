@@ -110,6 +110,7 @@ A gate is not done until all of these hold (full contract: `docs/ARCHITECTURE.md
 
 - Commit messages follow Conventional Commits: `type(scope): description`.
 - Atomic, purposeful commits.
+- Every commit signed and signed off: `git commit -s -S -m "..."` (must carry a `Signed-off-by` trailer matching DCO policy).
 - Never commit agent scratch state (`.claude/`, `.gemini/`, `.antigravity/`, `scratch/`, `*.session.*`). The agent hook files in §1's table are shared configuration, not scratch state, and are the only files under `.claude/` that are tracked.
 - The agent hooks run the installed discipline release in observe mode: they never block, and what would have blocked is logged to `<git dir>/discipline/hook-observe.log`. The installed release can lag `main`, so a `discipline.toml` key it does not know yet shows there as `could not check (reason: configuration)`. CI's `dogfood` job builds from source and is the gate.
 - Never leak local paths (`/Users/...`, `/home/...`) or LAN IPs in committed files or PR bodies.
