@@ -152,3 +152,90 @@ fn a_gitlab_token_describes_its_own_scopes_expiry_and_granularity() {
     assert!(scopes.contains(&"read_api"));
     assert!(scopes.contains(&"api"), "{scopes:?}");
 }
+
+/// #366 Step 0: Gitea and Forgejo say whether a deploy key can push, list collaborators
+/// without a permission, and have no repository or organisation setting for auto-merge,
+/// forking, secret scanning, the base permission, two-factor or visibility changes. The
+/// per-forge columns of docs/guides/ci-platforms.md §8 rest on these.
+#[test]
+fn gitea_and_forgejo_expose_deploy_key_write_access_and_no_access_settings() {
+    for forge in ["gitea", "forgejo"] {
+        let v = &fixture(forge)["doctor_access_366"];
+        assert!(
+            v["observed"].as_str().unwrap().starts_with("RUN "),
+            "{forge}"
+        );
+        let names = |k: &str| -> Vec<String> {
+            v[k].as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert!(
+            names("deploy_key_fields").contains(&"read_only".to_string()),
+            "{forge}"
+        );
+        assert_eq!(
+            v["collaborators_list_response"], "#/responses/UserList",
+            "{forge}"
+        );
+        let repo: Vec<String> = names("repository_fields")
+            .into_iter()
+            .chain(names("edit_repository_fields"))
+            .collect();
+        for absent in [
+            "allow_auto_merge",
+            "allow_forking",
+            "security_and_analysis",
+            "secret_scanning",
+            "vulnerability_alerts",
+        ] {
+            assert!(
+                !repo.iter().any(|f| f.contains(absent)),
+                "{forge}: {absent}"
+            );
+        }
+        let org = names("organization_fields");
+        for absent in [
+            "two_factor",
+            "default_repository_permission",
+            "members_can_change",
+        ] {
+            assert!(!org.iter().any(|f| f.contains(absent)), "{forge}: {absent}");
+        }
+    }
+}
+
+/// #366 Step 0: Gitea and Forgejo return a webhook created with a secret without it, and
+/// with nothing that says one is set, so `doctor` counts their webhooks and does not judge
+/// the secret: information, never a pass.
+#[test]
+fn gitea_and_forgejo_do_not_say_whether_a_webhook_has_a_secret() {
+    use discipline::doctor::Status;
+    use discipline::forge::ForgeKind;
+    for (forge, kind) in [("gitea", ForgeKind::Gitea), ("forgejo", ForgeKind::Forgejo)] {
+        let v = &fixture(forge)["doctor_webhooks_366"];
+        assert!(
+            v["observed"].as_str().unwrap().starts_with("RUN "),
+            "{forge}"
+        );
+        assert!(v["request_config_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k == "secret"));
+        let hooks = v["response"].as_array().unwrap();
+        for h in hooks {
+            assert!(h["config"].get("secret").is_none(), "{forge}");
+            assert!(h.get("secret").is_none(), "{forge}");
+        }
+        let f = discipline::doctor_settings::webhooks_finding(kind, hooks);
+        assert_eq!(f.status, Status::Info, "{forge}");
+        assert!(
+            f.summary
+                .contains("does not return whether a webhook has a secret"),
+            "{forge}"
+        );
+    }
+}

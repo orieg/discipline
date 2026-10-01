@@ -93,6 +93,14 @@ fn serve_safe_settings(api: &FakeForge) {
         serde_json::json!([]),
     );
     api.serve(
+        "repos/o/r/hooks?per_page=100&page=1",
+        serde_json::json!([{"id": 4, "config": {"url": "https://ci.example.com/hook", "secret": "********", "insecure_ssl": "0"}}]),
+    );
+    api.serve(
+        "repos/o/r/environments?per_page=100",
+        serde_json::json!({"total_count": 0, "environments": []}),
+    );
+    api.serve(
         "repos/o/r/automated-security-fixes",
         serde_json::json!({"enabled": true, "paused": false}),
     );
@@ -277,6 +285,95 @@ fn doctor_counts_deploy_keys_and_collaborators_and_reads_the_organisation() {
     assert_eq!(status(&st, "two-factor"), "warn", "{}", run.stdout);
     assert_eq!(status(&st, "visibility-change"), "pass", "{}", run.stdout);
     assert!(run.stdout.contains("organisation owner"), "{}", run.stdout);
+}
+
+/// Webhooks and deployment environments (#366): a GitHub webhook with no secret or with TLS
+/// verification off, by host only, and an environment that holds secrets but needs no
+/// reviewer.
+#[test]
+fn doctor_reports_weak_webhooks_and_unreviewed_environments_with_secrets() {
+    let status = |st: &[(String, String)], id: &str| {
+        st.iter()
+            .find(|(i, _)| i == id)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_else(|| panic!("no {id}: {st:?}"))
+    };
+    let repo = protected_repo();
+    let api = github_api(GOOD_RULES);
+    api.serve(
+        "repos/o/r/hooks?per_page=100&page=1",
+        serde_json::json!([
+            {"id": 1, "config": {"url": "https://chat.example.com/hook/AbC123", "insecure_ssl": "0"}},
+            {"id": 2, "config": {"url": "https://ci.example.com/hook", "secret": "********", "insecure_ssl": "0"}}
+        ]),
+    );
+    api.serve(
+        "repos/o/r/environments?per_page=100",
+        serde_json::json!({"total_count": 3, "environments": [
+            {"name": "copilot", "protection_rules": []},
+            {"name": "package signing", "protection_rules": [{"type": "branch_policy"}]},
+            {"name": "release", "protection_rules": [{"type": "required_reviewers"}]}
+        ]}),
+    );
+    api.serve(
+        "repos/o/r/environments/copilot/secrets",
+        serde_json::json!({"total_count": 0, "secrets": []}),
+    );
+    api.serve(
+        "repos/o/r/environments/package%20signing/secrets",
+        serde_json::json!({"total_count": 2, "secrets": [{"name": "SIGNING_KEY"}, {"name": "SIGNING_PASS"}]}),
+    );
+    let url = api.url();
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("GH_TOKEN", "gh-tok-1"),
+    ];
+    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let st = statuses(&run.stdout);
+    assert_eq!(status(&st, "webhooks"), "warn", "{}", run.stdout);
+    assert_eq!(
+        status(&st, "environment-reviewers"),
+        "info",
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains("chat.example.com"), "{}", run.stdout);
+    assert!(
+        run.stdout.contains("`package signing` (2 secret(s))"),
+        "{}",
+        run.stdout
+    );
+    // An environment with no secret needs no reviewer for this check.
+    assert!(!run.stdout.contains("`copilot`"), "{}", run.stdout);
+    // The webhook's path (often a token) and the secrets' names never appear.
+    for leak in ["AbC123", "SIGNING_KEY", "SIGNING_PASS"] {
+        assert!(!run.stdout.contains(leak), "{leak}: {}", run.stdout);
+    }
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+}
+
+/// `security-policy` (#366, OpenSSF Scorecard Security-Policy): a local file check,
+/// information when the repository has no SECURITY.md.
+#[test]
+fn doctor_says_whether_the_repository_has_a_security_policy() {
+    let status = |stdout: &str| {
+        statuses(stdout)
+            .into_iter()
+            .find(|(i, _)| i == "security-policy")
+            .map(|(_, s)| s)
+            .unwrap_or_else(|| panic!("no security-policy: {stdout}"))
+    };
+    let repo = protected_repo();
+    let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(status(&run.stdout), "info", "{}", run.stdout);
+    repo.write(".github/SECURITY.md", "# Security\n\nReport privately.\n");
+    let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(status(&run.stdout), "pass", "{}", run.stdout);
+    assert!(
+        run.stdout.contains(".github/SECURITY.md is present"),
+        "{}",
+        run.stdout
+    );
 }
 
 #[test]
@@ -1205,6 +1302,10 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
         serde_json::json!([{"id": 3, "title": "deploy", "can_push": true}]),
     );
     api.serve(
+        "projects/o%2Fr/hooks?per_page=100&page=1",
+        serde_json::json!([{"id": 8, "url": "https://plain.example.com/h", "enable_ssl_verification": false}]),
+    );
+    api.serve(
         "projects/o%2Fr/job_token_scope",
         recorded["job_token_scope"].clone(),
     );
@@ -1251,6 +1352,8 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
         ("deploy-keys", "warn"),
         ("outside-collaborators", "info"),
         ("two-factor", "info"),
+        ("webhooks", "warn"),
+        ("environment-reviewers", "info"),
     ] {
         assert!(
             st.contains(&(id.into(), want.into())),
