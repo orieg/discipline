@@ -1015,6 +1015,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - Disabling a gate (`enabled = false`).
   - Lowering severity (`severity = "error"` -> `severity = "warning"`).
+  - Removing an optional key whose absence reads looser than the value removed: `max_noise_cv` (absent means no noise check), and a gate's `allow_hidden = false` when `[directives] allow_hidden = true` (the gate then inherits it). Removing `noise_margin_pct` is not one: absent means 0.
   - Growing loosening lists (`exempt_paths`, `allowed_users`, `allow_patterns`, `assert_helper_fns`, `allowed_suppressions`).
   - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`, `workflows`, `forbidden_paths`, `deny_dependencies`), and emptying an allow-list (`allow_dependencies`, `allowed_paths`).
   - Removing or editing an entry of a list of tables (`groups`, `rules`, `commands`, `citation_measurement_jobs`). An entry of `groups`, `rules` or `commands` is matched across base and head by its identity, and an entry whose only edits tighten it is not a loss:
