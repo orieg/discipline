@@ -1254,6 +1254,18 @@
         "src/guards/integrity.rs::removing_an_optional_key_is_judged_by_what_absent_means"
       ],
       "verdict": "holds"
+    },
+    {
+      "id": "gate-assertion-reduction-library-expect-not-a-test-check",
+      "category": "gates",
+      "claim": "in Rust, a library function's unwrap/expect reached from a unit test is not counted as that test's check, so refactoring library code is not read as an assertion drop in an unchanged test; a test helper's unwrap/expect still counts",
+      "source": "docs/GATES.md:assertion-reduction, issue:#392",
+      "code": "src/ast/rust.rs:has_cfg_test_attribute",
+      "pinning_tests": [
+        "src/ast/rust.rs::a_library_functions_expect_is_not_a_check_of_the_test_that_calls_it",
+        "tests/test_gates_e2e.rs::refactoring_a_library_wrapper_chain_is_not_an_assertion_drop"
+      ],
+      "verdict": "holds"
     }
   ]
 }

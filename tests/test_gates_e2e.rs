@@ -36,6 +36,32 @@ fn assertion_reduction_fires_on_weakening_and_on_removal() {
     assert_eq!(run.titles("assertion-reduction").len(), 2, "{}", run.stdout);
 }
 
+/// #392: refactoring a library function's wrapper chain, with no test touched, is not an
+/// assertion drop. The library's own `expect` was counted as a check of the unit test that
+/// calls it, so ending the chain read as a lost assertion.
+#[test]
+fn refactoring_a_library_wrapper_chain_is_not_an_assertion_drop() {
+    let repo = Repo::new();
+    let base = "pub fn parse(s: &str) -> u32 {\n    parse_with(s, 10)\n}\n\n\
+                pub fn parse_with(s: &str, radix: u32) -> u32 {\n    u32::from_str_radix(s, radix).expect(\"digits\")\n}\n\n\
+                #[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn parses() {\n        assert_eq!(parse(\"7\"), 7);\n    }\n}\n";
+    repo.commit_base_files(&[("src/digits.rs", base)], "feat: digits");
+    let head = base.replace(
+        "pub fn parse_with(s: &str, radix: u32) -> u32 {\n    u32::from_str_radix(s, radix).expect(\"digits\")\n}",
+        "pub fn parse_with(s: &str, radix: u32) -> u32 {\n    parse_all(&[s], radix).into_iter().next().unwrap_or(0)\n}\n\n\
+         pub fn parse_all(items: &[&str], radix: u32) -> Vec<u32> {\n    items.iter().map(|s| u32::from_str_radix(s, radix).expect(\"digits\")).collect()\n}",
+    );
+    assert_ne!(head, base);
+    repo.write("src/digits.rs", &head);
+    repo.commit("refactor: parse through parse_all");
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+}
+
 #[test]
 fn assertion_reduction_override_must_name_the_test() {
     let repo = Repo::new();
