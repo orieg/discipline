@@ -87,6 +87,7 @@ findings! {
 
     // assertion-reduction
     ASSERTION_BOUND_LOOSENED = ["assertion-reduction"], "assertion-bound-loosened", "Assertion Bound Loosened", Same;
+    EXPECTED_VALUE_CHANGED = ["assertion-reduction"], "expected-value-changed", "Expected Value Changed In Existing Test", Same;
     MOCKING_INCREASED = ["assertion-reduction"], "mocking-increased-without-stronger-assertions", "Mocking Increased Without Stronger Assertions", Was("Mocking Grew Without Stronger Assertions");
     FATAL_ASSERTIONS_WEAKENED = ["assertion-reduction"], "fatal-assertions-weakened", "Fatal Assertions Weakened To Non-Fatal", Was("Fatal Assertions Weakened to Non-Fatal");
     ASSERTIONS_REDUCED = ["assertion-reduction"], "assertions-reduced", "Assertion Count Decreased In Existing Test", Was("Assertion Reduction In Existing Test");

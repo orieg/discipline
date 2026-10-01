@@ -14446,6 +14446,71 @@ fn a_loosened_assertion_bound_is_reported_and_a_tightened_one_is_not() {
 }
 
 #[test]
+fn an_expected_value_edited_to_match_changed_code_is_reported() {
+    // The code changes, and the test's expected values are edited to agree with it: the
+    // assertion count and strength hold, so only the expected value tells.
+    let base_src = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
+    let base_test = "use p::add;\n\n#[test]\nfn adds() {\n    assert_eq!(add(2, 2), 4);\n    assert_eq!(add(1, 2), 3, \"small sums\");\n}\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("src/lib.rs", base_src);
+    repo.write("tests/add.rs", base_test);
+    repo.commit("feat: add");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("src/lib.rs", &base_src.replace("a + b", "a + b + 1"));
+    repo.write(
+        "tests/add.rs",
+        &base_test
+            .replace("add(2, 2), 4", "add(2, 2), 5")
+            .replace("add(1, 2), 3", "add(1, 2), 4"),
+    );
+    repo.commit("fix: adjust");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(
+        run.titles("assertion-reduction"),
+        vec![
+            "Expected Value Changed In Existing Test",
+            "Expected Value Changed In Existing Test"
+        ]
+    );
+    let found = run.violations("assertion-reduction");
+    assert_eq!(found[0]["line"], 5);
+    assert_eq!(found[1]["line"], 6);
+    for v in &found {
+        let msg = v["message"].as_str().unwrap();
+        assert!(
+            !msg.contains("add(") && !msg.contains("small sums"),
+            "the assertion is not echoed: {msg}"
+        );
+    }
+
+    // The directive that lifts an assertion drop lifts it.
+    repo.commit("chore: record\n\nallow-assertion-drop: adds sums now count the carry, by design");
+    assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
+
+    // An added assertion, an unchanged expected value on a moved line, and a changed call
+    // under test (a different assertion) are not this finding.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/add.rs", base_test);
+    repo.commit("test: add");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "tests/add.rs",
+        &base_test
+            .replace("fn adds() {\n", "fn adds() {\n    let _setup = 1;\n")
+            .replace("add(1, 2), 3", "add(1, 3), 4")
+            .replace(
+                "small sums\");\n",
+                "small sums\");\n    assert_eq!(add(0, 0), 0);\n",
+            ),
+    );
+    repo.commit("test: more");
+    assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
+}
+
+#[test]
 fn a_configuration_outside_the_repository_is_read_and_not_compared() {
     // A candidate configuration kept outside the repository (an adoption trial, a replay
     // of someone else's project): git rejects its absolute path, which made
