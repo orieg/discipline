@@ -615,7 +615,7 @@
         },
         "exempt_authors": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Pull-request authors (exact logins, case-insensitive) that need no tracking-issue reference, e.g. dependabot[bot]; matched against the event payload's author, never the run's actor"
+          "description": "Pull-request authors (exact logins, case-insensitive) that need no tracking-issue reference, e.g. dependabot[bot]; matched against the event payload's author (on GitLab, the merge request's, read from the forge), never the run's actor"
         },
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"

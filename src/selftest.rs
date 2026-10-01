@@ -196,7 +196,7 @@ const CASES: &[Case] = &[
             };
             let pull = PullContext {
                 number: 7,
-                author: "agent".into(),
+                author: Some("agent".into()),
                 head_sha: "abc123".into(),
             };
             let forge = || {
@@ -328,6 +328,37 @@ const CASES: &[Case] = &[
                     "Owner-ratified-paths:\n- scripts/*.py\n- scripts/check_x.py\n",
                     t
                 )?)
+        },
+    ),
+    (
+        "pull author: a GitLab merge request's author is read from the forge, never the pipeline starter",
+        || {
+            use crate::forge::{CannedApi, Forge, ForgeKind};
+            use crate::override_policy::PullContext;
+            let forge = Forge {
+                kind: ForgeKind::GitLab,
+                url: "https://gitlab.example".into(),
+                repo: "o/r".into(),
+            };
+            // A merge-request pipeline names no author.
+            let pull = PullContext {
+                number: 7,
+                author: None,
+                head_sha: "abc123".into(),
+            };
+            let mut api = CannedApi::default();
+            api.responses.insert(
+                "gitlab:projects/o%2Fr/merge_requests/7".into(),
+                serde_json::json!({"iid": 7, "author": {"username": "owner"}}),
+            );
+            let read = pull.author_on(&api, &forge)?;
+            let unreadable = pull.author_on(&CannedApi::default(), &forge).is_err();
+            let named = PullContext {
+                author: Some("agent".into()),
+                ..pull.clone()
+            }
+            .author_on(&CannedApi::default(), &forge)?;
+            Ok(read == "owner" && unreadable && named == "agent")
         },
     ),
     (

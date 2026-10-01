@@ -12,7 +12,8 @@
 //!   ([`crate::references`]): at least one must be an issue of this repository. A forge
 //!   that cannot be read is exit 2, never a pass.
 //! - A pull request whose author is in `exempt_authors` (dependency-update bots) needs no
-//!   reference. The author comes from the forge's event payload, never the run's actor.
+//!   reference. The author comes from the forge's event payload (on GitLab, from the merge
+//!   request), never the run's actor.
 
 use crate::config::{GateSettings, IssueLinkGate, IssueWaiver};
 use crate::could_not_check::{tag, Reason};
@@ -215,12 +216,8 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
 
     out.examined = 1;
 
-    let pull_author = ctx
-        .forge
-        .as_ref()
-        .and_then(|f| f.pull.as_ref())
-        .map(|p| p.author.as_str());
-    if let Some(author) = exempt_author(pull_author, &settings.exempt_authors) {
+    let pull_author = exemption_author(ctx, settings)?;
+    if let Some(author) = exempt_author(pull_author.as_deref(), &settings.exempt_authors) {
         out.notes.push(format!(
             "pull request opened by `{author}`, listed in `exempt_authors`: no tracking issue required"
         ));
@@ -260,9 +257,40 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
     Ok(out)
 }
 
-/// The pull request's author when `exempt_authors` lists it. `author` is the one the
-/// forge's event payload names (`pull_request.user.login`; on GitLab the login that started
-/// the pipeline); a run with no pull request has none, so nothing is exempt.
+/// The author `exempt_authors` is matched against: the one the forge's event payload
+/// names (`pull_request.user.login`), or on GitLab, whose pipeline names only the login
+/// that started it (`GITLAB_USER_LOGIN`), the merge request's own (`author.username`),
+/// read from the forge. Read only when `exempt_authors` lists someone; a merge request
+/// that cannot be read is exit 2, never the pipeline starter instead. `None` for a run
+/// with no pull request.
+fn exemption_author(ctx: &Context, settings: &IssueLinkGate) -> Result<Option<String>> {
+    if settings.exempt_authors.is_empty() {
+        return Ok(None);
+    }
+    let Some((access, pull)) = ctx
+        .forge
+        .as_ref()
+        .and_then(|f| f.pull.as_ref().map(|p| (f, p)))
+    else {
+        return Ok(None);
+    };
+    if let Some(author) = &pull.author {
+        return Ok(Some(author.clone()));
+    }
+    let forge = (access.identify)().map_err(|e| {
+        tag(
+            Reason::Forge,
+            anyhow!("issue-link cannot identify the forge to read the author `exempt_authors` is matched against: {e}"),
+        )
+    })?;
+    let author = pull
+        .author_on(access.api, &forge)
+        .map_err(|e| tag(Reason::Forge, anyhow!("issue-link `exempt_authors`: {e:#}")))?;
+    Ok(Some(author))
+}
+
+/// The pull request's author when `exempt_authors` lists it. `author` comes from
+/// [`exemption_author`]; a run with no pull request has none, so nothing is exempt.
 pub fn exempt_author<'a>(author: Option<&'a str>, exempt_authors: &[String]) -> Option<&'a str> {
     let author = author.filter(|a| !a.is_empty())?;
     exempt_authors

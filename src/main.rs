@@ -440,15 +440,16 @@ fn detect_pull_context_from_ci() -> Option<discipline::override_policy::PullCont
     .filter_map(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
     .find_map(|json| discipline::override_policy::pull_context(&json))
     .or_else(|| {
-        // GitLab has no event payload; a merge-request pipeline sets these. The author is
-        // read from the merge request itself when approvals are checked.
+        // GitLab has no event payload; a merge-request pipeline sets these. No variable
+        // names the merge request's author (`GITLAB_USER_LOGIN` is the login that started
+        // the pipeline), so a check that needs the author reads it from the forge.
         let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
         let number = env("CI_MERGE_REQUEST_IID")?.parse().ok()?;
         let head_sha =
             env("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA").or_else(|| env("CI_COMMIT_SHA"))?;
         Some(discipline::override_policy::PullContext {
             number,
-            author: env("GITLAB_USER_LOGIN").unwrap_or_default(),
+            author: None,
             head_sha,
         })
     })
@@ -861,7 +862,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     let pull = detect_pull_context_from_ci().or_else(|| match merged.pulls.as_slice() {
         [one] => Some(discipline::override_policy::PullContext {
             number: one.number,
-            author: one.author.clone(),
+            author: Some(one.author.clone()),
             head_sha: one.head_sha.clone(),
         }),
         _ => None,

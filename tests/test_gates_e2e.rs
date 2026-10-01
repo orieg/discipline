@@ -5708,7 +5708,7 @@ fn required_approval_is_read_from_gitlab_at_the_merge_requests_head() {
     let repo = repo_with_two_self_granted_overrides(
         "require_approval = true\nallowed_override_actors = [\"lead\", \"agent\"]\n",
     );
-    let check = |mr_sha: &str, approvers: &[&str]| {
+    let check_started_by = |starter: &str, mr_sha: &str, approvers: &[&str]| {
         let api = FakeForge::start();
         api.serve(
             "projects/o%2Fr/merge_requests/7",
@@ -5727,11 +5727,12 @@ fn required_approval_is_read_from_gitlab_at_the_merge_requests_head() {
                 ("CI_PROJECT_PATH", "o/r"),
                 ("CI_MERGE_REQUEST_IID", "7"),
                 ("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "abc123"),
-                ("GITLAB_USER_LOGIN", "agent"),
+                ("GITLAB_USER_LOGIN", starter),
                 ("DISCIPLINE_FORGE_API_URL", url.as_str()),
             ],
         )
     };
+    let check = |mr_sha: &str, approvers: &[&str]| check_started_by("agent", mr_sha, approvers);
     // Approved by the listed reviewer at this head: the overrides stand.
     let ok = check("abc123", &["lead"]);
     assert_eq!(ok.code, 0, "stdout: {}\nstderr: {}", ok.stdout, ok.stderr);
@@ -5747,6 +5748,13 @@ fn required_approval_is_read_from_gitlab_at_the_merge_requests_head() {
         let refusals = run.json()["policy_failures"].as_array().unwrap().clone();
         assert_eq!(refusals.len(), 1, "{sha} {approvers:?}");
     }
+    // `GITLAB_USER_LOGIN` names who started the pipeline, not the merge request's author:
+    // the author comes from the merge request. `lead` re-ran the pipeline of `agent`'s
+    // merge request; `lead`'s approval stands and `agent`'s does not.
+    let rerun = check_started_by("lead", "abc123", &["lead"]);
+    assert_eq!(rerun.code, 0, "{}{}", rerun.stdout, rerun.stderr);
+    let own = check_started_by("lead", "abc123", &["agent"]);
+    assert_eq!(own.code, 1, "{}{}", own.stdout, own.stderr);
 }
 
 #[test]
@@ -10048,6 +10056,79 @@ fn issue_link_exempt_authors_follow_the_event_author_not_the_actor() {
         "stdout: {}\nstderr: {}",
         bad.stdout, bad.stderr
     );
+}
+
+/// On GitLab `GITLAB_USER_LOGIN` names whoever started the pipeline, not the merge
+/// request's author: `exempt_authors` matches the author read from the merge request.
+/// A listed bot that starts the pipeline of someone else's merge request exempts nothing;
+/// a human re-running the bot's merge request keeps the exemption; a merge request the
+/// forge cannot answer for is exit 2.
+#[test]
+fn issue_link_exempt_authors_on_gitlab_read_the_merge_request_author() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.issue-link]\nenabled = true\nexempt_authors = [\"dependabot[bot]\"]\n",
+    );
+    repo.write("Cargo.lock", "# bumped\n");
+    repo.commit("build(deps): bump serde");
+    let check = |mr_author: Option<&str>, starter: &str| {
+        let api = FakeForge::start();
+        match mr_author {
+            Some(a) => api.serve(
+                "projects/o%2Fr/merge_requests/9",
+                serde_json::json!({"iid": 9, "author": {"username": a}}),
+            ),
+            None => api.serve_raw("projects/o%2Fr/merge_requests/9", 404, &[], "{}"),
+        }
+        let url = api.url();
+        repo.run(
+            &["check", "--format", "json", "--base", "HEAD~1"],
+            &[
+                ("GITLAB_CI", "true"),
+                ("CI_SERVER_URL", "https://gitlab.example"),
+                ("CI_PROJECT_PATH", "o/r"),
+                ("CI_MERGE_REQUEST_IID", "9"),
+                ("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "abc123"),
+                ("GITLAB_USER_LOGIN", starter),
+                ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+                ("PR_TITLE", "build(deps): bump serde"),
+                ("PR_BODY", "Bumps serde from 1.0.1 to 1.0.2."),
+            ],
+        )
+    };
+
+    // The bot opened it; a human re-ran the pipeline: still exempt.
+    let rerun = check(Some("dependabot[bot]"), "someone");
+    assert_eq!(
+        rerun.code, 0,
+        "stdout: {}\nstderr: {}",
+        rerun.stdout, rerun.stderr
+    );
+    assert!(
+        rerun.outcome("issue-link")["notes"]
+            .to_string()
+            .contains("`dependabot[bot]`, listed in `exempt_authors`"),
+        "{}",
+        rerun.outcome("issue-link")
+    );
+
+    // Someone else opened it; the bot's push started the pipeline: not exempt.
+    let pushed = check(Some("someone"), "dependabot[bot]");
+    assert_eq!(pushed.code, 1, "stdout: {}", pushed.stdout);
+    assert!(pushed
+        .titles("issue-link")
+        .iter()
+        .any(|t| t == "Tracking Issue Link Missing"));
+
+    // The merge request cannot be read: exit 2, never the pipeline starter instead.
+    let unreadable = check(None, "dependabot[bot]");
+    assert_eq!(
+        unreadable.code, 2,
+        "stdout: {}\nstderr: {}",
+        unreadable.stdout, unreadable.stderr
+    );
+    assert_eq!(unreadable.could_not_check().0, "forge");
 }
 
 // ---- Phase A Parity Extensions ----------------------------------------------

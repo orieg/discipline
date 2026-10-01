@@ -1383,7 +1383,7 @@ pub struct IssueLinkGate {
     pub waiver: IssueWaiver,
     /// Pull-request authors (exact logins, case-insensitive) whose pull requests need no
     /// tracking-issue reference: dependency-update bots. Matched against the author the
-    /// forge's event payload names, never the actor of the run.
+    /// forge's event payload names (on GitLab, the merge request's), never the actor of the run.
     pub exempt_authors: Vec<String>,
 }
 
