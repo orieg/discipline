@@ -26,6 +26,7 @@ Host machines never execute untrusted attack repositories directly. All attacks 
   - `cfg-01` to `cfg-03`: Configuration tampering and `policy_from: base` evasion probes.
   - `cfg-04` to `cfg-09`: `config-integrity` key forms and removals: an optional limit or switch removed (`max_noise_cv`, a gate's `allow_hidden`), a default filled in (`noise_floor_pct`), dotted and inline-table forms, a deleted table falling back to a default-off gate, a misspelt key (exit 2).
   - `esc-01` to `esc-05`: Directive escape hatch evasion probes (CRLF, Markdown formatting smuggling, placeholder reasons, commit subject vs body scoping).
+  - `esc-06` to `esc-09`: a directive in an indented code block, a directive after a shorter fence nested in a longer one, a directive name spelt with a long s (`removeſ:`), and a second waiver past `directives.max_overrides = 1`.
   - `rat-01` to `rat-04`: Protected path owner ratification probes on live Gitea (author self-ratification, `refuse_author_ratification`, legitimate owner ratification, edited comments).
   - `sec-01`: `DISCIPLINE_NO_NETWORK=1` fail-closed verification.
   - `ast-01` to `ast-02`: AST assertion reduction and stealth test deletion probes.

@@ -574,6 +574,40 @@ fn unsafe_gate_fires_when_a_safety_comment_is_deleted() {
 
 // ---- deletion-rationale ----------------------------------------------------
 
+/// F8: a directive quoted as code never arms an override. An indented (four-column) code
+/// block and a longer fence that holds a shorter fence line are code, as fenced blocks are
+/// (lab runs `tests/red_team/attacks/esc-06` and `esc-07`).
+#[test]
+fn a_directive_in_an_indented_block_or_a_nested_fence_does_not_arm() {
+    let repo = Repo::new();
+    repo.remove("tests/a.rs");
+    repo.commit("test: drop a");
+    let deleted = |body: &str| {
+        repo.check_with_pr(&[], body)
+            .titles("deletion-rationale")
+            .contains(&"File Deleted Without Rationale".to_string())
+    };
+    // Control: the same directive on its own line arms.
+    assert!(!deleted(
+        "removes: tests/a.rs the cases moved to tests/b.rs\n"
+    ));
+    for body in [
+        "Example:\n\n    removes: tests/a.rs the cases moved to tests/b.rs\n",
+        "Example:\n\n\tremoves: tests/a.rs the cases moved to tests/b.rs\n",
+        "Docs:\n````md\n```\nremoves: tests/a.rs the cases moved to tests/b.rs\n````\n",
+        "Docs:\n~~~\n```\nremoves: tests/a.rs the cases moved to tests/b.rs\n~~~\n",
+    ] {
+        assert!(deleted(body), "armed from code: {body:?}");
+    }
+    // A directive after a properly closed fence, or indented by up to three spaces, arms.
+    assert!(!deleted(
+        "```\nexample\n```\nremoves: tests/a.rs the cases moved to tests/b.rs\n"
+    ));
+    assert!(!deleted(
+        "   removes: tests/a.rs the cases moved to tests/b.rs\n"
+    ));
+}
+
 #[test]
 fn deletion_needs_a_scoped_line_anchored_rationale() {
     let repo = Repo::new();
@@ -14431,6 +14465,71 @@ fn a_loosened_assertion_bound_is_reported_and_a_tightened_one_is_not() {
     repo.git(&["checkout", "-q", "-B", "work"]);
     repo.write("tests/test_batch.py", &loose.replace("5.0", "1.5"));
     repo.commit("test: tighten");
+    assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
+}
+
+#[test]
+fn an_expected_value_edited_to_match_changed_code_is_reported() {
+    // The code changes, and the test's expected values are edited to agree with it: the
+    // assertion count and strength hold, so only the expected value tells.
+    let base_src = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
+    let base_test = "use p::add;\n\n#[test]\nfn adds() {\n    assert_eq!(add(2, 2), 4);\n    assert_eq!(add(1, 2), 3, \"small sums\");\n}\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("src/lib.rs", base_src);
+    repo.write("tests/add.rs", base_test);
+    repo.commit("feat: add");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("src/lib.rs", &base_src.replace("a + b", "a + b + 1"));
+    repo.write(
+        "tests/add.rs",
+        &base_test
+            .replace("add(2, 2), 4", "add(2, 2), 5")
+            .replace("add(1, 2), 3", "add(1, 2), 4"),
+    );
+    repo.commit("fix: adjust");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(
+        run.titles("assertion-reduction"),
+        vec![
+            "Expected Value Changed In Existing Test",
+            "Expected Value Changed In Existing Test"
+        ]
+    );
+    let found = run.violations("assertion-reduction");
+    assert_eq!(found[0]["line"], 5);
+    assert_eq!(found[1]["line"], 6);
+    for v in &found {
+        let msg = v["message"].as_str().unwrap();
+        assert!(
+            !msg.contains("add(") && !msg.contains("small sums"),
+            "the assertion is not echoed: {msg}"
+        );
+    }
+
+    // The directive that lifts an assertion drop lifts it.
+    repo.commit("chore: record\n\nallow-assertion-drop: adds sums now count the carry, by design");
+    assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
+
+    // An added assertion, an unchanged expected value on a moved line, and a changed call
+    // under test (a different assertion) are not this finding.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/add.rs", base_test);
+    repo.commit("test: add");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "tests/add.rs",
+        &base_test
+            .replace("fn adds() {\n", "fn adds() {\n    let _setup = 1;\n")
+            .replace("add(1, 2), 3", "add(1, 3), 4")
+            .replace(
+                "small sums\");\n",
+                "small sums\");\n    assert_eq!(add(0, 0), 0);\n",
+            ),
+    );
+    repo.commit("test: more");
     assert!(repo.check(&[]).titles("assertion-reduction").is_empty());
 }
 

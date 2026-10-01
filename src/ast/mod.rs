@@ -14,6 +14,7 @@ pub mod c_macros;
 pub mod calls;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
+pub mod expectations;
 pub mod functions;
 #[cfg(feature = "lang-go")]
 pub mod r#go;
@@ -252,6 +253,10 @@ pub struct TestFn {
     /// Numeric bounds of its assertions (`super::bounds`), paired by skeleton across a
     /// change so a bound moved the loose way is seen although the count is unchanged.
     pub bounds: Vec<bounds::Bound>,
+    /// Expected values of its equality assertions (`super::expectations`), paired by
+    /// skeleton across a change so an edited expected value is seen although the count is
+    /// unchanged.
+    pub expectations: Vec<expectations::Expectation>,
 }
 
 impl TestFn {
@@ -843,6 +848,7 @@ impl Default for ParsedFileFacts {
                 trivial_asserts: 0,
                 helper_checks: 0,
                 bounds: Vec::new(),
+                expectations: Vec::new(),
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -873,6 +879,7 @@ impl ParsedFileFacts {
             trivial_asserts: 0,
             helper_checks: 0,
             bounds: Vec::new(),
+            expectations: Vec::new(),
         });
     }
 }

@@ -988,6 +988,7 @@
       "archive-contents/source-map-shipped",
       "assertion-reduction/assertion-bound-loosened",
       "assertion-reduction/assertions-reduced",
+      "assertion-reduction/expected-value-changed",
       "assertion-reduction/fatal-assertions-weakened",
       "assertion-reduction/mocking-increased-without-stronger-assertions",
       "assertion-reduction/nul-byte-added",
