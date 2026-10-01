@@ -32,7 +32,7 @@ args=(
   -e HOME=/tmp
   -e GIT_CONFIG_NOSYSTEM=1
   -e PATH=/target/debug:/usr/local/cargo/bin:/usr/bin:/bin
-  -v discipline-rt-target:/target:ro
+  -v "${RT_TARGET_VOLUME:-discipline-rt-target}":/target:ro
   -v "$DIR/attacks":/work
   -w /work
 )

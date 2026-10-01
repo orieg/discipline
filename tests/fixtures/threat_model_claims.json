@@ -582,6 +582,19 @@
       "verdict": "holds"
     },
     {
+      "id": "sec-audit-html-links-stay-in-repository",
+      "category": "security_policy",
+      "claim": "The audit page escapes text the repository wrote, and its source links stay in the audited repository whatever the file path",
+      "source": "docs/CONFIGURATION.md:audit --format html",
+      "code": "src/audit_html.rs:source",
+      "pinning_tests": [
+        "tests/test_audit_html.rs::a_source_link_stays_in_the_repository_whatever_the_path",
+        "tests/test_audit_html.rs::the_page_loads_nothing_and_escapes_what_authors_wrote",
+        "src/audit_html.rs::author_text_is_escaped"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "sec-hidden-directive-note-no-echo",
       "category": "security_policy",
       "claim": "A refused hidden directive is noted once, on its directive's gate, by name and location only: the report never repeats text that was hidden from reviewers",
