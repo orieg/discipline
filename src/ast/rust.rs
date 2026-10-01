@@ -160,8 +160,9 @@ struct Extractor<'a> {
     /// The whole file is test code (a test directory or a declared test path).
     test_file: bool,
     /// Counting a library function's checks: one outside `#[cfg(test)]` in a non-test
-    /// file. Its `unwrap` / `expect` is the library's own error handling, not a check a
-    /// test that calls it makes (#392); its assertions and panics still count.
+    /// file. Its `unwrap` / `expect` is the library's own error handling, and its `?`
+    /// the library's own error propagation, not a check a test that calls it makes (#392,
+    /// #422); its assertions and panics still count.
     library_helper: bool,
     facts: ParsedFileFacts,
     helpers: std::collections::HashMap<String, HelperFacts>,
@@ -525,7 +526,9 @@ impl<'a> Extractor<'a> {
                 return;
             }
             "try_expression" => {
-                if is_fallible_return {
+                // A library function's `?` hands its error to the caller, as its `expect`
+                // is its own handling (#392): the test checks that error, not the `?`.
+                if is_fallible_return && !self.library_helper {
                     test.total_asserts += 1;
                 }
             }
@@ -1753,6 +1756,60 @@ mod tests {
         // In a test file every helper is test code, so its `expect` counts.
         let f = test_file_facts(src);
         assert_eq!(f.tests[0].total_asserts, 2, "{:?}", f.tests[0]);
+    }
+
+    #[test]
+    fn a_library_functions_question_mark_is_not_a_check_of_the_test_that_calls_it() {
+        // #422: `rules` is library code, so its `?`s hand the error to the caller; moving
+        // them to another module must not lower `t_library`. Its `assert!` still counts. A
+        // test helper's `?` and a fallible test's own `?` are checks.
+        let src = r##"pub fn rules() -> Result<u32, std::num::ParseIntError> {
+    let a: u32 = "1".parse()?;
+    let b: u32 = "2".parse()?;
+    assert!(a < b);
+    Ok(a + b)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn helper() -> Result<u32, std::num::ParseIntError> {
+        let a: u32 = "1".parse()?;
+        Ok(a)
+    }
+    #[test]
+    fn t_library() {
+        assert_eq!(rules().unwrap(), 3);
+    }
+    #[test]
+    fn t_test_helper() {
+        assert_eq!(helper().unwrap(), 1);
+    }
+    #[test]
+    fn t_fallible() -> Result<(), std::num::ParseIntError> {
+        let n = rules()?;
+        let m: u32 = "4".parse()?;
+        assert_eq!(n + m, 7);
+        Ok(())
+    }
+}
+"##;
+        let f = facts(src);
+        let counts: Vec<(&str, usize, usize)> = f
+            .tests
+            .iter()
+            .map(|t| (t.name.as_str(), t.total_asserts, t.helper_checks))
+            .collect();
+        assert_eq!(
+            counts,
+            vec![
+                ("tests::t_library", 2, 1),
+                ("tests::t_test_helper", 2, 1),
+                ("tests::t_fallible", 4, 1),
+            ]
+        );
+        // In a test file every helper is test code, so its `?` counts.
+        let f = test_file_facts(src);
+        assert_eq!(f.tests[0].total_asserts, 4, "{:?}", f.tests[0]);
     }
 
     /// `facts` for a file in a test directory, where top-level helpers are test code.

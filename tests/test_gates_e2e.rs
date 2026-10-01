@@ -62,6 +62,59 @@ fn refactoring_a_library_wrapper_chain_is_not_an_assertion_drop() {
     );
 }
 
+/// #422: moving a library function's `?`s into another module, with no test touched, is
+/// not an assertion drop (#420 moved token compilation into `token_formats` and 12 unchanged
+/// tests read as dropping). Deleting an assertion, or a fallible test's own `?`, in the
+/// same move still is.
+#[test]
+fn moving_a_library_functions_question_marks_to_another_module_is_not_an_assertion_drop() {
+    let repo = Repo::new();
+    let base = "pub fn rules() -> Result<Vec<u32>, std::num::ParseIntError> {\n    let a = \"1\".parse::<u32>()?;\n    let b = \"2\".parse::<u32>()?;\n    let c = \"3\".parse::<u32>()?;\n    Ok(vec![a, b, c])\n}\n\n\
+                #[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn has_three_rules() {\n        assert_eq!(rules().unwrap().len(), 3);\n        assert!(rules().is_ok());\n    }\n\n    \
+                #[test]\n    fn sums() -> Result<(), std::num::ParseIntError> {\n        let n = \"4\".parse::<u32>()?;\n        let m = \"5\".parse::<u32>()?;\n        assert_eq!(n + m, 9);\n        Ok(())\n    }\n}\n";
+    repo.commit_base_files(&[("src/rules.rs", base)], "feat: rules");
+    let moved = base.replace(
+        "    let a = \"1\".parse::<u32>()?;\n    let b = \"2\".parse::<u32>()?;\n    let c = \"3\".parse::<u32>()?;\n    Ok(vec![a, b, c])",
+        "    crate::table::compile()",
+    );
+    assert_ne!(moved, base);
+    repo.write(
+        "src/table.rs",
+        "pub fn compile() -> Result<Vec<u32>, std::num::ParseIntError> {\n    let a = \"1\".parse::<u32>()?;\n    let b = \"2\".parse::<u32>()?;\n    let c = \"3\".parse::<u32>()?;\n    Ok(vec![a, b, c])\n}\n",
+    );
+    repo.write("src/rules.rs", &moved);
+    repo.commit("refactor: compile the rules in their own module");
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+
+    // The same move, with an assertion and a fallible test's `?` deleted: both reported.
+    let weakened = moved
+        .replace("        assert!(rules().is_ok());\n", "")
+        .replace(
+            "        let m = \"5\".parse::<u32>()?;\n",
+            "        let m = \"5\".parse::<u32>().unwrap_or(5);\n",
+        );
+    assert_ne!(weakened, moved);
+    repo.write("src/rules.rs", &weakened);
+    repo.commit("refactor: trim the rule tests");
+    let run = repo.check(&[]);
+    let drops: Vec<String> = run
+        .violations("assertion-reduction")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(drops.len(), 2, "{drops:?}");
+    assert!(
+        drops.iter().any(|m| m.contains("tests::has_three_rules")),
+        "{drops:?}"
+    );
+    assert!(drops.iter().any(|m| m.contains("tests::sums")), "{drops:?}");
+}
+
 #[test]
 fn assertion_reduction_override_must_name_the_test() {
     let repo = Repo::new();
@@ -14555,6 +14608,9 @@ fn a_dispatch_table_of_helpers_in_rust_and_js_is_a_refactor_and_a_removed_entry_
 
 /// PR #241: `install` became a thin wrapper around `install_with`, and a test calling
 /// `install` lost the checks it inherits from the helper although it was unchanged.
+/// The helpers' checks are `?`s: in a file under a test path they are test code and count,
+/// so hollowing the wrapped function is a drop; in library code they are not the test's
+/// checks (#422), so no case is reported.
 #[test]
 fn a_helper_refactored_into_a_thin_wrapper_is_not_an_assertion_reduction() {
     let test = "#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn install_writes_once() {\n        let n = install(Path::new(\"x\"), true).unwrap();\n        assert_eq!(n, 2);\n    }\n}\n";
@@ -14563,30 +14619,32 @@ fn a_helper_refactored_into_a_thin_wrapper_is_not_an_assertion_reduction() {
     let hollow = "use std::path::Path;\n\npub fn install(root: &Path, observe: bool) -> Result<u32> {\n    install_with(root, observe, false)\n}\n\npub fn install_with(root: &Path, observe: bool, force: bool) -> Result<u32> {\n    Ok(2)\n}\n\n";
     // The wrapper forwards an empty slice instead of a named constant.
     let forwarded = "use std::path::Path;\n\npub fn install(root: &Path, observe: bool) -> Result<u32> {\n    install_with(root, observe, &[])\n}\n\npub fn install_with(root: &Path, observe: bool, env: &[(&str, &str)]) -> Result<u32> {\n    let a = write(root, observe || !env.is_empty())?;\n    let b = write(root, observe)?;\n    Ok(a + b)\n}\n\n";
-    for (before, after, reported) in [
-        (helper, wrapped, false),
-        (wrapped, hollow, true),
-        (helper, forwarded, false),
-    ] {
-        let repo = Repo::new();
-        repo.git(&["checkout", "-q", "main"]);
-        repo.write("src/install.rs", &format!("{before}{test}"));
-        repo.commit("feat: install");
-        repo.git(&["checkout", "-q", "-B", "work"]);
-        repo.write("src/install.rs", &format!("{after}{test}"));
-        repo.commit("refactor: install");
-        let run = repo.check(&[]);
-        let expected: Vec<&str> = if reported {
-            vec!["Assertion Count Decreased In Existing Test"]
-        } else {
-            Vec::new()
-        };
-        assert_eq!(
-            run.titles("assertion-reduction"),
-            expected,
-            "{}",
-            run.stdout
-        );
+    for (path, test_code) in [("tests/install.rs", true), ("src/install.rs", false)] {
+        for (before, after, reported) in [
+            (helper, wrapped, false),
+            (wrapped, hollow, test_code),
+            (helper, forwarded, false),
+        ] {
+            let repo = Repo::new();
+            repo.git(&["checkout", "-q", "main"]);
+            repo.write(path, &format!("{before}{test}"));
+            repo.commit("feat: install");
+            repo.git(&["checkout", "-q", "-B", "work"]);
+            repo.write(path, &format!("{after}{test}"));
+            repo.commit("refactor: install");
+            let run = repo.check(&[]);
+            let expected: Vec<&str> = if reported {
+                vec!["Assertion Count Decreased In Existing Test"]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                run.titles("assertion-reduction"),
+                expected,
+                "{path}: {}",
+                run.stdout
+            );
+        }
     }
 }
 
