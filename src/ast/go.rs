@@ -230,6 +230,11 @@ impl<'a> GoExtractor<'a> {
             if let Some(body) = node.child_by_field_name("body") {
                 self.scan_block(body, &mut test_fn, func_name, &mut direct_calls);
                 super::dispatch_calls(body, self.src, &GO_DISPATCH, &mut direct_calls);
+                if test_fn.conditional_ignore.is_none() && !test_fn.ignored {
+                    if let Some(cond) = self.detect_go_conditional_early_exit(body) {
+                        test_fn.conditional_ignore = Some(cond);
+                    }
+                }
             }
 
             self.facts.tests.push(test_fn);
@@ -397,6 +402,11 @@ impl<'a> GoExtractor<'a> {
                 if let Some(sub_body) = func_lit.child_by_field_name("body") {
                     self.scan_block(sub_body, &mut sub_test, &sub_name, &mut sub_calls);
                     super::dispatch_calls(sub_body, self.src, &GO_DISPATCH, &mut sub_calls);
+                    if sub_test.conditional_ignore.is_none() && !sub_test.ignored {
+                        if let Some(cond) = self.detect_go_conditional_early_exit(sub_body) {
+                            sub_test.conditional_ignore = Some(cond);
+                        }
+                    }
                 }
             }
 
@@ -416,9 +426,11 @@ impl<'a> GoExtractor<'a> {
         {
             // `if testing.Short() { t.Skip(...) }` runs in a full run: a conditional skip,
             // reported as a note. A constant condition skips every run.
-            match enclosing_if_condition(node, self.src) {
-                Some(cond) if cond != "true" => test_fn.conditional_ignore = Some(cond),
-                _ => test_fn.ignored = true,
+            if test_fn.conditional_ignore.is_none() {
+                match enclosing_if_condition(node, self.src) {
+                    Some(cond) if cond != "true" => test_fn.conditional_ignore = Some(cond),
+                    _ => test_fn.ignored = true,
+                }
             }
             return;
         }
@@ -563,6 +575,73 @@ impl<'a> GoExtractor<'a> {
             t.to_string()
         }
     }
+
+    fn detect_go_conditional_early_exit(&self, body: Node) -> Option<String> {
+        let mut cursor = body.walk();
+        let mut env_bindings = std::collections::HashSet::new();
+
+        let mut statements = Vec::new();
+        for child in body.children(&mut cursor) {
+            if child.kind() == "statement_list" {
+                let mut s_cursor = child.walk();
+                for stmt in child.children(&mut s_cursor) {
+                    statements.push(stmt);
+                }
+            } else {
+                statements.push(child);
+            }
+        }
+
+        for stmt in statements {
+            if stmt.kind() == "short_var_declaration" {
+                let text = self.text(stmt);
+                if is_go_env_check(text) {
+                    if let Some(left) = stmt.child_by_field_name("left") {
+                        let name = self.text(left).trim();
+                        if !name.is_empty() {
+                            env_bindings.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+
+            if stmt.kind() == "if_statement" {
+                let init = stmt.child_by_field_name("initializer");
+                let cond = stmt.child_by_field_name("condition");
+                let init_str = init
+                    .and_then(|n| n.utf8_text(self.src).ok())
+                    .unwrap_or("")
+                    .trim();
+                let cond_str = cond
+                    .and_then(|n| n.utf8_text(self.src).ok())
+                    .unwrap_or("")
+                    .trim();
+
+                let is_env = is_go_env_check(init_str)
+                    || is_go_env_check(cond_str)
+                    || env_bindings.iter().any(|v| {
+                        cond_str == v
+                            || cond_str
+                                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                                .any(|t| t == v)
+                    });
+
+                if is_env {
+                    if let Some(consequence) = stmt.child_by_field_name("consequence") {
+                        if go_consequence_returns_early(consequence, self.src) {
+                            let cond_desc = if !init_str.is_empty() {
+                                format!("{init_str}; {cond_str}")
+                            } else {
+                                cond_str.to_string()
+                            };
+                            return Some(cond_desc);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 fn go_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
@@ -571,6 +650,54 @@ fn go_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
         .and_then(|n| n.utf8_text(src.as_bytes()).ok())
         .unwrap_or("");
     path.ends_with("_test.go") || is_go_test_function_name(name)
+}
+
+fn is_go_env_check(text: &str) -> bool {
+    text.contains("os.Getenv")
+        || text.contains("os.LookupEnv")
+        || text.contains("Getenv")
+        || text.contains("LookupEnv")
+        || super::is_ci_condition(text)
+}
+
+fn go_consequence_returns_early(consequence: Node, src: &[u8]) -> bool {
+    let mut statements = Vec::new();
+    let mut cursor = consequence.walk();
+    for child in consequence.children(&mut cursor) {
+        if child.kind() == "statement_list" {
+            let mut s_cursor = child.walk();
+            for stmt in child.children(&mut s_cursor) {
+                statements.push(stmt);
+            }
+        } else {
+            statements.push(child);
+        }
+    }
+
+    for child in statements {
+        if child.kind() == "return_statement" {
+            return true;
+        }
+        if child.kind() == "expression_statement" {
+            if let Some(call) = child.child(0) {
+                if call.kind() == "call_expression" {
+                    if let Some(func) = call.child_by_field_name("function") {
+                        if let Ok(name) = func.utf8_text(src) {
+                            if name.ends_with(".Skip")
+                                || name.ends_with(".Skipf")
+                                || name.ends_with(".SkipNow")
+                                || name == "Skip"
+                                || name == "Skipf"
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 /// The condition of the nearest `if` whose body holds `node`, stopping at the function
@@ -586,7 +713,13 @@ fn enclosing_if_condition(node: Node, src: &[u8]) -> Option<String> {
                     .child_by_field_name("consequence")
                     .is_some_and(|c| c.id() == cur.id());
                 if in_body {
-                    return cond.utf8_text(src).ok().map(|t| t.trim().to_string());
+                    let cond_str = cond.utf8_text(src).ok()?.trim().to_string();
+                    if let Some(init) = p.child_by_field_name("initializer") {
+                        if let Ok(init_str) = init.utf8_text(src) {
+                            return Some(format!("{}; {}", init_str.trim(), cond_str));
+                        }
+                    }
+                    return Some(cond_str);
                 }
             }
             _ => {}
@@ -767,6 +900,91 @@ func TestCalculator(t *testing.T) {
         assert_eq!(short.conditional_ignore.as_deref(), Some("testing.Short()"));
         assert!(by("TestAlways").ignored && by("TestAlways").conditional_ignore.is_none());
         assert!(by("TestConstant").ignored && by("TestConstant").conditional_ignore.is_none());
+    }
+
+    #[test]
+    fn early_exit_in_go_test_under_env_or_ci_check_detected() {
+        let src = r#"
+package p
+
+import (
+	"os"
+	"testing"
+)
+
+func TestCIReturn(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		return
+	}
+	if 1+1 != 2 {
+		t.Fatal("math")
+	}
+}
+
+func TestCILookupEnvSkip(t *testing.T) {
+	if _, ok := os.LookupEnv("GITHUB_ACTIONS"); ok {
+		t.Skip("skipping in github actions")
+	}
+	if 1+1 != 2 {
+		t.Fatal("math")
+	}
+}
+
+func TestGenericEnvReturn(t *testing.T) {
+	if os.Getenv("SKIP_SLOW") != "" {
+		return
+	}
+	if 1+1 != 2 {
+		t.Fatal("math")
+	}
+}
+
+func TestGuardWithoutExit(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		println("in CI")
+	}
+	if 1+1 != 2 {
+		t.Fatal("math")
+	}
+}
+
+func helperGuard(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		return
+	}
+}
+"#;
+        let facts = GoPack
+            .extract("p_test.go", src, &AssertVocabulary::default())
+            .unwrap();
+        let by = |n: &str| facts.tests.iter().find(|t| t.name == n).unwrap();
+
+        let ci_return = by("TestCIReturn");
+        assert!(!ci_return.ignored);
+        assert_eq!(
+            ci_return.conditional_ignore.as_deref(),
+            Some("os.Getenv(\"CI\") != \"\"")
+        );
+
+        let ci_lookup = by("TestCILookupEnvSkip");
+        assert!(!ci_lookup.ignored);
+        assert_eq!(
+            ci_lookup.conditional_ignore.as_deref(),
+            Some("_, ok := os.LookupEnv(\"GITHUB_ACTIONS\"); ok")
+        );
+
+        let generic = by("TestGenericEnvReturn");
+        assert!(!generic.ignored);
+        assert_eq!(
+            generic.conditional_ignore.as_deref(),
+            Some("os.Getenv(\"SKIP_SLOW\") != \"\"")
+        );
+
+        let no_exit = by("TestGuardWithoutExit");
+        assert!(!no_exit.ignored);
+        assert_eq!(no_exit.conditional_ignore, None);
+
+        assert!(facts.tests.iter().all(|t| t.name != "helperGuard"));
     }
 
     #[test]

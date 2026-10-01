@@ -353,6 +353,12 @@ impl<'a> JsExtractor<'a> {
                             if let Some(body) = callback.child_by_field_name("body") {
                                 self.collect_calls(body, &mut calls);
                                 super::dispatch_calls(body, self.src, &JS_DISPATCH, &mut calls);
+                                if test_fn.conditional_ignore.is_none() && !test_fn.ignored {
+                                    if let Some(cond) = self.detect_js_conditional_early_exit(body)
+                                    {
+                                        test_fn.conditional_ignore = Some(cond);
+                                    }
+                                }
                             }
                         }
                     }
@@ -570,6 +576,59 @@ impl<'a> JsExtractor<'a> {
         }
     }
 
+    fn detect_js_conditional_early_exit(&self, body: Node) -> Option<String> {
+        if body.kind() != "statement_block" {
+            return None;
+        }
+        let mut cursor = body.walk();
+        let mut env_bindings = std::collections::HashSet::new();
+
+        for child in body.children(&mut cursor) {
+            if child.kind() == "lexical_declaration" || child.kind() == "variable_declaration" {
+                let text = self.text(child);
+                if is_js_env_check(text) {
+                    let mut decl_cursor = child.walk();
+                    for decl in child.children(&mut decl_cursor) {
+                        if decl.kind() == "variable_declarator" {
+                            if let Some(name_node) = decl.child_by_field_name("name") {
+                                let name = self.text(name_node).trim();
+                                if !name.is_empty() {
+                                    env_bindings.insert(name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if child.kind() == "if_statement" {
+                let cond_node = child.child_by_field_name("condition")?;
+                let cond_text = self.text(cond_node).trim();
+                let unwrapped = cond_text
+                    .strip_prefix('(')
+                    .and_then(|s| s.strip_suffix(')'))
+                    .unwrap_or(cond_text)
+                    .trim();
+
+                let is_env_check = is_js_env_check(unwrapped)
+                    || env_bindings.iter().any(|v| {
+                        unwrapped == v
+                            || unwrapped
+                                .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                                .any(|t| t == v)
+                    });
+
+                if is_env_check {
+                    let consequence = child.child_by_field_name("consequence")?;
+                    if js_consequence_returns_early(consequence) {
+                        return Some(unwrapped.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn check_assertion_call(&self, call: Node, test: &mut TestFn) {
         let text = self.text(call);
         if let Some(func) = call.child_by_field_name("function") {
@@ -702,6 +761,25 @@ impl<'a> JsExtractor<'a> {
         }
         false
     }
+}
+
+fn is_js_env_check(text: &str) -> bool {
+    text.contains("process.env") || text.contains("process?.env") || super::is_ci_condition(text)
+}
+
+fn js_consequence_returns_early(consequence: Node) -> bool {
+    if consequence.kind() == "return_statement" {
+        return true;
+    }
+    if consequence.kind() == "statement_block" {
+        let mut cursor = consequence.walk();
+        for child in consequence.children(&mut cursor) {
+            if child.kind() == "return_statement" {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Overload signatures, abstract members and `declare` blocks carry no body.
@@ -1179,5 +1257,84 @@ test("weak matchers", () => {
             .extract("test/broken.test.js", src, &vocab)
             .expect("extract broken");
         assert!(facts.has_parse_errors);
+    }
+
+    #[test]
+    fn early_exit_in_js_test_under_env_or_ci_check_detected() {
+        let src = r#"
+test('ci dot check', () => {
+    if (process.env.CI) {
+        return;
+    }
+    expect(1).toBe(1);
+});
+
+it('ci bracket check', () => {
+    if (process.env['GITHUB_ACTIONS']) return;
+    expect(1).toBe(1);
+});
+
+test('generic env check', () => {
+    if (process.env.SKIP_SLOW) {
+        return;
+    }
+    expect(1).toBe(1);
+});
+
+test('guard without exit', () => {
+    if (process.env.CI) {
+        console.log("running in CI");
+    }
+    expect(1).toBe(1);
+});
+
+function helperGuard() {
+    if (process.env.CI) return;
+}
+"#;
+        let pack = JavaScriptPack;
+        let facts = pack
+            .extract("test/env_check.test.js", src, &AssertVocabulary::default())
+            .unwrap();
+
+        let ci_dot = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "ci dot check")
+            .unwrap();
+        assert!(!ci_dot.ignored);
+        assert_eq!(ci_dot.conditional_ignore.as_deref(), Some("process.env.CI"));
+
+        let ci_bracket = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "ci bracket check")
+            .unwrap();
+        assert!(!ci_bracket.ignored);
+        assert_eq!(
+            ci_bracket.conditional_ignore.as_deref(),
+            Some("process.env['GITHUB_ACTIONS']")
+        );
+
+        let generic = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "generic env check")
+            .unwrap();
+        assert!(!generic.ignored);
+        assert_eq!(
+            generic.conditional_ignore.as_deref(),
+            Some("process.env.SKIP_SLOW")
+        );
+
+        let no_exit = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "guard without exit")
+            .unwrap();
+        assert!(!no_exit.ignored);
+        assert_eq!(no_exit.conditional_ignore, None);
+
+        assert!(facts.tests.iter().all(|t| t.name != "helperGuard"));
     }
 }

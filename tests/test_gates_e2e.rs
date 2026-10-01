@@ -10780,6 +10780,67 @@ fn ignored_tests_distinguishes_arrives_ignored_from_no_longer_runs_and_honors_ap
 }
 
 #[test]
+fn ignored_tests_early_exit_under_env_or_ci_check_severity_and_directive_lift() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/suite.rs",
+        "#[test]\nfn test_orders() { assert_eq!(1, 1); }\n",
+    );
+    repo.commit("test: base suite");
+
+    // 1. Add early return under CI check -> Warning severity
+    repo.write(
+        "tests/ci_suite.rs",
+        "#[test]\nfn test_in_ci() {\n    if std::env::var(\"CI\").is_ok() {\n        return;\n    }\n    assert_eq!(1, 1);\n}\n",
+    );
+    repo.commit("test: add early exit in CI");
+    let run_ci = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_ci.titles("ignored-tests"),
+        vec!["Test Conditionally Skipped"]
+    );
+    let out_ci = run_ci.outcome("ignored-tests");
+    let v_ci = &out_ci["violations"][0];
+    assert_eq!(v_ci["severity"], "warning");
+    assert!(v_ci["message"].as_str().unwrap().contains("test_in_ci"));
+
+    // 2. Add early return under generic env check -> Note severity
+    repo.write(
+        "tests/env_suite.rs",
+        "#[test]\nfn test_in_env() {\n    if std::env::var(\"SKIP_SLOW\").is_ok() {\n        return;\n    }\n    assert_eq!(1, 1);\n}\n",
+    );
+    repo.commit("test: add early exit in generic env");
+    let run_env = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_env.titles("ignored-tests"),
+        vec!["Test Conditionally Skipped"]
+    );
+    let out_env = run_env.outcome("ignored-tests");
+    let v_env = &out_env["violations"][0];
+    assert_eq!(v_env["severity"], "note");
+    assert!(v_env["message"].as_str().unwrap().contains("test_in_env"));
+
+    // 3. Lift via allow-ignore: <test> <reason> in PR body
+    repo.write(
+        "pr_body.md",
+        "PR summary\n\nallow-ignore: test_in_ci slow in GitHub Actions, tracked in #99\n",
+    );
+    let run_lifted = repo.check(&["--base", "HEAD~2", "--pr-body-file", "pr_body.md"]);
+    // test_in_ci is lifted, only test_in_env remains
+    assert_eq!(
+        run_lifted.titles("ignored-tests"),
+        vec!["Test Conditionally Skipped"]
+    );
+    let out_lifted = run_lifted.outcome("ignored-tests");
+    assert_eq!(out_lifted["violations"].as_array().unwrap().len(), 1);
+    assert!(out_lifted["violations"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("test_in_env"));
+    assert_eq!(out_lifted["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn vacuous_tests_precision_python_and_cpp_example_patterns() {
     let repo = Repo::new();
     repo.write(
