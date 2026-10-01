@@ -828,7 +828,7 @@
           "type": "boolean"
         },
         "secrets": {
-          "description": "Check for leaked private keys and high-entropy API tokens",
+          "description": "Check every text file for fixed-format credentials: private-key headers, AWS, GitHub, Slack and OpenAI/Anthropic tokens, and literal Authorization Bearer values. Matches the token format only; there is no entropy check",
           "type": "boolean"
         },
         "severity": {
@@ -1625,7 +1625,7 @@
               "$ref": "#/$defs/PiiGate"
             }
           ],
-          "description": "no home paths, LAN IPs, or denylisted hostnames in tracked text"
+          "description": "no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text"
         },
         "pr-checklist": {
           "allOf": [

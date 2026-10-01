@@ -197,7 +197,7 @@ deleted files and removed tests need a scoped removes: rationale (agent-guard; d
 no calendar / duration estimates in markdown or the PR body (hygiene; default: on, warning; languages: any)
 .TP
 .B [gates.pii]
-no home paths, LAN IPs, or denylisted hostnames in tracked text (hygiene; default: on, error; languages: any)
+no home paths, LAN IPs, denylisted hostnames, or fixed\-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text (hygiene; default: on, error; languages: any)
 .TP
 .B [gates.agent-scratch]
 agent scratch state is never tracked (hygiene; default: on, error; languages: any)

@@ -106,7 +106,7 @@ pub const GATES: &[GateInfo] = &[
     GateInfo {
         id: "pii",
         suite: Suite::Hygiene,
-        summary: "no home paths, LAN IPs, or denylisted hostnames in tracked text",
+        summary: "no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text",
         languages: "any",
         available: true,
     },
