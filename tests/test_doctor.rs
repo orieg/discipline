@@ -85,6 +85,14 @@ fn serve_safe_settings(api: &FakeForge) {
     );
     api.serve_raw("repos/o/r/vulnerability-alerts", 204, &[], "");
     api.serve(
+        "repos/o/r/keys?per_page=100&page=1",
+        serde_json::json!([{"id": 1, "read_only": true}]),
+    );
+    api.serve(
+        "repos/o/r/collaborators?affiliation=outside&per_page=100&page=1",
+        serde_json::json!([]),
+    );
+    api.serve(
         "repos/o/r/automated-security-fixes",
         serde_json::json!({"enabled": true, "paused": false}),
     );
@@ -197,6 +205,78 @@ fn doctor_reports_auto_merge_forking_secret_scanning_and_dependency_alerts() {
             .contains("could not check"),
         "{auto}"
     );
+}
+
+/// Access and identity (#366): deploy keys that can push and outside collaborators,
+/// counted and never named, and on GitHub the owning organisation's base permission,
+/// two-factor requirement and visibility-change setting.
+#[test]
+fn doctor_counts_deploy_keys_and_collaborators_and_reads_the_organisation() {
+    let status = |st: &[(String, String)], id: &str| {
+        st.iter()
+            .find(|(i, _)| i == id)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_else(|| panic!("no {id}: {st:?}"))
+    };
+    let repo = protected_repo();
+    let api = github_api(GOOD_RULES);
+    api.serve(
+        "repos/o/r",
+        serde_json::json!({"default_branch": "main", "permissions": {"admin": true},
+            "owner": {"type": "Organization"}, "private": true, "visibility": "private",
+            "allow_auto_merge": false, "allow_forking": false,
+            "security_and_analysis": {"secret_scanning": {"status": "enabled"},
+                "secret_scanning_push_protection": {"status": "enabled"}}}),
+    );
+    api.serve(
+        "repos/o/r/keys?per_page=100&page=1",
+        serde_json::json!([{"id": 1, "read_only": false, "title": "release-bot"}, {"id": 2, "read_only": true}]),
+    );
+    api.serve(
+        "repos/o/r/collaborators?affiliation=outside&per_page=100&page=1",
+        serde_json::json!([{"id": 7, "login": "contractor-x", "permissions": {"push": true}}]),
+    );
+    api.serve(
+        "orgs/o",
+        serde_json::json!({"default_repository_permission": "write", "two_factor_requirement_enabled": false,
+            "members_can_change_repo_visibility": true}),
+    );
+    let url = api.url();
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("GH_TOKEN", "gh-tok-1"),
+    ];
+    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let st = statuses(&run.stdout);
+    for (id, want) in [
+        ("deploy-keys", "warn"),
+        ("outside-collaborators", "info"),
+        ("org-base-permission", "warn"),
+        ("two-factor", "warn"),
+        ("visibility-change", "warn"),
+    ] {
+        assert_eq!(status(&st, id), want, "{id}: {}", run.stdout);
+    }
+    // Counted, never named.
+    assert!(
+        !run.stdout.contains("release-bot") && !run.stdout.contains("contractor-x"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+
+    // A member's token: the organisation hides its base permission and two-factor setting.
+    api.serve(
+        "orgs/o",
+        serde_json::json!({"default_repository_permission": null, "two_factor_requirement_enabled": null,
+            "members_can_change_repo_visibility": false}),
+    );
+    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let st = statuses(&run.stdout);
+    assert_eq!(status(&st, "org-base-permission"), "warn", "{}", run.stdout);
+    assert_eq!(status(&st, "two-factor"), "warn", "{}", run.stdout);
+    assert_eq!(status(&st, "visibility-change"), "pass", "{}", run.stdout);
+    assert!(run.stdout.contains("organisation owner"), "{}", run.stdout);
 }
 
 #[test]
@@ -1121,6 +1201,10 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
     project["secret_push_protection_enabled"] = serde_json::json!(false);
     api.serve("projects/o%2Fr", project);
     api.serve(
+        "projects/o%2Fr/deploy_keys?per_page=100&page=1",
+        serde_json::json!([{"id": 3, "title": "deploy", "can_push": true}]),
+    );
+    api.serve(
         "projects/o%2Fr/job_token_scope",
         recorded["job_token_scope"].clone(),
     );
@@ -1164,6 +1248,9 @@ fn doctor_reads_gitlab_settings_and_audits_the_token() {
         ("forking", "warn"),
         ("secret-scanning", "info"),
         ("dependency-alerts", "info"),
+        ("deploy-keys", "warn"),
+        ("outside-collaborators", "info"),
+        ("two-factor", "info"),
     ] {
         assert!(
             st.contains(&(id.into(), want.into())),

@@ -391,6 +391,16 @@ discipline doctor --strict       # warnings fail too (exit 1)
 - `secret-scanning`: on GitHub, secret scanning and push protection (`security_and_analysis`), a pass when both are on and information otherwise; on GitLab, secret push protection (`secret_push_protection_enabled`, an Ultimate feature). The `shell-secrets` gate reads the diff either way.
 - `dependency-alerts`: on GitHub, Dependabot alerts (`vulnerability-alerts`) and, when visible, automated security updates; information when off. `dependency-delta` reads the diff either way.
 
+**Access and identity** (#366), counted and never named:
+- `deploy-keys`: a warning when a deploy key can push (GitHub, Gitea, Forgejo `read_only: false`; GitLab `can_push`), since a push with one is attributed to no person.
+- `outside-collaborators`: information with a count. GitHub counts outside collaborators who can push; Gitea and Forgejo count the repository's collaborators, whose list carries no permission; not available on GitLab.
+- On GitHub, for a repository an organisation owns, read from `orgs/{org}`:
+  - `org-base-permission` warns when every member has `write` or `admin` by default;
+  - `two-factor` warns when two-factor authentication is not required;
+  - `visibility-change` warns when members may change a repository's visibility.
+
+  GitHub shows the base permission and the two-factor requirement to an organisation owner's token only, so other tokens get `could not check` (RUN, 2026-09-30, owner and member tokens). A repository owned by a personal account has no organisation settings (information). Gitea and Forgejo expose no such organisation settings (RUN, `swagger.v1.json`); GitLab's group settings are not read yet.
+
 GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to an admin token only (RUN, 2026-09-30, against a public repository with an admin and a read token). Gitea 1.24 and Forgejo 12 expose none of these four settings in their API description (RUN, `swagger.v1.json`).
 
 **Coverage against the OWASP CI/CD Security Cheat Sheet and OpenSSF Scorecard.** Every recommendation of the [cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/CI_CD_Security_Cheat_Sheet.html) and every [Scorecard check](https://github.com/ossf/scorecard/blob/main/docs/checks.md), mapped to a `doctor` finding, a gate, "not checked" with the reason, or out of scope. Scorecard measures a repository's history and practices; `doctor` reads the settings that exist now.
@@ -401,11 +411,11 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Cheat sheet, SCM: require reviews that cannot be bypassed | `pull-request`, `review`, `code-owner-review`, `last-push-approval`, `bypass` |
 | Cheat sheet, SCM: protected branches | `required-check`, `up-to-date`, `force-push`, `deletion` |
 | Cheat sheet, SCM: signed commits | `signed-commits` (information) |
-| Cheat sheet, SCM: limit external contributors | not checked yet (#366, access group) |
-| Cheat sheet, SCM: MFA | not checked yet (#366, organisation two-factor requirement) |
-| Cheat sheet, SCM: no default permissions | not checked yet (#366, organisation base permission) |
+| Cheat sheet, SCM: limit external contributors | `outside-collaborators`, `deploy-keys` |
+| Cheat sheet, SCM: MFA | `two-factor` (GitHub organisations) |
+| Cheat sheet, SCM: no default permissions | `org-base-permission` (GitHub organisations) |
 | Cheat sheet, SCM: restrict forking of private or internal repositories | `forking` |
-| Cheat sheet, SCM: limit changing visibility to public | not checked yet (#366, organisation setting) |
+| Cheat sheet, SCM: limit changing visibility to public | `visibility-change` (GitHub organisations) |
 | Cheat sheet, pipeline: isolated build nodes | out of scope (runner infrastructure); the `sandbox-config` gate reads job and service containers |
 | Cheat sheet, pipeline: TLS between SCM and CI | out of scope |
 | Cheat sheet, pipeline: restrict CI access by IP | out of scope |
@@ -416,7 +426,7 @@ GitHub shows `allow_auto_merge`, `security_and_analysis` and the alert state to 
 | Cheat sheet, pipeline: no `--privileged` containers | the `sandbox-config` gate (workflow job and service containers) |
 | Cheat sheet, pipeline: version-controlled pipeline configuration | the `ci-integrity` gate |
 | Cheat sheet, IAM: secrets management | `secret-scoping`, `forge-token`, `secret-scanning`; the `shell-secrets` gate |
-| Cheat sheet, IAM: least privilege | `default-token`, `actions-approve-prs`, `agent-permission`; organisation base permission not checked yet (#366) |
+| Cheat sheet, IAM: least privilege | `default-token`, `actions-approve-prs`, `agent-permission`, `org-base-permission`, `deploy-keys` |
 | Cheat sheet, IAM: identity lifecycle | out of scope (identity provider) |
 | Cheat sheet, third-party code: dependency management | `dependency-alerts`, `actions-sha-pinning`; the `dependency-delta` gate |
 | Cheat sheet, third-party code: plug-ins and integrations | `allowed-actions`, `imposter-commit`, `nested-action-pins`; MCP server lists in the `sandbox-config` gate; webhooks not checked yet (#366) |
