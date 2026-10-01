@@ -16,6 +16,9 @@ pub struct SwallowSite {
     pub snippet: String,
 }
 
+/// Reads a silencing expression from the syntax tree: the site's kind, or `None`.
+pub type SilenceNode = fn(Node, &str, &HandlerSpec) -> Option<&'static str>;
+
 pub struct HandlerSpec {
     /// Node kinds that are an error handler with a body (`catch_clause`, `except_clause`).
     pub handler_kinds: &'static [&'static str],
@@ -46,8 +49,11 @@ pub struct HandlerSpec {
     /// Whether a silencing expression's text drops the error rather than handling it.
     pub silences: fn(&str) -> bool,
     /// A syntax-tree check a silencing expression must also pass (JS/TS `.catch(...)`:
-    /// the callback's body is read from the tree, not from text). `None`: `silences` alone.
-    pub silence_node: Option<fn(Node, &str, &HandlerSpec) -> bool>,
+    /// the callback's body is read from the tree, not from text). It returns the site's
+    /// kind (`silenced-error`, or `logging-handler` for a callback that only logs), or
+    /// `None` when the expression handles the error. Unset: `silences` alone, as
+    /// `silenced-error`.
+    pub silence_node: Option<SilenceNode>,
 }
 
 /// Statement heads that only record: a logging or printing call. A handler made of these
@@ -258,13 +264,16 @@ pub fn extract(
             }
         } else if spec.silence_kinds.contains(&node.kind()) && !is_test_line(line) {
             let t = text(node, src);
-            if (spec.silences)(t)
-                && spec.silence_node.is_none_or(|f| f(node, src, spec))
-                && !result_is_tested(node, src)
-            {
+            let kind = if (spec.silences)(t) {
+                spec.silence_node
+                    .map_or(Some("silenced-error"), |f| f(node, src, spec))
+            } else {
+                None
+            };
+            if let Some(kind) = kind.filter(|_| !result_is_tested(node, src)) {
                 out.push(SwallowSite {
                     line,
-                    kind: "silenced-error",
+                    kind,
                     snippet: first_line(t),
                 });
                 continue;
@@ -466,20 +475,26 @@ pub fn php_silences(_: &str) -> bool {
     true
 }
 
-/// JS/TS: a `.catch(...)` call is a candidate; `js_catch_silences` reads the callback.
+/// JS/TS: a `.catch(...)` call is a candidate; `js_catch_site_kind` reads the callback.
 pub fn js_catch_text(t: &str) -> bool {
     t.contains(".catch(") || t.contains(".catch (")
 }
 
-/// JS/TS: `p.catch(() => {})`, `p.catch(() => null)`, `p.catch(function () {})`: a
-/// `.catch` call whose only argument is an arrow or function expression with an empty
-/// body, a trivial statement body (`return null`, `return []`), or an expression body that
-/// is one of the pack's default values. A callback that computes something
-/// (`e => handle(e)`), logs only, or rethrows is handling the rejection; a named handler
+/// JS/TS: how a `.catch(...)` call drops the rejection, or `None` when it does not.
+/// The call has one argument, an arrow or function expression:
+/// - `silenced-error` when its body is empty, a trivial statement (`return null`,
+///   `return []`), or an expression body equal to one of the pack's default values
+///   (`p.catch(() => {})`, `p.catch(() => null)`, `p.catch(function () {})`);
+/// - `logging-handler` when its body only logs: a block whose every statement is a logging
+///   call, or an expression body that is a logging call (`e => console.error(e)`), judged
+///   by the same `body_swallows` / `is_logging_statement` as a `catch` clause.
+///
+/// A callback that computes something (`e => handle(e)`), logs then rethrows or returns a
+/// computed value, or any other call is handling the rejection; a named handler
 /// (`.catch(noop)`) is not read.
-pub fn js_catch_silences(node: Node, src: &str, spec: &HandlerSpec) -> bool {
+pub fn js_catch_site_kind(node: Node, src: &str, spec: &HandlerSpec) -> Option<&'static str> {
     if node.kind() != "call_expression" {
-        return false;
+        return None;
     }
     let is_catch = node
         .child_by_field_name("function")
@@ -487,30 +502,35 @@ pub fn js_catch_silences(node: Node, src: &str, spec: &HandlerSpec) -> bool {
         .and_then(|f| f.child_by_field_name("property"))
         .is_some_and(|p| text(p, src) == "catch");
     if !is_catch {
-        return false;
+        return None;
     }
-    let Some(args) = node.child_by_field_name("arguments") else {
-        return false;
-    };
+    let args = node.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
     let named: Vec<Node> = args
         .named_children(&mut cursor)
         .filter(|a| a.kind() != "comment")
         .collect();
     let [callback] = named[..] else {
-        return false;
+        return None;
     };
     if !matches!(
         callback.kind(),
         "arrow_function" | "function_expression" | "function"
     ) {
-        return false;
+        return None;
     }
-    let Some(body) = callback.child_by_field_name("body") else {
-        return false;
-    };
+    let body = callback.child_by_field_name("body")?;
     if body.kind() == "statement_block" {
-        return body_swallows(body, src, spec) == Some("empty-handler");
+        return match body_swallows(body, src, spec) {
+            Some("empty-handler") => Some("silenced-error"),
+            Some("logging-handler") => Some("logging-handler"),
+            _ => None,
+        };
+    }
+    // An expression body that is a single logging call: `e => console.error(e)`. The
+    // node kind rules out `console.error(e) || fallback(e)` and a comma sequence.
+    if body.kind() == "call_expression" && is_logging_statement(text(body, src)) {
+        return Some("logging-handler");
     }
     // An expression body: `() => null`, `() => ({})`, `() => []`. The value is silent when
     // `return <value>` is one of the pack's trivial statements.
@@ -523,6 +543,7 @@ pub fn js_catch_silences(node: Node, src: &str, spec: &HandlerSpec) -> bool {
         .iter()
         .filter_map(|t| t.strip_prefix("return "))
         .any(|v| v == value)
+        .then_some("silenced-error")
 }
 
 /// Ruby: `call rescue nil` (and `rescue false` / `[]` / `{}` / `0` / `""`) replaces an
@@ -1357,9 +1378,34 @@ mod pack_tests {
 
     #[test]
     fn js_ts_promise_catch_that_handles_the_rejection_is_not_silenced() {
-        let src = "async function f(p, q) {\n  p.catch((err) => handle(err));\n  p.catch((err) => { handle(err); });\n  p.catch((e) => { throw e; });\n  p.catch(() => compute());\n  p.catch(() => 1);\n  p.catch(() => ({ ok: false }));\n  p.catch(noop);\n  p.catch();\n  p.catch(() => {}, extra);\n  p.then(() => {});\n  p.finally(() => {});\n  q.cache(() => {});\n  const catchIt = () => {};\n  p.then(ok, () => {});\n  p.catch(handle).then(() => {});\n  p.catch((e) => { console.error(e); });\n  p.catch((e) => console.error(e));\n}\n";
+        let src = "async function f(p, q) {\n  p.catch((err) => handle(err));\n  p.catch((err) => { handle(err); });\n  p.catch((e) => { throw e; });\n  p.catch(() => compute());\n  p.catch(() => 1);\n  p.catch(() => ({ ok: false }));\n  p.catch(noop);\n  p.catch();\n  p.catch(() => {}, extra);\n  p.then(() => {});\n  p.finally(() => {});\n  q.cache(() => {});\n  const catchIt = () => {};\n  p.then(ok, () => {});\n  p.catch(handle).then(() => {});\n  p.catch((e) => { console.error(e); throw e; });\n  p.catch((e) => { console.error(e); return compute(e); });\n  p.catch((e) => { console.error(e); handle(e); });\n  p.catch((e) => console.error(e) || compute(e));\n  p.catch((e) => (console.error(e), handle(e)));\n  p.catch((e) => { throw e; });\n  p.catch(console.error);\n}\n";
         let got = sites("src/a.ts", src);
         assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn js_ts_promise_catch_that_only_logs_is_a_logged_and_dropped_error() {
+        let src = "async function f(p, logger) {\n  p.catch((e) => console.error(e));\n  p.catch((e) => { console.error(e); });\n  p.catch(function (e) { logger.warn(e) });\n  p.catch((e) => { console.warn(\"a\"); console.error(e); });\n  p.catch(async (e) => logger.error(e));\n  await p.then(go).catch((e) => console.log(e));\n  p.catch((e) => {});\n}\n";
+        let got = sites("src/a.ts", src);
+        assert_eq!(
+            got,
+            vec![
+                (2, "logging-handler"),
+                (3, "logging-handler"),
+                (4, "logging-handler"),
+                (5, "logging-handler"),
+                (6, "logging-handler"),
+                (7, "logging-handler"),
+                (8, "silenced-error"),
+            ]
+        );
+        let js = sites("src/a.js", "p.catch((e) => console.error(e));\n");
+        assert_eq!(js, vec![(1, "logging-handler")]);
+        let test = sites(
+            "src/a.test.ts",
+            "it('x', async () => {\n  p.catch((e) => console.error(e));\n});\n",
+        );
+        assert!(test.is_empty(), "{test:?}");
     }
 
     #[test]
