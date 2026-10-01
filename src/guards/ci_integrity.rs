@@ -434,16 +434,21 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                     // Check for deleted verification jobs
                     for (job_k, job_v) in base_jobs_map {
                         let job_id = job_k.as_str().unwrap_or("");
-                        if !head_jobs_map.contains_key(job_k) && is_verification_job(job_id, job_v)
+                        let is_rollup = settings.rollup_job.as_deref() == Some(job_id);
+                        if !head_jobs_map.contains_key(job_k)
+                            && (is_verification_job(job_id, job_v) || is_rollup)
                         {
-                            if added_steps.is_none() {
-                                added_steps = Some(added_job_steps(ctx, &workflow_globs, &filter)?);
-                            }
-                            if job_moved(job_v, added_steps.as_deref().unwrap_or(&[])) {
-                                out.notes.push(format!(
-                                    "{path}: job '{job_id}' was removed; its verification steps are in jobs this change added, so it is treated as a rename or split"
-                                ));
-                                continue;
+                            if !is_rollup {
+                                if added_steps.is_none() {
+                                    added_steps =
+                                        Some(added_job_steps(ctx, &workflow_globs, &filter)?);
+                                }
+                                if job_moved(job_v, added_steps.as_deref().unwrap_or(&[])) {
+                                    out.notes.push(format!(
+                                        "{path}: job '{job_id}' was removed; its verification steps are in jobs this change added, so it is treated as a rename or split"
+                                    ));
+                                    continue;
+                                }
                             }
                             record_or_excuse(
                                 ctx,

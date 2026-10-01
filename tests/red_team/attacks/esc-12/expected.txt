@@ -1,0 +1,5 @@
+discipline exit: 1
+failing: []
+inline overrides: 2
+policy failures: ['2 inline override(s) applied; `directives.max_inline_overrides` allows 1']
+HOLDS: inline override budget exceeded, change rejected

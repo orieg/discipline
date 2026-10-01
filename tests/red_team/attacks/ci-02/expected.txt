@@ -1,0 +1,4 @@
+discipline exit: 1
+failing: ['ci-integrity/verification-job-removed']
+overrides: 0
+HOLDS: renaming rollup job detected and blocked as verification job removal

@@ -377,6 +377,9 @@ pub struct DirectivesConfig {
     /// counted) one change may apply. Unset = no cap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_overrides: Option<usize>,
+    /// Most inline exemption markers one change may apply. Unset = no cap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_inline_overrides: Option<usize>,
     /// Directive overrides fail the run until the forge shows an approving review of the
     /// head commit by an `allowed_override_actors` member who is not the author.
     pub require_approval: bool,
@@ -401,6 +404,7 @@ impl Default for DirectivesConfig {
             fail_on_overrides: false,
             allowed_override_actors: Vec::new(),
             max_overrides: None,
+            max_inline_overrides: None,
             require_approval: false,
             degrade_offline: true,
         }

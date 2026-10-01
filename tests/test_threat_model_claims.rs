@@ -703,3 +703,135 @@ fn sec_gitattributes_diff_masking_rejected() {
         violations
     );
 }
+
+/// Attack Probe (esc-12): Exceeding directives.max_inline_overrides with inline markers fails the run.
+///
+/// Pinned by claim `sec-inline-override-budget-enforced`.
+#[test]
+fn sec_inline_override_budget_enforced() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nmax_inline_overrides = 1\n",
+        "chore: configure max_inline_overrides",
+    );
+    repo.write(
+        "docs/plan.md",
+        "Phase 2 (1 week). <!-- discipline:allow(time-estimates) -->\nPhase 3 (2 weeks). <!-- discipline:allow(time-estimates) -->\n",
+    );
+    repo.commit("docs: two inline overrides");
+    let run = repo.check(&["--policy-from", "base"]);
+    assert_eq!(
+        run.code, 1,
+        "exceeding max_inline_overrides must fail with exit 1"
+    );
+    let failures = run.json()["policy_failures"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        failures.iter().any(|f| f.as_str().is_some_and(|s| s
+            .contains("2 inline override(s) applied; `directives.max_inline_overrides` allows 1"))),
+        "run output must state inline override budget failure: {:?}",
+        failures
+    );
+}
+
+/// Attack Probe (ci-01): Adding continue-on-error: true to a verification step in CI is rejected.
+///
+/// Pinned by claim `sec-ci-step-continue-on-error-detected`.
+#[test]
+fn sec_ci_step_continue_on_error_detected() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (
+                "discipline.toml",
+                "[meta]\nversion = 1\nname = \"t\"\n[gates.ci-integrity]\nenabled = true\nseverity = \"error\"\n",
+            ),
+            (
+                ".github/workflows/ci.yml",
+                "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n      - name: run tests\n        run: cargo test\n",
+            ),
+        ],
+        "chore: base with clean CI workflow",
+    );
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n      - name: run tests\n        continue-on-error: true\n        run: cargo test\n",
+    );
+    repo.commit("feat: mask failure with continue-on-error");
+    let run = repo.check(&["--policy-from", "base"]);
+    assert_eq!(
+        run.code, 1,
+        "continue-on-error in verification step must fail"
+    );
+    let violations = run.violations("ci-integrity");
+    assert!(
+        violations
+            .iter()
+            .any(|v| v["code"] == "ci-integrity/step-failure-masked-continue-on-error"),
+        "ci-integrity must flag step-failure-masked-continue-on-error: {:?}",
+        violations
+    );
+}
+
+/// Attack Probe (ci-02): Renaming the required rollup verification job (ci-gate) is rejected as a removed job.
+///
+/// Pinned by claim `sec-ci-rollup-rename-bypass-detected`.
+#[test]
+fn sec_ci_rollup_rename_bypass_detected() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (
+                "discipline.toml",
+                "[meta]\nversion = 1\nname = \"t\"\n[gates.ci-integrity]\nenabled = true\nseverity = \"error\"\nrollup_job = \"ci-gate\"\n",
+            ),
+            (
+                ".github/workflows/ci.yml",
+                "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test\n  ci-gate:\n    needs: [test]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n",
+            ),
+        ],
+        "chore: base with rollup job",
+    );
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test\n  ci-gate-bypass:\n    needs: [test]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n",
+    );
+    repo.commit("feat: rename rollup job");
+    let run = repo.check(&["--policy-from", "base"]);
+    assert_eq!(run.code, 1, "renaming rollup job must fail");
+    let violations = run.violations("ci-integrity");
+    assert!(
+        violations
+            .iter()
+            .any(|v| v["code"] == "ci-integrity/verification-job-removed"),
+        "ci-integrity must flag verification-job-removed when rollup is renamed: {:?}",
+        violations
+    );
+}
+
+/// Attack Probe (ci-03): [skip ci] / [ci skip] in commit messages do not evade discipline sentinels.
+///
+/// Pinned by claim `sec-ci-skip-sentinel-evasion-blocked`.
+#[test]
+fn sec_ci_skip_sentinel_evasion_blocked() {
+    let repo = Repo::new();
+    repo.commit_base("tests/old.rs", "fn dummy() {}\n", "chore: add test");
+    repo.remove("tests/old.rs");
+    repo.commit("feat: delete test [skip ci]");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 1,
+        "[skip ci] in commit message must not bypass sentinels"
+    );
+    let violations = run.violations("deletion-rationale");
+    assert!(
+        violations
+            .iter()
+            .any(|v| v["code"] == "deletion-rationale/file-deleted-without-rationale"),
+        "deletion-rationale must fire despite [skip ci]: {:?}",
+        violations
+    );
+}

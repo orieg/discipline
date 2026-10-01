@@ -1,0 +1,4 @@
+discipline exit: 1
+failing: ['ci-integrity/step-failure-masked-continue-on-error']
+overrides: 0
+HOLDS: continue-on-error in workflow verification step detected and blocked
