@@ -12164,6 +12164,40 @@ fn command_snapshot_ignore_widened_on_head_is_a_gate_weakening() {
 }
 
 #[test]
+fn command_snapshot_on_base_tests_is_a_configuration_error() {
+    // `base-tests` never reaches the snapshot comparison: a snapshot on it would be
+    // configured and never checked, so the run stops (exit 2) instead of passing.
+    for table in [
+        "[gates.command]\npreset = \"base-tests\"\ncommand = \"true\"\nsnapshot = \"api.txt\"\n",
+        "[[gates.command.commands]]\nname = \"base-tests\"\ncommand = \"true\"\nsnapshot = \"api.txt\"\n",
+    ] {
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[
+                ("api.txt", "pub fn a()\n"),
+                (
+                    "discipline.toml",
+                    &format!("[meta]\nversion = 1\nname = \"test-repo\"\n\n{table}"),
+                ),
+            ],
+            "base: snapshot on base-tests",
+        );
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 2, "{table}\n{}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.could_not_check(),
+            ("configuration".to_string(), Some("command".to_string())),
+            "{table}"
+        );
+        assert!(
+            run.stderr.contains("runs the base tests, whose output is not compared"),
+            "{table}\n{}",
+            run.stderr
+        );
+    }
+}
+
+#[test]
 fn command_preset_cargo_public_api_compares_with_the_committed_snapshot() {
     let repo = Repo::new();
     repo.commit_base_files(

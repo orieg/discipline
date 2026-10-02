@@ -318,6 +318,26 @@ struct Snapshot {
     ignore: Vec<regex::Regex>,
 }
 
+/// A `base-tests` command runs the base branch's tests and never reaches the snapshot
+/// comparison, so a snapshot on it would be configured and never checked: a
+/// configuration error (exit 2) rather than a silent skip.
+fn refuse_snapshot_on_base_tests(
+    owner: &str,
+    is_base_tests: bool,
+    snapshot: Option<&Snapshot>,
+) -> Result<()> {
+    match snapshot {
+        Some(snap) if is_base_tests => Err(tag(
+            Reason::Configuration,
+            anyhow!(
+                "{owner} runs the base tests, whose output is not compared: remove `snapshot = \"{}\"` or move it to its own command",
+                snap.path
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Resolves the snapshot of one command table: its own `snapshot` key, else the preset's,
 /// with the preset's ignore patterns and the table's own. Configuration errors are exit 2.
 fn resolve_snapshot(
@@ -546,6 +566,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         let policy_files = policy_files_for(preset_def, snapshot.as_ref());
 
         let is_base = gate.preset.as_deref() == Some("base-tests");
+        refuse_snapshot_on_base_tests("`[gates.command]`", is_base, snapshot.as_ref())?;
         resolved.push(ResolvedCommand {
             name: gate.preset.clone().unwrap_or_else(|| "default".to_string()),
             is_base_tests: is_base,
@@ -643,6 +664,11 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         let policy_files = policy_files_for(preset_def, snapshot.as_ref());
 
         let is_base = entry.preset.as_deref() == Some("base-tests") || entry.name == "base-tests";
+        refuse_snapshot_on_base_tests(
+            &format!("command entry `{}`", entry.name),
+            is_base,
+            snapshot.as_ref(),
+        )?;
         resolved.push(ResolvedCommand {
             name: entry.name.clone(),
             is_base_tests: is_base,
