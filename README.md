@@ -6,6 +6,7 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)](#license)
 [![Rust 1.90+](https://img.shields.io/badge/rustc-1.90%2B-orange.svg)](Cargo.toml)
 [![Release](https://img.shields.io/github/v/release/orieg/discipline?logo=github)](https://github.com/orieg/discipline/releases)
+[![Crates.io](https://img.shields.io/crates/v/discipline.svg?logo=rust)](https://crates.io/crates/discipline)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23046102.svg)](https://doi.org/10.5281/zenodo.23046102)
 [![Marketplace](https://img.shields.io/badge/Marketplace-Discipline%20CI%20Gate-blue?logo=github-actions)](https://github.com/marketplace/actions/discipline-ci-gate)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](.pre-commit-hooks.yaml)
@@ -307,7 +308,11 @@ Direct `.rpm` package downloads and repodata manifests: [Discipline RPM Reposito
 
 ### Rust Toolchain
 
-- **`cargo install`** (from source via git, requires `rustc` 1.90+):
+- **`cargo install`** (crates.io, requires `rustc` 1.90+):
+  ```bash
+  cargo install discipline
+  ```
+- **From source** via git:
   ```bash
   cargo install --git https://github.com/orieg/discipline
   ```

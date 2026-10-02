@@ -1439,7 +1439,8 @@ Discipline is available as a standalone static binary across Linux and macOS.
 
 - **Cargo**:
   ```bash
-  cargo install --git https://github.com/orieg/discipline   # from source; not published on crates.io
+  cargo install discipline                                  # from crates.io (requires rustc 1.90+)
+  cargo install --git https://github.com/orieg/discipline   # from source
   ```
 
 #### CLI Execution
