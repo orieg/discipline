@@ -335,10 +335,17 @@ PowerShell and Elvish are generated the same way (`discipline completions powers
 
 ### Binary Verification & Provenance
 
-Each release publishes pre-compiled binaries with SHA-256 checksums and SLSA Build Level 2 attestations:
+Each release publishes pre-compiled binaries with SHA-256 checksums, SLSA Build Level 2 build-provenance attestations, and a CycloneDX Software Bill of Materials (`discipline.cdx.json`) with an SBOM attestation:
 
 ```bash
+# Verify the build provenance attestation for a release archive
 gh attestation verify discipline-x86_64-unknown-linux-musl.tar.gz --repo orieg/discipline
+
+# Verify the CycloneDX SBOM attestation for a release archive
+gh attestation verify discipline-x86_64-unknown-linux-musl.tar.gz --repo orieg/discipline --predicate-type https://cyclonedx.org/bom
+
+# Inspect the CycloneDX SBOM directly
+jq . discipline.cdx.json
 ```
 
 ## Documentation

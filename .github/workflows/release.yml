@@ -65,6 +65,18 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories bans licenses sources
+      - name: Generate CycloneDX SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests/action/install-tool.sh cargo-cyclonedx
+          CARGO_LOCKED=true cargo cyclonedx --format json --spec-version 1.5 --override-filename discipline.cdx
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: discipline-sbom
+          path: discipline.cdx.json
+          if-no-files-found: error
+          retention-days: 3
 
   build:
     needs: verify
@@ -229,7 +241,8 @@ jobs:
           # A build leg that silently produced nothing must not yield a release
           # that is missing a platform.
           [ "${count}" -eq 4 ] || { echo "::error::expected 4 archives, found ${count}"; exit 1; }
-          sha256sum discipline-*.tar.gz discipline_*.deb discipline-*.rpm > SHA256SUMS
+          [ -s "discipline.cdx.json" ] || { echo "::error::missing discipline.cdx.json"; exit 1; }
+          sha256sum discipline-*.tar.gz discipline_*.deb discipline-*.rpm discipline.cdx.json > SHA256SUMS
           cat SHA256SUMS
       # `smoke` serves a pre-release's archives with this file: a draft's assets
       # cannot be downloaded without a token that can write the repository.
@@ -246,6 +259,14 @@ jobs:
             dist/discipline-*.tar.gz
             dist/discipline_*.deb
             dist/discipline-*.rpm
+      - id: sbom-attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/discipline-*.tar.gz
+            dist/discipline_*.deb
+            dist/discipline-*.rpm
+          sbom-path: dist/discipline.cdx.json
       # The same attestation, attached to the release so it can be verified offline
       # (`gh attestation verify <archive> --bundle discipline.intoto.jsonl`) and found
       # by tools that read release assets (OpenSSF Scorecard Signed-Releases).
@@ -317,12 +338,12 @@ jobs:
           else
             gh release create "${TAG}" --draft "${flags[@]}"
           fi
-          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/discipline_*.deb dist/discipline-*.rpm dist/discipline.rb dist/Portfile dist/SHA256SUMS dist/discipline.intoto.jsonl --clobber
+          gh release upload "${TAG}" dist/discipline-*.tar.gz dist/discipline_*.deb dist/discipline-*.rpm dist/discipline.rb dist/Portfile dist/SHA256SUMS dist/discipline.intoto.jsonl dist/discipline.cdx.json --clobber
 
           # What the release holds is what SHA256SUMS lists, read back from GitHub.
           check="$(mktemp -d)"
           gh release download "${TAG}" --dir "${check}" \
-            --pattern 'discipline-*.tar.gz' --pattern 'discipline_*.deb' --pattern 'discipline-*.rpm' --pattern SHA256SUMS
+            --pattern 'discipline-*.tar.gz' --pattern 'discipline_*.deb' --pattern 'discipline-*.rpm' --pattern 'discipline.cdx.json' --pattern SHA256SUMS
           (cd "${check}" && sha256sum --check --strict SHA256SUMS)
 
           # A pre-release stays a draft: Zenodo archives every published release,
