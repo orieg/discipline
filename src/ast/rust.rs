@@ -120,6 +120,7 @@ impl LanguagePack for RustPack {
         );
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
+        super::caught_assertions::rust(root, src, &mut cx.facts.tests);
         cx.facts.prose = super::prose::extract(
             root,
             src,
@@ -494,6 +495,7 @@ impl<'a> Extractor<'a> {
             helper_checks: 0,
             bounds: Vec::new(),
             expectations: Vec::new(),
+            caught_assertions: Vec::new(),
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")

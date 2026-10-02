@@ -647,7 +647,7 @@ pub(crate) fn report_newly_added_nul_bytes(
 
 pub fn evaluate_assertion_reduction(
     pairs: &[TestPair],
-    _added: &[Located],
+    added: &[Located],
     settings: &crate::config::AssertionGate,
     directives: &[crate::tokens::ParsedDirective],
     is_staged: bool,
@@ -657,12 +657,59 @@ pub fn evaluate_assertion_reduction(
     let mut out = GateOutcome::new(GATE);
     out.examined = pairs.len();
 
+    for a in added.iter().filter(|a| !exempt.matches(a.path)) {
+        if a.test.caught_assertions.is_empty() {
+            continue;
+        }
+        let lift = |subject: &str| {
+            tokens::find_override(
+                directives,
+                GATE,
+                &crate::findings::ASSERTION_FAILURE_CAUGHT,
+                tokens::ALLOW_ASSERTION_DROP,
+                subject,
+            )
+        };
+        if let Some(record) = lift(leaf_name(a.test)).or_else(|| lift(a.path)) {
+            out.overrides.push(record);
+            continue;
+        }
+        for c in &a.test.caught_assertions {
+            out.push(
+                if is_staged {
+                    crate::config::Severity::Warning
+                } else {
+                    settings.severity()
+                },
+                &crate::findings::ASSERTION_FAILURE_CAUGHT,
+                Some(a.path),
+                Some(c.line),
+                format!(
+                    "Test `{}`: the assertion on line {} is caught by an enclosing handler (line {}) without failing the test; it is not an effective check.",
+                    a.test.name, c.line, c.handler_line
+                ),
+                &format!(
+                    "Restore the assertion to propagate failures, or justify the handler in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                    leaf_name(a.test)
+                ),
+            );
+        }
+    }
+
     for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
         let (b, h) = (p.base, p.head);
         let b_eff = b.effective_asserts();
         let h_eff = h.effective_asserts();
         let mut total_drop = h_eff < b_eff;
         let mut strong_drop = h.strong_asserts < b.strong_asserts;
+        let newly_caught: Vec<&crate::ast::caught_assertions::CaughtAssertion> = h
+            .caught_assertions
+            .iter()
+            .filter(|hc| !b.caught_assertions.iter().any(|bc| bc.line == hc.line))
+            .collect();
+        if total_drop && h_eff + newly_caught.len() >= b_eff {
+            total_drop = false;
+        }
         // Checks moved into same-file helpers that fail (assert, raise, throw, panic): one
         // `raise` in a helper's loop stands for many inline assertions, so the count drops
         // while the test calls more failing helpers than before. Deleting a helper call
@@ -686,7 +733,7 @@ pub fn evaluate_assertion_reduction(
         // The same assertion expecting a different value: the count and strength hold.
         let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
         let dropped = total_drop || strong_drop || fatal_drop || mock_growth;
-        if !dropped && loosened.is_empty() && changed.is_empty() {
+        if !dropped && loosened.is_empty() && changed.is_empty() && newly_caught.is_empty() {
             continue;
         }
 
@@ -696,7 +743,9 @@ pub fn evaluate_assertion_reduction(
         // The finding the override lifts, as the report below would rank it: the drop
         // (fewer assertions, weaker fatal ones, or doubles grown alone), else a loosened
         // bound. One directive lifts every finding of the pair; the record names the first.
-        let lifts = if total_drop || strong_drop {
+        let lifts = if !newly_caught.is_empty() {
+            &crate::findings::ASSERTION_FAILURE_CAUGHT
+        } else if total_drop || strong_drop {
             &crate::findings::ASSERTIONS_REDUCED
         } else if fatal_drop {
             &crate::findings::FATAL_ASSERTIONS_WEAKENED
@@ -734,6 +783,27 @@ pub fn evaluate_assertion_reduction(
             format!("Test `{}`", h.name)
         };
         let directive_name = if p.forced { leaf_name(b) } else { leaf_name(h) };
+
+        for c in &newly_caught {
+            out.push(
+                if is_staged {
+                    crate::config::Severity::Warning
+                } else {
+                    settings.severity()
+                },
+                &crate::findings::ASSERTION_FAILURE_CAUGHT,
+                Some(p.path),
+                Some(c.line),
+                format!(
+                    "{test_label}: the assertion on line {} is caught by an enclosing handler (line {}) without failing the test; it is not an effective check.",
+                    c.line, c.handler_line
+                ),
+                &format!(
+                    "Restore the assertion to propagate failures, or justify the handler in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
+        }
 
         for l in &loosened {
             out.push(
@@ -816,6 +886,10 @@ pub fn evaluate_assertion_reduction(
                     directive_name
                 ),
             );
+            continue;
+        }
+
+        if !total_drop && !strong_drop {
             continue;
         }
 

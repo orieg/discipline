@@ -30,6 +30,40 @@ const CASES: &[Case] = &[
             Ok(bad.tests[0].is_vacuous() && !good.tests[0].is_vacuous())
         },
     ),
+    (
+        "ast: assertion whose failure is caught inside test is neutralized; unhandled or re-raised is not",
+        || {
+            let v = AssertVocabulary::default();
+            let bad_rs = analyze(
+                "#[test] fn t() { let _ = std::panic::catch_unwind(|| assert_eq!(1, 2)); }",
+                &v,
+            )?;
+            let good_rs = analyze(
+                "#[test] fn t() { assert!(std::panic::catch_unwind(|| assert_eq!(1, 2)).is_err()); }",
+                &v,
+            )?;
+            let reg = crate::ast::default_registry();
+            let py_pack = reg.find_pack("test.py").unwrap();
+            let bad_py = py_pack.extract(
+                "test.py",
+                "def test_x():\n    try:\n        assert 1 == 2\n    except AssertionError:\n        pass\n",
+                &v,
+            )?;
+            let good_py = py_pack.extract(
+                "test.py",
+                "def test_x():\n    try:\n        assert 1 == 2\n    except AssertionError:\n        raise\n",
+                &v,
+            )?;
+            Ok(bad_rs.tests[0].effective_asserts() == 0
+                && bad_rs.tests[0].caught_assertions.len() == 1
+                && good_rs.tests[0].effective_asserts() >= 1
+                && good_rs.tests[0].caught_assertions.is_empty()
+                && bad_py.tests[0].effective_asserts() == 0
+                && bad_py.tests[0].caught_assertions.len() == 1
+                && good_py.tests[0].effective_asserts() == 1
+                && good_py.tests[0].caught_assertions.is_empty())
+        },
+    ),
     ("ast: assert inside a comment is not an assertion", || {
         let f = analyze(
             "#[test] fn t() { // assert_eq!(1, 2);\n }",
