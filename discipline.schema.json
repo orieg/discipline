@@ -366,6 +366,14 @@
           "description": "Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom)",
           "type": "string"
         },
+        "snapshot": {
+          "description": "Repository-relative path of a committed file the command's stdout must match",
+          "type": "string"
+        },
+        "snapshot_ignore": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Regexes for lines left out of the snapshot comparison, on both sides"
+        },
         "timeout_seconds": {
           "description": "Execution timeout in seconds",
           "type": "integer"
@@ -431,6 +439,14 @@
         },
         "severity": {
           "$ref": "#/$defs/Severity"
+        },
+        "snapshot": {
+          "description": "Repository-relative path of a committed file the command's stdout must match",
+          "type": "string"
+        },
+        "snapshot_ignore": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Regexes for lines left out of the snapshot comparison, on both sides"
         },
         "timeout_seconds": {
           "description": "Execution timeout in seconds (default: 60s)",

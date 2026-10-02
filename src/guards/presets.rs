@@ -15,6 +15,10 @@ pub struct PresetDefinition {
     pub canary_command: Option<&'static str>,
     pub canary_expected_diagnostic: Option<&'static str>,
     pub policy_files: &'static [&'static str],
+    /// Committed file the command's stdout must match; it is also a policy file.
+    pub snapshot: Option<&'static str>,
+    /// Regexes for lines left out of the snapshot comparison.
+    pub snapshot_ignore: &'static [&'static str],
     pub description: &'static str,
 }
 
@@ -30,6 +34,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &[".cargo/mutants.toml"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Rust mutation testing scoped to diff changes using cargo-mutants",
     },
     PresetDefinition {
@@ -42,6 +48,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["setup.cfg", "pyproject.toml"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Python mutation testing scoped to changed code using mutmut",
     },
     PresetDefinition {
@@ -54,6 +62,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["stryker.config.json", "stryker.conf.json"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "JavaScript/TypeScript mutation testing using Stryker",
     },
     PresetDefinition {
@@ -66,6 +76,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["pom.xml"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Java/JVM mutation testing using PIT",
     },
     // 2. Diff Coverage
@@ -79,6 +91,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["lcov.info"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "LCOV code coverage report summary inspector",
     },
     PresetDefinition {
@@ -92,6 +106,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["coverage.xml"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Cobertura XML code coverage report validator",
     },
     // 3. Semver & API Compatibility
@@ -105,6 +121,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &[],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Rust semver and public API compatibility enforcement",
     },
     PresetDefinition {
@@ -117,6 +135,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["api.snapshot"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Language-neutral public API surface snapshot discrepancy checker",
     },
     // 4. Supply Chain & Advisory Wrappers
@@ -130,6 +150,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["deny.toml"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Cargo dependency policy, advisory, and license enforcement",
     },
     PresetDefinition {
@@ -142,6 +164,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &[],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Python PyPI known vulnerability and dependency audit",
     },
     PresetDefinition {
@@ -154,6 +178,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["package-lock.json"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Node.js npm dependency vulnerability audit",
     },
     PresetDefinition {
@@ -166,6 +192,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["go.mod"],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Go vulnerability database inspection",
     },
     // 5. Deterministic Concurrency Testing
@@ -179,6 +207,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &[],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Rust loom deterministic concurrency permutation test runner",
     },
     PresetDefinition {
@@ -191,19 +221,23 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &[],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Rust Undefined Behavior detection with Miri and zero-tests guard",
     },
     PresetDefinition {
         id: "cargo-public-api",
         category: "semver",
-        default_command: "cargo public-api diff",
+        default_command: "cargo public-api --simplified",
         default_timeout_seconds: 180,
         zero_items_pattern: None,
         forbid_output: &[],
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["public-api.txt"],
-        description: "Rust public API surface diff inspector using cargo-public-api",
+        snapshot: Some("public-api.txt"),
+        snapshot_ignore: &["^#"],
+        description: "Rust public API surface compared with the committed public-api.txt (cargo-public-api, nightly)",
     },
     // 6. Runtime Sanitizers
     PresetDefinition {
@@ -216,6 +250,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: Some("cargo test --test race_canary"),
         canary_expected_diagnostic: Some("ThreadSanitizer: data race"),
         policy_files: &[],
+        snapshot: None,
+        snapshot_ignore: &[],
         description: "Runtime address and thread sanitizer runner with diagnostic verification",
     },
     // 7. Base Branch Test Overlay
@@ -229,6 +265,8 @@ pub static PRESETS: &[PresetDefinition] = &[
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &[],
+        snapshot: None,
+        snapshot_ignore: &[],
         description:
             "Executes base branch test files against head code to detect behavior regressions",
     },

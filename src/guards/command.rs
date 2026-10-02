@@ -9,6 +9,8 @@
 //! - `zero_items_pattern` and zero-count guard (failure unless `allow_zero = true`)
 //! - `count_pattern` + `min_count` ratchet read from BASE ref
 //! - Untrusted PR text guard: commands cannot be modified in PR diff without runner authorization
+//! - `snapshot`: stdout must match a committed file, line by line (exit 2 when the output
+//!   cannot be compared: cut off at the capture limit, not UTF-8, empty, or no file)
 
 use crate::config::{DisciplineConfig, GateSettings};
 use crate::could_not_check::{tag, Reason};
@@ -28,6 +30,32 @@ pub struct CommandRunResult {
     pub status: ExitStatus,
     pub stdout: String,
     pub stderr: String,
+    /// stdout is incomplete: it went past [`MAX_CAPTURE_BYTES`] and was cut there, or a
+    /// read failed.
+    pub stdout_truncated: bool,
+    /// stderr is incomplete, as for `stdout_truncated`.
+    pub stderr_truncated: bool,
+    /// stdout was not valid UTF-8; `stdout` holds a lossy conversion.
+    pub stdout_lossy: bool,
+}
+
+/// How much of each output stream is kept.
+pub const MAX_CAPTURE_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Reads a stream up to [`MAX_CAPTURE_BYTES`], and whether the capture is incomplete: the
+/// stream went past the limit, or a read failed. Past the limit the rest is drained so a
+/// child writing more is not blocked on a full pipe.
+fn read_capped(pipe: impl Read) -> (Vec<u8>, bool) {
+    let mut buf = Vec::new();
+    let mut reader = pipe.take(MAX_CAPTURE_BYTES + 1);
+    let read_failed = reader.read_to_end(&mut buf).is_err();
+    let over_limit = buf.len() as u64 > MAX_CAPTURE_BYTES;
+    if over_limit {
+        buf.truncate(MAX_CAPTURE_BYTES as usize);
+        // Draining only unblocks the child; the capture is already marked incomplete.
+        let _ = std::io::copy(&mut reader.into_inner(), &mut std::io::sink()); // discipline:allow(error-swallowing): the capture is already reported incomplete
+    }
+    (buf, read_failed || over_limit)
 }
 
 /// Splits a command line into executable and arguments, honoring single and double quotes.
@@ -135,20 +163,8 @@ pub fn run_command_bounded(
     let stdout_pipe = child.stdout.take().expect("piped stdout");
     let stderr_pipe = child.stderr.take().expect("piped stderr");
 
-    const MAX_CAPTURE_BYTES: u64 = 25 * 1024 * 1024; // 25 MiB cap per stream
-
-    let stdout_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let mut reader = std::io::Read::take(stdout_pipe, MAX_CAPTURE_BYTES);
-        let _ = reader.read_to_end(&mut buf);
-        buf
-    });
-    let stderr_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let mut reader = std::io::Read::take(stderr_pipe, MAX_CAPTURE_BYTES);
-        let _ = reader.read_to_end(&mut buf);
-        buf
-    });
+    let stdout_handle = std::thread::spawn(move || read_capped(stdout_pipe));
+    let stderr_handle = std::thread::spawn(move || read_capped(stderr_pipe));
 
     let kill_child_group = |child: &mut std::process::Child| {
         #[cfg(unix)]
@@ -192,13 +208,17 @@ pub fn run_command_bounded(
         }
     };
 
-    let stdout_bytes = stdout_handle.join().unwrap_or_default();
-    let stderr_bytes = stderr_handle.join().unwrap_or_default();
+    let (stdout_bytes, stdout_truncated) = stdout_handle.join().unwrap_or_default();
+    let (stderr_bytes, stderr_truncated) = stderr_handle.join().unwrap_or_default();
+    let stdout_lossy = std::str::from_utf8(&stdout_bytes).is_err();
 
     Ok(CommandRunResult {
         status,
         stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
         stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+        stdout_truncated,
+        stderr_truncated,
+        stdout_lossy,
     })
 }
 
@@ -288,7 +308,170 @@ struct ResolvedCommand {
     allow_zero: bool,
     canary_command: Option<String>,
     canary_expected_diagnostic: Option<String>,
-    policy_files: &'static [&'static str],
+    policy_files: Vec<String>,
+    snapshot: Option<Snapshot>,
+}
+
+/// A committed file the command's stdout must match.
+struct Snapshot {
+    path: String,
+    ignore: Vec<regex::Regex>,
+}
+
+/// Resolves the snapshot of one command table: its own `snapshot` key, else the preset's,
+/// with the preset's ignore patterns and the table's own. Configuration errors are exit 2.
+fn resolve_snapshot(
+    owner: &str,
+    snapshot: Option<&String>,
+    snapshot_ignore: &[String],
+    preset_def: Option<&presets::PresetDefinition>,
+) -> Result<Option<Snapshot>> {
+    let config_error = |msg: String| tag(Reason::Configuration, anyhow!(msg));
+    let path = snapshot
+        .cloned()
+        .or_else(|| preset_def.and_then(|d| d.snapshot.map(str::to_string)));
+    let Some(path) = path else {
+        if !snapshot_ignore.is_empty() {
+            return Err(config_error(format!(
+                "{owner} sets `snapshot_ignore` without `snapshot`: there is no snapshot to compare"
+            )));
+        }
+        return Ok(None);
+    };
+    let as_path = Path::new(&path);
+    let escapes = as_path.components().any(|c| {
+        !matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    });
+    if path.trim().is_empty() || escapes {
+        return Err(config_error(format!(
+            "{owner} `snapshot = \"{path}\"` must be a path relative to the repository root, without `..`"
+        )));
+    }
+    let preset_ignore = preset_def.map(|d| d.snapshot_ignore).unwrap_or(&[]);
+    let mut ignore = Vec::new();
+    for p in preset_ignore
+        .iter()
+        .copied()
+        .chain(snapshot_ignore.iter().map(String::as_str))
+    {
+        let re = regex::Regex::new(p).map_err(|e| {
+            config_error(format!(
+                "{owner} `snapshot_ignore` pattern `{p}` is not a valid regex: {e}"
+            ))
+        })?;
+        ignore.push(re);
+    }
+    Ok(Some(Snapshot { path, ignore }))
+}
+
+/// The policy files of a command: the preset's, with the preset's own snapshot replaced by
+/// the snapshot the command actually compares against.
+fn policy_files_for(
+    preset_def: Option<&presets::PresetDefinition>,
+    snapshot: Option<&Snapshot>,
+) -> Vec<String> {
+    let mut files: Vec<String> = preset_def
+        .map(|d| d.policy_files)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|f| preset_def.and_then(|d| d.snapshot) != Some(**f))
+        .map(|f| f.to_string())
+        .collect();
+    if let Some(s) = snapshot {
+        if !files.contains(&s.path) {
+            files.push(s.path.clone());
+        }
+    }
+    files
+}
+
+/// How a command's output differs from its snapshot. Line numbers are 1-based in each text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotDiff {
+    /// Lines in the output with no counterpart in the snapshot.
+    pub only_in_output: usize,
+    /// Lines in the snapshot with no counterpart in the output.
+    pub only_in_snapshot: usize,
+    /// The first compared line that differs: (snapshot line, output line). `None` on a side
+    /// that ran out of lines.
+    pub first_difference: (Option<usize>, Option<usize>),
+}
+
+/// The lines of `text` kept for comparison, with their 1-based line numbers. A trailing
+/// `\r` is dropped from every line, so a CRLF checkout compares equal to LF output, and a
+/// final newline is not significant.
+pub fn snapshot_lines<'t>(text: &'t str, ignore: &[regex::Regex]) -> Vec<(usize, &'t str)> {
+    text.lines()
+        .enumerate()
+        .map(|(i, l)| (i + 1, l.strip_suffix('\r').unwrap_or(l)))
+        .filter(|(_, l)| !ignore.iter().any(|re| re.is_match(l)))
+        .collect()
+}
+
+/// Compares a snapshot with a command's output, both already reduced by
+/// [`snapshot_lines`]. `None` when they match.
+pub fn compare_snapshot(
+    snapshot: &[(usize, &str)],
+    output: &[(usize, &str)],
+) -> Option<SnapshotDiff> {
+    let first = snapshot
+        .iter()
+        .map(Some)
+        .chain(std::iter::repeat(None))
+        .zip(output.iter().map(Some).chain(std::iter::repeat(None)))
+        .take(snapshot.len().max(output.len()))
+        .find(|(s, o)| s.map(|x| x.1) != o.map(|x| x.1))?;
+    let mut counts: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    for (_, l) in snapshot {
+        *counts.entry(l).or_default() += 1;
+    }
+    for (_, l) in output {
+        *counts.entry(l).or_default() -= 1;
+    }
+    let only_in_snapshot = counts
+        .values()
+        .filter(|c| **c > 0)
+        .map(|c| *c as usize)
+        .sum();
+    let only_in_output = counts
+        .values()
+        .filter(|c| **c < 0)
+        .map(|c| (-*c) as usize)
+        .sum();
+    Some(SnapshotDiff {
+        only_in_output,
+        only_in_snapshot,
+        first_difference: (first.0.map(|x| x.0), first.1.map(|x| x.0)),
+    })
+}
+
+/// A finding of one command, before the override check.
+struct Violation {
+    kind: &'static crate::findings::FindingKind,
+    message: String,
+    remediation: String,
+    file: Option<String>,
+    line: Option<usize>,
+}
+
+impl Violation {
+    /// A finding located at the configuration file.
+    fn new(
+        kind: &'static crate::findings::FindingKind,
+        message: String,
+        remediation: &str,
+    ) -> Self {
+        Self {
+            kind,
+            message,
+            remediation: remediation.to_string(),
+            file: None,
+            line: None,
+        }
+    }
 }
 
 /// Evaluates the `command` verification gate.
@@ -354,7 +537,13 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         let canary_diag = gate.canary_expected_diagnostic.clone().or_else(|| {
             preset_def.and_then(|d| d.canary_expected_diagnostic.map(|s| s.to_string()))
         });
-        let policy_files = preset_def.map(|d| d.policy_files).unwrap_or(&[]);
+        let snapshot = resolve_snapshot(
+            "`[gates.command]`",
+            gate.snapshot.as_ref(),
+            &gate.snapshot_ignore,
+            preset_def,
+        )?;
+        let policy_files = policy_files_for(preset_def, snapshot.as_ref());
 
         let is_base = gate.preset.as_deref() == Some("base-tests");
         resolved.push(ResolvedCommand {
@@ -370,6 +559,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             canary_command: canary_cmd,
             canary_expected_diagnostic: canary_diag,
             policy_files,
+            snapshot,
         });
     }
 
@@ -444,7 +634,13 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             })
             .or_else(|| gate.canary_expected_diagnostic.clone());
 
-        let policy_files = preset_def.map(|d| d.policy_files).unwrap_or(&[]);
+        let snapshot = resolve_snapshot(
+            &format!("command entry `{}`", entry.name),
+            entry.snapshot.as_ref(),
+            &entry.snapshot_ignore,
+            preset_def,
+        )?;
+        let policy_files = policy_files_for(preset_def, snapshot.as_ref());
 
         let is_base = entry.preset.as_deref() == Some("base-tests") || entry.name == "base-tests";
         resolved.push(ResolvedCommand {
@@ -463,6 +659,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             canary_command: canary_cmd,
             canary_expected_diagnostic: canary_diag,
             policy_files,
+            snapshot,
         });
     }
 
@@ -477,14 +674,14 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             continue;
         }
 
-        let mut command_violations = Vec::new();
+        let mut command_violations: Vec<Violation> = Vec::new();
 
         // 0. Check required policy files for stealth deletion
-        for pf in item.policy_files {
+        for pf in &item.policy_files {
             if let Ok(Some(_)) = ctx.git.base_content(pf) {
                 let pf_path = ctx.git.root().join(pf);
                 if !pf_path.exists() {
-                    command_violations.push((
+                    command_violations.push(Violation::new(
                         &crate::findings::POLICY_FILE_DELETED,
                         format!(
                             "Command `{}` required policy file `{pf}` was deleted in this change.",
@@ -512,7 +709,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                     canary_output.contains(expected_diag)
                 };
                 if !matched {
-                    command_violations.push((
+                    command_violations.push(Violation::new(
                         &crate::findings::CANARY_DIAGNOSTIC_MISSING,
                         format!(
                             "Command `{}` negative-control canary did not produce expected diagnostic `{expected_diag}`.",
@@ -522,7 +719,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                     ));
                 }
                 if canary_res.status.success() {
-                    command_violations.push((
+                    command_violations.push(Violation::new(
                         &crate::findings::CANARY_COMMAND_SUCCEEDED,
                         format!(
                             "Command `{}` negative-control canary exited with status 0 but was expected to fail.",
@@ -532,7 +729,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                     ));
                 }
             } else if canary_res.status.success() {
-                command_violations.push((
+                command_violations.push(Violation::new(
                     &crate::findings::CANARY_COMMAND_SUCCEEDED,
                     format!(
                         "Command `{}` negative-control canary exited with status 0 but was expected to fail.",
@@ -551,6 +748,12 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             ctx.git.root(),
         )?;
         let combined_output = format!("{}\n{}", run_res.stdout, run_res.stderr);
+        if item.snapshot.is_none() && (run_res.stdout_truncated || run_res.stderr_truncated) {
+            outcome.notes.push(format!(
+                "command `{}`: output went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read; output patterns were checked against the captured part only",
+                item.name
+            ));
+        }
 
         // Check exit status
         if !run_res.status.success() {
@@ -559,7 +762,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                 .code()
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "signal".to_string());
-            command_violations.push((
+            command_violations.push(Violation::new(
                 &crate::findings::COMMAND_FAILED,
                 format!(
                     "Command `{}` failed with exit status {code_str}.",
@@ -577,7 +780,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                 combined_output.contains(pattern)
             };
             if matched {
-                command_violations.push((
+                command_violations.push(Violation::new(
                     &crate::findings::FORBIDDEN_OUTPUT,
                     format!(
                         "Command `{}` produced forbidden output matching pattern `{pattern}`.",
@@ -620,11 +823,25 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         }
 
         if !item.allow_zero && zero_items {
-            command_violations.push((
+            command_violations.push(Violation::new(
                 &crate::findings::ZERO_ITEMS_EXECUTED,
                 format!("Command `{}` selected or executed zero items.", item.name),
                 "Ensure test or verification commands select and execute tests.",
             ));
+        }
+
+        // Compare stdout with the committed snapshot. A failed run's output is not compared.
+        if let Some(ref snap) = item.snapshot {
+            if run_res.status.success() {
+                if let Some(v) = check_snapshot(ctx, &item, snap, &run_res)? {
+                    command_violations.push(v);
+                }
+            } else {
+                outcome.notes.push(format!(
+                    "command `{}`: snapshot `{}` not compared: the command failed",
+                    item.name, snap.path
+                ));
+            }
         }
 
         // Check count ratchet against BASE ref
@@ -634,7 +851,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         if effective_floor > 0 {
             match extracted_count {
                 Some(cnt) if cnt < effective_floor => {
-                    command_violations.push((
+                    command_violations.push(Violation::new(
                         &crate::findings::COUNT_BELOW_RATCHET,
                         format!(
                             "Command `{}` count {cnt} fell below ratchet floor {effective_floor} (enforced from base ref).",
@@ -644,7 +861,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                     ));
                 }
                 None if item.count_pattern.is_some() => {
-                    command_violations.push((
+                    command_violations.push(Violation::new(
                         &crate::findings::COUNT_PATTERN_UNMATCHED,
                         format!(
                             "Command `{}` count pattern could not extract count to verify against ratchet floor {effective_floor}.",
@@ -660,8 +877,8 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         // Apply findings or an override directive covering this command name or
         // "default". One directive lifts every finding of the command; the record names
         // the first, as the report would list it.
-        if let Some((first, _, _)) = command_violations.first() {
-            let lifts = *first;
+        if let Some(first) = command_violations.first() {
+            let lifts = first.kind;
             let override_rec = ctx
                 .find_override(GATE, lifts, tokens::ALLOW_COMMAND, &item.name)
                 .or_else(|| {
@@ -674,14 +891,14 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             if let Some(rec) = override_rec {
                 outcome.overrides.push(rec);
             } else {
-                for (title, msg, rem) in command_violations {
+                for v in command_violations {
                     outcome.push(
                         gate.severity(),
-                        title,
-                        Some(ctx.config_path),
-                        None,
-                        msg,
-                        rem,
+                        v.kind,
+                        Some(v.file.as_deref().unwrap_or(ctx.config_path)),
+                        v.line,
+                        v.message,
+                        &v.remediation,
                     );
                 }
             }
@@ -691,6 +908,93 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     }
 
     Ok(outcome)
+}
+
+/// Compares one command's stdout with its snapshot. Output that cannot be compared is exit 2;
+/// a snapshot deleted in this change is left to the policy-file check.
+fn check_snapshot(
+    ctx: &Context,
+    item: &ResolvedCommand,
+    snap: &Snapshot,
+    run: &CommandRunResult,
+) -> Result<Option<Violation>> {
+    let cannot = |msg: String| Err(tag(Reason::Gate, anyhow!(msg)));
+    let name = &item.name;
+    if run.stdout_truncated {
+        return cannot(format!(
+            "command `{name}`: stdout went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read, so it cannot be compared with snapshot `{}`",
+            snap.path
+        ));
+    }
+    if run.stdout_lossy {
+        return cannot(format!(
+            "command `{name}`: stdout is not valid UTF-8, so it cannot be compared with snapshot `{}`",
+            snap.path
+        ));
+    }
+    let file = ctx.git.root().join(&snap.path);
+    let bytes = match std::fs::read(&file) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if matches!(ctx.git.base_content(&snap.path), Ok(Some(_))) {
+                // Reported as `policy-file-deleted`.
+                return Ok(None);
+            }
+            return cannot(format!(
+                "command `{name}`: snapshot `{}` does not exist; commit the command's output there",
+                snap.path
+            ));
+        }
+        Err(e) => {
+            return cannot(format!(
+                "command `{name}`: snapshot `{}` could not be read: {e}",
+                snap.path
+            ))
+        }
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return cannot(format!(
+            "command `{name}`: snapshot `{}` is not valid UTF-8",
+            snap.path
+        ));
+    };
+    let output = snapshot_lines(&run.stdout, &snap.ignore);
+    if output.is_empty() && !item.allow_zero {
+        return cannot(format!(
+            "command `{name}`: stdout has no lines to compare with snapshot `{}`; an empty output never matches (set `allow_zero = true` if the snapshot is meant to be empty)",
+            snap.path
+        ));
+    }
+    let snapshot = snapshot_lines(text, &snap.ignore);
+    let Some(diff) = compare_snapshot(&snapshot, &output) else {
+        return Ok(None);
+    };
+    let at = |n: Option<usize>| n.map_or("its end".to_string(), |n| format!("line {n}"));
+    let order = if diff.only_in_output == 0 && diff.only_in_snapshot == 0 {
+        " (the same lines in a different order)"
+    } else {
+        ""
+    };
+    // Output lines are not echoed: the command may print anything, a secret included.
+    let mut v = Violation::new(
+        &crate::findings::SNAPSHOT_MISMATCH,
+        format!(
+            "Command `{name}` output differs from snapshot `{}`: {} line(s) only in the output, {} only in the snapshot{order}; first difference at snapshot {}, output {}.",
+            snap.path,
+            diff.only_in_output,
+            diff.only_in_snapshot,
+            at(diff.first_difference.0),
+            at(diff.first_difference.1),
+        ),
+        "",
+    );
+    v.remediation = format!(
+        "Run `{}`, review the difference, and commit its output as `{}`.",
+        item.command, snap.path
+    );
+    v.file = Some(snap.path.clone());
+    v.line = diff.first_difference.0;
+    Ok(Some(v))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1136,5 +1440,121 @@ mod tests {
         assert_eq!(cases[0].id, "\"quoted\" & <tagged>");
         assert_eq!(cases[0].status, TestStatus::Failed);
         assert_eq!(cases[0].failure_message.as_deref(), Some("\"failed\""));
+    }
+
+    fn re(p: &str) -> regex::Regex {
+        regex::Regex::new(p).unwrap()
+    }
+
+    #[test]
+    fn snapshot_lines_drop_cr_ignored_lines_and_keep_line_numbers() {
+        let lines = snapshot_lines("# v1\r\npub fn a()\r\n\r\npub fn b()", &[re("^#")]);
+        assert_eq!(lines, vec![(2, "pub fn a()"), (3, ""), (4, "pub fn b()")]);
+        // Negative control: nothing ignored keeps the header.
+        assert_eq!(snapshot_lines("# v1\n", &[]), vec![(1, "# v1")]);
+    }
+
+    #[test]
+    fn compare_snapshot_matches_equal_lines_and_locates_the_first_difference() {
+        let snap = snapshot_lines("# v1\npub fn a()\npub fn b()\n", &[re("^#")]);
+        let same = snapshot_lines("# v2\r\npub fn a()\r\npub fn b()", &[re("^#")]);
+        assert_eq!(compare_snapshot(&snap, &same), None);
+
+        let changed = snapshot_lines("pub fn a()\npub fn c()\n", &[]);
+        assert_eq!(
+            compare_snapshot(&snap, &changed),
+            Some(SnapshotDiff {
+                only_in_output: 1,
+                only_in_snapshot: 1,
+                first_difference: (Some(3), Some(2)),
+            })
+        );
+
+        let longer = snapshot_lines("pub fn a()\npub fn b()\npub fn c()\n", &[]);
+        assert_eq!(
+            compare_snapshot(&snap, &longer),
+            Some(SnapshotDiff {
+                only_in_output: 1,
+                only_in_snapshot: 0,
+                first_difference: (None, Some(3)),
+            })
+        );
+
+        let reordered = snapshot_lines("pub fn b()\npub fn a()\n", &[]);
+        let d = compare_snapshot(&snap, &reordered).expect("order is compared");
+        assert_eq!((d.only_in_output, d.only_in_snapshot), (0, 0));
+    }
+
+    #[test]
+    fn resolve_snapshot_refuses_bad_paths_bad_patterns_and_orphan_ignores() {
+        let s = |p: &str| Some(p.to_string());
+        let err = |r: Result<Option<Snapshot>>| format!("{:#}", r.err().expect("refused"));
+        assert!(err(resolve_snapshot("t", s("../x").as_ref(), &[], None)).contains("relative"));
+        assert!(err(resolve_snapshot("t", s("/etc/x").as_ref(), &[], None)).contains("relative"));
+        assert!(err(resolve_snapshot("t", s("").as_ref(), &[], None)).contains("relative"));
+        assert!(err(resolve_snapshot(
+            "t",
+            s("a.txt").as_ref(),
+            &["(".into()],
+            None
+        ))
+        .contains("not a valid regex"));
+        assert!(err(resolve_snapshot("t", None, &["^#".into()], None)).contains("without"));
+
+        let ok = resolve_snapshot("t", s("api/a.txt").as_ref(), &["^#".into()], None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ok.path, "api/a.txt");
+        assert_eq!(ok.ignore.len(), 1);
+        assert!(resolve_snapshot("t", None, &[], None).unwrap().is_none());
+    }
+
+    #[test]
+    fn cargo_public_api_preset_renders_and_compares_with_its_policy_file() {
+        let preset = presets::resolve_preset("cargo-public-api").unwrap();
+        assert_eq!(preset.default_command, "cargo public-api --simplified");
+        assert_eq!(preset.snapshot, Some("public-api.txt"));
+
+        let snap = resolve_snapshot("t", None, &[], Some(preset))
+            .unwrap()
+            .unwrap();
+        assert_eq!(snap.path, "public-api.txt");
+        assert_eq!(
+            policy_files_for(Some(preset), Some(&snap)),
+            ["public-api.txt"]
+        );
+
+        // A configured path replaces the preset's file as the protected policy file.
+        let moved = resolve_snapshot("t", Some(&"api/surface.txt".to_string()), &[], Some(preset))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            policy_files_for(Some(preset), Some(&moved)),
+            ["api/surface.txt"]
+        );
+
+        // Presets without a snapshot keep their policy files and compare nothing.
+        let deny = presets::resolve_preset("cargo-deny").unwrap();
+        assert!(resolve_snapshot("t", None, &[], Some(deny))
+            .unwrap()
+            .is_none());
+        assert_eq!(policy_files_for(Some(deny), None), ["deny.toml"]);
+    }
+
+    #[test]
+    fn read_capped_reports_output_past_the_limit() {
+        let limit = MAX_CAPTURE_BYTES as usize;
+        let (buf, cut) = read_capped(std::io::repeat(b'x').take(MAX_CAPTURE_BYTES));
+        assert_eq!((buf.len(), cut), (limit, false));
+        let (buf, cut) = read_capped(std::io::repeat(b'x').take(MAX_CAPTURE_BYTES + 1));
+        assert_eq!((buf.len(), cut), (limit, true));
+    }
+
+    #[test]
+    fn run_command_bounded_flags_stdout_that_is_not_utf8() {
+        let bad = run_command_bounded("t", "printf '\\377'", 5, Path::new(".")).unwrap();
+        assert!(bad.stdout_lossy);
+        let good = run_command_bounded("t", "printf 'ok'", 5, Path::new(".")).unwrap();
+        assert!(!good.stdout_lossy && !good.stdout_truncated);
     }
 }

@@ -407,6 +407,8 @@ pub fn generate_schema() -> Value {
                     "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed" },
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
                     "canary_expected_diagnostic": { "type": "string", "description": "Expected diagnostic string that canary must produce" },
+                    "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match" },
+                    "snapshot_ignore": { "$ref": "#/$defs/StringListOrReset", "description": "Regexes for lines left out of the snapshot comparison, on both sides" },
                     "commands": {
                         "type": "array",
                         "items": { "$ref": "#/$defs/CommandEntry" },
@@ -429,7 +431,9 @@ pub fn generate_schema() -> Value {
                     "zero_items_pattern": { "type": "string", "description": "Pattern that indicates zero items were executed" },
                     "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed" },
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
-                    "canary_expected_diagnostic": { "type": "string", "description": "Expected diagnostic string that canary must produce" }
+                    "canary_expected_diagnostic": { "type": "string", "description": "Expected diagnostic string that canary must produce" },
+                    "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match" },
+                    "snapshot_ignore": { "$ref": "#/$defs/StringListOrReset", "description": "Regexes for lines left out of the snapshot comparison, on both sides" }
                 }
             },
             "DependencyDeltaGate": {
