@@ -25,6 +25,7 @@ pub struct CommitDetail {
     pub author_email: String,
     pub committer_email: String,
     pub message: String,
+    pub parent_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -951,6 +952,7 @@ impl GitCtx {
                 author_email: author.email().unwrap_or("").to_string(),
                 committer_email: committer.email().unwrap_or("").to_string(),
                 message: String::from_utf8_lossy(commit.message_bytes()).into_owned(),
+                parent_count: commit.parent_count(),
             });
         }
         Ok(out)

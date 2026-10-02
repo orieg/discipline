@@ -1192,6 +1192,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
             author_email: c.author().email().unwrap_or("").to_string(),
             committer_email: c.committer().email().unwrap_or("").to_string(),
             message: c.message().unwrap_or("").to_string(),
+            parent_count: c.parent_count(),
         };
         if crate::guards::commit_provenance::is_agent_commit(
             &detail,
