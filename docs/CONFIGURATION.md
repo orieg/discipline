@@ -188,6 +188,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.golden-output.paths` | list | *(8 entries)* | Committed golden/snapshot globs whose edits require a directive |
 | `gates.golden-output.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ignored-tests.approved_predicates` | list | `[]` | Conditional ignore predicates (e.g. miri) approved by policy |
+| `gates.ignored-tests.ci_skip_severity` | string | *(per entry)* | Severity for skips conditioned on CI environment variables (defaults to gate severity) |
 | `gates.ignored-tests.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.ignored-tests.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.ignored-tests.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |

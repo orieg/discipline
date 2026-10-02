@@ -251,7 +251,8 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "approved_predicates": { "$ref": "#/$defs/StringListOrReset", "description": "Conditional ignore predicates (e.g. miri) approved by policy" }
+                    "approved_predicates": { "$ref": "#/$defs/StringListOrReset", "description": "Conditional ignore predicates (e.g. miri) approved by policy" },
+                    "ci_skip_severity": { "$ref": "#/$defs/Severity", "description": "Severity for skips conditioned on CI environment variables (defaults to gate severity)" }
                 }
             },
             "TimeEstimateGate": {
