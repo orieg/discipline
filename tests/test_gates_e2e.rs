@@ -10824,21 +10824,31 @@ fn ignored_tests_early_exit_under_env_or_ci_check_severity_and_directive_lift() 
     );
     repo.commit("test: base suite");
 
-    // 1. Add early return under CI check -> Warning severity
+    // 1. Add early return under CI check -> Error severity by default (fails gate)
     repo.write(
         "tests/ci_suite.rs",
         "#[test]\nfn test_in_ci() {\n    if std::env::var(\"CI\").is_ok() {\n        return;\n    }\n    assert_eq!(1, 1);\n}\n",
     );
     repo.commit("test: add early exit in CI");
     let run_ci = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run_ci.code, 1);
     assert_eq!(
         run_ci.titles("ignored-tests"),
         vec!["Test Conditionally Skipped"]
     );
     let out_ci = run_ci.outcome("ignored-tests");
     let v_ci = &out_ci["violations"][0];
-    assert_eq!(v_ci["severity"], "warning");
+    assert_eq!(v_ci["severity"], "error");
     assert!(v_ci["message"].as_str().unwrap().contains("test_in_ci"));
+
+    // 1b. Approved predicate waives the CI condition
+    let run_ci_approved = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.ignored-tests]\napproved_predicates = [\"CI\"]\n",
+    ]);
+    assert_eq!(run_ci_approved.titles("ignored-tests").len(), 0);
 
     // 2. Add early return under generic env check -> Note severity
     repo.write(
@@ -10874,6 +10884,68 @@ fn ignored_tests_early_exit_under_env_or_ci_check_severity_and_directive_lift() 
         .unwrap()
         .contains("test_in_env"));
     assert_eq!(out_lifted["overrides"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn ignored_tests_ci_skip_multi_language_reproduction_and_approved_predicates() {
+    let repo = Repo::new();
+    repo.write("go.mod", "module example.com/p\n\ngo 1.22\n");
+    repo.write(
+        "p_test.go",
+        "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tif 1+1 != 2 {\n\t\tt.Fatal(\"math\")\n\t}\n}\n",
+    );
+    repo.write("test_calc.py", "def test_math():\n    assert 1 + 1 == 2\n");
+    repo.commit("test: base tests");
+
+    // Add CI condition skip in Go and Python -> Error severity, fails check
+    repo.write(
+        "p_test.go",
+        "package p\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestA(t *testing.T) {\n\tif os.Getenv(\"CI\") != \"\" {\n\t\tt.Skip(\"flaky in CI\")\n\t}\n\tif 1+1 != 2 {\n\t\tt.Fatal(\"math\")\n\t}\n}\n",
+    );
+    repo.write(
+        "test_calc.py",
+        "import os\nimport pytest\n\ndef test_math():\n    if os.environ.get(\"GITHUB_ACTIONS\"):\n        pytest.skip(\"slow on actions\")\n    assert 1 + 1 == 2\n",
+    );
+    repo.commit("test: skip tests under CI variables");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(run.code, 1);
+    let out = run.outcome("ignored-tests");
+    let violations = out["violations"].as_array().unwrap();
+    assert_eq!(violations.len(), 2);
+    assert!(violations.iter().all(|v| v["severity"] == "error"));
+    assert!(violations
+        .iter()
+        .any(|v| v["message"].as_str().unwrap().contains("TestA")));
+    assert!(violations
+        .iter()
+        .any(|v| v["message"].as_str().unwrap().contains("test_math")));
+
+    // Negative control 1: approved_predicates waives both and restores exit 0
+    let run_approved = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.ignored-tests]\napproved_predicates = [\"CI\", \"GITHUB_ACTIONS\"]\n",
+    ]);
+    assert_eq!(run_approved.code, 0);
+    assert_eq!(run_approved.titles("ignored-tests").len(), 0);
+
+    // Negative control 2: allow-ignore directives lift both
+    repo.write(
+        "pr_body.md",
+        "Summary\n\nallow-ignore: TestA flaky in CI, tracked in #101\nallow-ignore: test_math slow on actions, tracked in #102\n",
+    );
+    let run_lifted = repo.check(&["--base", "HEAD~1", "--pr-body-file", "pr_body.md"]);
+    assert_eq!(run_lifted.code, 0);
+    assert_eq!(run_lifted.titles("ignored-tests").len(), 0);
+    assert_eq!(
+        run_lifted.outcome("ignored-tests")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]

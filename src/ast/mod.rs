@@ -300,6 +300,8 @@ pub fn is_ci_env_var_name(name: &str) -> bool {
             | "TF_BUILD"
             | "APPVEYOR"
             | "CIRRUS_CI"
+            | "JENKINS_URL"
+            | "JENKINS_HOME"
     )
 }
 
@@ -320,6 +322,8 @@ pub fn is_ci_condition(cond: &str) -> bool {
         "TF_BUILD",
         "APPVEYOR",
         "CIRRUS_CI",
+        "JENKINS_URL",
+        "JENKINS_HOME",
     ];
 
     CI_VARS.iter().any(|&var| cond_contains_ci_var(cond, var))
