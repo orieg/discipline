@@ -467,11 +467,12 @@ To support brownfield adoption without weakening gates or ignoring violations, D
 
 ### 8.1 CI Pipeline (`.github/workflows/ci.yml`)
 
-Third-party GitHub Actions are pinned by full commit SHA. Tooling binaries (`act`, `actionlint`) are installed by version with pinned SHA-256 checksums. The `ci-gate` rollup enforces an **allow-list**: every required job must succeed, and the total job count (10, the jobs below) is asserted.
+Third-party GitHub Actions are pinned by full commit SHA. Tooling binaries (`act`, `actionlint`) are installed by version with pinned SHA-256 checksums. Conditional test suites are gated by `detect-changes`; the `ci-gate` rollup enforces an **allow-list**: every required job must succeed or be legitimately skipped, verified at runtime by the `ci-skip-set` gate, and the total job count (11, the jobs below) is asserted.
 
 | Job | Verification Scope |
 |---|---|
-| `lint` | `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `actionlint` on `.github/`, `.gitea/` and `.forgejo/` workflows, `shellcheck`, `lint-action.py` (F11), `docs --check` (generated reference in sync), link and CI-recipe validator (`check-links.py`), ecosystem theme contract, release-notes sanitiser and ledger checks, `test-check-major-tag.sh`, and a PR-title mention lint. |
+| `detect-changes` | Evaluates changed paths on pull requests to output skip/run decisions for downstream heavy test jobs; runs unconditionally and triggers all suites on push events. |
+| `lint` | `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `actionlint` on `.github/`, `.gitea/` and `.forgejo/` workflows, `shellcheck`, `lint-action.py` (F11), `docs --check` (generated reference in sync), link and CI-recipe validator (`check-links.py`), ecosystem theme contract, release-notes sanitiser and ledger checks, change detector tests (`detect_changes.py --test`), `test-check-major-tag.sh`, and a PR-title mention lint. |
 | `test` (Linux & macOS) | Full test suite execution asserting at least 65 test cases ran, followed by embedded `self-test`. |
 | `msrv` | `cargo check` under the pinned Minimum Supported Rust Version (`1.90`). |
 | `supply-chain` | `cargo-deny` validation of advisories, bans, license allow-list, and sources. |
