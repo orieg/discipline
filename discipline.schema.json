@@ -585,6 +585,10 @@
           "$ref": "#/$defs/StringListOrReset",
           "description": "Conditional ignore predicates (e.g. miri) approved by policy"
         },
+        "ci_skip_severity": {
+          "$ref": "#/$defs/Severity",
+          "description": "Severity for skips conditioned on CI environment variables (defaults to gate severity)"
+        },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"

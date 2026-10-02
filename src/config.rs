@@ -721,6 +721,9 @@ pub struct IgnoredTestsGate {
     pub exempt_paths: Vec<String>,
     /// Conditional ignore predicates (e.g. `miri`) that are approved by repository policy.
     pub approved_predicates: Vec<String>,
+    /// Severity for skips conditioned on CI environment variables (defaults to gate severity).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ci_skip_severity: Option<Severity>,
 }
 
 impl Default for IgnoredTestsGate {
@@ -730,7 +733,14 @@ impl Default for IgnoredTestsGate {
             severity: Severity::Error,
             exempt_paths: Vec::new(),
             approved_predicates: Vec::new(),
+            ci_skip_severity: None,
         }
+    }
+}
+
+impl IgnoredTestsGate {
+    pub fn ci_skip_severity(&self) -> Severity {
+        self.ci_skip_severity.unwrap_or(self.severity)
     }
 }
 

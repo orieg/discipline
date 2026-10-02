@@ -300,49 +300,70 @@ pub fn is_ci_env_var_name(name: &str) -> bool {
             | "TF_BUILD"
             | "APPVEYOR"
             | "CIRRUS_CI"
+            | "JENKINS_URL"
+            | "JENKINS_HOME"
     )
 }
 
+pub const CI_VARS: &[&str] = &[
+    "CI",
+    "GITHUB_ACTIONS",
+    "GITLAB_CI",
+    "GITEA_ACTIONS",
+    "FORGEJO_ACTIONS",
+    "CONTINUOUS_INTEGRATION",
+    "TRAVIS",
+    "CIRCLECI",
+    "BITBUCKET_BUILD_NUMBER",
+    "BUILDKITE",
+    "TEAMCITY_VERSION",
+    "TF_BUILD",
+    "APPVEYOR",
+    "CIRRUS_CI",
+    "JENKINS_URL",
+    "JENKINS_HOME",
+];
+
 /// Returns whether the condition text mentions a known CI environment variable name with word boundaries.
 pub fn is_ci_condition(cond: &str) -> bool {
-    const CI_VARS: &[&str] = &[
-        "CI",
-        "GITHUB_ACTIONS",
-        "GITLAB_CI",
-        "GITEA_ACTIONS",
-        "FORGEJO_ACTIONS",
-        "CONTINUOUS_INTEGRATION",
-        "TRAVIS",
-        "CIRCLECI",
-        "BITBUCKET_BUILD_NUMBER",
-        "BUILDKITE",
-        "TEAMCITY_VERSION",
-        "TF_BUILD",
-        "APPVEYOR",
-        "CIRRUS_CI",
-    ];
-
-    CI_VARS.iter().any(|&var| cond_contains_ci_var(cond, var))
+    CI_VARS.iter().any(|&var| cond_contains_ident(cond, var))
 }
 
-fn cond_contains_ci_var(text: &str, var: &str) -> bool {
+/// Returns all known CI environment variable names present in the condition with identifier boundaries.
+pub fn ci_vars_in_condition(cond: &str) -> Vec<&'static str> {
+    CI_VARS
+        .iter()
+        .copied()
+        .filter(|&var| cond_contains_ident(cond, var))
+        .collect()
+}
+
+/// Returns whether `text` contains `ident` matching on whole identifier boundaries.
+pub fn cond_contains_ident(text: &str, ident: &str) -> bool {
     let bytes = text.as_bytes();
-    let var_bytes = var.as_bytes();
-    if var_bytes.is_empty() || bytes.len() < var_bytes.len() {
+    let ident_bytes = ident.as_bytes();
+    if ident_bytes.is_empty() || bytes.len() < ident_bytes.len() {
         return false;
     }
-    for i in 0..=(bytes.len() - var_bytes.len()) {
-        if bytes[i..i + var_bytes.len()].eq_ignore_ascii_case(var_bytes) {
-            let ok_before = if i == 0 {
+    if text == ident || text.eq_ignore_ascii_case(ident) {
+        return true;
+    }
+    let first_is_ident = ident_bytes[0].is_ascii_alphanumeric() || ident_bytes[0] == b'_';
+    let last_is_ident = ident_bytes[ident_bytes.len() - 1].is_ascii_alphanumeric()
+        || ident_bytes[ident_bytes.len() - 1] == b'_';
+
+    for i in 0..=(bytes.len() - ident_bytes.len()) {
+        if bytes[i..i + ident_bytes.len()].eq_ignore_ascii_case(ident_bytes) {
+            let ok_before = if !first_is_ident || i == 0 {
                 true
             } else {
                 let b = bytes[i - 1];
                 !b.is_ascii_alphanumeric() && b != b'_'
             };
-            let ok_after = if i + var_bytes.len() == bytes.len() {
+            let ok_after = if !last_is_ident || i + ident_bytes.len() == bytes.len() {
                 true
             } else {
-                let b = bytes[i + var_bytes.len()];
+                let b = bytes[i + ident_bytes.len()];
                 !b.is_ascii_alphanumeric() && b != b'_'
             };
             if ok_before && ok_after {
@@ -1789,5 +1810,57 @@ mod tests {
 
         reg.register(Box::new(DartDummy));
         assert!(!is_unsupported_source_in("main.dart", &reg));
+    }
+
+    #[test]
+    fn cond_contains_ident_boundary_matching_and_ci_vars() {
+        assert!(cond_contains_ident("os.Getenv(\"CI\") != \"\"", "CI"));
+        assert!(cond_contains_ident("process.env.CI", "CI"));
+        assert!(cond_contains_ident("std::env::var(\"CI\").is_ok()", "CI"));
+
+        // Boundary checks prevent substring bypasses
+        assert!(!cond_contains_ident(
+            "os.Getenv(\"GITLAB_CI\") != \"\"",
+            "CI"
+        ));
+        assert!(!cond_contains_ident(
+            "os.Getenv(\"CIRRUS_CI\") != \"\"",
+            "CI"
+        ));
+        assert!(!cond_contains_ident(
+            "os.Getenv(\"CIRCLECI\") != \"\"",
+            "CI"
+        ));
+        assert!(!cond_contains_ident("if os.Getenv(\"CI\") != \"\"", "C"));
+        assert!(!cond_contains_ident("SKIP_MIRI_LIKE", "SKIP"));
+
+        // Exact matches and approved predicates
+        assert!(cond_contains_ident("SKIP_MIRI_LIKE", "SKIP_MIRI_LIKE"));
+        assert!(cond_contains_ident("cfg!(miri)", "miri"));
+        assert!(cond_contains_ident(
+            "cfg!(miri) || std::env::var(\"CI\").is_ok()",
+            "miri"
+        ));
+        assert!(cond_contains_ident(
+            "cfg!(miri) || std::env::var(\"CI\").is_ok()",
+            "CI"
+        ));
+
+        // ci_vars_in_condition
+        assert_eq!(
+            ci_vars_in_condition("cfg!(miri) || std::env::var(\"CI\").is_ok()"),
+            vec!["CI"]
+        );
+        assert_eq!(
+            ci_vars_in_condition("os.Getenv(\"GITLAB_CI\") != \"\""),
+            vec!["GITLAB_CI"]
+        );
+        assert_eq!(
+            ci_vars_in_condition(
+                "os.Getenv(\"CI\") != \"\" || os.Getenv(\"GITHUB_ACTIONS\") != \"\""
+            ),
+            vec!["CI", "GITHUB_ACTIONS"]
+        );
+        assert!(ci_vars_in_condition("cfg!(miri) || os.Getenv(\"SKIP_SLOW\") != \"\"").is_empty());
     }
 }

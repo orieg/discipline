@@ -509,6 +509,7 @@
       "gates.ignored-tests.approved_predicates",
       "gates.ignored-tests.approved_predicates.items",
       "gates.ignored-tests.approved_predicates.reset",
+      "gates.ignored-tests.ci_skip_severity",
       "gates.ignored-tests.enabled",
       "gates.ignored-tests.exempt_paths",
       "gates.ignored-tests.exempt_paths.items",

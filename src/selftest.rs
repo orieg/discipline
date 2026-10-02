@@ -2756,6 +2756,77 @@ command = "cargo test"
         },
     ),
     (
+        "ignored-tests: CI conditional skip is an error by default, generic env skip is a note",
+        || {
+            use crate::ast::TestFn;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+
+            let ci_test = TestFn {
+                name: "ci_test".to_string(),
+                line: 1,
+                conditional_ignore: Some("os.Getenv(\"CI\") != \"\"".to_string()),
+                ..Default::default()
+            };
+            let generic_test = TestFn {
+                name: "generic_test".to_string(),
+                line: 10,
+                conditional_ignore: Some("os.Getenv(\"SKIP_SLOW\") != \"\"".to_string()),
+                ..Default::default()
+            };
+            let added = [
+                Located {
+                    path: "a_test.go",
+                    file_survives: true,
+                    test: &ci_test,
+                },
+                Located {
+                    path: "b_test.go",
+                    file_survives: true,
+                    test: &generic_test,
+                },
+            ];
+
+            let default_settings = IgnoredTestsGate::default();
+            let out = evaluate_ignored_tests(&[], &added, &default_settings, &[], false)?;
+            let ci_v = out
+                .violations
+                .iter()
+                .find(|v| v.message.contains("ci_test"))
+                .ok_or_else(|| anyhow::anyhow!("missing ci_test violation"))?;
+            let gen_v = out
+                .violations
+                .iter()
+                .find(|v| v.message.contains("generic_test"))
+                .ok_or_else(|| anyhow::anyhow!("missing generic_test violation"))?;
+
+            let staged_out = evaluate_ignored_tests(&[], &added, &default_settings, &[], true)?;
+            let staged_ci_v = staged_out
+                .violations
+                .iter()
+                .find(|v| v.message.contains("ci_test"))
+                .ok_or_else(|| anyhow::anyhow!("missing staged ci_test violation"))?;
+
+            let mut warn_settings = default_settings.clone();
+            warn_settings.ci_skip_severity = Some(Severity::Warning);
+            let warn_out = evaluate_ignored_tests(&[], &added, &warn_settings, &[], false)?;
+            let warn_ci_v = warn_out
+                .violations
+                .iter()
+                .find(|v| v.message.contains("ci_test"))
+                .ok_or_else(|| anyhow::anyhow!("missing warn ci_test violation"))?;
+
+            Ok(ci_v.severity == Severity::Error
+                && gen_v.severity == Severity::Note
+                && staged_ci_v.severity == Severity::Warning
+                && warn_ci_v.severity == Severity::Warning
+                && ci_v
+                    .remediation
+                    .as_deref()
+                    .is_some_and(|r| r.contains("allow-ignore: ci_test <reason>")))
+        },
+    ),
+    (
         "hygiene: terms of art and historical narration exempt from time-estimates",
         || {
             let banned = crate::guards::hygiene::time_estimate_patterns()

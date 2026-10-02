@@ -59,6 +59,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("enabled", Direction::LooserWhenFalse),
     ("severity", Direction::Severity),
     ("exempt_paths", Direction::Grown),
+    ("ci_skip_severity", Direction::Severity),
     // Lists that widen what is tolerated.
     ("allow_patterns", Direction::Grown),
     ("allowed_users", Direction::Grown),
@@ -1131,7 +1132,7 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                         if (bs == "error" && (hs == "warning" || hs == "note"))
                             || (bs == "warning" && hs == "note")
                         {
-                            note(w("severity", Change::Lowered).values(bs, hs));
+                            note(w(key, Change::Lowered).values(bs, hs));
                         }
                     }
                 }
