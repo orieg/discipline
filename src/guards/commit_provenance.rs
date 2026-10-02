@@ -100,6 +100,11 @@ pub fn judge(
 ) -> Vec<Finding> {
     let mut out = Vec::new();
     for c in commits {
+        // Merge commits (e.g. GitHub Actions pull_request test merge refs) do not
+        // carry developer commit trailers.
+        if c.parent_count > 1 {
+            continue;
+        }
         let t = trailers(&c.message);
         let short: String = c.sha.chars().take(10).collect();
         for key in required {
@@ -145,7 +150,13 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
         );
         return Ok(out);
     }
-    out.examined = commits.len();
+    let non_merges: Vec<&CommitDetail> = commits.iter().filter(|c| c.parent_count <= 1).collect();
+    if non_merges.is_empty() {
+        out.notes
+            .push("not evaluated: no non-merge commits between the base and HEAD".to_string());
+        return Ok(out);
+    }
+    out.examined = non_merges.len();
     for f in judge(
         &commits,
         &settings.required_trailers,
@@ -185,6 +196,7 @@ mod tests {
             author_email: email.into(),
             committer_email: email.into(),
             message: message.into(),
+            parent_count: 1,
         }
     }
 
@@ -248,5 +260,13 @@ mod tests {
         // Without a review key the agent rule is off.
         let agent = commit("Ada", "ada@x", "feat: x\n\nAgent-Tool: coder 1.2\n");
         assert!(judge(&[agent], &[], &markers, "").is_empty());
+    }
+
+    #[test]
+    fn merge_commits_are_skipped() {
+        let markers = v(&["Agent-Tool:"]);
+        let mut merge = commit("GitHub", "noreply@github.com", "Merge abc into def\n");
+        merge.parent_count = 2;
+        assert!(judge(&[merge], &v(&["Signed-off-by"]), &markers, "Reviewed-by").is_empty());
     }
 }

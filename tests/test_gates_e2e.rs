@@ -4390,6 +4390,42 @@ fn commit_provenance_reads_trailers_and_authorship_of_every_commit_in_the_range(
         .contains("not evaluated"));
 }
 
+#[test]
+fn commit_provenance_skips_merge_commits() {
+    const CFG: &str =
+        "[gates.commit-provenance]\nenabled = true\nrequired_trailers = [\"Signed-off-by\"]\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("discipline.toml", &format!("{CONFIG_HEAD}{CFG}"));
+    repo.commit("chore: policy\n\nSigned-off-by: Owner <owner@example.test>");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    repo.write("a.txt", "a\n");
+    repo.commit("feat: a\n\nSigned-off-by: Owner <owner@example.test>");
+
+    // Merge a side branch: the merge commit carries no trailers, but must be skipped.
+    repo.git(&["checkout", "-q", "-b", "side"]);
+    repo.write("side.txt", "side\n");
+    repo.commit("feat: side\n\nSigned-off-by: Owner <owner@example.test>");
+    repo.git(&["checkout", "-q", "work"]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "Merge branch 'side'",
+        "side",
+    ]);
+
+    let res = repo.check(&[]);
+    assert!(
+        res.titles("commit-provenance").is_empty(),
+        "{:?}",
+        res.violations("commit-provenance")
+    );
+    assert_eq!(res.outcome("commit-provenance")["examined"], 2);
+}
+
 // ---- build-hooks -----------------------------------------------------------
 
 #[test]
