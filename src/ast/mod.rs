@@ -12,6 +12,7 @@ pub mod budgets;
 pub mod c_cpp;
 pub mod c_macros;
 pub mod calls;
+pub mod caught_assertions;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
 pub mod expectations;
@@ -257,12 +258,15 @@ pub struct TestFn {
     /// skeleton across a change so an edited expected value is seen although the count is
     /// unchanged.
     pub expectations: Vec<expectations::Expectation>,
+    /// Assertions whose failure is caught by an enclosing handler in the test without failing it.
+    pub caught_assertions: Vec<caught_assertions::CaughtAssertion>,
 }
 
 impl TestFn {
     /// Assertions that can actually fail.
     pub fn effective_asserts(&self) -> usize {
-        self.total_asserts.saturating_sub(self.tautologies)
+        self.total_asserts
+            .saturating_sub(self.tautologies + self.caught_assertions.len())
     }
 
     pub fn is_vacuous(&self) -> bool {
@@ -953,6 +957,7 @@ impl Default for ParsedFileFacts {
                 helper_checks: 0,
                 bounds: Vec::new(),
                 expectations: Vec::new(),
+                caught_assertions: Vec::new(),
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -984,6 +989,7 @@ impl ParsedFileFacts {
             helper_checks: 0,
             bounds: Vec::new(),
             expectations: Vec::new(),
+            caught_assertions: Vec::new(),
         });
     }
 }

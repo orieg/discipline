@@ -17599,3 +17599,79 @@ command = "python3 run_tests.py"
     assert_eq!(outcome_ov["violations"].as_array().unwrap().len(), 0);
     assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn assertion_failure_caught_inside_test_fires_and_accepts_override() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    repo.write(
+        "tests/test_t.py",
+        "from m import add\n\ndef test_add():\n    assert add(2, 2) == 4\n",
+    );
+    repo.write(
+        "src/lib.rs",
+        "pub fn add(a: u32, b: u32) -> u32 { a + b }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn adds() {\n        assert_eq!(add(2, 2), 4);\n    }\n}\n",
+    );
+    repo.commit("feat: initial tests");
+
+    // Negative control: negative control tests with re-raising handler or asserted catch_unwind
+    repo.git(&["checkout", "-q", "-B", "negative-control", "main"]);
+    repo.write(
+        "tests/test_t.py",
+        "from m import add\n\ndef test_add():\n    assert add(2, 2) == 4\n    try:\n        assert 1 == 2\n    except AssertionError:\n        raise\n",
+    );
+    repo.write(
+        "src/lib.rs",
+        "pub fn add(a: u32, b: u32) -> u32 { a + b }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn adds() {\n        assert_eq!(add(2, 2), 4);\n        assert!(std::panic::catch_unwind(|| add(u32::MAX, 1)).is_err());\n    }\n}\n",
+    );
+    repo.commit("test: negative controls for expected exceptions");
+    let run_neg = repo.check(&["--base", "main"]);
+    assert_eq!(
+        run_neg.code, 0,
+        "negative controls must pass: {}{}",
+        run_neg.stdout, run_neg.stderr
+    );
+    assert!(
+        run_neg.violations("assertion-reduction").is_empty(),
+        "negative controls must not fire: {:?}",
+        run_neg.violations("assertion-reduction")
+    );
+
+    // Positive control: wrapping assertion in swallowed try/catch or discarded catch_unwind
+    repo.git(&["checkout", "-q", "-B", "work", "main"]);
+    repo.write(
+        "tests/test_t.py",
+        "from m import add\n\ndef test_add():\n    try:\n        assert add(2, 2) == 4\n    except AssertionError:\n        pass\n",
+    );
+    repo.write(
+        "src/lib.rs",
+        "pub fn add(a: u32, b: u32) -> u32 { a + b }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn adds() {\n        let _ = std::panic::catch_unwind(|| assert_eq!(add(2, 2), 4));\n    }\n}\n",
+    );
+    repo.commit("test: caught assertions");
+
+    let run_caught = repo.check(&["--base", "main"]);
+    assert_eq!(
+        run_caught.code, 1,
+        "caught assertions must fail: {}{}",
+        run_caught.stdout, run_caught.stderr
+    );
+    let violations = run_caught.violations("assertion-reduction");
+    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert!(violations
+        .iter()
+        .all(|v| v["code"] == "assertion-reduction/assertion-failure-caught"));
+
+    // Override directive lifts the violation
+    let run_ov = repo.check_with_pr(
+        &["--base", "main"],
+        "Fixes #451\n\nallow-assertion-drop: adds intentional catch\nallow-assertion-drop: test_add intentional catch\n",
+    );
+    assert_eq!(
+        run_ov.code, 0,
+        "directive must lift assertion-failure-caught: {}{}",
+        run_ov.stdout, run_ov.stderr
+    );
+    assert!(run_ov.violations("assertion-reduction").is_empty());
+    let outcome_ov = run_ov.outcome("assertion-reduction");
+    assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 2);
+}
