@@ -1196,11 +1196,25 @@ pub fn evaluate_ignored_tests(
             continue;
         }
         let cond = test.conditional_ignore.as_deref().unwrap_or("condition");
-        if settings
-            .approved_predicates
-            .iter()
-            .any(|p| cond == p || cond.contains(p) || p.contains(cond))
-        {
+        let ci_vars = crate::ast::ci_vars_in_condition(cond);
+        let is_ci = !ci_vars.is_empty();
+
+        let is_approved = if is_ci {
+            !settings.approved_predicates.is_empty()
+                && ci_vars.iter().all(|var| {
+                    settings.approved_predicates.iter().any(|p| {
+                        p.eq_ignore_ascii_case(var)
+                            || crate::ast::cond_contains_ident(var, p)
+                            || crate::ast::cond_contains_ident(p, var)
+                    })
+                })
+        } else {
+            settings
+                .approved_predicates
+                .iter()
+                .any(|p| crate::ast::cond_contains_ident(cond, p))
+        };
+        if is_approved {
             continue;
         }
         if let Some(record) = tokens::find_override(
@@ -1213,10 +1227,22 @@ pub fn evaluate_ignored_tests(
             out.overrides.push(record);
             continue;
         }
-        let severity = if crate::ast::is_ci_condition(cond) {
-            crate::config::Severity::Warning
+        let severity = if is_ci {
+            if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.ci_skip_severity()
+            }
         } else {
             crate::config::Severity::Note
+        };
+        let remediation = if is_ci {
+            format!(
+                "Fix the test, approve the predicate under `approved_predicates`, or justify the skip on its own line: `allow-ignore: {} <reason>`.",
+                leaf_name(test)
+            )
+        } else {
+            "Conditional skips are monitored. If this was unintended, remove the conditional ignore attribute.".to_string()
         };
         out.push(
             severity,
@@ -1227,7 +1253,7 @@ pub fn evaluate_ignored_tests(
                 "Test `{}` is conditionally skipped under predicate `{}`.",
                 test.name, cond
             ),
-            "Conditional skips are monitored. If this was unintended, remove the conditional ignore attribute.",
+            &remediation,
         );
     }
 
@@ -2013,5 +2039,226 @@ mod tests {
             evaluate_assertion_reduction(&pairs, &[], &settings, &file_directive, false).unwrap();
         assert_eq!(out_file_override.violations.len(), 0);
         assert_eq!(out_file_override.overrides.len(), 1);
+    }
+
+    #[test]
+    fn ignored_tests_ci_skip_is_error_and_generic_skip_is_note() {
+        let ci_test = TestFn {
+            name: "test_ci".to_string(),
+            line: 5,
+            conditional_ignore: Some("os.Getenv(\"CI\") != \"\"".to_string()),
+            ..Default::default()
+        };
+        let generic_test = TestFn {
+            name: "test_generic".to_string(),
+            line: 15,
+            conditional_ignore: Some("os.Getenv(\"CUSTOM\") != \"\"".to_string()),
+            ..Default::default()
+        };
+        let added = [
+            Located {
+                path: "tests/suite.go",
+                file_survives: true,
+                test: &ci_test,
+            },
+            Located {
+                path: "tests/suite.go",
+                file_survives: true,
+                test: &generic_test,
+            },
+        ];
+
+        let default_settings = crate::config::IgnoredTestsGate::default();
+
+        // 1. Positive control: CI skip is Error by default
+        let out = evaluate_ignored_tests(&[], &added, &default_settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 2);
+        let ci_v = out
+            .violations
+            .iter()
+            .find(|v| v.message.contains("test_ci"))
+            .unwrap();
+        assert_eq!(ci_v.severity, crate::config::Severity::Error);
+        assert!(ci_v
+            .remediation
+            .as_deref()
+            .unwrap()
+            .contains("approved_predicates"));
+        assert!(ci_v
+            .remediation
+            .as_deref()
+            .unwrap()
+            .contains("allow-ignore: test_ci <reason>"));
+
+        // 2. Negative control: Generic skip is Note
+        let generic_v = out
+            .violations
+            .iter()
+            .find(|v| v.message.contains("test_generic"))
+            .unwrap();
+        assert_eq!(generic_v.severity, crate::config::Severity::Note);
+
+        // 3. Staged mode softens CI skip to Warning
+        let staged_out = evaluate_ignored_tests(&[], &added, &default_settings, &[], true).unwrap();
+        let staged_ci_v = staged_out
+            .violations
+            .iter()
+            .find(|v| v.message.contains("test_ci"))
+            .unwrap();
+        assert_eq!(staged_ci_v.severity, crate::config::Severity::Warning);
+
+        // 4. Negative control: approved_predicates waives CI condition
+        let mut approved_settings = default_settings.clone();
+        approved_settings.approved_predicates = vec!["CI".to_string()];
+        let approved_out =
+            evaluate_ignored_tests(&[], &added, &approved_settings, &[], false).unwrap();
+        assert_eq!(approved_out.violations.len(), 1);
+        assert!(approved_out.violations[0].message.contains("test_generic"));
+
+        // 5. Negative control: allow-ignore directive lifts CI condition
+        let directive = [crate::tokens::ParsedDirective {
+            directive: "allow-ignore".to_string(),
+            reason: "test_ci flaky in CI runner".to_string(),
+            source: crate::tokens::OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let lifted_out =
+            evaluate_ignored_tests(&[], &added, &default_settings, &directive, false).unwrap();
+        assert_eq!(lifted_out.violations.len(), 1);
+        assert!(lifted_out.violations[0].message.contains("test_generic"));
+        assert_eq!(lifted_out.overrides.len(), 1);
+    }
+
+    #[test]
+    fn ignored_tests_ci_skip_severity_configuration() {
+        let ci_test = TestFn {
+            name: "test_ci".to_string(),
+            line: 5,
+            conditional_ignore: Some("os.Getenv(\"CI\") != \"\"".to_string()),
+            ..Default::default()
+        };
+        let added = [Located {
+            path: "tests/suite.go",
+            file_survives: true,
+            test: &ci_test,
+        }];
+
+        let settings = crate::config::IgnoredTestsGate {
+            ci_skip_severity: Some(crate::config::Severity::Warning),
+            ..Default::default()
+        };
+        let out = evaluate_ignored_tests(&[], &added, &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 1);
+        assert_eq!(out.violations[0].severity, crate::config::Severity::Warning);
+    }
+
+    #[test]
+    fn ignored_tests_approved_predicates_boundary_matching_and_negative_controls() {
+        let miri_ci_test = TestFn {
+            name: "test_miri_ci".to_string(),
+            line: 1,
+            conditional_ignore: Some("cfg!(miri) || std::env::var(\"CI\").is_ok()".to_string()),
+            ..Default::default()
+        };
+        let gitlab_test = TestFn {
+            name: "test_gitlab".to_string(),
+            line: 10,
+            conditional_ignore: Some("os.Getenv(\"GITLAB_CI\") != \"\"".to_string()),
+            ..Default::default()
+        };
+        let miri_like_ci_test = TestFn {
+            name: "test_miri_like_ci".to_string(),
+            line: 20,
+            conditional_ignore: Some(
+                "if os.Getenv(\"SKIP_MIRI_LIKE\") != \"\" || os.Getenv(\"CI\") != \"\"".to_string(),
+            ),
+            ..Default::default()
+        };
+        let ci_test = TestFn {
+            name: "test_ci".to_string(),
+            line: 30,
+            conditional_ignore: Some("os.Getenv(\"CI\") != \"\"".to_string()),
+            ..Default::default()
+        };
+
+        let added = [
+            Located {
+                path: "t.rs",
+                file_survives: true,
+                test: &miri_ci_test,
+            },
+            Located {
+                path: "t.go",
+                file_survives: true,
+                test: &gitlab_test,
+            },
+            Located {
+                path: "t.go",
+                file_survives: true,
+                test: &miri_like_ci_test,
+            },
+            Located {
+                path: "t.go",
+                file_survives: true,
+                test: &ci_test,
+            },
+        ];
+
+        let default_settings = crate::config::IgnoredTestsGate::default();
+
+        // 1. Negative control: approving "miri" does NOT waive "cfg!(miri) || CI"
+        let mut miri_approved = default_settings.clone();
+        miri_approved.approved_predicates = vec!["miri".to_string()];
+        let out_miri = evaluate_ignored_tests(&[], &added, &miri_approved, &[], false).unwrap();
+        let v_miri_ci = out_miri
+            .violations
+            .iter()
+            .find(|v| v.message.contains("test_miri_ci"))
+            .unwrap();
+        assert_eq!(v_miri_ci.severity, crate::config::Severity::Error);
+
+        // 2. Negative control: approving "CI" does NOT waive "GITLAB_CI"
+        let mut ci_approved = default_settings.clone();
+        ci_approved.approved_predicates = vec!["CI".to_string()];
+        let out_ci = evaluate_ignored_tests(&[], &added, &ci_approved, &[], false).unwrap();
+        let v_gitlab = out_ci
+            .violations
+            .iter()
+            .find(|v| v.message.contains("test_gitlab"))
+            .unwrap();
+        assert_eq!(v_gitlab.severity, crate::config::Severity::Error);
+
+        // 3. Negative control: approving "SKIP" does NOT waive "SKIP_MIRI_LIKE"
+        let mut skip_approved = default_settings.clone();
+        skip_approved.approved_predicates = vec!["SKIP".to_string()];
+        let out_skip = evaluate_ignored_tests(&[], &added, &skip_approved, &[], false).unwrap();
+        let v_miri_like = out_skip
+            .violations
+            .iter()
+            .find(|v| v.message.contains("test_miri_like_ci"))
+            .unwrap();
+        assert_eq!(v_miri_like.severity, crate::config::Severity::Error);
+
+        // 4. Negative control: approving "C" does NOT waive "CI"
+        let mut c_approved = default_settings.clone();
+        c_approved.approved_predicates = vec!["C".to_string()];
+        let out_c = evaluate_ignored_tests(&[], &added, &c_approved, &[], false).unwrap();
+        let v_ci = out_c
+            .violations
+            .iter()
+            .find(|v| v.message.contains("test_ci"))
+            .unwrap();
+        assert_eq!(v_ci.severity, crate::config::Severity::Error);
+
+        // 5. Positive controls: approving all required CI vars waives them
+        let mut all_approved = default_settings.clone();
+        all_approved.approved_predicates = vec![
+            "miri".to_string(),
+            "CI".to_string(),
+            "GITLAB_CI".to_string(),
+            "SKIP_MIRI_LIKE".to_string(),
+        ];
+        let out_all = evaluate_ignored_tests(&[], &added, &all_approved, &[], false).unwrap();
+        assert_eq!(out_all.violations.len(), 0);
     }
 }
