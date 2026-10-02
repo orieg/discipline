@@ -142,3 +142,66 @@ fn provenance_is_skipped_with_a_notice_off_github_or_off_the_default_store() {
         assert!(out.contains("build provenance not verified"), "{out}");
     }
 }
+
+#[test]
+fn install_tool_script_invokes_correct_version_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let stub_bin = dir.path().join("stubs");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&stub_bin).unwrap();
+    let log = dir.path().join("invocations.log");
+
+    std::fs::write(
+        stub_bin.join("curl"),
+        "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --output) touch \"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::write(stub_bin.join("sha256sum"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(
+        stub_bin.join("tar"),
+        format!(
+            "#!/bin/sh\noutdir=\"\"\ntarget=\"\"\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -C) outdir=\"$2\"; shift 2 ;;\n    *) target=\"$1\"; shift ;;\n  esac\ndone\ntool=\"$(basename \"$target\")\"\nmkdir -p \"$outdir\"\nprintf '#!/bin/sh\\necho \"ARGS: $*\" >> \"%s\"\\n' \"{}\" > \"$outdir/$tool\"\nchmod +x \"$outdir/$tool\"\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for stub in ["curl", "sha256sum", "tar"] {
+            std::fs::set_permissions(stub_bin.join(stub), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+    }
+
+    let path = format!("{}:{}", stub_bin.display(), std::env::var("PATH").unwrap());
+
+    for (tool, expected_args) in [
+        ("actionlint", "--version"),
+        ("act", "--version"),
+        ("scorecard", "version"),
+        ("cargo-cyclonedx", "cyclonedx --version"),
+    ] {
+        let out = Command::new("bash")
+            .arg("tests/action/install-tool.sh")
+            .arg(tool)
+            .env("PATH", &path)
+            .env("HOME", &home)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "failed for {tool}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let recorded = std::fs::read_to_string(&log).unwrap();
+        let last_line = recorded.lines().last().unwrap();
+        assert_eq!(
+            last_line,
+            &format!("ARGS: {expected_args}"),
+            "wrong invocation for tool {tool}"
+        );
+    }
+}
