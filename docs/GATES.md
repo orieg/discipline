@@ -265,6 +265,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `command/count-below-ratchet` | Command Count Below Ratchet Floor |
 | `command/count-pattern-unmatched` | Count Pattern Unmatched |
 | `command/base-test-failed` | Base Test Failed Against Head Code |
+| `command/snapshot-mismatch` | Command Output Differs From Snapshot |
 | `sanitizers/canary-diagnostic-missing` | Canary Diagnostic Missing |
 | `sanitizers/violation-detected` | Sanitizer Violation Detected |
 | `msrv/msrv-declaration-missing` | MSRV Declaration Missing |
@@ -1608,6 +1609,16 @@ Notes for adapting it:
 #### `command`
 - **Rule:** Universal, language-neutral fail-closed wrapper for external verification commands. Discipline executes the command directly without shell pipes, captures stdout/stderr concurrently, bounds runtime (timeout = exit 2), detects missing binaries in PATH (exit 2), enforces a test count ratchet against the merge base ref, forbids declared output patterns, fails when zero items/tests are executed, verifies negative-control canaries produce stated diagnostics, and protects preset policy files against stealth deletion.
 - **Untrusted PR Text Guard:** PR diffs cannot alter or introduce commands or preset selections in `discipline.toml` without runner environment authorization (`DISCIPLINE_COMMAND` or `DISCIPLINE_ALLOW_COMMAND_CHANGE`).
+- **Snapshot comparison (`snapshot`):** a command, or a `[[gates.command.commands]]` entry, that names a repository-relative `snapshot` file must print exactly that file's lines to stdout. An example is a public API surface that every change must regenerate, so that each API change is a reviewed diff line.
+  - **Ignored lines:** a line matching a `snapshot_ignore` regex is left out on both sides, for example a generated `#` header naming the tool version.
+  - **Line endings:** `\r\n` and `\n` compare equal, and a missing final newline is not a difference.
+  - **On a mismatch:** `command/snapshot-mismatch` (exit 1) gives the counts, the first differing snapshot line, and up to 40 differing lines (`-` snapshot, `+` output). An output line holding a credential-shaped value is withheld.
+  - **Exit 2 instead of a comparison:** stdout over the 25 MiB capture limit, stdout that is not UTF-8, empty stdout (unless `allow_zero = true`), and a snapshot file that does not exist or is not UTF-8.
+  - **The snapshot file is a policy file:** deleting it in the change is `command/policy-file-deleted`.
+  - **No comparison:** a command that failed is reported as `command/command-failed` and is not compared.
+  - **Scope:** an entry's `snapshot` and `snapshot_ignore` are its own and are not inherited from `[gates.command]`.
+  - **Rejected settings (exit 2):** a path outside the repository, a pattern that does not compile, `snapshot_ignore` without `snapshot`, and `snapshot` on the `base-tests` preset.
+  - **`config-integrity`:** removing or repointing `snapshot`, or gaining a `snapshot_ignore` pattern, is a weakening. Adding a snapshot is not.
 - **Turnkey Presets:** Turnkey data-driven configurations providing pre-calibrated defaults for common high-assurance tools:
   - **Diff-Scoped Mutation Testing:** `cargo-mutants` (`cargo mutants --in-diff`, zero-mutants guard `0 mutants tested`, forbids `survived`, `MISSED`), `mutmut` (`mutmut run`), `stryker` (`npx stryker run`), `pit` (`mvn org.pitest:pitest-maven:mutationCoverage`).
   - **Diff Coverage:** `lcov` (`lcov --summary lcov.info`), `cobertura` (`coverage.xml`).
@@ -1623,7 +1634,8 @@ Notes for adapting it:
   - Command timeouts exceeding `timeout_seconds` (fails closed with exit 2).
   - Forbidden strings or regexes detected in stdout or stderr.
   - Zero tests or items executed when `allow_zero = false`.
-  - Stealth deletion of preset policy files (e.g. `deny.toml`, `api.snapshot`).
+  - Stealth deletion of preset policy files (e.g. `deny.toml`, `api.snapshot`) and of a configured `snapshot` file.
+  - stdout that no longer matches the committed `snapshot` file (`command/snapshot-mismatch`).
   - Extracted count dropping below the `min_count` ratchet floor established on the merge base ref.
   - Negative-control canaries failing to produce their declared diagnostic message or unexpectedly succeeding.
   - Tests passing on the base ref that fail when executed against the head code under the `base-tests` preset (`command/base-test-failed`).
@@ -1636,7 +1648,7 @@ Notes for adapting it:
   allow-behavior-change: test_calc intentional change to calculator behavior
   ```
 - **Lifting directive:** `allow-command: <command-or-preset-name> <reason>` for command execution failures; `allow-behavior-change: <test-name> <reason>` for `command/base-test-failed` under the `base-tests` preset.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `preset`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `commands`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `preset`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `snapshot`, `snapshot_ignore`, `commands`.
 
 #### `sanitizers`
 - **Rule:** Runs `cargo test -Zsanitizer=<sanitizer>` (`sanitizer` default `address`; nightly Rust) and, with `canary = true`, first a negative-control race canary (`cargo test --test race_canary`) that must print `ThreadSanitizer: data race`.

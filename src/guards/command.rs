@@ -8,6 +8,7 @@
 //! - `forbid_output` patterns that must not appear in stdout or stderr
 //! - `zero_items_pattern` and zero-count guard (failure unless `allow_zero = true`)
 //! - `count_pattern` + `min_count` ratchet read from BASE ref
+//! - `snapshot`: stdout must match a committed file line for line (the file is a policy file)
 //! - Untrusted PR text guard: commands cannot be modified in PR diff without runner authorization
 
 use crate::config::{DisciplineConfig, GateSettings};
@@ -28,7 +29,14 @@ pub struct CommandRunResult {
     pub status: ExitStatus,
     pub stdout: String,
     pub stderr: String,
+    /// stdout reached [`MAX_CAPTURE_BYTES`] and the rest was not read.
+    pub stdout_truncated: bool,
+    /// stdout was not valid UTF-8; `stdout` holds a lossy decoding.
+    pub stdout_invalid_utf8: bool,
 }
+
+/// Bytes read from each of a command's streams; anything past it is not captured.
+pub const MAX_CAPTURE_BYTES: u64 = 25 * 1024 * 1024;
 
 /// Splits a command line into executable and arguments, honoring single and double quotes.
 pub fn split_command_line(cmd: &str) -> Result<Vec<String>> {
@@ -135,11 +143,11 @@ pub fn run_command_bounded(
     let stdout_pipe = child.stdout.take().expect("piped stdout");
     let stderr_pipe = child.stderr.take().expect("piped stderr");
 
-    const MAX_CAPTURE_BYTES: u64 = 25 * 1024 * 1024; // 25 MiB cap per stream
-
+    // One byte past the cap is read so that output of exactly the cap is not taken for
+    // a cut-off one.
     let stdout_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
-        let mut reader = std::io::Read::take(stdout_pipe, MAX_CAPTURE_BYTES);
+        let mut reader = std::io::Read::take(stdout_pipe, MAX_CAPTURE_BYTES + 1);
         let _ = reader.read_to_end(&mut buf);
         buf
     });
@@ -192,13 +200,18 @@ pub fn run_command_bounded(
         }
     };
 
-    let stdout_bytes = stdout_handle.join().unwrap_or_default();
+    let mut stdout_bytes = stdout_handle.join().unwrap_or_default();
     let stderr_bytes = stderr_handle.join().unwrap_or_default();
+    let stdout_truncated = stdout_bytes.len() as u64 > MAX_CAPTURE_BYTES;
+    stdout_bytes.truncate(MAX_CAPTURE_BYTES as usize);
+    let stdout_invalid_utf8 = !stdout_truncated && std::str::from_utf8(&stdout_bytes).is_err();
 
     Ok(CommandRunResult {
         status,
         stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
         stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+        stdout_truncated,
+        stdout_invalid_utf8,
     })
 }
 
@@ -288,7 +301,72 @@ struct ResolvedCommand {
     allow_zero: bool,
     canary_command: Option<String>,
     canary_expected_diagnostic: Option<String>,
-    policy_files: &'static [&'static str],
+    policy_files: Vec<String>,
+    snapshot: Option<Snapshot>,
+}
+
+/// A `snapshot` setting, validated: a repository-relative path and compiled patterns.
+struct Snapshot {
+    path: String,
+    ignore: Vec<regex::Regex>,
+}
+
+/// Validates a `snapshot` path and its `snapshot_ignore` patterns. A path that leaves the
+/// repository or a pattern that does not compile is a configuration error (exit 2), never
+/// a substring match or a silent skip.
+fn resolve_snapshot(
+    owner: &str,
+    path: Option<&String>,
+    ignore: &[String],
+) -> Result<Option<Snapshot>> {
+    let Some(path) = path else {
+        if !ignore.is_empty() {
+            return Err(tag(
+                Reason::Configuration,
+                anyhow!("{owner} sets `snapshot_ignore` without `snapshot`"),
+            ));
+        }
+        return Ok(None);
+    };
+    let p = Path::new(path);
+    let escapes = p.components().any(|c| {
+        !matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    });
+    if path.trim().is_empty() || escapes {
+        return Err(tag(
+            Reason::Configuration,
+            anyhow!("{owner} `snapshot = \"{path}\"` must be a path inside the repository, relative to its root"),
+        ));
+    }
+    let ignore = ignore
+        .iter()
+        .map(|pat| {
+            regex::Regex::new(pat).map_err(|e| {
+                tag(
+                    Reason::Configuration,
+                    anyhow!("{owner} `snapshot_ignore` pattern `{pat}` is not a valid regex: {e}"),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(Snapshot {
+        path: path.trim_start_matches("./").to_string(),
+        ignore,
+    }))
+}
+
+/// Static policy files of a preset, plus the snapshot file when one is configured.
+fn policy_files_for(preset: &[&str], snapshot: &Option<Snapshot>) -> Vec<String> {
+    let mut files: Vec<String> = preset.iter().map(|s| s.to_string()).collect();
+    if let Some(snap) = snapshot {
+        if !files.contains(&snap.path) {
+            files.push(snap.path.clone());
+        }
+    }
+    files
 }
 
 /// Evaluates the `command` verification gate.
@@ -354,9 +432,21 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         let canary_diag = gate.canary_expected_diagnostic.clone().or_else(|| {
             preset_def.and_then(|d| d.canary_expected_diagnostic.map(|s| s.to_string()))
         });
-        let policy_files = preset_def.map(|d| d.policy_files).unwrap_or(&[]);
+        let snapshot = resolve_snapshot(
+            "`[gates.command]`",
+            gate.snapshot.as_ref(),
+            &gate.snapshot_ignore,
+        )?;
+        let policy_files =
+            policy_files_for(preset_def.map(|d| d.policy_files).unwrap_or(&[]), &snapshot);
 
         let is_base = gate.preset.as_deref() == Some("base-tests");
+        if is_base && snapshot.is_some() {
+            return Err(tag(
+                Reason::Configuration,
+                anyhow!("`[gates.command]` runs the base tests, whose output is not compared: remove `snapshot`"),
+            ));
+        }
         resolved.push(ResolvedCommand {
             name: gate.preset.clone().unwrap_or_else(|| "default".to_string()),
             is_base_tests: is_base,
@@ -370,7 +460,13 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             canary_command: canary_cmd,
             canary_expected_diagnostic: canary_diag,
             policy_files,
+            snapshot,
         });
+    } else if gate.snapshot.is_some() || !gate.snapshot_ignore.is_empty() {
+        return Err(tag(
+            Reason::Configuration,
+            anyhow!("`[gates.command]` sets `snapshot` without a `command` or `preset` to produce the output"),
+        ));
     }
 
     for entry in &gate.commands {
@@ -444,9 +540,24 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             })
             .or_else(|| gate.canary_expected_diagnostic.clone());
 
-        let policy_files = preset_def.map(|d| d.policy_files).unwrap_or(&[]);
+        let snapshot = resolve_snapshot(
+            &format!("command entry `{}`", entry.name),
+            entry.snapshot.as_ref(),
+            &entry.snapshot_ignore,
+        )?;
+        let policy_files =
+            policy_files_for(preset_def.map(|d| d.policy_files).unwrap_or(&[]), &snapshot);
 
         let is_base = entry.preset.as_deref() == Some("base-tests") || entry.name == "base-tests";
+        if is_base && snapshot.is_some() {
+            return Err(tag(
+                Reason::Configuration,
+                anyhow!(
+                    "command entry `{}` runs the base tests, whose output is not compared: remove `snapshot`",
+                    entry.name
+                ),
+            ));
+        }
         resolved.push(ResolvedCommand {
             name: entry.name.clone(),
             is_base_tests: is_base,
@@ -463,6 +574,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             canary_command: canary_cmd,
             canary_expected_diagnostic: canary_diag,
             policy_files,
+            snapshot,
         });
     }
 
@@ -480,10 +592,12 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         let mut command_violations = Vec::new();
 
         // 0. Check required policy files for stealth deletion
-        for pf in item.policy_files {
+        let mut deleted_policy_files = Vec::new();
+        for pf in &item.policy_files {
             if let Ok(Some(_)) = ctx.git.base_content(pf) {
                 let pf_path = ctx.git.root().join(pf);
                 if !pf_path.exists() {
+                    deleted_policy_files.push(pf.clone());
                     command_violations.push((
                         &crate::findings::POLICY_FILE_DELETED,
                         format!(
@@ -657,6 +771,29 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             }
         }
 
+        // Compare stdout with the committed snapshot. A failed command has already been
+        // reported, and a deleted snapshot is reported as a deleted policy file.
+        if let Some(ref snap) = item.snapshot {
+            if !run_res.status.success() {
+                outcome.notes.push(format!(
+                    "`{}`: snapshot `{}` not compared because the command failed",
+                    item.name, snap.path
+                ));
+            } else if !deleted_policy_files.contains(&snap.path) {
+                match compare_snapshot(ctx.git.root(), &item.name, snap, &run_res, item.allow_zero)? {
+                    SnapshotVerdict::Match { compared, ignored } => outcome.notes.push(format!(
+                        "`{}`: output matches snapshot `{}` ({compared} lines compared, {ignored} ignored)",
+                        item.name, snap.path
+                    )),
+                    SnapshotVerdict::Mismatch(message) => command_violations.push((
+                        &crate::findings::SNAPSHOT_MISMATCH,
+                        message,
+                        "Regenerate the snapshot with the same command and commit it with the change, so the difference is reviewed; or fix the change that altered the output.",
+                    )),
+                }
+            }
+        }
+
         // Apply findings or an override directive covering this command name or
         // "default". One directive lifts every finding of the command; the record names
         // the first, as the report would list it.
@@ -691,6 +828,227 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     }
 
     Ok(outcome)
+}
+
+/// Outcome of comparing a command's stdout with its committed snapshot.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SnapshotVerdict {
+    Match {
+        compared: usize,
+        ignored: usize,
+    },
+    /// The finding message, with a capped excerpt of the differing lines.
+    Mismatch(String),
+}
+
+/// Lines of the difference shown in a finding; the counts cover the rest.
+const SNAPSHOT_EXCERPT_LINES: usize = 40;
+
+/// Compares `run`'s stdout with the snapshot file. Output that was cut off at the capture
+/// limit, is not UTF-8 or is empty (unless `allow_zero`), and a snapshot file that is
+/// missing or not UTF-8, cannot be compared: each is exit 2, never a match.
+fn compare_snapshot(
+    root: &Path,
+    name: &str,
+    snap: &Snapshot,
+    run: &CommandRunResult,
+    allow_zero: bool,
+) -> Result<SnapshotVerdict> {
+    let cannot = |why: String| -> anyhow::Error {
+        tag(
+            Reason::Gate,
+            anyhow!(
+                "command `{name}`: cannot compare with snapshot `{}`: {why}",
+                snap.path
+            ),
+        )
+    };
+    if run.stdout_truncated {
+        return Err(cannot(format!(
+            "stdout exceeded the {MAX_CAPTURE_BYTES}-byte capture limit"
+        )));
+    }
+    if run.stdout_invalid_utf8 {
+        return Err(cannot("stdout is not valid UTF-8".to_string()));
+    }
+    if run.stdout.trim().is_empty() && !allow_zero {
+        return Err(cannot(
+            "the command printed nothing to stdout (set `allow_zero = true` if an empty snapshot is intended)"
+                .to_string(),
+        ));
+    }
+    let bytes = match std::fs::read(root.join(&snap.path)) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(cannot(
+                "the snapshot file does not exist; generate it with the command and commit it"
+                    .to_string(),
+            ))
+        }
+        Err(e) => return Err(cannot(format!("the snapshot file could not be read: {e}"))),
+    };
+    let expected_text = String::from_utf8(bytes)
+        .map_err(|_| cannot("the snapshot file is not valid UTF-8".to_string()))?;
+
+    Ok(compare_snapshot_text(
+        name,
+        &snap.path,
+        &expected_text,
+        &run.stdout,
+        &snap.ignore,
+    ))
+}
+
+/// Compares `output` with `snapshot` (the file's text) line for line, leaving out lines
+/// that match an `ignore` pattern on either side.
+pub fn compare_snapshot_text(
+    name: &str,
+    path: &str,
+    snapshot: &str,
+    output: &str,
+    ignore: &[regex::Regex],
+) -> SnapshotVerdict {
+    let (expected, ignored_expected) = snapshot_lines(snapshot, ignore);
+    let (actual, ignored_actual) = snapshot_lines(output, ignore);
+    // Line numbers differ when ignored lines differ in number; only the text is compared.
+    if expected.iter().map(|l| l.1).eq(actual.iter().map(|l| l.1)) {
+        return SnapshotVerdict::Match {
+            compared: actual.len(),
+            ignored: ignored_expected.max(ignored_actual),
+        };
+    }
+    SnapshotVerdict::Mismatch(mismatch_message(name, path, &expected, &actual))
+}
+
+/// Lines of `text` for the comparison: `\r\n` and `\n` both end a line, a final newline
+/// does not add an empty line, and a line matching an ignore pattern is dropped. Returns
+/// the kept lines (with their 1-based line numbers) and how many were dropped.
+fn snapshot_lines<'a>(text: &'a str, ignore: &[regex::Regex]) -> (Vec<(usize, &'a str)>, usize) {
+    let mut kept = Vec::new();
+    let mut dropped = 0;
+    for (i, line) in text.lines().enumerate() {
+        if ignore.iter().any(|re| re.is_match(line)) {
+            dropped += 1;
+        } else {
+            kept.push((i + 1, line));
+        }
+    }
+    // `lines()` ends a line at `\n` or `\r\n`, but a last line with no `\n` keeps a
+    // trailing `\r`; strip it too, so a CRLF checkout compares equal to an LF one.
+    let kept = kept
+        .into_iter()
+        .map(|(n, l)| (n, l.strip_suffix('\r').unwrap_or(l)))
+        .collect();
+    (kept, dropped)
+}
+
+/// One line of a difference: `-` only in the snapshot, `+` only in the output.
+#[derive(Debug, PartialEq, Eq)]
+enum DiffLine<'a> {
+    Removed(usize, &'a str),
+    Added(&'a str),
+}
+
+/// Lines only in `expected` or only in `actual`, in order. The common prefix and suffix
+/// are trimmed first; the rest is aligned by longest common subsequence when it is small
+/// enough, and otherwise reported as one replaced block.
+fn diff_lines<'a>(expected: &[(usize, &'a str)], actual: &[(usize, &'a str)]) -> Vec<DiffLine<'a>> {
+    let prefix = expected
+        .iter()
+        .zip(actual)
+        .take_while(|(e, a)| e.1 == a.1)
+        .count();
+    let suffix = expected[prefix..]
+        .iter()
+        .rev()
+        .zip(actual[prefix..].iter().rev())
+        .take_while(|(e, a)| e.1 == a.1)
+        .count();
+    let e = &expected[prefix..expected.len() - suffix];
+    let a = &actual[prefix..actual.len() - suffix];
+
+    const MAX_CELLS: usize = 4_000_000;
+    let mut out = Vec::new();
+    if e.len().saturating_mul(a.len()) > MAX_CELLS {
+        out.extend(e.iter().map(|(n, l)| DiffLine::Removed(*n, l)));
+        out.extend(a.iter().map(|(_, l)| DiffLine::Added(l)));
+        return out;
+    }
+    // lcs[i][j]: length of the longest common subsequence of e[i..] and a[j..].
+    let (n, m) = (e.len(), a.len());
+    let mut lcs = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            lcs[i][j] = if e[i].1 == a[j].1 {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    while i < n || j < m {
+        if i < n && j < m && e[i].1 == a[j].1 {
+            i += 1;
+            j += 1;
+        } else if j < m && (i == n || lcs[i][j + 1] >= lcs[i + 1][j]) {
+            out.push(DiffLine::Added(a[j].1));
+            j += 1;
+        } else {
+            out.push(DiffLine::Removed(e[i].0, e[i].1));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The finding message: counts, the first differing snapshot line, and an excerpt of at
+/// most [`SNAPSHOT_EXCERPT_LINES`] lines. An output line is the tool's text, not the
+/// committed file's, so one that holds a literal credential is withheld.
+fn mismatch_message(
+    name: &str,
+    path: &str,
+    expected: &[(usize, &str)],
+    actual: &[(usize, &str)],
+) -> String {
+    let diff = diff_lines(expected, actual);
+    let removed = diff
+        .iter()
+        .filter(|d| matches!(d, DiffLine::Removed(..)))
+        .count();
+    let added = diff.len() - removed;
+    let first = diff
+        .iter()
+        .find_map(|d| match d {
+            DiffLine::Removed(n, _) => Some(*n),
+            DiffLine::Added(_) => None,
+        })
+        .map(|n| format!("; first differing snapshot line {n}"))
+        .unwrap_or_default();
+    let classes = super::token_formats::compile_token_classes().unwrap_or_default();
+    let shown = |l: &str| -> String {
+        if classes.iter().any(|c| c.matches_literal(l)) {
+            "[line withheld: it holds a credential-shaped value]".to_string()
+        } else {
+            l.to_string()
+        }
+    };
+    let mut msg = format!(
+        "Command `{name}` output differs from snapshot `{path}`: {added} line(s) only in the output, {removed} only in the snapshot{first}."
+    );
+    for d in diff.iter().take(SNAPSHOT_EXCERPT_LINES) {
+        match d {
+            DiffLine::Removed(_, l) => msg.push_str(&format!("\n- {}", shown(l))),
+            DiffLine::Added(l) => msg.push_str(&format!("\n+ {}", shown(l))),
+        }
+    }
+    if diff.len() > SNAPSHOT_EXCERPT_LINES {
+        msg.push_str(&format!(
+            "\n... {} more differing line(s) not shown",
+            diff.len() - SNAPSHOT_EXCERPT_LINES
+        ));
+    }
+    msg
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1136,5 +1494,281 @@ mod tests {
         assert_eq!(cases[0].id, "\"quoted\" & <tagged>");
         assert_eq!(cases[0].status, TestStatus::Failed);
         assert_eq!(cases[0].failure_message.as_deref(), Some("\"failed\""));
+    }
+
+    // --- snapshot comparison ---
+
+    fn run_with(stdout: &str) -> CommandRunResult {
+        #[cfg(unix)]
+        let status = std::os::unix::process::ExitStatusExt::from_raw(0);
+        #[cfg(windows)]
+        let status = std::os::windows::process::ExitStatusExt::from_raw(0);
+        CommandRunResult {
+            status,
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            stdout_truncated: false,
+            stdout_invalid_utf8: false,
+        }
+    }
+
+    fn snap_in(dir: &Path, content: &[u8], ignore: &[&str]) -> Snapshot {
+        std::fs::write(dir.join("api.txt"), content).unwrap();
+        let ignore: Vec<String> = ignore.iter().map(|s| s.to_string()).collect();
+        resolve_snapshot("test", Some(&"api.txt".to_string()), &ignore)
+            .unwrap()
+            .unwrap()
+    }
+
+    fn reason(e: &anyhow::Error) -> Reason {
+        crate::could_not_check::classify(e).0
+    }
+
+    #[test]
+    fn snapshot_matches_identical_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = snap_in(dir.path(), b"pub fn a()\npub fn b()\n", &[]);
+        let v = compare_snapshot(
+            dir.path(),
+            "api",
+            &snap,
+            &run_with("pub fn a()\npub fn b()\n"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            SnapshotVerdict::Match {
+                compared: 2,
+                ignored: 0
+            }
+        );
+    }
+
+    #[test]
+    fn snapshot_reports_a_changed_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = snap_in(dir.path(), b"pub fn a()\npub fn b()\npub fn c()\n", &[]);
+        let v = compare_snapshot(
+            dir.path(),
+            "api",
+            &snap,
+            &run_with("pub fn a()\npub fn b2()\npub fn c()\n"),
+            false,
+        )
+        .unwrap();
+        let SnapshotVerdict::Mismatch(msg) = v else {
+            panic!("expected a mismatch, got {v:?}");
+        };
+        assert!(
+            msg.contains("1 line(s) only in the output, 1 only in the snapshot"),
+            "{msg}"
+        );
+        assert!(msg.contains("first differing snapshot line 2"), "{msg}");
+        assert!(
+            msg.contains("\n- pub fn b()") && msg.contains("\n+ pub fn b2()"),
+            "{msg}"
+        );
+        assert!(
+            !msg.contains("pub fn a()") && !msg.contains("pub fn c()"),
+            "unchanged lines shown: {msg}"
+        );
+    }
+
+    #[test]
+    fn snapshot_crlf_and_final_newline_compare_equal() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = snap_in(dir.path(), b"pub fn a()\r\npub fn b()\r\n", &[]);
+        let v = compare_snapshot(
+            dir.path(),
+            "api",
+            &snap,
+            &run_with("pub fn a()\npub fn b()"),
+            false,
+        )
+        .unwrap();
+        assert!(
+            matches!(v, SnapshotVerdict::Match { compared: 2, .. }),
+            "{v:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_ignore_drops_header_lines_on_both_sides() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = snap_in(dir.path(), b"# rendered by tool 1.0\npub fn a()\n", &["^#"]);
+        let v = compare_snapshot(
+            dir.path(),
+            "api",
+            &snap,
+            &run_with("# rendered by tool 2.0\npub fn a()\n"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            SnapshotVerdict::Match {
+                compared: 1,
+                ignored: 1
+            }
+        );
+        // A header on one side only shifts line numbers; the text still matches.
+        let v =
+            compare_snapshot(dir.path(), "api", &snap, &run_with("pub fn a()\n"), false).unwrap();
+        assert_eq!(
+            v,
+            SnapshotVerdict::Match {
+                compared: 1,
+                ignored: 1
+            }
+        );
+        // Negative control: without the pattern the header difference is a mismatch.
+        let plain = snap_in(dir.path(), b"# rendered by tool 1.0\npub fn a()\n", &[]);
+        let v = compare_snapshot(
+            dir.path(),
+            "api",
+            &plain,
+            &run_with("# rendered by tool 2.0\npub fn a()\n"),
+            false,
+        )
+        .unwrap();
+        assert!(matches!(v, SnapshotVerdict::Mismatch(_)), "{v:?}");
+    }
+
+    #[test]
+    fn snapshot_cannot_compare_cut_off_or_non_utf8_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = snap_in(dir.path(), b"pub fn a()\n", &[]);
+        let mut cut = run_with("pub fn a()\n");
+        cut.stdout_truncated = true;
+        let e = compare_snapshot(dir.path(), "api", &snap, &cut, false).unwrap_err();
+        assert_eq!(reason(&e), Reason::Gate);
+        assert!(e.to_string().contains("capture limit"), "{e}");
+        let mut bad = run_with("pub fn a()\n");
+        bad.stdout_invalid_utf8 = true;
+        let e = compare_snapshot(dir.path(), "api", &snap, &bad, false).unwrap_err();
+        assert!(e.to_string().contains("not valid UTF-8"), "{e}");
+    }
+
+    #[test]
+    fn snapshot_empty_output_is_not_a_match_unless_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = snap_in(dir.path(), b"", &[]);
+        let e = compare_snapshot(dir.path(), "api", &snap, &run_with("\n"), false).unwrap_err();
+        assert_eq!(reason(&e), Reason::Gate);
+        assert!(e.to_string().contains("printed nothing"), "{e}");
+        let v = compare_snapshot(dir.path(), "api", &snap, &run_with(""), true).unwrap();
+        assert_eq!(
+            v,
+            SnapshotVerdict::Match {
+                compared: 0,
+                ignored: 0
+            }
+        );
+    }
+
+    #[test]
+    fn snapshot_missing_or_non_utf8_file_cannot_be_compared() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = resolve_snapshot("test", Some(&"api.txt".to_string()), &[])
+            .unwrap()
+            .unwrap();
+        let e = compare_snapshot(dir.path(), "api", &snap, &run_with("pub fn a()\n"), false)
+            .unwrap_err();
+        assert_eq!(reason(&e), Reason::Gate);
+        assert!(e.to_string().contains("does not exist"), "{e}");
+        let snap = snap_in(dir.path(), &[0xff, 0xfe, b'\n'], &[]);
+        let e = compare_snapshot(dir.path(), "api", &snap, &run_with("pub fn a()\n"), false)
+            .unwrap_err();
+        assert!(
+            e.to_string().contains("snapshot file is not valid UTF-8"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn snapshot_settings_are_validated() {
+        let ok = resolve_snapshot(
+            "t",
+            Some(&"./.github/api/x.txt".to_string()),
+            &["^#".to_string()],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(ok.path, ".github/api/x.txt");
+        for bad in ["../x.txt", "/etc/x.txt", "a/../../x", " "] {
+            let e = resolve_snapshot("t", Some(&bad.to_string()), &[])
+                .err()
+                .unwrap_or_else(|| panic!("`{bad}` accepted"));
+            assert_eq!(reason(&e), Reason::Configuration, "{bad}");
+        }
+        let e = resolve_snapshot("t", Some(&"x.txt".to_string()), &["(".to_string()])
+            .err()
+            .unwrap();
+        assert_eq!(reason(&e), Reason::Configuration);
+        assert!(e.to_string().contains("not a valid regex"), "{e}");
+        let e = resolve_snapshot("t", None, &["^#".to_string()])
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("without `snapshot`"), "{e}");
+        assert!(resolve_snapshot("t", None, &[]).unwrap().is_none());
+    }
+
+    #[test]
+    fn snapshot_path_is_a_policy_file() {
+        let snap = resolve_snapshot("t", Some(&"public-api.txt".to_string()), &[]).unwrap();
+        assert_eq!(
+            policy_files_for(&["public-api.txt"], &snap),
+            vec!["public-api.txt"]
+        );
+        let snap = resolve_snapshot("t", Some(&".github/api.txt".to_string()), &[]).unwrap();
+        assert_eq!(
+            policy_files_for(&["deny.toml"], &snap),
+            vec!["deny.toml", ".github/api.txt"]
+        );
+        assert_eq!(policy_files_for(&["deny.toml"], &None), vec!["deny.toml"]);
+    }
+
+    #[test]
+    fn snapshot_diff_aligns_insertions_and_deletions() {
+        let e = [(1, "a"), (2, "b"), (3, "c"), (4, "d")];
+        let a = [(1, "a"), (2, "x"), (3, "c"), (4, "d"), (5, "e")];
+        assert_eq!(
+            diff_lines(&e, &a),
+            vec![
+                DiffLine::Added("x"),
+                DiffLine::Removed(2, "b"),
+                DiffLine::Added("e")
+            ]
+        );
+        assert!(diff_lines(&e, &e).is_empty());
+    }
+
+    #[test]
+    fn snapshot_message_caps_the_excerpt_and_withholds_credentials() {
+        let expected: Vec<(usize, &str)> = Vec::new();
+        let lines: Vec<String> = (0..SNAPSHOT_EXCERPT_LINES + 5)
+            .map(|i| format!("pub fn f{i}()"))
+            .collect();
+        let actual: Vec<(usize, &str)> = lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (i + 1, l.as_str()))
+            .collect();
+        let msg = mismatch_message("api", "api.txt", &expected, &actual);
+        assert!(
+            msg.contains("... 5 more differing line(s) not shown"),
+            "{msg}"
+        );
+        let key = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
+        let leaked = format!("token = {key}");
+        let msg = mismatch_message(
+            "api",
+            "api.txt",
+            &[(1, "pub fn a()")],
+            &[(1, leaked.as_str())],
+        );
+        assert!(!msg.contains(&key), "credential echoed: {msg}");
+        assert!(msg.contains("[line withheld"), "{msg}");
     }
 }

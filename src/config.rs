@@ -1213,6 +1213,12 @@ pub struct CommandGate {
     pub canary_command: Option<String>,
     /// Expected diagnostic string or regex that the canary MUST produce.
     pub canary_expected_diagnostic: Option<String>,
+    /// Repository-relative file the primary command's stdout must match line for line.
+    /// The file is also a policy file: deleting it in a change is reported.
+    pub snapshot: Option<String>,
+    /// Regexes; a line of the output or of the snapshot that matches one is left out of
+    /// the `snapshot` comparison (a generated header, for example).
+    pub snapshot_ignore: Vec<String>,
     /// Multi-command suite support.
     pub commands: Vec<CommandEntry>,
 }
@@ -1233,6 +1239,8 @@ impl Default for CommandGate {
             allow_zero: false,
             canary_command: None,
             canary_expected_diagnostic: None,
+            snapshot: None,
+            snapshot_ignore: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -1252,6 +1260,11 @@ pub struct CommandEntry {
     pub allow_zero: bool,
     pub canary_command: Option<String>,
     pub canary_expected_diagnostic: Option<String>,
+    /// Repository-relative file this entry's stdout must match. Not inherited from
+    /// `[gates.command]`: each entry names its own.
+    pub snapshot: Option<String>,
+    /// Regexes for lines left out of this entry's `snapshot` comparison. Not inherited.
+    pub snapshot_ignore: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

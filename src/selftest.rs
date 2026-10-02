@@ -2134,6 +2134,34 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: snapshot comparison matches regenerated output and reports drift",
+        || {
+            use crate::guards::command::{compare_snapshot_text, SnapshotVerdict};
+
+            let header = [Regex::new("^#")?];
+            let committed = "# rendered by tool 1.0\npub fn a()\npub fn b()\n";
+            // Positive control: same surface, different header, CRLF line endings.
+            let same = compare_snapshot_text(
+                "api",
+                "api.txt",
+                committed,
+                "# rendered by tool 2.0\r\npub fn a()\r\npub fn b()\r\n",
+                &header,
+            );
+            // Negative control: one item changed and the snapshot was not regenerated.
+            let drift = compare_snapshot_text(
+                "api",
+                "api.txt",
+                committed,
+                "pub fn a()\npub fn b(x: u8)\n",
+                &header,
+            );
+            let drift_ok = matches!(&drift, SnapshotVerdict::Mismatch(m)
+                if m.contains("\n- pub fn b()") && m.contains("\n+ pub fn b(x: u8)"));
+            Ok(same == SnapshotVerdict::Match { compared: 2, ignored: 1 } && drift_ok)
+        },
+    ),
+    (
         "command: canary failure, missing tool, and zero-items are detected",
         || {
             use crate::guards::command::run_command_bounded;

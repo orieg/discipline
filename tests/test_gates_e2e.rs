@@ -11855,6 +11855,188 @@ preset = "cargo-public-api"
     );
 }
 
+/// A repository whose `api` command prints `api.render` (standing in for a renderer such
+/// as `cargo public-api --simplified`) and must match the committed `api.txt`.
+fn snapshot_repo(render: &str, snapshot: Option<&str>) -> Repo {
+    let repo = Repo::new();
+    let mut files = vec![
+        ("api.render", render),
+        (
+            "discipline.toml",
+            r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.deletion-rationale]
+enabled = false
+
+[[gates.command.commands]]
+name = "api"
+command = "cat api.render"
+snapshot = "api.txt"
+snapshot_ignore = ["^#"]
+"#,
+        ),
+    ];
+    if let Some(snap) = snapshot {
+        files.push(("api.txt", snap));
+    }
+    repo.commit_base_files(&files, "base: api snapshot");
+    repo
+}
+
+#[test]
+fn command_snapshot_fails_when_output_drifts_and_passes_when_regenerated() {
+    let repo = snapshot_repo(
+        "pub fn a()\npub fn b()\n",
+        Some("# rendered by tool 1.0\npub fn a()\npub fn b()\n"),
+    );
+
+    // Unchanged output matches; the header line is ignored.
+    let clean = repo.check(&[]);
+    assert_eq!(clean.code, 0, "{}", clean.stdout);
+    let notes = clean.outcome("command")["notes"].to_string();
+    assert!(notes.contains("matches snapshot `api.txt`"), "{notes}");
+
+    // The rendered surface changes but the snapshot is not regenerated: exit 1.
+    repo.write("api.render", "pub fn a()\npub fn b(x: u8)\n");
+    repo.commit("feat: change b");
+    let drift = repo.check(&[]);
+    assert_eq!(drift.code, 1, "{}", drift.stdout);
+    let v = drift.violations("command");
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0]["code"], "command/snapshot-mismatch");
+    let msg = v[0]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("- pub fn b()") && msg.contains("+ pub fn b(x: u8)"),
+        "{msg}"
+    );
+
+    // The same change with the snapshot regenerated passes.
+    repo.write(
+        "api.txt",
+        "# rendered by tool 2.0\npub fn a()\npub fn b(x: u8)\n",
+    );
+    repo.commit("chore: regenerate api snapshot");
+    let regenerated = repo.check(&[]);
+    assert_eq!(regenerated.code, 0, "{}", regenerated.stdout);
+}
+
+#[test]
+fn command_snapshot_deleted_missing_or_empty_never_passes() {
+    // Deleted in the change: reported as a deleted policy file, and not compared.
+    let repo = snapshot_repo("pub fn a()\n", Some("pub fn a()\n"));
+    repo.git(&["rm", "-q", "api.txt"]);
+    repo.commit("chore: drop snapshot");
+    let deleted = repo.check(&[]);
+    assert_eq!(deleted.code, 1, "{}", deleted.stdout);
+    let codes: Vec<_> = deleted
+        .violations("command")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, vec!["command/policy-file-deleted"]);
+
+    // Never committed: there is nothing to compare with, exit 2.
+    let missing = snapshot_repo("pub fn a()\n", None);
+    let run = missing.check(&[]);
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert_eq!(
+        run.could_not_check(),
+        ("gate".to_string(), Some("command".to_string()))
+    );
+    assert!(
+        run.stderr.contains("snapshot file does not exist"),
+        "{}",
+        run.stderr
+    );
+
+    // Empty output never matches an empty snapshot unless `allow_zero` says so: exit 2.
+    let empty = snapshot_repo("", Some(""));
+    let run = empty.check(&[]);
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.stderr.contains("printed nothing"), "{}", run.stderr);
+}
+
+#[test]
+fn command_snapshot_invalid_settings_are_configuration_errors() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[(
+            "discipline.toml",
+            r#"[meta]
+version = 1
+name = "test-repo"
+
+[[gates.command.commands]]
+name = "api"
+command = "echo pub fn a()"
+snapshot = "../outside.txt"
+"#,
+        )],
+        "base: bad snapshot path",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert_eq!(
+        run.could_not_check(),
+        ("configuration".to_string(), Some("command".to_string()))
+    );
+    assert!(
+        run.stderr.contains("must be a path inside the repository"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn command_snapshot_ignore_widened_is_a_config_weakening_and_a_new_snapshot_is_not() {
+    let repo = snapshot_repo("pub fn a()\n", Some("pub fn a()\n"));
+    let base = std::fs::read_to_string(repo.file("discipline.toml")).unwrap();
+
+    // Widening the ignore list lets any output match: config-integrity reports it.
+    repo.write(
+        "discipline.toml",
+        &base.replace(
+            r#"snapshot_ignore = ["^#"]"#,
+            r#"snapshot_ignore = ["^#", ".*"]"#,
+        ),
+    );
+    repo.commit("chore: relax snapshot");
+    let widened = repo.check(&[]);
+    assert_eq!(widened.code, 1, "{}", widened.stdout);
+    assert_eq!(
+        widened.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+
+    // Adding a snapshot to an existing entry only tightens it.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("api.render", "pub fn a()\n"),
+            (
+                "discipline.toml",
+                "[meta]\nversion = 1\nname = \"t\"\n\n[[gates.command.commands]]\nname = \"api\"\ncommand = \"cat api.render\"\n",
+            ),
+        ],
+        "base: api command",
+    );
+    repo.write("api.txt", "pub fn a()\n");
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n\n[[gates.command.commands]]\nname = \"api\"\ncommand = \"cat api.render\"\nsnapshot = \"api.txt\"\n",
+    );
+    repo.commit("ci: snapshot the api");
+    let added = repo.check(&[]);
+    assert!(
+        added.titles("config-integrity").is_empty(),
+        "{}",
+        added.stdout
+    );
+    assert_eq!(added.code, 0, "{}", added.stdout);
+}
+
 // ---- archive-contents ------------------------------------------------------
 
 fn create_test_archive_tgz(path: &std::path::Path, entries: &[(&str, &[u8])]) {

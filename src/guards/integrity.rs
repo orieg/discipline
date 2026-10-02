@@ -70,6 +70,8 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("allowed_suppressions", Direction::Grown),
     ("excluded_jobs", Direction::Grown),
     ("first_party_action_prefixes", Direction::Grown),
+    // A gained pattern leaves more lines out of the snapshot comparison.
+    ("snapshot_ignore", Direction::Grown),
     // Allow-lists: growing or emptying both loosen.
     ("allow_dependencies", Direction::Allowlist),
     ("allowed_paths", Direction::Allowlist),
@@ -187,6 +189,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("preset", Direction::Evidence),
     ("count_pattern", Direction::Evidence),
     ("zero_items_pattern", Direction::Evidence),
+    ("snapshot", Direction::Evidence),
     ("constant_file", Direction::Evidence),
     ("constant_name", Direction::Evidence),
     ("deny_file", Direction::Evidence),
@@ -227,6 +230,9 @@ pub struct EntryShape {
     pub stricter_when_grown: &'static [&'static str],
     /// List fields where a lost item is stricter: no item may be gained.
     pub stricter_when_shrunk: &'static [&'static str],
+    /// Fields whose arrival is stricter: absent on the base entry, any value on head adds a
+    /// check. Once present, they must stay unchanged.
+    pub stricter_when_added: &'static [&'static str],
 }
 
 /// Every other field of a matched entry must be unchanged. `citation_measurement_jobs` is
@@ -238,6 +244,7 @@ pub const ENTRY_SHAPES: &[EntryShape] = &[
         identity: &["name"],
         stricter_when_grown: &["sources"],
         stricter_when_shrunk: &[],
+        stricter_when_added: &[],
     },
     // manifest-sync: more watched paths require the manifest to move more often; fewer
     // exclusions leave less outside the rule.
@@ -246,13 +253,16 @@ pub const ENTRY_SHAPES: &[EntryShape] = &[
         identity: &["manifest", "extract_regex"],
         stricter_when_grown: &["watched_paths"],
         stricter_when_shrunk: &["exclude_paths"],
+        stricter_when_added: &[],
     },
-    // command: one more forbidden output pattern is one more way the command fails.
+    // command: one more forbidden output pattern is one more way the command fails; a
+    // snapshot gained is one more comparison, and fewer ignored lines compare more.
     EntryShape {
         key: "commands",
         identity: &["name"],
         stricter_when_grown: &["forbid_output"],
-        stricter_when_shrunk: &[],
+        stricter_when_shrunk: &["snapshot_ignore"],
+        stricter_when_added: &["snapshot"],
     },
 ];
 
@@ -289,6 +299,8 @@ fn entry_tightened(key: &str, entry: &Value, base: &[Value], head: &[Value]) -> 
             within(bv, hv)
         } else if shape.stricter_when_shrunk.contains(&field.as_str()) {
             within(hv, bv)
+        } else if shape.stricter_when_added.contains(&field.as_str()) && bv.is_none() {
+            true
         } else {
             bv == hv
         }
@@ -1035,6 +1047,10 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
         let mut note = |w: Weakening| found.push(w);
         let w = |key: &str, change: Change| Weakening::new(gate, key, change);
         for (key, bv) in b {
+            // Ignore patterns loosen a comparison only where the base had one to loosen.
+            if key == "snapshot_ignore" && !b.contains_key("snapshot") {
+                continue;
+            }
             // An option this binary does not know is judged as a plain switch, so a
             // stale table degrades to the strict reading rather than to silence.
             let dir = direction_of(key).unwrap_or(Direction::LooserWhenFalse);
@@ -1348,6 +1364,31 @@ mod tests {
         assert!(lost(&narrowed));
         assert!(diff_configs(&base, &added).unwrap().is_empty());
         assert!(diff_configs(&base, &base).unwrap().is_empty());
+    }
+
+    #[test]
+    fn command_snapshot_settings_loosen_when_dropped_or_ignoring_more() {
+        let base = cfg("[gates.command]\ncommand = \"r\"\nsnapshot = \"api.txt\"\nsnapshot_ignore = [\"^#\"]\n");
+        let weakened = |head: &str, needle: &str| {
+            diff_configs(&base, &cfg(head))
+                .unwrap()
+                .iter()
+                .any(|w| w.gate == "command" && w.what().contains(needle))
+        };
+        assert!(weakened(
+            "[gates.command]\ncommand = \"r\"\nsnapshot = \"api.txt\"\nsnapshot_ignore = [\"^#\", \".*\"]\n",
+            "`snapshot_ignore`"
+        ));
+        assert!(weakened("[gates.command]\ncommand = \"r\"\n", "`snapshot`"));
+        assert!(weakened(
+            "[gates.command]\ncommand = \"r\"\nsnapshot = \"other.txt\"\nsnapshot_ignore = [\"^#\"]\n",
+            "`snapshot`"
+        ));
+        // Tightening: one ignore pattern fewer, or a snapshot added where there was none.
+        let tighter = cfg("[gates.command]\ncommand = \"r\"\nsnapshot = \"api.txt\"\n");
+        assert!(diff_configs(&base, &tighter).unwrap().is_empty());
+        let none = cfg("[gates.command]\ncommand = \"r\"\n");
+        assert!(diff_configs(&none, &base).unwrap().is_empty());
     }
 
     #[test]
