@@ -70,6 +70,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("allowed_suppressions", Direction::Grown),
     ("excluded_jobs", Direction::Grown),
     ("first_party_action_prefixes", Direction::Grown),
+    ("snapshot_ignore", Direction::Grown),
     // Allow-lists: growing or emptying both loosen.
     ("allow_dependencies", Direction::Allowlist),
     ("allowed_paths", Direction::Allowlist),
@@ -187,6 +188,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("preset", Direction::Evidence),
     ("count_pattern", Direction::Evidence),
     ("zero_items_pattern", Direction::Evidence),
+    ("snapshot", Direction::Evidence),
     ("constant_file", Direction::Evidence),
     ("constant_name", Direction::Evidence),
     ("deny_file", Direction::Evidence),
@@ -227,6 +229,8 @@ pub struct EntryShape {
     pub stricter_when_grown: &'static [&'static str],
     /// List fields where a lost item is stricter: no item may be gained.
     pub stricter_when_shrunk: &'static [&'static str],
+    /// Fields whose addition is stricter: absent on base, any value on head passes.
+    pub stricter_when_added: &'static [&'static str],
 }
 
 /// Every other field of a matched entry must be unchanged. `citation_measurement_jobs` is
@@ -238,6 +242,7 @@ pub const ENTRY_SHAPES: &[EntryShape] = &[
         identity: &["name"],
         stricter_when_grown: &["sources"],
         stricter_when_shrunk: &[],
+        stricter_when_added: &[],
     },
     // manifest-sync: more watched paths require the manifest to move more often; fewer
     // exclusions leave less outside the rule.
@@ -246,13 +251,16 @@ pub const ENTRY_SHAPES: &[EntryShape] = &[
         identity: &["manifest", "extract_regex"],
         stricter_when_grown: &["watched_paths"],
         stricter_when_shrunk: &["exclude_paths"],
+        stricter_when_added: &[],
     },
-    // command: one more forbidden output pattern is one more way the command fails.
+    // command: one more forbidden output pattern is one more way the command fails; a
+    // snapshot added is one more comparison, and fewer ignored lines compare more.
     EntryShape {
         key: "commands",
         identity: &["name"],
         stricter_when_grown: &["forbid_output"],
-        stricter_when_shrunk: &[],
+        stricter_when_shrunk: &["snapshot_ignore"],
+        stricter_when_added: &["snapshot"],
     },
 ];
 
@@ -289,6 +297,8 @@ fn entry_tightened(key: &str, entry: &Value, base: &[Value], head: &[Value]) -> 
             within(bv, hv)
         } else if shape.stricter_when_shrunk.contains(&field.as_str()) {
             within(hv, bv)
+        } else if shape.stricter_when_added.contains(&field.as_str()) && bv.is_none() {
+            true
         } else {
             bv == hv
         }
@@ -1566,6 +1576,76 @@ mod tests {
         assert_eq!(count(&cmd("", 5)), 1);
         // A field outside the list is judged whole: even a raised floor reads as lost.
         assert_eq!(count(&cmd("\"panicked\"", 9)), 1);
+
+        // A snapshot added to an entry tightens; repointed or removed, it loosens. Fewer
+        // ignored lines tighten; one more, or an edited pattern, loosens, even when it
+        // arrives with the snapshot (a preset can supply the snapshot itself).
+        let snap = |extra: &str| {
+            cfg(&format!(
+                "[[gates.command.commands]]\nname = \"t\"\ncommand = \"cargo test\"\n{extra}"
+            ))
+        };
+        let plain = snap("");
+        let with = snap("snapshot = \"api.txt\"\nsnapshot_ignore = ['^#', '^//']\n");
+        let count = |base: &DisciplineConfig, head: &DisciplineConfig| {
+            diff_configs(base, head).unwrap().len()
+        };
+        assert_eq!(count(&plain, &snap("snapshot = \"api.txt\"\n")), 0);
+        assert_eq!(count(&plain, &with), 1);
+        assert_eq!(count(&with, &plain), 1);
+        assert_eq!(
+            count(
+                &with,
+                &snap("snapshot = \"other.txt\"\nsnapshot_ignore = ['^#', '^//']\n")
+            ),
+            1
+        );
+        assert_eq!(
+            count(
+                &with,
+                &snap("snapshot = \"api.txt\"\nsnapshot_ignore = ['^#']\n")
+            ),
+            0
+        );
+        assert_eq!(
+            count(
+                &with,
+                &snap("snapshot = \"api.txt\"\nsnapshot_ignore = ['^#', '^//', '.*']\n")
+            ),
+            1
+        );
+        assert_eq!(
+            count(
+                &with,
+                &snap("snapshot = \"api.txt\"\nsnapshot_ignore = ['^#', '.*']\n")
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn command_table_snapshot_keys_are_directional() {
+        let top = |extra: &str| cfg(&format!("[gates.command]\ncommand = \"x\"\n{extra}"));
+        let keys = |base: &str, head: &str| -> Vec<String> {
+            diff_configs(&top(base), &top(head))
+                .unwrap()
+                .iter()
+                .map(|w| w.key.clone())
+                .collect()
+        };
+        let with = "snapshot = \"api.txt\"\nsnapshot_ignore = ['^#']\n";
+        assert!(keys("", "snapshot = \"api.txt\"\n").is_empty());
+        assert_eq!(keys("", with), ["snapshot_ignore"]);
+        assert_eq!(keys(with, "snapshot_ignore = ['^#']\n"), ["snapshot"]);
+        assert_eq!(
+            keys(with, "snapshot = \"b.txt\"\nsnapshot_ignore = ['^#']\n"),
+            ["snapshot"]
+        );
+        assert_eq!(
+            keys(with, "snapshot = \"api.txt\"\nsnapshot_ignore = ['.*']\n"),
+            ["snapshot_ignore"]
+        );
+        assert!(keys(with, "snapshot = \"api.txt\"\n").is_empty());
     }
 
     #[test]
@@ -1583,6 +1663,7 @@ mod tests {
                 .iter()
                 .chain(shape.stricter_when_grown)
                 .chain(shape.stricter_when_shrunk)
+                .chain(shape.stricter_when_added)
             {
                 assert!(
                     schema.contains(&format!("\"{field}\"")),

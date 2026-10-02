@@ -145,6 +145,8 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.commands[].min_count` | integer | *(per entry)* | Minimum count required |
 | `gates.command.commands[].name` | string | *(required)* | Name or identifier of the command |
 | `gates.command.commands[].preset` | string | *(per entry)* | Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom) |
+| `gates.command.commands[].snapshot` | string | *(per entry)* | Repository-relative path of a committed file the command's stdout must match |
+| `gates.command.commands[].snapshot_ignore` | list | *(per entry)* | Regexes for lines left out of the snapshot comparison, on both sides |
 | `gates.command.commands[].timeout_seconds` | integer | *(per entry)* | Execution timeout in seconds |
 | `gates.command.commands[].zero_items_pattern` | string | *(per entry)* | Pattern that indicates zero items were executed |
 | `gates.command.count_pattern` | string | *(unset)* | Regex pattern to extract an integer count |
@@ -154,6 +156,8 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.min_count` | integer | *(unset)* | Minimum count required |
 | `gates.command.preset` | string | *(unset)* | Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom) |
 | `gates.command.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.command.snapshot` | string | *(unset)* | Repository-relative path of a committed file the command's stdout must match |
+| `gates.command.snapshot_ignore` | list | `[]` | Regexes for lines left out of the snapshot comparison, on both sides |
 | `gates.command.timeout_seconds` | integer | *(unset)* | Execution timeout in seconds (default: 60s) |
 | `gates.command.zero_items_pattern` | string | *(unset)* | Pattern that indicates zero items were executed |
 | `gates.commit-provenance.agent_markers` | list | *(12 entries)* | Substrings of a trailer line, author name or author email that identify an agent-produced commit |

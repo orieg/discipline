@@ -11855,6 +11855,231 @@ preset = "cargo-public-api"
     );
 }
 
+/// A repository whose base configures `[gates.command]` with a snapshot. The command is a
+/// stand-in renderer (`printf`); `DISCIPLINE_COMMAND` replaces it the way a runner would.
+fn snapshot_repo(extra: &str, snapshot: &str) -> Repo {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("api.txt", snapshot),
+            (
+                "discipline.toml",
+                &format!(
+                    "[meta]\nversion = 1\nname = \"test-repo\"\n\n\
+                     [gates.deletion-rationale]\nenabled = false\n\n\
+                     [gates.command]\ncommand = \"printf 'pub fn a()\\\\npub fn b()\\\\n'\"\n\
+                     snapshot = \"api.txt\"\n{extra}"
+                ),
+            ),
+        ],
+        "base: command gate with a snapshot",
+    );
+    repo
+}
+
+fn render(repo: &Repo, command: &str) -> Run {
+    repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("DISCIPLINE_COMMAND", command)],
+    )
+}
+
+#[test]
+fn command_snapshot_matches_fails_on_a_difference_and_ignores_configured_lines() {
+    let repo = snapshot_repo(
+        "snapshot_ignore = ['^#']\n",
+        "# rendered by tool 1.0\npub fn a()\npub fn b()\n",
+    );
+
+    // The output matches the committed file; the `#` header is not compared.
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("command");
+    assert_eq!(outcome["examined"], 1);
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+
+    // The surface changed but the snapshot was not regenerated.
+    let run = render(&repo, "printf 'pub fn a()\\npub fn c()\\n'");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let v = run.violations("command");
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0]["code"], "command/snapshot-mismatch");
+    assert_eq!(v[0]["file"], "api.txt");
+    assert_eq!(v[0]["line"], 3);
+    let msg = v[0]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("1 line(s) only in the output, 1 only in the snapshot"),
+        "{msg}"
+    );
+    // The output's own text is not echoed.
+    assert!(!msg.contains("pub fn c"), "{msg}");
+
+    // Lines in a different order are a difference too.
+    let run = render(&repo, "printf 'pub fn b()\\npub fn a()\\n'");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(run.violations("command")[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("different order"));
+
+    // The same change with the snapshot regenerated passes, whatever its header says, and
+    // a CRLF checkout of it compares equal.
+    repo.write(
+        "api.txt",
+        "# rendered by tool 2.0\r\npub fn a()\r\npub fn c()\r\n",
+    );
+    repo.commit("feat: rename b to c and regenerate the snapshot");
+    let run = render(&repo, "printf 'pub fn a()\\npub fn c()\\n'");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+
+    // An override lifts a mismatch, as for every command finding.
+    let run = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[
+            ("DISCIPLINE_COMMAND", "printf 'pub fn z()\\n'"),
+            (
+                "PR_BODY",
+                "allow-command: default snapshot regenerated in a follow-up change",
+            ),
+        ],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.outcome("command")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn command_snapshot_fails_closed_when_the_output_cannot_be_compared() {
+    let exit_2 = |run: &Run, reason: &str, needle: &str| {
+        assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.could_not_check(),
+            (reason.to_string(), Some("command".to_string()))
+        );
+        assert!(run.stderr.contains(needle), "{}", run.stderr);
+    };
+    let repo = snapshot_repo("", "pub fn a()\npub fn b()\n");
+
+    // Empty output never matches, not even an empty snapshot.
+    exit_2(&render(&repo, "true"), "gate", "no lines to compare");
+    // Output that is not UTF-8.
+    exit_2(
+        &render(&repo, "printf 'pub fn a()\\377\\n'"),
+        "gate",
+        "not valid UTF-8",
+    );
+    // Output past the capture limit is cut off, so it is neither a match nor a mismatch.
+    exit_2(
+        &render(&repo, "head -c 26214401 /dev/zero"),
+        "gate",
+        "capture limit",
+    );
+
+    // The snapshot deleted in this change is a policy file deletion, not a comparison.
+    repo.git(&["rm", "-q", "api.txt"]);
+    repo.commit("chore: drop the snapshot");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<_> = run
+        .violations("command")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, ["command/policy-file-deleted"]);
+
+    // A snapshot that never existed: nothing to compare against.
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"test-repo\"\n\n[gates.command]\n\
+         command = \"printf 'x\\\\n'\"\nsnapshot = \"missing.txt\"\n",
+        "base: snapshot that was never committed",
+    );
+    exit_2(&repo.check(&[]), "gate", "does not exist");
+
+    // An invalid ignore pattern is a configuration error, never a substring match.
+    let repo = snapshot_repo("snapshot_ignore = ['(']\n", "pub fn a()\npub fn b()\n");
+    exit_2(&repo.check(&[]), "configuration", "not a valid regex");
+
+    // A path outside the repository is refused.
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"test-repo\"\n\n[gates.command]\n\
+         command = \"printf 'x\\\\n'\"\nsnapshot = \"../outside.txt\"\n",
+        "base: snapshot outside the repository",
+    );
+    exit_2(
+        &repo.check(&[]),
+        "configuration",
+        "relative to the repository root",
+    );
+}
+
+#[test]
+fn command_snapshot_ignore_widened_on_head_is_a_gate_weakening() {
+    let repo = snapshot_repo("snapshot_ignore = ['^#']\n", "pub fn a()\npub fn b()\n");
+    let toml = std::fs::read_to_string(repo.file("discipline.toml")).unwrap();
+    repo.write(
+        "discipline.toml",
+        &toml.replace(
+            "snapshot_ignore = ['^#']",
+            "snapshot_ignore = ['^#', '^pub fn b']",
+        ),
+    );
+    repo.commit("chore: ignore one more line");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let found = run.violations("config-integrity");
+    assert!(
+        found
+            .iter()
+            .any(|v| v["message"].as_str().unwrap().contains("snapshot_ignore")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn command_preset_cargo_public_api_compares_with_the_committed_snapshot() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("public-api.txt", "pub fn crate::a()\npub fn crate::b()\n"),
+            (
+                "discipline.toml",
+                "[meta]\nversion = 1\nname = \"test-repo\"\n\n[gates.command]\n\
+                 preset = \"cargo-public-api\"\n",
+            ),
+        ],
+        "base: cargo-public-api preset",
+    );
+    let renders = |out: &str| render(&repo, &format!("printf '{out}'"));
+
+    let run = renders("pub fn crate::a()\\npub fn crate::b()\\n");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+
+    // A public API change without the regenerated file fails.
+    let run = renders("pub fn crate::a()\\n");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let v = run.violations("command");
+    assert_eq!(v[0]["code"], "command/snapshot-mismatch");
+    assert_eq!(v[0]["file"], "public-api.txt");
+
+    // Regenerated, with the header the preset ignores, it passes.
+    repo.write(
+        "public-api.txt",
+        "# cargo-public-api 0.52.0, nightly-2026-09-01\npub fn crate::a()\n",
+    );
+    repo.commit("feat!: remove b and regenerate the public API");
+    let run = renders("pub fn crate::a()\\n");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
 // ---- archive-contents ------------------------------------------------------
 
 fn create_test_archive_tgz(path: &std::path::Path, entries: &[(&str, &[u8])]) {

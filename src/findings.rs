@@ -341,6 +341,7 @@ findings! {
     COUNT_BELOW_RATCHET = ["command"], "count-below-ratchet", "Command Count Below Ratchet Floor", Was("Count Ratchet Regression");
     COUNT_PATTERN_UNMATCHED = ["command"], "count-pattern-unmatched", "Count Pattern Unmatched", Was("Count Pattern Did Not Match");
     BASE_TEST_FAILED = ["command"], "base-test-failed", "Base Test Failed Against Head Code", Same;
+    SNAPSHOT_MISMATCH = ["command"], "snapshot-mismatch", "Command Output Differs From Snapshot", Same;
 
     // sanitizers
     SANITIZER_CANARY_DIAGNOSTIC_MISSING = ["sanitizers"], "canary-diagnostic-missing", "Canary Diagnostic Missing", Message;

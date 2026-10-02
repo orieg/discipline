@@ -2185,6 +2185,31 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: snapshot comparison ignores configured lines and line endings, and catches a changed surface",
+        || {
+            use crate::guards::command::{compare_snapshot, snapshot_lines};
+
+            let header = [Regex::new("^#")?];
+            let snapshot = snapshot_lines("# tool 1.0\npub fn a()\npub fn b()\n", &header);
+            let same = snapshot_lines("# tool 2.0\r\npub fn a()\r\npub fn b()", &header);
+            let changed = snapshot_lines("pub fn a()\npub fn c()\n", &header);
+            let reordered = snapshot_lines("pub fn b()\npub fn a()\n", &header);
+
+            let matches = compare_snapshot(&snapshot, &same).is_none();
+            let caught = compare_snapshot(&snapshot, &changed)
+                .is_some_and(|d| d.only_in_output == 1 && d.first_difference == (Some(3), Some(2)));
+            let order_caught = compare_snapshot(&snapshot, &reordered).is_some();
+            // Without the ignore pattern the header is compared.
+            let header_compared = compare_snapshot(
+                &snapshot_lines("# tool 1.0\npub fn a()\n", &[]),
+                &snapshot_lines("# tool 2.0\npub fn a()\n", &[]),
+            )
+            .is_some();
+
+            Ok(matches && caught && order_caught && header_compared)
+        },
+    ),
+    (
         "dependency: manifest delta detects wildcards, unpinned git deps, and banned packages",
         || {
             use crate::guards::dependency::{parse_cargo_toml, parse_package_json};
