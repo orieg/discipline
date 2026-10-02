@@ -9,8 +9,20 @@ description = "Universal CI/CD gatekeeper and AI coding agent diff sentinel"
 readme = "README.md"
 repository = "https://github.com/orieg/discipline"
 homepage = "https://github.com/orieg/discipline"
+documentation = "https://orieg.github.io/discipline/"
 keywords = ["ci", "testing", "ai-agents", "tree-sitter", "quality-gate"]
 categories = ["development-tools", "command-line-utilities"]
+include = [
+  "src/**/*",
+  "tests/**/*.rs",
+  "tests/fixtures/**/*",
+  "Cargo.toml",
+  "Cargo.lock",
+  "README.md",
+  "LICENSE",
+  "discipline.toml",
+  "man/**/*",
+]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive", "env"] }
