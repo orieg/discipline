@@ -18,9 +18,36 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
-# Third-party actions are pinned by commit SHA. No job uses path filters, so
-# `skipped` is never a legitimate result and `ci-gate` accepts only `success`.
+# Third-party actions are pinned by commit SHA. Conditional jobs are gated by
+# `detect-changes`; `ci-gate` accepts `success` and `skipped`, and verifies the
+# skip set with the `ci-skip-set` gate.
 jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      test: ${{ steps.filter.outputs.test }}
+      msrv: ${{ steps.filter.outputs.msrv }}
+      supply-chain: ${{ steps.filter.outputs.supply-chain }}
+      action-github: ${{ steps.filter.outputs.action-github }}
+      action-gitea: ${{ steps.filter.outputs.action-gitea }}
+      docker-smoke: ${{ steps.filter.outputs.docker-smoke }}
+      pre-commit: ${{ steps.filter.outputs.pre-commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: filter
+        name: Detect changed paths
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          python3 scripts/detect_changes.py
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -57,6 +84,8 @@ jobs:
           # The version being prepared must have ledger rows or none at all; this
           # renders them so a malformed table fails here, not during a release.
           python3 scripts/release_notes_upgrade.py --version "${version}" > /dev/null
+      - name: Test change detector
+        run: python3 scripts/detect_changes.py --test
       - name: Test major tag drift detector
         run: tests/action/test-check-major-tag.sh
       - name: Lint PR title for unquoted mentions
@@ -69,6 +98,8 @@ jobs:
           python3 tests/action/sanitize-release-notes.py --check-pr-title "${PR_TITLE}"
 
   test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.test == 'true' || github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
@@ -95,6 +126,8 @@ jobs:
       - run: cargo run --locked --quiet -- self-test
 
   msrv:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.msrv == 'true' || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -116,6 +149,8 @@ jobs:
       - run: cargo check --all-targets --locked
 
   supply-chain:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.supply-chain == 'true' || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -161,7 +196,8 @@ jobs:
 
   # The composite action on a real GitHub runner.
   action-github:
-    needs: build-static
+    needs: [detect-changes, build-static]
+    if: needs.detect-changes.outputs.action-github == 'true' || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -447,7 +483,8 @@ jobs:
   # with Gitea's runner image. A live Gitea server is the stronger check and is
   # tracked in docs/ROADMAP.md; this proves the action has no GitHub-only dependency.
   action-gitea:
-    needs: build-static
+    needs: [detect-changes, build-static]
+    if: needs.detect-changes.outputs.action-gitea == 'true' || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -485,7 +522,8 @@ jobs:
 
   # The local pre-commit path, through the pre-commit framework.
   pre-commit:
-    needs: build-static
+    needs: [detect-changes, build-static]
+    if: needs.detect-changes.outputs.pre-commit == 'true' || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -546,7 +584,8 @@ jobs:
 
   # Smoke test the built container image with non-root USER 10001 against a root-owned checkout (reproducing R1).
   docker-smoke:
-    needs: build-static
+    needs: [detect-changes, build-static]
+    if: needs.detect-changes.outputs.docker-smoke == 'true' || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -611,26 +650,24 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [lint, test, msrv, supply-chain, build-static, action-github, action-gitea, pre-commit, dogfood, docker-smoke]
+    needs: [detect-changes, lint, test, msrv, supply-chain, build-static, action-github, action-gitea, pre-commit, dogfood, docker-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Every job succeeded
+      - name: Every job succeeded or was legitimately skipped
         shell: bash
         env:
           NEEDS: ${{ toJson(needs) }}
         run: |
           set -euo pipefail
           echo "${NEEDS}" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          # Allow-list, not deny-list: anything other than `success` — including
-          # `skipped`, `cancelled`, or a result string added later — fails.
-          bad="$(echo "${NEEDS}" | jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(", ")')"
+          # Allow-list, not deny-list: anything other than `success` or `skipped` — including
+          # `failure`, `cancelled`, or a result string added later — fails.
+          bad="$(echo "${NEEDS}" | jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key] | join(", ")')"
           count="$(echo "${NEEDS}" | jq 'length')"
-          [ "${count}" -eq 10 ] || { echo "::error::expected 10 needed jobs, saw ${count}"; exit 1; }
+          [ "${count}" -eq 11 ] || { echo "::error::expected 11 needed jobs, saw ${count}"; exit 1; }
           [ -z "${bad}" ] || { echo "::error::not successful: ${bad}"; exit 1; }
-      # Dogfood ci-skip-set on this rollup's own runtime context. Every job
-      # above is unconditional, so each must have run; the inverted canary
-      # proves the gate evaluated the context rather than noting it absent.
+      # Dogfood ci-skip-set on this rollup's own runtime context.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -656,7 +693,7 @@ jobs:
           NEEDS: ${{ toJson(needs) }}
         run: |
           set -euo pipefail
-          first="$(echo "${NEEDS}" | jq -r 'keys[0]')"
+          first="lint"
           DISCIPLINE_CI_CONTEXT="$(echo "${NEEDS}" | jq -c --arg j "${first}" '.[$j].result = "skipped"')"
           export DISCIPLINE_CI_CONTEXT
           report="${RUNNER_TEMP}/skip-set-canary.json"
@@ -664,6 +701,6 @@ jobs:
           .ci-bin/discipline check --suite integrity --base HEAD --format json --json-out "${report}" > /dev/null || rc=$?
           [ "${rc}" -eq 1 ] || { echo "::error::expected exit 1 from the canary, got ${rc}"; exit 1; }
           # The finding's code is its stable identity; its title is display text.
-          jq -e --arg m "\`${first}\` was skipped" \
-            '[.outcomes[] | select(.gate == "ci-skip-set") | .violations[] | select(.code == "ci-skip-set/job-skipped-while-condition-true") | .message] | any(startswith($m))' "${report}" \
+          jq -e --arg m "\`${first}\` is declared unconditional but was skipped" \
+            '[.outcomes[] | select(.gate == "ci-skip-set") | .violations[] | select(.code == "ci-skip-set/unconditional-job-skipped") | .message] | any(startswith($m))' "${report}" \
             || { echo "::error::canary did not carry the ci-skip-set diagnostic"; jq '.outcomes[] | select(.gate == "ci-skip-set")' "${report}"; exit 1; }
