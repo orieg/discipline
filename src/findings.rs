@@ -86,6 +86,7 @@ findings! {
     NUL_BYTE_ADDED = ["assertion-reduction", "vacuous-tests", "ignored-tests", "unsafe-safety-comment"], "nul-byte-added", "NUL Byte Added To Source File", Was("Source File Contains Newly Added NUL Byte");
 
     // assertion-reduction
+    ASSERTION_FAILURE_CAUGHT = ["assertion-reduction"], "assertion-failure-caught", "Assertion Failure Caught Inside Test", Same;
     ASSERTION_BOUND_LOOSENED = ["assertion-reduction"], "assertion-bound-loosened", "Assertion Bound Loosened", Same;
     EXPECTED_VALUE_CHANGED = ["assertion-reduction"], "expected-value-changed", "Expected Value Changed In Existing Test", Same;
     MOCKING_INCREASED = ["assertion-reduction"], "mocking-increased-without-stronger-assertions", "Mocking Increased Without Stronger Assertions", Was("Mocking Grew Without Stronger Assertions");

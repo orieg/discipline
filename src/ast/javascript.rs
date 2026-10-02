@@ -116,6 +116,7 @@ impl LanguagePack for JavaScriptPack {
         );
         super::bounds::javascript(root, src, &mut extractor.facts.tests);
         super::expectations::javascript(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::javascript(root, src, &mut extractor.facts.tests);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "template_string"]);
         extractor.facts.budgets = super::budgets::extract(root, src, &JS_BUDGETS);
