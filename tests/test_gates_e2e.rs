@@ -10840,6 +10840,10 @@ fn ignored_tests_early_exit_under_env_or_ci_check_severity_and_directive_lift() 
     let v_ci = &out_ci["violations"][0];
     assert_eq!(v_ci["severity"], "error");
     assert!(v_ci["message"].as_str().unwrap().contains("test_in_ci"));
+    assert!(v_ci["remediation"]
+        .as_str()
+        .unwrap()
+        .contains("allow-ignore: test_in_ci <reason>"));
 
     // 1b. Approved predicate waives the CI condition
     let run_ci_approved = repo.check(&[
@@ -10849,6 +10853,23 @@ fn ignored_tests_early_exit_under_env_or_ci_check_severity_and_directive_lift() 
         "[gates.ignored-tests]\napproved_predicates = [\"CI\"]\n",
     ]);
     assert_eq!(run_ci_approved.titles("ignored-tests").len(), 0);
+
+    // 1c. ci_skip_severity = "warning" restores previous behaviour (exit 0, reported as warning)
+    let run_ci_warning = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.ignored-tests]\nci_skip_severity = \"warning\"\n[gates.vacuous-tests]\nenabled = false\n",
+    ]);
+    assert_eq!(run_ci_warning.code, 0);
+    assert_eq!(
+        run_ci_warning.titles("ignored-tests"),
+        vec!["Test Conditionally Skipped"]
+    );
+    assert_eq!(
+        run_ci_warning.outcome("ignored-tests")["violations"][0]["severity"],
+        "warning"
+    );
 
     // 2. Add early return under generic env check -> Note severity
     repo.write(
@@ -10920,6 +10941,32 @@ fn ignored_tests_ci_skip_multi_language_reproduction_and_approved_predicates() {
     assert!(violations
         .iter()
         .any(|v| v["message"].as_str().unwrap().contains("test_math")));
+
+    // Negative control 0a: approving "CI" does NOT waive GITHUB_ACTIONS (requires all CI vars in condition to be approved)
+    let run_partial_approved = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.ignored-tests]\napproved_predicates = [\"CI\"]\n",
+    ]);
+    assert_eq!(run_partial_approved.code, 1);
+    assert_eq!(run_partial_approved.titles("ignored-tests").len(), 1);
+    assert!(
+        run_partial_approved.outcome("ignored-tests")["violations"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("test_math")
+    );
+
+    // Negative control 0b: approving "ACTIONS" or "C" by substring does NOT waive on boundary check
+    let run_sub_approved = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.ignored-tests]\napproved_predicates = [\"C\", \"ACTIONS\"]\n",
+    ]);
+    assert_eq!(run_sub_approved.code, 1);
+    assert_eq!(run_sub_approved.titles("ignored-tests").len(), 2);
 
     // Negative control 1: approved_predicates waives both and restores exit 0
     let run_approved = repo.check(&[

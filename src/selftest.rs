@@ -2779,9 +2779,23 @@ command = "cargo test"
                 .find(|v| v.message.contains("ci_test"))
                 .ok_or_else(|| anyhow::anyhow!("missing staged ci_test violation"))?;
 
+            let mut warn_settings = default_settings.clone();
+            warn_settings.ci_skip_severity = Some(Severity::Warning);
+            let warn_out = evaluate_ignored_tests(&[], &added, &warn_settings, &[], false)?;
+            let warn_ci_v = warn_out
+                .violations
+                .iter()
+                .find(|v| v.message.contains("ci_test"))
+                .ok_or_else(|| anyhow::anyhow!("missing warn ci_test violation"))?;
+
             Ok(ci_v.severity == Severity::Error
                 && gen_v.severity == Severity::Note
-                && staged_ci_v.severity == Severity::Warning)
+                && staged_ci_v.severity == Severity::Warning
+                && warn_ci_v.severity == Severity::Warning
+                && ci_v
+                    .remediation
+                    .as_deref()
+                    .is_some_and(|r| r.contains("allow-ignore: ci_test <reason>")))
         },
     ),
     (
