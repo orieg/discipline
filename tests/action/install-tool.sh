@@ -24,6 +24,7 @@ case "${1:?tool name}" in
     url="https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-x86_64-unknown-linux-musl.tar.xz"
     sha="9bd3e599314f50810c9d98b8b68a617ff9d3cc20873968d90b29d121f6b226ff"
     archive_member="cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx"
+    version_args=(cyclonedx --version)
     ;;
   *)
     echo "unknown tool: $1" >&2
