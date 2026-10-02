@@ -82,9 +82,11 @@ enabled = true
 [gates.citation-metadata]
 enabled = true
 
-# An agent-produced commit (by trailer or authorship) carries a review by someone else.
+# An agent-produced commit (by trailer or authorship) carries a review by someone else,
+# and all commits must carry a DCO Signed-off-by trailer.
 [gates.commit-provenance]
 enabled = true
+required_trailers = ["Signed-off-by"]
 
 [gates.pii]
 exempt_paths = ["tests/fixtures/**"]

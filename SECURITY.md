@@ -56,4 +56,30 @@ The following operational characteristics are caller contracts, not vulnerabilit
 
 ## Dependencies & Supply Chain
 
-Discipline maintains an explicit dependency allow-list in `deny.toml`. Every dependency is vetted against supply-chain advisories, non-permissive licenses, and wildcard requirements. Dependency trees are audited automatically on every pull request.
+Discipline maintains an explicit dependency allow-list and automated scan policy in `deny.toml`.
+
+### Dependency Scanning Policy
+
+The supply-chain scanner (`cargo-deny`) runs automatically on every pull request (in `ci.yml` job `supply-chain`) and as a mandatory gate before cutting any release (in `release.yml` job `verify`). It enforces:
+- **Advisories:** Checks all dependencies against the RustSec Advisory Database. Any known security vulnerability or yanked crate fails the build immediately.
+- **Licenses:** Enforces a strict allow-list (`MIT`, `Apache-2.0`, `Unicode-3.0`, `Unlicense`, `Zlib`). Any disallowed or non-conforming license fails the build.
+- **Bans:** Blocks wildcard dependency versions and reports multiple version duplicates.
+- **Sources:** Blocks unknown package registries and untrusted git repositories (`unknown-registry = "deny"`, `unknown-git = "deny"`).
+
+**Threshold & Exceptions:** Any finding at `deny` severity blocks the pull request and the release verification job. Exceptions are never granted globally; they must be recorded as scoped, reasoned exception entries in `deny.toml` (e.g. `[[licenses.exceptions]]` for low-level TLS dependencies such as `ring` and `webpki-roots`).
+
+### Vulnerability Exploitability eXchange (VEX) & Advisory Disposition
+
+When an upstream security advisory is published for a crate in the dependency graph but the specific vulnerable codepath or mechanism does not affect Discipline:
+- The determination is documented with technical justification.
+- The advisory is recorded in `deny.toml` under `[advisories.ignore]` with an explicit rationale explaining why Discipline is not affected.
+- Because `deny.toml` is committed to the public repository, these entries serve as the machine-verifiable VEX statement published alongside the code.
+- If a broader public statement is warranted, a repository-level GitHub Security Advisory with "Not Affected" status is published.
+
+## Static Analysis & Code Scanning Policy
+
+Automated static analysis runs across multiple layers to catch defects before code is merged:
+
+- **Clippy (`cargo clippy --all-targets --locked -- -D warnings`):** Runs on every pull request and push to `main` as part of the `ci-gate` rollup. Any compiler warning or linter deviation blocks the merge.
+- **Discipline Sentinel:** The sentinel checks its own diffs on every pull request (`dogfood` job), enforcing fail-closed AST invariant gates against assertion reduction, vacuous tests, safety justifications on unsafe blocks, and test floor regressions.
+- **CodeQL Advanced (`security-extended`):** Runs on pull requests, pushes to `main`, and on a weekly schedule (`.github/workflows/codeql.yml`) across Rust, Actions, and Python. As documented in [`docs/ARCHITECTURE.md` §8.3](docs/ARCHITECTURE.md#83-codeql-security-pipeline-githubworkflowscodeqlyml), CodeQL runs in an advisory mode so that heuristic false positives or upstream query modifications do not block unrelated merges. However, any verified true positive is classified as a blocking security defect that must be remediated before the next release.
