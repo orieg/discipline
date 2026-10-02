@@ -1007,6 +1007,7 @@
       "assertion-reduction/assertion-bound-loosened",
       "assertion-reduction/assertion-failure-caught",
       "assertion-reduction/assertions-reduced",
+      "assertion-reduction/expected-exception-widened",
       "assertion-reduction/expected-value-changed",
       "assertion-reduction/fatal-assertions-weakened",
       "assertion-reduction/mocking-increased-without-stronger-assertions",

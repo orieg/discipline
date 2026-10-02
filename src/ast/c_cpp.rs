@@ -595,7 +595,7 @@ impl<'a> CCppExtractor<'a> {
                                     strong_asserts: 0,
                                     tautologies: 0,
                                     ignored: is_ignored,
-                                    should_panic: false,
+                                    should_panic: None,
                                     ..Default::default()
                                 };
                                 let mut calls = Vec::new();
@@ -660,7 +660,7 @@ impl<'a> CCppExtractor<'a> {
                 strong_asserts: 0,
                 tautologies: 0,
                 ignored: is_ignored,
-                should_panic: false,
+                should_panic: None,
                 ..Default::default()
             };
             let mut calls = Vec::new();
@@ -689,7 +689,7 @@ impl<'a> CCppExtractor<'a> {
                 strong_asserts: 0,
                 tautologies: 0,
                 ignored: is_ignored,
-                should_panic: false,
+                should_panic: None,
                 ..Default::default()
             };
             let mut calls = Vec::new();
@@ -717,7 +717,7 @@ impl<'a> CCppExtractor<'a> {
                 strong_asserts: 0,
                 tautologies: 0,
                 ignored: false,
-                should_panic: false,
+                should_panic: None,
                 ..Default::default()
             };
             let mut calls = Vec::new();

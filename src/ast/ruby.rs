@@ -335,7 +335,7 @@ impl<'a> RubyExtractor<'a> {
             strong_asserts: 0,
             tautologies: 0,
             ignored: parent_skipped,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
 
@@ -406,7 +406,7 @@ impl<'a> RubyExtractor<'a> {
             strong_asserts: 0,
             tautologies: 0,
             ignored: is_ignored,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
 

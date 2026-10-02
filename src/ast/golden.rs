@@ -77,7 +77,17 @@ impl LanguagePack for GoldenPack {
         });
 
         let ignored = has_xfail || has_skipif;
-        let should_panic = has_xfail;
+        let should_panic = if has_xfail {
+            Some(super::expected_exceptions::ExpectedException {
+                line: 1,
+                skeleton: "xfail".to_string(),
+                kind: "xfail".to_string(),
+                exception_type: None,
+                matcher: None,
+            })
+        } else {
+            None
+        };
 
         let end_line = src.lines().count().max(1);
         let test = TestFn {
@@ -88,7 +98,8 @@ impl LanguagePack for GoldenPack {
             strong_asserts,
             tautologies,
             ignored,
-            should_panic,
+            should_panic: should_panic.clone(),
+            expected_exceptions: should_panic.into_iter().collect(),
             ..Default::default()
         };
 
@@ -215,7 +226,7 @@ Expected bug #12345
             .extract("tests/xfail.phpt", xfail_src, &AssertVocabulary::default())
             .expect("extract");
         assert!(facts.tests[0].ignored);
-        assert!(facts.tests[0].should_panic);
+        assert!(facts.tests[0].should_panic.is_some());
 
         let skip_src = r#"--TEST--
 Unconditional Skip
@@ -285,7 +296,7 @@ Unconditional Skip
             .extract("tests/xfail.phpt", xfail_src, &vocab)
             .expect("extract xfail");
         assert!(xfail_facts.tests[0].ignored);
-        assert!(xfail_facts.tests[0].should_panic);
+        assert!(xfail_facts.tests[0].should_panic.is_some());
     }
 
     #[test]

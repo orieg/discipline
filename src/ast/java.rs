@@ -102,6 +102,7 @@ impl LanguagePack for JavaPack {
             super::calls::trivial_asserts,
         );
         super::caught_assertions::java(root, src, &mut extractor.facts.tests);
+        super::expected_exceptions::java(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -320,7 +321,7 @@ impl<'a> JavaExtractor<'a> {
 
             let line = node.start_position().row + 1;
             let end_line = node.end_position().row + 1;
-            let should_panic = self.has_expected_exception(node);
+            let should_panic = self.parse_expected_exception(node);
 
             let mut test_fn = TestFn {
                 name: full_name,
@@ -330,7 +331,8 @@ impl<'a> JavaExtractor<'a> {
                 strong_asserts: 0,
                 tautologies: 0,
                 ignored: parent_ignored || method_ignored,
-                should_panic,
+                should_panic: should_panic.clone(),
+                expected_exceptions: should_panic.into_iter().collect(),
                 ..Default::default()
             };
 
@@ -384,19 +386,38 @@ impl<'a> JavaExtractor<'a> {
         true
     }
 
-    fn has_expected_exception(&self, node: Node) -> bool {
+    fn parse_expected_exception(
+        &self,
+        node: Node,
+    ) -> Option<super::expected_exceptions::ExpectedException> {
         if let Some(modifiers) = Self::get_modifiers(node) {
             let mut cursor = modifiers.walk();
             for child in modifiers.children(&mut cursor) {
                 if child.kind() == "annotation" {
                     let text = self.text(child);
                     if text.contains("expected =") || text.contains("expected=") {
-                        return true;
+                        let idx = text.find("expected")?;
+                        let rest = text[idx + "expected".len()..].trim_start();
+                        let rest = rest.strip_prefix('=')?.trim_start();
+                        let val_str = rest
+                            .trim_end_matches(')')
+                            .trim()
+                            .trim_end_matches(".class")
+                            .trim();
+                        if !val_str.is_empty() {
+                            return Some(super::expected_exceptions::ExpectedException {
+                                line: child.start_position().row + 1,
+                                skeleton: "@Test(expected = #)".to_string(),
+                                kind: "test_expected".to_string(),
+                                exception_type: Some(val_str.to_string()),
+                                matcher: None,
+                            });
+                        }
                     }
                 }
             }
         }
-        false
+        None
     }
 
     fn scan_method_body(&self, body: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {

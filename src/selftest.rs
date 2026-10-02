@@ -1191,6 +1191,52 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a Python or Rust expected failure widened to an ancestor or dropping a matcher is reported, a sibling exception is not",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let py_pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let rust_pack = reg
+                .find_pack("tests/t.rs")
+                .ok_or_else(|| anyhow::anyhow!("no rust pack"))?;
+            let py_narrow = py_pack.extract(
+                "tests/test_t.py",
+                "def test_t():\n    with pytest.raises(ValueError, match=\"bad\"):\n        f()\n",
+                &v,
+            )?.tests[0].expected_exceptions.clone();
+            let py_wide = py_pack.extract(
+                "tests/test_t.py",
+                "def test_t():\n    with pytest.raises(Exception):\n        f()\n",
+                &v,
+            )?.tests[0].expected_exceptions.clone();
+            let py_sibling = py_pack.extract(
+                "tests/test_t.py",
+                "def test_t():\n    with pytest.raises(TypeError, match=\"bad\"):\n        f()\n",
+                &v,
+            )?.tests[0].expected_exceptions.clone();
+
+            let rs_narrow = rust_pack.extract(
+                "tests/t.rs",
+                "#[test]\n#[should_panic(expected = \"overflow\")]\nfn t() { f(); }",
+                &v,
+            )?.tests[0].expected_exceptions.clone();
+            let rs_wide = rust_pack.extract(
+                "tests/t.rs",
+                "#[test]\n#[should_panic]\nfn t() { f(); }",
+                &v,
+            )?.tests[0].expected_exceptions.clone();
+
+            Ok(widened(&py_narrow, &py_wide).len() == 1
+                && widened(&py_narrow, &py_sibling).is_empty()
+                && widened(&rs_narrow, &rs_wide).len() == 1
+                && widened(&rs_narrow, &rs_narrow).is_empty())
+        },
+    ),
+    (
         "error-swallowing: a Python handler for SystemExit or KeyboardInterrupt alone is not a site",
         || {
             use crate::ast::default_registry;
@@ -1561,7 +1607,7 @@ const CASES: &[Case] = &[
                 strong_asserts: 2,
                 tautologies: 0,
                 ignored: false,
-                should_panic: false,
+                should_panic: None,
                 ..Default::default()
             };
             let h = TestFn {
@@ -1571,7 +1617,7 @@ const CASES: &[Case] = &[
                 strong_asserts: 1,
                 tautologies: 0,
                 ignored: false,
-                should_panic: false,
+                should_panic: None,
                 ..Default::default()
             };
             let pair = [TestPair {
@@ -1638,7 +1684,7 @@ const CASES: &[Case] = &[
                 strong_asserts: 1,
                 tautologies: 0,
                 ignored: false,
-                should_panic: false,
+                should_panic: None,
                 ..Default::default()
             };
             let removed_test = [Located {

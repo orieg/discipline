@@ -140,6 +140,83 @@ fn assertion_reduction_override_must_name_the_test() {
 }
 
 #[test]
+fn expected_exception_widened_fires_and_accepts_override() {
+    let repo = Repo::new();
+    let rs_base = "pub fn add(a: u32, b: u32) -> u32 { a.checked_add(b).expect(\"overflow\") }\n\n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             use super::*;\n\
+             #[test]\n\
+             #[should_panic(expected = \"overflow\")]\n\
+             fn overflows() {\n\
+                 add(u32::MAX, 1);\n\
+             }\n\
+         }\n";
+    let py_base = "import pytest\ndef test_neg():\n    with pytest.raises(ValueError, match=\"negative\"):\n        pass\n";
+    repo.commit_base_files(
+        &[("src/lib.rs", rs_base), ("tests/test_r.py", py_base)],
+        "feat: initial base with narrow expected exceptions",
+    );
+
+    // Negative control: changing to a sibling exception does not fire
+    repo.write(
+        "tests/test_r.py",
+        "import pytest\ndef test_neg():\n    with pytest.raises(TypeError, match=\"negative\"):\n        pass\n",
+    );
+    repo.commit("test: sibling exception");
+    let clean = repo.check(&[]);
+    assert_eq!(
+        clean.titles("assertion-reduction").len(),
+        0,
+        "sibling should not fire"
+    );
+
+    // Positive control: widening both
+    repo.write(
+        "src/lib.rs",
+        "pub fn add(a: u32, b: u32) -> u32 { a.checked_add(b).expect(\"overflow\") }\n\n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             use super::*;\n\
+             #[test]\n\
+             #[should_panic]\n\
+             fn overflows() {\n\
+                 add(u32::MAX, 1);\n\
+             }\n\
+         }\n",
+    );
+    repo.write(
+        "tests/test_r.py",
+        "import pytest\ndef test_neg():\n    with pytest.raises(Exception):\n        pass\n",
+    );
+    repo.commit("test: widen panic and exception");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(run.titles("assertion-reduction").len(), 2, "{}", run.stdout);
+    let violations = run.violations("assertion-reduction");
+    assert!(violations
+        .iter()
+        .all(|v| v["code"] == "assertion-reduction/expected-exception-widened"));
+    assert!(violations.iter().any(|v| v["message"]
+        .as_str()
+        .unwrap_or("")
+        .contains("tests::overflows")));
+    assert!(violations
+        .iter()
+        .any(|v| v["message"].as_str().unwrap_or("").contains("test_neg")));
+
+    // Scoped override lifts both findings
+    repo.commit("test: justify widening\n\nallow-assertion-drop: overflows widened panic\nallow-assertion-drop: test_neg widened exception");
+    let lifted = repo.check(&[]);
+    assert!(
+        lifted.titles("assertion-reduction").is_empty(),
+        "{}",
+        lifted.stdout
+    );
+    assert_eq!(lifted.code, 0);
+}
+
+#[test]
 fn a_directive_that_lifted_no_finding_is_reported_without_failing_the_run() {
     let repo = Repo::new();
     repo.write(

@@ -223,7 +223,7 @@ impl<'a> GoExtractor<'a> {
                 strong_asserts: 0,
                 tautologies: 0,
                 ignored: false,
-                should_panic: false,
+                should_panic: None,
                 ..Default::default()
             };
 
@@ -393,7 +393,7 @@ impl<'a> GoExtractor<'a> {
                 strong_asserts: 0,
                 tautologies: 0,
                 ignored: test_fn.ignored,
-                should_panic: false,
+                should_panic: None,
                 ..Default::default()
             };
 
