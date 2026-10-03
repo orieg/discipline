@@ -4281,6 +4281,78 @@ smoke_cost::set_contains
             Ok(true)
         },
     ),
+    (
+        "ast: assertions inside proptest! and quickcheck! are parsed and discriminated",
+        || {
+            let v = AssertVocabulary::default();
+            let base_src = r#"
+proptest! {
+    #[test]
+    fn parses_dates(s in "[0-9]{4}") {
+        prop_assert!(!s.is_empty());
+        prop_assert_eq!(s.len(), 4);
+    }
+}
+quickcheck! {
+    fn prop_qc(x: u32) -> bool {
+        x == x
+    }
+    fn prop_tautology(_x: u32) -> bool {
+        true
+    }
+}
+"#;
+            let facts = analyze(base_src, &v)?;
+            anyhow::ensure!(
+                facts.tests.len() == 3,
+                "expected 3 tests in proptest/quickcheck, got {}",
+                facts.tests.len()
+            );
+            let parses_dates = facts
+                .tests
+                .iter()
+                .find(|t| t.name == "parses_dates")
+                .unwrap();
+            anyhow::ensure!(
+                parses_dates.total_asserts == 2 && parses_dates.strong_asserts == 1,
+                "parses_dates should have 2 asserts and 1 strong assert"
+            );
+
+            let prop_qc = facts.tests.iter().find(|t| t.name == "prop_qc").unwrap();
+            anyhow::ensure!(
+                prop_qc.total_asserts == 1 && prop_qc.strong_asserts == 1 && !prop_qc.is_vacuous(),
+                "prop_qc should count as 1 strong assert and not vacuous"
+            );
+
+            let prop_tautology = facts
+                .tests
+                .iter()
+                .find(|t| t.name == "prop_tautology")
+                .unwrap();
+            anyhow::ensure!(
+                prop_tautology.is_vacuous(),
+                "prop_tautology should be vacuous"
+            );
+
+            // Control: weakened proptest assertion reduces strong asserts
+            let weaker_src = r#"
+proptest! {
+    #[test]
+    fn parses_dates(s in "[0-9]{4}") {
+        prop_assert!(!s.is_empty());
+    }
+}
+"#;
+            let weaker_facts = analyze(weaker_src, &v)?;
+            let weaker = &weaker_facts.tests[0];
+            anyhow::ensure!(
+                weaker.total_asserts == 1 && weaker.strong_asserts == 0,
+                "weaker proptest should have 1 assert and 0 strong asserts"
+            );
+
+            Ok(true)
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

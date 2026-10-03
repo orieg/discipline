@@ -536,6 +536,9 @@ pub(crate) fn report_parse_errors(
             continue;
         }
         if let Some(h) = ff.head.as_ref() {
+            for note in &h.notes {
+                out.notes.push(note.clone());
+            }
             if h.has_parse_errors {
                 let is_c_like = matches!(
                     crate::ast::language_for(&ff.file.path),

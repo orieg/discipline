@@ -17905,3 +17905,90 @@ fn test_cases_reduced_in_parametrized_test_fires_and_accepts_override() {
     let notes = run_pres.outcome("assertion-reduction")["notes"].to_string();
     assert!(notes.contains("read as preserved across tests in same file"));
 }
+
+#[test]
+fn proptest_and_quickcheck_assertion_reduction_and_vacuous_e2e() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    repo.write(
+        "tests/prop_test.rs",
+        "use proptest::prelude::*;\n\nproptest! {\n    #[test]\n    fn parses_dates(s in \"[0-9]{4}\") {\n        prop_assert!(!s.is_empty());\n        prop_assert_eq!(s.len(), 4);\n    }\n}\n",
+    );
+    repo.commit("feat: add proptest property with 2 assertions");
+
+    // Positive control 1: Dropping an assertion inside proptest! fails assertion-reduction
+    repo.git(&["checkout", "-q", "-B", "weaken-proptest", "main"]);
+    repo.write(
+        "tests/prop_test.rs",
+        "use proptest::prelude::*;\n\nproptest! {\n    #[test]\n    fn parses_dates(s in \"[0-9]{4}\") {\n        prop_assert!(!s.is_empty());\n    }\n}\n",
+    );
+    repo.commit("test: dropped prop_assert_eq in proptest");
+    let run_weaken = repo.check(&["--base", "main"]);
+    assert_eq!(
+        run_weaken.code, 1,
+        "reduced proptest assertions must fail: {}{}",
+        run_weaken.stdout, run_weaken.stderr
+    );
+    let violations = run_weaken.violations("assertion-reduction");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"],
+        "assertion-reduction/assertions-reduced"
+    );
+    assert!(violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("parses_dates"));
+
+    // Directive lifts the assertion reduction
+    let run_ov = repo.check_with_pr(
+        &["--base", "main"],
+        "Fixes #454\n\nallow-assertion-drop: parses_dates simplified property assertions\n",
+    );
+    assert_eq!(
+        run_ov.code, 0,
+        "directive must lift assertion reduction: {}{}",
+        run_ov.stdout, run_ov.stderr
+    );
+    assert!(run_ov.violations("assertion-reduction").is_empty());
+
+    // Positive control 2: Vacuous property test inside quickcheck! trips vacuous-tests
+    repo.git(&["checkout", "-q", "-B", "vacuous-qc", "main"]);
+    repo.write(
+        "tests/qc_test.rs",
+        "quickcheck::quickcheck! {\n    fn prop_tautology(_x: u32) -> bool {\n        true\n    }\n}\n",
+    );
+    repo.commit("test: add vacuous quickcheck test");
+    let run_vacuous = repo.check(&["--base", "main"]);
+    assert_eq!(
+        run_vacuous.code, 1,
+        "vacuous quickcheck property must fail: {}{}",
+        run_vacuous.stdout, run_vacuous.stderr
+    );
+    let vac_violations = run_vacuous.violations("vacuous-tests");
+    assert_eq!(vac_violations.len(), 1, "{vac_violations:?}");
+    assert_eq!(
+        vac_violations[0]["code"],
+        "vacuous-tests/vacuous-test-added"
+    );
+    assert!(vac_violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("prop_tautology"));
+
+    // Negative control: Non-vacuous proptest and quickcheck property tests pass
+    repo.git(&["checkout", "-q", "-B", "stronger-props", "main"]);
+    repo.write(
+        "tests/prop_test.rs",
+        "use proptest::prelude::*;\n\nproptest! {\n    #[test]\n    fn parses_dates(s in \"[0-9]{4}\") {\n        prop_assert!(!s.is_empty());\n        prop_assert_eq!(s.len(), 4);\n        prop_assert_ne!(s.len(), 0);\n    }\n}\n\nquickcheck::quickcheck! {\n    fn prop_roundtrip(x: u32) -> bool {\n        x == x\n    }\n}\n",
+    );
+    repo.commit("test: strengthened proptest assertions and added real quickcheck");
+    let run_pass = repo.check(&["--base", "main"]);
+    assert_eq!(
+        run_pass.code, 0,
+        "non-vacuous and strengthened properties must pass: {}{}",
+        run_pass.stdout, run_pass.stderr
+    );
+    assert!(run_pass.violations("assertion-reduction").is_empty());
+    assert!(run_pass.violations("vacuous-tests").is_empty());
+}

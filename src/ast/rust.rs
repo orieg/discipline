@@ -326,6 +326,11 @@ impl<'a> Extractor<'a> {
                     if let Some(m) = node.child_by_field_name("macro") {
                         let full_name = self.text(m);
                         let short_name = last_segment(full_name);
+                        if self.in_fn == 0
+                            && (short_name == "proptest" || short_name == "quickcheck")
+                        {
+                            self.extract_property_tests(node, short_name, mods);
+                        }
                         let is_cta = if self.in_const > 0 {
                             self.is_assert_macro(short_name)
                                 || short_name.starts_with("const_assert")
@@ -484,37 +489,14 @@ impl<'a> Extractor<'a> {
                 _ => break,
             }
         }
-        let mut cur = node.parent();
-        while let Some(p) = cur {
-            if p.kind() == "mod_item" {
-                let mut prev_mod = p.prev_sibling();
-                while let Some(a) = prev_mod {
-                    if a.kind() != "attribute_item" {
-                        break;
-                    }
-                    let text = a.utf8_text(self.src).unwrap_or("");
-                    let name = attribute_name(text);
-                    if name == "cfg" {
-                        if is_cfg_test_suppression(text) {
-                            ignored = true;
-                        } else if let Some((is_unconditional, cond_str)) =
-                            super::runner_collection::evaluate_rust_cfg(
-                                text,
-                                &self.vocab.runner_rules.rust.declared_features,
-                            )
-                        {
-                            if is_unconditional {
-                                ignored = true;
-                                conditional_ignore = None;
-                            } else if !ignored && conditional_ignore.is_none() {
-                                conditional_ignore = Some(cond_str);
-                            }
-                        }
-                    }
-                    prev_mod = a.prev_sibling();
-                }
+        let (mod_ign, mod_cond) = self.eval_parent_mod_cfgs(node);
+        if mod_ign {
+            ignored = true;
+            conditional_ignore = None;
+        } else if let Some(cond_str) = mod_cond {
+            if !ignored && conditional_ignore.is_none() {
+                conditional_ignore = Some(cond_str);
             }
-            cur = p.parent();
         }
         if !is_test && has_commented_out_test {
             is_test = true;
@@ -623,6 +605,442 @@ impl<'a> Extractor<'a> {
             }
         }
         None
+    }
+
+    fn eval_parent_mod_cfgs(&self, node: Node) -> (bool, Option<String>) {
+        let mut ignored = false;
+        let mut conditional_ignore = None;
+        let mut cur = node.parent();
+        while let Some(p) = cur {
+            if p.kind() == "mod_item" {
+                let mut prev_mod = p.prev_sibling();
+                while let Some(a) = prev_mod {
+                    if a.kind() != "attribute_item" {
+                        break;
+                    }
+                    let text = a.utf8_text(self.src).unwrap_or("");
+                    let name = attribute_name(text);
+                    if name == "cfg" {
+                        if is_cfg_test_suppression(text) {
+                            ignored = true;
+                        } else if let Some((is_unconditional, cond_str)) =
+                            super::runner_collection::evaluate_rust_cfg(
+                                text,
+                                &self.vocab.runner_rules.rust.declared_features,
+                            )
+                        {
+                            if is_unconditional {
+                                ignored = true;
+                                conditional_ignore = None;
+                            } else if !ignored && conditional_ignore.is_none() {
+                                conditional_ignore = Some(cond_str);
+                            }
+                        }
+                    }
+                    prev_mod = a.prev_sibling();
+                }
+            }
+            cur = p.parent();
+        }
+        (ignored, conditional_ignore)
+    }
+
+    fn extract_property_tests(&mut self, node: Node, macro_name: &str, mods: &[String]) {
+        let Some(token_tree) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "token_tree")
+        else {
+            self.facts.notes.push(format!(
+                "macro `{macro_name}` near line {}: missing token tree (not analysed)",
+                node.start_position().row + 1
+            ));
+            return;
+        };
+
+        let mut cursor = token_tree.walk();
+        let children: Vec<Node> = token_tree.children(&mut cursor).collect();
+        let mut i = 0;
+        let mut current_attrs: Vec<(String, usize)> = Vec::new();
+        let mut attr_start_line: Option<usize> = None;
+        let mut found_any_fn = false;
+
+        while i < children.len() {
+            let child = children[i];
+            let kind = child.kind();
+
+            if matches!(kind, "line_comment" | "block_comment" | "{" | "}" | ";") {
+                i += 1;
+                continue;
+            }
+
+            // Inner attribute: # ! [ ... ]
+            if kind == "#" && i + 1 < children.len() && children[i + 1].kind() == "!" {
+                i += 2;
+                if i < children.len() && children[i].kind() == "token_tree" {
+                    i += 1;
+                }
+                continue;
+            }
+
+            // Outer attribute: # [ ... ]
+            if kind == "#" && i + 1 < children.len() && children[i + 1].kind() == "token_tree" {
+                let attr_line = child.start_position().row + 1;
+                if attr_start_line.is_none() {
+                    attr_start_line = Some(attr_line);
+                }
+                let attr_text = format!("#{}", self.text(children[i + 1]));
+                current_attrs.push((attr_text, attr_line));
+                i += 2;
+                continue;
+            }
+
+            // Skip visibility and async qualifiers: pub, pub(...), async
+            if kind == "visibility_modifier" || kind == "async" {
+                i += 1;
+                continue;
+            }
+            if kind == "identifier" && self.text(child) == "pub" {
+                i += 1;
+                if i < children.len()
+                    && children[i].kind() == "token_tree"
+                    && self.text(children[i]).starts_with('(')
+                {
+                    i += 1;
+                }
+                continue;
+            }
+
+            if kind == "fn" {
+                found_any_fn = true;
+                let fn_line = attr_start_line
+                    .take()
+                    .unwrap_or_else(|| child.start_position().row + 1);
+                i += 1;
+
+                while i < children.len()
+                    && matches!(children[i].kind(), "line_comment" | "block_comment")
+                {
+                    i += 1;
+                }
+
+                if i >= children.len() || children[i].kind() != "identifier" {
+                    self.facts.notes.push(format!(
+                        "macro `{macro_name}` near line {fn_line}: property test missing function name (not analysed)"
+                    ));
+                    current_attrs.clear();
+                    attr_start_line = None;
+                    continue;
+                }
+
+                let name_node = children[i];
+                let fn_name = self.text(name_node).to_string();
+                i += 1;
+
+                while i < children.len()
+                    && matches!(children[i].kind(), "line_comment" | "block_comment")
+                {
+                    i += 1;
+                }
+
+                if i >= children.len()
+                    || children[i].kind() != "token_tree"
+                    || !self.text(children[i]).starts_with('(')
+                {
+                    self.facts.notes.push(format!(
+                        "macro `{macro_name}` near line {fn_line}: property test `{fn_name}` missing parameter list (not analysed)"
+                    ));
+                    current_attrs.clear();
+                    attr_start_line = None;
+                    continue;
+                }
+                i += 1;
+
+                let mut return_type = String::new();
+                while i < children.len() {
+                    let k = children[i].kind();
+                    if k == "token_tree" && self.text(children[i]).starts_with('{') {
+                        break;
+                    }
+                    if !matches!(k, "line_comment" | "block_comment") {
+                        return_type.push_str(self.text(children[i]));
+                        return_type.push(' ');
+                    }
+                    i += 1;
+                }
+
+                if i >= children.len() {
+                    self.facts.notes.push(format!(
+                        "macro `{macro_name}` near line {fn_line}: property test `{fn_name}` missing body (not analysed)"
+                    ));
+                    current_attrs.clear();
+                    attr_start_line = None;
+                    continue;
+                }
+
+                let body_node = children[i];
+                let body_text = self.text(body_node);
+                let end_line = body_node.end_position().row + 1;
+                i += 1;
+
+                let test_name = mods
+                    .iter()
+                    .map(String::as_str)
+                    .chain(std::iter::once(fn_name.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("::");
+
+                let mut ignored = false;
+                let mut conditional_ignore = None;
+                let mut should_panic = None;
+
+                let (mod_ign, mod_cond) = self.eval_parent_mod_cfgs(node);
+                if mod_ign {
+                    ignored = true;
+                } else if let Some(cond_str) = mod_cond {
+                    conditional_ignore = Some(cond_str);
+                }
+
+                for (attr_text, attr_line) in current_attrs.drain(..) {
+                    let name = attribute_name(&attr_text);
+                    if name == "ignore" {
+                        ignored = true;
+                        conditional_ignore = None;
+                    } else if name == "should_panic" {
+                        should_panic = Some(super::expected_exceptions::parse_rust_should_panic(
+                            &attr_text, attr_line,
+                        ));
+                    } else if name == "cfg" {
+                        if is_cfg_test_suppression(&attr_text) {
+                            ignored = true;
+                        } else if let Some((is_unconditional, cond_str)) =
+                            super::runner_collection::evaluate_rust_cfg(
+                                &attr_text,
+                                &self.vocab.runner_rules.rust.declared_features,
+                            )
+                        {
+                            if is_unconditional {
+                                ignored = true;
+                                conditional_ignore = None;
+                            } else if !ignored {
+                                conditional_ignore = Some(cond_str);
+                            }
+                        }
+                    } else if name == "cfg_attr" {
+                        if let Some((cond, subs)) = parse_cfg_attr(&attr_text) {
+                            for sub in subs {
+                                let sub_name = attribute_name(&sub);
+                                if sub_name == "ignore" {
+                                    let norm = cond.replace(' ', "");
+                                    if norm == "all()" || norm == "test" {
+                                        ignored = true;
+                                    } else if let Some((is_unconditional, cond_str)) =
+                                        super::runner_collection::evaluate_rust_cfg(
+                                            &cond,
+                                            &self.vocab.runner_rules.rust.declared_features,
+                                        )
+                                    {
+                                        if is_unconditional {
+                                            ignored = true;
+                                            conditional_ignore = None;
+                                        } else if !ignored {
+                                            conditional_ignore = Some(cond_str);
+                                        }
+                                    } else {
+                                        conditional_ignore = Some(cond.clone());
+                                    }
+                                } else if sub_name == "should_panic" {
+                                    should_panic =
+                                        Some(super::expected_exceptions::parse_rust_should_panic(
+                                            &sub, attr_line,
+                                        ));
+                                }
+                            }
+                        }
+                    }
+                }
+                attr_start_line = None;
+
+                let mut test = TestFn {
+                    name: test_name,
+                    line: fn_line,
+                    end_line,
+                    ignored,
+                    conditional_ignore,
+                    should_panic,
+                    ..Default::default()
+                };
+
+                let fake_fn = format!("fn __discipline_prop() {body_text}");
+                let mut p = Parser::new();
+                let mut direct_calls = Vec::new();
+
+                if p.set_language(&tree_sitter_rust::LANGUAGE.into()).is_ok() {
+                    if let Some(tree) = p.parse(&fake_fn, None) {
+                        let root = tree.root_node();
+                        if let Some(fn_item) = root.child(0) {
+                            if let Some(body) = fn_item.child_by_field_name("body") {
+                                let is_qc = macro_name == "quickcheck"
+                                    || return_type.contains("bool")
+                                    || return_type.contains("TestResult");
+                                self.count_property_body_asserts(
+                                    body,
+                                    fake_fn.as_bytes(),
+                                    &mut test,
+                                    &mut direct_calls,
+                                    is_qc,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                self.facts.tests.push(test);
+                self.test_calls.push(direct_calls);
+                continue;
+            }
+
+            i += 1;
+        }
+
+        if !found_any_fn {
+            let has_meaningful_tokens = children
+                .iter()
+                .any(|c| !matches!(c.kind(), "{" | "}" | "line_comment" | "block_comment" | ";"));
+            if has_meaningful_tokens {
+                self.facts.notes.push(format!(
+                    "macro `{macro_name}` near line {}: token tree does not contain valid property tests (not analysed)",
+                    node.start_position().row + 1
+                ));
+            }
+        }
+    }
+
+    fn count_property_body_asserts(
+        &self,
+        node: Node,
+        src: &[u8],
+        test: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+        is_quickcheck: bool,
+    ) {
+        match node.kind() {
+            "function_item" => {
+                return;
+            }
+            "try_expression" => {
+                test.total_asserts += 1;
+            }
+            "macro_invocation" => {
+                if let Some(m) = node.child_by_field_name("macro") {
+                    let macro_ident = last_segment(m.utf8_text(src).unwrap_or(""));
+                    if self.is_assert_macro(macro_ident) {
+                        test.total_asserts += 1;
+                        if is_strong(macro_ident) {
+                            test.strong_asserts += 1;
+                        }
+                        let args = node
+                            .children(&mut node.walk())
+                            .find(|c| c.kind() == "token_tree")
+                            .and_then(|t| t.utf8_text(src).ok())
+                            .unwrap_or("");
+                        if is_tautology(macro_ident, args) {
+                            test.tautologies += 1;
+                        }
+                    }
+                    let mut cursor = node.walk();
+                    for tree in node
+                        .children(&mut cursor)
+                        .filter(|c| c.kind() == "token_tree")
+                    {
+                        let mut tree_cursor = tree.walk();
+                        let tokens: Vec<Node> = tree.children(&mut tree_cursor).collect();
+                        for j in 0..tokens.len() {
+                            if tokens[j].kind() == "identifier" {
+                                if let Ok(callee_name) = tokens[j].utf8_text(src) {
+                                    if j + 1 < tokens.len()
+                                        && tokens[j + 1].kind() == "token_tree"
+                                        && !NON_EVALUATING_MACROS.contains(&callee_name)
+                                    {
+                                        direct_calls.push(callee_name.to_string());
+                                        if self.vocab.helper_fns.iter().any(|h| h == callee_name) {
+                                            test.total_asserts += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "call_expression" => {
+                if let Some(f) = node.child_by_field_name("function") {
+                    if f.kind() == "field_expression" {
+                        if let Some(field) = f.child_by_field_name("field") {
+                            let method = field.utf8_text(src).unwrap_or("");
+                            if method == "unwrap" || method == "expect" {
+                                test.total_asserts += 1;
+                            }
+                        }
+                    }
+                    let callee = f.utf8_text(src).unwrap_or("");
+                    let callee_name = last_segment(callee).to_string();
+                    if self.vocab.helper_fns.contains(&callee_name) {
+                        test.total_asserts += 1;
+                    }
+                    direct_calls.push(callee_name);
+                }
+            }
+            _ => {}
+        }
+
+        if is_quickcheck && test.total_asserts == 0 {
+            if node.kind() == "block" {
+                let mut cursor = node.walk();
+                let children: Vec<Node> = node.children(&mut cursor).collect();
+                if let Some(last) = children.iter().rev().find(|c| c.is_named()) {
+                    if last.kind() != "expression_statement"
+                        && !matches!(last.kind(), "line_comment" | "block_comment")
+                    {
+                        self.eval_quickcheck_expr(*last, src, test);
+                    }
+                }
+            } else if node.kind() == "return_expression" {
+                if let Some(expr) = node.children(&mut node.walk()).find(|c| c.is_named()) {
+                    self.eval_quickcheck_expr(expr, src, test);
+                }
+            }
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.count_property_body_asserts(child, src, test, direct_calls, is_quickcheck);
+        }
+    }
+
+    fn eval_quickcheck_expr(&self, expr: Node, src: &[u8], test: &mut TestFn) {
+        match expr.kind() {
+            "binary_expression" => {
+                test.total_asserts += 1;
+                let mut cursor = expr.walk();
+                for child in expr.children(&mut cursor) {
+                    if child.kind() == "==" || child.kind() == "!=" {
+                        test.strong_asserts += 1;
+                        break;
+                    }
+                }
+            }
+            "boolean_literal" => {
+                let text = expr.utf8_text(src).unwrap_or("");
+                test.total_asserts += 1;
+                if text == "true" {
+                    test.tautologies += 1;
+                }
+            }
+            "call_expression" | "unary_expression" => {
+                test.total_asserts += 1;
+            }
+            _ => {}
+        }
     }
 
     fn count_asserts(
@@ -2012,6 +2430,104 @@ mod tests {
         };
         let f = RustPack.extract("test.rs", src, &vocab).unwrap();
         assert_eq!(f.tests[0].total_asserts, 2);
+    }
+
+    #[test]
+    fn proptest_and_quickcheck_property_tests_are_extracted() {
+        let src = r#"
+mod tests {
+    use super::*;
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+        #[test]
+        fn commutes(a: u32, b: u32) {
+            prop_assume!(a > 0);
+            prop_assert_eq!(add(a, b), add(b, a));
+            prop_assert!(add(a, b) >= a as u64);
+        }
+
+        #[ignore]
+        fn ignored_prop(x in 0..10) {
+            prop_assert!(x < 10);
+        }
+
+        fn vacuous_prop(x in 0..10) {}
+    }
+
+    quickcheck! {
+        fn prop_reverse(xs: Vec<isize>) -> bool {
+            xs == xs.into_iter().rev().rev().collect::<Vec<_>>()
+        }
+
+        fn prop_tautology(xs: Vec<isize>) -> bool {
+            true
+        }
+    }
+
+    prop_compose! {
+        fn arb_point()(x in 0..10, y in 0..10) -> (i32, i32) {
+            (x, y)
+        }
+    }
+}
+proptest! {
+    fn top_level_prop(x in 0..10) {
+        assert!(x < 20);
+    }
+}
+proptest! {
+    invalid tokens not a function
+}
+"#;
+        let f = facts(src);
+        let by_name = |n: &str| f.tests.iter().find(|t| t.name == n).unwrap().clone();
+
+        // 1. proptest commutes: prop_assume is not an assertion, prop_assert_eq and prop_assert are
+        let commutes = by_name("tests::commutes");
+        assert_eq!(commutes.total_asserts, 2);
+        assert_eq!(commutes.strong_asserts, 1);
+        assert_eq!(commutes.tautologies, 0);
+        assert!(!commutes.ignored);
+        assert!(!commutes.is_vacuous());
+
+        // 2. proptest ignored
+        let ignored_prop = by_name("tests::ignored_prop");
+        assert!(ignored_prop.ignored);
+        assert_eq!(ignored_prop.total_asserts, 1);
+
+        // 3. proptest vacuous
+        let vacuous_prop = by_name("tests::vacuous_prop");
+        assert_eq!(vacuous_prop.total_asserts, 0);
+        assert!(vacuous_prop.is_vacuous());
+
+        // 4. quickcheck bool check
+        let prop_reverse = by_name("tests::prop_reverse");
+        assert_eq!(prop_reverse.total_asserts, 1);
+        assert_eq!(prop_reverse.strong_asserts, 1);
+        assert!(!prop_reverse.is_vacuous());
+
+        // 5. quickcheck tautology
+        let prop_tautology = by_name("tests::prop_tautology");
+        assert_eq!(prop_tautology.total_asserts, 1);
+        assert_eq!(prop_tautology.tautologies, 1);
+        assert!(prop_tautology.is_vacuous());
+
+        // 6. top-level proptest naming
+        let top_level = by_name("top_level_prop");
+        assert_eq!(top_level.total_asserts, 1);
+        assert!(!top_level.is_vacuous());
+
+        // 7. prop_compose is not extracted as a test
+        assert!(f.tests.iter().all(|t| !t.name.contains("arb_point")));
+
+        // 8. total tests count: exactly 6
+        assert_eq!(f.tests.len(), 6);
+
+        // 9. Malformed proptest token tree emits a note ("not analysed")
+        assert!(f
+            .notes
+            .iter()
+            .any(|n| n.contains("proptest") && n.contains("not analysed")));
     }
 
     #[test]
