@@ -3171,7 +3171,7 @@ test tests::c: test
                 Some(&features),
             );
 
-            let cfg_ok = known == crate::ast::runner_collection::CfgValue::True
+            let cfg_ok = known == crate::ast::runner_collection::CfgValue::Unknown
                 && unknown == crate::ast::runner_collection::CfgValue::False
                 && any_cfg == crate::ast::runner_collection::CfgValue::False;
 
