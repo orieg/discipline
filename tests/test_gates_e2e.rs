@@ -18163,6 +18163,71 @@ fn test_cases_reduced_in_parametrized_test_fires_and_accepts_override() {
 }
 
 #[test]
+fn allow_case_drop_does_not_lift_loosened_assertion_bound_when_cases_dropped() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    repo.write(
+        "tests/test_calc.py",
+        "import pytest\n\n@pytest.mark.parametrize(\"x\", [1, 2, 3])\ndef test_x(x):\n    assert x < 1.5\n",
+    );
+    repo.commit("feat: parametrized test with 3 cases and bound 1.5");
+
+    repo.git(&["checkout", "-q", "-B", "drop-and-loosen", "main"]);
+    repo.write(
+        "tests/test_calc.py",
+        "import pytest\n\n@pytest.mark.parametrize(\"x\", [1])\ndef test_x(x):\n    assert x < 5.0\n",
+    );
+    repo.commit("test: drop cases and loosen bound");
+
+    let run_ov = repo.check_with_pr(
+        &["--base", "main"],
+        "allow-case-drop: test_x dropped redundant test cases\n",
+    );
+    assert_eq!(
+        run_ov.code, 1,
+        "allow-case-drop must NOT lift assertion-bound-loosened: {}{}",
+        run_ov.stdout, run_ov.stderr
+    );
+    let violations = run_ov.violations("assertion-reduction");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"],
+        "assertion-reduction/assertion-bound-loosened"
+    );
+}
+
+#[test]
+fn allow_case_drop_does_not_lift_plain_assertion_removal() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    repo.write(
+        "tests/test_calc.py",
+        "def test_x():\n    assert 1 == 1\n    assert 2 == 2\n",
+    );
+    repo.commit("feat: test with 2 assertions");
+
+    repo.git(&["checkout", "-q", "-B", "drop-assertion", "main"]);
+    repo.write("tests/test_calc.py", "def test_x():\n    assert 1 == 1\n");
+    repo.commit("test: dropped one assertion");
+
+    let run_ov = repo.check_with_pr(
+        &["--base", "main"],
+        "allow-case-drop: test_x tried to lift plain assertion drop\n",
+    );
+    assert_eq!(
+        run_ov.code, 1,
+        "allow-case-drop must NOT lift plain assertion removal: {}{}",
+        run_ov.stdout, run_ov.stderr
+    );
+    let violations = run_ov.violations("assertion-reduction");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"],
+        "assertion-reduction/assertions-reduced"
+    );
+}
+
+#[test]
 fn proptest_and_quickcheck_assertion_reduction_and_vacuous_e2e() {
     let repo = Repo::new();
     repo.git(&["checkout", "main"]);

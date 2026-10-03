@@ -1181,6 +1181,30 @@ pub fn evaluate_assertion_reduction(
             continue;
         }
 
+        let mut case_drop_allowed = false;
+        if cases_drop {
+            let lift_case = |subject: &str| {
+                tokens::find_override(
+                    directives,
+                    GATE,
+                    &crate::findings::TEST_CASES_REDUCED,
+                    tokens::ALLOW_CASE_DROP,
+                    subject,
+                )
+            };
+            let allowed_case = if p.forced {
+                lift_case(leaf_name(b)).or_else(|| lift_case(p.path))
+            } else {
+                lift_case(leaf_name(h))
+                    .or_else(|| lift_case(leaf_name(b)))
+                    .or_else(|| lift_case(p.path))
+            };
+            if let Some(record) = allowed_case {
+                out.overrides.push(record);
+                case_drop_allowed = true;
+            }
+        }
+
         let test_label = if p.forced {
             format!("Test `{}` -> `{}`", b.name, h.name)
         } else {
@@ -1279,27 +1303,29 @@ pub fn evaluate_assertion_reduction(
         }
 
         if let Some((b_cases, h_cases)) = cases_drop_info {
-            let severity = if is_staged {
-                crate::config::Severity::Warning
-            } else {
-                settings.severity()
-            };
-            let violation_line = if h.total_asserts > 0 { h.line } else { b.line };
-            out.push(
-                severity,
-                &crate::findings::TEST_CASES_REDUCED,
-                Some(p.path),
-                Some(violation_line),
-                format!(
-                    "{test_label}: test cases in parametrized / table-driven test dropped from {} to {}.",
-                    b_cases, h_cases
-                ),
-                &format!(
-                    "Restore the test cases, or justify the drop on its own line in the PR body or \
-                     a commit message: `allow-case-drop: {} <reason>`.",
-                    directive_name
-                ),
-            );
+            if !case_drop_allowed {
+                let severity = if is_staged {
+                    crate::config::Severity::Warning
+                } else {
+                    settings.severity()
+                };
+                let violation_line = if h.total_asserts > 0 { h.line } else { b.line };
+                out.push(
+                    severity,
+                    &crate::findings::TEST_CASES_REDUCED,
+                    Some(p.path),
+                    Some(violation_line),
+                    format!(
+                        "{test_label}: test cases in parametrized / table-driven test dropped from {} to {}.",
+                        b_cases, h_cases
+                    ),
+                    &format!(
+                        "Restore the test cases, or justify the drop on its own line in the PR body or \
+                         a commit message: `allow-case-drop: {} <reason>`.",
+                        directive_name
+                    ),
+                );
+            }
         }
 
         if !total_drop && !strong_drop && !fatal_drop && mock_growth {
@@ -2896,6 +2922,92 @@ mod tests {
             out_assert.overrides[0].code.as_deref(),
             Some("assertion-reduction/test-cases-reduced")
         );
+    }
+
+    #[test]
+    fn test_evaluate_assertion_reduction_case_drop_does_not_waive_loosened_bound_or_plain_assertion_drop(
+    ) {
+        let b = TestFn {
+            name: "test_param".to_string(),
+            line: 10,
+            cases: Some(5),
+            total_asserts: 2,
+            strong_asserts: 2,
+            ..Default::default()
+        };
+        let h = TestFn {
+            name: "test_param".to_string(),
+            line: 10,
+            cases: Some(2),
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let pairs = [TestPair {
+            path: "tests/test_foo.py",
+            base: &b,
+            head: &h,
+            forced: false,
+        }];
+        let settings = crate::config::AssertionGate::default();
+        let directive_case = crate::tokens::parse_directives(
+            "allow-case-drop: test_param removed slow redundant test cases\n",
+            crate::tokens::OverrideSource::PrBody,
+        );
+        let out = evaluate_assertion_reduction(&pairs, &[], &[], &settings, &directive_case, false)
+            .unwrap();
+        // The case drop is waived, but the assertion drop is reported
+        assert_eq!(out.violations.len(), 1);
+        assert_eq!(
+            out.violations[0].code,
+            "assertion-reduction/assertions-reduced"
+        );
+        assert_eq!(out.overrides.len(), 1);
+        assert_eq!(
+            out.overrides[0].code.as_deref(),
+            Some("assertion-reduction/test-cases-reduced")
+        );
+
+        // When only plain assertions dropped (no case change), allow-case-drop lifts nothing
+        let b_plain = TestFn {
+            name: "test_plain".to_string(),
+            line: 10,
+            total_asserts: 2,
+            strong_asserts: 2,
+            ..Default::default()
+        };
+        let h_plain = TestFn {
+            name: "test_plain".to_string(),
+            line: 10,
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let pairs_plain = [TestPair {
+            path: "tests/test_foo.py",
+            base: &b_plain,
+            head: &h_plain,
+            forced: false,
+        }];
+        let directive_case_plain = crate::tokens::parse_directives(
+            "allow-case-drop: test_plain tried to lift assertion drop\n",
+            crate::tokens::OverrideSource::PrBody,
+        );
+        let out_plain = evaluate_assertion_reduction(
+            &pairs_plain,
+            &[],
+            &[],
+            &settings,
+            &directive_case_plain,
+            false,
+        )
+        .unwrap();
+        assert_eq!(out_plain.violations.len(), 1);
+        assert_eq!(
+            out_plain.violations[0].code,
+            "assertion-reduction/assertions-reduced"
+        );
+        assert!(out_plain.overrides.is_empty());
     }
 
     #[test]
