@@ -84,8 +84,8 @@ fn evaluate_findings_for_directive(
 fn test_all_40_directives_table_driven_scoping() {
     assert_eq!(
         KNOWN_DIRECTIVES.len(),
-        44,
-        "KNOWN_DIRECTIVES must contain exactly 44 directives (34 canonical + 10 deprecated)"
+        45,
+        "KNOWN_DIRECTIVES must contain exactly 45 directives (35 canonical + 10 deprecated)"
     );
 
     let mut results = Vec::with_capacity(KNOWN_DIRECTIVES.len());

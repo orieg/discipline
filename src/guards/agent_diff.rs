@@ -696,8 +696,50 @@ pub fn evaluate_assertion_reduction(
         }
     }
 
+    let mut file_base_cases: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    let mut file_head_cases: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+
+    for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
+        if let Some(c) = p.base.cases {
+            *file_base_cases.entry(p.path).or_default() += c;
+        }
+        if let Some(c) = p.head.cases {
+            *file_head_cases.entry(p.path).or_default() += c;
+        }
+    }
+    for a in added.iter().filter(|a| !exempt.matches(a.path)) {
+        if let Some(c) = a.test.cases {
+            *file_head_cases.entry(a.path).or_default() += c;
+        }
+    }
+
     for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
         let (b, h) = (p.base, p.head);
+        if b.non_literal_cases || h.non_literal_cases {
+            out.notes.push(format!(
+                "{}:{}: non-literal test case source in `{}`; test case reduction cannot be statically verified",
+                p.path, h.line, h.name
+            ));
+        }
+        let mut cases_drop = false;
+        let mut cases_drop_info = None;
+        if let (Some(b_cases), Some(h_cases)) = (b.cases, h.cases) {
+            if h_cases < b_cases {
+                let base_file_total = file_base_cases.get(p.path).copied().unwrap_or(0);
+                let head_file_total = file_head_cases.get(p.path).copied().unwrap_or(0);
+                if head_file_total >= base_file_total {
+                    out.notes.push(format!(
+                        "`{}` in `{}`: test cases {} -> {} read as preserved across tests in same file ({} -> {} total cases)",
+                        h.name, p.path, b_cases, h_cases, base_file_total, head_file_total
+                    ));
+                } else {
+                    cases_drop = true;
+                    cases_drop_info = Some((b_cases, h_cases));
+                }
+            }
+        }
         let b_eff = b.effective_asserts();
         let h_eff = h.effective_asserts();
         let mut total_drop = h_eff < b_eff;
@@ -737,7 +779,7 @@ pub fn evaluate_assertion_reduction(
             &b.expected_exceptions,
             &h.expected_exceptions,
         );
-        let dropped = total_drop || strong_drop || fatal_drop || mock_growth;
+        let dropped = total_drop || strong_drop || fatal_drop || mock_growth || cases_drop;
         if !dropped
             && loosened.is_empty()
             && changed.is_empty()
@@ -755,6 +797,8 @@ pub fn evaluate_assertion_reduction(
         // bound. One directive lifts every finding of the pair; the record names the first.
         let lifts = if !newly_caught.is_empty() {
             &crate::findings::ASSERTION_FAILURE_CAUGHT
+        } else if cases_drop {
+            &crate::findings::TEST_CASES_REDUCED
         } else if total_drop || strong_drop {
             &crate::findings::ASSERTIONS_REDUCED
         } else if fatal_drop {
@@ -884,6 +928,30 @@ pub fn evaluate_assertion_reduction(
         }
         if !dropped {
             continue;
+        }
+
+        if let Some((b_cases, h_cases)) = cases_drop_info {
+            let severity = if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            };
+            let violation_line = if h.total_asserts > 0 { h.line } else { b.line };
+            out.push(
+                severity,
+                &crate::findings::TEST_CASES_REDUCED,
+                Some(p.path),
+                Some(violation_line),
+                format!(
+                    "{test_label}: test cases in parametrized / table-driven test dropped from {} to {}.",
+                    b_cases, h_cases
+                ),
+                &format!(
+                    "Restore the test cases, or justify the drop on its own line in the PR body or \
+                     a commit message: `allow-case-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
         }
 
         if !total_drop && !strong_drop && !fatal_drop && mock_growth {
@@ -2371,5 +2439,199 @@ mod tests {
         ];
         let out_all = evaluate_ignored_tests(&[], &added, &all_approved, &[], false).unwrap();
         assert_eq!(out_all.violations.len(), 0);
+    }
+
+    #[test]
+    fn test_evaluate_assertion_reduction_cases_reduced_reports_finding() {
+        let b = TestFn {
+            name: "test_param".to_string(),
+            line: 10,
+            cases: Some(5),
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let h = TestFn {
+            name: "test_param".to_string(),
+            line: 10,
+            cases: Some(2),
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let pairs = [TestPair {
+            path: "tests/test_foo.py",
+            base: &b,
+            head: &h,
+            forced: false,
+        }];
+        let settings = crate::config::AssertionGate::default();
+
+        let out = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 1);
+        let v = &out.violations[0];
+        assert_eq!(v.code, "assertion-reduction/test-cases-reduced");
+        assert_eq!(v.severity, crate::config::Severity::Error);
+        assert!(v
+            .message
+            .contains("test cases in parametrized / table-driven test dropped from 5 to 2"));
+        assert!(v
+            .remediation
+            .as_deref()
+            .unwrap()
+            .contains("allow-case-drop: test_param"));
+
+        // Staged reports warning
+        let out_staged = evaluate_assertion_reduction(&pairs, &[], &settings, &[], true).unwrap();
+        assert_eq!(
+            out_staged.violations[0].severity,
+            crate::config::Severity::Warning
+        );
+    }
+
+    #[test]
+    fn test_evaluate_assertion_reduction_cases_reduced_waived_by_directive() {
+        let b = TestFn {
+            name: "test_param".to_string(),
+            line: 10,
+            cases: Some(5),
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let h = TestFn {
+            name: "test_param".to_string(),
+            line: 10,
+            cases: Some(2),
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let pairs = [TestPair {
+            path: "tests/test_foo.py",
+            base: &b,
+            head: &h,
+            forced: false,
+        }];
+        let settings = crate::config::AssertionGate::default();
+
+        // 1. Waived by allow-case-drop
+        let directive_case = crate::tokens::parse_directives(
+            "allow-case-drop: test_param removed slow redundant test cases\n",
+            crate::tokens::OverrideSource::PrBody,
+        );
+        let out_case =
+            evaluate_assertion_reduction(&pairs, &[], &settings, &directive_case, false).unwrap();
+        assert_eq!(out_case.violations.len(), 0);
+        assert_eq!(out_case.overrides.len(), 1);
+        assert_eq!(
+            out_case.overrides[0].code.as_deref(),
+            Some("assertion-reduction/test-cases-reduced")
+        );
+
+        // 2. Waived by allow-assertion-drop
+        let directive_assert = crate::tokens::parse_directives(
+            "allow-assertion-drop: test_param removed slow redundant test cases\n",
+            crate::tokens::OverrideSource::PrBody,
+        );
+        let out_assert =
+            evaluate_assertion_reduction(&pairs, &[], &settings, &directive_assert, false).unwrap();
+        assert_eq!(out_assert.violations.len(), 0);
+        assert_eq!(out_assert.overrides.len(), 1);
+        assert_eq!(
+            out_assert.overrides[0].code.as_deref(),
+            Some("assertion-reduction/test-cases-reduced")
+        );
+    }
+
+    #[test]
+    fn test_evaluate_assertion_reduction_cases_preserved_across_tests_emits_note() {
+        let b1 = TestFn {
+            name: "test_param_1".to_string(),
+            line: 10,
+            cases: Some(5),
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let h1 = TestFn {
+            name: "test_param_1".to_string(),
+            line: 10,
+            cases: Some(2),
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let b2 = TestFn {
+            name: "test_param_2".to_string(),
+            line: 30,
+            cases: Some(2),
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let h2 = TestFn {
+            name: "test_param_2".to_string(),
+            line: 30,
+            cases: Some(5),
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let pairs = [
+            TestPair {
+                path: "tests/test_foo.py",
+                base: &b1,
+                head: &h1,
+                forced: false,
+            },
+            TestPair {
+                path: "tests/test_foo.py",
+                base: &b2,
+                head: &h2,
+                forced: false,
+            },
+        ];
+        let settings = crate::config::AssertionGate::default();
+
+        let out = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 0);
+        assert!(out.notes.iter().any(|n| n.contains(
+            "test cases 5 -> 2 read as preserved across tests in same file (7 -> 7 total cases)"
+        )));
+    }
+
+    #[test]
+    fn test_evaluate_assertion_reduction_non_literal_cases_emits_note() {
+        let b = TestFn {
+            name: "test_method_source".to_string(),
+            line: 10,
+            non_literal_cases: true,
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let h = TestFn {
+            name: "test_method_source".to_string(),
+            line: 10,
+            non_literal_cases: true,
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        };
+        let pairs = [TestPair {
+            path: "TestExample.java",
+            base: &b,
+            head: &h,
+            forced: false,
+        }];
+        let settings = crate::config::AssertionGate::default();
+
+        let out = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 0);
+        assert!(out
+            .notes
+            .iter()
+            .any(|n| n.contains("non-literal test case source in `test_method_source`")));
     }
 }

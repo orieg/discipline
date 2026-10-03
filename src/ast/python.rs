@@ -507,6 +507,9 @@ impl<'a> PythonExtractor<'a> {
 
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
+        let (cases, non_literal_cases) =
+            super::test_cases::extract_python_cases(decorators, self.src);
+
         let mut test_fn = TestFn {
             name: full_name,
             line,
@@ -516,6 +519,8 @@ impl<'a> PythonExtractor<'a> {
             tautologies: 0,
             ignored,
             should_panic: None,
+            cases,
+            non_literal_cases,
             ..Default::default()
         };
 

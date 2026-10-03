@@ -184,6 +184,13 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_doc: "Test function name, file path, or directory prefix",
     },
     DirectiveSpec {
+        canonical: "allow-case-drop",
+        deprecated: None,
+        gate: "assertion-reduction",
+        subject_kind: DirectiveSubjectKind::TestName,
+        subject_doc: "Test function name, file path, or directory prefix",
+    },
+    DirectiveSpec {
         canonical: "allow-ignore",
         deprecated: None,
         gate: "ignored-tests",
@@ -413,11 +420,12 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     },
 ];
 
-/// The 44 named directives recognized by discipline (34 canonical + 10 deprecated aliases).
+/// The 45 named directives recognized by discipline (35 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 34 Canonical
+    // 35 Canonical
     "removes",
     "allow-assertion-drop",
+    "allow-case-drop",
     "allow-ignore",
     "allow-gate-weakening",
     "allow-toolchain-weakening",
@@ -471,6 +479,7 @@ pub const REMOVES: &[&str] = &[
 ];
 pub const ALLOW_ASSERTION_DROP: &[&str] = &[
     "allow-assertion-drop",
+    "allow-case-drop",
     "discipline:allow(assertion-reduction)",
     "allow(assertion-reduction)",
 ];
@@ -665,7 +674,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
     let lower = name.to_ascii_lowercase();
     match lower.as_str() {
         "removes" | "deletes" => REMOVES,
-        "allow-assertion-drop" => ALLOW_ASSERTION_DROP,
+        "allow-assertion-drop" | "allow-case-drop" => ALLOW_ASSERTION_DROP,
         "allow-ignore" => ALLOW_IGNORE,
         "allow-gate-weakening" => ALLOW_GATE_WEAKENING,
         "allow-golden-update" => ALLOW_GOLDEN_UPDATE,
@@ -712,9 +721,10 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 34 Canonical
+    // 35 Canonical
     "removes",
     "allow-assertion-drop",
+    "allow-case-drop",
     "allow-ignore",
     "allow-gate-weakening",
     "allow-toolchain-weakening",

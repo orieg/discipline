@@ -93,6 +93,7 @@ findings! {
     MOCKING_INCREASED = ["assertion-reduction"], "mocking-increased-without-stronger-assertions", "Mocking Increased Without Stronger Assertions", Was("Mocking Grew Without Stronger Assertions");
     FATAL_ASSERTIONS_WEAKENED = ["assertion-reduction"], "fatal-assertions-weakened", "Fatal Assertions Weakened To Non-Fatal", Was("Fatal Assertions Weakened to Non-Fatal");
     ASSERTIONS_REDUCED = ["assertion-reduction"], "assertions-reduced", "Assertion Count Decreased In Existing Test", Was("Assertion Reduction In Existing Test");
+    TEST_CASES_REDUCED = ["assertion-reduction"], "test-cases-reduced", "Test Cases Reduced In Parametrized Test", Same;
 
     // vacuous-tests
     ASSERTS_ONLY_ON_MOCKS = ["vacuous-tests"], "asserts-only-on-mocks", "Test Asserts Only On Mocks", Same;

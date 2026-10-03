@@ -455,11 +455,15 @@ impl<'a> KotlinExtractor<'a> {
             } else {
                 format!("{}.{}", class_stack.join("."), name)
             };
+            let (cases, non_literal_cases) =
+                super::test_cases::extract_kotlin_cases(node, self.src);
             let mut test_fn = TestFn {
                 name: full_name,
                 line: node.start_position().row + 1,
                 end_line: node.end_position().row + 1,
                 ignored,
+                cases,
+                non_literal_cases,
                 ..Default::default()
             };
             let mut direct_calls = Vec::new();

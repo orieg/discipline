@@ -323,6 +323,10 @@ impl<'a> JavaExtractor<'a> {
             let end_line = node.end_position().row + 1;
             let should_panic = self.parse_expected_exception(node);
 
+            let (cases, non_literal_cases) = Self::get_modifiers(node)
+                .map(|m| super::test_cases::extract_java_cases(m, self.src))
+                .unwrap_or((None, false));
+
             let mut test_fn = TestFn {
                 name: full_name,
                 line,
@@ -333,6 +337,8 @@ impl<'a> JavaExtractor<'a> {
                 ignored: parent_ignored || method_ignored,
                 should_panic: should_panic.clone(),
                 expected_exceptions: should_panic.into_iter().collect(),
+                cases,
+                non_literal_cases,
                 ..Default::default()
             };
 

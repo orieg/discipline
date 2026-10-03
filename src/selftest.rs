@@ -2601,6 +2601,50 @@ command = "cargo test"
         },
     ),
     (
+        "assertion-reduction: test cases reduced in parametrized test reports finding, waived by allow-case-drop",
+        || {
+            use crate::ast::TestFn;
+            use crate::guards::agent_diff::{evaluate_assertion_reduction, TestPair};
+            let b = TestFn {
+                name: "test_param".to_string(),
+                line: 10,
+                cases: Some(5),
+                total_asserts: 1,
+                strong_asserts: 1,
+                ..Default::default()
+            };
+            let h = TestFn {
+                name: "test_param".to_string(),
+                line: 10,
+                cases: Some(2),
+                total_asserts: 1,
+                strong_asserts: 1,
+                ..Default::default()
+            };
+            let pairs = [TestPair {
+                path: "tests/test_foo.py",
+                base: &b,
+                head: &h,
+                forced: false,
+            }];
+            let settings = crate::config::AssertionGate::default();
+            let unexcused = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false)?;
+            let directives = crate::tokens::parse_directives(
+                "allow-case-drop: test_param dropping slow variants\n",
+                crate::tokens::OverrideSource::PrBody,
+            );
+            let excused = evaluate_assertion_reduction(&pairs, &[], &settings, &directives, false)?;
+
+            let reported = unexcused.violations.len() == 1
+                && unexcused.violations[0].code == "assertion-reduction/test-cases-reduced";
+            let waived = excused.violations.is_empty()
+                && excused.overrides.len() == 1
+                && excused.overrides[0].code.as_deref() == Some("assertion-reduction/test-cases-reduced");
+
+            Ok(reported && waived)
+        },
+    ),
+    (
         "ast: compile-time assertions in Rust and C/C++ are extracted outside tests",
         || {
             use crate::ast::LanguagePack;
