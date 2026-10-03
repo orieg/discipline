@@ -861,6 +861,43 @@ pub fn security_policy_finding(path: Option<&str>) -> Finding {
     }
 }
 
+/// `test-report`: whether test-floor runtime identity ratcheting is configured.
+pub fn test_report_finding(
+    root: &Path,
+    repo_config: Option<&crate::config::DisciplineConfig>,
+) -> Option<Finding> {
+    let configured_report = repo_config.and_then(|cfg| {
+        cfg.gates
+            .test_floor
+            .test_report
+            .as_deref()
+            .or(cfg.gates.test_floor.head_report.as_deref())
+    });
+
+    if let Some(rep) = configured_report {
+        Some(Finding::new(
+            "test-report",
+            Status::Pass,
+            format!("test-floor runtime identity ratcheting is configured (`{rep}`)"),
+        ))
+    } else {
+        crate::init::TestRunner::detect(root).map(|runner| {
+            Finding::new(
+                "test-report",
+                Status::Info,
+                format!(
+                    "recognized test runner ({}); test-floor has no test_report configured: runtime-only test erosion (parametrized cases, uncollected files, inactive #[cfg] tests, macro-generated tests) goes unchecked by static counts",
+                    runner.name()
+                ),
+            )
+            .fix(format!(
+                "Configure test_command and test_report in [gates.test-floor] (e.g. `{}`) or pass test_report in CI to enable identity ratcheting.",
+                runner.test_report()
+            ))
+        })
+    }
+}
+
 /// Check `CODEOWNERS` against the files that configure the gate.
 pub fn codeowners_finding(codeowners: Option<(&str, &str)>, targets: &[String]) -> Finding {
     let Some((path, content)) = codeowners else {
@@ -2553,6 +2590,10 @@ pub fn run(input: &DoctorInput) -> Report {
             .copied()
             .find(|p| root.join(p).is_file()),
     ));
+
+    if let Some(f) = test_report_finding(root, repo_config.as_ref()) {
+        findings.push(f);
+    }
 
     if let Some(f) = copilot_trust_finding(root, input.copilot_home.as_deref()) {
         findings.push(f);

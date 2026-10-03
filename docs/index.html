@@ -1827,6 +1827,21 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       <td><em>(none)</em></td>
       <td>Rollup job only: `toJson(needs)` of the rollup job (inline JSON, or a path to a file holding it) for the ci-skip-set gate. Empty: the gate reports &quot;not evaluated&quot;.</td>
     </tr>
+    <tr>
+      <td class="gate-id">test_report</td>
+      <td><em>(none)</em></td>
+      <td>Path to test report XML file relative to repo root (JUnit XML) for test-floor identity ratcheting.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">test_base_report</td>
+      <td><em>(none)</em></td>
+      <td>In-job base test report XML file for test-floor identity ratcheting in dual-report mode.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">test_head_report</td>
+      <td><em>(none)</em></td>
+      <td>In-job head test report XML file for test-floor identity ratcheting in dual-report mode.</td>
+    </tr>
   </tbody>
 </table>
 <!-- /generated -->

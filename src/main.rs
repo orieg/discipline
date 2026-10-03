@@ -1032,36 +1032,8 @@ fn init(name: Option<String>) -> Result<bool> {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
             .unwrap_or_else(|| "my-project".to_string())
     });
-    let starter = format!(
-        r#"# discipline.toml — configuration for Discipline CI gatekeeper.
-#
-# Schema version 1. Gates run at their built-in default enablement and severity.
-# You only need to specify settings that differ from the defaults.
-# Run `discipline gates` to view the effective status of all gates.
-
-[meta]
-version = 1
-name = "{project_name}"
-# description = "Brief description of the project"
-
-# [directives]
-# sources = ["pr-body", "commits", "merged-pr-body"]
-# allow_hidden = false
-# fail_on_overrides = false
-
-# Gate customizations (examples):
-# [gates.assertion-reduction]
-# severity = "error"
-# exempt_paths = ["tests/legacy/**"]
-
-# [gates.pii]
-# allowed_users = ["runner", "user", "username"]
-# hostname_denylist = ["internal.corp"]
-
-# [gates.time-estimates]
-# allow_patterns = ['^timeout: \d+']
-"#
-    );
+    let target_root = repo_root.unwrap_or_else(|| std::path::Path::new("."));
+    let starter = discipline::init::generate_starter(&project_name, target_root);
     std::fs::write(&config_path, starter)?;
     println!(
         "{} wrote minimal discipline.toml for `{project_name}` using built-in gate defaults.",

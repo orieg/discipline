@@ -1484,3 +1484,53 @@ fn doctor_states_gitea_secrets_and_reports_an_unread_one() {
     );
     assert!(!run.stdout.contains("tok-secret-123") && !run.stderr.contains("tok-secret-123"));
 }
+
+#[test]
+fn doctor_reports_test_report_finding_for_runtime_identity_ratcheting() {
+    let repo = Repo::new();
+    repo.write("Cargo.toml", "[package]\nname = \"r\"\n");
+    repo.write(".github/workflows/ci.yml", WORKFLOW);
+    repo.write(".github/CODEOWNERS", CODEOWNERS);
+    repo.write("discipline.toml", "[meta]\nversion = 1\nname = \"r\"\n");
+    repo.commit("ci: init with cargo and default test-floor");
+
+    // Case 1: Cargo detected, no test_report in discipline.toml -> Status: Info
+    let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let f = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "test-report")
+        .expect("must emit test-report finding");
+    assert_eq!(f["status"], "info", "{f}");
+    let summary = f["summary"].as_str().unwrap();
+    assert!(summary.contains("recognized test runner"));
+    assert!(summary.contains("runtime-only test erosion"));
+    assert!(f["remediation"]
+        .as_str()
+        .unwrap()
+        .contains("gates.test-floor"));
+
+    // Case 2: test_report configured -> Status: Pass
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"r\"\n\n[gates.test-floor]\ntest_report = \"target/nextest/ci/junit.xml\"\n",
+    );
+    repo.commit("ci: configure test_report");
+    let run2 = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(run2.code, 0, "{}", run2.stdout);
+    let v2: serde_json::Value = serde_json::from_str(&run2.stdout).unwrap();
+    let f2 = v2["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "test-report")
+        .expect("must emit test-report finding");
+    assert_eq!(f2["status"], "pass", "{f2}");
+    assert!(f2["summary"]
+        .as_str()
+        .unwrap()
+        .contains("target/nextest/ci/junit.xml"));
+}

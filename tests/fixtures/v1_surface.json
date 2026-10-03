@@ -24,6 +24,9 @@
       "pr_body",
       "pr_title",
       "suite",
+      "test_base_report",
+      "test_head_report",
+      "test_report",
       "token",
       "version",
       "working_directory"

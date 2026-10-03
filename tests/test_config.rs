@@ -313,6 +313,122 @@ name = "my-test-proj"
 }
 
 #[test]
+fn test_init_starter_detects_runners_and_generates_valid_config() {
+    use discipline::init::{generate_starter, TestRunner};
+
+    // 1. Rust runner detection and snippet
+    let rust_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        rust_dir.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .unwrap();
+    let runner = TestRunner::detect(rust_dir.path()).unwrap();
+    assert_eq!(runner, TestRunner::Cargo);
+    let starter_rust = generate_starter("demo-rust", rust_dir.path());
+    assert!(starter_rust.contains("cargo nextest run --profile ci"));
+    assert!(starter_rust.contains("target/nextest/ci/junit.xml"));
+    let cfg = DisciplineConfig::from_toml_str(&starter_rust).unwrap();
+    assert_eq!(cfg.meta.name, "demo-rust");
+
+    // 2. Python runner detection and snippet
+    let py_dir = tempfile::tempdir().unwrap();
+    std::fs::write(py_dir.path().join("pytest.ini"), "[pytest]\n").unwrap();
+    let runner = TestRunner::detect(py_dir.path()).unwrap();
+    assert_eq!(runner, TestRunner::Pytest);
+    let starter_py = generate_starter("demo-py", py_dir.path());
+    assert!(starter_py.contains("pytest --junitxml=reports/junit.xml"));
+    assert!(starter_py.contains("reports/junit.xml"));
+    let cfg_py = DisciplineConfig::from_toml_str(&starter_py).unwrap();
+    assert_eq!(cfg_py.meta.name, "demo-py");
+
+    // 3. Go runner detection and snippet
+    let go_dir = tempfile::tempdir().unwrap();
+    std::fs::write(go_dir.path().join("go.mod"), "module demo\n").unwrap();
+    let runner = TestRunner::detect(go_dir.path()).unwrap();
+    assert_eq!(runner, TestRunner::Go);
+    let starter_go = generate_starter("demo-go", go_dir.path());
+    assert!(starter_go.contains("gotestsum --junitfile reports/junit.xml"));
+
+    // 4. JS/TS Vitest and Jest runner detection
+    let vitest_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        vitest_dir.path().join("vitest.config.ts"),
+        "export default {};\n",
+    )
+    .unwrap();
+    let runner = TestRunner::detect(vitest_dir.path()).unwrap();
+    assert_eq!(runner, TestRunner::Vitest);
+    let starter_vitest = generate_starter("demo-vitest", vitest_dir.path());
+    assert!(starter_vitest.contains("vitest run --reporter=junit"));
+
+    let jest_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        jest_dir.path().join("jest.config.js"),
+        "module.exports = {};\n",
+    )
+    .unwrap();
+    let runner = TestRunner::detect(jest_dir.path()).unwrap();
+    assert_eq!(runner, TestRunner::Jest);
+    let starter_jest = generate_starter("demo-jest", jest_dir.path());
+    assert!(starter_jest.contains("npm test -- --reporters=jest-junit"));
+
+    // 5. Maven and Gradle runner detection
+    let mvn_dir = tempfile::tempdir().unwrap();
+    std::fs::write(mvn_dir.path().join("pom.xml"), "<project></project>\n").unwrap();
+    assert_eq!(
+        TestRunner::detect(mvn_dir.path()).unwrap(),
+        TestRunner::Maven
+    );
+
+    let gradle_dir = tempfile::tempdir().unwrap();
+    std::fs::write(gradle_dir.path().join("build.gradle"), "// gradle\n").unwrap();
+    assert_eq!(
+        TestRunner::detect(gradle_dir.path()).unwrap(),
+        TestRunner::Gradle
+    );
+
+    // 6. Uncommenting the test-floor block produces a valid test_command and test_report in config
+    let uncommented = starter_py
+        .replace("# [gates.test-floor]", "[gates.test-floor]")
+        .replace("# test_command =", "test_command =")
+        .replace("# test_report =", "test_report =");
+    let cfg_uncommented = DisciplineConfig::from_toml_str(&uncommented).unwrap();
+    let tf = cfg_uncommented.gates.test_floor;
+    assert_eq!(
+        tf.test_command.as_deref(),
+        Some("pytest --junitxml=reports/junit.xml")
+    );
+    assert_eq!(tf.test_report.as_deref(), Some("reports/junit.xml"));
+}
+
+#[test]
+fn test_empty_test_report_env_vars_parse_without_error() {
+    use clap::Parser;
+    use discipline::cli::Cli;
+
+    // Test reports env vars can be empty strings in CI (e.g. from GitHub Action inputs defaulting to '')
+    std::env::set_var("DISCIPLINE_TEST_BASE_REPORT", "");
+    std::env::set_var("DISCIPLINE_TEST_HEAD_REPORT", "");
+    std::env::set_var("DISCIPLINE_TEST_REPORT", "");
+
+    let cli = Cli::try_parse_from(["discipline", "check", "--base", "HEAD"])
+        .expect("empty test report env vars must not trigger clap required value errors");
+
+    if let discipline::cli::Commands::Check(args) = cli.command {
+        assert_eq!(args.test_base_report, Some(std::path::PathBuf::from("")));
+        assert_eq!(args.test_head_report, Some(std::path::PathBuf::from("")));
+        assert_eq!(args.test_report, Some(std::path::PathBuf::from("")));
+    } else {
+        panic!("expected check command");
+    }
+
+    std::env::remove_var("DISCIPLINE_TEST_BASE_REPORT");
+    std::env::remove_var("DISCIPLINE_TEST_HEAD_REPORT");
+    std::env::remove_var("DISCIPLINE_TEST_REPORT");
+}
+
+#[test]
 fn toml_deserialization_errors_include_spans() {
     // 1. Syntax error with line and column span
     let bad_syntax = "[meta]\nversion = 1\nname = \"test\n";

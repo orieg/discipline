@@ -1431,6 +1431,16 @@ or
 removes: test_logout deprecated legacy endpoint test
 ```
 
+###### What the static count cannot see
+
+Several kinds of test erosion are visible only at run time and escape static AST counts:
+- **Parametrized cases removed:** rows removed from `@pytest.mark.parametrize`, `test.each`, `@ValueSource`, `[InlineData]`, or `#[case]`. The test function definition remains in source, so static test counts do not drop.
+- **Tests moved out of collection:** test files or test classes excluded by test runner configuration (e.g. `pytest.ini`, `jest.config.js`) or path changes without modifying the test function.
+- **Tests behind disabled conditions:** tests gated by `#[cfg(...)]`, `@pytest.mark.skipif`, or environment flags that are never enabled in CI.
+- **Tests generated dynamically:** tests generated in loops, macros (`proptest!`, `quickcheck!`), or runtime factories where test identities exist only during execution.
+
+Configuring `test_report` closes these gaps by ratcheting the set of executed test identities across base and head (`discipline doctor` reports an informational finding when a runner is detected without `test_report`).
+
 #### `archive-contents`
 - **Rule:** Distribution archives produced during packaging or release must contain all required files and zero forbidden developer artifacts, private files, or CI scripts.
 - **Languages:** Any.
