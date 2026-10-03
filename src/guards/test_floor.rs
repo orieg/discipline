@@ -625,6 +625,7 @@ pub struct AstTestCount {
     /// Supported-language files that could not be read (contributed nothing) or that
     /// parse with errors (tree-sitter recovers what it can; the count may be short).
     pub unread: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 impl AstTestCount {
@@ -645,6 +646,9 @@ impl AstTestCount {
                 if facts.has_parse_errors {
                     self.unread.push(path.to_string());
                 }
+                for note in &facts.notes {
+                    self.notes.push(note.clone());
+                }
                 // A conditional skip (`skipif`, `cfg_attr(..., ignore)`) still runs somewhere.
                 let ignored = facts
                     .tests
@@ -661,6 +665,9 @@ impl AstTestCount {
     /// Notes for the report: what was left out of the count, and why.
     fn notes(&self, side: &str) -> Vec<String> {
         let mut notes = Vec::new();
+        for note in &self.notes {
+            notes.push(note.clone());
+        }
         if self.ignored > 0 {
             notes.push(format!(
                 "{side}: {} ignored / skipped test(s) are not counted toward the floor",
