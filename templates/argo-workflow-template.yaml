@@ -21,6 +21,9 @@ spec:
       - name: pr-body
         value: ""
         description: "Pull request body markdown text for directive and hygiene inspection"
+      - name: test-report
+        value: ""
+        description: "Path to test report XML file relative to repo root (JUnit XML) for test-floor identity ratcheting"
       - name: discipline-image
         # Major tag tracks the latest v0 release; pin an exact version (v0.16.0) or a digest for reproducible gating.
         value: "ghcr.io/orieg/discipline:v0"
@@ -37,6 +40,7 @@ spec:
           - name: target-branch
           - name: source-branch
           - name: pr-body
+          - name: test-report
           - name: discipline-image
       dag:
         tasks:
@@ -53,6 +57,8 @@ spec:
                   value: "{{inputs.parameters.source-branch}}"
                 - name: pr-body
                   value: "{{inputs.parameters.pr-body}}"
+                - name: test-report
+                  value: "{{inputs.parameters.test-report}}"
                 - name: discipline-image
                   value: "{{inputs.parameters.discipline-image}}"
 
@@ -75,6 +81,7 @@ spec:
           - name: target-branch
           - name: source-branch
           - name: pr-body
+          - name: test-report
           - name: discipline-image
       outputs:
         artifacts:
@@ -104,6 +111,8 @@ spec:
             value: "{{inputs.parameters.pr-body}}"
           - name: DISCIPLINE_TRUST_WORKSPACE
             value: "1"
+          - name: DISCIPLINE_TEST_REPORT
+            value: "{{inputs.parameters.test-report}}"
         command: ["/bin/sh", "-c"]
         args:
           - |

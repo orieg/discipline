@@ -18,6 +18,7 @@ pub mod forge;
 pub mod gitctx;
 pub mod guards;
 pub mod hook;
+pub mod init;
 pub mod lease;
 pub mod mcp;
 pub mod output_schema;

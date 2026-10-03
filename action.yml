@@ -109,6 +109,18 @@ inputs:
     description: 'Rollup job only: `toJson(needs)` of the rollup job (inline JSON, or a path to a file holding it) for the ci-skip-set gate. Empty: the gate reports "not evaluated".'
     required: false
     default: ''
+  test_report:
+    description: 'Path to test report XML file relative to repo root (JUnit XML) for test-floor identity ratcheting.'
+    required: false
+    default: ''
+  test_base_report:
+    description: 'In-job base test report XML file for test-floor identity ratcheting in dual-report mode.'
+    required: false
+    default: ''
+  test_head_report:
+    description: 'In-job head test report XML file for test-floor identity ratcheting in dual-report mode.'
+    required: false
+    default: ''
 
 outputs:
   status:
@@ -321,6 +333,9 @@ runs:
         DISCIPLINE_BASELINE: ${{ inputs.baseline_file }}
         DISCIPLINE_NO_BASELINE: ${{ inputs.no_baseline == 'true' && 'true' || 'false' }}
         DISCIPLINE_CI_CONTEXT: ${{ inputs.ci_context }}
+        DISCIPLINE_TEST_REPORT: ${{ inputs.test_report }}
+        DISCIPLINE_TEST_BASE_REPORT: ${{ inputs.test_base_report }}
+        DISCIPLINE_TEST_HEAD_REPORT: ${{ inputs.test_head_report }}
         INPUT_SUITE: ${{ inputs.suite }}
         PR_BODY: ${{ inputs.pr_body }}
         PR_TITLE: ${{ inputs.pr_title }}
