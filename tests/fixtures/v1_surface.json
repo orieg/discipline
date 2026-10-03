@@ -1016,6 +1016,7 @@
       "assertion-reduction/source-parsed-with-errors",
       "assertion-reduction/source-parsed-with-errors-preprocessor",
       "assertion-reduction/test-cases-reduced",
+      "assertion-reduction/test-helper-weakened",
       "bench-regression/benchmark-artifact-deleted",
       "bench-regression/benchmark-baseline-missing",
       "bench-regression/benchmark-provenance-mismatch",

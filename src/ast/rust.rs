@@ -302,7 +302,19 @@ impl<'a> Extractor<'a> {
                             )
                         }),
                     };
-                    self.helpers.insert(fn_name, facts);
+                    self.helpers.insert(fn_name.clone(), facts);
+                    let line = node.start_position().row + 1;
+                    let end_line = node.end_position().row + 1;
+                    self.facts.test_helpers.push(super::TestHelperFacts {
+                        name: fn_name,
+                        line,
+                        end_line,
+                        total_asserts: helper_test.total_asserts,
+                        strong_asserts: helper_test.strong_asserts,
+                        tautologies: helper_test.tautologies,
+                        fatal_asserts: helper_test.fatal_asserts,
+                        helper_checks: 0,
+                    });
                 }
                 self.in_fn += 1;
                 if is_test {
@@ -384,6 +396,7 @@ impl<'a> Extractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
+                test.direct_calls = calls.clone();
                 for call in calls {
                     if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {
@@ -539,6 +552,7 @@ impl<'a> Extractor<'a> {
             expected_exceptions: should_panic.into_iter().collect(),
             cases,
             non_literal_cases,
+            direct_calls: Vec::new(),
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")

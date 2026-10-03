@@ -475,6 +475,7 @@ impl<'a> CCppExtractor<'a> {
         let (helpers, helper_calls) = (&self.helpers, &self.helper_calls);
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
+                test.direct_calls = calls.clone();
                 for call in calls {
                     let mut path = Vec::new();
                     if let Some(h) =
@@ -565,6 +566,18 @@ impl<'a> CCppExtractor<'a> {
                                 ),
                             },
                         );
+                        let line = node.start_position().row + 1;
+                        let end_line = node.end_position().row + 1;
+                        self.facts.test_helpers.push(super::TestHelperFacts {
+                            name: fn_name.to_string(),
+                            line,
+                            end_line,
+                            total_asserts: helper_fn.total_asserts,
+                            strong_asserts: helper_fn.strong_asserts,
+                            tautologies: helper_fn.tautologies,
+                            fatal_asserts: helper_fn.fatal_asserts,
+                            helper_checks: 0,
+                        });
                         self.helper_calls.insert(fn_name.to_string(), dummy_calls);
                     }
                 }

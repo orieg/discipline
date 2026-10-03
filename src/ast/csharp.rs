@@ -285,6 +285,18 @@ impl<'a> CSharpExtractor<'a> {
                         }),
                     };
                     self.helpers.insert(method_name.to_string(), facts);
+                    let line = child.start_position().row + 1;
+                    let end_line = child.end_position().row + 1;
+                    self.facts.test_helpers.push(super::TestHelperFacts {
+                        name: method_name.to_string(),
+                        line,
+                        end_line,
+                        total_asserts: helper_fn.total_asserts,
+                        strong_asserts: helper_fn.strong_asserts,
+                        tautologies: helper_fn.tautologies,
+                        fatal_asserts: helper_fn.fatal_asserts,
+                        helper_checks: 0,
+                    });
                 }
             } else {
                 self.walk_scope(child, class_ignored);
@@ -481,6 +493,7 @@ impl<'a> CSharpExtractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
+                test.direct_calls = calls.clone();
                 for call in calls {
                     if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {

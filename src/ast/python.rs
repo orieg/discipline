@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use super::functions::{self, FunctionSpec};
 use super::{
     AssertVocabulary, EscapeHatchSite, Fact, HelperFacts, LanguagePack, ParsedFileFacts, TestFn,
+    TestHelperFacts,
 };
 
 /// Python language pack implementing [`LanguagePack`].
@@ -656,12 +657,24 @@ impl<'a> PythonExtractor<'a> {
             super::forwarding_wrapper_callee(b, &PY_WRAPPER, &PY_LOCALS, &calls, self.src)
         });
         self.helper_calls.entry(key.clone()).or_insert(calls);
-        self.helpers.entry(key).or_insert(HelperFacts {
+        self.helpers.entry(key.clone()).or_insert(HelperFacts {
             total_asserts: facts.total_asserts,
             strong_asserts: facts.strong_asserts,
             tautologies: facts.tautologies,
             fatal_asserts: facts.fatal_asserts,
             wraps,
+        });
+        let line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+        self.facts.test_helpers.push(TestHelperFacts {
+            name: key,
+            line,
+            end_line,
+            total_asserts: facts.total_asserts,
+            strong_asserts: facts.strong_asserts,
+            tautologies: facts.tautologies,
+            fatal_asserts: facts.fatal_asserts,
+            helper_checks: 0,
         });
     }
 
@@ -714,6 +727,7 @@ impl<'a> PythonExtractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         let (helpers, helper_calls) = (&self.helpers, &self.helper_calls);
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
+            test.direct_calls = calls.clone();
             for call in calls {
                 let mut path = Vec::new();
                 let Some(h) = super::transitive_helper(call, helpers, helper_calls, &mut path)
