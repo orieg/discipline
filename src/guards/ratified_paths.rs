@@ -339,7 +339,10 @@ mod tests {
         // No overlap — should be fine.
         for r in &settings.ratifiers {
             assert!(
-                !settings.agent_logins.iter().any(|a| a.eq_ignore_ascii_case(r)),
+                !settings
+                    .agent_logins
+                    .iter()
+                    .any(|a| a.eq_ignore_ascii_case(r)),
                 "{} overlaps with agent_logins",
                 r
             );
@@ -367,7 +370,10 @@ mod tests {
         };
 
         assert!(
-            settings_bad.ratifiers.iter().any(|r| settings_bad.agent_logins.iter().any(|a| a.eq_ignore_ascii_case(r))),
+            settings_bad.ratifiers.iter().any(|r| settings_bad
+                .agent_logins
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(r))),
             "overlap should be detected"
         );
     }

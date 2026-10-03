@@ -24,7 +24,8 @@ static UNIT_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static PROVENANCE_TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\((?:measured|target|projected|unverified|retracted|pending)").expect("valid regex")
+    Regex::new(r"(?i)\((?:measured|target|projected|unverified|retracted|pending)")
+        .expect("valid regex")
 });
 
 static MECHANISM_TERMS: LazyLock<Regex> = LazyLock::new(|| {

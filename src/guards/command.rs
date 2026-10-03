@@ -1048,8 +1048,10 @@ fn unescape_xml(s: &str) -> String {
 }
 
 pub fn parse_junit_cases(xml: &str) -> Vec<TestCaseReport> {
-    let re_case = regex::Regex::new(r"(?s)<testcase\b([^>]*?)(?:/>|>(.*?)</testcase>)").expect("valid regex");
-    let re_attr = regex::Regex::new(r#"([a-zA-Z0-9_:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')"#).expect("valid regex");
+    let re_case =
+        regex::Regex::new(r"(?s)<testcase\b([^>]*?)(?:/>|>(.*?)</testcase>)").expect("valid regex");
+    let re_attr = regex::Regex::new(r#"([a-zA-Z0-9_:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')"#)
+        .expect("valid regex");
     let re_failure =
         regex::Regex::new(r"(?s)<(?:failure|error)\b([^>]*?)(?:/>|>(.*?)</(?:failure|error)>)")
             .unwrap();

@@ -170,8 +170,8 @@ impl MarkdownTableTracker {
             return false;
         }
         let hit = &line[hit_start..hit_end];
-        let cal_re =
-            Regex::new(r"(?i)\b(?:weeks?|wks?|months?|sprints?|quarters?|years?|days?)\b").expect("valid regex");
+        let cal_re = Regex::new(r"(?i)\b(?:weeks?|wks?|months?|sprints?|quarters?|years?|days?)\b")
+            .expect("valid regex");
         if cal_re.is_match(hit) {
             return false;
         }
@@ -387,7 +387,8 @@ fn is_observed_duration(clause: &str) -> bool {
 /// `before` is the text before the match, including the previous line of the
 /// paragraph; `after` is the rest of the line.
 pub(crate) fn is_period_reference(before: &str, matched: &str, after: &str) -> bool {
-    let lookback = Regex::new(r"(?i)\b(?:past|last|previous|prior|recent)\s*$").expect("valid regex");
+    let lookback =
+        Regex::new(r"(?i)\b(?:past|last|previous|prior|recent)\s*$").expect("valid regex");
     if lookback.is_match(before.trim_end_matches('~')) {
         return true;
     }

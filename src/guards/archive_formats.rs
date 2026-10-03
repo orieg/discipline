@@ -1120,7 +1120,12 @@ mod tests {
         let full = fixtures::zip(FILES);
         // Cut the zip roughly in half — should fail, not panic.
         let path = write(&dir, "trunc.zip", &full[..full.len() / 2]);
-        assert!(names(&path).is_err());
+        let err = format!("{:#}", names(&path).unwrap_err());
+        // Error message must be queryable by operators (observability).
+        assert!(
+            err.contains("refusing to guess") || err.contains("not recognised"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1253,7 +1258,10 @@ mod tests {
         let zip_bytes = fixtures::zip(FILES);
         let path = write(&dir, "fake.tar", &zip_bytes);
         let err = format!("{:#}", names(&path).unwrap_err());
-        assert!(err.contains("refusing to guess") || err.contains("not recognised"), "{err}");
+        assert!(
+            err.contains("refusing to guess") || err.contains("not recognised"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1263,7 +1271,10 @@ mod tests {
         let tar_bytes = fixtures::tar(FILES);
         let path = write(&dir, "fake.zip", &tar_bytes);
         let err = format!("{:#}", names(&path).unwrap_err());
-        assert!(err.contains("refusing to guess") || err.contains("not recognised"), "{err}");
+        assert!(
+            err.contains("refusing to guess") || err.contains("not recognised"),
+            "{err}"
+        );
     }
 
     #[test]
