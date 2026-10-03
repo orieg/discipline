@@ -486,6 +486,8 @@ impl<'a> Extractor<'a> {
             .collect::<Vec<_>>()
             .join("::");
 
+        let (cases, non_literal_cases) = super::test_cases::extract_rust_cases(node, self.src);
+
         let mut test = TestFn {
             name: qualified,
             line: node.start_position().row + 1,
@@ -507,6 +509,8 @@ impl<'a> Extractor<'a> {
             expectations: Vec::new(),
             caught_assertions: Vec::new(),
             expected_exceptions: should_panic.into_iter().collect(),
+            cases,
+            non_literal_cases,
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")

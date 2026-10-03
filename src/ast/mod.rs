@@ -47,6 +47,7 @@ pub mod rust;
 pub mod scala;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
+pub mod test_cases;
 
 /// Language pack abstraction trait.
 ///
@@ -264,6 +265,12 @@ pub struct TestFn {
     /// Expected exceptions or panics of its assertions and attributes (`super::expected_exceptions`),
     /// paired by skeleton across a change so an expected exception widened or matcher dropped is seen.
     pub expected_exceptions: Vec<expected_exceptions::ExpectedException>,
+    /// Number of literal cases in a parametrized or table-driven test (e.g. `@pytest.mark.parametrize`,
+    /// `test.each`, `[]struct{...}{...}`, `@ValueSource`, `[InlineData]`, `#[case]`).
+    pub cases: Option<usize>,
+    /// Whether the test has dynamic / non-literal test cases (fixture, generator, or function call)
+    /// that cannot be statically counted.
+    pub non_literal_cases: bool,
 }
 
 impl TestFn {
@@ -965,6 +972,8 @@ impl Default for ParsedFileFacts {
                 expectations: Vec::new(),
                 caught_assertions: Vec::new(),
                 expected_exceptions: Vec::new(),
+                cases: None,
+                non_literal_cases: false,
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -998,6 +1007,8 @@ impl ParsedFileFacts {
             expectations: Vec::new(),
             caught_assertions: Vec::new(),
             expected_exceptions: Vec::new(),
+            cases: None,
+            non_literal_cases: false,
         });
     }
 }

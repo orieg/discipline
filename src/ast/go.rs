@@ -229,6 +229,10 @@ impl<'a> GoExtractor<'a> {
 
             let mut direct_calls = Vec::new();
             if let Some(body) = node.child_by_field_name("body") {
+                let (cases, non_literal_cases) =
+                    super::test_cases::extract_go_cases(body, self.src);
+                test_fn.cases = cases;
+                test_fn.non_literal_cases = non_literal_cases;
                 self.scan_block(body, &mut test_fn, func_name, &mut direct_calls);
                 super::dispatch_calls(body, self.src, &GO_DISPATCH, &mut direct_calls);
                 if test_fn.conditional_ignore.is_none() && !test_fn.ignored {

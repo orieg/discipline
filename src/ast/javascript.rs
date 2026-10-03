@@ -336,6 +336,9 @@ impl<'a> JsExtractor<'a> {
 
                     let line = node.start_position().row + 1;
                     let end_line = node.end_position().row + 1;
+                    let (cases, non_literal_cases) =
+                        super::test_cases::extract_javascript_cases(func_node, self.src);
+
                     let mut test_fn = TestFn {
                         name: full_name,
                         line,
@@ -345,6 +348,8 @@ impl<'a> JsExtractor<'a> {
                         tautologies: 0,
                         ignored: parent_ignored || is_ignored || is_todo,
                         should_panic: None,
+                        cases,
+                        non_literal_cases,
                         ..Default::default()
                     };
 

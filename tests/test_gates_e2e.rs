@@ -17752,3 +17752,74 @@ fn assertion_failure_caught_inside_test_fires_and_accepts_override() {
     let outcome_ov = run_ov.outcome("assertion-reduction");
     assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn test_cases_reduced_in_parametrized_test_fires_and_accepts_override() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    repo.write(
+        "tests/test_calc.py",
+        "import pytest\n\n@pytest.mark.parametrize(\"x\", [1, 2, 3])\ndef test_x(x):\n    assert x > 0\n",
+    );
+    repo.commit("feat: parametrized test with 3 cases");
+
+    // Positive control: drop cases from 3 to 1
+    repo.git(&["checkout", "-q", "-B", "drop-cases", "main"]);
+    repo.write(
+        "tests/test_calc.py",
+        "import pytest\n\n@pytest.mark.parametrize(\"x\", [1])\ndef test_x(x):\n    assert x > 0\n",
+    );
+    repo.commit("test: dropped cases to 1");
+
+    let run_drop = repo.check(&["--base", "main"]);
+    assert_eq!(
+        run_drop.code, 1,
+        "reduced test cases must fail: {}{}",
+        run_drop.stdout, run_drop.stderr
+    );
+    let violations = run_drop.violations("assertion-reduction");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"],
+        "assertion-reduction/test-cases-reduced"
+    );
+    assert!(violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("test cases in parametrized / table-driven test dropped from 3 to 1"));
+    assert!(violations[0]["remediation"]
+        .as_str()
+        .unwrap()
+        .contains("allow-case-drop: test_x"));
+
+    // Override directive lifts the violation
+    let run_ov = repo.check_with_pr(
+        &["--base", "main"],
+        "Fixes #450\n\nallow-case-drop: test_x removed redundant values\n",
+    );
+    assert_eq!(
+        run_ov.code, 0,
+        "directive must lift test-cases-reduced: {}{}",
+        run_ov.stdout, run_ov.stderr
+    );
+    assert!(run_ov.violations("assertion-reduction").is_empty());
+    let outcome_ov = run_ov.outcome("assertion-reduction");
+    assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 1);
+
+    // Negative control: cases preserved across tests in same file
+    repo.git(&["checkout", "-q", "-B", "preserve-cases", "main"]);
+    repo.write(
+        "tests/test_calc.py",
+        "import pytest\n\n@pytest.mark.parametrize(\"x\", [1])\ndef test_x(x):\n    assert x > 0\n\n@pytest.mark.parametrize(\"x\", [2, 3])\ndef test_x2(x):\n    assert x > 0\n",
+    );
+    repo.commit("test: split cases into two tests");
+    let run_pres = repo.check(&["--base", "main"]);
+    assert_eq!(
+        run_pres.code, 0,
+        "preserved test cases must pass: {}{}",
+        run_pres.stdout, run_pres.stderr
+    );
+    assert!(run_pres.violations("assertion-reduction").is_empty());
+    let notes = run_pres.outcome("assertion-reduction")["notes"].to_string();
+    assert!(notes.contains("read as preserved across tests in same file"));
+}
