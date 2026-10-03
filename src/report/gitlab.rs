@@ -311,7 +311,7 @@ mod tests {
             title: "Agents markdown found".to_string(),
             file: Some("src/main.rs".to_string()),
             line: Some(42),
-            message: "Found /Users/test\ntab\tand \"quotes\" & <angle>".to_string(),
+            message: "Found /Users/test\ntab\tand \"quotes\" & <angle>".to_string(), // discipline:allow(pii)
             remediation: None,
         });
 
