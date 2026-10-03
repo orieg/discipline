@@ -218,6 +218,24 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "integrity: adding ci_skip_severity note is a weakening, error is not",
+        || {
+            let base = DisciplineConfig::default_for_repo("t");
+            let mut weaker = base.clone();
+            weaker.gates.ignored_tests.ci_skip_severity = Some(crate::config::Severity::Note);
+            let mut stricter = base.clone();
+            stricter.gates.ignored_tests.severity = crate::config::Severity::Warning;
+            stricter.gates.ignored_tests.ci_skip_severity = Some(crate::config::Severity::Error);
+            let mut base_warning = base.clone();
+            base_warning.gates.ignored_tests.severity = crate::config::Severity::Warning;
+            let found = diff_configs(&base, &weaker)?;
+            Ok(found.len() == 1
+                && found[0].gate == "ignored-tests"
+                && found[0].key() == "ci_skip_severity"
+                && diff_configs(&base_warning, &stricter)?.is_empty())
+        },
+    ),
+    (
         "overrides: a listed reviewer approves, the author and a stale approval do not",
         || {
             use crate::config::DirectivesConfig;
