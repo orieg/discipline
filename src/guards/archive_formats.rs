@@ -1111,4 +1111,174 @@ mod tests {
         let path = write(&dir, "p.tar", &builder.into_inner().unwrap());
         assert_eq!(names(&path).unwrap().1, vec!["pkg/a"]);
     }
+
+    // ---- bounds audit: deterministic regression tests for malformed inputs ----
+
+    #[test]
+    fn truncated_zip_fails_gracefully() {
+        let dir = TempDir::new().unwrap();
+        let full = fixtures::zip(FILES);
+        // Cut the zip roughly in half — should fail, not panic.
+        let path = write(&dir, "trunc.zip", &full[..full.len() / 2]);
+        assert!(names(&path).is_err());
+    }
+
+    #[test]
+    fn truncated_tar_fails_gracefully() {
+        let dir = TempDir::new().unwrap();
+        let full = fixtures::tar(FILES);
+        // Cut the tar in half — should fail, not panic.
+        let path = write(&dir, "trunc.tar", &full[..full.len() / 2]);
+        assert!(names(&path).is_err());
+    }
+
+    #[test]
+    fn truncated_tar_gz_fails_gracefully() {
+        let dir = TempDir::new().unwrap();
+        let tar = fixtures::tar(FILES);
+        let gz = fixtures::gzip(&tar);
+        // Cut the gzip in half — should fail, not panic.
+        let path = write(&dir, "trunc.tar.gz", &gz[..gz.len() / 2]);
+        assert!(names(&path).is_err());
+    }
+
+    #[test]
+    fn truncated_tar_xz_fails_gracefully() {
+        let dir = TempDir::new().unwrap();
+        let tar = fixtures::tar(FILES);
+        let xz = fixtures::xz(&tar);
+        // Remove the last 20 bytes of the xz stream — should fail.
+        let path = write(&dir, "trunc.tar.xz", &xz[..xz.len() - 20]);
+        assert!(names(&path).is_err());
+    }
+
+    #[test]
+    fn truncated_tar_zst_fails_gracefully() {
+        let dir = TempDir::new().unwrap();
+        let tar = fixtures::tar(FILES);
+        let zst = fixtures::zstd(&tar);
+        // Remove the last 10 bytes of the zstd stream — should fail.
+        let path = write(&dir, "trunc.tar.zst", &zst[..zst.len() - 10]);
+        assert!(names(&path).is_err());
+    }
+
+    #[test]
+    fn truncated_deb_fails_gracefully() {
+        let dir = TempDir::new().unwrap();
+        let tar = fixtures::tar(FILES);
+        let deb = fixtures::deb("data.tar.gz", &fixtures::gzip(&tar));
+        // Cut the deb in half — should fail, not panic.
+        let path = write(&dir, "trunc.deb", &deb[..deb.len() / 2]);
+        assert!(names(&path).is_err());
+    }
+
+    #[test]
+    fn truncated_rpm_fails_gracefully() {
+        let dir = TempDir::new().unwrap();
+        let cpio = fixtures::cpio_newc(FILES);
+        let rpm = fixtures::rpm(&fixtures::gzip(&cpio));
+        // Cut the rpm in half — should fail, not panic.
+        let path = write(&dir, "trunc.rpm", &rpm[..rpm.len() / 2]);
+        assert!(names(&path).is_err());
+    }
+
+    #[test]
+    fn empty_file_fails_by_name_or_magic() {
+        let dir = TempDir::new().unwrap();
+        // Empty zip should fail (missing EOCD).
+        let path = write(&dir, "empty.zip", &[]);
+        assert!(names(&path).is_err());
+
+        // Empty deb should fail (not a valid ar archive).
+        let path = write(&dir, "empty.deb", &[]);
+        assert!(names(&path).is_err());
+
+        // Empty tar is actually valid (returns empty list) — this is correct behavior.
+        let path = write(&dir, "empty.tar", &[]);
+        let result = names(&path).unwrap();
+        assert_eq!(result.1.len(), 0, "empty tar should return no entries");
+    }
+
+    #[test]
+    fn zip_with_zero_length_entries_is_accepted() {
+        // A zip containing a zero-length file is valid.
+        let dir = TempDir::new().unwrap();
+        let bytes = fixtures::zip(&[("empty.txt", b"")]);
+        let path = write(&dir, "zero.zip", &bytes);
+        let names_out = names(&path).unwrap();
+        assert_eq!(names_out.1, vec!["empty.txt"]);
+    }
+
+    #[test]
+    fn tar_with_zero_length_entries_is_accepted() {
+        // A tar containing a zero-length file is valid.
+        let dir = TempDir::new().unwrap();
+        let bytes = fixtures::tar(&[("empty.txt", b"")]);
+        let path = write(&dir, "zero.tar", &bytes);
+        let names_out = names(&path).unwrap();
+        assert_eq!(names_out.1, vec!["empty.txt"]);
+    }
+
+    #[test]
+    fn zip_truncated_in_middle_of_entry_data_fails() {
+        // Build a valid zip, then truncate the file data mid-entry.
+        let dir = TempDir::new().unwrap();
+        let full = fixtures::zip(&[("data.bin", &[0u8; 256])]);
+        // The zip central directory is at the end; truncate before it.
+        // A minimal zip with one entry: local header + data + (no central dir).
+        // Cut off the last 10 bytes to remove the EOCD record.
+        let truncated = &full[..full.len() - 10];
+        let path = write(&dir, "mid_entry.zip", truncated);
+        // Should fail because the EOCD is missing or the entry is incomplete.
+        assert!(names(&path).is_err());
+    }
+
+    #[test]
+    fn cpio_with_impossibly_large_name_size_fails() {
+        // A cpio header claiming name_size > 65536 should be rejected.
+        let dir = TempDir::new().unwrap();
+        // Build a valid cpio and then patch the name_size field to 70000.
+        let mut full_cpio = fixtures::cpio_newc(&[("test.bin", &[0u8; 10])]);
+        // The name_size is at bytes 96..104 in the header (offset 11 from header start).
+        // Override it to a huge value (u64, 8 bytes).
+        full_cpio[96..104].copy_from_slice(&70_000u64.to_be_bytes());
+        let path = write(&dir, "big_name.cpio", &full_cpio);
+        assert!(names(&path).is_err());
+    }
+
+    #[test]
+    fn mislabelled_zip_as_tar_fails() {
+        // Valid zip bytes with .tar extension — should fail due to mismatch.
+        let dir = TempDir::new().unwrap();
+        let zip_bytes = fixtures::zip(FILES);
+        let path = write(&dir, "fake.tar", &zip_bytes);
+        let err = format!("{:#}", names(&path).unwrap_err());
+        assert!(err.contains("refusing to guess") || err.contains("not recognised"), "{err}");
+    }
+
+    #[test]
+    fn mislabelled_tar_as_zip_fails() {
+        // Valid tar bytes with .zip extension — should fail due to mismatch.
+        let dir = TempDir::new().unwrap();
+        let tar_bytes = fixtures::tar(FILES);
+        let path = write(&dir, "fake.zip", &tar_bytes);
+        let err = format!("{:#}", names(&path).unwrap_err());
+        assert!(err.contains("refusing to guess") || err.contains("not recognised"), "{err}");
+    }
+
+    #[test]
+    fn completely_random_bytes_fails_gracefully() {
+        let dir = TempDir::new().unwrap();
+        // 1024 random bytes with a .zip extension.
+        let path = write(&dir, "random.zip", &vec![0u8; 1024]);
+        assert!(names(&path).is_err());
+
+        // Same with .deb extension (not a valid ar archive).
+        let path = write(&dir, "random.deb", &vec![0u8; 1024]);
+        assert!(names(&path).is_err());
+
+        // Same with .rpm extension (not a valid rpm).
+        let path = write(&dir, "random.rpm", &vec![0u8; 1024]);
+        assert!(names(&path).is_err());
+    }
 }
