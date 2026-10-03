@@ -295,4 +295,87 @@ mod tests {
         assert_eq!(parsed[0].location.lines.begin, 48);
         assert_eq!(parsed[0].fingerprint.len(), 64);
     }
+
+    #[test]
+    fn gitlab_escaping_handles_special_characters_in_messages() {
+        // Violation messages may contain quotes, newlines, control chars, etc.
+        // The JSON output must remain valid regardless.
+        let mut outcome = GateOutcome::new("agents-md");
+        outcome.violations.push(Violation {
+            gate: "agents-md",
+            code: "agents-md/fixture".to_string(),
+            fingerprint: String::new(),
+            anchor: None,
+            legacy_title: None,
+            severity: Severity::Warning,
+            title: "Agents markdown found".to_string(),
+            file: Some("src/main.rs".to_string()),
+            line: Some(42),
+            message: "Found /Users/test\ntab\tand \"quotes\" & <angle>".to_string(),
+            remediation: None,
+        });
+
+        let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
+            base: "origin/main".to_string(),
+            errors: 0,
+            warnings: 1,
+            notes: 0,
+            overrides: 0,
+            baselined: 0,
+            planned_gates: Vec::new(),
+            outcomes: vec![outcome],
+            policy_failures: Vec::new(),
+            deprecations: Vec::new(),
+            unused_directives: Vec::new(),
+        };
+
+        let json = format_gitlab(&summary);
+        // Must parse as valid JSON (serde_json escapes all special chars).
+        let parsed: Vec<GitlabCodeQualityIssue> =
+            serde_json::from_str(&json).expect("valid code quality json with escaped chars");
+        assert_eq!(parsed.len(), 1);
+        // Serde_json deserializes \n back into newline, but the raw JSON must contain escapes.
+        // Verify the JSON string itself contains escape sequences for special chars.
+        assert!(json.contains("\\n"));
+        assert!(json.contains("\\\""));
+        assert!(json.contains("\\t"));
+
+        // Test with a message that would be problematic without escaping.
+        let mut outcome2 = GateOutcome::new("agents-md");
+        outcome2.violations.push(Violation {
+            gate: "agents-md",
+            code: "agents-md/fixture".to_string(),
+            fingerprint: String::new(),
+            anchor: None,
+            legacy_title: None,
+            severity: Severity::Error,
+            title: "Time estimate found".to_string(),
+            file: None,
+            line: None,
+            message: "Message with backslash \\ and null byte escape \0".to_string(),
+            remediation: None,
+        });
+
+        let summary2 = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
+            base: "origin/main".to_string(),
+            errors: 1,
+            warnings: 0,
+            notes: 0,
+            overrides: 0,
+            baselined: 0,
+            planned_gates: Vec::new(),
+            outcomes: vec![outcome2],
+            policy_failures: Vec::new(),
+            deprecations: Vec::new(),
+            unused_directives: Vec::new(),
+        };
+
+        let json2 = format_gitlab(&summary2);
+        serde_json::from_str::<Vec<GitlabCodeQualityIssue>>(&json2)
+            .expect("valid code quality json with backslash");
+    }
 }
