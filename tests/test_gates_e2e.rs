@@ -2603,11 +2603,11 @@ fn test_floor_counts_tests_that_run_not_tests_that_exist() {
 
     // A test file that no longer parses is named, not counted as zero in silence.
     let repo = Repo::new();
-    repo.write("tests/broken.py", "def test_a(:\n    assert 1 == 1\n");
+    repo.write("tests/test_broken.py", "def test_a(:\n    assert 1 == 1\n");
     repo.commit("test: wip");
     let notes = repo.check(&[]).outcome("test-floor")["notes"].to_string();
     assert!(notes.contains("parse with errors"), "{notes}");
-    assert!(notes.contains("tests/broken.py"), "{notes}");
+    assert!(notes.contains("tests/test_broken.py"), "{notes}");
 }
 
 // ---- sandbox-config ---------------------------------------------------------
@@ -11419,6 +11419,88 @@ fn test_floor_zero_config_and_base_config_e2e() {
     assert!(
         titles_base_floor.contains(&"Test Count Below Floor".to_string()),
         "Must enforce base floor of 5 against head count of 3"
+    );
+}
+
+#[test]
+fn test_floor_runner_discovery_e2e() {
+    // 1. Python runner discovery: moving a test file out of discovery drops it from the floor.
+    let repo = Repo::new();
+    repo.write(
+        "tests/test_calc.py",
+        "def test_add():\n    assert 1 + 1 == 2\n\ndef test_sub():\n    assert 2 - 1 == 1\n",
+    );
+    repo.commit("test: base with 2 python tests");
+
+    // Rename to calc_helper.py, which does not match default pytest patterns (test_*.py, *_test.py)
+    std::fs::remove_file(repo.file("tests/test_calc.py")).unwrap();
+    repo.write(
+        "tests/calc_helper.py",
+        "def test_add():\n    assert 1 + 1 == 2\n\ndef test_sub():\n    assert 2 - 1 == 1\n",
+    );
+    repo.commit("refactor: rename test file to helper");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let titles = run.titles("test-floor");
+    assert!(
+        titles.contains(&"Test Count Below Floor".to_string()),
+        "Dropping file from runner discovery must fail test-floor: {titles:?}"
+    );
+
+    // 2. Rust cfg undeclared feature treats test as unconditional ignore and drops it from floor.
+    let repo = Repo::new();
+    repo.write(
+        "Cargo.toml",
+        "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nfast = []\n",
+    );
+    repo.write(
+        "tests/basic.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n#[test]\nfn test_two() { assert_eq!(2, 2); }\n",
+    );
+    repo.commit("feat: rust tests");
+
+    repo.write(
+        "tests/basic.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n#[cfg(feature = \"undeclared\")]\n#[test]\nfn test_two() { assert_eq!(2, 2); }\n",
+    );
+    repo.commit("test: guard test_two with undeclared feature");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let tf_titles = run.titles("test-floor");
+    assert!(
+        tf_titles.contains(&"Test Count Below Floor".to_string()),
+        "Undeclared feature cfg must exclude test from floor count: {tf_titles:?}"
+    );
+    let it_titles = run.titles("ignored-tests");
+    assert!(
+        it_titles.contains(&"Existing Test Skipped".to_string()),
+        "Undeclared feature cfg must report existing test skipped: {it_titles:?}"
+    );
+
+    // 3. Custom pytest python_files in pyproject.toml
+    let repo = Repo::new();
+    repo.write(
+        "pyproject.toml",
+        "[tool.pytest.ini_options]\npython_files = [\"*_spec.py\"]\n",
+    );
+    repo.write(
+        "tests/math_spec.py",
+        "def test_multiply():\n    assert 2 * 3 == 6\n",
+    );
+    repo.commit("feat: initial spec test");
+
+    std::fs::remove_file(repo.file("tests/math_spec.py")).unwrap();
+    repo.write(
+        "tests/test_other.py",
+        "def test_other():\n    assert 1 == 1\n",
+    );
+    repo.commit("refactor: replace spec with test_other");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let titles = run.titles("test-floor");
+    assert!(
+        titles.contains(&"Test Count Below Floor".to_string()),
+        "File not matching custom pyproject.toml python_files must not count toward floor: {titles:?}"
     );
 }
 

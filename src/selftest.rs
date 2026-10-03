@@ -3060,6 +3060,54 @@ test tests::c: test
         },
     ),
     (
+        "test-floor: runner collection rules filter uncollected files and undeclared feature cfgs",
+        || {
+            use crate::ast::runner_collection::{
+                evaluate_rust_cfg, is_runner_collected, PytestCollectionRules,
+            };
+            use crate::ast::AssertVocabulary;
+            use std::collections::HashSet;
+
+            let mut vocab = AssertVocabulary::default();
+
+            // Default pytest collection
+            let py_ok = is_runner_collected("tests/test_math.py", &vocab)
+                && is_runner_collected("tests/math_test.py", &vocab)
+                && !is_runner_collected("tests/math_helper.py", &vocab)
+                && !is_runner_collected("tests/broken.py", &vocab);
+
+            // Custom pytest collection
+            vocab.runner_rules.pytest = PytestCollectionRules::parse_pyproject_toml(
+                "[tool.pytest.ini_options]\npython_files = [\"*_spec.py\"]\n",
+            );
+            let py_custom_ok = is_runner_collected("tests/math_spec.py", &vocab)
+                && !is_runner_collected("tests/test_math.py", &vocab);
+
+            // Go collection
+            let go_ok = is_runner_collected("pkg/service_test.go", &vocab)
+                && !is_runner_collected("pkg/service.go", &vocab);
+
+            // Rust collection
+            let rust_ok = is_runner_collected("tests/integration.rs", &vocab)
+                && is_runner_collected("tests/sub/main.rs", &vocab)
+                && is_runner_collected("src/lib.rs", &vocab)
+                && !is_runner_collected("tests/common/util.rs", &vocab);
+
+            // Rust cfg evaluation
+            let mut features = HashSet::new();
+            features.insert("known_feat".to_string());
+            let known = evaluate_rust_cfg(r#"feature = "known_feat""#, &features);
+            let unknown = evaluate_rust_cfg(r#"feature = "unknown_feat""#, &features);
+            let any_cfg = evaluate_rust_cfg("any()", &features);
+
+            let cfg_ok = matches!(known, Some((false, _)))
+                && matches!(unknown, Some((true, _)))
+                && matches!(any_cfg, Some((true, _)));
+
+            Ok(py_ok && py_custom_ok && go_ok && rust_ok && cfg_ok)
+        },
+    ),
+    (
         "ci-integrity: rollup needs detection, pinning, and error masks",
         || {
             use crate::guards::ci_integrity::parse_workflow_jobs;
