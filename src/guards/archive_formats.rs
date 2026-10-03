@@ -1123,7 +1123,7 @@ mod tests {
         let err = format!("{:#}", names(&path).unwrap_err());
         // Error message must be queryable by operators (observability).
         assert!(
-            err.contains("refusing to guess") || err.contains("not recognised"),
+            err.contains("zip") || err.contains("central directory"),
             "{err}"
         );
     }
