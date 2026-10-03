@@ -33,6 +33,15 @@ spec:
       default: false
       type: boolean
       description: "When true, exit non-zero if any override directives were applied"
+    test_report:
+      default: ""
+      description: "Path to test report XML file relative to repo root (JUnit XML) for test-floor identity ratcheting"
+    test_base_report:
+      default: ""
+      description: "In-job base test report XML file for test-floor identity ratcheting in dual-report mode"
+    test_head_report:
+      default: ""
+      description: "In-job head test report XML file for test-floor identity ratcheting in dual-report mode"
 
 ---
 
@@ -70,6 +79,15 @@ discipline:
       fi
       if [ "$[[ inputs.fail_on_overrides ]]" = "true" ]; then
         ARGS="$ARGS --fail-on-overrides"
+      fi
+      if [ -n "$[[ inputs.test_report ]]" ]; then
+        ARGS="$ARGS --test-report $[[ inputs.test_report ]]"
+      fi
+      if [ -n "$[[ inputs.test_base_report ]]" ]; then
+        ARGS="$ARGS --test-base-report $[[ inputs.test_base_report ]]"
+      fi
+      if [ -n "$[[ inputs.test_head_report ]]" ]; then
+        ARGS="$ARGS --test-head-report $[[ inputs.test_head_report ]]"
       fi
 
       # When running inside GitLab CI ($GITLAB_CI == "true"), discipline automatically

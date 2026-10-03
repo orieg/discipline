@@ -410,6 +410,9 @@ The action runs on `pull_request`, `merge_group` and `push` events (the base is 
 | `baseline_file` | *(none)* | Path to grandfathering baseline file (defaults to discipline-baseline.toml if present). |
 | `no_baseline` | `false` | Ignore grandfathering baseline even if present. |
 | `ci_context` | *(none)* | Rollup job only: `toJson(needs)` of the rollup job (inline JSON, or a path to a file holding it) for the ci-skip-set gate. Empty: the gate reports "not evaluated". |
+| `test_report` | *(none)* | Path to test report XML file relative to repo root (JUnit XML) for test-floor identity ratcheting. |
+| `test_base_report` | *(none)* | In-job base test report XML file for test-floor identity ratcheting in dual-report mode. |
+| `test_head_report` | *(none)* | In-job head test report XML file for test-floor identity ratcheting in dual-report mode. |
 <!-- /generated -->
 
 ### Action Outputs

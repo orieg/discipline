@@ -505,15 +505,15 @@ pub struct CheckArgs {
     pub bench_head_file: Option<PathBuf>,
 
     /// In-job base test report XML file for test-floor identity ratcheting
-    #[arg(long = "test-base-report", env = "DISCIPLINE_TEST_BASE_REPORT")]
+    #[arg(long = "test-base-report", env = "DISCIPLINE_TEST_BASE_REPORT", value_parser = parse_path)]
     pub test_base_report: Option<PathBuf>,
 
     /// In-job head test report XML file for test-floor identity ratcheting
-    #[arg(long = "test-head-report", env = "DISCIPLINE_TEST_HEAD_REPORT")]
+    #[arg(long = "test-head-report", env = "DISCIPLINE_TEST_HEAD_REPORT", value_parser = parse_path)]
     pub test_head_report: Option<PathBuf>,
 
     /// Test report XML file path (relative to repo root) for test-floor identity ratcheting
-    #[arg(long = "test-report", env = "DISCIPLINE_TEST_REPORT")]
+    #[arg(long = "test-report", env = "DISCIPLINE_TEST_REPORT", value_parser = parse_path)]
     pub test_report: Option<PathBuf>,
 
     /// Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)
@@ -696,4 +696,8 @@ pub enum PolicyFrom {
     Head,
     /// The configuration on the base ref.
     Base,
+}
+
+fn parse_path(s: &str) -> Result<PathBuf, std::convert::Infallible> {
+    Ok(PathBuf::from(s))
 }

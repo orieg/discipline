@@ -6690,6 +6690,8 @@ fn self_test_passes_and_gates_lists_effective_state() {
 fn init_writes_a_config_that_loads_and_refuses_to_overwrite() {
     let repo = Repo::new();
     assert_eq!(repo.run(&["init", "--name", "demo"], &[]).code, 0);
+    let content = std::fs::read_to_string(repo.path().join("discipline.toml")).unwrap();
+    assert!(content.contains("preset = \"cargo-mutants\""));
     assert_eq!(
         repo.run(&["gates"], &[]).code,
         0,
@@ -11710,6 +11712,91 @@ fn test_floor_identity_ratchet_committed_report_e2e() {
             .contains("'pkg::auth::test_logout' passed on base ref but failed in head test report"),
         "Must flag test as failed: {:?}",
         v_fail[0]["message"]
+    );
+}
+
+#[test]
+fn test_floor_identity_ratchet_parametrize_row_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\n",
+    );
+    repo.write(
+        "tests/test_math.py",
+        "import pytest\n\n@pytest.mark.parametrize('x', [1, 2])\ndef test_positive(x):\n    assert x > 0\n",
+    );
+    repo.write(
+        "reports/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="math">
+    <testcase classname="tests.test_math" name="test_positive[1]"/>
+    <testcase classname="tests.test_math" name="test_positive[2]"/>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo.commit("feat: initial parametrized test with 2 rows");
+
+    // Remove row [2] from source and report
+    repo.write(
+        "tests/test_math.py",
+        "import pytest\n\n@pytest.mark.parametrize('x', [1])\ndef test_positive(x):\n    assert x > 0\n",
+    );
+    repo.write(
+        "reports/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="math">
+    <testcase classname="tests.test_math" name="test_positive[1]"/>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo.commit("test: drop row 2 from parametrize");
+
+    // Case 1: Without test_report configured, static count passes (static function test_positive still exists)
+    let run_unconfigured = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_unconfigured.titles("test-floor").len(),
+        0,
+        "Static count cannot detect dropped parametrize row: {}",
+        run_unconfigured.stdout
+    );
+
+    // Case 2: With test_report configured, identity ratchet detects missing test_positive[2]
+    let run_configured = repo.check(&["--base", "HEAD~1", "--test-report", "reports/junit.xml"]);
+    assert!(
+        run_configured
+            .titles("test-floor")
+            .iter()
+            .any(|t| t == "Test Dropped From Suite"),
+        "Must flag test_positive[2] dropped when test_report is supplied: {:?}",
+        run_configured.titles("test-floor")
+    );
+    let violations = run_configured.violations("test-floor");
+    let dropped_v = violations
+        .iter()
+        .find(|v| v["code"] == "test-floor/test-dropped-from-suite")
+        .expect("must contain test-dropped-from-suite violation");
+    assert!(
+        dropped_v["message"]
+            .as_str()
+            .unwrap()
+            .contains("test_positive[2]"),
+        "Violation must cite missing test_positive[2]: {:?}",
+        dropped_v["message"]
+    );
+
+    // Case 3: Waived with allow-test-shrink
+    repo.commit("test: excuse dropped row\n\nallow-test-shrink: tests/test_math.py row removed\nallow-test-shrink: test_positive[2] redundant input");
+    let run_waived = repo.check(&["--base", "HEAD~2", "--test-report", "reports/junit.xml"]);
+    assert_eq!(
+        run_waived.titles("test-floor").len(),
+        0,
+        "allow-test-shrink must excuse dropped test identity: {}",
+        run_waived.stdout
     );
 }
 

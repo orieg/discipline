@@ -144,6 +144,11 @@ fn registries(out: &mut BTreeMap<&'static str, BTreeSet<String>>) {
             .or_default()
             .insert(r.as_str().to_string());
     }
+    for f in discipline::doctor::DOCTOR_FINDINGS {
+        out.entry("doctor.findings")
+            .or_default()
+            .insert(f.to_string());
+    }
 }
 
 fn mcp(out: &mut BTreeMap<&'static str, BTreeSet<String>>) {

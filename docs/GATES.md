@@ -501,6 +501,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Unreachable assertions:** an assertion the test runner never reaches counts 0 in every pack: one inside an `if` whose condition is a constant false (`if false`, `if (0)`, `if False:`), or one after an unconditional terminator at the same block level (`return`, `panic!()`, `pytest.fail()`, `throw`, `os.Exit()`; `src/ast/reach.rs`). The `else` branch of a constant-false `if`, and an assertion after a `return` inside a nested `if`, are live. A skip call (`t.Skip()`, `pytest.skip()`, Minitest `skip`) is deliberately not a terminator: the test is reported by `ignored-tests`, and counting its body as dead would report the same test twice and take it out of `allow-ignore`'s reach. This applies to `assertion-reduction` and `vacuous-tests` alike: moving an existing assertion under `if false` is a reduction, and a new test whose only assertion follows a `return` is vacuous.
 - **What it does NOT catch:**
   - Semantic non-assertions that involve external function calls (e.g. `assert!(check_validity())` where `check_validity()` returns `true` unconditionally).
+  - Special-cased test inputs: a production change that hard-codes return values for the specific inputs its tests use (the diff-scoped mutation presets of the [`command`](#command) gate — `cargo-mutants`, `mutmut`, `stryker`, `pit` — are the control for that class; see also `discipline init` and `doctor`).
   - Tests whose assertions occur in deeply nested helper callbacks not tracked by static analysis.
   - Run-time reachability: an assertion under a condition that is false only at run time, or inside a closure the test never calls, still counts. A constant-false condition (`if False:`, `if (0)`) and code after an unconditional terminator count 0 (see *Unreachable assertions* above).
 - **Per-pack resolution contracts & known limits:**
@@ -656,7 +657,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```
 - **What it does NOT catch:**
   - An added empty or constant-returning function (`fn noop() {}`, `return null`): a no-op is a legitimate shape for a new function; only a marker that says "not implemented" is reported when added.
-  - A stub padded with a second statement (a log line, an assignment), or a body that special-cases the inputs its tests use: mutation presets of the `command` gate are the control for that class.
+  - A stub padded with a second statement (a log line, an assignment), or a body that special-cases the inputs its tests use: diff-scoped mutation presets of the [`command`](#command) gate (`cargo-mutants`, `mutmut`, `stryker`, `pit`) are the control for that class (see also `discipline init` and `doctor`).
   - Test functions, `#[cfg(test)]` modules, abstract and overload members, Protocol / interface declarations, `.pyi` stubs, classes deriving from `abc.ABC`, and a base-class method that a subclass in the same file overrides (the stub is the contract, not an unimplemented function). Files under `[tests] paths` (every pack) and functions named in `[tests] functions` (Python and Rust packs only).
   - A body changed for the worse while staying substantive.
 - **Lifting directive:** `allow-stub: <function-name-or-path> <reason>`. A file path lifts every finding in that file.
@@ -1430,6 +1431,16 @@ or
 ```text
 removes: test_logout deprecated legacy endpoint test
 ```
+
+###### What the static count cannot see
+
+Several kinds of test erosion are visible only at run time and escape static AST counts:
+- **Parametrized cases removed:** rows removed from `@pytest.mark.parametrize`, `test.each`, `@ValueSource`, `[InlineData]`, or `#[case]`. The test function definition remains in source, so static test counts do not drop.
+- **Tests moved out of collection:** test files or test classes excluded by test runner configuration (e.g. `pytest.ini`, `jest.config.js`) or path changes without modifying the test function.
+- **Tests behind disabled conditions:** tests gated by `#[cfg(...)]`, `@pytest.mark.skipif`, or environment flags that are never enabled in CI.
+- **Tests generated dynamically:** tests generated in loops, macros (`proptest!`, `quickcheck!`), or runtime factories where test identities exist only during execution.
+
+Configuring `test_report` closes these gaps by ratcheting the set of executed test identities across base and head (`discipline doctor` reports an informational finding when a runner is detected without `test_report`).
 
 #### `archive-contents`
 - **Rule:** Distribution archives produced during packaging or release must contain all required files and zero forbidden developer artifacts, private files, or CI scripts.
