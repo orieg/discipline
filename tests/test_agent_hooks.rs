@@ -482,6 +482,10 @@ fn install_writes_each_new_agents_file() {
             text.contains(&format!("discipline hook run --agent {agent}")),
             "{agent}: {text}"
         );
+        if agent == "opencode" {
+            assert!(text.contains("export default"), "opencode: {text}");
+            assert!(text.contains("id: \"discipline\""), "opencode: {text}");
+        }
         if file.ends_with(".json") {
             serde_json::from_str::<serde_json::Value>(&text).unwrap();
         }
