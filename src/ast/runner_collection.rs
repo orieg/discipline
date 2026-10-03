@@ -790,21 +790,40 @@ fn eval_predicate(
         let raw_str = items[2].utf8_text(src).unwrap_or("");
         let feat = raw_str.trim_matches(|c| c == '"' || c == '\'');
         let cond_str = format!("feature = \"{feat}\"");
+        // A declared feature can be on or off in a given run; an undeclared one never is.
         let val = match declared_features {
-            Some(declared) => {
-                if declared.contains(feat) {
-                    CfgValue::True
-                } else {
-                    CfgValue::False
-                }
-            }
-            None => CfgValue::Unknown,
+            Some(declared) if !declared.contains(feat) => CfgValue::False,
+            _ => CfgValue::Unknown,
         };
         return (val, cond_str);
     }
 
-    // 5. Any other predicate (target_feature, unix, test, debug_assertions, miri, custom): Unknown
+    // 5. `test`: tests are only compiled with it set.
+    if items.len() == 1
+        && items[0].kind() == "identifier"
+        && items[0].utf8_text(src).ok() == Some("test")
+    {
+        return (CfgValue::True, "test".to_string());
+    }
+
+    // 6. Any other predicate (target_feature, unix, debug_assertions, miri, custom): Unknown
     (CfgValue::Unknown, full_text)
+}
+
+/// Whether the attribute names a Cargo feature (`feature = "..."`) anywhere in its predicate.
+pub fn cfg_mentions_feature(node: Node, src: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier"
+            && n.utf8_text(src).ok() == Some("feature")
+            && n.next_sibling().is_some_and(|s| s.kind() == "=")
+        {
+            return true;
+        }
+        stack.extend(n.children(&mut cursor));
+    }
+    false
 }
 
 /// Evaluates a Rust `#[cfg(...)]` attribute node using tree-sitter AST traversal.
@@ -1192,9 +1211,9 @@ python_files = test_*.py
         features.insert("declared_feat".to_string());
 
         // 1. feature = "x"
-        // Declared feature -> True
+        // Declared feature -> may be on or off
         let (val, _) = eval_cfg_str(r#"#[cfg(feature = "declared_feat")]"#, Some(&features));
-        assert_eq!(val, CfgValue::True);
+        assert_eq!(val, CfgValue::Unknown);
 
         // Undeclared feature -> False (unconditional ignore)
         let (val, _) = eval_cfg_str(r#"#[cfg(feature = "undeclared")]"#, Some(&features));
@@ -1209,9 +1228,9 @@ python_files = test_*.py
         let (val, _) = eval_cfg_str(r#"#[cfg(not(feature = "undeclared"))]"#, Some(&features));
         assert_eq!(val, CfgValue::True);
 
-        // not(feature = "declared_feat"): declared is True -> not(True) is False -> IS an unconditional ignore!
+        // not(feature = "declared_feat"): the feature may be off, so the test may run -> Unknown
         let (val, _) = eval_cfg_str(r#"#[cfg(not(feature = "declared_feat"))]"#, Some(&features));
-        assert_eq!(val, CfgValue::False);
+        assert_eq!(val, CfgValue::Unknown);
 
         // not(unix): unix is Unknown -> not(Unknown) is Unknown
         let (val, _) = eval_cfg_str(r#"#[cfg(not(unix))]"#, Some(&features));
@@ -1241,7 +1260,7 @@ python_files = test_*.py
         );
         assert_eq!(val, CfgValue::False);
 
-        // all(feature = "declared_feat", unix) -> Unknown (True AND Unknown is Unknown)
+        // all(feature = "declared_feat", unix) -> Unknown
         let (val, _) = eval_cfg_str(
             r#"#[cfg(all(feature = "declared_feat", unix))]"#,
             Some(&features),
@@ -1256,7 +1275,9 @@ python_files = test_*.py
         assert_eq!(val, CfgValue::Unknown);
 
         let (val, _) = eval_cfg_str(r#"#[cfg(test)]"#, Some(&features));
-        assert_eq!(val, CfgValue::Unknown);
+        assert_eq!(val, CfgValue::True);
+        let (val, _) = eval_cfg_str(r#"#[cfg(not(test))]"#, Some(&features));
+        assert_eq!(val, CfgValue::False);
 
         let (val, _) = eval_cfg_str(r#"#[cfg(debug_assertions)]"#, Some(&features));
         assert_eq!(val, CfgValue::Unknown);
@@ -1297,11 +1318,14 @@ python_files = test_*.py
             pack.extract(path, &src, &vocab).unwrap()
         };
 
-        // Declared in the member crate: runs.
+        // Declared in the member crate: built when the feature is on, a conditional skip.
         let facts = extract("crates/a/tests/t.rs", "x");
         assert_eq!(facts.tests.len(), 1);
         assert!(!facts.tests[0].ignored);
-        assert!(facts.tests[0].conditional_ignore.is_none());
+        assert_eq!(
+            facts.tests[0].conditional_ignore.as_deref(),
+            Some(r#"feature = "x""#)
+        );
 
         // Not declared in the member crate, whose manifest was read: never compiled.
         let facts = extract("crates/a/tests/t.rs", "y");
@@ -1320,6 +1344,57 @@ python_files = test_*.py
         let facts = extract("tests/t.rs", "x");
         assert!(!facts.tests[0].ignored);
         assert!(facts.tests[0].conditional_ignore.is_some());
+    }
+
+    #[test]
+    fn test_rust_cfg_without_feature_does_not_skip() {
+        use crate::ast::LanguagePack;
+        let src = r#"
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn in_cfg_test_mod() { assert_eq!(1, 1); }
+
+    #[cfg(unix)]
+    #[test]
+    fn platform() { assert_eq!(1, 1); }
+
+    #[cfg(target_feature = "avx2")]
+    #[test]
+    fn simd() { assert_eq!(1, 1); }
+
+    #[cfg(not(test))]
+    #[test]
+    fn never_built() { assert_eq!(1, 1); }
+
+    #[cfg_attr(test, ignore)]
+    #[test]
+    fn always_ignored() { assert_eq!(1, 1); }
+}
+"#;
+        let vocab = crate::ast::AssertVocabulary {
+            runner_rules: RunnerCollectionRules::from_files(|p| {
+                (p == "Cargo.toml")
+                    .then(|| "[package]\nname = \"p\"\nversion = \"0.1.0\"\n".to_string())
+            }),
+            ..Default::default()
+        };
+        let facts = crate::ast::rust::RustPack
+            .extract("src/lib.rs", src, &vocab)
+            .unwrap();
+        let get = |n: &str| {
+            facts
+                .tests
+                .iter()
+                .find(|t| t.name.rsplit("::").next() == Some(n))
+                .unwrap()
+        };
+        for name in ["in_cfg_test_mod", "platform", "simd"] {
+            assert!(!get(name).ignored, "{name}");
+            assert_eq!(get(name).conditional_ignore, None, "{name}");
+        }
+        assert!(get("never_built").ignored);
+        assert!(get("always_ignored").ignored);
     }
 
     #[test]
@@ -1356,5 +1431,37 @@ path = "tests/custom/entry.rs"
         assert!(rules.declared_features.contains("declared_feat"));
         assert!(rules.declared_features.contains("opt_dep"));
         assert!(!rules.declared_features.contains("never"));
+
+        let features = Some(&rules.declared_features);
+        // Undeclared feature -> unconditional ignore
+        assert_eq!(
+            eval_cfg_str(r#"#[cfg(feature = "never")]"#, features).0,
+            CfgValue::False
+        );
+        // Declared feature -> may be on or off
+        assert_eq!(
+            eval_cfg_str(r#"#[cfg(feature = "declared_feat")]"#, features).0,
+            CfgValue::Unknown
+        );
+        // Optional dependency is an implicit feature
+        assert_eq!(
+            eval_cfg_str(r#"#[cfg(feature = "opt_dep")]"#, features).0,
+            CfgValue::Unknown
+        );
+        // any() -> unconditional ignore
+        assert_eq!(
+            eval_cfg_str(r#"#[cfg(any())]"#, features).0,
+            CfgValue::False
+        );
+        // all(any()) -> unconditional ignore
+        assert_eq!(
+            eval_cfg_str(r#"#[cfg(all(any()))]"#, features).0,
+            CfgValue::False
+        );
+        // not(undeclared) -> compiled
+        assert_eq!(
+            eval_cfg_str(r#"#[cfg(not(feature = "never"))]"#, features).0,
+            CfgValue::True
+        );
     }
 }

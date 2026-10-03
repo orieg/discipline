@@ -620,9 +620,13 @@ impl<'a> Extractor<'a> {
         None
     }
 
+    /// A definitely false cfg is an unconditional ignore. An undecided cfg naming a Cargo
+    /// feature is a conditional skip (the feature may be off in the run); any other cfg
+    /// (`unix`, `target_feature`, ...) says nothing about whether the test runs.
     fn consume_cfg_result(
         val: super::runner_collection::CfgValue,
         cond_str: String,
+        names_feature: bool,
         ignored: &mut bool,
         conditional_ignore: &mut Option<String>,
     ) {
@@ -631,12 +635,12 @@ impl<'a> Extractor<'a> {
                 *ignored = true;
                 *conditional_ignore = None;
             }
-            super::runner_collection::CfgValue::Unknown => {
-                if !*ignored && conditional_ignore.is_none() {
-                    *conditional_ignore = Some(cond_str);
-                }
+            super::runner_collection::CfgValue::Unknown
+                if names_feature && !*ignored && conditional_ignore.is_none() =>
+            {
+                *conditional_ignore = Some(cond_str);
             }
-            super::runner_collection::CfgValue::True => {}
+            _ => {}
         }
     }
 
@@ -657,7 +661,8 @@ impl<'a> Extractor<'a> {
             self.src,
             self.owning_features.as_ref(),
         );
-        Self::consume_cfg_result(val, cond_str, ignored, conditional_ignore);
+        let names_feature = super::runner_collection::cfg_mentions_feature(attr_node, self.src);
+        Self::consume_cfg_result(val, cond_str, names_feature, ignored, conditional_ignore);
     }
 
     fn apply_cfg_attr_ignore(
@@ -3139,7 +3144,10 @@ mod mod_tests {
             .find(|t| t.name == "test_declared")
             .unwrap();
         assert!(!declared.ignored);
-        assert_eq!(declared.conditional_ignore, None);
+        assert_eq!(
+            declared.conditional_ignore.as_deref(),
+            Some(r#"feature = "declared_feat""#)
+        );
 
         let any_empty = facts
             .tests
