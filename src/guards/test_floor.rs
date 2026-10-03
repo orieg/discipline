@@ -252,23 +252,36 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     }
 
     // 5. Resolve test reports for identity-based ratcheting
-    let env_head = std::env::var("DISCIPLINE_TEST_HEAD_REPORT").ok();
-    let env_report = std::env::var("DISCIPLINE_TEST_REPORT").ok();
+    let env_head = std::env::var("DISCIPLINE_TEST_HEAD_REPORT")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let env_report = std::env::var("DISCIPLINE_TEST_REPORT")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
     let head_report_path: Option<&str> = ctx
         .test_head_report
         .as_deref()
         .and_then(|p| p.to_str())
+        .filter(|s| !s.trim().is_empty())
         .or(env_head.as_deref())
         .or(settings.head_report.as_deref())
-        .or_else(|| ctx.test_report.as_deref().and_then(|p| p.to_str()))
+        .or_else(|| {
+            ctx.test_report
+                .as_deref()
+                .and_then(|p| p.to_str())
+                .filter(|s| !s.trim().is_empty())
+        })
         .or(env_report.as_deref())
         .or(settings.test_report.as_deref());
 
-    let env_base = std::env::var("DISCIPLINE_TEST_BASE_REPORT").ok();
+    let env_base = std::env::var("DISCIPLINE_TEST_BASE_REPORT")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
     let base_report_path: Option<&str> = ctx
         .test_base_report
         .as_deref()
         .and_then(|p| p.to_str())
+        .filter(|s| !s.trim().is_empty())
         .or(env_base.as_deref())
         .or(settings.base_report.as_deref());
 

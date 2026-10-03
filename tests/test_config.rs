@@ -403,6 +403,32 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
 }
 
 #[test]
+fn test_empty_test_report_env_vars_parse_without_error() {
+    use clap::Parser;
+    use discipline::cli::Cli;
+
+    // Test reports env vars can be empty strings in CI (e.g. from GitHub Action inputs defaulting to '')
+    std::env::set_var("DISCIPLINE_TEST_BASE_REPORT", "");
+    std::env::set_var("DISCIPLINE_TEST_HEAD_REPORT", "");
+    std::env::set_var("DISCIPLINE_TEST_REPORT", "");
+
+    let cli = Cli::try_parse_from(["discipline", "check", "--base", "HEAD"])
+        .expect("empty test report env vars must not trigger clap required value errors");
+
+    if let discipline::cli::Commands::Check(args) = cli.command {
+        assert_eq!(args.test_base_report, Some(std::path::PathBuf::from("")));
+        assert_eq!(args.test_head_report, Some(std::path::PathBuf::from("")));
+        assert_eq!(args.test_report, Some(std::path::PathBuf::from("")));
+    } else {
+        panic!("expected check command");
+    }
+
+    std::env::remove_var("DISCIPLINE_TEST_BASE_REPORT");
+    std::env::remove_var("DISCIPLINE_TEST_HEAD_REPORT");
+    std::env::remove_var("DISCIPLINE_TEST_REPORT");
+}
+
+#[test]
 fn toml_deserialization_errors_include_spans() {
     // 1. Syntax error with line and column span
     let bad_syntax = "[meta]\nversion = 1\nname = \"test\n";
