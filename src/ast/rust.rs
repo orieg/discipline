@@ -455,8 +455,22 @@ impl<'a> Extractor<'a> {
                             }
                         }
                     }
-                    if name == "cfg" && is_cfg_test_suppression(text) {
-                        ignored = true;
+                    if name == "cfg" {
+                        if is_cfg_test_suppression(text) {
+                            ignored = true;
+                        } else if let Some((is_unconditional, cond_str)) =
+                            super::runner_collection::evaluate_rust_cfg(
+                                text,
+                                &self.vocab.runner_rules.rust.declared_features,
+                            )
+                        {
+                            if is_unconditional {
+                                ignored = true;
+                                conditional_ignore = None;
+                            } else if !ignored {
+                                conditional_ignore = Some(cond_str);
+                            }
+                        }
                     }
                     prev = p.prev_sibling();
                 }
@@ -469,6 +483,38 @@ impl<'a> Extractor<'a> {
                 }
                 _ => break,
             }
+        }
+        let mut cur = node.parent();
+        while let Some(p) = cur {
+            if p.kind() == "mod_item" {
+                let mut prev_mod = p.prev_sibling();
+                while let Some(a) = prev_mod {
+                    if a.kind() != "attribute_item" {
+                        break;
+                    }
+                    let text = a.utf8_text(self.src).unwrap_or("");
+                    let name = attribute_name(text);
+                    if name == "cfg" {
+                        if is_cfg_test_suppression(text) {
+                            ignored = true;
+                        } else if let Some((is_unconditional, cond_str)) =
+                            super::runner_collection::evaluate_rust_cfg(
+                                text,
+                                &self.vocab.runner_rules.rust.declared_features,
+                            )
+                        {
+                            if is_unconditional {
+                                ignored = true;
+                                conditional_ignore = None;
+                            } else if !ignored && conditional_ignore.is_none() {
+                                conditional_ignore = Some(cond_str);
+                            }
+                        }
+                    }
+                    prev_mod = a.prev_sibling();
+                }
+            }
+            cur = p.parent();
         }
         if !is_test && has_commented_out_test {
             is_test = true;
@@ -2469,5 +2515,94 @@ fn helper_guard() {
         assert_eq!(no_exit_test.conditional_ignore, None);
 
         assert!(facts.tests.iter().all(|t| t.name != "helper_guard"));
+    }
+
+    #[test]
+    fn test_cfg_features_and_any_evaluation() {
+        let src = r#"
+#[test]
+#[cfg(feature = "undeclared_feat")]
+fn test_undeclared() {
+    assert_eq!(1, 1);
+}
+
+#[test]
+#[cfg(feature = "declared_feat")]
+fn test_declared() {
+    assert_eq!(1, 1);
+}
+
+#[test]
+#[cfg(any())]
+fn test_any_empty() {
+    assert_eq!(1, 1);
+}
+
+#[test]
+#[cfg(all(any()))]
+fn test_all_any() {
+    assert_eq!(1, 1);
+}
+
+#[cfg(feature = "undeclared_feat")]
+mod mod_tests {
+    #[test]
+    fn test_in_mod() {
+        assert_eq!(1, 1);
+    }
+}
+"#;
+        let mut vocab = AssertVocabulary::default();
+        vocab
+            .runner_rules
+            .rust
+            .declared_features
+            .insert("declared_feat".to_string());
+
+        let pack = RustPack;
+        let facts = pack.extract("tests/cfg_tests.rs", src, &vocab).unwrap();
+
+        let undeclared = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_undeclared")
+            .unwrap();
+        assert!(undeclared.ignored);
+        assert_eq!(undeclared.conditional_ignore, None);
+
+        let declared = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_declared")
+            .unwrap();
+        assert!(!declared.ignored);
+        assert_eq!(
+            declared.conditional_ignore.as_deref(),
+            Some(r#"feature = "declared_feat""#)
+        );
+
+        let any_empty = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_any_empty")
+            .unwrap();
+        assert!(any_empty.ignored);
+        assert_eq!(any_empty.conditional_ignore, None);
+
+        let all_any = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_all_any")
+            .unwrap();
+        assert!(all_any.ignored);
+        assert_eq!(all_any.conditional_ignore, None);
+
+        let in_mod = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "mod_tests::test_in_mod")
+            .unwrap();
+        assert!(in_mod.ignored);
+        assert_eq!(in_mod.conditional_ignore, None);
     }
 }

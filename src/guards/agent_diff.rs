@@ -60,14 +60,39 @@ pub(crate) fn assert_vocabulary(config: &crate::config::DisciplineConfig) -> Ass
         test_paths: config.tests.paths.clone(),
         c_macros: config.languages.c.macros.clone(),
         c_function_macros: config.languages.c.function_macros.clone(),
+        runner_rules: Default::default(),
     }
+}
+
+pub(crate) fn assert_vocabulary_for_head(ctx: &Context) -> AssertVocabulary {
+    let mut vocab = assert_vocabulary(ctx.config);
+    vocab.runner_rules = crate::ast::runner_collection::RunnerCollectionRules::from_files(|path| {
+        ctx.git.head_content(path).ok().flatten().or_else(|| {
+            std::fs::read_to_string(std::path::Path::new(ctx.git.root()).join(path)).ok()
+        })
+    });
+    vocab
+}
+
+pub(crate) fn assert_vocabulary_for_base(ctx: &Context) -> AssertVocabulary {
+    let base_cfg = ctx
+        .base_config_text()
+        .ok()
+        .flatten()
+        .and_then(|s| crate::config::DisciplineConfig::from_toml_str(&s).ok());
+    let mut vocab = assert_vocabulary(base_cfg.as_ref().unwrap_or(ctx.config));
+    vocab.runner_rules = crate::ast::runner_collection::RunnerCollectionRules::from_files(|path| {
+        ctx.git.base_content(path).ok().flatten()
+    });
+    vocab
 }
 
 /// Runs every diff-based agent-guard gate and returns one outcome per gate.
 /// Disabled gates are filtered by the caller; computing them is cheap.
 pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     let gates = &ctx.config.gates;
-    let vocab = assert_vocabulary(ctx.config);
+    let base_vocab = assert_vocabulary_for_base(ctx);
+    let head_vocab = assert_vocabulary_for_head(ctx);
 
     let registry = default_registry();
     let changed = ctx.git.changed_files()?;
@@ -82,7 +107,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
             Some(bytes) => {
                 if let Some(pack) = registry.find_pack(&file.old_path) {
                     let src = String::from_utf8_lossy(&bytes);
-                    Some(pack.extract(&file.old_path, &src, &vocab)?)
+                    Some(pack.extract(&file.old_path, &src, &base_vocab)?)
                 } else {
                     None
                 }
@@ -97,7 +122,10 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
                     let newly_added = has_nul && !base_had_nul;
                     if let Some(pack) = registry.find_pack(&file.path) {
                         let src = String::from_utf8_lossy(&bytes);
-                        (Some(pack.extract(&file.path, &src, &vocab)?), newly_added)
+                        (
+                            Some(pack.extract(&file.path, &src, &head_vocab)?),
+                            newly_added,
+                        )
                     } else {
                         (None, newly_added)
                     }

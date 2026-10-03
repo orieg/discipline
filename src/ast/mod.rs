@@ -41,6 +41,7 @@ pub mod reach;
 pub mod retries;
 #[cfg(feature = "lang-ruby")]
 pub mod ruby;
+pub mod runner_collection;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
 #[cfg(feature = "lang-scala")]
@@ -1061,6 +1062,7 @@ pub struct AssertVocabulary {
     /// C / C++ macros that expand to a function head, beyond the built-in list
     /// (`[languages.c].function_macros`).
     pub c_function_macros: Vec<String>,
+    pub runner_rules: runner_collection::RunnerCollectionRules,
 }
 
 /// Top-level helper to analyze Rust code directly.

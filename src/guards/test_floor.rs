@@ -550,7 +550,8 @@ fn find_test_floor_override(
     }
     if let Ok(changed) = ctx.git.changed_files() {
         let registry = crate::ast::default_registry();
-        let v = crate::guards::agent_diff::assert_vocabulary(ctx.config);
+        let base_v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx);
+        let head_v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx);
 
         for cf in &changed {
             if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, &cf.path) {
@@ -578,26 +579,31 @@ fn find_test_floor_override(
 
             if let Ok(Some(base_src)) = ctx.git.base_content(&cf.old_path) {
                 if let Some(pack) = registry.find_pack(&cf.old_path) {
-                    if let Ok(base_facts) = pack.extract(&cf.old_path, &base_src, &v) {
-                        let head_names: std::collections::HashSet<String> = if cf.is_deleted() {
-                            std::collections::HashSet::new()
-                        } else if let Ok(Some(head_src)) = ctx.git.head_content(&cf.path) {
-                            pack.extract(&cf.path, &head_src, &v)
-                                .map(|f| f.tests.into_iter().map(|t| t.name).collect())
-                                .unwrap_or_default()
-                        } else {
-                            std::collections::HashSet::new()
-                        };
-
-                        for t in base_facts.tests {
-                            if !head_names.contains(&t.name) {
-                                if let Some(ov) = ctx.find_override(
-                                    GATE,
-                                    lifts,
-                                    tokens::ALLOW_TEST_SHRINK,
-                                    &t.name,
+                    if crate::ast::runner_collection::is_runner_collected(&cf.old_path, &base_v) {
+                        if let Ok(base_facts) = pack.extract(&cf.old_path, &base_src, &base_v) {
+                            let head_names: std::collections::HashSet<String> = if cf.is_deleted()
+                                || !crate::ast::runner_collection::is_runner_collected(
+                                    &cf.path, &head_v,
                                 ) {
-                                    return Some(ov);
+                                std::collections::HashSet::new()
+                            } else if let Ok(Some(head_src)) = ctx.git.head_content(&cf.path) {
+                                pack.extract(&cf.path, &head_src, &head_v)
+                                    .map(|f| f.tests.into_iter().map(|t| t.name).collect())
+                                    .unwrap_or_default()
+                            } else {
+                                std::collections::HashSet::new()
+                            };
+
+                            for t in base_facts.tests {
+                                if !head_names.contains(&t.name) {
+                                    if let Some(ov) = ctx.find_override(
+                                        GATE,
+                                        lifts,
+                                        tokens::ALLOW_TEST_SHRINK,
+                                        &t.name,
+                                    ) {
+                                        return Some(ov);
+                                    }
                                 }
                             }
                         }
@@ -684,10 +690,13 @@ pub fn count_workspace_ast_tests(
     filter: &crate::guards::PathFilter,
 ) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
-    let v = crate::guards::agent_diff::assert_vocabulary(ctx.config);
+    let v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx);
     let mut count = AstTestCount::default();
     for path in ctx.git.tracked_files()? {
-        if filter.matches(&path) || !registry.is_supported(&path) {
+        if filter.matches(&path)
+            || !registry.is_supported(&path)
+            || !crate::ast::runner_collection::is_runner_collected(&path, &v)
+        {
             continue;
         }
         let full = Path::new(ctx.git.root()).join(&path);
@@ -706,10 +715,13 @@ pub fn count_base_workspace_ast_tests(
     filter: &crate::guards::PathFilter,
 ) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
-    let v = crate::guards::agent_diff::assert_vocabulary(ctx.config);
+    let v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx);
     let mut count = AstTestCount::default();
     for path in ctx.git.base_tracked_files()? {
-        if filter.matches(&path) || !registry.is_supported(&path) {
+        if filter.matches(&path)
+            || !registry.is_supported(&path)
+            || !crate::ast::runner_collection::is_runner_collected(&path, &v)
+        {
             continue;
         }
         count.add(
