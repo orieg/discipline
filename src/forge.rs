@@ -2795,4 +2795,150 @@ mod tests {
         assert_eq!(page_query(ForgeKind::Forgejo, 2), "limit=50&page=2");
         assert_eq!(page_query(ForgeKind::GitLab, 1), "per_page=100&page=1");
     }
+
+    // ---- forge network error-path tests: malformed/empty/oversized responses ----
+
+    fn gh() -> Forge {
+        Forge {
+            kind: ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        }
+    }
+
+    #[test]
+    fn page_from_answer_rejects_non_array_body() {
+        // Page::from_answer expects an array; a string or object should fail.
+        let err = Page::from_answer(serde_json::json!("not an array"), &[]).unwrap_err();
+        assert!(err.contains("expected a list"), "non-array body: {err}");
+
+        let err = Page::from_answer(serde_json::json!({"key": "value"}), &[]).unwrap_err();
+        assert!(err.contains("expected a list"), "object body: {err}");
+
+        let err = Page::from_answer(serde_json::json!(null), &[]).unwrap_err();
+        assert!(err.contains("expected a list"), "null body: {err}");
+    }
+
+    #[test]
+    fn page_from_answer_accepts_empty_array() {
+        // An empty array is valid (no items to return).
+        let page = Page::from_answer(serde_json::json!([]), &[]).unwrap();
+        assert_eq!(page.items.len(), 0);
+        assert!(!page.has_next);
+    }
+
+    #[test]
+    fn malformed_body_on_200_for_get_page_is_malformed() {
+        let gh = gh();
+        let mut api = CannedApi::default();
+        // Malformed JSON on 200 for get_page should be ForgeErrorKind::Malformed.
+        api.responses.insert(
+            "github:repos/o/r/issues".into(),
+            serde_json::json!({"__status": 200, "__body": "{invalid json}"}),
+        );
+        let err = api.get_page(&gh, "repos/o/r/issues").unwrap_err();
+        assert_eq!(err.kind, ForgeErrorKind::Malformed);
+    }
+
+    #[test]
+    fn valid_json_array_on_200_is_accepted() {
+        let gh = gh();
+        let mut api = CannedApi::default();
+        // Valid JSON array on 200 should be accepted.
+        api.responses.insert(
+            "github:repos/o/r/issues".into(),
+            serde_json::json!([{"id": 1, "title": "Issue 1"}]),
+        );
+        let result = api.get(&gh, "repos/o/r/issues").unwrap();
+        assert!(result.is_some());
+        let value = result.unwrap();
+        assert_eq!(value[0]["id"], 1);
+    }
+
+    #[test]
+    fn valid_json_object_on_200_is_accepted_for_fetch() {
+        let gh = gh();
+        let mut api = CannedApi::default();
+        // Valid JSON object on 200 should be accepted for fetch.
+        api.responses.insert(
+            "github:repos/o/r/issues".into(),
+            serde_json::json!({"id": 1, "title": "Issue 1"}),
+        );
+        let result = api.fetch(&gh, "repos/o/r/issues").unwrap();
+        assert_eq!(result["id"], 1);
+    }
+
+    #[test]
+    fn page_from_answer_with_paging_headers_works() {
+        let gh = gh();
+        let mut api = CannedApi::default();
+        // Page with Link header indicating next page.
+        api.responses.insert(
+            "github:repos/o/r/issues".into(),
+            serde_json::json!({
+                "__status": 200,
+                "__body": [{"id": 1}],
+                "__headers": {"Link": "<https://api.github.com/repositories/1/issues?page=2>; rel=\"next\""}
+            }),
+        );
+        let page = api.get_page(&gh, "repos/o/r/issues").unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(page.has_next);
+
+        // Page without next link.
+        api.responses.insert(
+            "github:repos/o/r/issues2".into(),
+            serde_json::json!({"__status": 200, "__body": [{"id": 2}]}),
+        );
+        let page = api.get_page(&gh, "repos/o/r/issues2").unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(!page.has_next);
+    }
+
+    #[test]
+    fn get_page_rejects_non_array_on_200() {
+        let gh = gh();
+        let mut api = CannedApi::default();
+        // Non-array body on 200 for get_page should be malformed.
+        api.responses.insert(
+            "github:repos/o/r/issues".into(),
+            serde_json::json!({"__status": 200, "__body": "not an array"}),
+        );
+        let err = api.get_page(&gh, "repos/o/r/issues").unwrap_err();
+        assert_eq!(err.kind, ForgeErrorKind::Malformed);
+    }
+
+    #[test]
+    fn get_accepts_any_2xx_body() {
+        let gh = gh();
+        let mut api = CannedApi::default();
+        // 201 Created with any body should be accepted by get().
+        api.responses.insert(
+            "github:repos/o/r/issues".into(),
+            serde_json::json!({"__status": 201, "__body": {"id": 1}}),
+        );
+        let result = api.get(&gh, "repos/o/r/issues").unwrap();
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn get_page_rejects_4xx_and_5xx() {
+        let gh = gh();
+        let mut api = CannedApi::default();
+        // 404 should be NotFound, not Malformed.
+        api.responses.insert(
+            "github:repos/o/r/issues".into(),
+            serde_json::json!({"__status": 404, "__body": {"message": "Not Found"}}),
+        );
+        let err = api.get_page(&gh, "repos/o/r/issues").unwrap_err();
+        assert_eq!(err.kind, ForgeErrorKind::NotFound);
+
+        // 500 should be Unavailable.
+        api.responses.insert(
+            "github:repos/o/r/issues2".into(),
+            serde_json::json!({"__status": 500, "__body": {"message": "Internal Server Error"}}),
+        );
+        let err = api.get_page(&gh, "repos/o/r/issues2").unwrap_err();
+        assert_eq!(err.kind, ForgeErrorKind::Unavailable);
+    }
 }

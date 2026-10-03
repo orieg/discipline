@@ -442,6 +442,10 @@ Before 1.0 a minor release may change gate behaviour; from 1.0, `docs/ARCHITECTU
 
 Default enablement and severity are part of the compatibility contract (`docs/ARCHITECTURE.md` §3.1). Every change to a built-in default is recorded here, newest first; a **loosening** within a major version is not allowed without an entry. Each entry names the one-line configuration that restores the previous behaviour.
 
+### Hardening Sprint Ledger (2026-10-02)
+
+This craftsmanship hardening sprint addressed five areas across 5 batches: (1) archive format bounds audit — deterministic regression tests for truncated, oversized, and mislabelled archives across zip/tar/xz/zst/deb/rpm/cpio; (2) unwrap/expect classification — explicit `.expect("valid regex")` on 30+ static regex compilations in 9 guard files; (3) forge network error-path tests — malformed/empty response body handling verified with 10 new unit tests; (4) GitLab JSON escaping — violation messages with special characters verified to produce valid JSON output; (5) config key audit — `discipline.toml` keys confirmed against `v1_surface.json` with zero orphaned keys.
+
 | Release | Gate | Old default | New default | Direction | Reason | Restore previous behaviour |
 |---|---|---|---|---|---|---|
 | v0.17.0 | `ignored-tests` | A test skip conditioned on a CI variable (`CI`, `GITHUB_ACTIONS`, etc.) reported at `warning` | Reported at `error` (gate severity) | stricter | A test that skips itself when running in CI is disabled where the merge gate runs. Generic environment conditions stay at `note`. To waive specific CI skips entirely, add their variables to `approved_predicates`. | `[gates.ignored-tests]` `ci_skip_severity = "warning"` |

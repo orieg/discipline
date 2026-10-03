@@ -197,3 +197,89 @@ pub const CONFUSABLES: &[(char, char)] = &[
     ('\u{AB5A}', 'y'),
     ('\u{AB64}', 'a'),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every entry maps a non-ASCII code point to an ASCII letter.
+    #[test]
+    fn confusables_are_sorted_by_code_point() {
+        for i in 1..CONFUSABLES.len() {
+            assert!(
+                CONFUSABLES[i].0 as u32 > CONFUSABLES[i - 1].0 as u32,
+                "not sorted at index {}: {:x} <= {:x}",
+                i,
+                CONFUSABLES[i].0 as u32,
+                CONFUSABLES[i - 1].0 as u32,
+            );
+        }
+    }
+
+    /// Each ASCII target is a lowercase letter a-z.
+    #[test]
+    fn confusables_map_to_lowercase_ascii_letters() {
+        for &(cp, mapped) in CONFUSABLES {
+            assert!(
+                mapped.is_ascii_lowercase(),
+                "{:x} maps to '{}' which is not a-z",
+                cp as u32,
+                mapped
+            );
+            assert_ne!(cp, mapped, "{:?} maps to itself ({})", cp, mapped);
+        }
+    }
+
+    /// A known look-alike resolves to its expected ASCII letter.
+    #[test]
+    fn specific_lookalikes_resolve_correctly() {
+        // Greek capital alpha (U+0391) → a
+        assert_eq!(
+            CONFUSABLES.iter().find(|&&(cp, _)| cp == '\u{0391}'),
+            Some(&('\u{0391}', 'a'))
+        );
+        // Latin small gamma (U+0261) → g
+        assert_eq!(
+            CONFUSABLES.iter().find(|&&(cp, _)| cp == '\u{0261}'),
+            Some(&('\u{0261}', 'g'))
+        );
+        // Multiplication sign (U+00D7) → x
+        assert_eq!(
+            CONFUSABLES.iter().find(|&&(cp, _)| cp == '\u{00D7}'),
+            Some(&('\u{00D7}', 'x'))
+        );
+    }
+
+    /// The set contains entries for all 26 lowercase letters.
+    #[test]
+    fn confusables_cover_all_lowercase_letters() {
+        let mapped: std::collections::HashSet<char> = CONFUSABLES.iter().map(|&(_, c)| c).collect();
+        for letter in b'a'..=b'z' {
+            assert!(
+                mapped.contains(&(letter as char)),
+                "no confusable maps to '{}'",
+                letter as char
+            );
+        }
+    }
+
+    /// Binary search on CONFUSABLES works correctly because the array is sorted.
+    #[test]
+    fn binary_search_on_confusables_returns_correct_entries() {
+        // Greek capital alpha (U+0391) → a
+        let idx = CONFUSABLES.binary_search(&('\u{0391}', 'a'));
+        assert!(idx.is_ok(), "binary search should find U+0391");
+
+        // Latin small gamma (U+0261) → g
+        let idx = CONFUSABLES.binary_search(&('\u{0261}', 'g'));
+        assert!(idx.is_ok(), "binary search should find U+0261");
+
+        // Multiplication sign (U+00D7) → x
+        let idx = CONFUSABLES.binary_search(&('\u{00D7}', 'x'));
+        assert!(idx.is_ok(), "binary search should find U+00D7");
+
+        // A non-existent code point should not be found.
+        let idx = CONFUSABLES.binary_search(&('z', 'z'));
+        assert!(idx.is_err(), "binary search should not find (z, z)");
+    }
+}
