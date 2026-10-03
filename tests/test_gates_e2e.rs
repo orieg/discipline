@@ -11558,6 +11558,86 @@ fn test_floor_runner_discovery_e2e() {
 }
 
 #[test]
+fn test_floor_rust_deep_integration_tests_e2e() {
+    let repo = Repo::new();
+    repo.write("tests/it/main.rs", "mod foo;\n");
+    repo.write(
+        "tests/it/foo.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n#[test]\nfn test_two() { assert_eq!(2, 2); }\n",
+    );
+    repo.commit("feat: rust deep integration tests");
+
+    // Deleting a #[test] from tests/it/foo.rs makes test-floor fire
+    repo.write(
+        "tests/it/foo.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n",
+    );
+    repo.commit("test: delete test_two from foo.rs");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let titles = run.titles("test-floor");
+    assert!(
+        titles.contains(&"Test Count Below Floor".to_string()),
+        "Deleting a test from tests/it/foo.rs must fail test-floor: {titles:?}"
+    );
+}
+
+#[test]
+fn test_floor_js_mocha_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "package.json",
+        r#"{"name": "pkg", "devDependencies": {"mocha": "^10.0.0"}}"#,
+    );
+    repo.write(
+        "test/foo.js",
+        "it('test one', () => { assert(1 === 1); });\nit('test two', () => { assert(2 === 2); });\n",
+    );
+    repo.commit("feat: mocha tests");
+
+    // Deleting an it(...) from test/foo.js makes test-floor fire
+    repo.write(
+        "test/foo.js",
+        "it('test one', () => { assert(1 === 1); });\n",
+    );
+    repo.commit("test: delete test two from test/foo.js");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let titles = run.titles("test-floor");
+    assert!(
+        titles.contains(&"Test Count Below Floor".to_string()),
+        "Deleting an it(...) from test/foo.js with Mocha must fail test-floor: {titles:?}"
+    );
+}
+
+#[test]
+fn test_rust_cfg_not_feature_no_ignored_tests_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "Cargo.toml",
+        "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nfast = []\n",
+    );
+    repo.write(
+        "tests/basic.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n#[test]\nfn test_two() { assert_eq!(2, 2); }\n",
+    );
+    repo.commit("feat: initial tests");
+
+    repo.write(
+        "tests/basic.rs",
+        "#[test]\nfn test_one() { assert_eq!(1, 1); }\n#[cfg(not(feature = \"undeclared\"))]\n#[test]\nfn test_two() { assert_eq!(2, 2); }\n",
+    );
+    repo.commit("test: guard test_two with not(feature = undeclared)");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let it_titles = run.titles("ignored-tests");
+    assert!(
+        it_titles.is_empty(),
+        "Adding #[cfg(not(feature = \"x\"))] with x undeclared must produce no ignored-tests finding: {it_titles:?}"
+    );
+}
+
+#[test]
 fn test_floor_identity_gap_probe() {
     let repo = Repo::new();
     repo.write(

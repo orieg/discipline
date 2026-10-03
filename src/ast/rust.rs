@@ -1,5 +1,7 @@
 //! Rust language pack: tree-sitter AST extraction of tests, assertions, and unsafe sites.
 
+use std::collections::HashSet;
+
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
@@ -47,6 +49,18 @@ impl LanguagePack for RustPack {
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
+        let (owning_features, manifest_error) =
+            vocab.runner_rules.rust.find_owning_crate_features(path);
+        let mut facts = ParsedFileFacts {
+            has_parse_errors: root.has_error(),
+            ..Default::default()
+        };
+        if let Some(err_path) = manifest_error {
+            facts
+                .notes
+                .push(format!("failed to parse manifest at '{err_path}'"));
+        }
+
         let mut cx = Extractor {
             dead: super::reach::dead_ranges(root, src, &RS_REACH),
             src: src.as_bytes(),
@@ -62,12 +76,10 @@ impl LanguagePack for RustPack {
             test_file: super::functions::test_path(path)
                 || super::functions::declared_test_path(path, &vocab.test_paths),
             library_helper: false,
-            facts: ParsedFileFacts {
-                has_parse_errors: root.has_error(),
-                ..Default::default()
-            },
+            facts,
             helpers: std::collections::HashMap::new(),
             test_calls: Vec::new(),
+            owning_features,
         };
         cx.collect_comments(root);
         cx.visit(root, &mut Vec::new());
@@ -169,6 +181,7 @@ struct Extractor<'a> {
     facts: ParsedFileFacts,
     helpers: std::collections::HashMap<String, HelperFacts>,
     test_calls: Vec<Vec<String>>,
+    owning_features: Option<HashSet<String>>,
 }
 
 impl<'a> Extractor<'a> {
@@ -458,12 +471,12 @@ impl<'a> Extractor<'a> {
                                 ) {
                                     is_test = true;
                                 } else if sub_name == "ignore" {
-                                    let norm = cond.replace(' ', "");
-                                    if norm == "all()" || norm == "test" {
-                                        ignored = true;
-                                    } else {
-                                        conditional_ignore = Some(cond.clone());
-                                    }
+                                    self.apply_cfg_attr_ignore(
+                                        p,
+                                        &cond,
+                                        &mut ignored,
+                                        &mut conditional_ignore,
+                                    );
                                 } else if sub_name == "should_panic" {
                                     should_panic =
                                         Some(super::expected_exceptions::parse_rust_should_panic(
@@ -474,21 +487,7 @@ impl<'a> Extractor<'a> {
                         }
                     }
                     if name == "cfg" {
-                        if is_cfg_test_suppression(text) {
-                            ignored = true;
-                        } else if let Some((is_unconditional, cond_str)) =
-                            super::runner_collection::evaluate_rust_cfg(
-                                text,
-                                &self.vocab.runner_rules.rust.declared_features,
-                            )
-                        {
-                            if is_unconditional {
-                                ignored = true;
-                                conditional_ignore = None;
-                            } else if !ignored {
-                                conditional_ignore = Some(cond_str);
-                            }
-                        }
+                        self.apply_cfg(p, &mut ignored, &mut conditional_ignore);
                     }
                     prev = p.prev_sibling();
                 }
@@ -621,6 +620,77 @@ impl<'a> Extractor<'a> {
         None
     }
 
+    fn consume_cfg_result(
+        val: super::runner_collection::CfgValue,
+        cond_str: String,
+        ignored: &mut bool,
+        conditional_ignore: &mut Option<String>,
+    ) {
+        match val {
+            super::runner_collection::CfgValue::False => {
+                *ignored = true;
+                *conditional_ignore = None;
+            }
+            super::runner_collection::CfgValue::Unknown => {
+                if !*ignored && conditional_ignore.is_none() {
+                    *conditional_ignore = Some(cond_str);
+                }
+            }
+            super::runner_collection::CfgValue::True => {}
+        }
+    }
+
+    fn apply_cfg(
+        &self,
+        attr_node: Node,
+        ignored: &mut bool,
+        conditional_ignore: &mut Option<String>,
+    ) {
+        let text = self.text(attr_node);
+        if is_cfg_test_suppression(text) {
+            *ignored = true;
+            *conditional_ignore = None;
+            return;
+        }
+        let (val, cond_str) = super::runner_collection::evaluate_rust_cfg(
+            attr_node,
+            self.src,
+            self.owning_features.as_ref(),
+        );
+        Self::consume_cfg_result(val, cond_str, ignored, conditional_ignore);
+    }
+
+    fn apply_cfg_attr_ignore(
+        &self,
+        attr_node: Node,
+        fallback_cond_str: &str,
+        ignored: &mut bool,
+        conditional_ignore: &mut Option<String>,
+    ) {
+        let (val, desc) = super::runner_collection::evaluate_rust_cfg(
+            attr_node,
+            self.src,
+            self.owning_features.as_ref(),
+        );
+        let cond_str = if desc.is_empty() {
+            fallback_cond_str.to_string()
+        } else {
+            desc
+        };
+        match val {
+            super::runner_collection::CfgValue::True => {
+                *ignored = true;
+                *conditional_ignore = None;
+            }
+            super::runner_collection::CfgValue::Unknown => {
+                if !*ignored && conditional_ignore.is_none() {
+                    *conditional_ignore = Some(cond_str);
+                }
+            }
+            super::runner_collection::CfgValue::False => {}
+        }
+    }
+
     fn eval_parent_mod_cfgs(&self, node: Node) -> (bool, Option<String>) {
         let mut ignored = false;
         let mut conditional_ignore = None;
@@ -635,21 +705,7 @@ impl<'a> Extractor<'a> {
                     let text = a.utf8_text(self.src).unwrap_or("");
                     let name = attribute_name(text);
                     if name == "cfg" {
-                        if is_cfg_test_suppression(text) {
-                            ignored = true;
-                        } else if let Some((is_unconditional, cond_str)) =
-                            super::runner_collection::evaluate_rust_cfg(
-                                text,
-                                &self.vocab.runner_rules.rust.declared_features,
-                            )
-                        {
-                            if is_unconditional {
-                                ignored = true;
-                                conditional_ignore = None;
-                            } else if !ignored && conditional_ignore.is_none() {
-                                conditional_ignore = Some(cond_str);
-                            }
-                        }
+                        self.apply_cfg(a, &mut ignored, &mut conditional_ignore);
                     }
                     prev_mod = a.prev_sibling();
                 }
@@ -674,7 +730,7 @@ impl<'a> Extractor<'a> {
         let mut cursor = token_tree.walk();
         let children: Vec<Node> = token_tree.children(&mut cursor).collect();
         let mut i = 0;
-        let mut current_attrs: Vec<(String, usize)> = Vec::new();
+        let mut current_attrs: Vec<(Node, String, usize)> = Vec::new();
         let mut attr_start_line: Option<usize> = None;
         let mut found_any_fn = false;
 
@@ -703,7 +759,7 @@ impl<'a> Extractor<'a> {
                     attr_start_line = Some(attr_line);
                 }
                 let attr_text = format!("#{}", self.text(children[i + 1]));
-                current_attrs.push((attr_text, attr_line));
+                current_attrs.push((children[i + 1], attr_text, attr_line));
                 i += 2;
                 continue;
             }
@@ -814,7 +870,7 @@ impl<'a> Extractor<'a> {
                     conditional_ignore = Some(cond_str);
                 }
 
-                for (attr_text, attr_line) in current_attrs.drain(..) {
+                for (attr_node, attr_text, attr_line) in current_attrs.drain(..) {
                     let name = attribute_name(&attr_text);
                     if name == "ignore" {
                         ignored = true;
@@ -824,44 +880,18 @@ impl<'a> Extractor<'a> {
                             &attr_text, attr_line,
                         ));
                     } else if name == "cfg" {
-                        if is_cfg_test_suppression(&attr_text) {
-                            ignored = true;
-                        } else if let Some((is_unconditional, cond_str)) =
-                            super::runner_collection::evaluate_rust_cfg(
-                                &attr_text,
-                                &self.vocab.runner_rules.rust.declared_features,
-                            )
-                        {
-                            if is_unconditional {
-                                ignored = true;
-                                conditional_ignore = None;
-                            } else if !ignored {
-                                conditional_ignore = Some(cond_str);
-                            }
-                        }
+                        self.apply_cfg(attr_node, &mut ignored, &mut conditional_ignore);
                     } else if name == "cfg_attr" {
                         if let Some((cond, subs)) = parse_cfg_attr(&attr_text) {
                             for sub in subs {
                                 let sub_name = attribute_name(&sub);
                                 if sub_name == "ignore" {
-                                    let norm = cond.replace(' ', "");
-                                    if norm == "all()" || norm == "test" {
-                                        ignored = true;
-                                    } else if let Some((is_unconditional, cond_str)) =
-                                        super::runner_collection::evaluate_rust_cfg(
-                                            &cond,
-                                            &self.vocab.runner_rules.rust.declared_features,
-                                        )
-                                    {
-                                        if is_unconditional {
-                                            ignored = true;
-                                            conditional_ignore = None;
-                                        } else if !ignored {
-                                            conditional_ignore = Some(cond_str);
-                                        }
-                                    } else {
-                                        conditional_ignore = Some(cond.clone());
-                                    }
+                                    self.apply_cfg_attr_ignore(
+                                        attr_node,
+                                        &cond,
+                                        &mut ignored,
+                                        &mut conditional_ignore,
+                                    );
                                 } else if sub_name == "should_panic" {
                                     should_panic =
                                         Some(super::expected_exceptions::parse_rust_should_panic(
@@ -3082,12 +3112,15 @@ mod mod_tests {
     }
 }
 "#;
-        let mut vocab = AssertVocabulary::default();
-        vocab
-            .runner_rules
-            .rust
-            .declared_features
-            .insert("declared_feat".to_string());
+        let vocab = AssertVocabulary {
+            runner_rules: crate::ast::runner_collection::RunnerCollectionRules::from_files(|p| {
+                (p == "Cargo.toml").then(|| {
+                    "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[features]\ndeclared_feat = []\n"
+                        .to_string()
+                })
+            }),
+            ..Default::default()
+        };
 
         let pack = RustPack;
         let facts = pack.extract("tests/cfg_tests.rs", src, &vocab).unwrap();
@@ -3106,10 +3139,7 @@ mod mod_tests {
             .find(|t| t.name == "test_declared")
             .unwrap();
         assert!(!declared.ignored);
-        assert_eq!(
-            declared.conditional_ignore.as_deref(),
-            Some(r#"feature = "declared_feat""#)
-        );
+        assert_eq!(declared.conditional_ignore, None);
 
         let any_empty = facts
             .tests
