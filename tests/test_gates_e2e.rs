@@ -216,6 +216,57 @@ fn expected_exception_widened_fires_and_accepts_override() {
     assert_eq!(lifted.code, 0);
 }
 
+/// #453: a shared assertion helper defined in another test file (e.g. `tests/helpers.py`)
+/// that loses assertions reports `assertion-reduction/test-helper-weakened`, even when the
+/// calling test file is not modified.
+#[test]
+fn shared_assertion_helper_weakened_in_another_test_file_reports_finding_and_waived() {
+    let repo = Repo::new();
+    let base_helper =
+        "def check_user(u):\n    assert u.name == \"alice\"\n    assert u.is_active\n";
+    let base_test =
+        "from helpers import check_user\n\ndef test_login():\n    check_user(get_user())\n";
+    repo.commit_base_files(
+        &[
+            ("tests/helpers.py", base_helper),
+            ("tests/test_auth.py", base_test),
+        ],
+        "feat: user tests with shared helper",
+    );
+
+    // Weaken the helper in tests/helpers.py (test file untouched)
+    let weakened_helper = "def check_user(u):\n    assert u.name == \"alice\"\n";
+    repo.write("tests/helpers.py", weakened_helper);
+    repo.commit("refactor: weaken helper");
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("assertion-reduction");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let v = &violations[0];
+    assert_eq!(v["code"], "assertion-reduction/test-helper-weakened");
+    assert_eq!(v["file"], "tests/helpers.py");
+    assert_eq!(v["title"], "Test Helper Function Weakened");
+    assert!(v["message"]
+        .as_str()
+        .unwrap()
+        .contains("Helper `check_user`: effective assertions dropped from 2 to 1"));
+    assert!(v["remediation"]
+        .as_str()
+        .unwrap()
+        .contains("allow-assertion-drop: check_user"));
+
+    // Scoped override by helper name waives the finding
+    repo.commit("refactor: justify\n\nallow-assertion-drop: check_user moved is_active check to model invariant");
+    let lifted = repo.check(&[]);
+    assert!(
+        lifted.violations("assertion-reduction").is_empty(),
+        "{}",
+        lifted.stdout
+    );
+    assert_eq!(lifted.code, 0);
+}
+
 #[test]
 fn a_directive_that_lifted_no_finding_is_reported_without_failing_the_run() {
     let repo = Repo::new();

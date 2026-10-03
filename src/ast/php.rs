@@ -278,7 +278,7 @@ impl<'a> PhpExtractor<'a> {
             );
         }
         self.helpers.insert(
-            key,
+            key.clone(),
             super::HelperFacts {
                 total_asserts: h.total_asserts,
                 strong_asserts: h.strong_asserts,
@@ -287,6 +287,18 @@ impl<'a> PhpExtractor<'a> {
                 wraps,
             },
         );
+        let line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+        self.facts.test_helpers.push(super::TestHelperFacts {
+            name: key,
+            line,
+            end_line,
+            total_asserts: h.total_asserts,
+            strong_asserts: h.strong_asserts,
+            tautologies: h.tautologies,
+            fatal_asserts: h.fatal_asserts,
+            helper_checks: 0,
+        });
     }
 
     /// The same-file callees a test body runs: `$this->m()`, `self::m()`,
@@ -339,6 +351,7 @@ impl<'a> PhpExtractor<'a> {
     /// own callees are not followed, except through a thin wrapper.
     fn resolve_same_file_helpers(&mut self) {
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
+            test.direct_calls = calls.clone();
             for call in calls {
                 let Some(h) = super::helper_through_wrappers(call, &self.helpers) else {
                     continue;

@@ -301,7 +301,7 @@ impl<'a> ObjcExtractor<'a> {
             self.facts.tests.push(test_fn);
             self.test_calls.push(calls);
         } else {
-            self.record_helper(selector.to_string(), body);
+            self.record_helper(selector.to_string(), node, body);
         }
     }
 
@@ -312,11 +312,11 @@ impl<'a> ObjcExtractor<'a> {
             .map(|n| self.text(n).to_string())
             .unwrap_or_default();
         if let (false, Some(body)) = (name.is_empty(), node.child_by_field_name("body")) {
-            self.record_helper(name, body);
+            self.record_helper(name, node, body);
         }
     }
 
-    fn record_helper(&mut self, name: String, body: Node) {
+    fn record_helper(&mut self, name: String, node: Node, body: Node) {
         let mut helper = TestFn::default();
         let mut dummy = Vec::new();
         self.scan_node(body, &mut helper, &mut dummy);
@@ -327,18 +327,32 @@ impl<'a> ObjcExtractor<'a> {
             &["@throw", "abort("],
             &["block_literal"],
         );
-        self.helpers.entry(name).or_insert(super::HelperFacts {
+        self.helpers
+            .entry(name.clone())
+            .or_insert(super::HelperFacts {
+                total_asserts: helper.total_asserts,
+                strong_asserts: helper.strong_asserts,
+                tautologies: helper.tautologies,
+                fatal_asserts: helper.fatal_asserts,
+                wraps: super::forwarding_wrapper_callee(
+                    body,
+                    &OBJC_WRAPPER,
+                    &OBJC_LOCALS,
+                    &dummy,
+                    self.src,
+                ),
+            });
+        let line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+        self.facts.test_helpers.push(super::TestHelperFacts {
+            name,
+            line,
+            end_line,
             total_asserts: helper.total_asserts,
             strong_asserts: helper.strong_asserts,
             tautologies: helper.tautologies,
             fatal_asserts: helper.fatal_asserts,
-            wraps: super::forwarding_wrapper_callee(
-                body,
-                &OBJC_WRAPPER,
-                &OBJC_LOCALS,
-                &dummy,
-                self.src,
-            ),
+            helper_checks: 0,
         });
     }
 
@@ -436,6 +450,7 @@ impl<'a> ObjcExtractor<'a> {
 
     fn resolve_same_file_helpers(&mut self) {
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
+            test.direct_calls = calls.clone();
             for call in calls {
                 let Some(h) = super::helper_through_wrappers(call, &self.helpers) else {
                     continue;

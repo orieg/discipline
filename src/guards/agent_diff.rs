@@ -142,12 +142,14 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     }
 
     let (pairs, removed, added) = match_tests(&analyzed_files);
+    let helpers = match_helpers(&analyzed_files);
 
     let is_staged = ctx.staged && ctx.pr_body.is_none();
     let mut ast_gates = vec![
         evaluate_assertion_reduction(
             &pairs,
             &added,
+            &helpers,
             &gates.assertion_reduction,
             &ctx.directives,
             is_staged,
@@ -519,6 +521,82 @@ pub fn match_tests(files: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>,
     (pairs, removed, added)
 }
 
+#[derive(Debug, Clone)]
+pub struct HelperPair<'a> {
+    pub path: &'a str,
+    pub base: &'a crate::ast::TestHelperFacts,
+    pub head: Option<&'a crate::ast::TestHelperFacts>,
+}
+
+pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
+    let mut pairs = Vec::new();
+    let mut taken_head: std::collections::HashSet<(&'a str, &'a str)> =
+        std::collections::HashSet::new();
+
+    for ff in files {
+        let in_test = crate::ast::functions::test_path(&ff.file.path)
+            || crate::ast::functions::test_path(&ff.file.old_path);
+        if !in_test {
+            continue;
+        }
+        let Some(base_facts) = &ff.base else { continue };
+        // A helper file has no tests of its own; helpers in a file with tests are
+        // same-file helpers whose checks are already resolved into those tests.
+        if !base_facts.tests.is_empty() {
+            continue;
+        }
+        let head_facts = ff.head.as_ref();
+        for b in &base_facts.test_helpers {
+            if b.effective_asserts() == 0 && b.strong_asserts == 0 && b.fatal_asserts == 0 {
+                continue;
+            }
+            if let Some(h_facts) = head_facts {
+                if let Some(h) = h_facts.test_helpers.iter().find(|h| {
+                    h.name == b.name
+                        && !taken_head.contains(&(ff.file.path.as_str(), h.name.as_str()))
+                }) {
+                    taken_head.insert((ff.file.path.as_str(), h.name.as_str()));
+                    pairs.push(HelperPair {
+                        path: &ff.file.path,
+                        base: b,
+                        head: Some(h),
+                    });
+                    continue;
+                }
+            }
+            let mut matched_cross = false;
+            for other in files {
+                if other.file.path == ff.file.path {
+                    continue;
+                }
+                if let Some(other_head) = &other.head {
+                    if let Some(h) = other_head.test_helpers.iter().find(|h| {
+                        h.name == b.name
+                            && !taken_head.contains(&(other.file.path.as_str(), h.name.as_str()))
+                    }) {
+                        taken_head.insert((other.file.path.as_str(), h.name.as_str()));
+                        pairs.push(HelperPair {
+                            path: &other.file.path,
+                            base: b,
+                            head: Some(h),
+                        });
+                        matched_cross = true;
+                        break;
+                    }
+                }
+            }
+            if !matched_cross {
+                pairs.push(HelperPair {
+                    path: &ff.file.path,
+                    base: b,
+                    head: None,
+                });
+            }
+        }
+    }
+    pairs
+}
+
 pub(crate) fn leaf_name(test: &TestFn) -> &str {
     let s = test.name.rsplit("::").next().unwrap_or(&test.name);
     let s = s.rsplit('#').next().unwrap_or(s);
@@ -679,6 +757,7 @@ pub(crate) fn report_newly_added_nul_bytes(
 pub fn evaluate_assertion_reduction(
     pairs: &[TestPair],
     added: &[Located],
+    helpers: &[HelperPair],
     settings: &crate::config::AssertionGate,
     directives: &[crate::tokens::ParsedDirective],
     is_staged: bool,
@@ -686,7 +765,7 @@ pub fn evaluate_assertion_reduction(
     const GATE: &str = "assertion-reduction";
     let exempt = exempt_filter(settings)?;
     let mut out = GateOutcome::new(GATE);
-    out.examined = pairs.len();
+    out.examined = pairs.len() + helpers.len();
 
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
         if a.test.caught_assertions.is_empty() {
@@ -725,6 +804,144 @@ pub fn evaluate_assertion_reduction(
                 ),
             );
         }
+    }
+
+    let mut head_helpers: std::collections::HashMap<&str, &crate::ast::TestHelperFacts> =
+        std::collections::HashMap::new();
+    for hp in helpers {
+        if let Some(h) = hp.head {
+            head_helpers.insert(&h.name, h);
+            let leaf = h.name.rsplit("::").next().unwrap_or(&h.name);
+            head_helpers.insert(leaf, h);
+        }
+    }
+
+    for hp in helpers.iter().filter(|hp| !exempt.matches(hp.path)) {
+        let b = hp.base;
+        let (total_drop, strong_drop, fatal_drop, h_eff) = match hp.head {
+            Some(h) => {
+                let b_eff = b.effective_asserts();
+                let h_eff = h.effective_asserts();
+                (
+                    h_eff < b_eff,
+                    h.strong_asserts < b.strong_asserts,
+                    h.fatal_asserts < b.fatal_asserts,
+                    h_eff,
+                )
+            }
+            None => (
+                b.effective_asserts() > 0,
+                b.strong_asserts > 0,
+                b.fatal_asserts > 0,
+                0,
+            ),
+        };
+        if !total_drop && !strong_drop && !fatal_drop {
+            continue;
+        }
+
+        let lift = |subject: &str| {
+            tokens::find_override(
+                directives,
+                GATE,
+                &crate::findings::TEST_HELPER_WEAKENED,
+                tokens::ALLOW_ASSERTION_DROP,
+                subject,
+            )
+        };
+        let helper_leaf = b.name.rsplit("::").next().unwrap_or(&b.name);
+        let file_leaf = hp.path.rsplit('/').next().unwrap_or(hp.path);
+        let allowed = lift(helper_leaf)
+            .or_else(|| lift(&b.name))
+            .or_else(|| lift(hp.path))
+            .or_else(|| lift(file_leaf));
+        if let Some(record) = allowed {
+            out.overrides.push(record);
+            continue;
+        }
+
+        let mut calling_tests = Vec::new();
+        for p in pairs {
+            if p.head.direct_calls.iter().any(|c| {
+                let c_leaf = c.rsplit("::").next().unwrap_or(c);
+                let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
+                c_leaf == helper_leaf || c == &b.name
+            }) || p.base.direct_calls.iter().any(|c| {
+                let c_leaf = c.rsplit("::").next().unwrap_or(c);
+                let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
+                c_leaf == helper_leaf || c == &b.name
+            }) {
+                calling_tests.push(p.head.name.clone());
+            }
+        }
+        for a in added {
+            if a.test.direct_calls.iter().any(|c| {
+                let c_leaf = c.rsplit("::").next().unwrap_or(c);
+                let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
+                c_leaf == helper_leaf || c == &b.name
+            }) {
+                calling_tests.push(a.test.name.clone());
+            }
+        }
+        calling_tests.sort();
+        calling_tests.dedup();
+
+        let callers_str = if calling_tests.is_empty() {
+            String::new()
+        } else if calling_tests.len() <= 3 {
+            format!(
+                " (called by {})",
+                calling_tests
+                    .iter()
+                    .map(|n| format!("`{}`", n))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            format!(
+                " (called by {} tests: `{}` and others)",
+                calling_tests.len(),
+                calling_tests[0]
+            )
+        };
+
+        let b_eff = b.effective_asserts();
+        let msg = match hp.head {
+            None => format!(
+                "Helper `{}`: deleted or checks removed (previously had {} assertion(s)){}.",
+                b.name, b_eff, callers_str
+            ),
+            Some(_) if total_drop => format!(
+                "Helper `{}`: effective assertions dropped from {} to {}{}.",
+                b.name, b_eff, h_eff, callers_str
+            ),
+            Some(h) if strong_drop => format!(
+                "Helper `{}`: equality / pattern assertions dropped from {} to {} (weakened to a looser form){}.",
+                b.name, b.strong_asserts, h.strong_asserts, callers_str
+            ),
+            Some(h) => format!(
+                "Helper `{}`: fatal assertions dropped from {} to {}{}.",
+                b.name, b.fatal_asserts, h.fatal_asserts, callers_str
+            ),
+        };
+
+        let severity = if is_staged {
+            crate::config::Severity::Warning
+        } else {
+            settings.severity()
+        };
+        let line = hp.head.map(|h| h.line).unwrap_or(b.line);
+        out.push(
+            severity,
+            &crate::findings::TEST_HELPER_WEAKENED,
+            Some(hp.path),
+            Some(line),
+            msg,
+            &format!(
+                "Restore the assertions in `{helper_leaf}`, or justify the change in the PR body or a commit message: `allow-assertion-drop: {helper_leaf} <reason>`."
+            ),
+        );
+        out.anchor_last(b.name.clone());
     }
 
     let mut file_base_cases: std::collections::HashMap<&str, usize> =
@@ -794,6 +1011,91 @@ pub fn evaluate_assertion_reduction(
             ));
             total_drop = false;
             strong_drop = false;
+        }
+
+        // Checks moved into a helper (in another file or same file) that has assertions/checks.
+        if total_drop || strong_drop {
+            let mut moved_into_helper = None;
+            for call in &h.direct_calls {
+                let call_leaf = call.rsplit("::").next().unwrap_or(call);
+                let call_leaf = call_leaf.rsplit('.').next().unwrap_or(call_leaf);
+                if let Some(target_helper) = head_helpers
+                    .get(call.as_str())
+                    .or_else(|| head_helpers.get(call_leaf))
+                {
+                    if target_helper.effective_asserts() > 0
+                        || target_helper.strong_asserts > 0
+                        || target_helper.fatal_asserts > 0
+                    {
+                        let base_called = b.direct_calls.iter().any(|c| {
+                            let c_leaf = c.rsplit("::").next().unwrap_or(c);
+                            let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
+                            c_leaf == call_leaf || c == call
+                        });
+                        let helper_gained = helpers.iter().any(|hp| {
+                            if let (Some(h_fact), b_fact) = (hp.head, hp.base) {
+                                (h_fact.name == target_helper.name
+                                    || h_fact.name.ends_with(call_leaf))
+                                    && h_fact.effective_asserts() > b_fact.effective_asserts()
+                            } else {
+                                false
+                            }
+                        });
+                        if !base_called || helper_gained {
+                            moved_into_helper = Some((
+                                target_helper.name.clone(),
+                                target_helper.effective_asserts(),
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some((helper_name, helper_checks)) = moved_into_helper {
+                out.notes.push(format!(
+                    "`{}` in `{}`: assertions {} -> {} read as moved into helper `{}` ({} check(s))",
+                    h.name, p.path, b_eff, h_eff, helper_name, helper_checks
+                ));
+                total_drop = false;
+                strong_drop = false;
+            }
+        }
+
+        // If the test's drop is entirely accounted for by weakened helpers that were already reported
+        if total_drop || strong_drop {
+            let mut total_weakened_helper_drop = 0;
+            let mut weakened_helper_names = Vec::new();
+            for call in &h.direct_calls {
+                let call_leaf = call.rsplit("::").next().unwrap_or(call);
+                let call_leaf = call_leaf.rsplit('.').next().unwrap_or(call_leaf);
+                if let Some(hp) = helpers.iter().find(|hp| {
+                    let h_leaf = hp.base.name.rsplit("::").next().unwrap_or(&hp.base.name);
+                    (hp.base.name == *call || h_leaf == call_leaf)
+                        && hp.head.is_some_and(|head| {
+                            head.effective_asserts() < hp.base.effective_asserts()
+                        })
+                }) {
+                    let delta_helper = hp
+                        .base
+                        .effective_asserts()
+                        .saturating_sub(hp.head.unwrap().effective_asserts());
+                    total_weakened_helper_drop += delta_helper;
+                    weakened_helper_names.push(hp.base.name.as_str());
+                }
+            }
+            let delta_test = b_eff.saturating_sub(h_eff);
+            if delta_test > 0 && delta_test <= total_weakened_helper_drop {
+                out.notes.push(format!(
+                    "`{}` in `{}`: assertion drop {} -> {} attributed to weakened helper `{}`",
+                    h.name,
+                    p.path,
+                    b_eff,
+                    h_eff,
+                    weakened_helper_names.join("`, `")
+                ));
+                total_drop = false;
+                strong_drop = false;
+            }
         }
         let fatal_drop = h.fatal_asserts < b.fatal_asserts;
         // More doubles in the test, and no stronger assertion on what the code produced:
@@ -1847,7 +2149,7 @@ mod tests {
             forced: false,
         }];
         let out_weak =
-            evaluate_assertion_reduction(&pair_weak, &[], &settings, &[], false).unwrap();
+            evaluate_assertion_reduction(&pair_weak, &[], &[], &settings, &[], false).unwrap();
         assert_eq!(out_weak.violations.len(), 1);
         assert_eq!(out_weak.examined, 1);
 
@@ -1859,7 +2161,7 @@ mod tests {
             forced: false,
         }];
         let out_drop =
-            evaluate_assertion_reduction(&pair_drop, &[], &settings, &[], false).unwrap();
+            evaluate_assertion_reduction(&pair_drop, &[], &[], &settings, &[], false).unwrap();
         assert_eq!(out_drop.violations.len(), 1);
 
         // Override justifies the drop
@@ -1870,7 +2172,8 @@ mod tests {
             hidden: false,
         }];
         let out_override =
-            evaluate_assertion_reduction(&pair_drop, &[], &settings, &directives, false).unwrap();
+            evaluate_assertion_reduction(&pair_drop, &[], &[], &settings, &directives, false)
+                .unwrap();
         assert_eq!(out_override.violations.len(), 0);
         assert_eq!(out_override.overrides.len(), 1);
 
@@ -1881,7 +2184,8 @@ mod tests {
             test: &b, // has 2 asserts
         }];
         let out_unabsorbed =
-            evaluate_assertion_reduction(&pair_drop, &added_split, &settings, &[], false).unwrap();
+            evaluate_assertion_reduction(&pair_drop, &added_split, &[], &settings, &[], false)
+                .unwrap();
         assert_eq!(out_unabsorbed.violations.len(), 1);
     }
 
@@ -2219,7 +2523,7 @@ mod tests {
         };
 
         // Without override -> violation
-        let out = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false).unwrap();
+        let out = evaluate_assertion_reduction(&pairs, &[], &[], &settings, &[], false).unwrap();
         assert_eq!(out.violations.len(), 1);
         assert!(out.violations[0]
             .message
@@ -2234,7 +2538,7 @@ mod tests {
             hidden: false,
         }];
         let out_override =
-            evaluate_assertion_reduction(&pairs, &[], &settings, &directive, false).unwrap();
+            evaluate_assertion_reduction(&pairs, &[], &[], &settings, &directive, false).unwrap();
         assert_eq!(out_override.violations.len(), 0);
         assert_eq!(out_override.overrides.len(), 1);
 
@@ -2246,7 +2550,8 @@ mod tests {
             hidden: false,
         }];
         let out_file_override =
-            evaluate_assertion_reduction(&pairs, &[], &settings, &file_directive, false).unwrap();
+            evaluate_assertion_reduction(&pairs, &[], &[], &settings, &file_directive, false)
+                .unwrap();
         assert_eq!(out_file_override.violations.len(), 0);
         assert_eq!(out_file_override.overrides.len(), 1);
     }
@@ -2498,7 +2803,7 @@ mod tests {
         }];
         let settings = crate::config::AssertionGate::default();
 
-        let out = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false).unwrap();
+        let out = evaluate_assertion_reduction(&pairs, &[], &[], &settings, &[], false).unwrap();
         assert_eq!(out.violations.len(), 1);
         let v = &out.violations[0];
         assert_eq!(v.code, "assertion-reduction/test-cases-reduced");
@@ -2513,7 +2818,8 @@ mod tests {
             .contains("allow-case-drop: test_param"));
 
         // Staged reports warning
-        let out_staged = evaluate_assertion_reduction(&pairs, &[], &settings, &[], true).unwrap();
+        let out_staged =
+            evaluate_assertion_reduction(&pairs, &[], &[], &settings, &[], true).unwrap();
         assert_eq!(
             out_staged.violations[0].severity,
             crate::config::Severity::Warning
@@ -2552,7 +2858,8 @@ mod tests {
             crate::tokens::OverrideSource::PrBody,
         );
         let out_case =
-            evaluate_assertion_reduction(&pairs, &[], &settings, &directive_case, false).unwrap();
+            evaluate_assertion_reduction(&pairs, &[], &[], &settings, &directive_case, false)
+                .unwrap();
         assert_eq!(out_case.violations.len(), 0);
         assert_eq!(out_case.overrides.len(), 1);
         assert_eq!(
@@ -2566,7 +2873,8 @@ mod tests {
             crate::tokens::OverrideSource::PrBody,
         );
         let out_assert =
-            evaluate_assertion_reduction(&pairs, &[], &settings, &directive_assert, false).unwrap();
+            evaluate_assertion_reduction(&pairs, &[], &[], &settings, &directive_assert, false)
+                .unwrap();
         assert_eq!(out_assert.violations.len(), 0);
         assert_eq!(out_assert.overrides.len(), 1);
         assert_eq!(
@@ -2625,7 +2933,7 @@ mod tests {
         ];
         let settings = crate::config::AssertionGate::default();
 
-        let out = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false).unwrap();
+        let out = evaluate_assertion_reduction(&pairs, &[], &[], &settings, &[], false).unwrap();
         assert_eq!(out.violations.len(), 0);
         assert!(out.notes.iter().any(|n| n.contains(
             "test cases 5 -> 2 read as preserved across tests in same file (7 -> 7 total cases)"
@@ -2658,11 +2966,344 @@ mod tests {
         }];
         let settings = crate::config::AssertionGate::default();
 
-        let out = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false).unwrap();
+        let out = evaluate_assertion_reduction(&pairs, &[], &[], &settings, &[], false).unwrap();
         assert_eq!(out.violations.len(), 0);
         assert!(out
             .notes
             .iter()
             .any(|n| n.contains("non-literal test case source in `test_method_source`")));
+    }
+
+    #[test]
+    fn test_evaluate_assertion_reduction_helper_weakened_reports_violation_and_cites_calling_tests()
+    {
+        let b_helper = crate::ast::TestHelperFacts {
+            name: "check_user".to_string(),
+            line: 5,
+            end_line: 10,
+            total_asserts: 2,
+            strong_asserts: 2,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+        let h_helper = crate::ast::TestHelperFacts {
+            name: "check_user".to_string(),
+            line: 5,
+            end_line: 9,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &b_helper,
+            head: Some(&h_helper),
+        }];
+        let b_test = TestFn {
+            name: "test_login".to_string(),
+            line: 20,
+            direct_calls: vec!["check_user".to_string()],
+            total_asserts: 2,
+            strong_asserts: 2,
+            ..Default::default()
+        };
+        let h_test = TestFn {
+            name: "test_login".to_string(),
+            line: 20,
+            direct_calls: vec!["check_user".to_string()],
+            total_asserts: 2,
+            strong_asserts: 2,
+            ..Default::default()
+        };
+        let pairs = [TestPair {
+            path: "tests/test_auth.py",
+            base: &b_test,
+            head: &h_test,
+            forced: false,
+        }];
+        let settings = crate::config::AssertionGate::default();
+
+        let out =
+            evaluate_assertion_reduction(&pairs, &[], &helpers, &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 1);
+        let v = &out.violations[0];
+        assert_eq!(v.code, "assertion-reduction/test-helper-weakened");
+        assert_eq!(v.file.as_deref(), Some("tests/helpers.py"));
+        assert_eq!(v.line, Some(5));
+        assert!(v
+            .message
+            .contains("Helper `check_user`: effective assertions dropped from 2 to 1"));
+        assert!(v.message.contains("(called by `test_login`)"));
+        assert!(v
+            .remediation
+            .as_deref()
+            .unwrap()
+            .contains("allow-assertion-drop: check_user"));
+
+        // Staged reports warning
+        let out_staged =
+            evaluate_assertion_reduction(&pairs, &[], &helpers, &settings, &[], true).unwrap();
+        assert_eq!(
+            out_staged.violations[0].severity,
+            crate::config::Severity::Warning
+        );
+    }
+
+    #[test]
+    fn test_evaluate_assertion_reduction_helper_weakened_waived_by_directives() {
+        let b_helper = crate::ast::TestHelperFacts {
+            name: "check_user".to_string(),
+            line: 5,
+            end_line: 10,
+            total_asserts: 2,
+            strong_asserts: 2,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+        let h_helper = crate::ast::TestHelperFacts {
+            name: "check_user".to_string(),
+            line: 5,
+            end_line: 9,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &b_helper,
+            head: Some(&h_helper),
+        }];
+        let settings = crate::config::AssertionGate::default();
+
+        // 1. Waived by helper name
+        let dir_helper = crate::tokens::parse_directives(
+            "allow-assertion-drop: check_user consolidated into api schema\n",
+            crate::tokens::OverrideSource::PrBody,
+        );
+        let out_helper =
+            evaluate_assertion_reduction(&[], &[], &helpers, &settings, &dir_helper, false)
+                .unwrap();
+        assert_eq!(out_helper.violations.len(), 0);
+        assert_eq!(out_helper.overrides.len(), 1);
+        assert_eq!(
+            out_helper.overrides[0].code.as_deref(),
+            Some("assertion-reduction/test-helper-weakened")
+        );
+
+        // 2. Waived by path
+        let dir_path = crate::tokens::parse_directives(
+            "allow-assertion-drop: tests/helpers.py consolidated into api schema\n",
+            crate::tokens::OverrideSource::PrBody,
+        );
+        let out_path =
+            evaluate_assertion_reduction(&[], &[], &helpers, &settings, &dir_path, false).unwrap();
+        assert_eq!(out_path.violations.len(), 0);
+        assert_eq!(out_path.overrides.len(), 1);
+        assert_eq!(
+            out_path.overrides[0].code.as_deref(),
+            Some("assertion-reduction/test-helper-weakened")
+        );
+    }
+
+    #[test]
+    fn test_evaluate_assertion_reduction_refactor_into_helper_emits_note() {
+        let b = TestFn {
+            name: "test_check".to_string(),
+            line: 10,
+            total_asserts: 2,
+            strong_asserts: 2,
+            ..Default::default()
+        };
+        let h = TestFn {
+            name: "test_check".to_string(),
+            line: 10,
+            total_asserts: 1,
+            strong_asserts: 1,
+            direct_calls: vec!["custom_assert".to_string()],
+            ..Default::default()
+        };
+        let h_helper = crate::ast::TestHelperFacts {
+            name: "custom_assert".to_string(),
+            line: 30,
+            end_line: 35,
+            total_asserts: 2,
+            strong_asserts: 2,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+        let helpers = [HelperPair {
+            path: "tests/common.rs",
+            base: &h_helper,
+            head: Some(&h_helper),
+        }];
+        let pairs = [TestPair {
+            path: "tests/test_foo.rs",
+            base: &b,
+            head: &h,
+            forced: false,
+        }];
+        let settings = crate::config::AssertionGate::default();
+
+        let out =
+            evaluate_assertion_reduction(&pairs, &[], &helpers, &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 0);
+        assert!(out
+            .notes
+            .iter()
+            .any(|n| n.contains("read as moved into helper `custom_assert`")));
+    }
+
+    #[test]
+    fn test_evaluate_assertion_reduction_attributed_helper_drop_emits_note() {
+        let b_helper = crate::ast::TestHelperFacts {
+            name: "helper".to_string(),
+            line: 5,
+            end_line: 10,
+            total_asserts: 2,
+            strong_asserts: 2,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+        let h_helper = crate::ast::TestHelperFacts {
+            name: "helper".to_string(),
+            line: 5,
+            end_line: 9,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+        let helpers = [HelperPair {
+            path: "tests/test_foo.rs",
+            base: &b_helper,
+            head: Some(&h_helper),
+        }];
+        let b_test = TestFn {
+            name: "test_foo".to_string(),
+            line: 20,
+            total_asserts: 2,
+            strong_asserts: 2,
+            direct_calls: vec!["helper".to_string()],
+            ..Default::default()
+        };
+        let h_test = TestFn {
+            name: "test_foo".to_string(),
+            line: 20,
+            total_asserts: 1,
+            strong_asserts: 1,
+            direct_calls: vec!["helper".to_string()],
+            ..Default::default()
+        };
+        let pairs = [TestPair {
+            path: "tests/test_foo.rs",
+            base: &b_test,
+            head: &h_test,
+            forced: false,
+        }];
+        let settings = crate::config::AssertionGate::default();
+
+        let out =
+            evaluate_assertion_reduction(&pairs, &[], &helpers, &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 1);
+        assert_eq!(
+            out.violations[0].code,
+            "assertion-reduction/test-helper-weakened"
+        );
+        assert!(out
+            .notes
+            .iter()
+            .any(|n| n.contains("attributed to weakened helper `helper`")));
+    }
+
+    #[test]
+    fn test_match_helpers_same_file_and_cross_file() {
+        let h1 = crate::ast::TestHelperFacts {
+            name: "check_same".to_string(),
+            line: 5,
+            end_line: 10,
+            total_asserts: 1,
+            strong_asserts: 1,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+        let h2_base = crate::ast::TestHelperFacts {
+            name: "check_cross".to_string(),
+            line: 15,
+            end_line: 20,
+            total_asserts: 2,
+            strong_asserts: 2,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+        let h2_head = crate::ast::TestHelperFacts {
+            name: "check_cross".to_string(),
+            line: 25,
+            end_line: 30,
+            total_asserts: 2,
+            strong_asserts: 2,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        };
+
+        let file1 = FileFacts {
+            file: crate::gitctx::ChangedFile {
+                path: "tests/helpers.py".to_string(),
+                old_path: "tests/helpers.py".to_string(),
+                kind: crate::gitctx::ChangeKind::Modified,
+                added_lines: Default::default(),
+            },
+            base: Some(crate::ast::ParsedFileFacts {
+                test_helpers: vec![h1.clone(), h2_base.clone()],
+                ..Default::default()
+            }),
+            head: Some(crate::ast::ParsedFileFacts {
+                test_helpers: vec![h1.clone()],
+                ..Default::default()
+            }),
+            newly_added_nul: false,
+        };
+        let file2 = FileFacts {
+            file: crate::gitctx::ChangedFile {
+                path: "tests/utils.py".to_string(),
+                old_path: "tests/utils.py".to_string(),
+                kind: crate::gitctx::ChangeKind::Modified,
+                added_lines: Default::default(),
+            },
+            base: Some(crate::ast::ParsedFileFacts::default()),
+            head: Some(crate::ast::ParsedFileFacts {
+                test_helpers: vec![h2_head.clone()],
+                ..Default::default()
+            }),
+            newly_added_nul: false,
+        };
+
+        let files = [file1, file2];
+        let matched = match_helpers(&files);
+        assert_eq!(matched.len(), 2);
+        let same = matched
+            .iter()
+            .find(|m| m.base.name == "check_same")
+            .unwrap();
+        assert_eq!(same.path, "tests/helpers.py");
+        assert_eq!(same.head.unwrap().line, 5);
+
+        let cross = matched
+            .iter()
+            .find(|m| m.base.name == "check_cross")
+            .unwrap();
+        assert_eq!(cross.path, "tests/utils.py");
+        assert_eq!(cross.head.unwrap().line, 25);
     }
 }

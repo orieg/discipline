@@ -469,6 +469,18 @@ impl<'a> JsExtractor<'a> {
                     JS_FUNCTION_KINDS,
                 );
             }
+            let line = func.start_position().row + 1;
+            let end_line = func.end_position().row + 1;
+            self.facts.test_helpers.push(super::TestHelperFacts {
+                name: name.clone(),
+                line,
+                end_line,
+                total_asserts: h.total_asserts,
+                strong_asserts: h.strong_asserts,
+                tautologies: h.tautologies,
+                fatal_asserts: h.fatal_asserts,
+                helper_checks: 0,
+            });
             helpers.insert(
                 name,
                 super::HelperFacts {
@@ -481,6 +493,7 @@ impl<'a> JsExtractor<'a> {
             );
         }
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
+            test.direct_calls = calls.clone();
             for call in calls {
                 let Some(h) = super::helper_through_wrappers(call, &helpers) else {
                     continue;

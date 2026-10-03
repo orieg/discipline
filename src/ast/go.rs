@@ -136,12 +136,19 @@ pub fn is_go_test_function_name(name: &str) -> bool {
 
 /// Determines whether a path is conventionally a Go test file.
 pub fn is_go_test_path(path: &str) -> bool {
-    let filename = path.rsplit('/').next().unwrap_or(path);
+    let p = path.to_ascii_lowercase();
+    let filename = p.rsplit('/').next().unwrap_or(&p);
     filename.ends_with("_test.go")
-        || path.starts_with("test/")
-        || path.contains("/test/")
-        || path.starts_with("tests/")
-        || path.contains("/tests/")
+        || filename.ends_with("testutil.go")
+        || filename.ends_with("testutils.go")
+        || p.starts_with("test/")
+        || p.contains("/test/")
+        || p.starts_with("tests/")
+        || p.contains("/tests/")
+        || p.starts_with("testutil/")
+        || p.contains("/testutil/")
+        || p.starts_with("testutils/")
+        || p.contains("/testutils/")
 }
 
 struct GoExtractor<'a> {
@@ -270,6 +277,18 @@ impl<'a> GoExtractor<'a> {
                     ),
                 };
                 self.helpers.insert(func_name.to_string(), facts);
+                let line = node.start_position().row + 1;
+                let end_line = node.end_position().row + 1;
+                self.facts.test_helpers.push(super::TestHelperFacts {
+                    name: func_name.to_string(),
+                    line,
+                    end_line,
+                    total_asserts: helper_fn.total_asserts,
+                    strong_asserts: helper_fn.strong_asserts,
+                    tautologies: helper_fn.tautologies,
+                    fatal_asserts: helper_fn.fatal_asserts,
+                    helper_checks: 0,
+                });
             }
         }
     }
@@ -538,6 +557,7 @@ impl<'a> GoExtractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
+                test.direct_calls = calls.clone();
                 for call in calls {
                     if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
                         if self.vocab.helper_fns.iter().any(|name| name == call) {

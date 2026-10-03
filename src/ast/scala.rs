@@ -443,6 +443,18 @@ impl<'a> ScalaExtractor<'a> {
                     self.src,
                 ),
             });
+        let line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+        self.facts.test_helpers.push(super::TestHelperFacts {
+            name: name.to_string(),
+            line,
+            end_line,
+            total_asserts: helper.total_asserts,
+            strong_asserts: helper.strong_asserts,
+            tautologies: helper.tautologies,
+            fatal_asserts: helper.fatal_asserts,
+            helper_checks: 0,
+        });
     }
 
     fn args<'b>(&self, call: Node<'b>) -> Vec<Node<'b>> {
@@ -571,6 +583,7 @@ impl<'a> ScalaExtractor<'a> {
 
     fn resolve_same_file_helpers(&mut self) {
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
+            test.direct_calls = calls.clone();
             for call in calls {
                 let Some(h) = super::helper_through_wrappers(call, &self.helpers) else {
                     continue;

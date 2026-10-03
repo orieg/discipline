@@ -272,6 +272,8 @@ pub struct TestFn {
     /// Whether the test has dynamic / non-literal test cases (fixture, generator, or function call)
     /// that cannot be statically counted.
     pub non_literal_cases: bool,
+    /// Functions called directly in the body of the test.
+    pub direct_calls: Vec<String>,
 }
 
 impl TestFn {
@@ -402,6 +404,25 @@ pub struct HelperFacts {
     /// The one same-file function this helper's whole body calls, when it is a thin
     /// wrapper ([`thin_wrapper_callee`]); its checks are resolved as the wrapper's.
     pub wraps: Option<String>,
+}
+
+/// Assertions and checks inside a non-test helper function.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TestHelperFacts {
+    pub name: String,
+    pub line: usize,
+    pub end_line: usize,
+    pub total_asserts: usize,
+    pub strong_asserts: usize,
+    pub tautologies: usize,
+    pub fatal_asserts: usize,
+    pub helper_checks: usize,
+}
+
+impl TestHelperFacts {
+    pub fn effective_asserts(&self) -> usize {
+        self.total_asserts.saturating_sub(self.tautologies)
+    }
 }
 
 /// How many calls deep a test's same-file helpers are followed: a C or C++ test `main`
@@ -916,6 +937,8 @@ pub enum EscapeHatchSite {
 #[derive(Debug, Clone)]
 pub struct ParsedFileFacts {
     pub tests: Vec<TestFn>,
+    /// Assertions and checks inside non-test helper functions defined in this file.
+    pub test_helpers: Vec<TestHelperFacts>,
     pub unsafe_sites: Vec<UnsafeSite>,
     pub escape_hatches: Vec<EscapeHatchSite>,
     /// Every function with a body, and what the body amounts to (`Fact::Functions`).
@@ -946,6 +969,7 @@ impl Default for ParsedFileFacts {
     fn default() -> Self {
         Self {
             tests: Vec::new(),
+            test_helpers: Vec::new(),
             unsafe_sites: Vec::new(),
             escape_hatches: Vec::new(),
             functions: Vec::new(),
@@ -978,6 +1002,7 @@ impl Default for ParsedFileFacts {
                 expected_exceptions: Vec::new(),
                 cases: None,
                 non_literal_cases: false,
+                direct_calls: Vec::new(),
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -1013,6 +1038,7 @@ impl ParsedFileFacts {
             expected_exceptions: Vec::new(),
             cases: None,
             non_literal_cases: false,
+            direct_calls: Vec::new(),
         });
     }
 }

@@ -983,6 +983,7 @@ const CASES: &[Case] = &[
                 evaluate_assertion_reduction(
                     &[TestPair { path: "s.py", base: b, head: h, forced: false }],
                     &[],
+                    &[],
                     &settings,
                     &[],
                     false,
@@ -1627,14 +1628,14 @@ const CASES: &[Case] = &[
                 forced: false,
             }];
             let settings = crate::config::AssertionGate::default();
-            let unexcused = evaluate_assertion_reduction(&pair, &[], &settings, &[], false)?;
+            let unexcused = evaluate_assertion_reduction(&pair, &[], &[], &settings, &[], false)?;
             let directives = [crate::tokens::ParsedDirective {
                 directive: "allow-assertion-drop".to_string(),
                 reason: "test_check simplified".to_string(),
                 source: crate::tokens::OverrideSource::PrBody,
                 hidden: false,
             }];
-            let excused = evaluate_assertion_reduction(&pair, &[], &settings, &directives, false)?;
+            let excused = evaluate_assertion_reduction(&pair, &[], &[], &settings, &directives, false)?;
 
             // An added test must NOT offset the paired test's reduction
             use crate::guards::agent_diff::Located;
@@ -1644,7 +1645,7 @@ const CASES: &[Case] = &[
                 test: &b,
             }];
             let with_added =
-                evaluate_assertion_reduction(&pair, &added_test, &settings, &[], false)?;
+                evaluate_assertion_reduction(&pair, &added_test, &[], &settings, &[], false)?;
 
             Ok(unexcused.violations.len() == 1
                 && unexcused.overrides.is_empty()
@@ -2591,6 +2592,7 @@ command = "cargo test"
                 evaluate_assertion_reduction(
                     &[TestPair { path: "src/rules.rs", base: b, head: h, forced: false }],
                     &[],
+                    &[],
                     &settings,
                     &[],
                     false,
@@ -2628,18 +2630,65 @@ command = "cargo test"
                 forced: false,
             }];
             let settings = crate::config::AssertionGate::default();
-            let unexcused = evaluate_assertion_reduction(&pairs, &[], &settings, &[], false)?;
+            let unexcused = evaluate_assertion_reduction(&pairs, &[], &[], &settings, &[], false)?;
             let directives = crate::tokens::parse_directives(
                 "allow-case-drop: test_param dropping slow variants\n",
                 crate::tokens::OverrideSource::PrBody,
             );
-            let excused = evaluate_assertion_reduction(&pairs, &[], &settings, &directives, false)?;
+            let excused = evaluate_assertion_reduction(&pairs, &[], &[], &settings, &directives, false)?;
 
             let reported = unexcused.violations.len() == 1
                 && unexcused.violations[0].code == "assertion-reduction/test-cases-reduced";
             let waived = excused.violations.is_empty()
                 && excused.overrides.len() == 1
                 && excused.overrides[0].code.as_deref() == Some("assertion-reduction/test-cases-reduced");
+
+            Ok(reported && waived)
+        },
+    ),
+    (
+        "assertion-reduction: shared assertion helper weakened in test path reports finding, waived by allow-assertion-drop",
+        || {
+            use crate::ast::TestHelperFacts;
+            use crate::guards::agent_diff::{evaluate_assertion_reduction, HelperPair};
+            let b = TestHelperFacts {
+                name: "check_user".to_string(),
+                line: 5,
+                end_line: 10,
+                total_asserts: 2,
+                strong_asserts: 2,
+                tautologies: 0,
+                fatal_asserts: 0,
+                helper_checks: 0,
+            };
+            let h = TestHelperFacts {
+                name: "check_user".to_string(),
+                line: 5,
+                end_line: 9,
+                total_asserts: 1,
+                strong_asserts: 1,
+                tautologies: 0,
+                fatal_asserts: 0,
+                helper_checks: 0,
+            };
+            let helpers = [HelperPair {
+                path: "tests/helpers.py",
+                base: &b,
+                head: Some(&h),
+            }];
+            let settings = crate::config::AssertionGate::default();
+            let unexcused = evaluate_assertion_reduction(&[], &[], &helpers, &settings, &[], false)?;
+            let directives = crate::tokens::parse_directives(
+                "allow-assertion-drop: check_user consolidated checks\n",
+                crate::tokens::OverrideSource::PrBody,
+            );
+            let excused = evaluate_assertion_reduction(&[], &[], &helpers, &settings, &directives, false)?;
+
+            let reported = unexcused.violations.len() == 1
+                && unexcused.violations[0].code == "assertion-reduction/test-helper-weakened";
+            let waived = excused.violations.is_empty()
+                && excused.overrides.len() == 1
+                && excused.overrides[0].code.as_deref() == Some("assertion-reduction/test-helper-weakened");
 
             Ok(reported && waived)
         },
