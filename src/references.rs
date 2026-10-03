@@ -152,7 +152,7 @@ pub fn parse(text: &str, kind: ForgeKind, keywords: &[String]) -> Vec<Reference>
     let mut last_end = 0usize;
     for caps in REFERENCE.captures_iter(&text) {
         let (start, end, reference) = if let Some(n) = caps.name("un") {
-            let whole = caps.get(0).unwrap();
+            let whole = caps.get(0).expect("regex match has group 0");
             let kind_seg = caps["ukind"].to_ascii_lowercase();
             (
                 whole.start(),
@@ -167,7 +167,7 @@ pub fn parse(text: &str, kind: ForgeKind, keywords: &[String]) -> Vec<Reference>
                 },
             )
         } else if let Some(n) = caps.name("qn") {
-            let repo = caps.name("qrepo").unwrap();
+            let repo = caps.name("qrepo").expect("regex match has qrepo group");
             (
                 repo.start(),
                 n.end(),
@@ -181,8 +181,8 @@ pub fn parse(text: &str, kind: ForgeKind, keywords: &[String]) -> Vec<Reference>
                 },
             )
         } else {
-            let sig = caps.name("lsig").unwrap();
-            let n = caps.name("ln").unwrap();
+            let sig = caps.name("lsig").expect("regex match has lsig group");
+            let n = caps.name("ln").expect("regex match has ln group");
             (
                 sig.start(),
                 n.end(),

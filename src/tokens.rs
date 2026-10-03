@@ -1541,7 +1541,7 @@ fn is_placeholder(reason: &str) -> bool {
 }
 
 static CITATION_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r"(?i)https?://[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/(?:actions/runs/\d+|pipelines/\d+|jobs/\d+)|(?:results|docs|crates|scripts|benches|tests|src|target)/[a-zA-Z0-9_./-]+\.(?:json|txt|csv|md|svg|log|out)").unwrap()
+    Regex::new(r"(?i)https?://[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/(?:actions/runs/\d+|pipelines/\d+|jobs/\d+)|(?:results|docs|crates|scripts|benches|tests|src|target)/[a-zA-Z0-9_./-]+\.(?:json|txt|csv|md|svg|log|out)").expect("valid regex")
 });
 
 /// Extracts a verifiable citation (CI run URL or committed artifact path) from an override reason.

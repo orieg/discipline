@@ -1048,12 +1048,12 @@ fn unescape_xml(s: &str) -> String {
 }
 
 pub fn parse_junit_cases(xml: &str) -> Vec<TestCaseReport> {
-    let re_case = regex::Regex::new(r"(?s)<testcase\b([^>]*?)(?:/>|>(.*?)</testcase>)").unwrap();
-    let re_attr = regex::Regex::new(r#"([a-zA-Z0-9_:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap();
+    let re_case = regex::Regex::new(r"(?s)<testcase\b([^>]*?)(?:/>|>(.*?)</testcase>)").expect("valid regex");
+    let re_attr = regex::Regex::new(r#"([a-zA-Z0-9_:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')"#).expect("valid regex");
     let re_failure =
         regex::Regex::new(r"(?s)<(?:failure|error)\b([^>]*?)(?:/>|>(.*?)</(?:failure|error)>)")
             .unwrap();
-    let re_skipped = regex::Regex::new(r"(?s)<skipped\b").unwrap();
+    let re_skipped = regex::Regex::new(r"(?s)<skipped\b").expect("valid regex");
 
     let mut cases = Vec::new();
     for cap in re_case.captures_iter(xml) {
@@ -1469,7 +1469,7 @@ mod tests {
     }
 
     fn re(p: &str) -> regex::Regex {
-        regex::Regex::new(p).unwrap()
+        regex::Regex::new(p).expect("valid regex")
     }
 
     #[test]

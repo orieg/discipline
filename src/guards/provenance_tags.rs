@@ -20,50 +20,50 @@ use std::sync::LazyLock;
 pub const GATE: &str = "provenance-tags";
 
 static UNIT_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b\d+(?:[.,]\d+)?\s*(?:ns|µs|us|ms|ops/s|Mops/s|M ops/s|M/s|B/key|B/k|bytes/key|GB|MB|KiB|MiB)\b|\d+(?:\.\d+)?\s*[×x]\b").unwrap()
+    Regex::new(r"(?i)\b\d+(?:[.,]\d+)?\s*(?:ns|µs|us|ms|ops/s|Mops/s|M ops/s|M/s|B/key|B/k|bytes/key|GB|MB|KiB|MiB)\b|\d+(?:\.\d+)?\s*[×x]\b").expect("valid regex")
 });
 
 static PROVENANCE_TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\((?:measured|target|projected|unverified|retracted|pending)").unwrap()
+    Regex::new(r"(?i)\((?:measured|target|projected|unverified|retracted|pending)").expect("valid regex")
 });
 
 static MECHANISM_TERMS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(?:memory[- ]latency[- ]bound|latency[- ]bound|bandwidth[- ]bound|cache[- ]miss[- ]bound|miss[- ]bound|branch[- ]misprediction|mispredict(?:s|ed|ion)?[- ]bound|TLB[- ]bound|page[- ]walk[- ]bound|memory[- ]level parallelism|MLP[- ]bound|fill[- ]buffer[- ]bound|MSHR[- ]bound|front[- ]end bound|back[- ]end bound|stall(?:ed|ing)? on (?:L[123]|DRAM|memory))\b").unwrap()
+    Regex::new(r"(?i)\b(?:memory[- ]latency[- ]bound|latency[- ]bound|bandwidth[- ]bound|cache[- ]miss[- ]bound|miss[- ]bound|branch[- ]misprediction|mispredict(?:s|ed|ion)?[- ]bound|TLB[- ]bound|page[- ]walk[- ]bound|memory[- ]level parallelism|MLP[- ]bound|fill[- ]buffer[- ]bound|MSHR[- ]bound|front[- ]end bound|back[- ]end bound|stall(?:ed|ing)? on (?:L[123]|DRAM|memory))\b").expect("valid regex")
 });
 
 static MECHANISM_NEGATION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:cannot see|can(?:'|’)?t see|does not (?:see|measure|model|capture)|blind to|ignores?|invisible to|no counter|unable to (?:see|measure))").unwrap()
+    Regex::new(r"(?i)(?:cannot see|can(?:'|')?t see|does not (?:see|measure|model|capture)|blind to|ignores?|invisible to|no counter|unable to (?:see|measure))").expect("valid regex")
 });
 
 static MECHANISM_EVIDENCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:perf stat|perf_counters|point_lookup_counters|hardware counter|counters? (?:on|show|locate|say)|branch-misses|branch_misses|L1-dcache|LLC-load|dTLB|cycle_activity|mem_load_retired|cpu_core/|cpu_atom/|--cache-sim|callgrind.*(?:LL|RAM) |results/baseline_|\bunmeasured\b|\bnot measured\b|\bhypothesis\b|\bunverified\b|\bretracted\b|\bcause unknown\b|\bconjecture\b)").unwrap()
+    Regex::new(r"(?i)(?:perf stat|perf_counters|point_lookup_counters|hardware counter|counters? (?:on|show|locate|say)|branch-misses|branch_misses|L1-dcache|LLC-load|dTLB|cycle_activity|mem_load_retired|cpu_core/|cpu_atom/|--cache-sim|callgrind.*(?:LL|RAM) |results/baseline_|\bunmeasured\b|\bnot measured\b|\bhypothesis\b|\bunverified\b|\bretracted\b|\bcause unknown\b|\bconjecture\b)").expect("valid regex")
 });
 
 static WALLCLOCK_RATIO: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b\d+(?:\.\d+)?\s*(?:x\b|×(?:\s|$|[^\w]))").unwrap());
 
 static WALLCLOCK_CONTEXT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\bns\b|µs|\bus\b|\bms\b|ops/s|Mops|M/s|latency|throughput|faster|slower|speedup|wall.?clock)").unwrap()
+    Regex::new(r"(?i)(?:\bns\b|µs|\bus\b|\bms\b|ops/s|Mops|M/s|latency|throughput|faster|slower|speedup|wall.?clock)").expect("valid regex")
 });
 
 static DETERMINISTIC_METRIC: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:instruction|callgrind|\bIr\b|B/key|B/k|bytes/key|byte accounting|symbol|deterministic|inst\b|density|memory|footprint|\bKB/|\bMB/|\bB/|resident|allocat|\bRAM\b|heap)").unwrap()
+    Regex::new(r"(?i)(?:instruction|callgrind|\bIr\b|B/key|B/k|bytes/key|byte accounting|symbol|deterministic|inst\b|density|memory|footprint|\bKB/|\bMB/|\bB/|resident|allocat|\bRAM\b|heap)").expect("valid regex")
 });
 
 static INTERVAL_EVIDENCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\[\s*[-+]?\d+(?:\.\d+)?[%x×]?\s*,\s*[-+]?\d+(?:\.\d+)?[%x×]?\s*\]|\bBCa\b|confidence interval|\bCI\b|bca_bootstrap|results/baseline_|\bno interval\b|\bunsourced\b|\bsuperseded\b|\bretracted\b|\bindicative\b|\bunmeasured\b|\bprovisional\b|pending re-measurement)").unwrap()
+    Regex::new(r"(?i)(?:\[\s*[-+]?\d+(?:\.\d+)?[%x×]?\s*,\s*[-+]?\d+(?:\.\d+)?[%x×]?\s*\]|\bBCa\b|confidence interval|\bCI\b|bca_bootstrap|results/baseline_|\bno interval\b|\bunsourced\b|\bsuperseded\b|\bretracted\b|\bindicative\b|\bunmeasured\b|\bprovisional\b|pending re-measurement)").expect("valid regex")
 });
 
 static PAIRED_VS_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s|B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|Mops/s|M ops/s|M/s|Minst|M inst|inst|tps|M\b)\b(?:\*\*)?\s*(?:vs\.?|vs|against)\s*(?:\*\*)?\d+(?:\.\d+)?|\b\d+(?:\.\d+)?\b(?:\*\*)?\s*(?:vs\.?|vs|against)\s*(?:\*\*)?\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s|B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|Mops/s|M ops/s|M/s|Minst|M inst|inst|tps|M\b)\b)").unwrap()
+    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s|B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|Mops/s|M ops/s|M/s|Minst|M inst|inst|tps|M\b)\b(?:\*\*)?\s*(?:vs\.?|vs|against)\s*(?:\*\*)?\d+(?:\.\d+)?|\b\d+(?:\.\d+)?\b(?:\*\*)?\s*(?:vs\.?|vs|against)\s*(?:\*\*)?\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s|B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|Mops/s|M ops/s|M/s|Minst|M inst|inst|tps|M\b)\b)").expect("valid regex")
 });
 
 static INSTRUCTION_METRIC_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*[x×]\s*(?:the\s+)?instructions?\b|\b\d+(?:\.\d+)?\s*(?:M\s*inst|Minst|inst|instructions?|instruction-retired|Ir)\b|\b\d+(?:\.\d+)?%\s*(?:fewer|more)?\s*instructions?\b)").unwrap()
+    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*[x×]\s*(?:the\s+)?instructions?\b|\b\d+(?:\.\d+)?\s*(?:M\s*inst|Minst|inst|instructions?|instruction-retired|Ir)\b|\b\d+(?:\.\d+)?%\s*(?:fewer|more)?\s*instructions?\b)").expect("valid regex")
 });
 
 static TIME_METRIC_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s)\b|\b\d+(?:\.\d+)?\s*[x×]\s*(?:faster|slower|speedup)?\s*(?:in\s+)?wall[- ]?clock\b|wall[- ]?clock(?:\s+latency)?\s*(?:of\s*)?\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s|x|×)|\b\d+(?:\.\d+)?\s*[x×]\s*(?:faster|slower)\b)").unwrap()
+    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s)\b|\b\d+(?:\.\d+)?\s*[x×]\s*(?:faster|slower|speedup)?\s*(?:in\s+)?wall[- ]?clock\b|wall[- ]?clock(?:\s+latency)?\s*(?:of\s*)?\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s|x|×)|\b\d+(?:\.\d+)?\s*[x×]\s*(?:faster|slower)\b)").expect("valid regex")
 });
 
 static THROUGHPUT_METRIC_PAT: LazyLock<Regex> = LazyLock::new(|| {
@@ -74,19 +74,19 @@ static THROUGHPUT_METRIC_PAT: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static MEMORY_METRIC_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|B/state)\b|\b\d+(?:\.\d+)?\s*[x×]\s*(?:lower|higher|less|more)?\s*(?:RAM|memory|heap|footprint)\b|\b\d+(?:\.\d+)?\s*(?:MB|MiB|GB|GiB|KB|KiB)\s*(?:RAM|heap|memory|live heap)\b)").unwrap()
+    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|B/state)\b|\b\d+(?:\.\d+)?\s*[x×]\s*(?:lower|higher|less|more)?\s*(?:RAM|memory|heap|footprint)\b|\b\d+(?:\.\d+)?\s*(?:MB|MiB|GB|GiB|KB|KiB)\s*(?:RAM|heap|memory|live heap)\b)").expect("valid regex")
 });
 
 static WORKLOAD_TAG_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:[\(\[]|;\s*|\b)workload:\s*`?([a-zA-Z0-9_-]+)`?\b").unwrap()
+    Regex::new(r"(?i)(?:[\(\[]|;\s*|\b)workload:\s*`?([a-zA-Z0-9_-]+)`?\b").expect("valid regex")
 });
 
 static WORKLOAD_DIFF_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:[\(\[]|;\s*|\b)workloads\s+differ:\s*`?([a-zA-Z0-9_-]+)`?\s+vs\s+`?([a-zA-Z0-9_-]+)`?\b").unwrap()
+    Regex::new(r"(?i)(?:[\(\[]|;\s*|\b)workloads\s+differ:\s*`?([a-zA-Z0-9_-]+)`?\s+vs\s+`?([a-zA-Z0-9_-]+)`?\b").expect("valid regex")
 });
 
 static PAIRED_FALLBACK_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(?:different\s+experiment|different\s+workload|not\s+comparable|retracted|superseded|neither\s+half\s+describes|two\s+halves\s+are\s+different|historical\s+record|pre-#\d+|unmeasured|unverified|definitional|no\s+arm\s+on\s+which\s+both\s+were\s+observed|strawman|target|\(target\)|until\s+measured|pending\s+(?:fair-baseline\s+)?re-run)\b").unwrap()
+    Regex::new(r"(?i)\b(?:different\s+experiment|different\s+workload|not\s+comparable|retracted|superseded|neither\s+half\s+describes|two\s+halves\s+are\s+different|historical\s+record|pre-#\d+|unmeasured|unverified|definitional|no\s+arm\s+on\s+which\s+both\s+were\s+observed|strawman|target|\(target\)|until\s+measured|pending\s+(?:fair-baseline\s+)?re-run)\b").expect("valid regex")
 });
 
 #[derive(Debug, Clone, PartialEq, Eq)]
