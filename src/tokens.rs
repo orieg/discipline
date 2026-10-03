@@ -479,10 +479,10 @@ pub const REMOVES: &[&str] = &[
 ];
 pub const ALLOW_ASSERTION_DROP: &[&str] = &[
     "allow-assertion-drop",
-    "allow-case-drop",
     "discipline:allow(assertion-reduction)",
     "allow(assertion-reduction)",
 ];
+pub const ALLOW_CASE_DROP: &[&str] = &["allow-case-drop"];
 pub const ALLOW_IGNORE: &[&str] = &[
     "allow-ignore",
     "discipline:allow(ignored-tests)",
@@ -674,7 +674,8 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
     let lower = name.to_ascii_lowercase();
     match lower.as_str() {
         "removes" | "deletes" => REMOVES,
-        "allow-assertion-drop" | "allow-case-drop" => ALLOW_ASSERTION_DROP,
+        "allow-assertion-drop" => ALLOW_ASSERTION_DROP,
+        "allow-case-drop" => ALLOW_CASE_DROP,
         "allow-ignore" => ALLOW_IGNORE,
         "allow-gate-weakening" => ALLOW_GATE_WEAKENING,
         "allow-golden-update" => ALLOW_GOLDEN_UPDATE,
