@@ -3140,18 +3140,40 @@ test tests::c: test
             let rust_ok = is_runner_collected("tests/integration.rs", &vocab)
                 && is_runner_collected("tests/sub/main.rs", &vocab)
                 && is_runner_collected("src/lib.rs", &vocab)
-                && !is_runner_collected("tests/common/util.rs", &vocab);
+                && is_runner_collected("tests/common/util.rs", &vocab)
+                && !is_runner_collected("other/helper.rs", &vocab);
 
             // Rust cfg evaluation
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_rust::LANGUAGE.into())
+                .unwrap();
             let mut features = HashSet::new();
             features.insert("known_feat".to_string());
-            let known = evaluate_rust_cfg(r#"feature = "known_feat""#, &features);
-            let unknown = evaluate_rust_cfg(r#"feature = "unknown_feat""#, &features);
-            let any_cfg = evaluate_rust_cfg("any()", &features);
 
-            let cfg_ok = matches!(known, Some((false, _)))
-                && matches!(unknown, Some((true, _)))
-                && matches!(any_cfg, Some((true, _)));
+            let t_known = parser.parse("#[cfg(feature = \"known_feat\")]", None).unwrap();
+            let t_unknown = parser.parse("#[cfg(feature = \"unknown_feat\")]", None).unwrap();
+            let t_any = parser.parse("#[cfg(any())]", None).unwrap();
+
+            let (known, _) = evaluate_rust_cfg(
+                t_known.root_node().child(0).unwrap(),
+                b"#[cfg(feature = \"known_feat\")]",
+                Some(&features),
+            );
+            let (unknown, _) = evaluate_rust_cfg(
+                t_unknown.root_node().child(0).unwrap(),
+                b"#[cfg(feature = \"unknown_feat\")]",
+                Some(&features),
+            );
+            let (any_cfg, _) = evaluate_rust_cfg(
+                t_any.root_node().child(0).unwrap(),
+                b"#[cfg(any())]",
+                Some(&features),
+            );
+
+            let cfg_ok = known == crate::ast::runner_collection::CfgValue::Unknown
+                && unknown == crate::ast::runner_collection::CfgValue::False
+                && any_cfg == crate::ast::runner_collection::CfgValue::False;
 
             Ok(py_ok && py_custom_ok && go_ok && rust_ok && cfg_ok)
         },
