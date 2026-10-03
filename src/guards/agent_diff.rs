@@ -732,8 +732,18 @@ pub fn evaluate_assertion_reduction(
         let loosened = crate::ast::bounds::loosened(&b.bounds, &h.bounds);
         // The same assertion expecting a different value: the count and strength hold.
         let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
+        // The same assertion with widened expected exception or dropped matcher.
+        let widened = crate::ast::expected_exceptions::widened(
+            &b.expected_exceptions,
+            &h.expected_exceptions,
+        );
         let dropped = total_drop || strong_drop || fatal_drop || mock_growth;
-        if !dropped && loosened.is_empty() && changed.is_empty() && newly_caught.is_empty() {
+        if !dropped
+            && loosened.is_empty()
+            && changed.is_empty()
+            && newly_caught.is_empty()
+            && widened.is_empty()
+        {
             continue;
         }
 
@@ -753,6 +763,8 @@ pub fn evaluate_assertion_reduction(
             &crate::findings::MOCKING_INCREASED
         } else if !loosened.is_empty() {
             &crate::findings::ASSERTION_BOUND_LOOSENED
+        } else if !widened.is_empty() {
+            &crate::findings::EXPECTED_EXCEPTION_WIDENED
         } else {
             &crate::findings::EXPECTED_VALUE_CHANGED
         };
@@ -844,6 +856,27 @@ pub fn evaluate_assertion_reduction(
                 ),
                 &format!(
                     "Restore the expected value, or justify the new one on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
+            out.anchor_last(h.name.clone());
+        }
+        for w in &widened {
+            out.push(
+                if is_staged {
+                    crate::config::Severity::Warning
+                } else {
+                    settings.severity()
+                },
+                &crate::findings::EXPECTED_EXCEPTION_WIDENED,
+                Some(p.path),
+                Some(w.line),
+                format!(
+                    "{test_label}: the expected failure on line {} was widened ({}); it now accepts more failures.",
+                    w.line, w.detail
+                ),
+                &format!(
+                    "Restore the expected failure or matcher, or justify the change on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
                     directive_name
                 ),
             );
@@ -952,10 +985,12 @@ pub fn evaluate_vacuous_tests(
         let mocks_only = a.test.mock_asserts > 0
             && a.test.mock_asserts >= a.test.effective_asserts()
             && a.test.strong_asserts == 0
-            && !a.test.should_panic;
+            && a.test.should_panic.is_none()
+            && a.test.expected_exceptions.is_empty();
         let trivial_only = a.test.trivial_asserts > 0
             && a.test.trivial_asserts >= a.test.effective_asserts()
-            && !a.test.should_panic;
+            && a.test.should_panic.is_none()
+            && a.test.expected_exceptions.is_empty();
         let below_floor = settings
             .min_assertions_per_test
             .is_some_and(|min| a.test.effective_asserts() < min);
@@ -986,7 +1021,8 @@ pub fn evaluate_vacuous_tests(
         if a.test.mock_asserts > 0
             && a.test.mock_asserts >= a.test.effective_asserts()
             && a.test.strong_asserts == 0
-            && !a.test.should_panic
+            && a.test.should_panic.is_none()
+            && a.test.expected_exceptions.is_empty()
         {
             out.push(
                 crate::config::Severity::Warning,
@@ -1007,7 +1043,8 @@ pub fn evaluate_vacuous_tests(
         // trivial count decides.)
         if a.test.trivial_asserts > 0
             && a.test.trivial_asserts >= a.test.effective_asserts()
-            && !a.test.should_panic
+            && a.test.should_panic.is_none()
+            && a.test.expected_exceptions.is_empty()
         {
             out.push(
                 crate::config::Severity::Warning,
@@ -1557,7 +1594,7 @@ mod tests {
             strong_asserts: 2,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let t2 = TestFn {
@@ -1567,7 +1604,7 @@ mod tests {
             strong_asserts: 0,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let facts = vec![FileFacts {
@@ -1612,7 +1649,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let b2 = TestFn {
@@ -1622,7 +1659,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let h1 = TestFn {
@@ -1632,7 +1669,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let facts = vec![FileFacts {
@@ -1678,7 +1715,7 @@ mod tests {
             strong_asserts: 2,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let h_weak = TestFn {
@@ -1688,7 +1725,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let h_drop = TestFn {
@@ -1698,7 +1735,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let settings = crate::config::AssertionGate::default();
@@ -1759,7 +1796,7 @@ mod tests {
             strong_asserts: 0,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let t_tautology = TestFn {
@@ -1769,7 +1806,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 1,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let t_real = TestFn {
@@ -1779,7 +1816,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
 
@@ -1840,7 +1877,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let h_ignored = TestFn {
@@ -1850,7 +1887,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 0,
             ignored: true,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
 
@@ -1885,7 +1922,7 @@ mod tests {
             tautologies: 0,
             ignored: false,
             conditional_ignore: Some("miri".to_string()),
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let added_miri = [Located {
@@ -2017,7 +2054,7 @@ mod tests {
             strong_asserts: 1,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
         let removed_tests = [Located {

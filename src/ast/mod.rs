@@ -16,6 +16,7 @@ pub mod caught_assertions;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
 pub mod expectations;
+pub mod expected_exceptions;
 pub mod functions;
 #[cfg(feature = "lang-go")]
 pub mod r#go;
@@ -236,7 +237,7 @@ pub struct TestFn {
     pub conditional_ignore: Option<String>,
     /// Fatal assertions that abort execution on failure (e.g. `require.*`, `ASSERT_*`).
     pub fatal_asserts: usize,
-    pub should_panic: bool,
+    pub should_panic: Option<expected_exceptions::ExpectedException>,
     /// Test doubles constructed or programmed in the body (`Mock()`, `jest.fn()`, `when(`).
     pub mock_setups: usize,
     /// Assertions on a double's interactions (`assert_called_with`, `toHaveBeenCalled`).
@@ -260,6 +261,9 @@ pub struct TestFn {
     pub expectations: Vec<expectations::Expectation>,
     /// Assertions whose failure is caught by an enclosing handler in the test without failing it.
     pub caught_assertions: Vec<caught_assertions::CaughtAssertion>,
+    /// Expected exceptions or panics of its assertions and attributes (`super::expected_exceptions`),
+    /// paired by skeleton across a change so an expected exception widened or matcher dropped is seen.
+    pub expected_exceptions: Vec<expected_exceptions::ExpectedException>,
 }
 
 impl TestFn {
@@ -270,7 +274,9 @@ impl TestFn {
     }
 
     pub fn is_vacuous(&self) -> bool {
-        self.effective_asserts() == 0 && !self.should_panic
+        self.effective_asserts() == 0
+            && self.should_panic.is_none()
+            && self.expected_exceptions.is_empty()
     }
 
     /// Whether this test is conditionally skipped under a CI environment check.
@@ -948,7 +954,7 @@ impl Default for ParsedFileFacts {
                 ignored: false,
                 conditional_ignore: None,
                 fatal_asserts: 0,
-                should_panic: false,
+                should_panic: None,
                 mock_setups: 0,
                 mock_asserts: 0,
                 retries: None,
@@ -958,6 +964,7 @@ impl Default for ParsedFileFacts {
                 bounds: Vec::new(),
                 expectations: Vec::new(),
                 caught_assertions: Vec::new(),
+                expected_exceptions: Vec::new(),
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -980,7 +987,7 @@ impl ParsedFileFacts {
             ignored: false,
             conditional_ignore: None,
             fatal_asserts: 0,
-            should_panic: false,
+            should_panic: None,
             mock_setups: 0,
             mock_asserts: 0,
             retries: None,
@@ -990,6 +997,7 @@ impl ParsedFileFacts {
             bounds: Vec::new(),
             expectations: Vec::new(),
             caught_assertions: Vec::new(),
+            expected_exceptions: Vec::new(),
         });
     }
 }
@@ -1130,7 +1138,7 @@ mod tests {
                     strong_asserts: 1,
                     tautologies: 0,
                     ignored: false,
-                    should_panic: false,
+                    should_panic: None,
                     mock_setups: 0,
                     mock_asserts: 0,
                     retries: None,

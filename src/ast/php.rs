@@ -465,7 +465,7 @@ impl<'a> PhpExtractor<'a> {
             strong_asserts: 0,
             tautologies: 0,
             ignored: class_ignored || is_ignored,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
 
@@ -505,7 +505,7 @@ impl<'a> PhpExtractor<'a> {
             strong_asserts: 0,
             tautologies: 0,
             ignored: is_ignored,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
 
@@ -553,7 +553,7 @@ impl<'a> PhpExtractor<'a> {
             strong_asserts: 0,
             tautologies: 0,
             ignored: false,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
 
@@ -660,7 +660,15 @@ impl<'a> PhpExtractor<'a> {
         {
             test_fn.total_asserts += 1;
             test_fn.strong_asserts += 1;
-            test_fn.should_panic = true;
+            let exp = super::expected_exceptions::ExpectedException {
+                line: node.start_position().row + 1,
+                skeleton: format!("$this->{}#", call_name),
+                kind: call_name.to_string(),
+                exception_type: None,
+                matcher: None,
+            };
+            test_fn.should_panic = Some(exp.clone());
+            test_fn.expected_exceptions.push(exp);
             return;
         }
 

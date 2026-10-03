@@ -105,6 +105,7 @@ impl LanguagePack for CSharpPack {
             super::calls::trivial_asserts,
         );
         super::caught_assertions::csharp(root, src, &mut extractor.facts.tests);
+        super::expected_exceptions::csharp(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -399,7 +400,7 @@ impl<'a> CSharpExtractor<'a> {
             strong_asserts: 0,
             tautologies: 0,
             ignored: is_ignored,
-            should_panic: false,
+            should_panic: None,
             ..Default::default()
         };
 

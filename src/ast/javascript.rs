@@ -117,6 +117,7 @@ impl LanguagePack for JavaScriptPack {
         super::bounds::javascript(root, src, &mut extractor.facts.tests);
         super::expectations::javascript(root, src, &mut extractor.facts.tests);
         super::caught_assertions::javascript(root, src, &mut extractor.facts.tests);
+        super::expected_exceptions::javascript(root, src, &mut extractor.facts.tests);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "template_string"]);
         extractor.facts.budgets = super::budgets::extract(root, src, &JS_BUDGETS);
@@ -343,7 +344,7 @@ impl<'a> JsExtractor<'a> {
                         strong_asserts: 0,
                         tautologies: 0,
                         ignored: parent_ignored || is_ignored || is_todo,
-                        should_panic: false,
+                        should_panic: None,
                         ..Default::default()
                     };
 

@@ -121,6 +121,7 @@ impl LanguagePack for RustPack {
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
         super::caught_assertions::rust(root, src, &mut cx.facts.tests);
+        super::expected_exceptions::rust(root, src, &mut cx.facts.tests);
         cx.facts.prose = super::prose::extract(
             root,
             src,
@@ -408,7 +409,7 @@ impl<'a> Extractor<'a> {
             .is_some_and(|name| self.vocab.test_functions.iter().any(|f| f == name));
         let mut ignored = false;
         let mut conditional_ignore = None;
-        let mut should_panic = false;
+        let mut should_panic = None;
         let mut has_commented_out_test = false;
         let mut prev = node.prev_sibling();
         while let Some(p) = prev {
@@ -416,10 +417,16 @@ impl<'a> Extractor<'a> {
                 "attribute_item" => {
                     let text = self.text(p);
                     let name = attribute_name(text);
+                    let attr_line = p.start_position().row + 1;
                     let mut check_attr = |n: &str| match n {
                         "test" | "rstest" | "test_case" | "quickcheck" => is_test = true,
                         "ignore" => ignored = true,
-                        "should_panic" => should_panic = true,
+                        "should_panic" => {
+                            should_panic =
+                                Some(super::expected_exceptions::parse_rust_should_panic(
+                                    text, attr_line,
+                                ));
+                        }
                         _ => {}
                     };
                     check_attr(&name);
@@ -440,7 +447,10 @@ impl<'a> Extractor<'a> {
                                         conditional_ignore = Some(cond.clone());
                                     }
                                 } else if sub_name == "should_panic" {
-                                    should_panic = true;
+                                    should_panic =
+                                        Some(super::expected_exceptions::parse_rust_should_panic(
+                                            &sub, attr_line,
+                                        ));
                                 }
                             }
                         }
@@ -486,7 +496,7 @@ impl<'a> Extractor<'a> {
             ignored,
             conditional_ignore,
             fatal_asserts: 0,
-            should_panic,
+            should_panic: should_panic.clone(),
             mock_setups: 0,
             mock_asserts: 0,
             retries: None,
@@ -496,6 +506,7 @@ impl<'a> Extractor<'a> {
             bounds: Vec::new(),
             expectations: Vec::new(),
             caught_assertions: Vec::new(),
+            expected_exceptions: should_panic.into_iter().collect(),
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")
