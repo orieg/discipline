@@ -775,7 +775,7 @@ mod tests {
         let n = (10..=24)
             .find(|&n| {
                 let input = format!("{}c", "a".repeat(n));
-                let default = fancy_regex::Regex::new(r"(?i)(a*)*\1b").unwrap();
+                let default = fancy_regex::Regex::new(r"(?i)(a*)*\1b").expect("valid regex");
                 default.find(&input).is_ok() && scan_superseded(&lines(&input), &reg).is_err()
             })
             .expect("an input whose search needs more than BACKTRACK_LIMIT steps");

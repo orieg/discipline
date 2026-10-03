@@ -170,8 +170,8 @@ impl MarkdownTableTracker {
             return false;
         }
         let hit = &line[hit_start..hit_end];
-        let cal_re =
-            Regex::new(r"(?i)\b(?:weeks?|wks?|months?|sprints?|quarters?|years?|days?)\b").unwrap();
+        let cal_re = Regex::new(r"(?i)\b(?:weeks?|wks?|months?|sprints?|quarters?|years?|days?)\b")
+            .expect("valid regex");
         if cal_re.is_match(hit) {
             return false;
         }
@@ -281,7 +281,7 @@ pub(crate) fn has_plan_vocabulary(text: &str) -> bool {
     let plan_re = Regex::new(
         r"(?i)\b(?:ship(?:s|ped|ping)?|deliver(?:s|ed|y|ing|ables?)?|land(?:s|ed|ing)?|rollout|eta|estimate(?:s|d|ing)?|effort|deadline(?:s)?|due|will|should|expect(?:s|ed|ing)?|plan(?:s|ned|ning)?|phase(?:s)?|milestone(?:s)?|sprint(?:s)?|scop(?:e|es|ed|ing)|capacity|roadmap|target(?:s)?|rewrite|\d+\s+[a-z]+\s+of\s+work|capacity\s+work|work\s+limit|working\s+for|working\s+on)\b",
     )
-    .unwrap();
+    .expect("valid regex");
     plan_re.is_match(text)
 }
 
@@ -289,14 +289,14 @@ fn is_exempt_question(clause: &str, line: &str) -> bool {
     let target_re = Regex::new(
         r"(?i)\b(?:target|due|done|roadmap|release|launch|schedule|timeline|deliver|ship|plan)\b",
     )
-    .unwrap();
+    .expect("valid regex");
     if target_re.is_match(clause) || target_re.is_match(line) {
         return false;
     }
     let q_re = Regex::new(
-        r"(?i)(?:\b(?:question|ask|answering|quoting|faq)\b|Q[1-4]\s*[-—–:)?.]|\(Q[1-4]\)|Q[1-4]['’]s|\*\*Q[1-4]|\[Q[1-4]\]|###?\s*Q[1-4])",
+        r"(?i)(?:\b(?:question|ask|answering|quoting|faq)\b|Q[1-4]\s*[-—–:)?.]|\(Q[1-4]\)|Q[1-4]['']s|\*\*Q[1-4]|\[Q[1-4]\]|###?\s*Q[1-4])",
     )
-    .unwrap();
+    .expect("valid regex");
     q_re.is_match(clause) || q_re.is_match(line)
 }
 
@@ -308,7 +308,7 @@ fn has_exemption_cue(clause: &str, line: &str, _matched: &str) -> bool {
     let setting_re = Regex::new(
         r"(?i)\b(?:timeout(?:-minutes)?\s*[:=]\s*\d+|\d+[- ](?:second|sec|minute|min|hour|hr)[- ]timeout|capped\s+at\s+\d+|\d+[- ](?:minute|min|hour|hr|sec)[- ]cap|cap\s+of\s+\d+|limit\s+is\s+\d+|\d+[- ](?:minute|min|hour|hr|sec)[- ]limit|rate\s+limit\s+is\s+\d+|budget\s+of\s+\d+|\d+[- ](?:minute|min|hour|hr|sec)[- ]budget|retention\s+(?:is|of)\s+\d+|\d+[- ](?:day|hour|month)[- ]retention|ttl\s+(?:is\s+set\s+to|is|set\s+to)\s+\d+|\d+[- ](?:hour|day|min)[- ]ttl|interval\s+is\s+(?:every\s+)?\d+|\d+[- ](?:minute|hour|day)[- ](?:run|test|burn-in)|\d+[- ](?:hour|minute|day)[- ]default|default\s+(?:is|of)\s+\d+|gap\s+between\s+runs|retention|retained|expires?|expired|cache(?:d)?|ttl|soak|uptime|window|timeout|sleep|24-hour)\b",
     )
-    .unwrap();
+    .expect("valid regex");
     if setting_re.is_match(clause) {
         return true;
     }
@@ -317,7 +317,7 @@ fn has_exemption_cue(clause: &str, line: &str, _matched: &str) -> bool {
     let freq_re = Regex::new(&format!(
         r"(?i)\b(?:every\s+{COUNT}\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)|once\s+a\s+(?:day|week|month|year)|twice\s+a\s+(?:day|week|month|year)|triggers\s+every\s+\d+|per\s+(?:day|week|month|year)|within\s+{COUNT}\s+(?:seconds?|secs?|minutes?|mins?))\b",
     ))
-    .unwrap();
+    .expect("valid regex");
     if freq_re.is_match(clause) {
         return true;
     }
@@ -326,7 +326,7 @@ fn has_exemption_cue(clause: &str, line: &str, _matched: &str) -> bool {
     let meas_re = Regex::new(
         r"(?i)\b(?:took\s+\d+|ran\s+for\s+(?:over\s+)?(?:\d+|two)\s+|elapsed[:\s]+\d+|finished\s+in\s+\d+|measured\s+elapsed\s+time[:\s]+\d+|execution\s+took\s+\d+|mean\s+runtime\s+of\s+\d+|runtime\s+(?:was|of)\s+\d+|wall[- ]clock\s+time\s+was\s+\d+|wall\s+time\s+on\s+the\s+same\s+core|nightly\s+run\s+took\s+\d+|nightly|p\d{2,3}\s+latency|load1|loadavg|load\s+average|1-min\s+(?:load\s+)?average|one-minute\s+(?:load\s+)?average|\d+[- ](?:min|minute|sec|hour)\s+\d+(?:\.\d+)?)\b",
     )
-    .unwrap();
+    .expect("valid regex");
     if meas_re.is_match(clause) {
         return true;
     }
@@ -335,7 +335,7 @@ fn has_exemption_cue(clause: &str, line: &str, _matched: &str) -> bool {
     let hist_re = Regex::new(&format!(
         r"(?i)\b(?:{COUNT}[- ](?:years?|months?|days?|hours?|mins?)[- ]old|(?:a|an)\s+(?:years?|months?|days?)[- ]old|{COUNT}\s+(?:years?|months?|days?|weeks?|months?)\s+ago|a\s+day\s+ago|shipped\s+a\s+day|for\s+(?:the\s+past|the\s+last|about|over|~)?\s*\d+\s*(?:years?|months?)|stable\s+for\s+\d+|compatibility\s+for\s+(?:over\s+)?\d+|history\s+spans\s+\d+|survived\s+\d+\s+years|undetected\s+for\s+[~]?\d+\s+years|invariants?|unchecked\s+for\s+\d+|written\s+\d+\s+years\s+ago|issue\s+was\s+resolved|production\s+history\s+spans|commit\s+ordering|(?:minutes?|hours?|days?|weeks?)\s+later|(?:minutes?|hours?|days?|weeks?)\s+earlier|\d+[- ]?(?:minutes?|hours?|days?|weeks?|months?)[- ]gap\s+between|gap\s+of\s+\d+\s+(?:minutes?|hours?|days?|weeks?|months?)|\d+\s+(?:minutes?|hours?|days?|weeks?|months?)\s+between\s+(?:the|two|each|its))\b",
     ))
-    .unwrap();
+    .expect("valid regex");
     if hist_re.is_match(clause)
         || (hist_re.is_match(line) && line.to_lowercase().contains("commit ordering"))
     {
@@ -345,7 +345,7 @@ fn has_exemption_cue(clause: &str, line: &str, _matched: &str) -> bool {
     // 5. Operational wrap windows / bitfield / epoch
     let wrap_re =
         Regex::new(r"(?i)\b(?:active\s+window|wrap\s+window|wrap\s+duration|bitfield|epoch)\b")
-            .unwrap();
+            .expect("valid regex");
     if wrap_re.is_match(clause) || wrap_re.is_match(line) {
         return true;
     }
@@ -354,7 +354,7 @@ fn has_exemption_cue(clause: &str, line: &str, _matched: &str) -> bool {
     let media_re = Regex::new(
         r"(?i)\b\d+[- ](?:minute|min|hour|hr)[- ](?:read|overview|talk|presentation|paper|video|podcast|description)\b",
     )
-    .unwrap();
+    .expect("valid regex");
     if media_re.is_match(clause) {
         return true;
     }
@@ -370,14 +370,14 @@ fn is_observed_duration(clause: &str) -> bool {
     let estimate_form = Regex::new(&format!(
         r"(?i)\b(?:in|within|takes?|taking)\s+{COUNT}\s*-?\s*(?:hours?|hrs?|days?|weeks?|wks?|months?|quarters?|sprints?|years?)\b"
     ))
-    .unwrap();
+    .expect("valid regex");
     if estimate_form.is_match(clause) {
         return false;
     }
     let observed = Regex::new(&format!(
         r"(?i)\b(?:(?:has|have|had)\s+been|(?:was|were)\s+\w+ed|on\s+record\s+for|{COUNT}\s+(?:minutes?|hours?|days?|weeks?|months?)\s+(?:with\s+no|without))\b"
     ))
-    .unwrap();
+    .expect("valid regex");
     observed.is_match(clause)
 }
 
@@ -387,7 +387,8 @@ fn is_observed_duration(clause: &str) -> bool {
 /// `before` is the text before the match, including the previous line of the
 /// paragraph; `after` is the rest of the line.
 pub(crate) fn is_period_reference(before: &str, matched: &str, after: &str) -> bool {
-    let lookback = Regex::new(r"(?i)\b(?:past|last|previous|prior|recent)\s*$").unwrap();
+    let lookback =
+        Regex::new(r"(?i)\b(?:past|last|previous|prior|recent)\s*$").expect("valid regex");
     if lookback.is_match(before.trim_end_matches('~')) {
         return true;
     }
@@ -400,7 +401,7 @@ pub(crate) fn is_period_reference(before: &str, matched: &str, after: &str) -> b
     let quarter_noun = Regex::new(
         r"(?i)^\s+(?:invoices?|reports?|earnings|results|revenue|sales|numbers|figures|filings?|statements?|close|financials)\b",
     )
-    .unwrap();
+    .expect("valid regex");
     matches!(matched, "Q1" | "Q2" | "Q3" | "Q4") && quarter_noun.is_match(after)
 }
 
@@ -439,7 +440,7 @@ pub(crate) fn is_time_estimate_violation(
     if is_a_an {
         let in_re =
             Regex::new(r"(?i)\b(?:in|takes?|taking|about|approx(?:\.|imately)?|~)\s+(?:a|an)\b")
-                .unwrap();
+                .expect("valid regex");
         return in_re.is_match(clause) || in_re.is_match(line);
     }
     true

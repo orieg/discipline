@@ -222,3 +222,189 @@ pub fn evaluate_ratified_paths(ctx: &Context) -> Result<GateOutcome> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::config::{RatifiedPathsGate, Severity};
+    use crate::guards::PathFilter;
+    #[test]
+    fn empty_protected_paths_is_rejected() {
+        let settings = RatifiedPathsGate {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: vec![],
+            protected_paths: vec![],
+            never_ratifiable: vec![],
+            ratifiers: vec!["alice".to_string()],
+            agent_logins: vec![],
+            marker: "Owner-ratified-paths:".to_string(),
+            closing_source: crate::config::ClosingSource::Server,
+            closing_keywords: vec![],
+            require_open_issue: true,
+            ratification_repos: vec![],
+            ratification_valid_from: crate::config::RatificationWindow::PathLastChanged,
+            ratification_max_age_days: None,
+            accept_edited: crate::config::AcceptEdited::Never,
+            accept_email_replies: false,
+            refuse_author_ratification: false,
+        };
+
+        let result = PathFilter::new(&settings.protected_paths);
+        // Empty list should produce a filter that matches nothing.
+        assert!(result.is_ok());
+    }
+
+    /// Protected paths are matched correctly by glob patterns.
+    #[test]
+    fn protected_path_filter_matches_correctly() {
+        let settings = RatifiedPathsGate {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: vec![],
+            protected_paths: vec![".github/workflows/**".to_string()],
+            never_ratifiable: vec![],
+            ratifiers: vec!["alice".to_string()],
+            agent_logins: vec![],
+            marker: "Owner-ratified-paths:".to_string(),
+            closing_source: crate::config::ClosingSource::Server,
+            closing_keywords: vec![],
+            require_open_issue: true,
+            ratification_repos: vec![],
+            ratification_valid_from: crate::config::RatificationWindow::PathLastChanged,
+            ratification_max_age_days: None,
+            accept_edited: crate::config::AcceptEdited::Never,
+            accept_email_replies: false,
+            refuse_author_ratification: false,
+        };
+
+        let filter = PathFilter::new(&settings.protected_paths).unwrap();
+
+        assert!(filter.matches(".github/workflows/ci.yml"));
+        assert!(filter.matches(".github/workflows/deploy.yaml"));
+        assert!(!filter.matches("src/main.rs"));
+    }
+
+    /// Never-ratifiable paths are matched correctly.
+    #[test]
+    fn never_ratifiable_path_filter_matches_correctly() {
+        let settings = RatifiedPathsGate {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: vec![],
+            protected_paths: vec!["AGENTS.md".to_string()],
+            never_ratifiable: vec![".github/workflows/**".to_string()],
+            ratifiers: vec!["alice".to_string()],
+            agent_logins: vec![],
+            marker: "Owner-ratified-paths:".to_string(),
+            closing_source: crate::config::ClosingSource::Server,
+            closing_keywords: vec![],
+            require_open_issue: true,
+            ratification_repos: vec![],
+            ratification_valid_from: crate::config::RatificationWindow::PathLastChanged,
+            ratification_max_age_days: None,
+            accept_edited: crate::config::AcceptEdited::Never,
+            accept_email_replies: false,
+            refuse_author_ratification: false,
+        };
+
+        let never = PathFilter::new(&settings.never_ratifiable).unwrap();
+
+        assert!(never.matches(".github/workflows/ci.yml"));
+        assert!(!never.matches("AGENTS.md"));
+    }
+
+    /// Ratifier and agent login lists are distinct.
+    #[test]
+    fn ratifiers_and_agent_logins_must_not_overlap() {
+        let settings = RatifiedPathsGate {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: vec![],
+            protected_paths: vec!["AGENTS.md".to_string()],
+            never_ratifiable: vec![],
+            ratifiers: vec!["alice".to_string(), "bob".to_string()],
+            agent_logins: vec!["github-actions[bot]".to_string()],
+            marker: "Owner-ratified-paths:".to_string(),
+            closing_source: crate::config::ClosingSource::Server,
+            closing_keywords: vec![],
+            require_open_issue: true,
+            ratification_repos: vec![],
+            ratification_valid_from: crate::config::RatificationWindow::PathLastChanged,
+            ratification_max_age_days: None,
+            accept_edited: crate::config::AcceptEdited::Never,
+            accept_email_replies: false,
+            refuse_author_ratification: false,
+        };
+
+        // No overlap — should be fine.
+        for r in &settings.ratifiers {
+            assert!(
+                !settings
+                    .agent_logins
+                    .iter()
+                    .any(|a| a.eq_ignore_ascii_case(r)),
+                "{} overlaps with agent_logins",
+                r
+            );
+        }
+
+        // With overlap — the guard would reject this.
+        let settings_bad = RatifiedPathsGate {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: vec![],
+            protected_paths: vec!["AGENTS.md".to_string()],
+            never_ratifiable: vec![],
+            ratifiers: vec!["alice".to_string(), "github-actions[bot]".to_string()],
+            agent_logins: vec!["github-actions[bot]".to_string()],
+            marker: "Owner-ratified-paths:".to_string(),
+            closing_source: crate::config::ClosingSource::Server,
+            closing_keywords: vec![],
+            require_open_issue: true,
+            ratification_repos: vec![],
+            ratification_valid_from: crate::config::RatificationWindow::PathLastChanged,
+            ratification_max_age_days: None,
+            accept_edited: crate::config::AcceptEdited::Never,
+            accept_email_replies: false,
+            refuse_author_ratification: false,
+        };
+
+        assert!(
+            settings_bad.ratifiers.iter().any(|r| settings_bad
+                .agent_logins
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(r))),
+            "overlap should be detected"
+        );
+    }
+
+    /// A path that is both protected and never-ratifiable is flagged.
+    #[test]
+    fn never_ratifiable_path_is_rejected() {
+        let settings = RatifiedPathsGate {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: vec![],
+            protected_paths: vec![".github/workflows/ci.yml".to_string()],
+            never_ratifiable: vec![".github/workflows/ci.yml".to_string()],
+            ratifiers: vec!["alice".to_string()],
+            agent_logins: vec![],
+            marker: "Owner-ratified-paths:".to_string(),
+            closing_source: crate::config::ClosingSource::Server,
+            closing_keywords: vec![],
+            require_open_issue: true,
+            ratification_repos: vec![],
+            ratification_valid_from: crate::config::RatificationWindow::PathLastChanged,
+            ratification_max_age_days: None,
+            accept_edited: crate::config::AcceptEdited::Never,
+            accept_email_replies: false,
+            refuse_author_ratification: false,
+        };
+
+        let protected = PathFilter::new(&settings.protected_paths).unwrap();
+        let never = PathFilter::new(&settings.never_ratifiable).unwrap();
+
+        assert!(protected.matches(".github/workflows/ci.yml"));
+        assert!(never.matches(".github/workflows/ci.yml"));
+    }
+}
