@@ -1152,6 +1152,22 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                 _ => {}
             }
         }
+        // A key only on head: unset `ci_skip_severity` means the gate's `severity`. No other
+        // optional gate key can loosen by being added (an added cap only tightens).
+        for (key, hv) in h {
+            if b.contains_key(key) {
+                continue;
+            }
+            if gate == "ignored-tests" && key == "ci_skip_severity" {
+                if let (Some(Value::String(bs)), Value::String(hs)) = (b.get("severity"), hv) {
+                    if (bs == "error" && (hs == "warning" || hs == "note"))
+                        || (bs == "warning" && hs == "note")
+                    {
+                        note(w(key, Change::Lowered).values(bs, hs));
+                    }
+                }
+            }
+        }
     }
     Ok(found)
 }
@@ -1971,5 +1987,49 @@ mod tests {
             cfg("[gates.dependency-delta]\nallow_dependencies = [\"serde\", \"left-pad\"]\n");
         assert!(diff_configs(&none, &adopted).unwrap().is_empty());
         assert_eq!(diff_configs(&adopted, &grown).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ci_skip_severity_added_on_head_is_detected_as_weakening() {
+        // a. base "" , head "[gates.ignored-tests]\nci_skip_severity = \"note\"" -> 1 weakening naming ci_skip_severity
+        let found_a = diff_configs(
+            &cfg(""),
+            &cfg("[gates.ignored-tests]\nci_skip_severity = \"note\"\n"),
+        )
+        .unwrap();
+        assert_eq!(found_a.len(), 1);
+        assert_eq!(found_a[0].gate, "ignored-tests");
+        assert_eq!(found_a[0].key(), "ci_skip_severity");
+        assert_eq!(found_a[0].change, Change::Lowered);
+        assert_eq!(found_a[0].before.as_deref(), Some("error"));
+        assert_eq!(found_a[0].after.as_deref(), Some("note"));
+
+        // b. base ci_skip_severity="error", head "note" -> 1
+        let found_b = diff_configs(
+            &cfg("[gates.ignored-tests]\nci_skip_severity = \"error\"\n"),
+            &cfg("[gates.ignored-tests]\nci_skip_severity = \"note\"\n"),
+        )
+        .unwrap();
+        assert_eq!(found_b.len(), 1);
+        assert_eq!(found_b[0].gate, "ignored-tests");
+        assert_eq!(found_b[0].key(), "ci_skip_severity");
+
+        // c. control: base "", head severity="note" -> 1
+        let found_c = diff_configs(
+            &cfg(""),
+            &cfg("[gates.ignored-tests]\nseverity = \"note\"\n"),
+        )
+        .unwrap();
+        assert_eq!(found_c.len(), 1);
+        assert_eq!(found_c[0].gate, "ignored-tests");
+        assert_eq!(found_c[0].key(), "severity");
+
+        // d. base severity="warning", head severity="warning" + ci_skip_severity="error" -> 0
+        let found_d = diff_configs(
+            &cfg("[gates.ignored-tests]\nseverity = \"warning\"\n"),
+            &cfg("[gates.ignored-tests]\nseverity = \"warning\"\nci_skip_severity = \"error\"\n"),
+        )
+        .unwrap();
+        assert!(found_d.is_empty(), "expected 0 weakenings, got {found_d:?}");
     }
 }
