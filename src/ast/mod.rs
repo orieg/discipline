@@ -938,6 +938,8 @@ pub struct ParsedFileFacts {
     pub first_parse_error_line: Option<usize>,
     /// Number of skipped ERROR/MISSING regions in the AST.
     pub skipped_error_nodes_count: usize,
+    /// Notes recorded during parsing (e.g. unanalysed macro token trees).
+    pub notes: Vec<String>,
 }
 
 impl Default for ParsedFileFacts {
@@ -950,6 +952,7 @@ impl Default for ParsedFileFacts {
             swallowed: Vec::new(),
             prose: Vec::new(),
             budgets: Vec::new(),
+            notes: Vec::new(),
             compile_time_asserts: 0,
             compile_time_assert_line: None,
             compile_time_test: Some(TestFn {
