@@ -1534,3 +1534,79 @@ fn doctor_reports_test_report_finding_for_runtime_identity_ratcheting() {
         .unwrap()
         .contains("target/nextest/ci/junit.xml"));
 }
+
+#[test]
+fn doctor_reports_mutation_preset_finding() {
+    let repo = Repo::new();
+    repo.commit_base(".github/workflows/ci.yml", WORKFLOW, "base");
+    repo.write("Cargo.toml", "[package]\nname = \"r\"\n");
+    repo.commit("feat: rust package");
+
+    // Case 1: runner detected, no mutation preset in config -> Status: Info
+    let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let f = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "mutation-testing")
+        .expect("must emit mutation-testing finding");
+    assert_eq!(f["status"], "info", "{f}");
+    let summary = f["summary"].as_str().unwrap();
+    assert!(summary.contains("recognized test runner"));
+    assert!(summary.contains("special-cased test inputs"));
+    assert!(f["remediation"].as_str().unwrap().contains("cargo-mutants"));
+
+    // Case 2: command.commands preset configured -> Status: Pass
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"r\"\n\n[[gates.command.commands]]\nname = \"mutation\"\npreset = \"cargo-mutants\"\n",
+    );
+    repo.commit("ci: configure mutation preset");
+    let run2 = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(run2.code, 0, "{}", run2.stdout);
+    let v2: serde_json::Value = serde_json::from_str(&run2.stdout).unwrap();
+    let f2 = v2["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "mutation-testing")
+        .expect("must emit mutation-testing finding");
+    assert_eq!(f2["status"], "pass", "{f2}");
+    assert!(f2["summary"].as_str().unwrap().contains("cargo-mutants"));
+
+    // Case 3: command.preset configured directly -> Status: Pass
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"r\"\n\n[gates.command]\npreset = \"cargo-mutants\"\n",
+    );
+    repo.commit("ci: configure command.preset");
+    let run3 = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(run3.code, 0, "{}", run3.stdout);
+    let v3: serde_json::Value = serde_json::from_str(&run3.stdout).unwrap();
+    let f3 = v3["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "mutation-testing")
+        .expect("must emit mutation-testing finding");
+    assert_eq!(f3["status"], "pass", "{f3}");
+
+    // Case 4: Go runner detected with no mutation preset available -> no mutation-testing finding
+    let go_repo = Repo::new();
+    go_repo.commit_base(".github/workflows/ci.yml", WORKFLOW, "base");
+    go_repo.write("go.mod", "module demo\n");
+    go_repo.commit("feat: go module");
+    let run_go = go_repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(run_go.code, 0, "{}", run_go.stdout);
+    let v_go: serde_json::Value = serde_json::from_str(&run_go.stdout).unwrap();
+    assert!(
+        v_go["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["id"] != "mutation-testing"),
+        "Go runner without mutation preset must not emit mutation-testing finding"
+    );
+}

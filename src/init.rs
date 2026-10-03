@@ -64,6 +64,25 @@ impl TestRunner {
         )
     }
 
+    pub fn mutation_preset(self) -> Option<&'static str> {
+        match self {
+            TestRunner::CargoNextest | TestRunner::Cargo => Some("cargo-mutants"),
+            TestRunner::Pytest => Some("mutmut"),
+            TestRunner::Vitest | TestRunner::Jest => Some("stryker"),
+            TestRunner::Maven | TestRunner::Gradle => Some("pit"),
+            TestRunner::Go => None,
+        }
+    }
+
+    pub fn mutation_snippet(self) -> Option<String> {
+        self.mutation_preset().map(|preset| {
+            format!(
+                "# Diff-scoped mutation testing (guards against special-cased test inputs):\n# [[gates.command.commands]]\n# name = \"mutation\"\n# preset = \"{}\"",
+                preset
+            )
+        })
+    }
+
     /// Detect test runner present in the directory `root`.
     pub fn detect(root: &Path) -> Option<Self> {
         // Rust
@@ -151,6 +170,10 @@ impl TestRunner {
 pub fn generate_starter(project_name: &str, root: &Path) -> String {
     let runner = TestRunner::detect(root).unwrap_or(TestRunner::CargoNextest);
     let test_floor_snippet = runner.config_snippet();
+    let mutation_part = match runner.mutation_snippet() {
+        Some(s) => format!("\n{s}\n"),
+        None => String::new(),
+    };
 
     format!(
         r#"# discipline.toml — configuration for Discipline CI gatekeeper.
@@ -175,7 +198,7 @@ name = "{project_name}"
 # exempt_paths = ["tests/legacy/**"]
 
 {test_floor_snippet}
-
+{mutation_part}
 # [gates.pii]
 # allowed_users = ["runner", "user", "username"]
 # hostname_denylist = ["internal.corp"]

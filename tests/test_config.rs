@@ -328,6 +328,7 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
     let starter_rust = generate_starter("demo-rust", rust_dir.path());
     assert!(starter_rust.contains("cargo nextest run --profile ci"));
     assert!(starter_rust.contains("target/nextest/ci/junit.xml"));
+    assert!(starter_rust.contains("preset = \"cargo-mutants\""));
     let cfg = DisciplineConfig::from_toml_str(&starter_rust).unwrap();
     assert_eq!(cfg.meta.name, "demo-rust");
 
@@ -339,16 +340,18 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
     let starter_py = generate_starter("demo-py", py_dir.path());
     assert!(starter_py.contains("pytest --junitxml=reports/junit.xml"));
     assert!(starter_py.contains("reports/junit.xml"));
+    assert!(starter_py.contains("preset = \"mutmut\""));
     let cfg_py = DisciplineConfig::from_toml_str(&starter_py).unwrap();
     assert_eq!(cfg_py.meta.name, "demo-py");
 
-    // 3. Go runner detection and snippet
+    // 3. Go runner detection and snippet (no diff-scoped mutation preset)
     let go_dir = tempfile::tempdir().unwrap();
     std::fs::write(go_dir.path().join("go.mod"), "module demo\n").unwrap();
     let runner = TestRunner::detect(go_dir.path()).unwrap();
     assert_eq!(runner, TestRunner::Go);
     let starter_go = generate_starter("demo-go", go_dir.path());
     assert!(starter_go.contains("gotestsum --junitfile reports/junit.xml"));
+    assert!(!starter_go.contains("preset ="));
 
     // 4. JS/TS Vitest and Jest runner detection
     let vitest_dir = tempfile::tempdir().unwrap();
@@ -361,6 +364,7 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
     assert_eq!(runner, TestRunner::Vitest);
     let starter_vitest = generate_starter("demo-vitest", vitest_dir.path());
     assert!(starter_vitest.contains("vitest run --reporter=junit"));
+    assert!(starter_vitest.contains("preset = \"stryker\""));
 
     let jest_dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -372,6 +376,7 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
     assert_eq!(runner, TestRunner::Jest);
     let starter_jest = generate_starter("demo-jest", jest_dir.path());
     assert!(starter_jest.contains("npm test -- --reporters=jest-junit"));
+    assert!(starter_jest.contains("preset = \"stryker\""));
 
     // 5. Maven and Gradle runner detection
     let mvn_dir = tempfile::tempdir().unwrap();
@@ -380,6 +385,8 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
         TestRunner::detect(mvn_dir.path()).unwrap(),
         TestRunner::Maven
     );
+    let starter_mvn = generate_starter("demo-mvn", mvn_dir.path());
+    assert!(starter_mvn.contains("preset = \"pit\""));
 
     let gradle_dir = tempfile::tempdir().unwrap();
     std::fs::write(gradle_dir.path().join("build.gradle"), "// gradle\n").unwrap();
@@ -387,6 +394,8 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
         TestRunner::detect(gradle_dir.path()).unwrap(),
         TestRunner::Gradle
     );
+    let starter_gradle = generate_starter("demo-gradle", gradle_dir.path());
+    assert!(starter_gradle.contains("preset = \"pit\""));
 
     // 6. Uncommenting the test-floor block produces a valid test_command and test_report in config
     let uncommented = starter_py
@@ -400,6 +409,19 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
         Some("pytest --junitxml=reports/junit.xml")
     );
     assert_eq!(tf.test_report.as_deref(), Some("reports/junit.xml"));
+
+    // 7. Uncommenting the mutation preset block produces valid [[gates.command.commands]]
+    let uncommented_mut = starter_rust
+        .replace("# [[gates.command.commands]]", "[[gates.command.commands]]")
+        .replace("# name = \"mutation\"", "name = \"mutation\"")
+        .replace("# preset = \"cargo-mutants\"", "preset = \"cargo-mutants\"");
+    let cfg_mut = DisciplineConfig::from_toml_str(&uncommented_mut).unwrap();
+    assert_eq!(cfg_mut.gates.command.commands.len(), 1);
+    assert_eq!(cfg_mut.gates.command.commands[0].name, "mutation");
+    assert_eq!(
+        cfg_mut.gates.command.commands[0].preset.as_deref(),
+        Some("cargo-mutants")
+    );
 }
 
 #[test]
