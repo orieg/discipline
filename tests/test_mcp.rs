@@ -196,3 +196,88 @@ fn check_diff_ignores_an_agent_chosen_base_and_the_changes_own_config() {
         replies[0]
     );
 }
+
+fn session_at(dir: &std::path::Path, messages: &[Value]) -> Vec<Value> {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
+    cmd.arg("mcp")
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("DISCIPLINE_NO_NETWORK", "1");
+    for var in common::ISOLATED_ENV_VARS
+        .iter()
+        .chain(common::GIT_REPOSITORY_ENV_VARS)
+    {
+        cmd.env_remove(var);
+    }
+    for (k, _) in std::env::vars() {
+        if k.starts_with("DISCIPLINE_") && k != "DISCIPLINE_NO_NETWORK" {
+            cmd.env_remove(k);
+        }
+    }
+    let mut child = cmd.spawn().unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        for m in messages {
+            writeln!(stdin, "{m}").unwrap();
+        }
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+/// #476: on a shallow clone with committed changes where origin/main does not exist,
+/// check_diff answers could_not_check with isError: true, never status: "pass".
+#[test]
+fn check_diff_on_shallow_clone_refuses_when_base_cannot_measure_change() {
+    let repo = Repo::new();
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn adds() {\n    let x = 1;\n    let _ = x + 1;\n}\n",
+    );
+    repo.commit("test: drop assertion");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let shallow = tmp.path().join("shallow");
+    let repo_url = format!("file://{}", repo.path().display());
+    let clone_status = std::process::Command::new("git")
+        .args([
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            "--branch",
+            "work",
+            &repo_url,
+            shallow.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(clone_status.success());
+
+    let replies = session_at(&shallow, &[call(1, "check_diff", json!({}))]);
+    let result = &replies[0]["result"];
+    assert_eq!(result["isError"], true, "{result}");
+    assert_eq!(
+        result["structuredContent"]["status"], "could_not_check",
+        "{result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["reason"], "repository",
+        "{result}"
+    );
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("base ref `origin/main` does not resolve"),
+        "{text}"
+    );
+}

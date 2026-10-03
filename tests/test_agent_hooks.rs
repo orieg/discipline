@@ -1643,3 +1643,56 @@ fn claude_code_bootstrap_pins_release_digests() {
         copilot.stderr
     );
 }
+
+/// #476: on a shallow clone with committed changes where origin/main does not exist,
+/// hook run reports could_not_check, never a pass.
+#[test]
+fn hook_run_on_shallow_clone_refuses_when_base_cannot_measure_change() {
+    let repo = Repo::new();
+    weakened(&repo);
+    repo.commit("test: drop assertion");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let shallow = tmp.path().join("shallow");
+    let repo_url = format!("file://{}", repo.path().display());
+    let clone_status = std::process::Command::new("git")
+        .args([
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            "--branch",
+            "work",
+            &repo_url,
+            shallow.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(clone_status.success());
+
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"));
+    cmd.args(["hook", "run", "--agent", "claude-code"])
+        .current_dir(&shallow)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .env("DISCIPLINE_NO_NETWORK", "1");
+    for var in common::ISOLATED_ENV_VARS
+        .iter()
+        .chain(common::GIT_REPOSITORY_ENV_VARS)
+    {
+        cmd.env_remove(var);
+    }
+    for (k, _) in std::env::vars() {
+        if k.starts_with("DISCIPLINE_") && k != "DISCIPLINE_NO_NETWORK" {
+            cmd.env_remove(k);
+        }
+    }
+    let out = cmd.output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("could not check this change (reason: repository)"),
+        "{stderr}"
+    );
+}
