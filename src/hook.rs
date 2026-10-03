@@ -812,6 +812,8 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str) -> String {
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
 // the model reads it and repairs the change.
+import {{ $ }} from \"bun\"
+
 const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
 
 export const Discipline = async ({{ $, directory }}) => ({{
@@ -837,6 +839,47 @@ export const Discipline = async ({{ $, directory }}) => ({{
     }}
   }},
 }})
+
+export default {{
+  id: \"discipline\",
+  setup({{ tool, event, location }}) {{
+    const directory = location?.directory ?? process.cwd()
+
+    event?.subscribe?.(async (e) => {{
+      if (e?.type !== \"session.created\") return
+      const start = new Response(JSON.stringify({{
+        input: {{ sessionID: e.properties?.sessionID }},
+        cwd: e.properties?.info?.directory ?? directory
+      }}))
+      await $`{start} < ${{start}}`.nothrow().quiet()
+    }})
+
+    tool?.hook?.(\"execute.before\", async (call) => {{
+      const toolName = call.tool ?? call.input?.tool
+      if (!EDIT_TOOLS.includes(toolName) && toolName !== \"bash\") return
+      const payload = new Response(JSON.stringify({{
+        input: {{ tool: toolName, sessionID: call.sessionID }},
+        output: {{ args: call.input ?? {{}} }},
+        cwd: directory
+      }}))
+      const r = await $`{pre} < ${{payload}}`.cwd(directory).nothrow().quiet()
+      if (r.exitCode !== 0) {{
+        throw new Error(r.stdout.toString() + r.stderr.toString())
+      }}
+    }})
+
+    tool?.hook?.(\"execute.after\", async (call) => {{
+      const toolName = call.tool ?? call.input?.tool
+      if (!EDIT_TOOLS.includes(toolName)) return
+      const r = await $`{cmd}`.cwd(directory).nothrow().quiet()
+      if (r.exitCode !== 0) {{
+        if (call.result) {{
+          call.result.output = (call.result.output ?? \"\") + \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
+        }}
+      }}
+    }})
+  }}
+}}
 "
     )
 }
