@@ -252,26 +252,50 @@ pub fn parse_payload(raw: &str) -> Payload {
     }
 }
 
-/// The base the agent's change is measured against: the merge base with the
-/// default branch, so a weakening already committed on the branch is seen too.
-/// `None` defers to `check`'s own resolution (`DISCIPLINE_BASE_REF`).
+/// The default branch of the repository: origin's default branch (`origin/HEAD`), else
+/// local `main` or `master`. `None` when none resolves or when the candidate holds `HEAD`
+/// on a non-default branch. Callers that check a change defer to `discipline check`'s own
+/// fail-closed resolution when this returns `None`.
 pub fn default_base(repo: &git2::Repository) -> Option<String> {
     if std::env::var("DISCIPLINE_BASE_REF").is_ok_and(|b| !b.trim().is_empty()) {
         return None;
     }
+    let head = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .map(|c| c.id());
+    let current_branch = repo
+        .head()
+        .ok()
+        .and_then(|h| h.shorthand().ok().map(str::to_string));
+    let holds_head = |target: &str| -> bool {
+        let Some(head) = head else { return false };
+        let Ok(obj) = repo.revparse_single(target) else {
+            return false;
+        };
+        let Ok(commit) = obj.peel_to_commit() else {
+            return false;
+        };
+        repo.merge_base(commit.id(), head).is_ok_and(|m| m == head)
+    };
     if let Ok(r) = repo.find_reference("refs/remotes/origin/HEAD") {
         if let Ok(Some(target)) = r.symbolic_target() {
             if let Some(short) = target.strip_prefix("refs/remotes/") {
-                return Some(short.to_string());
+                if !holds_head(short) {
+                    return Some(short.to_string());
+                }
             }
         }
     }
     for name in ["main", "master"] {
-        if repo.find_branch(name, git2::BranchType::Local).is_ok() {
+        if repo.find_branch(name, git2::BranchType::Local).is_ok()
+            && (current_branch.as_deref() == Some(name) || !holds_head(name))
+        {
             return Some(name.to_string());
         }
     }
-    Some("HEAD".to_string())
+    None
 }
 
 /// Runs the check for the agent and returns what the hook emits.
@@ -317,12 +341,9 @@ pub fn run_with(
         return Ok(translate_event(agent, event, 0, "", ""));
     }
     let base = match base {
-        Some(b) => Some(b),
-        None => crate::gitctx::discover_repository(&dir)
-            .ok()
-            .and_then(|r| default_base(&r)),
+        Some(b) => CheckSide::Base(b),
+        None => CheckSide::Default,
     };
-    let base = base.map(CheckSide::Base).unwrap_or(CheckSide::Default);
     let run = run_check(&dir, &base)?;
     let reason = could_not_check_reason(&run);
     if observe {

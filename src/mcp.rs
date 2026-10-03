@@ -34,15 +34,7 @@ pub struct ChildRunner;
 
 impl Runner for ChildRunner {
     fn check(&self, side: &CheckSide) -> Result<crate::hook::CheckRun> {
-        let side = match side {
-            CheckSide::Default => crate::gitctx::discover_repository(".")
-                .ok()
-                .and_then(|r| crate::hook::default_base(&r))
-                .map(CheckSide::Base)
-                .unwrap_or(CheckSide::Default),
-            other => other.clone(),
-        };
-        crate::hook::run_check(Path::new("."), &side)
+        crate::hook::run_check(Path::new("."), side)
     }
 
     fn gates(&self) -> Result<String> {
