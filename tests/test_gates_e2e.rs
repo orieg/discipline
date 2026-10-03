@@ -6690,6 +6690,8 @@ fn self_test_passes_and_gates_lists_effective_state() {
 fn init_writes_a_config_that_loads_and_refuses_to_overwrite() {
     let repo = Repo::new();
     assert_eq!(repo.run(&["init", "--name", "demo"], &[]).code, 0);
+    let content = std::fs::read_to_string(repo.path().join("discipline.toml")).unwrap();
+    assert!(content.contains("preset = \"cargo-mutants\""));
     assert_eq!(
         repo.run(&["gates"], &[]).code,
         0,

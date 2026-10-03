@@ -172,6 +172,59 @@ pub const WORKFLOW_DIRS: &[&str] = &[
 /// `CODEOWNERS` locations, in the order GitHub resolves them.
 pub const CODEOWNERS_PATHS: &[&str] = &[".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
 
+/// Stable finding codes emitted by `discipline doctor`.
+pub const DOCTOR_FINDINGS: &[&str] = &[
+    "actions-approve-prs",
+    "actions-sha-pinning",
+    "agent-permission",
+    "agent-sandbox",
+    "allow-failure",
+    "allowed-actions",
+    "auto-merge",
+    "bypass",
+    "code-owner-review",
+    "codeowners",
+    "config",
+    "copilot-trust",
+    "default-token",
+    "deletion",
+    "dependency-alerts",
+    "deploy-keys",
+    "environment-reviewers",
+    "force-push",
+    "forge-token",
+    "forking",
+    "immutable-releases",
+    "last-push-approval",
+    "leases",
+    "mutation-testing",
+    "non-blocking",
+    "org-base-permission",
+    "outside-collaborators",
+    "platform",
+    "pretool-hook",
+    "pull-request",
+    "push-trigger",
+    "ref-guard",
+    "required-check",
+    "review",
+    "secret-scanning",
+    "secret-scoping",
+    "security-policy",
+    "signed-commits",
+    "tag-protection",
+    "test-report",
+    "thread-resolution",
+    "token",
+    "trigger",
+    "two-factor",
+    "up-to-date",
+    "visibility-change",
+    "webhooks",
+    "workflow-protection",
+    "workflows",
+];
+
 /// Whether a workflow step runs discipline.
 fn step_runs_discipline(step: &serde_yaml::Value, self_action: bool) -> bool {
     if let Some(uses) = step.get("uses").and_then(|u| u.as_str()) {
@@ -894,6 +947,58 @@ pub fn test_report_finding(
                 "Configure test_command and test_report in [gates.test-floor] (e.g. `{}`) or pass test_report in CI to enable identity ratcheting.",
                 runner.test_report()
             ))
+        })
+    }
+}
+
+/// `mutation-testing`: whether diff-scoped mutation testing is configured in `command`.
+pub fn mutation_preset_finding(
+    root: &Path,
+    repo_config: Option<&crate::config::DisciplineConfig>,
+) -> Option<Finding> {
+    let configured_preset = repo_config.and_then(|cfg| {
+        if !cfg.gates.command.enabled {
+            return None;
+        }
+        if let Some(ref p) = cfg.gates.command.preset {
+            if crate::guards::presets::resolve_preset(p).is_some_and(|d| d.category == "mutation") {
+                return Some(p.clone());
+            }
+        }
+        for cmd in &cfg.gates.command.commands {
+            if let Some(ref p) = cmd.preset {
+                if crate::guards::presets::resolve_preset(p)
+                    .is_some_and(|d| d.category == "mutation")
+                {
+                    return Some(p.clone());
+                }
+            }
+        }
+        None
+    });
+
+    if let Some(preset) = configured_preset {
+        Some(Finding::new(
+            "mutation-testing",
+            Status::Pass,
+            format!("diff-scoped mutation testing is configured (`{preset}`)"),
+        ))
+    } else {
+        crate::init::TestRunner::detect(root).and_then(|runner| {
+            runner.mutation_preset().map(|preset| {
+                Finding::new(
+                    "mutation-testing",
+                    Status::Info,
+                    format!(
+                        "recognized test runner ({}); no diff-scoped mutation preset configured in [gates.command]: special-cased test inputs (hard-coding return values for tested arguments) go undetected by static diff gates",
+                        runner.name()
+                    ),
+                )
+                .fix(format!(
+                    "Configure a diff-scoped mutation preset in [gates.command] (e.g. `preset = \"{}\"`) to verify test discrimination against modified code.",
+                    preset
+                ))
+            })
         })
     }
 }
@@ -2592,6 +2697,10 @@ pub fn run(input: &DoctorInput) -> Report {
     ));
 
     if let Some(f) = test_report_finding(root, repo_config.as_ref()) {
+        findings.push(f);
+    }
+
+    if let Some(f) = mutation_preset_finding(root, repo_config.as_ref()) {
         findings.push(f);
     }
 
