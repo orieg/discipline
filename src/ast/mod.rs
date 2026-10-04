@@ -71,6 +71,14 @@ pub trait LanguagePack: Send + Sync {
     /// Whether this pack handles the given relative path.
     fn matches(&self, path: &str) -> bool;
 
+    /// Whether `path` counts as test code for this pack: the shared
+    /// directory/suffix conventions ([`functions::test_path`]) or the pack's own
+    /// naming convention. The default is the shared rule alone; packs with their
+    /// own convention override it.
+    fn is_test_path(&self, path: &str) -> bool {
+        functions::test_path(path)
+    }
+
     /// Extract language-neutral facts from source text.
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts>;
 }
@@ -1190,6 +1198,127 @@ mod tests {
                 });
             }
             Ok(facts)
+        }
+    }
+
+    /// Every pack's test-file rule is the shared rule or its own convention: a path
+    /// only the shared rule recognises and one only the pack's own predicate
+    /// recognises both count as test files, and a plain source path does not. (Go's
+    /// own convention names no path the shared rule does not, so its second row is
+    /// a path both recognise.)
+    #[cfg(all(
+        feature = "lang-rust",
+        feature = "lang-python",
+        feature = "lang-javascript",
+        feature = "lang-java",
+        feature = "lang-go",
+        feature = "lang-php",
+        feature = "lang-c",
+        feature = "lang-cpp",
+        feature = "lang-csharp",
+        feature = "lang-ruby",
+        feature = "lang-kotlin",
+        feature = "lang-swift",
+        feature = "lang-scala",
+        feature = "lang-objc"
+    ))]
+    #[test]
+    fn test_file_rule_is_shared_or_own_in_every_pack() {
+        use super::functions;
+        /// A pack's own test-path convention, for the per-pack rows below.
+        type OwnTestPath = fn(&str) -> bool;
+        // Where a pack has no own convention the rows pass the shared rule itself,
+        // mirroring that those packs call `test_path` directly (`shared || shared`
+        // is the shared rule).
+        let shared: OwnTestPath = functions::test_path;
+        let cases: &[(&str, OwnTestPath, bool)] = &[
+            ("benches/a.go", super::r#go::is_go_test_path, true),
+            ("pkg/a_test.go", super::r#go::is_go_test_path, true),
+            ("pkg/a.go", super::r#go::is_go_test_path, false),
+            ("benches/Helper.java", super::java::is_java_test_path, true),
+            (
+                "src/main/java/TestHelper.java",
+                super::java::is_java_test_path,
+                true,
+            ),
+            (
+                "src/main/java/Helper.java",
+                super::java::is_java_test_path,
+                false,
+            ),
+            (
+                "benches/Helper.cs",
+                super::csharp::is_csharp_test_path,
+                true,
+            ),
+            (
+                "src/TestHelper.cs",
+                super::csharp::is_csharp_test_path,
+                true,
+            ),
+            ("src/Helper.cs", super::csharp::is_csharp_test_path, false),
+            ("benches/a.py", super::python::is_python_test_path, true),
+            ("src/test_a.py", super::python::is_python_test_path, true),
+            ("src/a.py", super::python::is_python_test_path, false),
+            ("pkg/conftest.py", super::python::is_python_test_path, true),
+            ("benches/Repo.kt", super::kotlin::is_kotlin_test_path, true),
+            (
+                "src/main/kotlin/RepoTest.kt",
+                super::kotlin::is_kotlin_test_path,
+                true,
+            ),
+            (
+                "src/main/kotlin/Repo.kt",
+                super::kotlin::is_kotlin_test_path,
+                false,
+            ),
+            ("tests/Cart.swift", super::swift::is_swift_test_path, true),
+            (
+                "Sources/App/CartTests.swift",
+                super::swift::is_swift_test_path,
+                true,
+            ),
+            (
+                "Sources/App/Cart.swift",
+                super::swift::is_swift_test_path,
+                false,
+            ),
+            ("benches/Cart.scala", super::scala::is_scala_test_path, true),
+            (
+                "src/main/scala/CartSpec.scala",
+                super::scala::is_scala_test_path,
+                true,
+            ),
+            (
+                "src/main/scala/Cart.scala",
+                super::scala::is_scala_test_path,
+                false,
+            ),
+            ("tests/Cart.m", super::objc::is_objc_test_path, true),
+            ("AppTests/CartTests.m", super::objc::is_objc_test_path, true),
+            ("App/Cart.m", super::objc::is_objc_test_path, false),
+            ("benches/a.php", super::php::is_php_test_path, true),
+            ("src/test_a.php", super::php::is_php_test_path, true),
+            ("src/a.php", super::php::is_php_test_path, false),
+            ("benches/a.rb", super::ruby::is_ruby_test_path, true),
+            ("src/test_a.rb", super::ruby::is_ruby_test_path, true),
+            ("spec/a.rb", super::ruby::is_ruby_test_path, true),
+            ("src/a.rb", super::ruby::is_ruby_test_path, false),
+            ("benches/a.c", super::c_cpp::is_c_cpp_test_path, true),
+            ("src/foo_test.c", super::c_cpp::is_c_cpp_test_path, true),
+            ("src/foo.c", super::c_cpp::is_c_cpp_test_path, false),
+            ("src/BarTest.cpp", super::c_cpp::is_c_cpp_test_path, true),
+            ("benches/a.js", shared, true),
+            ("src/a.js", shared, false),
+            ("benches/a.rs", shared, true),
+            ("src/a.rs", shared, false),
+        ];
+        for (path, own, expected) in cases {
+            assert_eq!(
+                functions::is_test_file(path, Some(*own)),
+                *expected,
+                "{path}"
+            );
         }
     }
 

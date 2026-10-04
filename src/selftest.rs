@@ -72,6 +72,60 @@ const CASES: &[Case] = &[
         Ok(f.tests[0].total_asserts == 0)
     }),
     (
+        "ast: a pack's own test-path convention counts as a test file",
+        || {
+            let reg = crate::ast::default_registry();
+            let py = reg
+                .find_pack("src/test_helper.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let v = AssertVocabulary::default();
+            let src = "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n";
+            let own = py.extract("src/test_helper.py", src, &v)?;
+            let neg = py.extract("src/helper.py", src, &v)?;
+            Ok(own.swallowed.is_empty() && neg.swallowed.len() == 1)
+        },
+    ),
+    (
+        "ast: java own test-path convention counts as a test file",
+        || {
+            let reg = crate::ast::default_registry();
+            let java = reg
+                .find_pack("src/main/java/TestHelper.java")
+                .ok_or_else(|| anyhow::anyhow!("no java pack"))?;
+            let v = AssertVocabulary::default();
+            let own_src = "class TestHelper {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n";
+            let neg_src = "class Helper {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n";
+            let own = java.extract("src/main/java/TestHelper.java", own_src, &v)?;
+            let neg = java.extract("src/main/java/Helper.java", neg_src, &v)?;
+            Ok(own.swallowed.is_empty() && neg.swallowed.len() == 1)
+        },
+    ),
+    (
+        "ast: base-anchored classification flags same-language rename into test scope",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            let reg = crate::ast::default_registry();
+            let renamed_in = ChangedFile {
+                path: "src/main/java/TestRepo.java".to_string(),
+                old_path: "src/main/java/Repo.java".to_string(),
+                kind: ChangeKind::Renamed,
+                added_lines: std::collections::BTreeSet::new(),
+            };
+            let renamed_out = ChangedFile {
+                path: "src/main/java/Repo.java".to_string(),
+                old_path: "src/main/java/TestRepo.java".to_string(),
+                kind: ChangeKind::Renamed,
+                added_lines: std::collections::BTreeSet::new(),
+            };
+            let c_in = crate::guards::base_anchored_classification(&renamed_in, &reg);
+            let c_out = crate::guards::base_anchored_classification(&renamed_out, &reg);
+            Ok(c_in.classify_path == "src/main/java/Repo.java"
+                && c_in.reclassified
+                && c_out.classify_path == "src/main/java/TestRepo.java"
+                && !c_out.reclassified)
+        },
+    ),
+    (
         "ast: SAFETY comment above documents, prose about it does not",
         || {
             let v = AssertVocabulary::default();

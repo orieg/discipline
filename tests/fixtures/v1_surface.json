@@ -1194,6 +1194,7 @@
       "error-swallowing/error-logged-and-dropped",
       "error-swallowing/error-silenced",
       "error-swallowing/result-discarded",
+      "error-swallowing/test-path-reclassification",
       "error-swallowing/unparseable-input-skipped",
       "error-swallowing/value-discarded",
       "golden-output/golden-output-changed-without-directive",

@@ -101,6 +101,66 @@ pub fn unread_note(path: &str) -> String {
     format!("skipped `{path}` (binary or unreadable file)")
 }
 
+/// Base-anchored classification for one changed file, shared by the gates that
+/// read whole-file and per-function test scope (`error-swallowing`,
+/// `stub-bodies`): a file that exists on the base side is classified by its
+/// base path, so a rename cannot move production code into test scope. Files
+/// the change adds, and renames that change the extension or the language, are
+/// classified by their head path: the extension also selects the grammar a pack
+/// parses with, so the base path is only used when both sides have the same
+/// extension (compared case-sensitively).
+pub struct BaseAnchored {
+    /// Path to pass to `pack.extract` for classification; the reporting path
+    /// stays `file.path`.
+    pub classify_path: String,
+    /// A same-language rename out of test scope into it: the caller in
+    /// `error-swallowing` reports it once as `test-path-reclassification`;
+    /// `stub-bodies` skips it (it already judges the same file's bodies).
+    pub reclassified: bool,
+    /// A rename across languages or extensions: classification keeps the
+    /// head-path behaviour; the caller records this as a gate note.
+    pub language_changed_note: Option<String>,
+}
+
+pub fn base_anchored_classification(
+    file: &crate::gitctx::ChangedFile,
+    registry: &crate::ast::LanguageRegistry,
+) -> BaseAnchored {
+    if file.old_path == file.path {
+        return BaseAnchored {
+            classify_path: file.path.clone(),
+            reclassified: false,
+            language_changed_note: None,
+        };
+    }
+    let same_language = registry
+        .find_pack(&file.path)
+        .zip(registry.find_pack(&file.old_path))
+        .is_some_and(|(head, base)| head.id() == base.id());
+    let same_extension = crate::ast::extension(&file.path) == crate::ast::extension(&file.old_path);
+    if !same_language || !same_extension {
+        return BaseAnchored {
+            classify_path: file.path.clone(),
+            reclassified: false,
+            language_changed_note: Some(format!(
+                "`{}` was renamed from `{}` to another language or extension; classified by its new path",
+                file.path, file.old_path
+            )),
+        };
+    }
+    let base_pack = registry
+        .find_pack(&file.old_path)
+        .expect("same-language rename has a base pack");
+    let head_pack = registry
+        .find_pack(&file.path)
+        .expect("same-language rename has a head pack");
+    BaseAnchored {
+        classify_path: file.old_path.clone(),
+        reclassified: !base_pack.is_test_path(&file.old_path) && head_pack.is_test_path(&file.path),
+        language_changed_note: None,
+    }
+}
+
 impl GateOutcome {
     /// Enabled, examined nothing, found nothing, and says why: "not evaluated: ...".
     pub fn is_not_evaluated(&self) -> bool {
@@ -920,6 +980,115 @@ pub fn toolchain_unavailable(stdout: &str, stderr: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Base-anchored classification: an existing file is judged by its base path,
+    /// so only added files use the head path; a same-language rename into test
+    /// scope is flagged, and a cross-language rename keeps head behaviour with a
+    /// note.
+    #[test]
+    fn base_anchored_classification_pins_renames_to_the_base_path() {
+        use crate::gitctx::{ChangeKind, ChangedFile};
+        let reg = crate::ast::default_registry();
+        let changed = |old: &str, new: &str, kind: ChangeKind| ChangedFile {
+            path: new.to_string(),
+            old_path: old.to_string(),
+            kind,
+            added_lines: std::collections::BTreeSet::new(),
+        };
+
+        // Added file: head path, no flag, no note.
+        let added = base_anchored_classification(
+            &changed(
+                "src/main/java/TestNew.java",
+                "src/main/java/TestNew.java",
+                ChangeKind::Added,
+            ),
+            &reg,
+        );
+        assert_eq!(added.classify_path, "src/main/java/TestNew.java");
+        assert!(!added.reclassified);
+        assert!(added.language_changed_note.is_none());
+
+        // Same-language rename out of test scope into it: base path, flagged.
+        let renamed = base_anchored_classification(
+            &changed(
+                "src/main/java/Repo.java",
+                "src/main/java/TestRepo.java",
+                ChangeKind::Renamed,
+            ),
+            &reg,
+        );
+        assert_eq!(renamed.classify_path, "src/main/java/Repo.java");
+        assert!(renamed.reclassified);
+        assert!(renamed.language_changed_note.is_none());
+
+        // Same-language rename inside test scope, or out of it: base path, silent.
+        let inside = base_anchored_classification(
+            &changed("tests/a_test.py", "tests/b_test.py", ChangeKind::Renamed),
+            &reg,
+        );
+        assert_eq!(inside.classify_path, "tests/a_test.py");
+        assert!(!inside.reclassified);
+        let out = base_anchored_classification(
+            &changed(
+                "src/main/java/TestRepo.java",
+                "src/main/java/Repo.java",
+                ChangeKind::Renamed,
+            ),
+            &reg,
+        );
+        assert!(!out.reclassified);
+
+        // Same-language rename inside production code: base path, silent.
+        let moved = base_anchored_classification(
+            &changed("pkg/a.go", "pkg/b.go", ChangeKind::Renamed),
+            &reg,
+        );
+        assert_eq!(moved.classify_path, "pkg/a.go");
+        assert!(!moved.reclassified);
+
+        // Cross-language rename: head path with a note.
+        let crossed = base_anchored_classification(
+            &changed("src/a.c", "src/a.cpp", ChangeKind::Renamed),
+            &reg,
+        );
+        assert_eq!(crossed.classify_path, "src/a.cpp");
+        assert!(!crossed.reclassified);
+        assert!(crossed
+            .language_changed_note
+            .is_some_and(|n| { n.contains("src/a.cpp") && n.contains("src/a.c") }));
+    }
+
+    /// Base anchoring needs an unchanged extension: the extension also picks the
+    /// grammar a pack parses with, so `.js` -> `.ts` (one pack) or `.c` -> `.h`
+    /// is classified by the head path with a note, and an equal extension is
+    /// anchored to the base path.
+    #[test]
+    fn base_anchoring_needs_an_unchanged_extension_within_one_pack() {
+        use crate::gitctx::{ChangeKind, ChangedFile};
+        let reg = crate::ast::default_registry();
+        let renamed = |old: &str, new: &str| ChangedFile {
+            path: new.to_string(),
+            old_path: old.to_string(),
+            kind: ChangeKind::Renamed,
+            added_lines: std::collections::BTreeSet::new(),
+        };
+        for (old, new) in [
+            ("web/a.js", "web/a.ts"),
+            ("web/a.ts", "web/a.tsx"),
+            ("src/a.c", "src/a.h"),
+            ("pkg/a.py", "pkg/a.pyi"),
+            ("web/a.JS", "web/a.js"),
+        ] {
+            let got = base_anchored_classification(&renamed(old, new), &reg);
+            assert_eq!(got.classify_path, new, "{old} -> {new}");
+            assert!(!got.reclassified, "{old} -> {new}");
+            assert!(got.language_changed_note.is_some(), "{old} -> {new}");
+        }
+        let same = base_anchored_classification(&renamed("web/a.ts", "web/test_a.ts"), &reg);
+        assert_eq!(same.classify_path, "web/a.ts");
+        assert!(same.language_changed_note.is_none());
+    }
 
     #[test]
     fn inline_marker_is_scoped_to_the_named_gate() {

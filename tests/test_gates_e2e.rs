@@ -3503,6 +3503,43 @@ fn stub_bodies_reports_added_stubs_and_gutted_bodies_across_languages() {
     );
 }
 
+/// #492 B3b: the function test-path rule is the shared-or-own superset, so a
+/// gutted body in a file only the shared rule recognises (`examples/`, which the
+/// Go convention does not name) is test code, while the same gutting in a plain
+/// file still fires.
+#[test]
+fn stub_bodies_ignores_a_gutted_go_body_in_a_shared_convention_test_path() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "examples/foo.go",
+        "package foo\nfunc Render(x int) int { return x * 2 }\n",
+    );
+    repo.write(
+        "pkg/foo.go",
+        "package foo\nfunc Render(x int) int { return x * 2 }\n",
+    );
+    repo.commit("feat: real bodies");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "examples/foo.go",
+        "package foo\nfunc Render(x int) int { panic(\"not implemented\") }\n",
+    );
+    repo.write(
+        "pkg/foo.go",
+        "package foo\nfunc Render(x int) int { panic(\"not implemented\") }\n",
+    );
+    repo.commit("feat: wire up later");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let files: Vec<String> = run
+        .violations("stub-bodies")
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(files, vec!["pkg/foo.go".to_string()], "{files:?}");
+}
+
 // ---- mock infiltration -----------------------------------------------------
 
 #[test]
@@ -3697,6 +3734,503 @@ fn error_swallowing_is_a_delta_outside_tests_across_languages() {
         "pkg/io.py"
     );
     assert_eq!(lifted.outcome("error-swallowing")["inline_exemptions"], 1);
+}
+
+/// #492 B3b: the whole-file test-path rule is the shared-or-own superset, so an
+/// empty handler in a file only the pack's own convention recognises (`src/test_helper.py`:
+/// the `test_` prefix is not a shared convention) is test code, while the same handler
+/// in a plain file still fires.
+#[test]
+fn error_swallowing_ignores_a_handler_in_an_own_convention_test_path() {
+    let repo = Repo::new();
+    repo.write(
+        "src/test_helper.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n",
+    );
+    repo.write(
+        "src/helper.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n",
+    );
+    repo.commit("feat: handlers");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let files: Vec<String> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(files, vec!["src/helper.py".to_string()], "{files:?}");
+}
+
+/// #492 B3b: the whole-file test-path rule is the shared-or-own superset, so an
+/// empty handler in a file only the pack's own convention recognises
+/// (`src/main/java/TestHelper.java`: the `Test` prefix is not a shared
+/// convention) is test code, while the same handler in a plain file still fires.
+#[test]
+fn error_swallowing_ignores_a_java_handler_in_an_own_convention_test_path() {
+    let repo = Repo::new();
+    repo.write(
+        "src/main/java/TestHelper.java",
+        "class TestHelper {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n",
+    );
+    repo.write(
+        "src/main/java/Helper.java",
+        "class Helper {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n",
+    );
+    repo.commit("feat: handlers");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let files: Vec<String> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        files,
+        vec!["src/main/java/Helper.java".to_string()],
+        "{files:?}"
+    );
+}
+
+/// #492 rename evasion: a file that exists on the base side is classified by its
+/// BASE path. Renaming `Repo.java` to `TestRepo.java` keeps it production code,
+/// so the added empty handler fires, and the move into test scope is reported
+/// once as `error-swallowing/test-path-reclassification`.
+#[test]
+fn rename_into_test_scope_stays_production_code_and_is_reported_java_prefix() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/main/java/Repo.java",
+        "class Repo {\n  void m() {\n    g();\n  }\n}\n",
+    );
+    repo.commit("feat: repo");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "src/main/java/Repo.java"]);
+    repo.write(
+        "src/main/java/TestRepo.java",
+        "class TestRepo {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n",
+    );
+    repo.commit("refactor: rename");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let mut got: Vec<(String, String)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["file"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "error-swallowing/empty-error-handler-added".to_string(),
+                "src/main/java/TestRepo.java".to_string(),
+            ),
+            (
+                "error-swallowing/test-path-reclassification".to_string(),
+                "src/main/java/TestRepo.java".to_string(),
+            ),
+        ],
+        "{got:?}"
+    );
+    assert!(
+        run.violations("stub-bodies").is_empty(),
+        "reclassification is emitted once, by error-swallowing: {:?}",
+        run.violations("stub-bodies")
+    );
+}
+
+/// Same as above through the `*Test.java` suffix rule.
+#[test]
+fn rename_into_test_scope_stays_production_code_and_is_reported_java_suffix() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/main/java/Repo.java",
+        "class Repo {\n  void m() {\n    g();\n  }\n}\n",
+    );
+    repo.commit("feat: repo");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "src/main/java/Repo.java"]);
+    repo.write(
+        "src/main/java/RepoTest.java",
+        "class RepoTest {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n",
+    );
+    repo.commit("refactor: rename");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let mut got: Vec<(String, String)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["file"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "error-swallowing/empty-error-handler-added".to_string(),
+                "src/main/java/RepoTest.java".to_string(),
+            ),
+            (
+                "error-swallowing/test-path-reclassification".to_string(),
+                "src/main/java/RepoTest.java".to_string(),
+            ),
+        ],
+        "{got:?}"
+    );
+}
+
+/// Same as above for the Python `test_` prefix rule.
+#[test]
+fn rename_into_test_scope_stays_production_code_and_is_reported_python() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("pkg/repo.py", "def load(p):\n    return open(p).read()\n");
+    repo.commit("feat: repo");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "pkg/repo.py"]);
+    repo.write(
+        "pkg/test_repo.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except Exception:\n        pass\n",
+    );
+    repo.commit("refactor: rename");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let mut got: Vec<(String, String)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["file"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "error-swallowing/empty-error-handler-added".to_string(),
+                "pkg/test_repo.py".to_string(),
+            ),
+            (
+                "error-swallowing/test-path-reclassification".to_string(),
+                "pkg/test_repo.py".to_string(),
+            ),
+        ],
+        "{got:?}"
+    );
+}
+
+/// Same as above for stub-bodies through the shared `examples/` convention: the
+/// gutted Go body fires on the head path, and the move is reported once.
+#[test]
+fn rename_into_test_scope_stays_production_code_and_is_reported_go_stub() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "pkg/x.go",
+        "package foo\nfunc Render(x int) int { return x * 2 }\n",
+    );
+    repo.commit("feat: real body");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "pkg/x.go"]);
+    repo.write(
+        "examples/x.go",
+        "package foo\nfunc Render(x int) int { panic(\"not implemented\") }\n",
+    );
+    repo.commit("refactor: rename and gut");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let mut stubbed: Vec<(String, String)> = run
+        .violations("stub-bodies")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["file"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    stubbed.sort();
+    assert_eq!(
+        stubbed,
+        vec![(
+            "stub-bodies/body-replaced-by-stub".to_string(),
+            "examples/x.go".to_string(),
+        )],
+        "{stubbed:?}"
+    );
+    let mut reclassified: Vec<(String, String)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["file"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    reclassified.sort();
+    assert_eq!(
+        reclassified,
+        vec![(
+            "error-swallowing/test-path-reclassification".to_string(),
+            "examples/x.go".to_string(),
+        )],
+        "{reclassified:?}"
+    );
+}
+
+/// Swift already used the union before this work: the rename path is closed there
+/// too.
+#[test]
+fn rename_into_test_scope_stays_production_code_and_is_reported_swift() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "Sources/App/Cart.swift",
+        "struct Cart {\n    func save(_ s: Store) {\n        s.write()\n    }\n}\n",
+    );
+    repo.commit("feat: cart");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "Sources/App/Cart.swift"]);
+    repo.write(
+        "Sources/App/CartTests.swift",
+        "struct Cart {\n    func save(_ s: Store) {\n        do { try s.write() } catch { }\n    }\n}\n",
+    );
+    repo.commit("refactor: rename");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let mut got: Vec<(String, String)> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["file"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "error-swallowing/empty-error-handler-added".to_string(),
+                "Sources/App/CartTests.swift".to_string(),
+            ),
+            (
+                "error-swallowing/test-path-reclassification".to_string(),
+                "Sources/App/CartTests.swift".to_string(),
+            ),
+        ],
+        "{got:?}"
+    );
+    assert!(
+        run.violations("stub-bodies").is_empty(),
+        "reclassification is emitted once, by error-swallowing: {:?}",
+        run.violations("stub-bodies")
+    );
+}
+
+/// Negative controls: an added test file stays test code; a rename inside test
+/// scope and a plain edit of a test file are unaffected; the directive lifts the
+/// reclassification finding.
+#[test]
+fn rename_evasion_negative_controls() {
+    // An added file has no base side: head-path classification, still test code.
+    let repo = Repo::new();
+    repo.write(
+        "src/main/java/TestNew.java",
+        "class TestNew {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n",
+    );
+    repo.commit("feat: new test helper");
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("error-swallowing").is_empty(),
+        "{:?}",
+        run.violations("error-swallowing")
+    );
+    assert!(
+        !run.stdout.contains("test-path-reclassification"),
+        "{}",
+        run.stdout
+    );
+
+    // A rename that stays inside test scope reports nothing.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tests/a_test.py",
+        "def load(p):\n    return open(p).read()\n",
+    );
+    repo.commit("feat: test helper");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "tests/a_test.py"]);
+    repo.write(
+        "tests/b_test.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except Exception:\n        pass\n",
+    );
+    repo.commit("refactor: rename");
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("error-swallowing").is_empty(),
+        "{:?}",
+        run.violations("error-swallowing")
+    );
+    assert!(
+        !run.stdout.contains("test-path-reclassification"),
+        "{}",
+        run.stdout
+    );
+
+    // A plain edit of an existing test file is unaffected.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tests/test_keep.py",
+        "def load(p):\n    return open(p).read()\n",
+    );
+    repo.commit("feat: test helper");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "tests/test_keep.py",
+        "def load(p):\n    try:\n        return open(p).read()\n    except Exception:\n        pass\n",
+    );
+    repo.commit("refactor: tidy");
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("error-swallowing").is_empty(),
+        "{:?}",
+        run.violations("error-swallowing")
+    );
+
+    // The escape directive lifts the reclassification finding.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/main/java/Repo.java",
+        "class Repo {\n  void m() {\n    g();\n  }\n}\n",
+    );
+    repo.commit("feat: repo");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "src/main/java/Repo.java"]);
+    repo.write(
+        "src/main/java/TestRepo.java",
+        "class TestRepo {\n  void m() {\n    g();\n  }\n}\n",
+    );
+    repo.commit(
+        "refactor: rename\n\nallow-swallow: src/main/java/TestRepo.java test layout matches the build",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(
+        run.violations("error-swallowing").is_empty(),
+        "lifted finding must not be in violations: {:?}",
+        run.violations("error-swallowing")
+    );
+    assert_eq!(
+        run.outcome("error-swallowing")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "must record 1 override: {}",
+        run.stdout
+    );
+    assert_eq!(
+        run.outcome("error-swallowing")["overrides"][0]["code"],
+        "error-swallowing/test-path-reclassification"
+    );
+}
+
+/// A rename inside one pack that changes the extension changes the grammar:
+/// `.js` -> `.ts` is parsed as TypeScript, so TypeScript-only syntax in the head
+/// does not hide its empty handler (classification by the base path would parse
+/// it with the JavaScript grammar).
+#[test]
+fn rename_between_extensions_of_one_pack_is_parsed_with_the_head_grammar() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "web/repo.js",
+        "// load a record\n// from the store\n// and return it\nfunction load(x) {\n  return fetch(x);\n}\n",
+    );
+    repo.commit("feat: repo");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "web/repo.js"]);
+    repo.write(
+        "web/repo.ts",
+        "// load a record\n// from the store\n// and return it\nfunction load(x: number): void {\n  try { fetch(x); } catch (e) {}\n}\n",
+    );
+    repo.commit("refactor: port to typescript");
+    let run = repo.check(&[]);
+    let got: Vec<String> = run
+        .violations("error-swallowing")
+        .iter()
+        .map(|v| {
+            format!(
+                "{} {}",
+                v["code"].as_str().unwrap(),
+                v["file"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec!["error-swallowing/empty-error-handler-added web/repo.ts".to_string()],
+        "{got:?}"
+    );
+    let notes = run.outcome("error-swallowing")["notes"].to_string();
+    assert!(
+        notes.contains("web/repo.js") && notes.contains("web/repo.ts"),
+        "{notes}"
+    );
+}
+
+/// A rename across packs (`.java` -> `.kt`) is classified by the head path with
+/// a note: here the Kotlin file name is a test file, so its handler is test code.
+#[test]
+fn rename_across_packs_is_classified_by_the_head_path_with_a_note() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/main/java/Repo.java",
+        "// load a record\n// from the store\n// and return it\n// for the caller\nclass Repo {\n}\n",
+    );
+    repo.commit("feat: repo");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "src/main/java/Repo.java"]);
+    repo.write(
+        "src/main/java/RepoTest.kt",
+        "// load a record\n// from the store\n// and return it\n// for the caller\nclass Repo {\n  fun m() {\n    try { g() } catch (e: Exception) { }\n  }\n}\n",
+    );
+    repo.commit("refactor: port to kotlin");
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("error-swallowing").is_empty(),
+        "{:?}",
+        run.violations("error-swallowing")
+    );
+    let notes = run.outcome("error-swallowing")["notes"].to_string();
+    assert!(
+        notes.contains("src/main/java/Repo.java") && notes.contains("src/main/java/RepoTest.kt"),
+        "{notes}"
+    );
 }
 
 #[test]

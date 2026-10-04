@@ -29,6 +29,10 @@ impl LanguagePack for PhpPack {
         matches!(super::extension(path), Some("php" | "phtml" | "inc"))
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        functions::is_test_file(path, Some(is_php_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -70,8 +74,7 @@ impl LanguagePack for PhpPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            let whole_file = is_php_test_path(path)
-                || functions::test_path(path)
+            let whole_file = functions::is_test_file(path, Some(is_php_test_path))
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
@@ -118,7 +121,7 @@ fn php_fn_is_test(node: Node, src: &str, path: &str) -> bool {
     let attributed = node.children(&mut cursor).any(|c| {
         c.kind() == "attribute_list" && c.utf8_text(src.as_bytes()).unwrap_or("").contains("Test")
     });
-    name.starts_with("test") || attributed || is_php_test_path(path) || functions::test_path(path)
+    name.starts_with("test") || attributed || functions::is_test_file(path, Some(is_php_test_path))
 }
 
 pub const PHP_FUNCTIONS: FunctionSpec = FunctionSpec {

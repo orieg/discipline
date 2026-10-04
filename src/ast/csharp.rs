@@ -29,6 +29,10 @@ impl LanguagePack for CSharpPack {
         matches!(super::extension(path), Some("cs"))
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        super::functions::is_test_file(path, Some(is_csharp_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -73,9 +77,10 @@ impl LanguagePack for CSharpPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            // A file in a test directory, or one the repository declares as test scope, is
-            // test code line for line.
-            let whole_file = super::functions::test_path(path)
+            // A file matching the shared test-path conventions, this pack's own test-file
+            // convention, or one the repository declares as test scope, is test code
+            // line for line.
+            let whole_file = super::functions::is_test_file(path, Some(is_csharp_test_path))
                 || super::functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
@@ -684,7 +689,7 @@ fn csharp_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
 }
 
 fn csharp_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
-    if functions::test_path(path) {
+    if functions::is_test_file(path, Some(is_csharp_test_path)) {
         return true;
     }
     let mut cursor = node.walk();
@@ -791,6 +796,41 @@ pub const CS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole-file handler rule and the function rule are the shared-or-own
+    /// superset: an empty handler is silent, and a plain method counts as a test
+    /// function, in a file only the shared rule recognises (`benches/`) and in one
+    /// only the pack's own `Test` prefix recognises; elsewhere the handler fires
+    /// and the method is not a test.
+    #[test]
+    fn whole_file_and_fn_rules_are_the_shared_or_own_superset() {
+        let handler_src =
+            "class Helper {\n  void M() {\n    try {\n      G();\n    } catch (System.Exception) {}\n  }\n}\n";
+        let swallowed = |path: &str| {
+            CSharpPack
+                .extract(path, handler_src, &AssertVocabulary::default())
+                .unwrap()
+                .swallowed
+                .len()
+        };
+        assert_eq!(swallowed("benches/Helper.cs"), 0, "shared rule only");
+        assert_eq!(swallowed("src/TestHelper.cs"), 0, "own rule only");
+        assert_eq!(swallowed("src/Helper.cs"), 1, "negative control");
+
+        let plain_src = "class Helper {\n  void M() { G(); }\n}\n";
+        let is_test = |path: &str| {
+            CSharpPack
+                .extract(path, plain_src, &AssertVocabulary::default())
+                .unwrap()
+                .functions
+                .iter()
+                .map(|f| f.is_test)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(is_test("benches/Helper.cs"), vec![true], "shared rule only");
+        assert_eq!(is_test("src/TestHelper.cs"), vec![true], "own rule only");
+        assert_eq!(is_test("src/Helper.cs"), vec![false], "negative control");
+    }
 
     /// A test calling a thin wrapper gets the credit of one calling the wrapped function
     /// (`crate::ast::thin_wrapper_counts` names the controls).
