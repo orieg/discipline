@@ -109,7 +109,14 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
             out.notes.push(super::unread_note(&file.path));
             continue;
         };
-        let head = match pack.extract(&file.path, &head_src, &vocab) {
+        // Base-anchored classification, shared with `error-swallowing`: a renamed
+        // file is judged by its base path. The move itself is reported once by
+        // `error-swallowing` (`test-path-reclassification`), not here.
+        let anchored = super::base_anchored_classification(&file, &registry);
+        if let Some(note) = anchored.language_changed_note {
+            out.notes.push(note);
+        }
+        let head = match pack.extract(&anchored.classify_path, &head_src, &vocab) {
             Ok(f) => f,
             Err(e) => {
                 out.notes.push(format!(

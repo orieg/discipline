@@ -43,6 +43,10 @@ impl LanguagePack for CPack {
         matches!(super::extension(path), Some("c" | "h"))
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        functions::is_test_file(path, Some(is_c_cpp_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let facts = self.extract_as_c(path, src, vocab)?;
         // A `.h` header may be C++ (a class, a namespace) or Objective-C (`@interface`):
@@ -137,6 +141,10 @@ impl LanguagePack for CppPack {
         )
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        functions::is_test_file(path, Some(is_c_cpp_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -208,8 +216,7 @@ fn shared_facts(
             .iter()
             .map(|t| (t.line, t.end_line.max(t.line)))
             .collect();
-        let whole_file = is_c_cpp_test_path(path)
-            || functions::test_path(path)
+        let whole_file = functions::is_test_file(path, Some(is_c_cpp_test_path))
             || functions::declared_test_path(path, &vocab.test_paths);
         let is_test_line = |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
         facts.swallowed = super::handlers::extract(root, src, &C_HANDLERS, &is_test_line);
@@ -272,8 +279,7 @@ fn c_fn_is_test(node: Node, src: &str, path: &str) -> bool {
         || name.ends_with("_test")
         || name.starts_with("smoke_")
         || name.ends_with("_smoke")
-        || is_c_cpp_test_path(path)
-        || functions::test_path(path)
+        || functions::is_test_file(path, Some(is_c_cpp_test_path))
 }
 
 pub const C_FUNCTIONS: FunctionSpec = FunctionSpec {

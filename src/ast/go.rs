@@ -29,6 +29,10 @@ impl LanguagePack for GoPack {
         matches!(super::extension(path), Some("go"))
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        super::functions::is_test_file(path, Some(is_go_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -70,9 +74,10 @@ impl LanguagePack for GoPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            // A file in a test directory, or one the repository declares as test scope, is
-            // test code line for line.
-            let whole_file = super::functions::test_path(path)
+            // A file matching the shared test-path conventions, this pack's own test-file
+            // convention, or one the repository declares as test scope, is test code
+            // line for line.
+            let whole_file = super::functions::is_test_file(path, Some(is_go_test_path))
                 || super::functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
@@ -674,7 +679,7 @@ fn go_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(src.as_bytes()).ok())
         .unwrap_or("");
-    path.ends_with("_test.go") || is_go_test_function_name(name)
+    functions::is_test_file(path, Some(is_go_test_path)) || is_go_test_function_name(name)
 }
 
 fn is_go_env_check(text: &str) -> bool {
@@ -833,6 +838,38 @@ pub const GO_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The function rule is the shared-or-own superset: a plain function counts as a
+    /// test function in a file only the shared rule recognises (`benches/`, which the
+    /// Go convention does not name), as before in a `_test.go` file, and not elsewhere.
+    #[test]
+    fn fn_rule_is_the_shared_or_own_superset() {
+        let src = "package a\nfunc Helper() int { return 1 }\n";
+        let is_test = |path: &str| {
+            GoPack
+                .extract(path, src, &AssertVocabulary::default())
+                .unwrap()
+                .functions
+                .iter()
+                .map(|f| (f.name.clone(), f.is_test))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            is_test("benches/a.go"),
+            vec![("Helper".to_string(), true)],
+            "shared rule only"
+        );
+        assert_eq!(
+            is_test("pkg/a_test.go"),
+            vec![("Helper".to_string(), true)],
+            "both rules"
+        );
+        assert_eq!(
+            is_test("pkg/a.go"),
+            vec![("Helper".to_string(), false)],
+            "negative control"
+        );
+    }
 
     /// A test calling a thin wrapper gets the credit of one calling the wrapped function
     /// (`crate::ast::thin_wrapper_counts` names the controls).

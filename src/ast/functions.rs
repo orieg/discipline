@@ -511,6 +511,19 @@ pub fn declared_test_path(path: &str, globs: &[String]) -> bool {
     })
 }
 
+/// The shared test-path rule or a pack's own naming convention: true when `path`
+/// matches [`test_path`] or the pack's own predicate `own` (`None` keeps the
+/// shared rule alone; no pack passes `None` today, the packs without their own
+/// convention call [`test_path`] directly).
+///
+/// Used for the whole-file handler check and for each pack's `*_fn_is_test`.
+/// Not used for test/helper *extraction*, which still reads each pack's own
+/// `is_test_path` field, nor for repository-declared test globs (see
+/// [`declared_test_path`], which callers check separately).
+pub fn is_test_file(path: &str, own: Option<fn(&str) -> bool>) -> bool {
+    test_path(path) || own.is_some_and(|is_own| is_own(path))
+}
+
 /// A path under a test directory or with a test suffix. Cargo's `benches/` and
 /// `examples/` are compiled as their own crates and are not shipped code.
 pub fn test_path(path: &str) -> bool {
@@ -552,6 +565,12 @@ pub fn test_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_test_file_with_no_own_convention_is_the_shared_rule() {
+        assert!(is_test_file("benches/a.rs", None));
+        assert!(!is_test_file("src/a.rs", None));
+    }
 
     #[test]
     fn classifiers_tell_stubs_from_trivial_and_substantive_bodies() {

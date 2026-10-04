@@ -61,11 +61,50 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             unsupported.push(file.path.clone());
             continue;
         }
+        // Base-anchored classification: a renamed file with an unchanged extension is
+        // judged by its base path, so a move into test scope cannot silence its findings.
+        let anchored = super::base_anchored_classification(&file, &registry);
+        // A rename out of test scope into it is reported once, here, before any
+        // head-side early exit; `stub-bodies` judges the same file's bodies and
+        // skips it. Paths only, no contents.
+        if anchored.reclassified {
+            let lift = |subject: &str| {
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::TEST_PATH_RECLASSIFIED,
+                    tokens::ALLOW_SWALLOW,
+                    subject,
+                )
+            };
+            if let Some(ov) =
+                lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
+            {
+                out.overrides.push(ov);
+            } else {
+                out.push(
+                    ctx.overridable(settings.severity()),
+                    &crate::findings::TEST_PATH_RECLASSIFIED,
+                    Some(&file.path),
+                    None,
+                    format!(
+                        "`{}` was renamed from `{}` into test scope and is still judged as production code.",
+                        file.path, file.old_path
+                    ),
+                    &format!(
+                        "Rename it back out of test scope, or justify the move on its own line in the PR body or a commit message: `allow-swallow: {} <reason>`.",
+                        file.path
+                    ),
+                );
+            }
+        }
         let Some(head_src) = ctx.git.head_content(&file.path)? else {
             out.notes.push(super::unread_note(&file.path));
             continue;
         };
-        let head = match pack.extract(&file.path, &head_src, &vocab) {
+        if let Some(note) = anchored.language_changed_note {
+            out.notes.push(note);
+        }
+        let head = match pack.extract(&anchored.classify_path, &head_src, &vocab) {
             Ok(f) => f.swallowed,
             Err(e) => {
                 out.notes.push(format!(
