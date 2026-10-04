@@ -494,7 +494,8 @@ pub fn generate_schema() -> Value {
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "required_trailers": { "$ref": "#/$defs/StringListOrReset", "description": "Trailer keys every commit in the change must carry" },
                     "agent_markers": { "$ref": "#/$defs/StringListOrReset", "description": "Substrings of a trailer line, author name or author email that identify an agent-produced commit" },
-                    "review_trailer": { "type": "string", "description": "Trailer an agent-produced commit must carry, naming someone other than its author; empty switches the rule off (default: Reviewed-by)" }
+                    "review_trailer": { "type": "string", "description": "Trailer an agent-produced commit must carry, naming someone other than its author; empty switches the rule off (default: Reviewed-by)" },
+                    "allow_author_review": { "type": "boolean", "description": "The review trailer may name the commit's author when the author is a person and the reviewer is not an agent (single-maintainer repositories; default: false)" }
                 }
             },
             "IssueLinkGate": {

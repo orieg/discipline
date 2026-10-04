@@ -679,6 +679,30 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: allow_author_review lets a person, never an agent, review their own commit",
+        || {
+            use crate::guards::commit_provenance::judge_with;
+            let markers = vec![
+                "Co-authored-by: Claude".to_string(),
+                "noreply@anthropic.com".to_string(),
+                "[bot]".to_string(),
+            ];
+            let c = |name: &str, email: &str, msg: &str| crate::gitctx::CommitDetail {
+                sha: "0123456789".into(),
+                author_name: name.into(),
+                author_email: email.into(),
+                committer_email: email.into(),
+                message: msg.into(),
+                parent_count: 1,
+            };
+            let person = c("Ada", "ada@x", "f: x\n\nReviewed-by: Ada <ada@x>\nCo-authored-by: Claude <noreply@anthropic.com>\n");
+            let agent = c("coder[bot]", "coder@x", "f: x\n\nReviewed-by: coder <coder@x>\n");
+            Ok(judge_with(std::slice::from_ref(&person), &[], &markers, "Reviewed-by", false).len() == 1
+                && judge_with(&[person], &[], &markers, "Reviewed-by", true).is_empty()
+                && judge_with(&[agent], &[], &markers, "Reviewed-by", true).len() == 1)
+        },
+    ),
+    (
         "commit-provenance: trailers a squash merge split into paragraphs are all read",
         || {
             use crate::guards::commit_provenance::trailers;
