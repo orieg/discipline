@@ -237,8 +237,16 @@ pub struct JsCollectionRules {
     pub test_match: Vec<String>,
     pub test_regex: Vec<String>,
     pub include: Vec<String>,
+    /// Jest `rootDir` as written; `<rootDir>` resolves to it.
+    pub root_dir: Option<serde_json::Value>,
+    /// Jest `roots` as written: only files under one of them are collected.
+    pub roots: Option<serde_json::Value>,
+    /// A Vitest `root` or `dir` key: the base `include` resolves against.
+    pub vitest_root: Option<String>,
     compiled_globs: Vec<globset::GlobMatcher>,
     compiled_regexes: Vec<regex::Regex>,
+    /// Repository-relative directories collection is limited to; empty is no limit.
+    effective_roots: Vec<String>,
 }
 
 impl PartialEq for JsCollectionRules {
@@ -250,6 +258,9 @@ impl PartialEq for JsCollectionRules {
             && self.test_match == other.test_match
             && self.test_regex == other.test_regex
             && self.include == other.include
+            && self.root_dir == other.root_dir
+            && self.roots == other.roots
+            && self.vitest_root == other.vitest_root
     }
 }
 
@@ -273,11 +284,90 @@ fn has_extglob(pattern: &str) -> bool {
     false
 }
 
+/// A configured directory as a repository-relative path, or `None` when it cannot be
+/// one: absolute, climbing out with `..`, or holding glob or token characters.
+fn repo_relative_dir(raw: &str) -> Option<String> {
+    let s = raw.trim().replace('\\', "/");
+    if s.starts_with('/') || s.get(1..2) == Some(":") || s.contains(['*', '?', '[', '{', '<']) {
+        return None;
+    }
+    let parts: Vec<&str> = s
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    if parts.contains(&"..") {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// Replaces a leading Jest `<rootDir>` token with the repository-relative `root_dir`.
+fn resolve_root_token(pattern: &str, root_dir: &str) -> String {
+    let Some(rest) = pattern.strip_prefix("<rootDir>") else {
+        return pattern.to_string();
+    };
+    let rest = rest.trim_start_matches('/');
+    match (root_dir.is_empty(), rest.is_empty()) {
+        (true, _) => rest.to_string(),
+        (false, true) => root_dir.to_string(),
+        (false, false) => format!("{root_dir}/{rest}"),
+    }
+}
+
 impl JsCollectionRules {
     pub fn compile_patterns(&mut self) {
         self.compiled_regexes.clear();
         self.compiled_globs.clear();
+        self.effective_roots.clear();
         self.invalid_pattern = None;
+
+        if let Some(key) = &self.vitest_root {
+            self.invalid_pattern = Some(format!(
+                "vitest `{key}` moves where `include` resolves, cannot evaluate statically"
+            ));
+            return;
+        }
+        // Jest `rootDir` is relative to the configuration file, which is read at the
+        // repository root, so it is the repository-relative prefix `<rootDir>` stands for.
+        let root_dir = match &self.root_dir {
+            None => String::new(),
+            Some(v) => match v.as_str().and_then(repo_relative_dir) {
+                Some(dir) => dir,
+                None => {
+                    self.invalid_pattern = Some(format!(
+                        "jest rootDir {v} cannot be resolved to a repository path"
+                    ));
+                    return;
+                }
+            },
+        };
+        // Jest only collects under `roots`, which defaults to `["<rootDir>"]`.
+        match &self.roots {
+            Some(v) => {
+                let resolved: Option<Vec<String>> = v.as_array().and_then(|arr| {
+                    arr.iter()
+                        .map(|r| {
+                            r.as_str().and_then(|s| {
+                                repo_relative_dir(&resolve_root_token(s.trim(), &root_dir))
+                            })
+                        })
+                        .collect()
+                });
+                match resolved {
+                    // A root that is the repository itself limits nothing.
+                    Some(dirs) if !dirs.iter().any(String::is_empty) => self.effective_roots = dirs,
+                    Some(_) => {}
+                    None => {
+                        self.invalid_pattern = Some(format!(
+                            "jest roots {v} cannot be resolved to repository paths"
+                        ));
+                        return;
+                    }
+                }
+            }
+            None if !root_dir.is_empty() => self.effective_roots = vec![root_dir.clone()],
+            None => {}
+        }
 
         for r in &self.test_regex {
             match regex::Regex::new(r) {
@@ -296,13 +386,8 @@ impl JsCollectionRules {
             if trimmed.is_empty() {
                 continue;
             }
-            // Jest `<rootDir>` is the directory holding the configuration; paths here
-            // are repository-relative, so it is the empty prefix.
-            let without_root = trimmed
-                .strip_prefix("<rootDir>/")
-                .or_else(|| trimmed.strip_prefix("<rootDir>"))
-                .unwrap_or(trimmed);
-            if has_extglob(without_root) {
+            let without_root = resolve_root_token(trimmed, &root_dir);
+            if has_extglob(&without_root) {
                 if self.invalid_pattern.is_none() {
                     self.invalid_pattern = Some(format!(
                         "glob pattern uses extglob, cannot evaluate statically: '{trimmed}'"
@@ -310,7 +395,7 @@ impl JsCollectionRules {
                 }
                 continue;
             }
-            match globset::GlobBuilder::new(without_root)
+            match globset::GlobBuilder::new(&without_root)
                 .literal_separator(false)
                 .build()
             {
@@ -358,7 +443,17 @@ impl JsCollectionRules {
             return JsCollectionResult::Unknown("no runner config found".to_string());
         }
 
-        // 5. Config was parsed: check configured patterns or defaults
+        // 5. Outside every configured root the runner never looks.
+        if !self.effective_roots.is_empty()
+            && !self
+                .effective_roots
+                .iter()
+                .any(|r| norm == *r || norm.starts_with(&format!("{r}/")))
+        {
+            return JsCollectionResult::NotCollected;
+        }
+
+        // 6. Config was parsed: check configured patterns or defaults
         let has_custom =
             !self.test_regex.is_empty() || !self.test_match.is_empty() || !self.include.is_empty();
 
@@ -427,6 +522,17 @@ impl JsCollectionRules {
     }
 
     fn extract_from_json(&mut self, val: &serde_json::Value) {
+        if let Some(rd) = val.get("rootDir") {
+            self.root_dir = Some(rd.clone());
+        }
+        if let Some(roots) = val.get("roots") {
+            self.roots = Some(roots.clone());
+        }
+        for key in ["root", "dir"] {
+            if val.get(key).is_some() {
+                self.vitest_root = Some(key.to_string());
+            }
+        }
         if let Some(tm) = val.get("testMatch").and_then(|v| v.as_array()) {
             let matches: Vec<String> = tm
                 .iter()
@@ -1179,6 +1285,78 @@ python_files = test_*.py
             plain.is_collected("test/a.test.js"),
             JsCollectionResult::Collected
         );
+    }
+
+    #[test]
+    fn test_jest_root_dir_and_roots() {
+        let rules = |pkg: &str| {
+            let mut r = JsCollectionRules::default();
+            r.merge_package_json(pkg);
+            r
+        };
+
+        // `<rootDir>` stands for the configured `rootDir`, not the repository root.
+        let rd = rules(
+            r#"{"jest": {"rootDir": "packages/a", "testMatch": ["<rootDir>/test/**/*.test.js"]}}"#,
+        );
+        assert_eq!(
+            rd.is_collected("packages/a/test/x.test.js"),
+            JsCollectionResult::Collected
+        );
+        assert_eq!(
+            rd.is_collected("test/x.test.js"),
+            JsCollectionResult::NotCollected
+        );
+
+        // Default conventions apply only under `rootDir` (the default `roots`).
+        let rd_default = rules(r#"{"jest": {"rootDir": "./packages/a/"}}"#);
+        assert_eq!(
+            rd_default.is_collected("packages/a/src/x.test.js"),
+            JsCollectionResult::Collected
+        );
+        assert_eq!(
+            rd_default.is_collected("packages/b/src/x.test.js"),
+            JsCollectionResult::NotCollected
+        );
+
+        // `roots` limits collection to the listed directories.
+        let roots = rules(r#"{"jest": {"roots": ["<rootDir>/src", "lib"]}}"#);
+        assert_eq!(
+            roots.is_collected("src/a.test.js"),
+            JsCollectionResult::Collected
+        );
+        assert_eq!(
+            roots.is_collected("lib/b.test.js"),
+            JsCollectionResult::Collected
+        );
+        assert_eq!(
+            roots.is_collected("test/a.test.js"),
+            JsCollectionResult::NotCollected
+        );
+        // `<rootDir>` itself as a root limits nothing.
+        let whole = rules(r#"{"jest": {"roots": ["<rootDir>"]}}"#);
+        assert_eq!(
+            whole.is_collected("test/a.test.js"),
+            JsCollectionResult::Collected
+        );
+
+        // Anything that cannot be a repository path is Unknown, never a silent drop.
+        for pkg in [
+            r#"{"jest": {"rootDir": "../shared"}}"#,
+            r#"{"jest": {"rootDir": "/abs/path"}}"#,
+            r#"{"jest": {"rootDir": 3}}"#,
+            r#"{"jest": {"roots": "src"}}"#,
+            r#"{"jest": {"roots": ["src/*"]}}"#,
+            r#"{"vitest": {"root": "web"}}"#,
+        ] {
+            assert!(
+                matches!(
+                    rules(pkg).is_collected("test/a.test.js"),
+                    JsCollectionResult::Unknown(_)
+                ),
+                "{pkg} must be Unknown"
+            );
+        }
     }
 
     #[test]

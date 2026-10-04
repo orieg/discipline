@@ -11680,6 +11680,37 @@ it('test two', () => { assert(2 === 2); });
 }
 
 #[test]
+fn test_floor_jest_root_dir_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "package.json",
+        r#"{"name": "pkg", "jest": {"rootDir": "packages/a", "testMatch": ["<rootDir>/test/**/*.test.js"]}}"#,
+    );
+    repo.write(
+        "packages/a/test/a.test.js",
+        "it('test one', () => { assert(1 === 1); });
+it('test two', () => { assert(2 === 2); });
+",
+    );
+    repo.commit("feat: jest tests under a configured rootDir");
+
+    // Deleting an it(...) under the configured rootDir makes test-floor fire
+    repo.write(
+        "packages/a/test/a.test.js",
+        "it('test one', () => { assert(1 === 1); });
+",
+    );
+    repo.commit("test: delete test two from packages/a/test/a.test.js");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let titles = run.titles("test-floor");
+    assert!(
+        titles.contains(&"Test Count Below Floor".to_string()),
+        "Deleting an it(...) under a configured Jest rootDir must fail test-floor: {titles:?}"
+    );
+}
+
+#[test]
 fn test_floor_jest_testmatch_extglob_e2e() {
     let repo = Repo::new();
     repo.write(
