@@ -255,6 +255,24 @@ impl PartialEq for JsCollectionRules {
 
 impl Eq for JsCollectionRules {}
 
+/// True when a glob pattern uses extglob operators (`?(`, `*(`, `+(`, `@(`, `!(`),
+/// which the glob matcher cannot evaluate. Bracket spans are skipped: `[?()]`
+/// is a literal character class, not an operator.
+fn has_extglob(pattern: &str) -> bool {
+    let mut in_bracket = false;
+    let mut prev = '\0';
+    for c in pattern.chars() {
+        match c {
+            '[' if !in_bracket => in_bracket = true,
+            ']' if in_bracket => in_bracket = false,
+            '(' if !in_bracket && matches!(prev, '?' | '*' | '+' | '@' | '!') => return true,
+            _ => {}
+        }
+        prev = c;
+    }
+    false
+}
+
 impl JsCollectionRules {
     pub fn compile_patterns(&mut self) {
         self.compiled_regexes.clear();
@@ -278,7 +296,21 @@ impl JsCollectionRules {
             if trimmed.is_empty() {
                 continue;
             }
-            match globset::GlobBuilder::new(trimmed)
+            // Jest `<rootDir>` is the directory holding the configuration; paths here
+            // are repository-relative, so it is the empty prefix.
+            let without_root = trimmed
+                .strip_prefix("<rootDir>/")
+                .or_else(|| trimmed.strip_prefix("<rootDir>"))
+                .unwrap_or(trimmed);
+            if has_extglob(without_root) {
+                if self.invalid_pattern.is_none() {
+                    self.invalid_pattern = Some(format!(
+                        "glob pattern uses extglob, cannot evaluate statically: '{trimmed}'"
+                    ));
+                }
+                continue;
+            }
+            match globset::GlobBuilder::new(without_root)
                 .literal_separator(false)
                 .build()
             {
@@ -1104,6 +1136,48 @@ python_files = test_*.py
         assert_eq!(
             custom.is_collected("add.test.js"),
             JsCollectionResult::NotCollected
+        );
+    }
+
+    #[test]
+    fn test_jest_testmatch_rootdir_and_extglob() {
+        // `<rootDir>/` is the config directory: repo-relative paths match it.
+        let mut rootdir = JsCollectionRules::default();
+        rootdir.merge_package_json(r#"{"jest": {"testMatch": ["<rootDir>/test/**/*.test.js"]}}"#);
+        rootdir.compile_patterns();
+        assert_eq!(
+            rootdir.is_collected("test/a.test.js"),
+            JsCollectionResult::Collected
+        );
+        assert_eq!(
+            rootdir.is_collected("src/a.test.js"),
+            JsCollectionResult::NotCollected
+        );
+
+        // Extglob cannot be evaluated: Unknown with a reason, never a silent drop.
+        let mut extglob = JsCollectionRules::default();
+        extglob
+            .merge_package_json(r#"{"jest": {"testMatch": ["**/?(*.)+(spec|test).[jt]s?(x)"]}}"#);
+        extglob.compile_patterns();
+        assert_eq!(
+            extglob.is_collected("test/a.test.js"),
+            JsCollectionResult::Unknown(
+                "glob pattern uses extglob, cannot evaluate statically: '**/?(*.)+(spec|test).[jt]s?(x)'"
+                    .to_string()
+            )
+        );
+
+        // A bracket class holding parens is not extglob.
+        assert!(!has_extglob("test/[?()].test.js"));
+        assert!(has_extglob("**/*.+(test).js"));
+
+        // Control: a plain glob still decides.
+        let mut plain = JsCollectionRules::default();
+        plain.merge_package_json(r#"{"jest": {"testMatch": ["**/test/**/*.test.js"]}}"#);
+        plain.compile_patterns();
+        assert_eq!(
+            plain.is_collected("test/a.test.js"),
+            JsCollectionResult::Collected
         );
     }
 

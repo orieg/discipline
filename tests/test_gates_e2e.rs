@@ -11649,6 +11649,68 @@ fn test_floor_js_mocha_e2e() {
 }
 
 #[test]
+fn test_floor_jest_testmatch_rootdir_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "package.json",
+        r#"{"name": "pkg", "jest": {"testMatch": ["<rootDir>/test/**/*.test.js"]}}"#,
+    );
+    repo.write(
+        "test/a.test.js",
+        "it('test one', () => { assert(1 === 1); });
+it('test two', () => { assert(2 === 2); });
+",
+    );
+    repo.commit("feat: jest tests with rootDir testMatch");
+
+    // Deleting an it(...) from test/a.test.js makes test-floor fire
+    repo.write(
+        "test/a.test.js",
+        "it('test one', () => { assert(1 === 1); });
+",
+    );
+    repo.commit("test: delete test two from test/a.test.js");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let titles = run.titles("test-floor");
+    assert!(
+        titles.contains(&"Test Count Below Floor".to_string()),
+        "Deleting an it(...) under a <rootDir> testMatch must fail test-floor: {titles:?}"
+    );
+}
+
+#[test]
+fn test_floor_jest_testmatch_extglob_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "package.json",
+        r#"{"name": "pkg", "jest": {"testMatch": ["**/?(*.)+(spec|test).[jt]s?(x)"]}}"#,
+    );
+    repo.write(
+        "test/a.test.js",
+        "it('test one', () => { assert(1 === 1); });
+it('test two', () => { assert(2 === 2); });
+",
+    );
+    repo.commit("feat: jest tests with extglob testMatch");
+
+    // Deleting an it(...) from test/a.test.js makes test-floor fire
+    repo.write(
+        "test/a.test.js",
+        "it('test one', () => { assert(1 === 1); });
+",
+    );
+    repo.commit("test: delete test two from test/a.test.js");
+
+    let run = repo.check(&["--base", "HEAD~1"]);
+    let titles = run.titles("test-floor");
+    assert!(
+        titles.contains(&"Test Count Below Floor".to_string()),
+        "Deleting an it(...) under an extglob testMatch must fail test-floor: {titles:?}"
+    );
+}
+
+#[test]
 fn test_rust_cfg_not_feature_no_ignored_tests_e2e() {
     let repo = Repo::new();
     repo.write(
