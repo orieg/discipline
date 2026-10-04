@@ -281,7 +281,7 @@ spec:
 Official multi-architecture (`linux/amd64`, `linux/arm64`) OCI images are published to GitHub Container Registry:
 - `ghcr.io/orieg/discipline:latest`
 - `ghcr.io/orieg/discipline:v0`
-- `ghcr.io/orieg/discipline:v0.17.0`
+- `ghcr.io/orieg/discipline:v0.17.1`
 
 ### Running Locally via Docker
 
