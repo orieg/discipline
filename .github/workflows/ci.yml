@@ -65,7 +65,7 @@ jobs:
       - name: Install actionlint (pinned, checksum-verified)
         run: tests/action/install-tool.sh actionlint
       - run: actionlint -color .github/workflows/*.yml .gitea/workflows/*.yml .forgejo/workflows/*.yml
-      - run: shellcheck tests/action/*.sh
+      - run: shellcheck tests/action/*.sh scripts/tag-release.sh
       - name: Composite action shell blocks pass shellcheck
         run: python3 tests/action/lint-action.py action.yml
       - name: Check reference documentation and schemas are up to date
@@ -88,6 +88,8 @@ jobs:
         run: python3 scripts/detect_changes.py --test
       - name: Test major tag drift detector
         run: tests/action/test-check-major-tag.sh
+      - name: Test release tagging script
+        run: tests/action/test-tag-release.sh
       - name: Lint PR title for unquoted mentions
         if: github.event_name == 'pull_request'
         shell: bash
