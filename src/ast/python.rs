@@ -39,6 +39,10 @@ impl LanguagePack for PythonPack {
         matches!(super::extension(path), Some("py" | "pyi"))
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        super::functions::is_test_file(path, Some(is_python_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -86,9 +90,10 @@ impl LanguagePack for PythonPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            // A file in a test directory, or one the repository declares as test scope, is
-            // test code line for line.
-            let whole_file = super::functions::test_path(path)
+            // A file matching the shared test-path conventions, this pack's own test-file
+            // convention, or one the repository declares as test scope, is test code
+            // line for line.
+            let whole_file = super::functions::is_test_file(path, Some(is_python_test_path))
                 || super::functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
@@ -1160,7 +1165,7 @@ fn python_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(src.as_bytes()).ok())
         .unwrap_or("");
-    functions::test_path(path) || name.starts_with("test_") || is_python_test_path(path)
+    functions::is_test_file(path, Some(is_python_test_path)) || name.starts_with("test_")
 }
 
 pub const PYTHON_FUNCTIONS: FunctionSpec = FunctionSpec {
@@ -1277,6 +1282,24 @@ pub const PY_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole-file handler rule is the shared-or-own superset: an empty handler is
+    /// silent in a file only the shared rule recognises (`benches/`) and in one only
+    /// the pack's own `test_` prefix recognises, and fires elsewhere.
+    #[test]
+    fn whole_file_handler_rule_is_the_shared_or_own_superset() {
+        let src = "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n";
+        let swallowed = |path: &str| {
+            PythonPack
+                .extract(path, src, &AssertVocabulary::default())
+                .unwrap()
+                .swallowed
+                .len()
+        };
+        assert_eq!(swallowed("benches/helper.py"), 0, "shared rule only");
+        assert_eq!(swallowed("src/test_helper.py"), 0, "own rule only");
+        assert_eq!(swallowed("src/helper.py"), 1, "negative control");
+    }
 
     /// A test calling a thin wrapper gets the credit of one calling the wrapped function
     /// (`crate::ast::thin_wrapper_counts` names the controls).

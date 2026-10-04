@@ -39,6 +39,10 @@ impl LanguagePack for KotlinPack {
         matches!(super::extension(path), Some("kt" | "kts"))
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        functions::is_test_file(path, Some(is_kotlin_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -80,8 +84,7 @@ impl LanguagePack for KotlinPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            let whole_file = is_kotlin_test_path(path)
-                || functions::test_path(path)
+            let whole_file = functions::is_test_file(path, Some(is_kotlin_test_path))
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
@@ -732,10 +735,6 @@ impl<'a> KotlinExtractor<'a> {
 }
 
 fn kotlin_fn_is_test(node: Node, src: &str, path: &str) -> bool {
-    let name = node
-        .child_by_field_name("name")
-        .and_then(|n| n.utf8_text(src.as_bytes()).ok())
-        .unwrap_or("");
     let mut cursor = node.walk();
     let annotated = node.children(&mut cursor).any(|c| {
         c.kind() == "modifiers" && {
@@ -743,10 +742,7 @@ fn kotlin_fn_is_test(node: Node, src: &str, path: &str) -> bool {
             t.contains("@Test") || t.contains("Test\n") || t.contains("@ParameterizedTest")
         }
     });
-    annotated
-        || (name.starts_with("test") && (is_kotlin_test_path(path) || functions::test_path(path)))
-        || is_kotlin_test_path(path)
-        || functions::test_path(path)
+    annotated || functions::is_test_file(path, Some(is_kotlin_test_path))
 }
 
 pub const KOTLIN_FUNCTIONS: FunctionSpec = FunctionSpec {

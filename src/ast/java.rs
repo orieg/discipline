@@ -29,6 +29,10 @@ impl LanguagePack for JavaPack {
         matches!(super::extension(path), Some("java"))
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        super::functions::is_test_file(path, Some(is_java_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -70,9 +74,10 @@ impl LanguagePack for JavaPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            // A file in a test directory, or one the repository declares as test scope, is
-            // test code line for line.
-            let whole_file = super::functions::test_path(path)
+            // A file matching the shared test-path conventions, this pack's own test-file
+            // convention, or one the repository declares as test scope, is test code
+            // line for line.
+            let whole_file = super::functions::is_test_file(path, Some(is_java_test_path))
                 || super::functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
@@ -657,7 +662,7 @@ impl<'a> JavaExtractor<'a> {
 /// A method without a `body` field (abstract, interface) never reaches the classifier;
 /// a `default` interface method or a class method does.
 fn java_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
-    if functions::test_path(path) || is_java_test_path(path) {
+    if functions::is_test_file(path, Some(is_java_test_path)) {
         return true;
     }
     let mut cursor = node.walk();
@@ -757,6 +762,32 @@ pub const JAVA_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole-file handler rule is the shared-or-own superset: an empty handler is
+    /// silent in a file only the shared rule recognises (`benches/`) and in one only
+    /// the pack's own `Test` prefix recognises, and fires elsewhere.
+    #[test]
+    fn whole_file_handler_rule_is_the_shared_or_own_superset() {
+        let src = "class Helper {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n";
+        let swallowed = |path: &str| {
+            JavaPack
+                .extract(path, src, &AssertVocabulary::default())
+                .unwrap()
+                .swallowed
+                .len()
+        };
+        assert_eq!(swallowed("benches/Helper.java"), 0, "shared rule only");
+        assert_eq!(
+            swallowed("src/main/java/TestHelper.java"),
+            0,
+            "own rule only"
+        );
+        assert_eq!(
+            swallowed("src/main/java/Helper.java"),
+            1,
+            "negative control"
+        );
+    }
 
     /// A test calling a thin wrapper gets the credit of one calling the wrapped function
     /// (`crate::ast::thin_wrapper_counts` names the controls).
