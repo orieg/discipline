@@ -446,7 +446,11 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         head_cases.len()
     } else {
         let head = count_workspace_ast_tests(ctx, &filter)?;
-        out.notes.extend(head.notes("head"));
+        for note in head.notes("head") {
+            if !out.notes.contains(&note) {
+                out.notes.push(note);
+            }
+        }
         head.running
     };
     out.examined = measured_count;
@@ -511,7 +515,11 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     } else {
         // Zero-config ratchet: compare head AST test count against base ref AST test count.
         let base = count_base_workspace_ast_tests(ctx, &filter)?;
-        out.notes.extend(base.notes("base"));
+        for note in base.notes("base") {
+            if !out.notes.contains(&note) {
+                out.notes.push(note);
+            }
+        }
         let base_count = base.running;
         if base_count > 0 && measured_count + settings.tolerance < base_count {
             if let Some(ov) =
@@ -712,11 +720,20 @@ pub fn count_workspace_ast_tests(
     let registry = crate::ast::default_registry();
     let v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx);
     let mut count = AstTestCount::default();
+    let mut unknown_reasons = std::collections::BTreeSet::new();
     for path in ctx.git.tracked_files()? {
-        if filter.matches(&path)
-            || !registry.is_supported(&path)
-            || !crate::ast::runner_collection::is_runner_collected(&path, &v)
-        {
+        if filter.matches(&path) || !registry.is_supported(&path) {
+            continue;
+        }
+        let collected = match crate::ast::runner_collection::check_runner_collected(&path, &v) {
+            crate::ast::runner_collection::RunnerCollectionStatus::Collected => true,
+            crate::ast::runner_collection::RunnerCollectionStatus::NotCollected => false,
+            crate::ast::runner_collection::RunnerCollectionStatus::Unknown(reason) => {
+                unknown_reasons.insert(reason);
+                crate::ast::functions::test_path(&path)
+            }
+        };
+        if !collected {
             continue;
         }
         let full = Path::new(ctx.git.root()).join(&path);
@@ -725,6 +742,11 @@ pub fn count_workspace_ast_tests(
             continue;
         }
         count.add(&path, std::fs::read_to_string(&full).ok(), &registry, &v);
+    }
+    for reason in unknown_reasons {
+        count.notes.push(format!(
+            "test-floor: runner collection unknown ({reason}); falling back to standard test paths"
+        ));
     }
     Ok(count)
 }
@@ -737,11 +759,20 @@ pub fn count_base_workspace_ast_tests(
     let registry = crate::ast::default_registry();
     let v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx);
     let mut count = AstTestCount::default();
+    let mut unknown_reasons = std::collections::BTreeSet::new();
     for path in ctx.git.base_tracked_files()? {
-        if filter.matches(&path)
-            || !registry.is_supported(&path)
-            || !crate::ast::runner_collection::is_runner_collected(&path, &v)
-        {
+        if filter.matches(&path) || !registry.is_supported(&path) {
+            continue;
+        }
+        let collected = match crate::ast::runner_collection::check_runner_collected(&path, &v) {
+            crate::ast::runner_collection::RunnerCollectionStatus::Collected => true,
+            crate::ast::runner_collection::RunnerCollectionStatus::NotCollected => false,
+            crate::ast::runner_collection::RunnerCollectionStatus::Unknown(reason) => {
+                unknown_reasons.insert(reason);
+                crate::ast::functions::test_path(&path)
+            }
+        };
+        if !collected {
             continue;
         }
         count.add(
@@ -750,6 +781,11 @@ pub fn count_base_workspace_ast_tests(
             &registry,
             &v,
         );
+    }
+    for reason in unknown_reasons {
+        count.notes.push(format!(
+            "test-floor: runner collection unknown ({reason}); falling back to standard test paths"
+        ));
     }
     Ok(count)
 }

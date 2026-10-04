@@ -66,11 +66,16 @@ pub(crate) fn assert_vocabulary(config: &crate::config::DisciplineConfig) -> Ass
 
 pub(crate) fn assert_vocabulary_for_head(ctx: &Context) -> AssertVocabulary {
     let mut vocab = assert_vocabulary(ctx.config);
-    vocab.runner_rules = crate::ast::runner_collection::RunnerCollectionRules::from_files(|path| {
-        ctx.git.head_content(path).ok().flatten().or_else(|| {
-            std::fs::read_to_string(std::path::Path::new(ctx.git.root()).join(path)).ok()
-        })
-    });
+    let manifests = cargo_manifests(ctx.git.tracked_files().unwrap_or_default());
+    vocab.runner_rules =
+        crate::ast::runner_collection::RunnerCollectionRules::from_files_with_manifests(
+            |path| {
+                ctx.git.head_content(path).ok().flatten().or_else(|| {
+                    std::fs::read_to_string(std::path::Path::new(ctx.git.root()).join(path)).ok()
+                })
+            },
+            &manifests,
+        );
     vocab
 }
 
@@ -81,10 +86,20 @@ pub(crate) fn assert_vocabulary_for_base(ctx: &Context) -> AssertVocabulary {
         .flatten()
         .and_then(|s| crate::config::DisciplineConfig::from_toml_str(&s).ok());
     let mut vocab = assert_vocabulary(base_cfg.as_ref().unwrap_or(ctx.config));
-    vocab.runner_rules = crate::ast::runner_collection::RunnerCollectionRules::from_files(|path| {
-        ctx.git.base_content(path).ok().flatten()
-    });
+    let manifests = cargo_manifests(ctx.git.base_tracked_files().unwrap_or_default());
+    vocab.runner_rules =
+        crate::ast::runner_collection::RunnerCollectionRules::from_files_with_manifests(
+            |path| ctx.git.base_content(path).ok().flatten(),
+            &manifests,
+        );
     vocab
+}
+
+fn cargo_manifests(files: Vec<String>) -> Vec<String> {
+    files
+        .into_iter()
+        .filter(|f| f == "Cargo.toml" || f.ends_with("/Cargo.toml"))
+        .collect()
 }
 
 /// Runs every diff-based agent-guard gate and returns one outcome per gate.
