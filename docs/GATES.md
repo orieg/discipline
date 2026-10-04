@@ -884,7 +884,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_secret_patterns`, `allow_patterns`, `diff_only`.
 
 #### `commit-provenance`
-- **Rule:** Every commit between the base and `HEAD` carries the trailers the repository requires, and a commit that identifies itself as agent-produced carries a review trailer naming someone other than its author. Trailers are the last paragraph of the message when every line of it is `Key: value`; the subject paragraph is never read as one.
+- **Rule:** Every commit between the base and `HEAD` carries the trailers the repository requires, and a commit that identifies itself as agent-produced carries a review trailer naming someone other than its author. Trailers are the trailing paragraphs of the message in which every line is `Key: value`, read back from the end up to the first paragraph that holds any other line; the subject paragraph is never read as one. A squash merge that splits one trailer block into several paragraphs (GitHub writes each trailer it does not recognise as its own paragraph) is read whole.
 - **Languages:** Any (commit metadata).
 - **What it catches:**
   - `Commit Trailer Missing`: a commit without one of `required_trailers` (`Signed-off-by`, `Agent-Tool`, ...).
