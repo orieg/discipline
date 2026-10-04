@@ -679,6 +679,15 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: trailers a squash merge split into paragraphs are all read",
+        || {
+            use crate::guards::commit_provenance::trailers;
+            let split = "fix: x\n\nReviewed-by: A <a@x>\n\nSession: s\n\nSigned-off-by: B <b@x>\n";
+            let prose = "fix: x\n\nReviewed-by: A <a@x>\n\nprose\n\nSigned-off-by: B <b@x>\n";
+            Ok(trailers(split).len() == 3 && trailers(prose).len() == 1)
+        },
+    ),
+    (
         "build-hooks: a lifecycle script gaining curl is reported, an unchanged one is not",
         || {
             use crate::gitctx::{ChangeKind, ChangedFile};

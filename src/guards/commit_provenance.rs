@@ -16,31 +16,54 @@ use anyhow::Result;
 
 pub const GATE: &str = "commit-provenance";
 
-/// Trailer lines at the end of a commit message: `Key: value` runs after the last blank
-/// line, in the order written. Case of the key is kept.
+/// Trailer lines at the end of a commit message: every line of the trailing paragraphs
+/// in which each line is `Key: value`, in the order written. Case of the key is kept.
+///
+/// A trailer block is usually one paragraph, but a forge's squash merge can split it:
+/// GitHub writes each trailer it does not recognise as its own paragraph and appends its
+/// own `Signed-off-by:` / `Co-authored-by:` block last. Reading only the last paragraph
+/// would then drop a `Reviewed-by:` the author wrote. The run stops at the first paragraph,
+/// read from the end, that holds a line that is not a trailer.
 pub fn trailers(message: &str) -> Vec<(String, String)> {
     let body = message.trim_end();
     // The subject paragraph is never a trailer block, whatever it looks like.
-    let Some((_, last_block)) = body.rsplit_once("\n\n") else {
+    let Some((_, rest)) = body.split_once("\n\n") else {
         return Vec::new();
     };
+    let mut blocks = Vec::new();
+    let paragraphs: Vec<&str> = rest.split("\n\n").collect();
+    for paragraph in paragraphs.into_iter().rev() {
+        if paragraph.trim().is_empty() {
+            continue;
+        }
+        match trailer_block(paragraph) {
+            Some(block) => blocks.push(block),
+            None => break,
+        }
+    }
+    blocks.into_iter().rev().flatten().collect()
+}
+
+/// The `Key: value` lines of one paragraph, or `None` when any line is not a trailer:
+/// that paragraph is prose.
+fn trailer_block(paragraph: &str) -> Option<Vec<(String, String)>> {
     let mut out = Vec::new();
-    for line in last_block.lines() {
+    for line in paragraph.lines() {
         let line = line.trim();
-        let Some((k, v)) = line.split_once(':') else {
-            // A non-trailer line means this block is prose, not a trailer block.
-            return Vec::new();
-        };
+        if line.is_empty() {
+            continue;
+        }
+        let (k, v) = line.split_once(':')?;
         let k = k.trim();
         if k.is_empty()
             || k.contains(' ')
             || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         {
-            return Vec::new();
+            return None;
         }
         out.push((k.to_string(), v.trim().to_string()));
     }
-    out
+    Some(out)
 }
 
 fn has_trailer(trailers: &[(String, String)], key: &str) -> bool {
@@ -213,6 +236,35 @@ mod tests {
         assert_eq!(t[0].0, "Signed-off-by");
         assert!(trailers("feat: x\n\nJust prose here.\n").is_empty());
         assert!(trailers("feat: x").is_empty());
+    }
+
+    #[test]
+    fn trailers_split_into_paragraphs_by_a_squash_merge_are_all_read() {
+        // The layout GitHub writes when it squash-merges a commit whose one trailer block
+        // held trailers it does not recognise.
+        let squashed = "chore: bump\n\nBody prose.\n\nReviewed-by: Owner <owner@x>\n\n\
+                        Session: https://example.test/s\n\n\
+                        Signed-off-by: Bot <noreply@anthropic.com>\n\
+                        Co-authored-by: Bot <noreply@anthropic.com>\n";
+        let keys: Vec<String> = trailers(squashed).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            keys,
+            ["Reviewed-by", "Session", "Signed-off-by", "Co-authored-by"]
+        );
+        let markers = v(&["noreply@anthropic.com"]);
+        let c = commit("Bot", "noreply@anthropic.com", squashed);
+        assert!(judge(&[c], &[], &markers, "Reviewed-by").is_empty());
+
+        // A prose paragraph ends the run: a `Key: value` paragraph before it is body text.
+        let interrupted = "chore: bump\n\nReviewed-by: Owner <owner@x>\n\nProse after it.\n\n\
+                           Co-authored-by: Bot <noreply@anthropic.com>\n";
+        let keys: Vec<String> = trailers(interrupted).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, ["Co-authored-by"]);
+        let c = commit("Bot", "noreply@anthropic.com", interrupted);
+        assert_eq!(
+            judge(&[c], &[], &markers, "Reviewed-by")[0].kind.title,
+            "Agent Commit Without Review"
+        );
     }
 
     #[test]
