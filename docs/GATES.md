@@ -1434,11 +1434,14 @@ removes: test_logout deprecated legacy endpoint test
 
 ###### What the static count cannot see
 
-Several kinds of test erosion are visible only at run time and escape static AST counts:
-- **Parametrized cases removed:** rows removed from `@pytest.mark.parametrize`, `test.each`, `@ValueSource`, `[InlineData]`, or `#[case]`. The test function definition remains in source, so static test counts do not drop.
-- **Tests moved out of collection:** test files or test classes excluded by test runner configuration (e.g. `pytest.ini`, `jest.config.js`) or path changes without modifying the test function.
+Several kinds of test erosion are visible only at run time and escape static AST counts. What the static count does see:
+- **Parametrized cases removed:** rows removed from `@pytest.mark.parametrize`, `test.each`, `@ValueSource`, `[InlineData]`, or `#[case]` are reported as `Test Cases Reduced In Parametrized Test` (`assertion-reduction/test-cases-reduced`), even though the test function definition remains and the count does not drop.
+- **Property tests:** tests inside `proptest!` and `quickcheck!` macro blocks are parsed and extracted into test facts, so they count toward the floor like any other test.
+- **Tests moved out of collection:** a file the runner's known, parsed configuration excludes (`pytest.ini` `python_files` / `testpaths`, Jest/Vitest `testMatch` / `testRegex`, Go `*_test.go`, Rust `tests/*.rs` / `tests/*/main.rs` / `src/**/*.rs` and `[[test]] path`) is not counted. When the runner is unknown — no configuration found, Mocha detected, a `jest.config.*` / `vitest.config.*` script that cannot be parsed statically, or a configured pattern that does not compile — the file IS counted via the standard test paths, and a gate note names the reason (`test-floor: runner collection unknown (...)`).
+
+Still visible only at run time:
 - **Tests behind disabled conditions:** tests gated by `#[cfg(...)]`, `@pytest.mark.skipif`, or environment flags that are never enabled in CI.
-- **Tests generated dynamically:** tests generated in loops, macros (`proptest!`, `quickcheck!`), or runtime factories where test identities exist only during execution.
+- **Tests generated dynamically:** tests generated in loops or runtime factories where test identities exist only during execution.
 
 Configuring `test_report` closes these gaps by ratcheting the set of executed test identities across base and head (`discipline doctor` reports an informational finding when a runner is detected without `test_report`).
 
