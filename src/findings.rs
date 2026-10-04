@@ -201,6 +201,7 @@ findings! {
     ERROR_LOGGED_AND_DROPPED = ["error-swallowing"], "error-logged-and-dropped", "Error Logged And Dropped", Was("Empty Error Handler Added");
     UNPARSEABLE_INPUT_SKIPPED = ["error-swallowing"], "unparseable-input-skipped", "Unparseable Input Skipped", Same;
     ERROR_SILENCED = ["error-swallowing"], "error-silenced", "Error Silenced", Same;
+    TEST_PATH_RECLASSIFIED = ["error-swallowing"], "test-path-reclassification", "File Renamed Into Test Scope", Same;
 
     // instruction-smuggling
     AGENT_INSTRUCTIONS_CHANGED = ["instruction-smuggling"], "agent-instructions-changed", "Agent Instructions Changed", Same;

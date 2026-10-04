@@ -55,6 +55,10 @@ impl LanguagePack for ObjcPack {
         matches!(super::extension(path), Some("m" | "mm"))
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        functions::is_test_file(path, Some(is_objc_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -106,8 +110,7 @@ impl LanguagePack for ObjcPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            let whole_file = is_objc_test_path(path)
-                || functions::test_path(path)
+            let whole_file = functions::is_test_file(path, Some(is_objc_test_path))
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
@@ -482,8 +485,7 @@ fn objc_fn_is_test(node: Node, src: &str, path: &str) -> bool {
         found
     };
     (node.kind() == "method_definition" && first.starts_with("test") && is_objc_test_path(path))
-        || is_objc_test_path(path)
-        || functions::test_path(path)
+        || functions::is_test_file(path, Some(is_objc_test_path))
 }
 
 pub const OBJC_FUNCTIONS: FunctionSpec = FunctionSpec {
