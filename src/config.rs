@@ -1580,6 +1580,12 @@ pub struct CommitProvenanceGate {
     /// Trailer an agent-produced commit must carry, naming someone other than its
     /// author. Empty switches the agent rule off.
     pub review_trailer: String,
+    /// The review trailer may name the commit's author when that author is a person (no
+    /// `agent_markers` entry matches the author name or email) and the reviewer is not an
+    /// agent. For a single-maintainer repository, where a squash merge makes the
+    /// maintainer the author of an agent-assisted commit. Off: the reviewer must be
+    /// someone other than the author.
+    pub allow_author_review: bool,
 }
 
 impl Default for CommitProvenanceGate {
@@ -1607,6 +1613,7 @@ impl Default for CommitProvenanceGate {
             .map(|s| s.to_string())
             .collect(),
             review_trailer: "Reviewed-by".to_string(),
+            allow_author_review: false,
         }
     }
 }

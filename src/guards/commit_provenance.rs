@@ -16,31 +16,54 @@ use anyhow::Result;
 
 pub const GATE: &str = "commit-provenance";
 
-/// Trailer lines at the end of a commit message: `Key: value` runs after the last blank
-/// line, in the order written. Case of the key is kept.
+/// Trailer lines at the end of a commit message: every line of the trailing paragraphs
+/// in which each line is `Key: value`, in the order written. Case of the key is kept.
+///
+/// A trailer block is usually one paragraph, but a forge's squash merge can split it:
+/// GitHub writes each trailer it does not recognise as its own paragraph and appends its
+/// own `Signed-off-by:` / `Co-authored-by:` block last. Reading only the last paragraph
+/// would then drop a `Reviewed-by:` the author wrote. The run stops at the first paragraph,
+/// read from the end, that holds a line that is not a trailer.
 pub fn trailers(message: &str) -> Vec<(String, String)> {
     let body = message.trim_end();
     // The subject paragraph is never a trailer block, whatever it looks like.
-    let Some((_, last_block)) = body.rsplit_once("\n\n") else {
+    let Some((_, rest)) = body.split_once("\n\n") else {
         return Vec::new();
     };
+    let mut blocks = Vec::new();
+    let paragraphs: Vec<&str> = rest.split("\n\n").collect();
+    for paragraph in paragraphs.into_iter().rev() {
+        if paragraph.trim().is_empty() {
+            continue;
+        }
+        match trailer_block(paragraph) {
+            Some(block) => blocks.push(block),
+            None => break,
+        }
+    }
+    blocks.into_iter().rev().flatten().collect()
+}
+
+/// The `Key: value` lines of one paragraph, or `None` when any line is not a trailer:
+/// that paragraph is prose.
+fn trailer_block(paragraph: &str) -> Option<Vec<(String, String)>> {
     let mut out = Vec::new();
-    for line in last_block.lines() {
+    for line in paragraph.lines() {
         let line = line.trim();
-        let Some((k, v)) = line.split_once(':') else {
-            // A non-trailer line means this block is prose, not a trailer block.
-            return Vec::new();
-        };
+        if line.is_empty() {
+            continue;
+        }
+        let (k, v) = line.split_once(':')?;
         let k = k.trim();
         if k.is_empty()
             || k.contains(' ')
             || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         {
-            return Vec::new();
+            return None;
         }
         out.push((k.to_string(), v.trim().to_string()));
     }
-    out
+    Some(out)
 }
 
 fn has_trailer(trailers: &[(String, String)], key: &str) -> bool {
@@ -66,22 +89,40 @@ pub fn is_agent_commit(
     })
 }
 
-/// Whether the review trailer names someone other than the author.
+/// Whether a marker matches the author name or email: the author is an agent, not a
+/// person committing with an agent's help.
+fn author_is_agent(c: &CommitDetail, markers: &[String]) -> bool {
+    let name = c.author_name.to_lowercase();
+    let email = c.author_email.to_lowercase();
+    markers.iter().any(|m| {
+        let m = m.to_lowercase();
+        name.contains(&m) || email.contains(&m)
+    })
+}
+
+/// Whether the review trailer names an acceptable reviewer: someone other than the
+/// author, or, under `allow_author_review`, the author when the author is a person and
+/// the reviewer is not an agent.
 fn reviewed_by_someone_else(
     c: &CommitDetail,
     trailers: &[(String, String)],
     review_key: &str,
+    markers: &[String],
+    allow_author_review: bool,
 ) -> bool {
+    let author_may_review = allow_author_review && !author_is_agent(c, markers);
     trailers
         .iter()
         .filter(|(k, _)| k.eq_ignore_ascii_case(review_key))
-        .any(|(_, v)| {
+        .any(|(k, v)| {
+            let line = format!("{k}: {v}").to_lowercase();
             let v = v.to_lowercase();
             let name = c.author_name.to_lowercase();
             let email = c.author_email.to_lowercase();
-            !v.is_empty()
-                && !(name.len() > 2 && v.contains(&name))
-                && !(email.len() > 2 && v.contains(&email))
+            let names_author =
+                (name.len() > 2 && v.contains(&name)) || (email.len() > 2 && v.contains(&email));
+            let names_agent = markers.iter().any(|m| line.contains(&m.to_lowercase()));
+            !v.is_empty() && (!names_author || (author_may_review && !names_agent))
         })
 }
 
@@ -97,6 +138,17 @@ pub fn judge(
     required: &[String],
     markers: &[String],
     review_key: &str,
+) -> Vec<Finding> {
+    judge_with(commits, required, markers, review_key, false)
+}
+
+/// [`judge`] with the `allow_author_review` setting.
+pub fn judge_with(
+    commits: &[CommitDetail],
+    required: &[String],
+    markers: &[String],
+    review_key: &str,
+    allow_author_review: bool,
 ) -> Vec<Finding> {
     let mut out = Vec::new();
     for c in commits {
@@ -125,7 +177,7 @@ pub fn judge(
                         "commit {short} identifies itself as agent-produced and carries no `{review_key}:` trailer"
                     ),
                 });
-            } else if !reviewed_by_someone_else(c, &t, review_key) {
+            } else if !reviewed_by_someone_else(c, &t, review_key, markers, allow_author_review) {
                 out.push(Finding {
                     kind: &crate::findings::AGENT_COMMIT_REVIEWED_BY_AUTHOR,
                     sha: c.sha.clone(),
@@ -157,11 +209,12 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
     out.examined = non_merges.len();
-    for f in judge(
+    for f in judge_with(
         &commits,
         &settings.required_trailers,
         &settings.agent_markers,
         &settings.review_trailer,
+        settings.allow_author_review,
     ) {
         let short: String = f.sha.chars().take(7).collect();
         if let Some(ov) = ctx
@@ -213,6 +266,81 @@ mod tests {
         assert_eq!(t[0].0, "Signed-off-by");
         assert!(trailers("feat: x\n\nJust prose here.\n").is_empty());
         assert!(trailers("feat: x").is_empty());
+    }
+
+    #[test]
+    fn trailers_split_into_paragraphs_by_a_squash_merge_are_all_read() {
+        // The layout GitHub writes when it squash-merges a commit whose one trailer block
+        // held trailers it does not recognise.
+        let squashed = "chore: bump\n\nBody prose.\n\nReviewed-by: Owner <owner@x>\n\n\
+                        Session: https://example.test/s\n\n\
+                        Signed-off-by: Bot <noreply@anthropic.com>\n\
+                        Co-authored-by: Bot <noreply@anthropic.com>\n";
+        let keys: Vec<String> = trailers(squashed).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            keys,
+            ["Reviewed-by", "Session", "Signed-off-by", "Co-authored-by"]
+        );
+        let markers = v(&["noreply@anthropic.com"]);
+        let c = commit("Bot", "noreply@anthropic.com", squashed);
+        assert!(judge(&[c], &[], &markers, "Reviewed-by").is_empty());
+
+        // A prose paragraph ends the run: a `Key: value` paragraph before it is body text.
+        let interrupted = "chore: bump\n\nReviewed-by: Owner <owner@x>\n\nProse after it.\n\n\
+                           Co-authored-by: Bot <noreply@anthropic.com>\n";
+        let keys: Vec<String> = trailers(interrupted).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, ["Co-authored-by"]);
+        let c = commit("Bot", "noreply@anthropic.com", interrupted);
+        assert_eq!(
+            judge(&[c], &[], &markers, "Reviewed-by")[0].kind.title,
+            "Agent Commit Without Review"
+        );
+    }
+
+    #[test]
+    fn allow_author_review_lets_a_person_review_their_own_agent_assisted_commit() {
+        let markers = v(&["Co-authored-by: Claude", "noreply@anthropic.com", "[bot]"]);
+        // The squash merge of an agent's pull request: the maintainer is the author.
+        let squashed = commit(
+            "Ada",
+            "ada@x",
+            "feat: x (#1)\n\nReviewed-by: Ada <ada@x>\n\nCo-authored-by: Claude <noreply@anthropic.com>\n",
+        );
+        let strict = judge_with(
+            std::slice::from_ref(&squashed),
+            &[],
+            &markers,
+            "Reviewed-by",
+            false,
+        );
+        assert_eq!(strict[0].kind.title, "Agent Commit Reviewed By Its Author");
+        assert!(judge_with(&[squashed], &[], &markers, "Reviewed-by", true).is_empty());
+
+        // An agent author never reviews itself, whatever the setting: the author name
+        // carries a marker, the review line does not.
+        let agent_author = commit(
+            "coder[bot]",
+            "coder@x",
+            "feat: x\n\nReviewed-by: coder <coder@x>\n",
+        );
+        assert_eq!(
+            judge_with(&[agent_author], &[], &markers, "Reviewed-by", true)[0]
+                .kind
+                .title,
+            "Agent Commit Reviewed By Its Author"
+        );
+        // A reviewer that is an agent is not a person's review.
+        let agent_reviewer = commit(
+            "Ada",
+            "ada@x",
+            "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>\nReviewed-by: Ada <ada@x>, Claude <noreply@anthropic.com>\n",
+        );
+        assert_eq!(
+            judge_with(&[agent_reviewer], &[], &markers, "Reviewed-by", true)[0]
+                .kind
+                .title,
+            "Agent Commit Reviewed By Its Author"
+        );
     }
 
     #[test]

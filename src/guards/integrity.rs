@@ -126,6 +126,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("max_increase", Direction::Cap),
     // Booleans where `true` relaxes the gate.
     ("allow_hidden", Direction::LooserWhenTrue),
+    ("allow_author_review", Direction::LooserWhenTrue),
     ("allow_zero", Direction::LooserWhenTrue),
     ("diff_only", Direction::LooserWhenTrue),
     ("allow_cross_host", Direction::LooserWhenTrue),
