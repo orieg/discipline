@@ -31,6 +31,10 @@ impl LanguagePack for RubyPack {
             || path.ends_with("Gemfile")
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        functions::is_test_file(path, Some(is_ruby_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -72,8 +76,7 @@ impl LanguagePack for RubyPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            let whole_file = is_ruby_test_path(path)
-                || functions::test_path(path)
+            let whole_file = functions::is_test_file(path, Some(is_ruby_test_path))
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
@@ -115,8 +118,7 @@ fn ruby_fn_is_test(node: Node, src: &str, path: &str) -> bool {
         .unwrap_or("");
     name.starts_with("test_")
         || name == "test"
-        || is_ruby_test_path(path)
-        || functions::test_path(path)
+        || functions::is_test_file(path, Some(is_ruby_test_path))
 }
 
 pub const RUBY_FUNCTIONS: FunctionSpec = FunctionSpec {

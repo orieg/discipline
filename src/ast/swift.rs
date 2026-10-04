@@ -34,6 +34,10 @@ impl LanguagePack for SwiftPack {
         super::extension(path) == Some("swift")
     }
 
+    fn is_test_path(&self, path: &str) -> bool {
+        functions::is_test_file(path, Some(is_swift_test_path))
+    }
+
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         let mut parser = Parser::new();
         parser
@@ -75,8 +79,7 @@ impl LanguagePack for SwiftPack {
                 .iter()
                 .map(|t| (t.line, t.end_line.max(t.line)))
                 .collect();
-            let whole_file = is_swift_test_path(path)
-                || functions::test_path(path)
+            let whole_file = functions::is_test_file(path, Some(is_swift_test_path))
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
@@ -541,18 +544,11 @@ impl<'a> SwiftExtractor<'a> {
 }
 
 fn swift_fn_is_test(node: Node, src: &str, path: &str) -> bool {
-    let name = node
-        .child_by_field_name("name")
-        .and_then(|n| n.utf8_text(src.as_bytes()).ok())
-        .unwrap_or("");
     let mut cursor = node.walk();
     let annotated = node.children(&mut cursor).any(|c| {
         c.kind() == "modifiers" && c.utf8_text(src.as_bytes()).unwrap_or("").contains("@Test")
     });
-    annotated
-        || (name.starts_with("test") && is_swift_test_path(path))
-        || is_swift_test_path(path)
-        || functions::test_path(path)
+    annotated || functions::is_test_file(path, Some(is_swift_test_path))
 }
 
 pub const SWIFT_FUNCTIONS: FunctionSpec = FunctionSpec {
