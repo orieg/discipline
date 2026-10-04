@@ -2053,6 +2053,44 @@ fn lowered_floors_and_repointed_commands_are_weakenings() {
 }
 
 #[test]
+fn adding_ci_skip_severity_note_on_head_is_detected_as_config_integrity_weakening() {
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.ignored-tests]\nci_skip_severity = \"note\"\n"),
+    );
+    repo.write(
+        "tests/ci_check.rs",
+        "#[test]\nfn test_in_ci() {\n    if std::env::var(\"CI\").is_ok() {\n        return;\n    }\n    assert_eq!(compute(), 1);\n}\nfn compute() -> u32 { 1 }\n",
+    );
+    repo.commit("test: add conditional skip and set ci_skip_severity to note");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+    let violations = run.violations("config-integrity");
+    assert_eq!(violations.len(), 1);
+    assert!(
+        violations[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("[ignored-tests] `ci_skip_severity` lowered from error to note"),
+        "unexpected violation message: {:?}",
+        violations[0]["message"]
+    );
+
+    // With allow-gate-weakening directive in commit body, it passes.
+    repo.commit(
+        "chore: allow\n\nallow-gate-weakening: ignored-tests allow ci conditional skips as notes",
+    );
+    let lifted = repo.check(&[]);
+    assert!(lifted.titles("config-integrity").is_empty());
+    assert_eq!(lifted.code, 0);
+}
+
+#[test]
 fn ci_integrity_flags_advisory_on_the_discipline_step_in_every_actions_directory() {
     const ENFORCING: &str = r#"name: CI
 permissions: read-all
