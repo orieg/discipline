@@ -1149,7 +1149,7 @@
       - <span class="code-prop">name:</span> Run Discipline Sentinel
         <span class="code-prop">uses:</span> orieg/discipline@v0</div>
         <p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.9rem;">
-          The default <code>ci-integrity</code> gate rejects a newly added action that is not pinned by commit SHA, <code>@v0</code> included. Pin it to a commit SHA, which runs the binary of the release that commit names: <code>uses: orieg/discipline@&lt;commit-sha&gt; # v0.17.0</code>.
+          The default <code>ci-integrity</code> gate rejects a newly added action that is not pinned by commit SHA, <code>@v0</code> included. Pin it to a commit SHA, which runs the binary of the release that commit names: <code>uses: orieg/discipline@&lt;commit-sha&gt; # v0.17.1</code>.
         </p>
       </div>
 
@@ -1289,7 +1289,7 @@ docker run --rm \
         <div class="code-block"><span class="code-comment"># .pre-commit-config.yaml</span>
 <span class="code-prop">repos:</span>
   - <span class="code-prop">repo:</span> https://github.com/orieg/discipline
-    <span class="code-prop">rev:</span> v0.17.0
+    <span class="code-prop">rev:</span> v0.17.1
     <span class="code-prop">hooks:</span>
       - <span class="code-prop">id:</span> discipline         <span class="code-comment"># Compiles via cargo</span>
       <span class="code-comment"># - id: discipline-system   # Or uses binary on PATH</span></div>

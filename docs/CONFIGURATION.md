@@ -894,7 +894,7 @@ jobs:
           fail_on_warnings: true
 ```
 
-A repository that runs the default `ci-integrity` gate reports a tag ref (`@v0`, `@v0.17.0`) as an unpinned action. Pin the action to a commit SHA (`uses: orieg/discipline@<commit-sha> # v0.17.0`): a SHA ref runs the binary of the release that commit's `Cargo.toml` names, and `version:` picks another release.
+A repository that runs the default `ci-integrity` gate reports a tag ref (`@v0`, `@v0.17.1`) as an unpinned action. Pin the action to a commit SHA (`uses: orieg/discipline@<commit-sha> # v0.17.1`): a SHA ref runs the binary of the release that commit's `Cargo.toml` names, and `version:` picks another release.
 
 ### GitLab CI/CD
 
@@ -981,7 +981,7 @@ Use [`templates/argo-workflow-template.yaml`](https://github.com/orieg/disciplin
 ```yaml
 repos:
   - repo: https://github.com/orieg/discipline
-    rev: v0.17.0
+    rev: v0.17.1
     hooks:
       - id: discipline          # compiles via cargo
       # Or: - id: discipline-system # uses pre-installed binary on PATH
