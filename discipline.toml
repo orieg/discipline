@@ -82,11 +82,14 @@ enabled = true
 [gates.citation-metadata]
 enabled = true
 
-# An agent-produced commit (by trailer or authorship) carries a review by someone else,
-# and all commits must carry a DCO Signed-off-by trailer.
+# An agent-produced commit (by trailer or authorship) carries a review, and all commits
+# must carry a DCO Signed-off-by trailer. One maintainer: a squash merge makes that
+# maintainer the author of an agent's pull request, so the maintainer may be the
+# reviewer; an agent never is.
 [gates.commit-provenance]
 enabled = true
 required_trailers = ["Signed-off-by"]
+allow_author_review = true
 
 [gates.pii]
 exempt_paths = ["tests/fixtures/**"]
