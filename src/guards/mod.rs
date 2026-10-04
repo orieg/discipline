@@ -247,6 +247,11 @@ pub struct CheckSummary {
     /// Deprecated configuration keys this run read, one note each. They never fail the run.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deprecations: Vec<String>,
+    /// Notes about the directive sources as a whole (which merged pull request a pushed
+    /// commit came through, a forge lookup that could not be made), once per run. A note
+    /// about one directive goes to its gate instead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub directive_notes: Vec<String>,
     /// Directives this run read (PR body, commit bodies, merged pull-request bodies) that
     /// lifted no finding. Computed when every suite ran; empty under `--suite`. They
     /// never fail the run.
@@ -636,6 +641,7 @@ pub fn run_checks(
         }
     }
 
+    let mut run_directive_notes: Vec<String> = Vec::new();
     for note in &ctx.directive_notes {
         // A refused hidden directive's note names the directive and nothing it says (#362):
         // it belongs to that directive's gate alone.
@@ -714,6 +720,14 @@ pub fn run_checks(
         } else {
             ""
         };
+        // Where a pushed commit came from: about the run's sources, not any gate's
+        // directives, so it is reported once for the run.
+        if target_gate.is_empty() && crate::tokens::is_merged_source_note(note) {
+            if !run_directive_notes.contains(note) {
+                run_directive_notes.push(note.clone());
+            }
+            continue;
+        }
         for o in &mut outcomes {
             if target_gate.is_empty() {
                 if matches!(
@@ -821,6 +835,7 @@ pub fn run_checks(
         outcomes,
         policy_failures: Vec::new(),
         deprecations,
+        directive_notes: run_directive_notes,
     })
 }
 

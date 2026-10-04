@@ -1426,6 +1426,28 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "merged-pr-body: a 422 for an unknown commit means not on the forge, a 403 stays a failure",
+        || {
+            use crate::forge::{commit_origin, CannedApi, CommitOrigin, Forge, ForgeKind};
+            let forge = Forge {
+                kind: ForgeKind::GitHub,
+                url: "https://github.com".into(),
+                repo: "o/r".into(),
+            };
+            let mut api = CannedApi::default();
+            api.responses.insert(
+                "github:repos/o/r/commits/fff/pulls".into(),
+                serde_json::json!({"__status": 422, "__body": {"message": "No commit found for SHA: fff"}}),
+            );
+            api.responses.insert(
+                "github:repos/o/r/commits/ddd/pulls".into(),
+                serde_json::json!({"__status": 403, "__body": {}}),
+            );
+            Ok(commit_origin(&api, &forge, "fff").ok() == Some(CommitOrigin::NotOnForge)
+                && commit_origin(&api, &forge, "ddd").is_err())
+        },
+    ),
+    (
         "merged-pr-body: a merged pull request is found for a commit, a direct push is not",
         || {
             use crate::forge::{merged_pull_for_commit, CannedApi, Forge, ForgeKind};
@@ -2800,6 +2822,7 @@ command = "cargo test"
                 planned_gates: vec![],
                 policy_failures: Vec::new(),
                 deprecations: Vec::new(),
+                directive_notes: Vec::new(),
                 unused_directives: Vec::new(),
             };
 

@@ -208,6 +208,9 @@ fn render_terminal_to_writer<W: Write>(
     for failure in &summary.policy_failures {
         writeln!(w, "{}", style::red(&format!("failure: {failure}")))?;
     }
+    for note in &summary.directive_notes {
+        writeln!(w, "directives: {note}")?;
+    }
     for note in &summary.deprecations {
         writeln!(w, "deprecated: {note}")?;
     }
@@ -300,6 +303,9 @@ pub fn render_step_summary_to_writer(
     writeln!(file, "{heading}\n\nBase: `{}`\n", summary.base)?;
     for failure in &summary.policy_failures {
         writeln!(file, "**Refused:** {failure}\n")?;
+    }
+    for note in &summary.directive_notes {
+        writeln!(file, "**Directives:** {note}\n")?;
     }
     for note in &summary.deprecations {
         writeln!(file, "**Deprecated:** {note}\n")?;
@@ -720,6 +726,7 @@ mod tests {
             planned_gates: vec![],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         }
     }
@@ -776,6 +783,7 @@ mod tests {
             planned_gates: vec![],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
         let prompt = format_agent_prompt(&summary);
@@ -919,6 +927,7 @@ mod tests {
             planned_gates: vec![],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
 
@@ -984,6 +993,7 @@ mod tests {
             planned_gates: vec![],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
 
@@ -1084,6 +1094,7 @@ mod tests {
             planned_gates: vec![],
             policy_failures: Vec::new(),
             deprecations: vec!["`gates.x.old` is deprecated".into()],
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
         let mut buf = Vec::new();
@@ -1099,6 +1110,7 @@ mod tests {
         // An empty list stays out of the report, as policy_failures does.
         let quiet = CheckSummary {
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
             ..summary
         };
@@ -1139,6 +1151,7 @@ mod tests {
             planned_gates: vec![],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
 
@@ -1174,6 +1187,7 @@ mod tests {
             planned_gates: vec![],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
 
@@ -1215,6 +1229,7 @@ mod tests {
             planned_gates: vec![],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
 
