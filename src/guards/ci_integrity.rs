@@ -26,10 +26,11 @@
 //! - `pull_request_target` triggers cannot be introduced without fork protection.
 //! - Documented job counts in catalogue documentation stay in sync with workflow definitions.
 
-use crate::guards::{exempt_filter, line_allows, Context, GateOutcome, Severity, Violation};
+use crate::guards::{
+    exempt_filter, line_allows, Context, GateOutcome, PathFilter, Severity, Violation,
+};
 use crate::tokens;
-use anyhow::{Context as _, Result};
-use globset::GlobSetBuilder;
+use anyhow::Result;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -47,18 +48,12 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
 
     let filter = exempt_filter(settings)?;
 
-    let mut glob_builder = GlobSetBuilder::new();
-    for pattern in &settings.workflows {
-        let glob = globset::Glob::new(pattern)
-            .with_context(|| format!("Invalid workflow glob: '{pattern}'"))?;
-        glob_builder.add(glob);
-    }
-    let workflow_globs = glob_builder.build()?;
+    let workflow_filter = PathFilter::new(&settings.workflows)?;
 
     // Banned references are judged across the whole tree, whatever `diff_only` says: a
     // reference is banned whether or not this change added it.
     if !settings.banned_actions.is_empty() {
-        check_banned(ctx, &filter, &workflow_globs, &mut out)?;
+        check_banned(ctx, &filter, &workflow_filter, &mut out)?;
     }
 
     let (workflow_files, added_lines_map) = if settings.diff_only {
@@ -66,7 +61,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         let mut files = Vec::new();
         let mut line_map = std::collections::HashMap::new();
         for f in changed {
-            if filter.matches(&f.path) || !workflow_globs.is_match(&f.path) {
+            if filter.matches(&f.path) || !workflow_filter.matches(&f.path) {
                 continue;
             }
             files.push(f.path.clone());
@@ -100,7 +95,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         let tracked = ctx.git.tracked_files()?;
         let files: Vec<_> = tracked
             .into_iter()
-            .filter(|p| !filter.matches(p) && workflow_globs.is_match(p))
+            .filter(|p| !filter.matches(p) && workflow_filter.matches(p))
             .collect();
         (files, None)
     };
@@ -137,7 +132,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                             })
                             .collect();
                         if added_steps.is_none() && !verification.is_empty() {
-                            added_steps = Some(added_job_steps(ctx, &workflow_globs, &filter)?);
+                            added_steps = Some(added_job_steps(ctx, &workflow_filter, &filter)?);
                         }
                         let added = added_steps.as_deref().unwrap_or(&[]);
                         if !verification.is_empty()
@@ -441,7 +436,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                             if !is_rollup {
                                 if added_steps.is_none() {
                                     added_steps =
-                                        Some(added_job_steps(ctx, &workflow_globs, &filter)?);
+                                        Some(added_job_steps(ctx, &workflow_filter, &filter)?);
                                 }
                                 if job_moved(job_v, added_steps.as_deref().unwrap_or(&[])) {
                                     out.notes.push(format!(
@@ -1350,7 +1345,7 @@ fn deletion_reason(
 /// removed job's steps may have moved (a rename, a split, a move to another file).
 fn added_job_steps(
     ctx: &Context,
-    globs: &globset::GlobSet,
+    globs: &crate::guards::PathFilter,
     filter: &crate::guards::PathFilter,
 ) -> Result<Vec<serde_yaml::Value>> {
     let mut paths = ctx.git.tracked_files()?;
@@ -1359,7 +1354,7 @@ fn added_job_steps(
     paths.dedup();
     let mut steps = Vec::new();
     for p in paths.iter().filter(|p| {
-        globs.is_match(p) && !filter.matches(p) && !super::ci_gitlab::is_gitlab_ci_path(p)
+        globs.matches(p) && !filter.matches(p) && !super::ci_gitlab::is_gitlab_ci_path(p)
     }) {
         let Some(head) = ctx.git.head_content(p)? else {
             continue;
@@ -2546,14 +2541,14 @@ pub(crate) fn banned_entry_for<'a>(
 fn check_banned(
     ctx: &Context,
     filter: &crate::guards::PathFilter,
-    workflow_globs: &globset::GlobSet,
+    workflow_globs: &crate::guards::PathFilter,
     out: &mut GateOutcome,
 ) -> Result<()> {
     let settings = &ctx.config.gates.ci_integrity;
     let mut compared = 0usize;
     for path in ctx.git.tracked_files()? {
         if filter.matches(&path)
-            || !workflow_globs.is_match(&path)
+            || !workflow_globs.matches(&path)
             || super::ci_gitlab::is_gitlab_ci_path(&path)
         {
             continue;
