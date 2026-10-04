@@ -176,34 +176,11 @@ fn git_with_hooks(dir: &std::path::Path, args: &[&str]) -> std::process::Output 
         .parent()
         .unwrap()
         .to_path_buf();
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let mut cmd = std::process::Command::new("git");
-    // An explicit identity: the runner has no global one, and GIT_* is cleared below.
-    cmd.args([
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "user.name=discipline test",
-        "-c",
-        "user.email=test@example.invalid",
-    ])
-    .args(args)
-    .current_dir(dir)
-    .env("PATH", path);
-    for (k, _) in std::env::vars() {
-        if k.starts_with("GIT_") || k.starts_with("DISCIPLINE_") {
-            cmd.env_remove(k);
-        }
-    }
-    cmd.output().unwrap()
+    git_with_hooks_in(dir, args, &bin)
 }
 
 /// As [`git_with_hooks`], with the `discipline` found first on `PATH` taken from `bin`.
-fn git_with_discipline_in(
+fn git_with_hooks_in(
     dir: &std::path::Path,
     args: &[&str],
     bin: &std::path::Path,
@@ -414,7 +391,7 @@ fn the_guard_passes_silently_when_the_installed_discipline_predates_lease() {
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let wt2 = repo.path().join("wt2");
-    let out = git_with_discipline_in(&wt2, &["branch", "-f", "feat/stack", "HEAD"], old.path());
+    let out = git_with_hooks_in(&wt2, &["branch", "-f", "feat/stack", "HEAD"], old.path());
     assert!(
         out.status.success(),
         "an old discipline aborted the update: {}",

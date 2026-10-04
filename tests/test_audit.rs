@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::Repo;
+use common::{Repo, CONFIG_HEAD};
 use serde_json::Value;
 
 const CONFIG: &str = "[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\nexempt_paths = [\"a/**\"]\n";
@@ -123,7 +123,7 @@ fn an_unreadable_historical_configuration_is_a_record_not_a_failure() {
         "[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\nretired_option = true\n",
     );
     repo.commit("chore: adopt (#1)");
-    repo.write("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n");
+    repo.write("discipline.toml", CONFIG_HEAD);
     repo.commit("chore: drop the retired option (#2)");
     let run = repo.run(&["audit", "--last", "1", "--ref", "main", "--json"], &[]);
     assert_eq!(run.code, 0, "{}", run.stderr);
