@@ -902,7 +902,7 @@ Include the remote pipeline template directly:
 
 ```yaml
 include:
-  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.17.0/templates/discipline.gitlab-ci.yml'
+  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.17.1/templates/discipline.gitlab-ci.yml'
 ```
 
 Or configure a standalone job emitting native GitLab Code Quality diffs:

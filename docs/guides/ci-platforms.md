@@ -179,7 +179,7 @@ Include the official component in `.gitlab-ci.yml`:
 
 ```yaml
 include:
-  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.17.0/templates/discipline.gitlab-ci.yml'
+  - remote: 'https://raw.githubusercontent.com/orieg/discipline/v0.17.1/templates/discipline.gitlab-ci.yml'
 ```
 
 ### Custom Container Job
