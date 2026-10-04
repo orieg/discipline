@@ -4484,6 +4484,83 @@ fn instruction_smuggling_new_normalisers_stay_quiet_on_ordinary_text() {
 }
 
 #[test]
+fn commit_provenance_allow_author_review_accepts_a_maintainer_reviewing_a_squashed_agent_commit() {
+    // The squash merge of an agent's pull request names the maintainer as author.
+    const MSG: &str = "feat: s (#7)\n\nReviewed-by: Owner <owner@example.test>\n\nSigned-off-by: Claude <noreply@anthropic.com>\nCo-authored-by: Claude <noreply@anthropic.com>";
+    let run_with = |cfg: &str| {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("discipline.toml", &format!("{CONFIG_HEAD}{cfg}"));
+        repo.commit("chore: policy");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("s.txt", "s\n");
+        repo.git(&["add", "-A"]);
+        repo.git(&[
+            "commit",
+            "-q",
+            "--author",
+            "Owner <owner@example.test>",
+            "-m",
+            MSG,
+        ]);
+        repo.check(&[])
+    };
+
+    // Positive control: by default the reviewer must be someone other than the author.
+    let strict = run_with("[gates.commit-provenance]\nenabled = true\n");
+    assert_eq!(strict.code, 1);
+    assert_eq!(
+        strict.titles("commit-provenance"),
+        vec!["Agent Commit Reviewed By Its Author"]
+    );
+
+    // Negative control: a single-maintainer repository opts in.
+    let light = run_with("[gates.commit-provenance]\nenabled = true\nallow_author_review = true\n");
+    assert!(
+        light.titles("commit-provenance").is_empty(),
+        "{:?}",
+        light.violations("commit-provenance")
+    );
+    assert_eq!(light.outcome("commit-provenance")["examined"], 1);
+}
+
+#[test]
+fn commit_provenance_reads_a_trailer_block_a_squash_merge_split_into_paragraphs() {
+    const CFG: &str = "[gates.commit-provenance]\nenabled = true\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("discipline.toml", &format!("{CONFIG_HEAD}{CFG}"));
+    repo.commit("chore: policy");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // The layout GitHub writes when it squash-merges a commit whose trailer block held
+    // trailers it does not recognise: the review is not in the last paragraph.
+    repo.write("s.txt", "s\n");
+    repo.commit(
+        "feat: s (#7)\n\nBody.\n\nReviewed-by: Owner <owner@example.test>\n\nSession: https://example.test/s\n\nSigned-off-by: Coder Bot <noreply@anthropic.com>\nCo-authored-by: Claude <noreply@anthropic.com>",
+    );
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("commit-provenance").is_empty(),
+        "{:?}",
+        quiet.violations("commit-provenance")
+    );
+    assert_eq!(quiet.outcome("commit-provenance")["examined"], 1);
+
+    // Positive control: a prose paragraph after the review ends the trailer run.
+    repo.write("t.txt", "t\n");
+    repo.commit(
+        "feat: t (#8)\n\nReviewed-by: Owner <owner@example.test>\n\nProse after it.\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("commit-provenance"),
+        vec!["Agent Commit Without Review"]
+    );
+}
+
+#[test]
 fn commit_provenance_reads_trailers_and_authorship_of_every_commit_in_the_range() {
     const CFG: &str =
         "[gates.commit-provenance]\nenabled = true\nrequired_trailers = [\"Signed-off-by\"]\n";
