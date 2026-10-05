@@ -482,8 +482,7 @@
           "description": "Trailer keys every commit in the change must carry"
         },
         "review_trailer": {
-          "description": "Trailer an agent-produced commit must carry, naming someone other than its author (default: Reviewed-by)",
-          "minLength": 1,
+          "description": "Trailer an agent-produced commit must carry, naming someone other than its author (default: Reviewed-by). An empty name is the deprecated spelling of require_agent_review = false",
           "type": "string"
         },
         "severity": {

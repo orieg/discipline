@@ -444,6 +444,39 @@ pub struct KeyAlias {
 /// the 1.0 promise (docs/ARCHITECTURE.md §3.2) is kept by code, not by hand.
 pub const KEY_ALIASES: &[KeyAlias] = &[];
 
+/// Reads an empty `gates.commit-provenance.review_trailer` as `require_agent_review = false`.
+/// Through v0.17 the empty name was the rule's switch, so a configuration written for it
+/// must still load: refusing it stops every run that reads such a base configuration,
+/// including the change that migrates it. An explicit `require_agent_review = true` beside
+/// it contradicts it and is an error.
+fn rewrite_empty_review_trailer(value: &mut Value) -> Result<Option<String>> {
+    let Some(gate) = value
+        .get_mut("gates")
+        .and_then(|g| g.get_mut("commit-provenance"))
+        .and_then(Value::as_table_mut)
+    else {
+        return Ok(None);
+    };
+    if !gate
+        .get("review_trailer")
+        .and_then(Value::as_str)
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        return Ok(None);
+    }
+    if gate.get("require_agent_review").and_then(Value::as_bool) == Some(true) {
+        bail!(
+            "`gates.commit-provenance.review_trailer` is empty and `require_agent_review` is true: an empty `review_trailer` is the deprecated spelling of `require_agent_review = false`; name the trailer, or set `require_agent_review = false` and remove `review_trailer`"
+        );
+    }
+    gate.remove("review_trailer");
+    gate.insert("require_agent_review".to_string(), Value::Boolean(false));
+    Ok(Some(
+        "`gates.commit-provenance.review_trailer = \"\"` is deprecated: it is read as `require_agent_review = false` until the next major version; replace it"
+            .to_string(),
+    ))
+}
+
 /// Rewrites each old key in `value` to its new name and returns one deprecation note per
 /// rewrite. Both names set in the same table is an error: the two values could disagree,
 /// and neither can be picked silently.
@@ -1578,7 +1611,7 @@ pub struct CommitProvenanceGate {
     /// email that identify an agent-produced commit.
     pub agent_markers: Vec<String>,
     /// Trailer an agent-produced commit must carry, naming someone other than its
-    /// author. Never empty: `require_agent_review` switches the rule.
+    /// author. An empty name in a configuration file is read as `require_agent_review = false`.
     pub review_trailer: String,
     /// Whether an agent-produced commit must carry `review_trailer`. The trailer is the
     /// change's own claim; separating reviewer from author is the forge's required
@@ -2406,21 +2439,14 @@ impl DisciplineConfig {
                 check_gate_id(id)?;
             }
         }
+        let mut deprecations = deprecations;
+        if let Some(note) = rewrite_empty_review_trailer(&mut value)? {
+            deprecations.push(note);
+        }
         let mut config: DisciplineConfig = value
             .try_into()
             .context("discipline configuration failed schema validation")?;
         config.normalize();
-        if config
-            .gates
-            .commit_provenance
-            .review_trailer
-            .trim()
-            .is_empty()
-        {
-            bail!(
-                "`gates.commit-provenance.review_trailer` is empty: name the trailer (default `Reviewed-by`); to switch the agent review rule off, set `require_agent_review = false`"
-            );
-        }
         config.deprecations = deprecations;
         if config.meta.version != SCHEMA_VERSION {
             bail!(
