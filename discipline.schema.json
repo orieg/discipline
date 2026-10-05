@@ -1241,6 +1241,10 @@
     "TestFloorGate": {
       "additionalProperties": false,
       "properties": {
+        "base_report": {
+          "description": "JUnit XML report of the base-side test run, a file on disk; used with head_report",
+          "type": "string"
+        },
         "constant_file": {
           "description": "File containing a floor constant",
           "type": "string"
@@ -1256,6 +1260,10 @@
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"
         },
+        "head_report": {
+          "description": "JUnit XML report of the head-side test run, a file on disk; used with base_report",
+          "type": "string"
+        },
         "min_tests": {
           "description": "Minimum required workspace test count",
           "type": "integer"
@@ -1269,6 +1277,10 @@
         },
         "test_command": {
           "description": "Custom command to list or count tests",
+          "type": "string"
+        },
+        "test_report": {
+          "description": "JUnit XML report of the test run, read from the working tree for the head side and from the base ref for the base side; switches on the test-identity ratchet",
           "type": "string"
         },
         "tolerance": {

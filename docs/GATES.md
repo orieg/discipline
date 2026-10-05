@@ -1049,6 +1049,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - Disabling a gate (`enabled = false`).
   - Lowering severity (`severity = "error"` -> `severity = "warning"`).
+  - Adding an optional key whose value is looser than leaving it unset: `noise_margin_pct` or `ratio_tolerance_pct` above zero (unset adds no tolerance), a gate's `allow_hidden = true` when `[directives] allow_hidden` is `false`, and `ci_skip_severity` below the gate's `severity`. Removing `ci_skip_severity` where it was above the gate's `severity`, and removing or repointing `test-floor`'s `test_report`, `base_report` or `head_report`.
   - Removing an optional key whose absence reads looser than the value removed: `max_noise_cv` (absent means no noise check), and a gate's `allow_hidden = false` when `[directives] allow_hidden = true` (the gate then inherits it). Removing `noise_margin_pct` is not one: absent means 0.
   - Growing loosening lists (`exempt_paths`, `allowed_users`, `allow_patterns`, `assert_helper_fns`, `allowed_suppressions`).
   - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`, `workflows`, `forbidden_paths`, `deny_dependencies`), and emptying an allow-list (`allow_dependencies`, `allowed_paths`).
