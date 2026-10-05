@@ -509,3 +509,52 @@ fn cli_gitea_actions_auto_detection() {
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
     assert!(run_pass.stdout.contains("Status: PASS"));
 }
+
+#[test]
+fn conflicting_event_paths_are_read_from_one_file() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-b", "feat/conflict"]);
+    repo.git(&["rm", "-q", "tests/a.rs"]);
+    repo.commit("chore: remove tests/a.rs");
+
+    let forgejo = repo.file("forgejo_event.json");
+    std::fs::write(
+        &forgejo,
+        r#"{"pull_request": {"number": 7, "title": "chore: remove tests/a.rs (#7)", "user": {"login": "forgejo-author"}, "head": {"sha": "1111111111111111111111111111111111111111"}}}"#,
+    )
+    .unwrap();
+    let github = repo.file("github_event.json");
+    std::fs::write(
+        &github,
+        r#"{"pull_request": {"number": 8, "title": "chore: remove tests/a.rs (#8)", "body": "removes: tests/a.rs from the GitHub payload\nallow-test-shrink: tests/a.rs from the GitHub payload\n"}}"#,
+    )
+    .unwrap();
+    let env = |extra: &[(&'static str, String)]| {
+        let mut v: Vec<(&str, String)> = vec![
+            ("FORGEJO_ACTIONS", "true".into()),
+            ("FORGEJO_BASE_REF", "main".into()),
+        ];
+        v.extend(extra.iter().cloned());
+        v
+    };
+    let run = |extra: &[(&'static str, String)]| {
+        let owned = env(extra);
+        let pairs: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        repo.run(&["check"], &pairs)
+    };
+    let f = forgejo.to_str().unwrap().to_string();
+    let g = github.to_str().unwrap().to_string();
+
+    // The Forgejo payload carries no directive; the GitHub one does. One file is read, so
+    // the GitHub body must not reach the directive source.
+    let conflict = run(&[
+        ("FORGEJO_EVENT_PATH", f.clone()),
+        ("GITHUB_EVENT_PATH", g.clone()),
+    ]);
+    assert_eq!(conflict.code, 1, "{}{}", conflict.stdout, conflict.stderr);
+    assert!(conflict.stdout.contains("File Deleted Without Rationale"));
+
+    // Only the GitHub variable set: its body applies, as before.
+    let single = run(&[("GITHUB_EVENT_PATH", g)]);
+    assert_eq!(single.code, 0, "{}{}", single.stdout, single.stderr);
+}

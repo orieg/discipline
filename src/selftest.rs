@@ -1417,6 +1417,37 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "event payload: one fixed order (Forgejo, Gitea, GitHub); a broken first choice is not skipped",
+        || {
+            use crate::gitctx::{event_payload_with_env, normalize_before};
+            let dir = std::env::temp_dir().join(format!("discipline-selftest-event-{}", std::process::id()));
+            std::fs::create_dir_all(&dir)?;
+            let mut env = std::collections::HashMap::new();
+            for (var, who) in [
+                ("GITHUB_EVENT_PATH", "github"),
+                ("GITEA_EVENT_PATH", "gitea"),
+                ("FORGEJO_EVENT_PATH", "forgejo"),
+            ] {
+                let f = dir.join(who);
+                std::fs::write(&f, format!(r#"{{"who":"{who}"}}"#))?;
+                env.insert(var, f.to_string_lossy().to_string());
+            }
+            let who = |env: &std::collections::HashMap<&str, String>| {
+                event_payload_with_env(|k| env.get(k).cloned())
+                    .and_then(|v| v["who"].as_str().map(str::to_string))
+            };
+            let first = who(&env) == Some("forgejo".into());
+            env.remove("FORGEJO_EVENT_PATH");
+            let second = who(&env) == Some("gitea".into());
+            env.insert("FORGEJO_EVENT_PATH", "/nonexistent/event.json".into());
+            let broken = who(&env).is_none();
+            let before = normalize_before(&"0".repeat(40)).as_deref() == Some("HEAD~1")
+                && normalize_before("").is_none();
+            std::fs::remove_dir_all(&dir)?;
+            Ok(first && second && broken && before)
+        },
+    ),
+    (
         "assertion-reduction: a C++ main running its tests from a table counts their checks; a declared _self_test is a test",
         || {
             use crate::ast::default_registry;
