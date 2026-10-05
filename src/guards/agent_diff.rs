@@ -1056,21 +1056,41 @@ pub fn evaluate_assertion_reduction(
                 p.path, h.line, h.name
             ));
         }
+        // A base side with a literal count is compared with whatever the head side is:
+        // a head with no literal count is a reduction that cannot be measured, not an
+        // unchanged test. One literal case is one run with or without its parametrization.
+        let case_change = match (b.cases, h.cases) {
+            (Some(b_cases), Some(h_cases)) if h_cases < b_cases => {
+                Some(CaseDrop::Fewer(b_cases, h_cases))
+            }
+            (Some(b_cases), None) if b_cases >= 2 => Some(if h.non_literal_cases {
+                CaseDrop::NotLiteral(b_cases)
+            } else {
+                CaseDrop::NotParametrized(b_cases)
+            }),
+            _ => None,
+        };
         let mut cases_drop = false;
         let mut cases_drop_info = None;
-        if let (Some(b_cases), Some(h_cases)) = (b.cases, h.cases) {
-            if h_cases < b_cases {
-                let base_file_total = file_base_cases.get(p.path).copied().unwrap_or(0);
-                let head_file_total = file_head_cases.get(p.path).copied().unwrap_or(0);
-                if head_file_total >= base_file_total {
-                    out.notes.push(format!(
-                        "`{}` in `{}`: test cases {} -> {} read as preserved across tests in same file ({} -> {} total cases)",
-                        h.name, p.path, b_cases, h_cases, base_file_total, head_file_total
-                    ));
-                } else {
-                    cases_drop = true;
-                    cases_drop_info = Some((b_cases, h_cases));
-                }
+        if let Some(change) = case_change {
+            let base_file_total = file_base_cases.get(p.path).copied().unwrap_or(0);
+            let head_file_total = file_head_cases.get(p.path).copied().unwrap_or(0);
+            if head_file_total >= base_file_total {
+                let moved = match change {
+                    CaseDrop::Fewer(b_cases, h_cases) => {
+                        format!("test cases {b_cases} -> {h_cases}")
+                    }
+                    CaseDrop::NotLiteral(b_cases) | CaseDrop::NotParametrized(b_cases) => {
+                        format!("{b_cases} literal test cases no longer counted on it")
+                    }
+                };
+                out.notes.push(format!(
+                    "`{}` in `{}`: {} read as preserved across tests in same file ({} -> {} total cases)",
+                    h.name, p.path, moved, base_file_total, head_file_total
+                ));
+            } else {
+                cases_drop = true;
+                cases_drop_info = Some(change);
             }
         }
         let b_eff = b.effective_asserts();
@@ -1351,7 +1371,7 @@ pub fn evaluate_assertion_reduction(
             continue;
         }
 
-        if let Some((b_cases, h_cases)) = cases_drop_info {
+        if let Some(change) = cases_drop_info {
             if !case_drop_allowed {
                 let severity = if is_staged {
                     crate::config::Severity::Warning
@@ -1364,10 +1384,18 @@ pub fn evaluate_assertion_reduction(
                     &crate::findings::TEST_CASES_REDUCED,
                     Some(p.path),
                     Some(violation_line),
-                    format!(
-                        "{test_label}: test cases in parametrized / table-driven test dropped from {} to {}.",
-                        b_cases, h_cases
-                    ),
+                    // Counts only: a case source is the change's own text and is not echoed.
+                    match change {
+                        CaseDrop::Fewer(b_cases, h_cases) => format!(
+                            "{test_label}: test cases in parametrized / table-driven test dropped from {b_cases} to {h_cases}."
+                        ),
+                        CaseDrop::NotLiteral(b_cases) => format!(
+                            "{test_label}: the case source is no longer a literal list and its cases cannot be counted; it had {b_cases} literal cases."
+                        ),
+                        CaseDrop::NotParametrized(b_cases) => format!(
+                            "{test_label}: ran {b_cases} cases and is no longer read as parametrized; no case list is found on it."
+                        ),
+                    },
                     &format!(
                         "Restore the test cases, or justify the drop on its own line in the PR body or \
                          a commit message: `allow-case-drop: {} <reason>`.",
@@ -1461,6 +1489,17 @@ pub fn evaluate_assertion_reduction(
         );
     }
     Ok(out)
+}
+
+/// How the literal case count of a paired parametrized test went down.
+#[derive(Clone, Copy)]
+enum CaseDrop {
+    /// Both sides are literal: base count, head count.
+    Fewer(usize, usize),
+    /// The head's case source is an expression whose cases cannot be counted; base count.
+    NotLiteral(usize),
+    /// No case source is read on the head at all; base count.
+    NotParametrized(usize),
 }
 
 pub fn evaluate_vacuous_tests(
@@ -3277,6 +3316,115 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.contains("non-literal test case source in `test_method_source`")));
+    }
+
+    /// A paired test with one assertion on each side and the given case facts.
+    fn case_test(name: &str, cases: Option<usize>, non_literal_cases: bool) -> TestFn {
+        TestFn {
+            name: name.to_string(),
+            line: 10,
+            cases,
+            non_literal_cases,
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        }
+    }
+
+    fn case_outcome(b: &TestFn, h: &TestFn, added: &[Located]) -> GateOutcome {
+        let pairs = [TestPair {
+            path: "tests/test_foo.py",
+            base: b,
+            head: h,
+            forced: false,
+        }];
+        let settings = crate::config::AssertionGate::default();
+        evaluate_assertion_reduction(&pairs, added, &[], &settings, &[], false).unwrap()
+    }
+
+    #[test]
+    fn a_counted_base_with_a_non_literal_head_is_a_case_reduction() {
+        let b = case_test("test_param", Some(3), false);
+        let h = case_test("test_param", None, true);
+        let out = case_outcome(&b, &h, &[]);
+        assert_eq!(out.violations.len(), 1);
+        assert_eq!(
+            out.violations[0].code,
+            "assertion-reduction/test-cases-reduced"
+        );
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_param`: the case source is no longer a literal list and its cases cannot be counted; it had 3 literal cases."
+        );
+        assert!(out.violations[0]
+            .remediation
+            .as_deref()
+            .is_some_and(|r| r.contains("allow-case-drop: test_param")));
+    }
+
+    #[test]
+    fn a_counted_base_with_an_unparametrized_head_is_a_case_reduction() {
+        let b = case_test("test_param", Some(2), false);
+        let h = case_test("test_param", None, false);
+        let out = case_outcome(&b, &h, &[]);
+        assert_eq!(out.violations.len(), 1);
+        assert_eq!(
+            out.violations[0].code,
+            "assertion-reduction/test-cases-reduced"
+        );
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_param`: ran 2 cases and is no longer read as parametrized; no case list is found on it."
+        );
+    }
+
+    /// Controls: one literal case is one run either way; an uncounted base says nothing.
+    #[test]
+    fn an_uncounted_head_is_no_reduction_without_two_counted_base_cases() {
+        for (b_cases, b_non_literal, h_cases, h_non_literal) in [
+            (Some(1), false, None, false),
+            (Some(1), false, None, true),
+            (Some(0), false, None, false),
+            (None, true, Some(3), false),
+            (None, true, None, true),
+            (None, false, None, true),
+            (None, false, Some(3), false),
+        ] {
+            let b = case_test("test_param", b_cases, b_non_literal);
+            let h = case_test("test_param", h_cases, h_non_literal);
+            let out = case_outcome(&b, &h, &[]);
+            assert!(
+                out.violations.is_empty(),
+                "{b_cases:?}/{b_non_literal} -> {h_cases:?}/{h_non_literal}: {:?}",
+                out.violations
+                    .iter()
+                    .map(|v| &v.message)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// The same-file excusal reads an uncounted head as the literal one: cases that
+    /// reappear on another test of the file are a note.
+    #[test]
+    fn an_uncounted_head_whose_cases_reappear_in_the_file_is_a_note() {
+        let b = case_test("test_param", Some(3), false);
+        let h = case_test("test_param", None, false);
+        let moved = case_test("test_param_table", Some(3), false);
+        let added = [Located {
+            path: "tests/test_foo.py",
+            file_survives: true,
+            test: &moved,
+        }];
+        let out = case_outcome(&b, &h, &added);
+        assert!(out.violations.is_empty());
+        assert!(
+            out.notes.iter().any(|n| n.contains(
+                "3 literal test cases no longer counted on it read as preserved across tests in same file (3 -> 3 total cases)"
+            )),
+            "{:?}",
+            out.notes
+        );
     }
 
     #[test]

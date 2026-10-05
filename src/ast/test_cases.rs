@@ -339,45 +339,204 @@ pub fn extract_java_cases(modifiers_node: Node, src: &[u8]) -> (Option<usize>, b
 // Kotlin
 // ============================================================================
 
+/// The named children of `node` that are not comments.
+fn kotlin_elements(node: Node) -> Vec<Node> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|c| !c.kind().ends_with("comment"))
+        .collect()
+}
+
+/// The name a Kotlin `value_argument` is passed under (`ints` in `ints = [1, 2]`), and
+/// its value expression. A positional argument has no name; a spread has no value.
+fn kotlin_argument<'a, 'tree>(
+    arg: Node<'tree>,
+    src: &'a [u8],
+) -> (Option<&'a str>, Option<Node<'tree>>) {
+    let mut cursor = arg.walk();
+    let tokens: Vec<&str> = arg.children(&mut cursor).map(|c| c.kind()).collect();
+    let parts = kotlin_elements(arg);
+    let name = if tokens.contains(&"=") {
+        parts.first().map(|n| text(*n, src))
+    } else {
+        None
+    };
+    let value = parts
+        .get(usize::from(name.is_some())..)
+        .and_then(|v| v.last());
+    // A spread (`*rows`) stands for a number of values the source does not show. The
+    // grammar reads it as a `*` token of the argument or as a `spread_expression`.
+    let value = value
+        .copied()
+        .filter(|v| !tokens.contains(&"*") && v.kind() != "spread_expression");
+    (name, value)
+}
+
+/// The number of elements of a literal Kotlin array: `[a, b]`, or a call of `arrayOf` or
+/// one of its typed forms (`intArrayOf(1, 2)`). Any other expression (a constant, another
+/// call) has no count that can be read from the source.
+fn kotlin_literal_array_len(expr: Node, src: &[u8]) -> Option<usize> {
+    match expr.kind() {
+        "collection_literal" => Some(kotlin_elements(expr).len()),
+        "call_expression" => {
+            let parts = kotlin_elements(expr);
+            let callee = parts.first()?;
+            if callee.kind() != "identifier" {
+                return None;
+            }
+            let name = text(*callee, src);
+            if name != "arrayOf" && !name.ends_with("ArrayOf") {
+                return None;
+            }
+            let args = parts.iter().find(|c| c.kind() == "value_arguments")?;
+            let elements = kotlin_elements(*args);
+            let all_plain = elements
+                .iter()
+                .all(|a| matches!(kotlin_argument(*a, src), (None, Some(_))));
+            all_plain.then_some(elements.len())
+        }
+        _ => None,
+    }
+}
+
+/// The rows of a `textBlock` string: its non-blank lines.
+fn kotlin_text_block_rows(literal: Node, src: &[u8]) -> usize {
+    text(literal, src)
+        .trim_matches('"')
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+}
+
+/// Reads one Kotlin annotation: `Ok(Some(n))` for a literal case source of `n` cases,
+/// `Ok(None)` for an annotation that is not a case source, `Err(())` for a case source
+/// whose cases cannot be counted from the source.
+///
+/// In the bundled grammar an annotation with arguments is
+/// `annotation > constructor_invocation > (user_type, value_arguments > value_argument*)`,
+/// and one without is `annotation > user_type`.
+fn kotlin_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>, ()> {
+    let parts = kotlin_elements(annotation);
+    let Some(invocation) = parts.iter().find(|c| c.kind() == "constructor_invocation") else {
+        // No arguments: a marker such as `@Test`, or a source naming nothing to count.
+        let name = parts
+            .iter()
+            .find(|c| c.kind() == "user_type")
+            .and_then(|t| {
+                kotlin_elements(*t)
+                    .into_iter()
+                    .rfind(|c| c.kind() == "identifier")
+            })
+            .map(|n| text(n, src));
+        return match name {
+            Some("MethodSource" | "CsvFileSource" | "ArgumentsSource") => Err(()),
+            _ => Ok(None),
+        };
+    };
+    let invocation_parts = kotlin_elements(*invocation);
+    let name = invocation_parts
+        .iter()
+        .find(|c| c.kind() == "user_type")
+        .and_then(|t| {
+            kotlin_elements(*t)
+                .into_iter()
+                .rfind(|c| c.kind() == "identifier")
+        })
+        .map(|n| text(n, src))
+        .unwrap_or("");
+    let args: Vec<(Option<&str>, Option<Node>)> = invocation_parts
+        .iter()
+        .find(|c| c.kind() == "value_arguments")
+        .map(|a| {
+            kotlin_elements(*a)
+                .into_iter()
+                .filter(|c| c.kind() == "value_argument")
+                .map(|c| kotlin_argument(c, src))
+                .collect()
+        })
+        .unwrap_or_default();
+    match name {
+        "MethodSource" | "CsvFileSource" | "ArgumentsSource" => Err(()),
+        // `@ValueSource(ints = [1, 2])`: one typed array, whichever its name.
+        "ValueSource" => match args.as_slice() {
+            [(Some(_), Some(value))] => kotlin_literal_array_len(*value, src).map(Some).ok_or(()),
+            _ => Err(()),
+        },
+        "CsvSource" => {
+            let mut rows = 0usize;
+            let mut found = false;
+            for (arg_name, value) in &args {
+                let Some(value) = value else { return Err(()) };
+                match arg_name {
+                    // `@CsvSource("a,1", "b,2")`: each positional string is one row.
+                    None => match value.kind() {
+                        "string_literal" | "multiline_string_literal" => {
+                            rows += 1;
+                            found = true;
+                        }
+                        // One positional array is the whole `value`.
+                        _ => {
+                            rows += kotlin_literal_array_len(*value, src).ok_or(())?;
+                            found = true;
+                        }
+                    },
+                    Some("value") => {
+                        rows += kotlin_literal_array_len(*value, src).ok_or(())?;
+                        found = true;
+                    }
+                    Some("textBlock") => match value.kind() {
+                        "string_literal" | "multiline_string_literal" => {
+                            rows += kotlin_text_block_rows(*value, src);
+                            found = true;
+                        }
+                        _ => return Err(()),
+                    },
+                    // `delimiter`, `nullValues` and the like are not rows.
+                    Some(_) => {}
+                }
+            }
+            if found {
+                Ok(Some(rows))
+            } else {
+                Err(())
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Extracts test cases from Kotlin annotations on a function.
+///
+/// Recognizes `@ValueSource(ints = [..])` and its `intArrayOf(..)` / `arrayOf(..)` form,
+/// `@CsvSource("..", "..")`, `@CsvSource(value = [..])` and `@CsvSource(textBlock = "..")`.
+/// Several literal sources on one function add up. `@MethodSource`, `@CsvFileSource`,
+/// `@ArgumentsSource`, and a `@ValueSource` / `@CsvSource` whose value is not a literal
+/// list, mark `non_literal = true`.
 pub fn extract_kotlin_cases(node: Node, src: &[u8]) -> (Option<usize>, bool) {
     let mut total_cases: Option<usize> = None;
     let mut has_non_literal = false;
 
+    let mut annotations = Vec::new();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "modifiers" || child.kind() == "annotation" {
-            let mut sub_cursor = child.walk();
-            let check_node =
-                |n: Node, total_cases: &mut Option<usize>, has_non_literal: &mut bool| {
-                    let txt = text(n, src);
-                    if txt.contains("ValueSource") || txt.contains("CsvSource") {
-                        // Check if collection literal or arrayOf
-                        let mut a_cursor = n.walk();
-                        for a_child in n.children(&mut a_cursor) {
-                            if a_child.kind() == "collection_literal" {
-                                *total_cases = Some(a_child.named_child_count());
-                            } else if a_child.kind() == "call_expression"
-                                && text(a_child, src).contains("arrayOf")
-                            {
-                                if let Some(args) = a_child.child_by_field_name("arguments") {
-                                    *total_cases = Some(args.named_child_count());
-                                }
-                            }
-                        }
-                    } else if txt.contains("MethodSource") || txt.contains("CsvFileSource") {
-                        *has_non_literal = true;
-                    }
-                };
-            if child.kind() == "annotation" {
-                check_node(child, &mut total_cases, &mut has_non_literal);
-            } else {
-                for grandchild in child.children(&mut sub_cursor) {
-                    if grandchild.kind() == "annotation" {
-                        check_node(grandchild, &mut total_cases, &mut has_non_literal);
-                    }
-                }
+        match child.kind() {
+            "annotation" => annotations.push(child),
+            "modifiers" => {
+                let mut sub_cursor = child.walk();
+                annotations.extend(
+                    child
+                        .children(&mut sub_cursor)
+                        .filter(|c| c.kind() == "annotation"),
+                );
             }
+            _ => {}
+        }
+    }
+    for annotation in annotations {
+        match kotlin_annotation_cases(annotation, src) {
+            Ok(Some(n)) => total_cases = Some(total_cases.unwrap_or(0).saturating_add(n)),
+            Ok(None) => {}
+            Err(()) => has_non_literal = true,
         }
     }
 
