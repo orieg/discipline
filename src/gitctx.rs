@@ -350,6 +350,7 @@ pub struct Sides {
 /// baseline code): keeps the first read error instead of dropping it, so the caller
 /// ends with `finish()?` and the gate is "could not run", not a pass over a missing file.
 #[derive(Default)]
+#[must_use = "a recorder that is never `finish()`ed drops the read error it kept"]
 pub struct ReadRecorder {
     first: std::cell::RefCell<Option<anyhow::Error>>,
 }

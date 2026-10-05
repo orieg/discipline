@@ -99,29 +99,71 @@ fn a_directory_at_a_configured_path_reads_as_absent_not_as_a_failed_read() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
 
+/// Commits a gitlink (a submodule pointer) at `path` on `main` and rebases `work` onto it.
+fn commit_base_gitlink(repo: &Repo, path: &str) {
+    let sha = repo.git_output(&["rev-parse", "main"]);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{sha},{path}"),
+    ]);
+    repo.git(&["commit", "-q", "-m", "chore: submodule pointer"]);
+    repo.git(&["checkout", "-q", "-B", "work", "main"]);
+    let entry = repo.git_output(&["ls-tree", "main", path]);
+    assert!(entry.starts_with("160000"), "no gitlink on main: {entry}");
+}
+
 #[test]
-fn a_gitlink_at_a_configured_path_reads_as_absent_not_as_a_failed_read() {
+fn a_gitlink_on_the_base_side_reads_as_absent_not_as_a_failed_read() {
+    let repo = Repo::new();
+    commit_base_gitlink(&repo, "vendor/sub");
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = true\nconstant_file = \"vendor/sub\"\nconstant_name = \"MIN_TESTS\"\n",
+    );
+    repo.write("docs/plan.md", "# Plan\n\nPhase 1 then Phase 2, more.\n");
+    let run = repo.check(&[]);
+    // The gate ran and judged the path as not a file on the base side; a failed read would
+    // be exit 2 with no outcome.
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let titles = run.titles("test-floor");
+    assert_eq!(
+        titles,
+        vec!["Floor Constant File Missing In Base Ref".to_string()],
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_staged_gitlink_reads_as_absent_not_as_a_failed_read() {
     let repo = Repo::new();
     let sha = repo.git_output(&["rev-parse", "HEAD"]);
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n[gates.dependency-delta]\nenabled = true\ndeny_file = \"vendor/sub\"\n",
+    );
+    repo.git(&["add", "discipline.toml"]);
     repo.git(&[
         "update-index",
         "--add",
         "--cacheinfo",
         &format!("160000,{sha},vendor/sub"),
     ]);
-    repo.git(&["commit", "-q", "-m", "chore: submodule pointer"]);
-    repo.git(&["checkout", "-q", "-B", "work", "main"]);
-    repo.git(&["checkout", "-q", "main"]);
-    repo.git(&["merge", "-q", "--ff-only", "work"]);
-    repo.git(&["checkout", "-q", "-B", "work", "main"]);
-    repo.write(
-        "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.dependency-delta]\nenabled = true\ndeny_file = \"vendor/sub\"\n",
+    let entry = repo.git_output(&["ls-files", "-s", "vendor/sub"]);
+    assert!(entry.starts_with("160000"), "no staged gitlink: {entry}");
+    let run = repo.check(&["--staged"]);
+    assert_ne!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.outcome("dependency-delta")["violations"]
+            .as_array()
+            .map(Vec::len),
+        Some(0),
+        "{}",
+        run.stdout
     );
-    repo.write("docs/plan.md", "# Plan\n\nPhase 1 then Phase 2, more.\n");
-    std::fs::create_dir_all(repo.file("vendor/sub")).unwrap();
-    let run = repo.check(&[]);
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
 
 #[test]
