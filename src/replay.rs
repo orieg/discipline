@@ -674,7 +674,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
 
         let mut lookup_error = None;
         let (pr, body, author, directives_from) = match &forge {
-            Ok(f) => match crate::forge::merged_pull_for_commit(&api, f, &c.id().to_string()) {
+            Ok(f) => match crate::forge::merged_pull_on_forge(&api, f, &c.id().to_string()) {
                 Ok(Some(m)) => (
                     Some(m.number),
                     Some(m.body),

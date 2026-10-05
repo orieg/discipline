@@ -306,6 +306,66 @@ fn a_blocked_change_whose_pull_request_could_not_be_read_is_not_checked() {
 }
 
 #[test]
+fn a_blocked_change_the_forge_does_not_have_is_not_checked() {
+    let (repo, weakening) = history();
+    let path = format!("repos/o/r/commits/{weakening}/pulls");
+    let run = |status: u16, body: &str| {
+        let api = FakeForge::start();
+        api.serve_raw(&path, status, &[], body);
+        let url = api.url();
+        replay(
+            &repo,
+            &[],
+            &[
+                ("GITHUB_REPOSITORY", "o/r"),
+                ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ],
+        )
+    };
+    // GitHub answers 422 for a commit it does not have (a replay of unpushed history, or
+    // against another repository): whether a pull request body lifts the finding is
+    // unknown, so the change is not checked.
+    let s = run(422, r#"{"message":"No commit found for SHA"}"#);
+    assert_eq!(
+        verdicts(&s),
+        [
+            (3, "passed".to_string()),
+            (2, "could_not_check".to_string())
+        ],
+        "{s}"
+    );
+    let case = &s["cases_detail"][1];
+    assert_eq!(case["reason"], "forge", "{s}");
+    assert_eq!(
+        s["could_not_check_by_reason"]["forge"],
+        serde_json::json!(["#2"]),
+        "{s}"
+    );
+    let detail = case["detail"].as_str().unwrap();
+    assert!(detail.contains("pull request could not be read"), "{s}");
+    assert!(
+        detail.contains(&format!(
+            "the forge does not have commit {}",
+            &weakening[..10]
+        )),
+        "{s}"
+    );
+    assert!(!detail.contains(&weakening), "{s}");
+    // The control: 404 is GitHub's answer for a commit it has that no pull request
+    // carries. That is an answer, and the change is blocked on its commit message alone.
+    let s = run(404, r#"{"message":"Not Found"}"#);
+    assert_eq!(
+        verdicts(&s),
+        [(3, "passed".to_string()), (2, "blocked".to_string())],
+        "{s}"
+    );
+    assert_eq!(
+        s["cases_detail"][1]["directives_from"], "commit message only: no merged pull request",
+        "{s}"
+    );
+}
+
+#[test]
 fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_only() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);

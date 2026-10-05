@@ -1551,7 +1551,9 @@ pub enum CommitOrigin {
     NotOnForge,
 }
 
-/// [`commit_origin`] without the reason there is no merged pull request.
+/// [`commit_origin`] without the reason there is no merged pull request: a direct push
+/// and a commit made only locally both read as `None`. A caller that expects the forge
+/// to have the commit uses [`merged_pull_on_forge`], where the second is an error.
 pub fn merged_pull_for_commit(
     api: &dyn ForgeApi,
     forge: &Forge,
@@ -1561,6 +1563,28 @@ pub fn merged_pull_for_commit(
         CommitOrigin::Merged(pull) => Some(pull),
         CommitOrigin::DirectPush | CommitOrigin::NotOnForge => None,
     })
+}
+
+/// [`commit_origin`] for a caller whose commits are expected to be on the forge (`audit
+/// --forge`, `replay`): a commit the forge does not have is a lookup that failed, never
+/// "no pull request". Asked about a repository that lacks the commit (an unpushed ref,
+/// the wrong repository), the forge has said nothing about how the change was merged.
+/// `Ok(None)` is a direct push only.
+pub fn merged_pull_on_forge(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    sha: &str,
+) -> Result<Option<MergedPull>, String> {
+    match commit_origin(api, forge, sha)? {
+        CommitOrigin::Merged(pull) => Ok(Some(pull)),
+        CommitOrigin::DirectPush => Ok(None),
+        CommitOrigin::NotOnForge => {
+            let short: String = sha.chars().take(10).collect();
+            Err(format!(
+                "the forge does not have commit {short} (not pushed, or another repository)"
+            ))
+        }
+    }
 }
 
 /// Where a commit came from: the merged pull request that carries it, a direct push, or
