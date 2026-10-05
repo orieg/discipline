@@ -5,8 +5,12 @@ The compatibility ledger (default changes) and the behaviour-changes table in
 docs/ROADMAP.md are the single source of truth for what a release changes for
 consumers. Generated release notes list pull-request titles only, which is how
 past loosenings shipped without a migration note. This script copies the rows
-whose Release cell names the version into a Markdown section that release.yml
-puts above the generated notes.
+whose Release cell names the version, or an earlier patch of the same minor,
+into a Markdown section that release.yml puts above the generated notes. A
+patch release is therefore cumulative for its minor: v0.17.2 lists the v0.17.0
+and v0.17.1 rows too, because an earlier patch may never have reached a
+registry, and then the patch is the first release of that minor a consumer
+upgrades to.
 
 Usage:
   release_notes_upgrade.py --version v0.7.0 [--roadmap docs/ROADMAP.md]
@@ -43,8 +47,26 @@ def table_rows(text: str, heading: str) -> list[list[str]]:
     return rows[1:]  # drop the header row
 
 
+def parse_version(text: str) -> tuple[int, int, int] | None:
+    """`(major, minor, patch)` of a `vX.Y.Z` at the start of `text`, else None."""
+    m = re.match(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?![0-9.])", text)
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
 def release_matches(cell: str, version: str) -> bool:
-    return re.match(rf"{re.escape(version)}(?![0-9.])", cell) is not None
+    """Whether a row labelled `cell` belongs in the notes of `version`: the same
+    major and minor, and a patch no later than the release's."""
+    row, release = parse_version(cell), parse_version(version)
+    if row is None or release is None:
+        return re.match(rf"{re.escape(version)}(?![0-9.])", cell) is not None
+    return row[:2] == release[:2] and row[2] <= release[2]
+
+
+def earlier_patches(rows: list[list[str]], version: str) -> list[str]:
+    """Labels of the earlier patches of the same minor that `rows` carry."""
+    release = parse_version(version)
+    labels = {r[0].split()[0] for r in rows if parse_version(r[0]) not in (None, release)}
+    return sorted(labels, key=lambda label: parse_version(label) or (0, 0, 0))
 
 
 def render(text: str, version: str) -> str:
@@ -57,6 +79,12 @@ def render(text: str, version: str) -> str:
     if not defaults and not behaviour:
         return ""
     out = [f"## Upgrading to {version}", ""]
+    earlier = earlier_patches(defaults + behaviour, version)
+    if earlier:
+        out += [
+            f"This section is cumulative for the minor: it includes the changes of {', '.join(earlier)}.",
+            "",
+        ]
     if defaults:
         out += ["### Default changes", ""]
         for _, gate, old, new, direction, reason, restore in defaults:
@@ -87,6 +115,9 @@ SAMPLE = """## Default Changes (Compatibility Ledger)
 | v1.2.0 | report | Counts changed. | reclassified | Read status. |
 | v1.2.0 | CLI | New `x --agent <a\\|b>`. | additive | None. |
 | v1.2.01 | other | Not this release. | looser | None. |
+| v1.3.0 | later | A later minor. | stricter | None. |
+| v1.2.2 | later-patch | A later patch. | stricter | None. |
+| v1.2.1 | patch | A patch change. | stricter | Do x. |
 """
 
 
@@ -99,6 +130,20 @@ def self_test() -> None:
 
     assert "`h`" not in got, "a row of another release leaked"
     assert "Not this release" not in got, "a prefix-matching version leaked"
+    assert "A patch change" not in got, "a later patch leaked into an earlier release"
+    assert "cumulative" not in got, "the first release of a minor is not cumulative"
+
+    patch = render(SAMPLE, "v1.2.1")
+    assert "## Upgrading to v1.2.1" in patch, patch
+    assert "**patch** (stricter): A patch change. Migration: Do x." in patch, patch
+    assert "**report** (reclassified): Counts changed." in patch, "an earlier patch of the minor is included"
+    assert "`g`: on, `error` → on, `warning` (looser)" in patch, "an earlier patch's default change is included"
+    assert "cumulative for the minor: it includes the changes of v1.2.0." in patch, patch
+    assert "A later patch" not in patch, "a later patch leaked"
+    assert "A later minor" not in patch and "`h`" not in patch, "another minor leaked"
+    assert "Not this release" not in patch, "a prefix-matching version leaked"
+    assert render(SAMPLE, "v1.2.2").count("- **") == 4, "v1.2.2 lists v1.2.0, v1.2.1 and its own rows"
+
     assert render(SAMPLE, "v9.9.9") == "", "no rows means no section"
     try:
         render("# nothing\n", "v1.2.0")
