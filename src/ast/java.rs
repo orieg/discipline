@@ -518,6 +518,16 @@ impl<'a> JavaExtractor<'a> {
         let args = Self::collect_arguments(args_node);
 
         match method_name {
+            // A configured helper counts one total and no strong assertion, whatever else
+            // its name looks like.
+            m if self
+                .vocab
+                .helper_fns
+                .iter()
+                .any(|h| super::helper_call_matches(m, h)) =>
+            {
+                test_fn.total_asserts += 1;
+            }
             "assertTrue" => {
                 test_fn.total_asserts += 1;
                 if let Some(first) = args.first() {
@@ -599,7 +609,7 @@ impl<'a> JavaExtractor<'a> {
                 let is_custom_assert = other.starts_with("assert")
                     && other.len() > 6
                     && other.chars().nth(6).is_some_and(|c| c.is_ascii_uppercase());
-                if is_custom_assert || self.vocab.helper_fns.iter().any(|h| h == other) {
+                if is_custom_assert {
                     test_fn.total_asserts += 1;
                     test_fn.strong_asserts += 1;
                 }
@@ -624,22 +634,9 @@ impl<'a> JavaExtractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
-                test.direct_calls = calls.clone();
-                for call in calls {
-                    if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
-                        if self.vocab.helper_fns.iter().any(|name| name == call) {
-                            test.total_asserts = test.total_asserts.saturating_sub(1);
-                            test.strong_asserts = test.strong_asserts.saturating_sub(1);
-                        }
-                        test.total_asserts += h.total_asserts;
-                        test.strong_asserts += h.strong_asserts;
-                        test.tautologies += h.tautologies;
-                        test.fatal_asserts += h.fatal_asserts;
-                        if h.total_asserts > h.tautologies {
-                            test.helper_checks += 1;
-                        }
-                    }
-                }
+                super::resolve_test_same_file_helpers(test, calls, self.vocab, |call| {
+                    super::helper_through_wrappers(call, &self.helpers)
+                });
             }
         }
     }
@@ -978,6 +975,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 class AssertJTest {
+    private void customAssertHelper(int x) {
+        assertEquals(42, x);
+    }
+
     @Test
     void testAssertJ() {
         assertThat("foo").isEqualTo("foo");

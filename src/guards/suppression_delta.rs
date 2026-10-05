@@ -10,10 +10,9 @@
 //! `unsafe-budget`.
 
 use crate::ast::{default_registry, EscapeHatchSite};
-use crate::guards::{line_allows, Context, GateOutcome};
+use crate::guards::{line_allows, Context, GateOutcome, PathFilter};
 use crate::tokens::ALLOW_SUPPRESSION;
 use anyhow::Result;
-use globset::{Glob, GlobSetBuilder};
 use std::collections::HashMap;
 
 pub const GATE: &str = "suppression-delta";
@@ -141,15 +140,9 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
 
-    let mut exempt_builder = GlobSetBuilder::new();
-    for pat in &settings.exempt_paths {
-        if let Ok(g) = Glob::new(pat) {
-            exempt_builder.add(g);
-        }
-    }
-    let exempt_set = exempt_builder
-        .build()
-        .unwrap_or_else(|_| GlobSetBuilder::new().build().unwrap());
+    // A malformed glob is a configuration error (exit 2), never a silently
+    // skipped exemption.
+    let exempt = PathFilter::new(&settings.exempt_paths)?;
 
     let registry = default_registry();
     let vocab = super::agent_diff::assert_vocabulary(ctx.config);
@@ -157,7 +150,7 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
     let mut detected: Vec<(String, Site, String)> = Vec::new();
 
     for file in &changed {
-        if file.is_deleted() || exempt_set.is_match(&file.path) {
+        if file.is_deleted() || exempt.matches(&file.path) {
             continue;
         }
         let Some(pack) = registry.find_pack(&file.path) else {
@@ -407,6 +400,7 @@ pub fn extract_suppression_rules(snippet: &str, pat: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use crate::config::{Severity, SuppressionDeltaGate};
+    use crate::guards::PathFilter;
 
     #[test]
     fn test_suppression_delta_defaults() {
@@ -416,6 +410,18 @@ mod tests {
         // escape hatches, so the population in an unknown repository is high.
         assert_eq!(gate.severity, Severity::Warning);
         assert_eq!(gate.max_increase, 0);
+    }
+
+    #[test]
+    fn invalid_exempt_glob_is_an_error_not_a_silently_skipped_pattern() {
+        assert!(PathFilter::new(&["[".to_string()]).is_err());
+    }
+
+    #[test]
+    fn valid_exempt_glob_still_matches() {
+        let exempt = PathFilter::new(&["generated/**".to_string()]).unwrap();
+        assert!(exempt.matches("generated/bindings.rs"));
+        assert!(!exempt.matches("src/lib.rs"));
     }
 
     #[test]

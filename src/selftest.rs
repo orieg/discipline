@@ -22,6 +22,34 @@ const CASES: &[Case] = &[
         Ok(base.tests[0].strong_asserts == 1 && head.tests[0].strong_asserts == 0)
     }),
     (
+        "ast: configured assertion helper counts total only and acquires strong only from visible body",
+        || {
+            let reg = crate::ast::default_registry();
+            let mut v = AssertVocabulary::default();
+            v.helper_fns.push("check_result".to_string());
+            if !cfg!(feature = "lang-go") {
+                return Ok(true);
+            }
+            let Some(go_pack) = reg.find_pack("pkg/a_test.go") else {
+                bail!("the Go pack is compiled in but not registered");
+            };
+            let unseen = go_pack.extract(
+                "pkg/a_test.go",
+                "package a\nimport \"testing\"\nfunc TestT(t *testing.T) { check_result(t, 1) }\n",
+                &v,
+            )?;
+            let same_file = go_pack.extract(
+                "pkg/a_test.go",
+                "package a\nimport \"testing\"\nfunc check_result(t *testing.T, x int) { if x != 1 { t.Errorf(\"bad\") } }\nfunc TestT(t *testing.T) { check_result(t, 1) }\n",
+                &v,
+            )?;
+            Ok(unseen.tests[0].total_asserts == 1
+                && unseen.tests[0].strong_asserts == 0
+                && same_file.tests[0].total_asserts == 1
+                && same_file.tests[0].strong_asserts == 1)
+        },
+    ),
+    (
         "ast: tautological test is vacuous, real test is not",
         || {
             let v = AssertVocabulary::default();
@@ -1480,6 +1508,28 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "merged-pr-body: a 422 for an unknown commit means not on the forge, a 403 stays a failure",
+        || {
+            use crate::forge::{commit_origin, CannedApi, CommitOrigin, Forge, ForgeKind};
+            let forge = Forge {
+                kind: ForgeKind::GitHub,
+                url: "https://github.com".into(),
+                repo: "o/r".into(),
+            };
+            let mut api = CannedApi::default();
+            api.responses.insert(
+                "github:repos/o/r/commits/fff/pulls".into(),
+                serde_json::json!({"__status": 422, "__body": {"message": "No commit found for SHA: fff"}}),
+            );
+            api.responses.insert(
+                "github:repos/o/r/commits/ddd/pulls".into(),
+                serde_json::json!({"__status": 403, "__body": {}}),
+            );
+            Ok(commit_origin(&api, &forge, "fff").ok() == Some(CommitOrigin::NotOnForge)
+                && commit_origin(&api, &forge, "ddd").is_err())
+        },
+    ),
+    (
         "merged-pr-body: a merged pull request is found for a commit, a direct push is not",
         || {
             use crate::forge::{merged_pull_for_commit, CannedApi, Forge, ForgeKind};
@@ -2854,6 +2904,7 @@ command = "cargo test"
                 planned_gates: vec![],
                 policy_failures: Vec::new(),
                 deprecations: Vec::new(),
+                directive_notes: Vec::new(),
                 unused_directives: Vec::new(),
             };
 
@@ -4175,18 +4226,10 @@ smoke_cost::set_contains
     (
         "scope-confinement: check_path_confinement discriminates authorized, forbidden, and exempt files",
         || {
-            use globset::{Glob, GlobSetBuilder};
-            let mut exempt_b = GlobSetBuilder::new();
-            exempt_b.add(Glob::new("tests/fixtures/**")?);
-            let exempt = exempt_b.build()?;
-
-            let mut allowed_b = GlobSetBuilder::new();
-            allowed_b.add(Glob::new("src/**")?);
-            let allowed = allowed_b.build()?;
-
-            let mut forbidden_b = GlobSetBuilder::new();
-            forbidden_b.add(Glob::new(".github/**")?);
-            let forbidden = forbidden_b.build()?;
+            use crate::guards::PathFilter;
+            let exempt = PathFilter::new(&["tests/fixtures/**".to_string()])?;
+            let allowed = PathFilter::new(&["src/**".to_string()])?;
+            let forbidden = PathFilter::new(&[".github/**".to_string()])?;
 
             let ok = crate::guards::scope_confinement::check_path_confinement(
                 "src/lib.rs", &exempt, &allowed, true, &forbidden,
@@ -4205,6 +4248,14 @@ smoke_cost::set_contains
                 && forbidden_res == Some("forbidden")
                 && outside_res == Some("outside-allowed")
                 && exempt_res.is_none())
+        },
+    ),
+    (
+        "scope-confinement: a malformed glob is a configuration error, never a skipped pattern",
+        || {
+            use crate::guards::PathFilter;
+            Ok(PathFilter::new(&["[".to_string()]).is_err()
+                && PathFilter::new(&["src/**".to_string()]).is_ok())
         },
     ),
     (

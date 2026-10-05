@@ -51,6 +51,7 @@ pub fn report_schema() -> Value {
             "planned_gates": { "type": "array", "items": { "type": "string" }, "description": "Gate ids the roadmap plans but this binary does not ship" },
             "policy_failures": { "type": "array", "items": { "type": "string" }, "description": "Run-level refusals no single gate owns; any entry fails the run. Omitted when empty" },
             "deprecations": { "type": "array", "items": { "type": "string" }, "description": "Deprecated configuration keys this run read, one note each; never fails the run. Omitted when empty" },
+            "directive_notes": { "type": "array", "items": { "type": "string" }, "description": "Notes about the directive sources as a whole (the merged pull request a pushed commit came through, a forge lookup that could not be made), once per run; a note about one directive is in its gate's notes. Omitted when empty" },
             "unused_directives": { "type": "array", "items": { "$ref": "#/$defs/UnusedDirective" }, "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty" },
             "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" }
         },

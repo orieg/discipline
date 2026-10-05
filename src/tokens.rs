@@ -55,6 +55,14 @@ pub struct OverrideRecord {
     pub hidden: bool,
 }
 
+/// Whether a directive note is about the merged pull requests a push was resolved to
+/// (`merged-pr-body: ...` from the lookup, `N directive(s) read from merged pull request
+/// #N`): a note about the run's sources, reported once rather than on every gate.
+pub fn is_merged_source_note(note: &str) -> bool {
+    note.starts_with("merged-pr-body: ")
+        || note.contains(" directive(s) read from merged pull request #")
+}
+
 /// A directive a run read that lifted no finding. Its reason is not carried: it is free
 /// text the change's author wrote, and can echo secret material or a name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

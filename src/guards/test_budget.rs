@@ -16,10 +16,9 @@
 
 use crate::config::GateSettings;
 use crate::gitctx::ChangeKind;
-use crate::guards::{Context, GateOutcome, Violation};
+use crate::guards::{Context, GateOutcome, PathFilter, Violation};
 use crate::tokens;
 use anyhow::Result;
-use globset::{Glob, GlobSetBuilder};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -210,21 +209,11 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
     }
 
     // Build exemption matcher
-    let mut ex_builder = GlobSetBuilder::new();
-    for pattern in &gate.exempt_paths {
-        ex_builder.add(Glob::new(pattern)?);
-    }
-    let ex_matcher = ex_builder.build()?;
+    let exempt = PathFilter::new(&gate.exempt_paths)?;
 
-    // Build corpus directory matcher
-    let mut corpus_builder = GlobSetBuilder::new();
-    for pattern in &gate.corpus_dirs {
-        corpus_builder.add(Glob::new(pattern)?);
-        if let Some(stripped) = pattern.strip_prefix("**/") {
-            corpus_builder.add(Glob::new(stripped)?);
-        }
-    }
-    let corpus_matcher = corpus_builder.build()?;
+    // Build corpus directory matcher (`**/x` already matches a bare `x`, so no
+    // stripped duplicate is added).
+    let corpus = PathFilter::new(&gate.corpus_dirs)?;
 
     let changed = ctx.git.changed_files()?;
     let mut examined_count = 0usize;
@@ -234,14 +223,14 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
     let mut head_corpus_counts: HashMap<String, usize> = HashMap::new();
 
     for f in &changed {
-        if ex_matcher.is_match(&f.path) {
+        if exempt.matches(&f.path) {
             continue;
         }
 
         examined_count += 1;
 
         // Check if this file is in a seed corpus directory
-        if corpus_matcher.is_match(&f.path) || corpus_matcher.is_match(&f.old_path) {
+        if corpus.matches(&f.path) || corpus.matches(&f.old_path) {
             let parent = Path::new(&f.path)
                 .parent()
                 .and_then(|p| p.to_str())
@@ -523,6 +512,35 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use globset::{Glob, GlobSetBuilder};
+
+    #[test]
+    fn leading_double_star_already_matches_a_bare_name() {
+        // Pins why no stripped `strip_prefix("**/")` copy is added: globset's
+        // `**/` matches zero or more directories, so the stripped copy is redundant.
+        let mut only_star = GlobSetBuilder::new();
+        only_star.add(Glob::new("**/tests/corpus/**").unwrap());
+        let only_star = only_star.build().unwrap();
+        assert!(only_star.is_match("tests/corpus/seed.bin"));
+        assert!(only_star.is_match("a/tests/corpus/seed.bin"));
+
+        let mut with_stripped = GlobSetBuilder::new();
+        with_stripped.add(Glob::new("**/tests/corpus/**").unwrap());
+        with_stripped.add(Glob::new("tests/corpus/**").unwrap());
+        let with_stripped = with_stripped.build().unwrap();
+        for path in [
+            "tests/corpus/seed.bin",
+            "a/tests/corpus/seed.bin",
+            "fuzz/corpus/seed.bin",
+            "src/lib.rs",
+        ] {
+            assert_eq!(
+                only_star.is_match(path),
+                with_stripped.is_match(path),
+                "mismatch on {path}"
+            );
+        }
+    }
 
     #[test]
     fn test_parse_duration_or_count() {

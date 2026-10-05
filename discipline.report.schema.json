@@ -325,6 +325,13 @@
       },
       "type": "array"
     },
+    "directive_notes": {
+      "description": "Notes about the directive sources as a whole (the merged pull request a pushed commit came through, a forge lookup that could not be made), once per run; a note about one directive is in its gate's notes. Omitted when empty",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "errors": {
       "description": "Findings of severity `error` across all gates",
       "minimum": 0,

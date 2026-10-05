@@ -354,25 +354,9 @@ impl<'a> PhpExtractor<'a> {
     /// own callees are not followed, except through a thin wrapper.
     fn resolve_same_file_helpers(&mut self) {
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
-            test.direct_calls = calls.clone();
-            for call in calls {
-                let Some(h) = super::helper_through_wrappers(call, &self.helpers) else {
-                    continue;
-                };
-                let leaf = call.rsplit("::").next().unwrap_or(call);
-                // A configured assertion helper was already counted at the call.
-                if self.vocab.helper_fns.iter().any(|n| n == leaf) {
-                    test.total_asserts = test.total_asserts.saturating_sub(1);
-                    test.strong_asserts = test.strong_asserts.saturating_sub(1);
-                }
-                test.total_asserts += h.total_asserts;
-                test.strong_asserts += h.strong_asserts;
-                test.tautologies += h.tautologies;
-                test.fatal_asserts += h.fatal_asserts;
-                if h.total_asserts > h.tautologies {
-                    test.helper_checks += 1;
-                }
-            }
+            super::resolve_test_same_file_helpers(test, calls, self.vocab, |call| {
+                super::helper_through_wrappers(call, &self.helpers)
+            });
         }
     }
 
@@ -715,9 +699,14 @@ impl<'a> PhpExtractor<'a> {
         }
 
         // Custom helpers configured via vocabulary
-        if !call_name.is_empty() && self.vocab.helper_fns.iter().any(|h| h == call_name) {
+        if !call_name.is_empty()
+            && self
+                .vocab
+                .helper_fns
+                .iter()
+                .any(|h| super::helper_call_matches(call_name, h))
+        {
             test_fn.total_asserts += 1;
-            test_fn.strong_asserts += 1;
         }
     }
 

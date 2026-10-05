@@ -2,10 +2,9 @@
 //!
 //! Restricts agent modifications strictly within authorized directory and file paths.
 
-use crate::guards::{Context, GateOutcome};
+use crate::guards::{Context, GateOutcome, PathFilter};
 use crate::tokens::ALLOW_SCOPE;
 use anyhow::Result;
-use globset::{Glob, GlobSetBuilder};
 
 pub const GATE: &str = "scope-confinement";
 
@@ -26,47 +25,24 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
 
-    // Build exempt paths globset
-    let mut exempt_builder = GlobSetBuilder::new();
-    for pat in &settings.exempt_paths {
-        if let Ok(g) = Glob::new(pat) {
-            exempt_builder.add(g);
-        }
-    }
-    let exempt_set = exempt_builder
-        .build()
-        .unwrap_or_else(|_| GlobSetBuilder::new().build().unwrap());
+    // A malformed glob is a configuration error (exit 2), never a silently
+    // skipped pattern that would let a forbidden path pass.
+    let exempt = PathFilter::new(&settings.exempt_paths)?;
 
-    // Build allowed paths globset (if non-empty)
+    // Build allowed paths filter (if non-empty)
     let has_allowed = !settings.allowed_paths.is_empty();
-    let mut allowed_builder = GlobSetBuilder::new();
-    for pat in &settings.allowed_paths {
-        if let Ok(g) = Glob::new(pat) {
-            allowed_builder.add(g);
-        }
-    }
-    let allowed_set = allowed_builder
-        .build()
-        .unwrap_or_else(|_| GlobSetBuilder::new().build().unwrap());
+    let allowed = PathFilter::new(&settings.allowed_paths)?;
 
-    // Build forbidden paths globset
-    let mut forbidden_builder = GlobSetBuilder::new();
-    for pat in &settings.forbidden_paths {
-        if let Ok(g) = Glob::new(pat) {
-            forbidden_builder.add(g);
-        }
-    }
-    let forbidden_set = forbidden_builder
-        .build()
-        .unwrap_or_else(|_| GlobSetBuilder::new().build().unwrap());
+    // Build forbidden paths filter
+    let forbidden = PathFilter::new(&settings.forbidden_paths)?;
 
     for file in &changed {
-        if exempt_set.is_match(&file.path) {
+        if exempt.matches(&file.path) {
             continue;
         }
 
         // 1. Check forbidden paths first
-        if forbidden_set.is_match(&file.path) {
+        if forbidden.matches(&file.path) {
             if let Some(ov) = ctx.find_override(
                 GATE,
                 &crate::findings::FILE_IN_FORBIDDEN_SCOPE,
@@ -92,7 +68,7 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
         }
 
         // 2. Check allowed paths if configured
-        if has_allowed && !allowed_set.is_match(&file.path) {
+        if has_allowed && !allowed.matches(&file.path) {
             if let Some(ov) = ctx.find_override(
                 GATE,
                 &crate::findings::FILE_OUTSIDE_AUTHORIZED_SCOPE,
@@ -122,18 +98,18 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
 
 pub fn check_path_confinement(
     path: &str,
-    exempt_set: &globset::GlobSet,
-    allowed_set: &globset::GlobSet,
+    exempt: &PathFilter,
+    allowed: &PathFilter,
     has_allowed: bool,
-    forbidden_set: &globset::GlobSet,
+    forbidden: &PathFilter,
 ) -> Option<&'static str> {
-    if exempt_set.is_match(path) {
+    if exempt.matches(path) {
         return None;
     }
-    if forbidden_set.is_match(path) {
+    if forbidden.matches(path) {
         return Some("forbidden");
     }
-    if has_allowed && !allowed_set.is_match(path) {
+    if has_allowed && !allowed.matches(path) {
         return Some("outside-allowed");
     }
     None
@@ -142,6 +118,7 @@ pub fn check_path_confinement(
 #[cfg(test)]
 mod tests {
     use crate::config::{ScopeConfinementGate, Severity};
+    use crate::guards::PathFilter;
 
     #[test]
     fn test_scope_confinement_defaults() {
@@ -150,5 +127,50 @@ mod tests {
         assert_eq!(gate.severity, Severity::Error);
         assert!(gate.allowed_paths.is_empty());
         assert!(gate.forbidden_paths.is_empty());
+    }
+
+    #[test]
+    fn invalid_glob_is_an_error_not_a_silently_skipped_pattern() {
+        let bad = ScopeConfinementGate {
+            enabled: true,
+            forbidden_paths: vec!["[".to_string()],
+            ..Default::default()
+        };
+        assert!(PathFilter::new(&bad.exempt_paths).is_ok());
+        assert!(PathFilter::new(&bad.allowed_paths).is_ok());
+        assert!(PathFilter::new(&bad.forbidden_paths).is_err());
+    }
+
+    #[test]
+    fn valid_globs_still_match_through_check_path_confinement() {
+        let exempt = PathFilter::new(&["tests/fixtures/**".to_string()]).unwrap();
+        let allowed = PathFilter::new(&["src/**".to_string()]).unwrap();
+        let forbidden = PathFilter::new(&[".github/**".to_string()]).unwrap();
+        assert!(
+            super::check_path_confinement("src/lib.rs", &exempt, &allowed, true, &forbidden)
+                .is_none()
+        );
+        assert_eq!(
+            super::check_path_confinement(
+                ".github/workflows/ci.yml",
+                &exempt,
+                &allowed,
+                true,
+                &forbidden
+            ),
+            Some("forbidden")
+        );
+        assert_eq!(
+            super::check_path_confinement("docs/guide.md", &exempt, &allowed, true, &forbidden),
+            Some("outside-allowed")
+        );
+        assert!(super::check_path_confinement(
+            "tests/fixtures/data.bin",
+            &exempt,
+            &allowed,
+            true,
+            &forbidden
+        )
+        .is_none());
     }
 }
