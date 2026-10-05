@@ -3302,8 +3302,14 @@ test tests::c: test
 
             let mut vocab = AssertVocabulary::default();
 
-            // Default pytest collection
-            let py_ok = is_runner_collected("tests/test_math.py", &vocab)
+            // No pytest configuration: the runner is not known, so a file pytest's default
+            // names would skip still counts.
+            let py_unknown_ok = is_runner_collected("tests/math_helper.py", &vocab);
+
+            // Default pytest collection, in a repository that configures pytest
+            vocab.runner_rules.pytest = PytestCollectionRules::parse_ini("[pytest]\n");
+            let py_ok = py_unknown_ok
+                && is_runner_collected("tests/test_math.py", &vocab)
                 && is_runner_collected("tests/math_test.py", &vocab)
                 && !is_runner_collected("tests/math_helper.py", &vocab)
                 && !is_runner_collected("tests/broken.py", &vocab);

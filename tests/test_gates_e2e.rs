@@ -12349,7 +12349,10 @@ fn test_floor_zero_config_and_base_config_e2e() {
 #[test]
 fn test_floor_runner_discovery_e2e() {
     // 1. Python runner discovery: moving a test file out of discovery drops it from the floor.
+    // The repository says it runs pytest; with no pytest configuration at all the runner is
+    // not known and the renamed file's tests would still count (#521).
     let repo = Repo::new();
+    repo.write("pytest.ini", "[pytest]\n");
     repo.write(
         "tests/test_calc.py",
         "def test_add():\n    assert 1 + 1 == 2\n\ndef test_sub():\n    assert 2 - 1 == 1\n",
