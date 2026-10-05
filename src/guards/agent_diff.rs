@@ -1013,11 +1013,7 @@ pub fn evaluate_assertion_reduction(
         let h_eff = h.effective_asserts();
         let mut total_drop = h_eff < b_eff;
         let mut strong_drop = h.strong_asserts < b.strong_asserts;
-        let newly_caught: Vec<&crate::ast::caught_assertions::CaughtAssertion> = h
-            .caught_assertions
-            .iter()
-            .filter(|hc| !b.caught_assertions.iter().any(|bc| bc.line == hc.line))
-            .collect();
+        let newly_caught = crate::ast::caught_assertions::newly_caught(b, h);
         if total_drop && h_eff + newly_caught.len() >= b_eff {
             total_drop = false;
         }

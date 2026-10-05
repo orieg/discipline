@@ -41,6 +41,58 @@ fn attribute(tests: &mut [TestFn], c: CaughtAssertion) {
     }
 }
 
+/// The head test's swallowed assertions that its base counterpart did not already have.
+///
+/// A swallowed assertion is identified by where it sits inside its own test, never by its
+/// line in the file: a file line moves whenever anything above the test is edited, and a
+/// test paired across a move or a rename starts on another line altogether (#526).
+///
+/// Each head assertion is paired with a base one at the same offsets from the start of the
+/// test (assertion and handler). The ones left, which an edit inside the test may have
+/// moved, are paired with a remaining base one of the same construct at the same distance
+/// from its handler. What stays unpaired is new.
+///
+/// The count is deliberately not a shortcut: a test that stops swallowing one assertion
+/// and starts swallowing another swallows as many as before, and the second is new.
+///
+/// The limits: an edit that changes the distance between a swallowed assertion and its
+/// handler reports that assertion as new, and when a new one has the shape of an earlier
+/// one that moved, the line named may be the earlier one's.
+pub fn newly_caught<'a>(base: &TestFn, head: &'a TestFn) -> Vec<&'a CaughtAssertion> {
+    let offsets = |t: &TestFn, c: &CaughtAssertion| {
+        (
+            c.line as i64 - t.line as i64,
+            c.handler_line as i64 - t.line as i64,
+        )
+    };
+    let shape = |c: &CaughtAssertion| (c.line as i64 - c.handler_line as i64, c.detail.clone());
+
+    // Each base assertion pairs with at most one head assertion.
+    let mut free: Vec<&CaughtAssertion> = base.caught_assertions.iter().collect();
+    let mut unpaired: Vec<&CaughtAssertion> = Vec::new();
+    for hc in &head.caught_assertions {
+        match free
+            .iter()
+            .position(|bc| offsets(base, bc) == offsets(head, hc))
+        {
+            Some(i) => {
+                free.remove(i);
+            }
+            None => unpaired.push(hc),
+        }
+    }
+    let mut new = Vec::new();
+    for hc in unpaired {
+        match free.iter().position(|bc| shape(bc) == shape(hc)) {
+            Some(i) => {
+                free.remove(i);
+            }
+            None => new.push(hc),
+        }
+    }
+    new
+}
+
 fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     let res = node
@@ -770,6 +822,84 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
 #[cfg(test)]
 mod tests {
     use crate::ast::{AssertVocabulary, LanguagePack};
+
+    fn test_at(line: usize, caught: &[(usize, usize)]) -> crate::ast::TestFn {
+        crate::ast::TestFn {
+            line,
+            caught_assertions: caught
+                .iter()
+                .map(|&(line, handler_line)| super::CaughtAssertion {
+                    line,
+                    handler_line,
+                    detail: "except AssertionError".to_string(),
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn new_lines(base: &crate::ast::TestFn, head: &crate::ast::TestFn) -> Vec<usize> {
+        super::newly_caught(base, head)
+            .iter()
+            .map(|c| c.line)
+            .collect()
+    }
+
+    #[test]
+    fn a_swallowed_assertion_is_new_by_its_place_in_the_test_not_its_file_line() {
+        // The whole test moved down three lines, then up: nothing is new.
+        let base = test_at(1, &[(3, 4)]);
+        assert_eq!(
+            new_lines(&base, &test_at(4, &[(6, 7)])),
+            Vec::<usize>::new()
+        );
+        assert_eq!(
+            new_lines(&test_at(4, &[(6, 7)]), &base),
+            Vec::<usize>::new()
+        );
+        // A handler added where there was none is new, on its head file line.
+        assert_eq!(new_lines(&test_at(1, &[]), &test_at(4, &[(6, 7)])), vec![6]);
+        // A new one that lands on the FILE line the old one had (the test moved down three
+        // lines, the new one sits three lines below the old one's place) is still new.
+        assert_eq!(
+            new_lines(&test_at(1, &[(6, 7)]), &test_at(4, &[(6, 7), (9, 10)])),
+            vec![6]
+        );
+    }
+
+    #[test]
+    fn a_second_swallowed_assertion_is_new_once_and_the_first_is_not() {
+        let base = test_at(1, &[(3, 4)]);
+        assert_eq!(new_lines(&base, &test_at(4, &[(6, 7), (10, 11)])), vec![10]);
+        // The first one moved inside the test as well: it pairs by its distance to its
+        // handler, and the one of another shape is the new one.
+        assert_eq!(new_lines(&base, &test_at(1, &[(4, 5), (9, 11)])), vec![9]);
+        // Both moved and of one shape: one is new, never two.
+        assert_eq!(new_lines(&base, &test_at(1, &[(4, 5), (9, 10)])).len(), 1);
+    }
+
+    #[test]
+    fn an_edit_inside_the_test_moves_a_swallowed_assertion_without_making_it_new() {
+        // A line added inside the test above the swallowed assertion moves its offset.
+        assert_eq!(
+            new_lines(&test_at(1, &[(3, 4)]), &test_at(1, &[(4, 5)])),
+            Vec::<usize>::new()
+        );
+        assert_eq!(
+            new_lines(&test_at(1, &[(3, 4), (7, 8)]), &test_at(1, &[(7, 8)])),
+            Vec::<usize>::new()
+        );
+    }
+
+    /// One assertion stops being swallowed and another starts: as many as before, and
+    /// the second is new.
+    #[test]
+    fn a_swallowed_assertion_traded_for_another_is_new() {
+        assert_eq!(
+            new_lines(&test_at(1, &[(3, 4)]), &test_at(1, &[(6, 9)])),
+            vec![6]
+        );
+    }
 
     fn caught_lines(pack: &dyn LanguagePack, path: &str, src: &str) -> Vec<(usize, usize)> {
         let facts = pack
