@@ -1732,12 +1732,22 @@ pub fn evaluate_ignored_tests(
         );
     }
 
+    // A conditional skip is new when the base side had none, and also when the base side
+    // had one that no CI variable decided and the head side's is CI-conditional: the test
+    // stops running in CI. The two sides are compared by that classification, never by
+    // their text, so a reworded or reordered condition is not a change. A condition that
+    // was already CI-conditional on the base side is not reported again.
     let newly_cond_ignored = pairs
         .iter()
         .filter(|p| {
             p.head.conditional_ignore.is_some()
-                && p.base.conditional_ignore.is_none()
                 && !p.head.ignored
+                && match p.base.conditional_ignore.as_deref() {
+                    None => true,
+                    Some(base_cond) => {
+                        p.head.is_ci_skip() && !crate::ast::is_ci_condition(base_cond)
+                    }
+                }
         })
         .map(|p| (p.path, p.head))
         .chain(
@@ -2818,6 +2828,122 @@ mod tests {
         ];
         let out_all = evaluate_ignored_tests(&[], &added, &all_approved, &[], false).unwrap();
         assert_eq!(out_all.violations.len(), 0);
+    }
+
+    /// A paired test whose conditional skip is `base` on the base side and `head` on the
+    /// head side, evaluated with `settings`.
+    fn changed_condition_outcome(
+        base: &str,
+        head: &str,
+        settings: &crate::config::IgnoredTestsGate,
+        directives: &[crate::tokens::ParsedDirective],
+        is_staged: bool,
+    ) -> GateOutcome {
+        let b = TestFn {
+            name: "TestA".to_string(),
+            line: 9,
+            conditional_ignore: Some(base.to_string()),
+            ..Default::default()
+        };
+        let h = TestFn {
+            name: "TestA".to_string(),
+            line: 9,
+            conditional_ignore: Some(head.to_string()),
+            ..Default::default()
+        };
+        let pairs = [TestPair {
+            path: "p_test.go",
+            base: &b,
+            head: &h,
+            forced: false,
+        }];
+        evaluate_ignored_tests(&pairs, &[], settings, directives, is_staged).unwrap()
+    }
+
+    const SHORT: &str = "testing.Short()";
+    const SHORT_OR_CI: &str = "testing.Short() || os.Getenv(\"CI\") != \"\"";
+
+    #[test]
+    fn ignored_tests_ci_condition_added_to_an_existing_conditional_skip_is_reported() {
+        let settings = crate::config::IgnoredTestsGate::default();
+        let out = changed_condition_outcome(SHORT, SHORT_OR_CI, &settings, &[], false);
+        assert_eq!(out.violations.len(), 1);
+        let v = &out.violations[0];
+        assert_eq!(v.title, "Test Conditionally Skipped");
+        assert_eq!(v.severity, crate::config::Severity::Error);
+        assert!(v.message.contains("TestA"));
+        assert!(v.message.contains(SHORT_OR_CI));
+        assert!(v
+            .remediation
+            .as_deref()
+            .unwrap()
+            .contains("allow-ignore: TestA <reason>"));
+
+        // Staged mode softens it, as for a newly added CI-conditional skip.
+        let staged = changed_condition_outcome(SHORT, SHORT_OR_CI, &settings, &[], true);
+        assert_eq!(staged.violations.len(), 1);
+        assert_eq!(
+            staged.violations[0].severity,
+            crate::config::Severity::Warning
+        );
+
+        // `ci_skip_severity` sets the severity.
+        let warning = crate::config::IgnoredTestsGate {
+            ci_skip_severity: Some(crate::config::Severity::Warning),
+            ..Default::default()
+        };
+        let out_warning = changed_condition_outcome(SHORT, SHORT_OR_CI, &warning, &[], false);
+        assert_eq!(out_warning.violations.len(), 1);
+        assert_eq!(
+            out_warning.violations[0].severity,
+            crate::config::Severity::Warning
+        );
+
+        // An approved CI predicate waives it.
+        let approved = crate::config::IgnoredTestsGate {
+            approved_predicates: vec!["CI".to_string()],
+            ..Default::default()
+        };
+        let out_approved = changed_condition_outcome(SHORT, SHORT_OR_CI, &approved, &[], false);
+        assert_eq!(out_approved.violations.len(), 0);
+
+        // The directive lifts it and is recorded.
+        let directive = [crate::tokens::ParsedDirective {
+            directive: "allow-ignore".to_string(),
+            reason: "TestA flaky on the shared runner".to_string(),
+            source: crate::tokens::OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let lifted = changed_condition_outcome(SHORT, SHORT_OR_CI, &settings, &directive, false);
+        assert_eq!(lifted.violations.len(), 0);
+        assert_eq!(lifted.overrides.len(), 1);
+    }
+
+    #[test]
+    fn ignored_tests_conditional_skip_that_gains_no_ci_condition_is_not_reported() {
+        let settings = crate::config::IgnoredTestsGate::default();
+        let ci = "os.Getenv(\"CI\") != \"\"";
+        for (base, head) in [
+            // Unchanged, CI-conditional on both sides: the gate is delta-only.
+            (SHORT_OR_CI, SHORT_OR_CI),
+            // Unchanged, not CI-conditional.
+            (SHORT, SHORT),
+            // Reformatted CI condition.
+            (SHORT_OR_CI, "os.Getenv(\"CI\") != \"\" || testing.Short()"),
+            // Changed, neither side CI-conditional.
+            (SHORT, "testing.Short() || runtime.GOOS == \"windows\""),
+            // CI condition removed: a tightening.
+            (SHORT_OR_CI, SHORT),
+            // A CI variable added to a skip that was already CI-conditional.
+            (
+                ci,
+                "os.Getenv(\"CI\") != \"\" || os.Getenv(\"GITHUB_ACTIONS\") != \"\"",
+            ),
+        ] {
+            let out = changed_condition_outcome(base, head, &settings, &[], false);
+            assert_eq!(out.violations.len(), 0, "`{base}` -> `{head}`");
+            assert_eq!(out.overrides.len(), 0, "`{base}` -> `{head}`");
+        }
     }
 
     #[test]
