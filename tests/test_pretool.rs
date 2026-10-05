@@ -16,18 +16,12 @@ struct Out {
 
 /// `discipline hook run --agent <agent> --event pre-tool [extra]` in `dir`, `payload` on stdin.
 fn pretool(dir: &Path, agent: &str, payload: &str, extra: &[&str]) -> Out {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"));
+    let mut cmd = common::discipline_cmd(dir);
     cmd.args(["hook", "run", "--agent", agent, "--event", "pre-tool"])
         .args(extra)
-        .current_dir(dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    for (k, _) in std::env::vars() {
-        if k.starts_with("GIT_") || k.starts_with("DISCIPLINE_") {
-            cmd.env_remove(k);
-        }
-    }
     let mut child = cmd.spawn().unwrap();
     child
         .stdin
@@ -336,18 +330,12 @@ fn session_start(dir: &Path, agent: &str, payload: &str) -> Out {
 
 /// [`session_start`] with `extra` arguments.
 fn session_start_args(dir: &Path, agent: &str, payload: &str, extra: &[&str]) -> Out {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"));
+    let mut cmd = common::discipline_cmd(dir);
     cmd.args(["hook", "run", "--agent", agent, "--event", "session-start"])
         .args(extra)
-        .current_dir(dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    for (k, _) in std::env::vars() {
-        if k.starts_with("GIT_") || k.starts_with("DISCIPLINE_") {
-            cmd.env_remove(k);
-        }
-    }
     let mut child = cmd.spawn().unwrap();
     child
         .stdin
@@ -512,7 +500,7 @@ fn a_branch_leased_in_another_worktree_is_left_out_of_the_new_lease() {
     .unwrap()
     .trim()
     .to_string();
-    let take = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+    let take = common::discipline_cmd(&wt2)
         .args([
             "lease",
             "take",
@@ -523,7 +511,6 @@ fn a_branch_leased_in_another_worktree_is_left_out_of_the_new_lease() {
             "--branch",
             &branch,
         ])
-        .current_dir(&wt2)
         .output()
         .unwrap();
     assert!(

@@ -1,7 +1,7 @@
 //! End-to-end tests for `discipline doctor`, driving the real binary.
 
 mod common;
-use common::{FakeForge, Repo};
+use common::{FakeForge, Repo, Run, CONFIG_HEAD};
 
 const WORKFLOW: &str = "name: CI
 on:
@@ -114,11 +114,22 @@ fn protected_repo() -> Repo {
         &[
             (".github/workflows/ci.yml", WORKFLOW),
             (".github/CODEOWNERS", CODEOWNERS),
-            ("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n"),
+            ("discipline.toml", CONFIG_HEAD),
         ],
         "base",
     );
     repo
+}
+
+/// `doctor --repo o/r --format json` against the loopback `api` as GitHub with
+/// the harness token: the env/run pair most doctor tests share.
+fn doctor_json(repo: &Repo, api: &FakeForge) -> Run {
+    let url = api.url();
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("GH_TOKEN", "gh-tok-1"),
+    ];
+    repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env)
 }
 
 fn statuses(stdout: &str) -> Vec<(String, String)> {
@@ -171,12 +182,7 @@ fn doctor_reports_auto_merge_forking_secret_scanning_and_dependency_alerts() {
         "repos/o/r/automated-security-fixes",
         serde_json::json!({"enabled": false, "paused": false}),
     );
-    let url = api.url();
-    let env = [
-        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
-        ("GH_TOKEN", "gh-tok-1"),
-    ];
-    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let run = doctor_json(&repo, &api);
     let st = statuses(&run.stdout);
     // Auto-merge with no required review merges on the required check alone.
     assert_eq!(status(&st, "auto-merge"), "warn", "{}", run.stdout);
@@ -193,7 +199,7 @@ fn doctor_reports_auto_merge_forking_secret_scanning_and_dependency_alerts() {
         serde_json::json!({"default_branch": "main", "permissions": {"admin": false, "push": true},
             "private": true, "visibility": "private", "allow_forking": false}),
     );
-    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let run = doctor_json(&repo, &api);
     let st = statuses(&run.stdout);
     for id in ["auto-merge", "secret-scanning", "dependency-alerts"] {
         assert_eq!(status(&st, id), "warn", "{id}: {}", run.stdout);
@@ -249,12 +255,7 @@ fn doctor_counts_deploy_keys_and_collaborators_and_reads_the_organisation() {
         serde_json::json!({"default_repository_permission": "write", "two_factor_requirement_enabled": false,
             "members_can_change_repo_visibility": true}),
     );
-    let url = api.url();
-    let env = [
-        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
-        ("GH_TOKEN", "gh-tok-1"),
-    ];
-    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let run = doctor_json(&repo, &api);
     let st = statuses(&run.stdout);
     for (id, want) in [
         ("deploy-keys", "warn"),
@@ -279,7 +280,7 @@ fn doctor_counts_deploy_keys_and_collaborators_and_reads_the_organisation() {
         serde_json::json!({"default_repository_permission": null, "two_factor_requirement_enabled": null,
             "members_can_change_repo_visibility": false}),
     );
-    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let run = doctor_json(&repo, &api);
     let st = statuses(&run.stdout);
     assert_eq!(status(&st, "org-base-permission"), "warn", "{}", run.stdout);
     assert_eq!(status(&st, "two-factor"), "warn", "{}", run.stdout);
@@ -323,12 +324,7 @@ fn doctor_reports_weak_webhooks_and_unreviewed_environments_with_secrets() {
         "repos/o/r/environments/package%20signing/secrets",
         serde_json::json!({"total_count": 2, "secrets": [{"name": "SIGNING_KEY"}, {"name": "SIGNING_PASS"}]}),
     );
-    let url = api.url();
-    let env = [
-        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
-        ("GH_TOKEN", "gh-tok-1"),
-    ];
-    let run = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    let run = doctor_json(&repo, &api);
     let st = statuses(&run.stdout);
     assert_eq!(status(&st, "webhooks"), "warn", "{}", run.stdout);
     assert_eq!(
@@ -380,14 +376,7 @@ fn doctor_says_whether_the_repository_has_a_security_policy() {
 fn doctor_healthy_repository_passes() {
     let repo = protected_repo();
     let api = github_api(GOOD_RULES);
-    let url = api.url();
-    let run = repo.run(
-        &["doctor", "--repo", "o/r", "--format", "json"],
-        &[
-            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
-            ("GH_TOKEN", "gh-tok-1"),
-        ],
-    );
+    let run = doctor_json(&repo, &api);
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     let st = statuses(&run.stdout);
     assert!(
@@ -490,7 +479,7 @@ fn doctor_reads_gitea_protection_with_the_gitea_token_header() {
                 ".gitea/CODEOWNERS",
                 CODEOWNERS.replace(".github", ".gitea").as_str(),
             ),
-            ("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n"),
+            ("discipline.toml", CONFIG_HEAD),
         ],
         "base",
     );
@@ -872,21 +861,14 @@ fn doctor_reports_a_push_trigger_when_squash_or_rebase_merges_drop_the_pr_body()
         &[
             (".github/workflows/ci.yml", wf.as_str()),
             (".github/CODEOWNERS", CODEOWNERS),
-            ("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n"),
+            ("discipline.toml", CONFIG_HEAD),
         ],
         "base",
     );
     let run_with = |repo_json: serde_json::Value| {
         let api = github_api(GOOD_RULES);
         api.serve("repos/o/r", repo_json);
-        let url = api.url();
-        repo.run(
-            &["doctor", "--repo", "o/r", "--format", "json"],
-            &[
-                ("DISCIPLINE_FORGE_API_URL", url.as_str()),
-                ("GH_TOKEN", "gh-tok-1"),
-            ],
-        )
+        doctor_json(&repo, &api)
     };
     // Squash merges allowed, `merged-pr-body` on by default: information, naming the token
     // the push run needs.
@@ -950,10 +932,7 @@ fn doctor_reports_a_push_trigger_when_squash_or_rebase_merges_drop_the_pr_body()
     );
     // With the source on again, the same hidden merge methods are information: the token,
     // not the method, decides whether the review record reaches the push run.
-    repo.commit_base_files(
-        &[("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n")],
-        "chore: defaults again",
-    );
+    repo.commit_base_files(&[("discipline.toml", CONFIG_HEAD)], "chore: defaults again");
     let run = run_with(serde_json::json!({"default_branch": "main"}));
     let st = statuses(&run.stdout);
     assert!(

@@ -1,6 +1,21 @@
 mod common;
 use common::{Repo, GOOD_LIB, GOOD_TEST};
 
+/// The vendored `tests/schemas/validate.py` over `out_file` (`kind` is `junit`
+/// or `sarif`) against the vendored `schema_rel`; the caller asserts on the output.
+fn validate_out(kind: &str, out_file: &std::path::Path, schema_rel: &str) -> std::process::Output {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::process::Command::new("python3")
+        .args([
+            root.join("tests/schemas/validate.py").to_str().unwrap(),
+            kind,
+            out_file.to_str().unwrap(),
+            root.join(schema_rel).to_str().unwrap(),
+        ])
+        .output()
+        .expect("validate.py succeeds")
+}
+
 #[test]
 fn safety_comment_rejects_placeholders_and_accepts_short_invariants() {
     let repo = Repo::new();
@@ -196,19 +211,7 @@ fn cli_check_format_junit_and_output_file() {
     assert!(content.contains("<property name=\"examined\""));
 
     // Validate against vendored junit-10.xsd
-    let schema_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/junit-10.xsd");
-    let script_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/validate.py");
-    let val = std::process::Command::new("python3")
-        .args([
-            script_path.to_str().unwrap(),
-            "junit",
-            out_file.to_str().unwrap(),
-            schema_path.to_str().unwrap(),
-        ])
-        .output()
-        .expect("validate.py succeeds");
+    let val = validate_out("junit", &out_file, "tests/schemas/junit-10.xsd");
     assert_eq!(
         val.status.code(),
         Some(0),
@@ -241,15 +244,7 @@ fn cli_check_format_junit_and_output_file() {
     assert!(fail_content.contains("cannot fail"));
     assert!(fail_content.contains("<property name=\"examined\""));
 
-    let val_fail = std::process::Command::new("python3")
-        .args([
-            script_path.to_str().unwrap(),
-            "junit",
-            out_file.to_str().unwrap(),
-            schema_path.to_str().unwrap(),
-        ])
-        .output()
-        .expect("validate.py succeeds");
+    let val_fail = validate_out("junit", &out_file, "tests/schemas/junit-10.xsd");
     assert_eq!(val_fail.status.code(), Some(0));
 }
 
@@ -281,19 +276,7 @@ fn cli_check_format_sarif_and_output_file() {
     assert!(file_parsed["runs"][0]["invocations"][0]["properties"]["totalExamined"].is_number());
 
     // Validate against vendored sarif-schema-2.1.0.json
-    let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/schemas/sarif-schema-2.1.0.json");
-    let script_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/validate.py");
-    let val = std::process::Command::new("python3")
-        .args([
-            script_path.to_str().unwrap(),
-            "sarif",
-            out_file.to_str().unwrap(),
-            schema_path.to_str().unwrap(),
-        ])
-        .output()
-        .expect("validate.py succeeds");
+    let val = validate_out("sarif", &out_file, "tests/schemas/sarif-schema-2.1.0.json");
     assert_eq!(
         val.status.code(),
         Some(0),
@@ -332,15 +315,7 @@ fn cli_check_format_sarif_and_output_file() {
         "vacuous-tests/vacuous-test-added"
     );
 
-    let val_fail = std::process::Command::new("python3")
-        .args([
-            script_path.to_str().unwrap(),
-            "sarif",
-            out_file.to_str().unwrap(),
-            schema_path.to_str().unwrap(),
-        ])
-        .output()
-        .expect("validate.py succeeds");
+    let val_fail = validate_out("sarif", &out_file, "tests/schemas/sarif-schema-2.1.0.json");
     assert_eq!(val_fail.status.code(), Some(0));
 }
 

@@ -88,6 +88,53 @@ impl Run {
 /// `COPILOT_HOME` for a test that does not set its own: a directory that does not exist.
 pub const NO_COPILOT_HOME: &str = "/nonexistent/discipline-test-copilot-home";
 
+/// A `discipline` binary invocation in `dir` with full process isolation: every
+/// CI/forge variable the hand-rolled scrub loops removed (the union of all copies),
+/// plus `DISCIPLINE_NO_NETWORK=1` and a hermetic `COPILOT_HOME`. Every test that
+/// spawns the binary builds on this; nothing reaches a real forge.
+pub fn discipline_cmd(dir: &Path) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
+    cmd.current_dir(dir);
+    // Inherit nothing that could change the verdict.
+    for var in ISOLATED_ENV_VARS.iter().chain(GIT_REPOSITORY_ENV_VARS) {
+        cmd.env_remove(var);
+    }
+    // Prefix-built names too (`DISCIPLINE_COMMAND_<GATE>`, ...), and anything the
+    // looser historical copies swept (`GIT_*`, `DISCIPLINE_*`).
+    for (k, _) in std::env::vars() {
+        if k.starts_with("DISCIPLINE_") || k.starts_with("GIT_") {
+            cmd.env_remove(k);
+        }
+    }
+    // No test reaches a real forge: only a loopback FakeForge is allowed.
+    cmd.env("DISCIPLINE_NO_NETWORK", "1");
+    // Nor reads this machine's Copilot CLI configuration (trusted folders, hooks).
+    cmd.env("COPILOT_HOME", NO_COPILOT_HOME);
+    cmd
+}
+
+/// Caller-supplied environment over an isolated command: a `PR_BODY` without a
+/// `PR_TITLE` still gets the default title `check` expects.
+fn apply_run_env(cmd: &mut Command, env: &[(&str, &str)]) {
+    let has_pr_body = env.iter().any(|(k, _)| *k == "PR_BODY");
+    let has_pr_title = env.iter().any(|(k, _)| *k == "PR_TITLE");
+    if has_pr_body && !has_pr_title {
+        cmd.env("PR_TITLE", "chore: test PR (#101)");
+    }
+    cmd.envs(env.iter().copied());
+}
+
+fn finish_run(out: std::process::Output) -> Run {
+    Run {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// The `[meta]` header every test configuration starts from.
+pub const CONFIG_HEAD: &str = "[meta]\nversion = 1\nname = \"t\"\n";
+
 /// Variables that point git at a repository other than the one in the working directory.
 /// `git rebase --exec` and git hooks export them; a fixture that inherits `GIT_DIR` would
 /// re-initialise or commit to that repository instead of its own.
@@ -353,57 +400,17 @@ impl Repo {
     }
 
     pub fn run(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
-        cmd.args(args).current_dir(self.path());
-        // Inherit nothing that could change the verdict.
-        for var in ISOLATED_ENV_VARS.iter().chain(GIT_REPOSITORY_ENV_VARS) {
-            cmd.env_remove(var);
-        }
-        // Prefix-built names too (`DISCIPLINE_COMMAND_<GATE>`, ...).
-        for (k, _) in std::env::vars() {
-            if k.starts_with("DISCIPLINE_") {
-                cmd.env_remove(k);
-            }
-        }
-        // No test reaches a real forge: only a loopback FakeForge is allowed.
-        cmd.env("DISCIPLINE_NO_NETWORK", "1");
-        // Nor reads this machine's Copilot CLI configuration (trusted folders, hooks).
-        cmd.env("COPILOT_HOME", NO_COPILOT_HOME);
-        let has_pr_body = env.iter().any(|(k, _)| *k == "PR_BODY");
-        let has_pr_title = env.iter().any(|(k, _)| *k == "PR_TITLE");
-        if has_pr_body && !has_pr_title {
-            cmd.env("PR_TITLE", "chore: test PR (#101)");
-        }
-        cmd.envs(env.iter().copied());
-        let out = cmd.output().unwrap();
-        Run {
-            code: out.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        }
+        let mut cmd = discipline_cmd(self.path());
+        cmd.args(args);
+        apply_run_env(&mut cmd, env);
+        finish_run(cmd.output().unwrap())
     }
 
     pub fn run_in_dir(&self, rel_dir: &str, args: &[&str], env: &[(&str, &str)]) -> Run {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
-        cmd.args(args).current_dir(self.file(rel_dir));
-        for var in ISOLATED_ENV_VARS.iter().chain(GIT_REPOSITORY_ENV_VARS) {
-            cmd.env_remove(var);
-        }
-        // Prefix-built names too (`DISCIPLINE_COMMAND_<GATE>`, ...).
-        for (k, _) in std::env::vars() {
-            if k.starts_with("DISCIPLINE_") {
-                cmd.env_remove(k);
-            }
-        }
-        cmd.env("DISCIPLINE_NO_NETWORK", "1");
-        cmd.env("COPILOT_HOME", NO_COPILOT_HOME);
-        cmd.envs(env.iter().copied());
-        let out = cmd.output().unwrap();
-        Run {
-            code: out.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        }
+        let mut cmd = discipline_cmd(&self.file(rel_dir));
+        cmd.args(args);
+        apply_run_env(&mut cmd, env);
+        finish_run(cmd.output().unwrap())
     }
 }
 

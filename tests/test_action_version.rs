@@ -205,3 +205,48 @@ fn install_tool_script_invokes_correct_version_command() {
         );
     }
 }
+
+/// The Forgejo self-test workflow is a rename of the Gitea one: comments and
+/// `name:` fields name the forge, but the `jobs` structure (steps, `uses`,
+/// `run`, `env`, `with`) must stay identical so both forges prove the same
+/// action has no host-only dependency. `ci.yml` runs the Gitea copy under act.
+/// Killed mutant: any step edited in only one copy.
+#[test]
+fn forgejo_and_gitea_selftest_workflows_run_the_same_jobs() {
+    fn jobs(path: &str) -> serde_yaml::Value {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let text =
+            std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let doc: serde_yaml::Value =
+            serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+        doc.get("jobs")
+            .unwrap_or_else(|| panic!("{path} has no jobs"))
+            .clone()
+    }
+
+    fn strip_names(value: &mut serde_yaml::Value) {
+        match value {
+            serde_yaml::Value::Mapping(mapping) => {
+                mapping.remove(serde_yaml::Value::String("name".to_string()));
+                for (_, v) in mapping.iter_mut() {
+                    strip_names(v);
+                }
+            }
+            serde_yaml::Value::Sequence(items) => {
+                for v in items {
+                    strip_names(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut gitea = jobs(".gitea/workflows/action-selftest.yml");
+    let mut forgejo = jobs(".forgejo/workflows/action-selftest.yml");
+    strip_names(&mut gitea);
+    strip_names(&mut forgejo);
+    assert_eq!(
+        forgejo, gitea,
+        "Forgejo and Gitea self-test workflows drifted apart: mirror the step change to both"
+    );
+}

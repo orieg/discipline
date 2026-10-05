@@ -4,7 +4,6 @@
 import argparse
 import datetime
 import gzip
-import hashlib
 import io
 import os
 import shutil
@@ -20,26 +19,10 @@ from site_theme import (
     THEME_HEAD_JS,
     THEME_TOGGLE_CSS,
     THEME_TOGGLE_JS,
+    get_default_version,
     make_nav,
+    sha256_file,
 )
-
-
-def get_default_version() -> str:
-    cargo_toml = os.path.join(os.path.dirname(__file__), "..", "Cargo.toml")
-    if os.path.isfile(cargo_toml):
-        with open(cargo_toml, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("version ="):
-                    return line.split("=")[1].strip().strip('"')
-    return "0.3.0"
-
-
-def sha256_file(filepath: str) -> str:
-    h = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        while chunk := f.read(65536):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def extract_control_info(deb_path: str) -> dict:
