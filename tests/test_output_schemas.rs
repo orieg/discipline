@@ -24,6 +24,8 @@ const REPORT_FIELDS: &[&str] = &[
     "could_not_check.reason: enum(configuration|baseline|repository|tool-missing|tool-timeout|toolchain-unavailable|forge|gate|internal)",
     "deprecations?: array",
     "deprecations[]: string",
+    "directive_notes?: array",
+    "directive_notes[]: string",
     "errors: integer",
     "notes: integer",
     "outcomes: array",

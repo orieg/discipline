@@ -241,6 +241,7 @@ mod tests {
             outcomes: Vec::new(),
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
         let json = format_gitlab(&summary);
@@ -277,6 +278,7 @@ mod tests {
             outcomes: vec![outcome],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
 
@@ -327,6 +329,7 @@ mod tests {
             outcomes: vec![outcome],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
 
@@ -370,6 +373,7 @@ mod tests {
             outcomes: vec![outcome2],
             policy_failures: Vec::new(),
             deprecations: Vec::new(),
+            directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         };
 
