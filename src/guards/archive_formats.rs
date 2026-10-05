@@ -1240,15 +1240,34 @@ mod tests {
 
     #[test]
     fn cpio_with_impossibly_large_name_size_fails() {
-        // A cpio header claiming name_size > 65536 should be rejected.
+        // `c_namesize` is the twelfth 8-character ASCII hex field after the 6-byte
+        // magic: bytes 94..102 of the newc header. The payload is wrapped as an RPM,
+        // the one format whose reader reaches `walk_cpio`.
         let dir = TempDir::new().unwrap();
-        // Build a valid cpio and then patch the name_size field to 70000.
-        let mut full_cpio = fixtures::cpio_newc(&[("test.bin", &[0u8; 10])]);
-        // The name_size is at bytes 96..104 in the header (offset 11 from header start).
-        // Override it to a huge value (u64, 8 bytes).
-        full_cpio[96..104].copy_from_slice(&70_000u64.to_be_bytes());
-        let path = write(&dir, "big_name.cpio", &full_cpio);
-        assert!(names(&path).is_err());
+        let cpio = fixtures::cpio_newc(&[("test.bin", &[0u8; 10])]);
+        assert_eq!(
+            &cpio[94..102],
+            b"00000009",
+            "c_namesize of `test.bin` + NUL"
+        );
+        let with_name_size = |name_size: u64| {
+            let mut patched = cpio.clone();
+            patched[94..102].copy_from_slice(format!("{name_size:08x}").as_bytes());
+            let path = write(&dir, "n.rpm", &fixtures::rpm(&fixtures::gzip(&patched)));
+            format!("{:#}", names(&path).unwrap_err())
+        };
+
+        // One past the bound: refused before any buffer of that size is allocated.
+        let over = with_name_size(65_537);
+        assert!(over.contains("corrupt cpio name length 65537"), "{over}");
+        let zero = with_name_size(0);
+        assert!(zero.contains("corrupt cpio name length 0"), "{zero}");
+
+        // Control: the bound itself is a legal length, so the reader goes on to read
+        // the name and fails on the short payload instead.
+        let at = with_name_size(65_536);
+        assert!(at.contains("truncated cpio name"), "{at}");
+        assert!(!at.contains("corrupt cpio name length"), "{at}");
     }
 
     #[test]

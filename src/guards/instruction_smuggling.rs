@@ -951,6 +951,38 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
 mod tests {
     use super::*;
 
+    /// The lookup `fold` and `has_mixed_script_word` use: a character in the confusables
+    /// table resolves to the ASCII letter it imitates, the first and last entries of the
+    /// table included, and nothing else resolves.
+    /// Killed mutant: `confusable` returning the table's code point instead of its letter.
+    #[test]
+    fn a_look_alike_resolves_to_its_ascii_letter_and_other_characters_do_not() {
+        for (look_alike, letter) in [
+            ('\u{0391}', 'a'), // Greek capital alpha
+            ('\u{043E}', 'o'), // Cyrillic small o
+            ('\u{0261}', 'g'), // Latin small script g
+            ('\u{00D7}', 'x'), // multiplication sign
+            (CONFUSABLES[0].0, CONFUSABLES[0].1),
+            (
+                CONFUSABLES[CONFUSABLES.len() - 1].0,
+                CONFUSABLES[CONFUSABLES.len() - 1].1,
+            ),
+        ] {
+            assert_eq!(confusable(look_alike), Some(letter), "{look_alike:?}");
+        }
+        assert_eq!(CONFUSABLES[0], ('\u{00A1}', 'i'));
+        assert_eq!(CONFUSABLES[CONFUSABLES.len() - 1], ('\u{AB64}', 'a'));
+
+        // Not look-alikes: an ASCII letter, an accented Latin letter, a Cyrillic letter
+        // with no Latin twin, a CJK ideograph, and the code points on either side of
+        // the table.
+        for other in [
+            'a', 'x', '\u{00E9}', '\u{0416}', '\u{4E2D}', '\u{00A0}', '\u{AB65}',
+        ] {
+            assert_eq!(confusable(other), None, "{other:?}");
+        }
+    }
+
     #[test]
     fn invisible_characters_are_classified_and_a_leading_bom_is_not() {
         assert_eq!(invisible_classes("plain text", false), Vec::<&str>::new());

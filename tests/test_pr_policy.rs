@@ -632,6 +632,79 @@ fn an_unprotected_change_asks_the_forge_nothing() {
     assert!(api.requests().is_empty(), "{:?}", api.requests());
 }
 
+/// The gate refuses a policy that protects nothing: enabled with an empty
+/// `protected_paths`, it would report "nothing needs a ratification" for every change.
+/// Killed mutant: the `protected_paths.is_empty()` guard in `evaluate_ratified_paths`
+/// removed (the run then passes with exit 0).
+#[test]
+fn ratified_paths_enabled_with_no_protected_paths_is_a_configuration_error() {
+    let policy = RATIFY.replace(
+        "protected_paths = [\"scripts/check_*.py\", \"discipline.toml\"]",
+        "protected_paths = []",
+    );
+    assert_ne!(policy, RATIFY);
+    let (repo, event) = protected_change(&policy, &[("docs/notes.md", "# Notes\n")]);
+    let api = FakeForge::start();
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.could_not_check(),
+        (
+            "configuration".to_string(),
+            Some("ratified-paths".to_string())
+        )
+    );
+    let detail = run.json()["could_not_check"]["detail"].to_string();
+    assert!(
+        detail.contains("`protected_paths` is empty"),
+        "{detail}\n{}",
+        run.stderr
+    );
+
+    // Control: the same change under a policy that protects something passes.
+    let (repo, event) = protected_change(RATIFY, &[("docs/notes.md", "# Notes\n")]);
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
+/// A login that is both a ratifier and an agent could ratify its own change, so the
+/// gate refuses the policy; logins compare without regard to case.
+/// Killed mutant: the overlap guard in `evaluate_ratified_paths` removed (exit 0).
+#[test]
+fn a_login_in_both_ratifiers_and_agent_logins_is_a_configuration_error() {
+    let policy = RATIFY.replace(
+        "ratifiers = [\"owner\"]",
+        "ratifiers = [\"owner\", \"Agent\"]",
+    );
+    assert_ne!(policy, RATIFY);
+    let (repo, event) = protected_change(&policy, &[("docs/notes.md", "# Notes\n")]);
+    let api = FakeForge::start();
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.could_not_check(),
+        (
+            "configuration".to_string(),
+            Some("ratified-paths".to_string())
+        )
+    );
+    let detail = run.json()["could_not_check"]["detail"].to_string();
+    assert!(
+        detail.contains("`Agent` is in both `ratifiers` and `agent_logins`"),
+        "{detail}\n{}",
+        run.stderr
+    );
+
+    // Control: a second ratifier that is not an agent login is accepted.
+    let disjoint = RATIFY.replace(
+        "ratifiers = [\"owner\"]",
+        "ratifiers = [\"owner\", \"second\"]",
+    );
+    let (repo, event) = protected_change(&disjoint, &[("docs/notes.md", "# Notes\n")]);
+    let run = ratify_check(&repo, &event, &api, "Closes #12", "base");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
 // ---- review-threads ----------------------------------------------------------------
 
 /// A loopback Gitea answering reviews the way Gitea 1.24.7 did (RUN): thread A on line 1
@@ -683,6 +756,36 @@ fn an_unresolved_review_thread_fails_and_a_resolved_one_with_replies_passes() {
 
     let ok = ratify_check(&repo, &event, &gitea_threads(true, true), "", "base");
     assert_eq!(ok.code, 0, "{}{}", ok.stdout, ok.stderr);
+}
+
+/// `exempt_paths` of `gates.review-threads` leaves a thread on a matching file out of
+/// the verdict and out of the examined count; a thread on any other file still counts.
+/// Killed mutant: the `exempt.matches(&t.path)` skip in `evaluate_review_threads` removed.
+#[test]
+fn a_review_thread_on_an_exempt_path_is_not_counted() {
+    let exempting = |glob: &str| format!("{THREADS}exempt_paths = [\"{glob}\"]\n");
+    // Thread B (line 3 of scripts/check_x.py) is unresolved; its file is exempt.
+    let (repo, event) =
+        protected_change(&exempting("scripts/**"), &[("docs/notes.md", "# Notes\n")]);
+    let run = ratify_check(&repo, &event, &gitea_threads(true, false), "", "base");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.violations("review-threads").is_empty());
+    let n = notes(&run, "review-threads");
+    assert!(n.contains("0 review thread(s) on pull request #7"), "{n}");
+
+    // Control: a glob that matches another file exempts nothing here.
+    let (repo, event) = protected_change(&exempting("docs/**"), &[("docs/notes.md", "# Notes\n")]);
+    let run = ratify_check(&repo, &event, &gitea_threads(true, false), "", "base");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        codes(&run, "review-threads"),
+        vec!["review-threads/unresolved-review-thread"]
+    );
+    let n = notes(&run, "review-threads");
+    assert!(
+        n.contains("2 review thread(s) on pull request #7, 1 unresolved"),
+        "{n}"
+    );
 }
 
 #[test]

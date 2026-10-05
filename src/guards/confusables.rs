@@ -230,26 +230,6 @@ mod tests {
         }
     }
 
-    /// A known look-alike resolves to its expected ASCII letter.
-    #[test]
-    fn specific_lookalikes_resolve_correctly() {
-        // Greek capital alpha (U+0391) → a
-        assert_eq!(
-            CONFUSABLES.iter().find(|&&(cp, _)| cp == '\u{0391}'),
-            Some(&('\u{0391}', 'a'))
-        );
-        // Latin small gamma (U+0261) → g
-        assert_eq!(
-            CONFUSABLES.iter().find(|&&(cp, _)| cp == '\u{0261}'),
-            Some(&('\u{0261}', 'g'))
-        );
-        // Multiplication sign (U+00D7) → x
-        assert_eq!(
-            CONFUSABLES.iter().find(|&&(cp, _)| cp == '\u{00D7}'),
-            Some(&('\u{00D7}', 'x'))
-        );
-    }
-
     /// The set contains entries for all 26 lowercase letters.
     #[test]
     fn confusables_cover_all_lowercase_letters() {
@@ -261,25 +241,5 @@ mod tests {
                 letter as char
             );
         }
-    }
-
-    /// Binary search on CONFUSABLES works correctly because the array is sorted.
-    #[test]
-    fn binary_search_on_confusables_returns_correct_entries() {
-        // Greek capital alpha (U+0391) → a
-        let idx = CONFUSABLES.binary_search(&('\u{0391}', 'a'));
-        assert!(idx.is_ok(), "binary search should find U+0391");
-
-        // Latin small gamma (U+0261) → g
-        let idx = CONFUSABLES.binary_search(&('\u{0261}', 'g'));
-        assert!(idx.is_ok(), "binary search should find U+0261");
-
-        // Multiplication sign (U+00D7) → x
-        let idx = CONFUSABLES.binary_search(&('\u{00D7}', 'x'));
-        assert!(idx.is_ok(), "binary search should find U+00D7");
-
-        // A non-existent code point should not be found.
-        let idx = CONFUSABLES.binary_search(&('z', 'z'));
-        assert!(idx.is_err(), "binary search should not find (z, z)");
     }
 }
