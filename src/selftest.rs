@@ -4309,6 +4309,31 @@ smoke_cost::set_contains
         },
     ),
     (
+        "configuration: a glob that does not compile is found before any gate runs, in an enabled gate, a rule entry or [tests] paths",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::check_configured_globs;
+            let head = "[meta]\nversion = 1\nname = \"t\"\n";
+            let load = |body: &str| DisciplineConfig::from_toml_str(&format!("{head}{body}"));
+            let ids = ["scope-confinement", "manifest-sync"];
+            let gate = load("[gates.scope-confinement]\nenabled = true\nforbidden_paths = [\"[\"]\n")?;
+            let off = load("[gates.scope-confinement]\nenabled = false\nforbidden_paths = [\"[\"]\n")?;
+            let rule = load("[gates.manifest-sync]\nenabled = true\n[[gates.manifest-sync.rules]]\nmanifest = \"m.toml\"\nextract_regex = \"x\"\nwatched_paths = [\"src/[a-z\"]\n")?;
+            let tests = load("[tests]\npaths = [\"qa/[a-z\"]\n")?;
+            let good = load("[tests]\npaths = [\"qa/{a,b}/**\"]\n[gates.scope-confinement]\nenabled = true\nforbidden_paths = [\"secrets/[a-z]*\"]\n")?;
+            let names = |cfg: &DisciplineConfig, needle: &str| {
+                check_configured_globs(cfg, &ids)
+                    .err()
+                    .is_some_and(|e| format!("{e:#}").contains(needle))
+            };
+            Ok(names(&gate, "gates.scope-confinement.forbidden_paths")
+                && check_configured_globs(&off, &ids).is_ok()
+                && names(&rule, "gates.manifest-sync.rules.watched_paths")
+                && names(&tests, "tests.paths")
+                && check_configured_globs(&good, &ids).is_ok())
+        },
+    ),
+    (
         "suppression-delta: extract_suppression_rules extracts exact rules across language packs",
         || {
             use crate::guards::suppression_delta::extract_suppression_rules;
