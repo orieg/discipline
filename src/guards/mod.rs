@@ -125,6 +125,7 @@ pub struct BaseAnchored {
 pub fn base_anchored_classification(
     file: &crate::gitctx::ChangedFile,
     registry: &crate::ast::LanguageRegistry,
+    declared_test_paths: &[String],
 ) -> BaseAnchored {
     if file.old_path == file.path {
         return BaseAnchored {
@@ -154,8 +155,17 @@ pub fn base_anchored_classification(
     let head_pack = registry
         .find_pack(&file.path)
         .expect("same-language rename has a head pack");
+    // The anchor exists so that a move into test scope cannot silence a production file.
+    // A file that was test code on the base side has nothing to keep: it is judged by
+    // where it is now, so a move out of test scope makes it production code.
+    let base_is_test = base_pack.is_test_path(&file.old_path)
+        || crate::ast::functions::declared_test_path(&file.old_path, declared_test_paths);
     BaseAnchored {
-        classify_path: file.old_path.clone(),
+        classify_path: if base_is_test {
+            file.path.clone()
+        } else {
+            file.old_path.clone()
+        },
         reclassified: !base_pack.is_test_path(&file.old_path) && head_pack.is_test_path(&file.path),
         language_changed_note: None,
     }
@@ -987,10 +997,10 @@ pub fn toolchain_unavailable(stdout: &str, stderr: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Base-anchored classification: an existing file is judged by its base path,
-    /// so only added files use the head path; a same-language rename into test
-    /// scope is flagged, and a cross-language rename keeps head behaviour with a
-    /// note.
+    /// Base-anchored classification: a file that was production code on the base
+    /// side is judged by its base path, so a same-language rename into test scope
+    /// is flagged and stays production; a file that was test code is judged by its
+    /// head path; a cross-language rename keeps head behaviour with a note.
     #[test]
     fn base_anchored_classification_pins_renames_to_the_base_path() {
         use crate::gitctx::{ChangeKind, ChangedFile};
@@ -1010,6 +1020,7 @@ mod tests {
                 ChangeKind::Added,
             ),
             &reg,
+            &[],
         );
         assert_eq!(added.classify_path, "src/main/java/TestNew.java");
         assert!(!added.reclassified);
@@ -1023,17 +1034,20 @@ mod tests {
                 ChangeKind::Renamed,
             ),
             &reg,
+            &[],
         );
         assert_eq!(renamed.classify_path, "src/main/java/Repo.java");
         assert!(renamed.reclassified);
         assert!(renamed.language_changed_note.is_none());
 
-        // Same-language rename inside test scope, or out of it: base path, silent.
+        // Same-language rename inside test scope: silent.
         let inside = base_anchored_classification(
             &changed("tests/a_test.py", "tests/b_test.py", ChangeKind::Renamed),
             &reg,
+            &[],
         );
-        assert_eq!(inside.classify_path, "tests/a_test.py");
+        // Test code on the base side has no production classification to keep.
+        assert_eq!(inside.classify_path, "tests/b_test.py");
         assert!(!inside.reclassified);
         let out = base_anchored_classification(
             &changed(
@@ -1042,13 +1056,30 @@ mod tests {
                 ChangeKind::Renamed,
             ),
             &reg,
+            &[],
         );
+        // Out of test scope: production code from now on (#517).
+        assert_eq!(out.classify_path, "src/main/java/Repo.java");
         assert!(!out.reclassified);
+        // The same for a path that is test scope only by a declared glob.
+        let declared = base_anchored_classification(
+            &changed("qa/a.py", "src/a.py", ChangeKind::Renamed),
+            &reg,
+            &["qa/**".to_string()],
+        );
+        assert_eq!(declared.classify_path, "src/a.py");
+        let undeclared = base_anchored_classification(
+            &changed("qa/a.py", "src/a.py", ChangeKind::Renamed),
+            &reg,
+            &[],
+        );
+        assert_eq!(undeclared.classify_path, "qa/a.py");
 
         // Same-language rename inside production code: base path, silent.
         let moved = base_anchored_classification(
             &changed("pkg/a.go", "pkg/b.go", ChangeKind::Renamed),
             &reg,
+            &[],
         );
         assert_eq!(moved.classify_path, "pkg/a.go");
         assert!(!moved.reclassified);
@@ -1057,6 +1088,7 @@ mod tests {
         let crossed = base_anchored_classification(
             &changed("src/a.c", "src/a.cpp", ChangeKind::Renamed),
             &reg,
+            &[],
         );
         assert_eq!(crossed.classify_path, "src/a.cpp");
         assert!(!crossed.reclassified);
@@ -1086,12 +1118,12 @@ mod tests {
             ("pkg/a.py", "pkg/a.pyi"),
             ("web/a.JS", "web/a.js"),
         ] {
-            let got = base_anchored_classification(&renamed(old, new), &reg);
+            let got = base_anchored_classification(&renamed(old, new), &reg, &[]);
             assert_eq!(got.classify_path, new, "{old} -> {new}");
             assert!(!got.reclassified, "{old} -> {new}");
             assert!(got.language_changed_note.is_some(), "{old} -> {new}");
         }
-        let same = base_anchored_classification(&renamed("web/a.ts", "web/test_a.ts"), &reg);
+        let same = base_anchored_classification(&renamed("web/a.ts", "web/test_a.ts"), &reg, &[]);
         assert_eq!(same.classify_path, "web/a.ts");
         assert!(same.language_changed_note.is_none());
     }
