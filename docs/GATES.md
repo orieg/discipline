@@ -892,7 +892,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Languages:** Any (commit metadata).
 - **What it catches:**
   - `Commit Trailer Missing`: a commit without one of `required_trailers` (`Signed-off-by`, `Agent-Tool`, ...).
-  - `Agent Commit Without Review`: a commit matching an `agent_markers` entry (a trailer line, the author name or the author email; defaults cover `Agent-Tool:`, `Agent:`, `Generated-by:`, `Co-authored-by: Claude` / `Copilot` / `Gemini` / `Codex` / `Cursor` / `aider`, `[bot]`, `noreply@anthropic.com`, `noreply@openai.com`) with no `review_trailer` (`Reviewed-by` by default; `require_agent_review = false` switches this rule off, and an empty `review_trailer` is a configuration error).
+  - `Agent Commit Without Review`: a commit matching an `agent_markers` entry (a trailer line, the author name or the author email; defaults cover `Agent-Tool:`, `Agent:`, `Generated-by:`, `Co-authored-by: Claude` / `Copilot` / `Gemini` / `Codex` / `Cursor` / `aider`, `[bot]`, `noreply@anthropic.com`, `noreply@openai.com`) with no `review_trailer` (`Reviewed-by` by default; `require_agent_review = false` switches this rule off; an empty `review_trailer` is the deprecated spelling of that and leaves a deprecation note).
   - `Agent Commit Reviewed By Its Author`: the review trailer names the commit's own author (by name or email).
 - **Failing commit (rejected):**
   ```text

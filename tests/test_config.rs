@@ -824,19 +824,44 @@ fn a_renamed_key_is_read_under_its_old_name_with_a_deprecation_note() {
     .is_err());
 }
 
-/// `review_trailer` names a trailer; it is no longer the agent review rule's switch.
-/// Killed mutant: the empty-name check removed from configuration loading.
+/// An empty `review_trailer` is the v0.17 spelling of `require_agent_review = false`: it
+/// still loads, switches the rule off and leaves a deprecation note. Refusing it made a
+/// base configuration written for v0.17 unloadable (#518).
+/// Killed mutant: the empty-name rewrite removed from configuration loading.
 #[test]
-fn an_empty_review_trailer_is_refused_and_require_agent_review_switches_the_rule() {
+fn an_empty_review_trailer_reads_as_require_agent_review_false_with_a_deprecation() {
     let head = "[meta]\nversion = 1\nname = \"t\"\n";
     for empty in ["\"\"", "\"  \""] {
-        let err = DisciplineConfig::from_toml_str(&format!(
+        let cfg = DisciplineConfig::from_toml_str(&format!(
             "{head}[gates.commit-provenance]\nreview_trailer = {empty}\n"
         ))
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("require_agent_review"), "{err}");
+        .unwrap();
+        assert!(!cfg.gates.commit_provenance.require_agent_review);
+        assert_eq!(cfg.gates.commit_provenance.review_trailer, "Reviewed-by");
+        assert_eq!(cfg.deprecations.len(), 1, "{:?}", cfg.deprecations);
+        assert!(
+            cfg.deprecations[0].contains("require_agent_review = false"),
+            "{:?}",
+            cfg.deprecations
+        );
     }
+    // Both spellings at once, disagreeing, is an error naming both keys.
+    let err = DisciplineConfig::from_toml_str(&format!(
+        "{head}[gates.commit-provenance]\nreview_trailer = \"\"\nrequire_agent_review = true\n"
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("review_trailer") && err.contains("require_agent_review"),
+        "{err}"
+    );
+    // Agreeing is the same as the new key alone, still noted.
+    let both = DisciplineConfig::from_toml_str(&format!(
+        "{head}[gates.commit-provenance]\nreview_trailer = \"\"\nrequire_agent_review = false\n"
+    ))
+    .unwrap();
+    assert!(!both.gates.commit_provenance.require_agent_review);
+    assert_eq!(both.deprecations.len(), 1);
     let defaults = DisciplineConfig::from_toml_str(head).unwrap();
     assert!(defaults.gates.commit_provenance.require_agent_review);
     assert_eq!(

@@ -5159,13 +5159,66 @@ fn commit_provenance_require_agent_review_false_keeps_only_the_required_trailers
         vec!["Commit Trailer Missing"]
     );
 
-    // An empty trailer name is a configuration error, never a silent switch.
+    // An empty trailer name is the v0.17 spelling of the switch: same result, with a
+    // deprecation note in the report.
     let empty = run_with("review_trailer = \"\"\n");
-    assert_eq!(empty.code, 2, "{}{}", empty.stdout, empty.stderr);
-    assert!(
-        empty.stderr.contains("require_agent_review"),
-        "{}",
+    assert_eq!(
+        empty.titles("commit-provenance"),
+        vec!["Commit Trailer Missing"],
+        "{}{}",
+        empty.stdout,
         empty.stderr
+    );
+    let notes = empty.json()["deprecations"].to_string();
+    assert!(notes.contains("require_agent_review = false"), "{notes}");
+}
+
+/// A base configuration written for v0.17 (`review_trailer = ""`) still loads, so the
+/// change that migrates it is judged like any other: base policy does not stop the run,
+/// and a weakening carried along with the migration is reported (#518).
+#[test]
+fn a_v0_17_empty_review_trailer_on_the_base_does_not_block_or_unguard_its_migration() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.commit-provenance]\nenabled = true\nreview_trailer = \"\"\n[gates.pii]\nenabled = true\n"),
+    );
+    repo.commit("chore: policy");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.commit-provenance]\nenabled = true\nrequire_agent_review = false\n[gates.pii]\nenabled = false\n[gates.config-integrity]\nenabled = false\n"),
+    );
+    repo.commit("chore: migrate");
+
+    let head_policy = repo.check(&[]);
+    assert_eq!(
+        head_policy.code, 1,
+        "{}{}",
+        head_policy.stdout, head_policy.stderr
+    );
+    let messages: Vec<String> = head_policy
+        .violations("config-integrity")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.starts_with("[pii]")),
+        "{messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|m| m.starts_with("[commit-provenance]")),
+        "the migration itself is not a weakening: {messages:?}"
+    );
+
+    let base_policy = repo.check(&["--policy-from", "base"]);
+    assert_ne!(
+        base_policy.code, 2,
+        "{}{}",
+        base_policy.stdout, base_policy.stderr
     );
 }
 

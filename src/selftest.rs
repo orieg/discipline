@@ -761,16 +761,23 @@ const CASES: &[Case] = &[
         },
     ),
     (
-        "commit-provenance: an empty review_trailer is refused; require_agent_review switches the rule",
+        "commit-provenance: an empty review_trailer reads as require_agent_review = false, with a deprecation note",
         || {
             let head = "[meta]\nversion = 1\nname = \"t\"\n[gates.commit-provenance]\n";
             let empty = crate::config::DisciplineConfig::from_toml_str(&format!(
                 "{head}review_trailer = \"\"\n"
-            ));
+            ))?;
             let off = crate::config::DisciplineConfig::from_toml_str(&format!(
                 "{head}require_agent_review = false\n"
             ))?;
-            Ok(empty.is_err() && !off.gates.commit_provenance.require_agent_review)
+            let clash = crate::config::DisciplineConfig::from_toml_str(&format!(
+                "{head}review_trailer = \"\"\nrequire_agent_review = true\n"
+            ));
+            Ok(!empty.gates.commit_provenance.require_agent_review
+                && empty.deprecations.len() == 1
+                && off.deprecations.is_empty()
+                && !off.gates.commit_provenance.require_agent_review
+                && clash.is_err())
         },
     ),
     (
