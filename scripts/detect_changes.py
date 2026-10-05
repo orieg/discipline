@@ -27,6 +27,30 @@ RULES: Dict[str, List[str]] = {
         "build.rs",
         "discipline.toml",
         ".github/workflows/ci.yml",
+        # Files outside the source tree that a Rust test reads. Each is listed
+        # because a pull request changing it alone can make `cargo test` fail;
+        # a file no test reads stays out, so the rule remains a filter.
+        # Compared with each other by a parity test:
+        "install.sh",
+        "docs/install.sh",
+        ".forgejo/workflows/action-selftest.yml",
+        ".gitea/workflows/action-selftest.yml",
+        # Parsed by tests:
+        "action.yml",
+        ".github/workflows/release.yml",
+        "renovate/discipline.json",
+        "CITATION.cff",
+        # Generated or checked by `discipline docs --check`, which a test runs
+        # over the working tree; several are also read by a test of their own:
+        "README.md",
+        "docs/index.html",
+        "docs/GATES.md",
+        "docs/CONFIGURATION.md",
+        "docs/ROADMAP.md",
+        "man/**",
+        "completions/**",
+        "discipline.schema.json",
+        "discipline.*.schema.json",
     ],
     "msrv": [
         "src/**",
@@ -167,8 +191,14 @@ def get_changed_files_from_git(base_ref: str) -> List[str]:
 
 def run_tests() -> None:
     """Execute unit tests for change detection logic."""
-    # 1. Pure docs change
-    docs_only = ["LICENSE", "docs/index.html", "README.md", "docs/GATES.md"]
+    # 1. Pure docs change: files no Rust test reads
+    docs_only = [
+        "LICENSE",
+        "SECURITY.md",
+        "CONTRIBUTING.md",
+        "docs/ARCHITECTURE.md",
+        "docs/guides/ci-platforms.md",
+    ]
     res = evaluate_files(docs_only, "pull_request")
     assert all(not v for v in res.values()), f"Expected all False for docs, got {res}"
 
@@ -200,7 +230,7 @@ def run_tests() -> None:
     res = evaluate_files(action, "pull_request")
     assert res["action-github"] is True
     assert res["action-gitea"] is True
-    assert res["test"] is False
+    assert res["test"] is True
     assert res["docker-smoke"] is False
 
     # 6. Dockerfile change
@@ -227,6 +257,71 @@ def run_tests() -> None:
     assert res["action-gitea"] is True
     gitea = [".gitea/workflows/action-selftest.yml"]
     assert evaluate_files(gitea, "pull_request") == res
+
+    # 8c. A file a Rust test reads runs `cargo test` when it is the only change:
+    # the test is the drift check, so skipping it lets the drift land (issue 523).
+    read_by_a_rust_test = [
+        # tests/test_docs.rs: served_installer_is_a_byte_copy_of_the_tested_installer
+        "install.sh",
+        "docs/install.sh",
+        # tests/test_action_version.rs:
+        # forgejo_and_gitea_selftest_workflows_run_the_same_jobs
+        ".forgejo/workflows/action-selftest.yml",
+        ".gitea/workflows/action-selftest.yml",
+        # tests/test_release_workflow.rs
+        ".github/workflows/release.yml",
+        # tests/test_docs.rs, tests/test_action_version.rs,
+        # tests/test_stability_contract.rs, tests/test_threat_model_claims.rs
+        "action.yml",
+        # tests/test_docs.rs: docs_check_passes_over_the_working_tree
+        "README.md",
+        "docs/index.html",
+        "docs/ROADMAP.md",
+        "man/man1/discipline.1",
+        "man/man5/discipline.toml.5",
+        # the same, and tests/test_adoption.rs (include_str!)
+        "docs/GATES.md",
+        # the same, and tests/test_config.rs, tests/test_editor_integrations.rs,
+        # tests/test_release_recipe.rs, tests/test_stability_contract.rs
+        "docs/CONFIGURATION.md",
+        # tests/test_docs.rs: committed_completion_scripts_match_the_binary
+        "completions/_discipline",
+        "completions/discipline.bash",
+        "completions/discipline.fish",
+        # tests/test_config.rs, tests/test_output_schemas.rs
+        "discipline.schema.json",
+        "discipline.report.schema.json",
+        "discipline.replay.schema.json",
+        "discipline.audit.schema.json",
+        # tests/test_editor_integrations.rs
+        "renovate/discipline.json",
+        "CITATION.cff",
+    ]
+    skipped = [
+        f
+        for f in read_by_a_rust_test
+        if not evaluate_files([f], "pull_request")["test"]
+    ]
+    assert not skipped, f"`test` is skipped for files a Rust test reads: {skipped}"
+
+    # 8d. Control: the rule stays a filter. A file no Rust test reads, alone,
+    # still skips `cargo test`, including a neighbour of each listed file.
+    for unread in [
+        "SECURITY.md",
+        "LICENSE-MIT",
+        ".zenodo.json",
+        "docs/ARCHITECTURE.md",
+        "docs/tutorials/getting-started.md",
+        "templates/discipline.gitlab-ci.yml",
+        "scripts/tag-release.sh",
+        ".github/workflows/pages.yml",
+        ".gitea/workflows/other.yml",
+        "renovate/other.json",
+        "packaging/docker/docker-entrypoint.sh",
+    ]:
+        assert (
+            evaluate_files([unread], "pull_request")["test"] is False
+        ), f"`test` runs for {unread}, which no Rust test reads"
 
     # 9. Push event on main (must run all suites unconditionally)
     res_push = evaluate_files(docs_only, "push")
