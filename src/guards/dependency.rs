@@ -9,10 +9,9 @@
 //! - Scoped `allow-dependency` escape hatches
 
 use crate::config::{GateSettings, Severity};
-use crate::guards::{lockfile, Context, GateOutcome};
+use crate::guards::{lockfile, Context, GateOutcome, PathFilter};
 use crate::tokens;
 use anyhow::{Context as _, Result};
-use globset::{Glob, GlobSetBuilder};
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::path::Path;
@@ -872,22 +871,12 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
         return Ok(outcome);
     }
 
-    // Build manifest matcher
-    let mut builder = GlobSetBuilder::new();
-    for pattern in &gate.manifests {
-        builder.add(Glob::new(pattern)?);
-        if let Some(stripped) = pattern.strip_prefix("**/") {
-            builder.add(Glob::new(stripped)?);
-        }
-    }
-    let manifest_matcher = builder.build()?;
+    // Build manifest matcher (`**/x` already matches a bare `x`, so no stripped
+    // duplicate is added).
+    let manifest_matcher = PathFilter::new(&gate.manifests)?;
 
     // Build exemptions matcher
-    let mut ex_builder = GlobSetBuilder::new();
-    for pattern in &gate.exempt_paths {
-        ex_builder.add(Glob::new(pattern)?);
-    }
-    let ex_matcher = ex_builder.build()?;
+    let exempt = PathFilter::new(&gate.exempt_paths)?;
 
     // Load deny.toml policy if configured or auto-detected
     let deny_policy = if let Some(ref deny_path) = gate.deny_file {
@@ -916,7 +905,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
     let mut lock_files = Vec::new();
 
     for f in &changed {
-        if ex_matcher.is_match(&f.path) {
+        if exempt.matches(&f.path) {
             continue;
         }
         let p = Path::new(&f.path);
@@ -924,7 +913,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
         if lockfile_names.contains(&fname) {
             lock_files.push((f, fname));
         }
-        if manifest_matcher.is_match(&f.path) {
+        if manifest_matcher.matches(&f.path) {
             manifest_files.push(f);
         }
     }
@@ -1229,6 +1218,47 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use globset::{Glob, GlobSetBuilder};
+
+    #[test]
+    fn leading_double_star_already_matches_a_bare_manifest_name() {
+        // Pins why no stripped `strip_prefix("**/")` copy is added: globset's
+        // `**/` matches zero or more directories, so the stripped copy is redundant.
+        let mut only_star = GlobSetBuilder::new();
+        only_star.add(Glob::new("**/Cargo.toml").unwrap());
+        let only_star = only_star.build().unwrap();
+        assert!(only_star.is_match("Cargo.toml"));
+        assert!(only_star.is_match("crates/a/Cargo.toml"));
+
+        let mut with_stripped = GlobSetBuilder::new();
+        with_stripped.add(Glob::new("**/Cargo.toml").unwrap());
+        with_stripped.add(Glob::new("Cargo.toml").unwrap());
+        let with_stripped = with_stripped.build().unwrap();
+        for path in ["Cargo.toml", "crates/a/Cargo.toml", "src/lib.rs"] {
+            assert_eq!(
+                only_star.is_match(path),
+                with_stripped.is_match(path),
+                "mismatch on {path}"
+            );
+        }
+
+        // A wildcard file name behaves the same: `**/*.toml` already covers the root.
+        let mut wild = GlobSetBuilder::new();
+        wild.add(Glob::new("**/*.toml").unwrap());
+        let wild = wild.build().unwrap();
+        let mut wild_stripped = GlobSetBuilder::new();
+        wild_stripped.add(Glob::new("**/*.toml").unwrap());
+        wild_stripped.add(Glob::new("*.toml").unwrap());
+        let wild_stripped = wild_stripped.build().unwrap();
+        for path in ["Cargo.toml", "crates/a/Cargo.toml", "src/lib.rs"] {
+            assert_eq!(
+                wild.is_match(path),
+                wild_stripped.is_match(path),
+                "mismatch on {path}"
+            );
+        }
+        assert!(wild.is_match("Cargo.toml"));
+    }
 
     #[test]
     fn lockfiles_read_entry_by_entry_count_their_parsed_entries() {

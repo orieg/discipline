@@ -4226,18 +4226,10 @@ smoke_cost::set_contains
     (
         "scope-confinement: check_path_confinement discriminates authorized, forbidden, and exempt files",
         || {
-            use globset::{Glob, GlobSetBuilder};
-            let mut exempt_b = GlobSetBuilder::new();
-            exempt_b.add(Glob::new("tests/fixtures/**")?);
-            let exempt = exempt_b.build()?;
-
-            let mut allowed_b = GlobSetBuilder::new();
-            allowed_b.add(Glob::new("src/**")?);
-            let allowed = allowed_b.build()?;
-
-            let mut forbidden_b = GlobSetBuilder::new();
-            forbidden_b.add(Glob::new(".github/**")?);
-            let forbidden = forbidden_b.build()?;
+            use crate::guards::PathFilter;
+            let exempt = PathFilter::new(&["tests/fixtures/**".to_string()])?;
+            let allowed = PathFilter::new(&["src/**".to_string()])?;
+            let forbidden = PathFilter::new(&[".github/**".to_string()])?;
 
             let ok = crate::guards::scope_confinement::check_path_confinement(
                 "src/lib.rs", &exempt, &allowed, true, &forbidden,
@@ -4256,6 +4248,14 @@ smoke_cost::set_contains
                 && forbidden_res == Some("forbidden")
                 && outside_res == Some("outside-allowed")
                 && exempt_res.is_none())
+        },
+    ),
+    (
+        "scope-confinement: a malformed glob is a configuration error, never a skipped pattern",
+        || {
+            use crate::guards::PathFilter;
+            Ok(PathFilter::new(&["[".to_string()]).is_err()
+                && PathFilter::new(&["src/**".to_string()]).is_ok())
         },
     ),
     (

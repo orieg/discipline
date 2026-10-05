@@ -5,10 +5,9 @@
 
 use crate::ast::default_registry;
 use crate::gitctx::ChangeKind;
-use crate::guards::{Context, GateOutcome};
+use crate::guards::{Context, GateOutcome, PathFilter};
 use crate::tokens::ALLOW_UNSAFE;
 use anyhow::Result;
-use globset::{Glob, GlobSetBuilder};
 
 pub const GATE: &str = "unsafe-budget";
 
@@ -26,15 +25,9 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
 
-    let mut exempt_builder = GlobSetBuilder::new();
-    for pat in &settings.exempt_paths {
-        if let Ok(g) = Glob::new(pat) {
-            exempt_builder.add(g);
-        }
-    }
-    let exempt_set = exempt_builder
-        .build()
-        .unwrap_or_else(|_| GlobSetBuilder::new().build().unwrap());
+    // A malformed glob is a configuration error (exit 2), never a silently
+    // skipped exemption.
+    let exempt = PathFilter::new(&settings.exempt_paths)?;
 
     let registry = default_registry();
     let vocab = super::agent_diff::assert_vocabulary(ctx.config);
@@ -45,7 +38,7 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
     let mut new_unsafe_sites = Vec::new();
 
     for file in &changed {
-        if exempt_set.is_match(&file.path) {
+        if exempt.matches(&file.path) {
             continue;
         }
 
@@ -249,6 +242,7 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
 #[cfg(test)]
 mod tests {
     use crate::config::{Severity, UnsafeBudgetGate};
+    use crate::guards::PathFilter;
 
     #[test]
     fn test_unsafe_budget_defaults() {
@@ -257,5 +251,17 @@ mod tests {
         assert_eq!(gate.severity, Severity::Error);
         assert_eq!(gate.max_unsafe, None);
         assert!(!gate.allow_increase);
+    }
+
+    #[test]
+    fn invalid_exempt_glob_is_an_error_not_a_silently_skipped_pattern() {
+        assert!(PathFilter::new(&["[".to_string()]).is_err());
+    }
+
+    #[test]
+    fn valid_exempt_glob_still_matches() {
+        let exempt = PathFilter::new(&["generated/**".to_string()]).unwrap();
+        assert!(exempt.matches("generated/bindings.rs"));
+        assert!(!exempt.matches("src/lib.rs"));
     }
 }
