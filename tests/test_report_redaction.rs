@@ -159,6 +159,7 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
         planned_gates: Vec::new(),
         policy_failures: Vec::new(),
         deprecations: Vec::new(),
+        directive_notes: Vec::new(),
         unused_directives: Vec::new(),
     };
 
