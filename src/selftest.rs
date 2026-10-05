@@ -129,7 +129,7 @@ const CASES: &[Case] = &[
         },
     ),
     (
-        "ast: base-anchored classification flags same-language rename into test scope",
+        "ast: a rename into test scope stays production and is flagged; a rename out of it becomes production",
         || {
             use crate::gitctx::{ChangeKind, ChangedFile};
             let reg = crate::ast::default_registry();
@@ -145,11 +145,11 @@ const CASES: &[Case] = &[
                 kind: ChangeKind::Renamed,
                 added_lines: std::collections::BTreeSet::new(),
             };
-            let c_in = crate::guards::base_anchored_classification(&renamed_in, &reg);
-            let c_out = crate::guards::base_anchored_classification(&renamed_out, &reg);
+            let c_in = crate::guards::base_anchored_classification(&renamed_in, &reg, &[]);
+            let c_out = crate::guards::base_anchored_classification(&renamed_out, &reg, &[]);
             Ok(c_in.classify_path == "src/main/java/Repo.java"
                 && c_in.reclassified
-                && c_out.classify_path == "src/main/java/TestRepo.java"
+                && c_out.classify_path == "src/main/java/Repo.java"
                 && !c_out.reclassified)
         },
     ),

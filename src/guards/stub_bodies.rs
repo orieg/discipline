@@ -112,7 +112,7 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
         // Base-anchored classification, shared with `error-swallowing`: a renamed
         // file is judged by its base path. The move itself is reported once by
         // `error-swallowing` (`test-path-reclassification`), not here.
-        let anchored = super::base_anchored_classification(&file, &registry);
+        let anchored = super::base_anchored_classification(&file, &registry, &vocab.test_paths);
         if let Some(note) = anchored.language_changed_note {
             out.notes.push(note);
         }
