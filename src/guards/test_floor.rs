@@ -652,9 +652,39 @@ pub struct AstTestCount {
     /// parse with errors (tree-sitter recovers what it can; the count may be short).
     pub unread: Vec<String>,
     pub notes: Vec<String>,
+    /// Files with tests that were counted although runner collection was not
+    /// determined, by reason.
+    pub unknown_collection: std::collections::BTreeMap<String, usize>,
 }
 
 impl AstTestCount {
+    /// As [`Self::add`], for a file runner collection gave `status` for. A file is left
+    /// out only when a parsed runner configuration excludes it; one whose collection is
+    /// not determined counts every test its pack finds, and is recorded for the notes.
+    fn add_collected(
+        &mut self,
+        path: &str,
+        status: crate::ast::runner_collection::RunnerCollectionStatus,
+        content: impl FnOnce() -> Result<Option<String>>,
+        registry: &crate::ast::LanguageRegistry,
+        v: &crate::ast::AssertVocabulary,
+    ) -> Result<()> {
+        use crate::ast::runner_collection::RunnerCollectionStatus;
+        let unknown = match status {
+            RunnerCollectionStatus::Collected => None,
+            RunnerCollectionStatus::NotCollected => return Ok(()),
+            RunnerCollectionStatus::Unknown(reason) => Some(reason),
+        };
+        let before = self.running + self.ignored;
+        self.add(path, content()?, registry, v);
+        if let Some(reason) = unknown {
+            if self.running + self.ignored > before {
+                *self.unknown_collection.entry(reason).or_default() += 1;
+            }
+        }
+        Ok(())
+    }
+
     fn add(
         &mut self,
         path: &str,
@@ -694,6 +724,11 @@ impl AstTestCount {
         for note in &self.notes {
             notes.push(note.clone());
         }
+        for (reason, files) in &self.unknown_collection {
+            notes.push(format!(
+                "{side}: runner collection unknown ({reason}): every test the language packs found in {files} file(s) is counted"
+            ));
+        }
         if self.ignored > 0 {
             notes.push(format!(
                 "{side}: {} ignored / skipped test(s) are not counted toward the floor",
@@ -725,20 +760,8 @@ pub fn count_workspace_ast_tests(
     let registry = crate::ast::default_registry();
     let v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx)?;
     let mut count = AstTestCount::default();
-    let mut unknown_reasons = std::collections::BTreeSet::new();
     for path in ctx.git.tracked_files()? {
         if filter.matches(&path) || !registry.is_supported(&path) {
-            continue;
-        }
-        let collected = match crate::ast::runner_collection::check_runner_collected(&path, &v) {
-            crate::ast::runner_collection::RunnerCollectionStatus::Collected => true,
-            crate::ast::runner_collection::RunnerCollectionStatus::NotCollected => false,
-            crate::ast::runner_collection::RunnerCollectionStatus::Unknown(reason) => {
-                unknown_reasons.insert(reason);
-                crate::ast::functions::test_path(&path)
-            }
-        };
-        if !collected {
             continue;
         }
         let full = Path::new(ctx.git.root()).join(&path);
@@ -746,12 +769,14 @@ pub fn count_workspace_ast_tests(
         if !full.exists() {
             continue;
         }
-        count.add(&path, std::fs::read_to_string(&full).ok(), &registry, &v);
-    }
-    for reason in unknown_reasons {
-        count.notes.push(format!(
-            "test-floor: runner collection unknown ({reason}); falling back to standard test paths"
-        ));
+        let status = crate::ast::runner_collection::check_runner_collected(&path, &v);
+        count.add_collected(
+            &path,
+            status,
+            || Ok(std::fs::read_to_string(&full).ok()),
+            &registry,
+            &v,
+        )?;
     }
     Ok(count)
 }
@@ -764,28 +789,12 @@ pub fn count_base_workspace_ast_tests(
     let registry = crate::ast::default_registry();
     let v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx)?;
     let mut count = AstTestCount::default();
-    let mut unknown_reasons = std::collections::BTreeSet::new();
     for path in ctx.git.base_tracked_files()? {
         if filter.matches(&path) || !registry.is_supported(&path) {
             continue;
         }
-        let collected = match crate::ast::runner_collection::check_runner_collected(&path, &v) {
-            crate::ast::runner_collection::RunnerCollectionStatus::Collected => true,
-            crate::ast::runner_collection::RunnerCollectionStatus::NotCollected => false,
-            crate::ast::runner_collection::RunnerCollectionStatus::Unknown(reason) => {
-                unknown_reasons.insert(reason);
-                crate::ast::functions::test_path(&path)
-            }
-        };
-        if !collected {
-            continue;
-        }
-        count.add(&path, ctx.git.base_content(&path)?, &registry, &v);
-    }
-    for reason in unknown_reasons {
-        count.notes.push(format!(
-            "test-floor: runner collection unknown ({reason}); falling back to standard test paths"
-        ));
+        let status = crate::ast::runner_collection::check_runner_collected(&path, &v);
+        count.add_collected(&path, status, || ctx.git.base_content(&path), &registry, &v)?;
     }
     Ok(count)
 }
