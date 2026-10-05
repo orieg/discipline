@@ -677,7 +677,7 @@ opencode: OpenCode (`.opencode/plugins/discipline.js`, a plugin on session start
 .RE
 .TP
 \fB\-b\fR, \fB\-\-base\fR \fI<BASE>\fR
-Base to measure the change against (default: the merge base with origin\*(Aqs default branch, else main / master)
+Base to measure the change against (default: DISCIPLINE_BASE_REF or the CI base, else the merge base with origin\*(Aqs default branch, else main / master / trunk)
 .TP
 \fB\-\-if\-configured\fR
 Pass silently unless the working directory (for the pre\-tool and session\-start events, the payload\*(Aqs directory) is in a git repository with a discipline.toml at its root (for a user\-level hook, which runs in every folder)
