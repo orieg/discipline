@@ -82,6 +82,12 @@ pub fn detect_base_ref(
     })
 }
 
+/// Whether the environment names the base (steps 4 to 11 of [`detect_base_ref`]): when it
+/// does not, a run with no `--base` falls to the literal `origin/main`.
+pub fn environment_names_base() -> bool {
+    named_base_ref_with_env(None, None, None, |k| std::env::var(k).ok()).is_some()
+}
+
 /// The head a `--commit X` or `--commit-range A..B` names: `X`, or `B` (`None` when the
 /// range leaves it out, which means the checkout).
 pub fn named_head(commit: Option<&str>, commit_range: Option<&str>) -> Option<String> {
@@ -268,30 +274,45 @@ pub fn detect_base_ref_with_env<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
+    named_base_ref_with_env(explicit_base, commit, commit_range, get_env)
+        .unwrap_or_else(|| "origin/main".to_string())
+}
+
+/// The base an argument or the environment names: every step of [`detect_base_ref`] but
+/// the last. `None` when nothing names one.
+pub fn named_base_ref_with_env<F>(
+    explicit_base: Option<&str>,
+    commit: Option<&str>,
+    commit_range: Option<&str>,
+    get_env: F,
+) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
     if let Some(b) = explicit_base.filter(|s| !s.trim().is_empty()) {
-        return b.to_string();
+        return Some(b.to_string());
     }
     if let Some(c) = commit.filter(|s| !s.trim().is_empty()) {
         let trimmed = c.trim();
-        return format!("{trimmed}~1");
+        return Some(format!("{trimmed}~1"));
     }
     if let Some(r) = commit_range.filter(|s| !s.trim().is_empty()) {
         let trimmed = r.trim();
         if let Some((before, _)) = trimmed.split_once("...") {
             if !before.is_empty() {
-                return before.to_string();
+                return Some(before.to_string());
             }
         } else if let Some((before, _)) = trimmed.split_once("..") {
             if !before.is_empty() {
-                return before.to_string();
+                return Some(before.to_string());
             }
         } else {
-            return trimmed.to_string();
+            return Some(trimmed.to_string());
         }
     }
     if let Some(b) = get_env("DISCIPLINE_BASE_REF") {
         if !b.trim().is_empty() {
-            return b.trim().to_string();
+            return Some(b.trim().to_string());
         }
     }
 
@@ -304,28 +325,28 @@ where
             "CI_COMMIT_BEFORE_SHA",
         ] {
             if let Some(base) = get_env(var).and_then(|b| normalize_before(&b)) {
-                return base;
+                return Some(base);
             }
         }
         if let Some(base) = event_before_sha(&get_env).and_then(|b| normalize_before(&b)) {
-            return base;
+            return Some(base);
         }
-        return "HEAD~1".to_string();
+        return Some("HEAD~1".to_string());
     }
 
     if let Some(target_branch) = get_env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME") {
         if !target_branch.trim().is_empty() {
             let trimmed = target_branch.trim();
             if trimmed.starts_with("origin/") {
-                return trimmed.to_string();
+                return Some(trimmed.to_string());
             } else {
-                return format!("origin/{}", trimmed);
+                return Some(format!("origin/{}", trimmed));
             }
         }
     }
     if let Some(diff_base) = get_env("CI_MERGE_REQUEST_DIFF_BASE_SHA") {
         if !diff_base.trim().is_empty() {
-            return diff_base.trim().to_string();
+            return Some(diff_base.trim().to_string());
         }
     }
     for var in &["FORGEJO_BASE_REF", "GITEA_BASE_REF", "GITHUB_BASE_REF"] {
@@ -333,9 +354,9 @@ where
             if !base_branch.trim().is_empty() {
                 let trimmed = base_branch.trim();
                 if trimmed.starts_with("origin/") {
-                    return trimmed.to_string();
+                    return Some(trimmed.to_string());
                 } else {
-                    return format!("origin/{}", trimmed);
+                    return Some(format!("origin/{}", trimmed));
                 }
             }
         }
@@ -344,13 +365,13 @@ where
         if !default_branch.trim().is_empty() {
             let trimmed = default_branch.trim();
             if trimmed.starts_with("origin/") {
-                return trimmed.to_string();
+                return Some(trimmed.to_string());
             } else {
-                return format!("origin/{}", trimmed);
+                return Some(format!("origin/{}", trimmed));
             }
         }
     }
-    "origin/main".to_string()
+    None
 }
 
 /// Discovers a git repository starting from the given path.
@@ -1907,6 +1928,35 @@ mod tests {
         assert_eq!(
             detect_base_ref_with_env(None, None, None, lookup),
             "origin/release/v1.0"
+        );
+    }
+
+    /// #530: the environment-named base is told apart from the `origin/main` fallback.
+    #[test]
+    fn a_base_named_by_nothing_is_none_and_the_fallback_is_origin_main() {
+        assert_eq!(named_base_ref_with_env(None, None, None, |_| None), None);
+        assert_eq!(
+            named_base_ref_with_env(None, None, None, |k| {
+                (k == "DISCIPLINE_BASE_REF").then(|| "origin/main".to_string())
+            }),
+            Some("origin/main".to_string()),
+            "a variable that names the fallback's ref still names the base"
+        );
+        assert_eq!(
+            named_base_ref_with_env(None, None, None, |k| {
+                (k == "GITHUB_BASE_REF").then(|| "develop".to_string())
+            }),
+            Some("origin/develop".to_string())
+        );
+        assert_eq!(
+            named_base_ref_with_env(Some("x"), None, None, |_| None),
+            Some("x".to_string())
+        );
+        assert_eq!(
+            detect_base_ref_with_env(None, None, None, |k| {
+                (k == "DISCIPLINE_BASE_REF").then(|| "  ".to_string())
+            }),
+            "origin/main"
         );
     }
 

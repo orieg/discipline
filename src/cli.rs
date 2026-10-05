@@ -275,7 +275,7 @@ pub struct HookRunArgs {
     #[arg(long, value_enum)]
     pub agent: crate::hook::Agent,
 
-    /// Base to measure the change against (default: the merge base with origin's default branch, else main / master)
+    /// Base to measure the change against (default: DISCIPLINE_BASE_REF or the CI base, else the merge base with origin's default branch, else main / master / trunk)
     #[arg(short, long)]
     pub base: Option<String>,
 
