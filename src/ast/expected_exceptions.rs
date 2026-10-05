@@ -217,17 +217,32 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                 true
             }
             "call" => {
-                // Standalone calls like self.assertRaises(ValueError, f, -1)
-                if let Some(parent) = node.parent() {
-                    if parent.kind() != "with_item" {
-                        inspect_python_standalone_call(node, src, tests);
-                    }
+                // Standalone calls like self.assertRaises(ValueError, f, -1). The context
+                // manager of a `with` item, bound with `as` or not, is read above.
+                if !is_python_with_item_value(node) {
+                    inspect_python_standalone_call(node, src, tests);
                 }
                 true
             }
             _ => true,
         }
     });
+}
+
+/// Whether `call` is the context manager of a `with` item: its value, or the value an
+/// `as` binding wraps (`with f() as e:` parses as `with_item > as_pattern > call`).
+fn is_python_with_item_value(call: Node) -> bool {
+    let Some(parent) = call.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        "with_item" => true,
+        "as_pattern" => {
+            parent.parent().is_some_and(|g| g.kind() == "with_item")
+                && parent.named_child(0).is_some_and(|c| c.id() == call.id())
+        }
+        _ => false,
+    }
 }
 
 fn inspect_python_with_item(with_stmt: Node, item: Node, src: &str, tests: &mut [TestFn]) {
@@ -246,6 +261,15 @@ fn inspect_python_with_item(with_stmt: Node, item: Node, src: &str, tests: &mut 
             return;
         };
         c
+    };
+    // `with pytest.raises(E) as e:` wraps the call in an `as_pattern`.
+    let call = if call.kind() == "as_pattern" {
+        let Some(inner) = call.named_child(0) else {
+            return;
+        };
+        inner
+    } else {
+        call
     };
     let Some(func) = call.child_by_field_name("function") else {
         return;
@@ -559,7 +583,17 @@ fn inspect_java_annotation(anno: Node, src: &str, tests: &mut [TestFn]) {
     attribute(tests, exp);
 }
 
-/// C#: `Assert.Throws<...>` / `Assert.ThrowsAny<...>`.
+/// The assertion classes of the C# pack (`csharp.rs`, `extract_assertions_in_body`).
+const CSHARP_ASSERT_CLASSES: &[&str] = &[
+    "Assert",
+    "StringAssert",
+    "CollectionAssert",
+    "ClassicAssert",
+];
+
+/// C#: `Assert.Throws<...>` / `Assert.ThrowsAny<...>` and their async, exact and MSTest
+/// spellings. The call is an expected exception only as a member of an assertion class:
+/// `mock.Setup(..).Throws(..)` configures a double and asserts nothing.
 pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
@@ -571,27 +605,42 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
         let Some(expr) = node.child_by_field_name("function") else {
             return true;
         };
-        let expr_text = text(expr, src);
-        if !expr_text.contains("Throws") {
+        if expr.kind() != "member_access_expression" {
             return true;
         }
-
-        let is_any = expr_text.contains("ThrowsAny");
-        let kind = if is_any {
-            "Assert.ThrowsAny"
-        } else {
-            "Assert.Throws"
+        let (Some(receiver), Some(name)) = (
+            expr.child_by_field_name("expression"),
+            expr.child_by_field_name("name"),
+        ) else {
+            return true;
         };
-
-        let mut exception_type = None;
-        let mut cursor = expr.walk();
-        for child in expr.children(&mut cursor) {
-            if child.kind() == "type_argument_list" {
-                if let Some(t_arg) = child.named_child(0) {
-                    exception_type = Some(text(t_arg, src).to_string());
-                }
-            }
+        if receiver.kind() != "identifier" || !CSHARP_ASSERT_CLASSES.contains(&text(receiver, src))
+        {
+            return true;
         }
+        // `Throws<T>` is a `generic_name`: an identifier and a `type_argument_list`.
+        let (method, type_args) = if name.kind() == "generic_name" {
+            let mut cursor = name.walk();
+            let type_args = name
+                .children(&mut cursor)
+                .find(|c| c.kind() == "type_argument_list");
+            (name.child(0).unwrap_or(name), type_args)
+        } else {
+            (name, None)
+        };
+        let kind = match text(method, src) {
+            "ThrowsAny" | "ThrowsAnyAsync" => "Assert.ThrowsAny",
+            "Throws"
+            | "ThrowsAsync"
+            | "ThrowsExactly"
+            | "ThrowsExactlyAsync"
+            | "ThrowsException"
+            | "ThrowsExceptionAsync" => "Assert.Throws",
+            _ => return true,
+        };
+        let exception_type = type_args
+            .and_then(|l| l.named_child(0))
+            .map(|t| text(t, src).to_string());
 
         let Some(args) = node.child_by_field_name("arguments") else {
             return true;
@@ -616,6 +665,155 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::ast::csharp::CSharpPack;
+    use crate::ast::python::PythonPack;
+    use crate::ast::{AssertVocabulary, LanguagePack};
+
+    fn py(src: &str) -> Vec<TestFn> {
+        PythonPack
+            .extract("tests/test_t.py", src, &AssertVocabulary::default())
+            .expect("extract succeeds")
+            .tests
+    }
+
+    fn cs(body: &str) -> Vec<TestFn> {
+        let src = format!(
+            "using Xunit;\npublic class T {{\n    [Fact]\n    public void Run() {{\n        {body}\n    }}\n}}\n"
+        );
+        CSharpPack
+            .extract("tests/T.cs", &src, &AssertVocabulary::default())
+            .expect("extract succeeds")
+            .tests
+    }
+
+    #[test]
+    fn python_raises_as_form_is_read_like_the_plain_form() {
+        let plain = py(
+            "def test_t():\n    with pytest.raises(ValueError, match=\"neg\"):\n        f(-1)\n",
+        );
+        let bound = py(
+            "def test_t():\n    with pytest.raises(ValueError, match=\"neg\") as e:\n        f(-1)\n",
+        );
+        assert_eq!(plain[0].expected_exceptions.len(), 1);
+        let got = &bound[0].expected_exceptions;
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].kind, "pytest.raises");
+        assert_eq!(got[0].exception_type.as_deref(), Some("ValueError"));
+        assert_eq!(got[0].matcher.as_deref(), Some("neg"));
+        assert_eq!(got[0].skeleton, "with pytest.raises(#) as e: f(-1)");
+        assert_eq!(got[0].line, 2);
+    }
+
+    #[test]
+    fn python_raises_as_form_widened_is_reported_and_unchanged_is_not() {
+        let narrow = py(
+            "def test_t():\n    with pytest.raises(ValueError, match=\"neg\") as e:\n        f(-1)\n",
+        );
+        let wide = py("def test_t():\n    with pytest.raises(Exception) as e:\n        f(-1)\n");
+        let w = widened(&narrow[0].expected_exceptions, &wide[0].expected_exceptions);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].detail.contains("from `ValueError` to `Exception`"));
+        assert!(widened(
+            &narrow[0].expected_exceptions,
+            &narrow[0].expected_exceptions
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn python_assert_raises_as_form_is_recorded_once_on_the_with_path() {
+        let src = |call: &str| {
+            format!(
+                "class TestC(unittest.TestCase):\n    def test_t(self):\n        with {call} as cm:\n            f(-1)\n"
+            )
+        };
+        let narrow = py(&src("self.assertRaisesRegex(ValueError, \"neg\")"));
+        let got = &narrow[0].expected_exceptions;
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].kind, "assertRaises");
+        assert_eq!(got[0].exception_type.as_deref(), Some("ValueError"));
+        assert_eq!(got[0].matcher.as_deref(), Some("neg"));
+        assert_eq!(got[0].skeleton, "with self.assertRaises(#) as cm: f(-1)");
+
+        let wide = py(&src("self.assertRaises(Exception)"));
+        let w = widened(got, &wide[0].expected_exceptions);
+        assert_eq!(w.len(), 1, "{w:?}");
+    }
+
+    #[test]
+    fn csharp_mock_setup_throws_is_not_an_expected_exception() {
+        let mocked = cs("mock.Setup(m => m.Get()).Throws(new Exception()); sut.Run();");
+        assert!(
+            mocked[0].expected_exceptions.is_empty(),
+            "{:?}",
+            mocked[0].expected_exceptions
+        );
+        assert!(mocked[0].is_vacuous());
+
+        // The same holds for any receiver that is not an assertion class.
+        for body in [
+            "stub.Throws<InvalidOperationException>(); sut.Run();",
+            "mock.Setup(m => m.GetAsync()).ThrowsAsync(new Exception()); sut.Run();",
+            "ThrowsHelper(); sut.Run();",
+            "Guard.Throws<InvalidOperationException>(() => sut.Run());",
+        ] {
+            let t = cs(body);
+            assert!(t[0].expected_exceptions.is_empty(), "{body}");
+            assert!(t[0].is_vacuous(), "{body}");
+        }
+    }
+
+    #[test]
+    fn csharp_assert_throws_is_an_expected_exception_and_not_vacuous() {
+        for (body, kind) in [
+            (
+                "Assert.Throws<InvalidOperationException>(() => sut.Run());",
+                "Assert.Throws",
+            ),
+            (
+                "Assert.ThrowsAny<InvalidOperationException>(() => sut.Run());",
+                "Assert.ThrowsAny",
+            ),
+            (
+                "Assert.ThrowsExactly<InvalidOperationException>(() => sut.Run());",
+                "Assert.Throws",
+            ),
+            (
+                "ClassicAssert.Throws<InvalidOperationException>(() => sut.Run());",
+                "Assert.Throws",
+            ),
+        ] {
+            let t = cs(body);
+            let got = &t[0].expected_exceptions;
+            assert_eq!(got.len(), 1, "{body}: {got:?}");
+            assert_eq!(got[0].kind, kind, "{body}");
+            assert_eq!(got[0].skeleton, "Assert.Throws#(() => sut.Run())");
+            assert!(!t[0].is_vacuous(), "{body}");
+        }
+        // An assertion that nothing is thrown expects no exception.
+        let none = cs("Assert.DoesNotThrow(() => sut.Run());");
+        assert!(none[0].expected_exceptions.is_empty());
+    }
+
+    #[test]
+    fn csharp_assert_throws_reads_its_type_argument() {
+        let narrow = cs("Assert.Throws<ArgumentNullException>(() => sut.Run());");
+        let wide = cs("Assert.Throws<Exception>(() => sut.Run());");
+        let sibling = cs("Assert.Throws<ArgumentException>(() => sut.Run());");
+        let n = &narrow[0].expected_exceptions;
+        assert_eq!(
+            n[0].exception_type.as_deref(),
+            Some("ArgumentNullException")
+        );
+        let w = widened(n, &wide[0].expected_exceptions);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0]
+            .detail
+            .contains("from `ArgumentNullException` to `Exception`"));
+        assert!(widened(n, &sibling[0].expected_exceptions).is_empty());
+        assert!(widened(n, n).is_empty());
+    }
 
     #[test]
     fn test_widened_rust_panic_matcher_removed() {
