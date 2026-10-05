@@ -9426,6 +9426,48 @@ func TestCalc(t *testing.T) {
 }
 
 #[test]
+fn go_replacing_strong_assertion_with_external_helper_is_reported_as_assertion_reduction() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_go = r#"package calc_test
+
+import "testing"
+
+func TestCalc(t *testing.T) {
+    if 1+1 != 2 {
+        t.Errorf("unexpected")
+    }
+}
+"#;
+    repo.write("calc_test.go", base_go);
+    repo.commit("feat: initial go test with strong assertion");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    let head_go = r#"package calc_test
+
+import "testing"
+
+func TestCalc(t *testing.T) {
+    customHelper(t)
+}
+"#;
+    repo.write("calc_test.go", head_go);
+    repo.commit("test: replace strong assertion with external helper");
+
+    let run = repo.check(&[
+        "--config-override",
+        "[gates.assertion-reduction]\nassert_helper_fns = [\"customHelper\"]",
+    ]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("assertion-reduction");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"],
+        "assertion-reduction/assertions-reduced"
+    );
+}
+
+#[test]
 fn go_skipped_tests_detected_and_accepts_override() {
     let repo = Repo::new();
     repo.write(
@@ -14358,6 +14400,41 @@ forbidden_paths = [".github/**"]
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
 }
 
+#[test]
+fn scope_confinement_invalid_glob_is_could_not_check_not_a_pass() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.scope-confinement]
+enabled = true
+forbidden_paths = ["["]
+"#,
+    );
+    repo.commit("chore: configure scope confinement");
+
+    // The forbidden path would pass if the malformed glob were silently skipped.
+    repo.write(".github/workflows/test.yml", "name: test\n");
+    repo.commit("ci: touch forbidden path");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.could_not_check(),
+        ("gate".to_string(), Some("scope-confinement".to_string()))
+    );
+    let detail = run.json()["could_not_check"]["detail"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        detail.contains("invalid glob") && detail.contains('['),
+        "exit 2 must name the bad glob, got: {detail}"
+    );
+}
+
 // ---- suppression-delta -----------------------------------------------------
 
 /// `suppression-delta` defaults to `warning`; these tests exercise the blocking
@@ -14390,6 +14467,41 @@ fn suppression_delta_detects_new_suppression_and_accepts_waiver() {
     repo.commit("feat: clean function");
     let run_ok = repo.check(SUPPRESSION_BLOCKING);
     assert_eq!(run_ok.code, 0, "{}{}", run_ok.stdout, run_ok.stderr);
+}
+
+#[test]
+fn suppression_delta_invalid_exempt_glob_is_could_not_check() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.suppression-delta]
+enabled = true
+exempt_paths = ["["]
+"#,
+    );
+    repo.commit("chore: configure suppression delta");
+
+    // A clean change passes if the malformed glob is silently skipped.
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn clean() {{}}\n"));
+    repo.commit("feat: clean function");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.could_not_check(),
+        ("gate".to_string(), Some("suppression-delta".to_string()))
+    );
+    let detail = run.json()["could_not_check"]["detail"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        detail.contains("invalid glob") && detail.contains('['),
+        "exit 2 must name the bad glob, got: {detail}"
+    );
 }
 
 // ---- pr-checklist ----------------------------------------------------------
@@ -14476,6 +14588,45 @@ allow_increase = false
     repo.commit("feat: safe function");
     let run_ok = repo.check(&[]);
     assert_eq!(run_ok.code, 0, "{}{}", run_ok.stdout, run_ok.stderr);
+}
+
+#[test]
+fn unsafe_budget_invalid_exempt_glob_is_could_not_check() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.unsafe-budget]
+enabled = true
+allow_increase = false
+exempt_paths = ["["]
+"#,
+    );
+    repo.commit("chore: enable unsafe budget");
+
+    // A safe change passes if the malformed glob is silently skipped.
+    repo.write(
+        "src/lib.rs",
+        &format!("{GOOD_LIB}\npub fn safe_fn() -> u32 {{ 42 }}\n"),
+    );
+    repo.commit("feat: safe function");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.could_not_check(),
+        ("gate".to_string(), Some("unsafe-budget".to_string()))
+    );
+    let detail = run.json()["could_not_check"]["detail"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        detail.contains("invalid glob") && detail.contains('['),
+        "exit 2 must name the bad glob, got: {detail}"
+    );
 }
 
 // ---- msrv ------------------------------------------------------------------

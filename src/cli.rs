@@ -78,7 +78,7 @@ pub struct BenchDeriveArgs {
     pub allow_mixed_commits: bool,
 
     /// Derived cell floors above this percentage are reported but not gated
-    #[arg(long, default_value_t = 50.0)]
+    #[arg(long, default_value_t = crate::guards::perf::paired_ratio::DEFAULT_CEILING_PCT)]
     pub ceiling_pct: f64,
 }
 
@@ -700,4 +700,26 @@ pub enum PolicyFrom {
 
 fn parse_path(s: &str) -> Result<PathBuf, std::convert::Infallible> {
     Ok(PathBuf::from(s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn bench_derive_ceiling_default_matches_the_paired_ratio_constant() {
+        // Drift guard, not a bug test: the clap default must stay equal to
+        // `DEFAULT_CEILING_PCT` in `guards::perf::paired_ratio`.
+        let cli = Cli::try_parse_from(["discipline", "bench", "derive", "a.json", "b.json"])
+            .expect("bench derive parses");
+        let Commands::Bench(args) = cli.command else {
+            panic!("expected bench command");
+        };
+        let BenchCommand::Derive(derive) = args.command;
+        assert_eq!(
+            derive.ceiling_pct,
+            crate::guards::perf::paired_ratio::DEFAULT_CEILING_PCT
+        );
+    }
 }

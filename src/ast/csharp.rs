@@ -479,9 +479,16 @@ impl<'a> CSharpExtractor<'a> {
                     return;
                 }
 
-                if self.vocab.extra_macros.iter().any(|m| m == method_name)
-                    || self.vocab.helper_fns.iter().any(|h| h == method_name)
+                if self
+                    .vocab
+                    .helper_fns
+                    .iter()
+                    .any(|h| super::helper_call_matches(method_name, h))
                 {
+                    test_fn.total_asserts += 1;
+                    return;
+                }
+                if self.vocab.extra_macros.iter().any(|m| m == method_name) {
                     test_fn.total_asserts += 1;
                     test_fn.strong_asserts += 1;
                     return;
@@ -498,22 +505,9 @@ impl<'a> CSharpExtractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
-                test.direct_calls = calls.clone();
-                for call in calls {
-                    if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
-                        if self.vocab.helper_fns.iter().any(|name| name == call) {
-                            test.total_asserts = test.total_asserts.saturating_sub(1);
-                            test.strong_asserts = test.strong_asserts.saturating_sub(1);
-                        }
-                        test.total_asserts += h.total_asserts;
-                        test.strong_asserts += h.strong_asserts;
-                        test.tautologies += h.tautologies;
-                        test.fatal_asserts += h.fatal_asserts;
-                        if h.total_asserts > h.tautologies {
-                            test.helper_checks += 1;
-                        }
-                    }
-                }
+                super::resolve_test_same_file_helpers(test, calls, self.vocab, |call| {
+                    super::helper_through_wrappers(call, &self.helpers)
+                });
             }
         }
     }

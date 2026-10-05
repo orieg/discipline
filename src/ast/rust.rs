@@ -409,21 +409,9 @@ impl<'a> Extractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
-                test.direct_calls = calls.clone();
-                for call in calls {
-                    if let Some(h) = super::helper_through_wrappers(call, &self.helpers) {
-                        if self.vocab.helper_fns.iter().any(|name| name == call) {
-                            test.total_asserts = test.total_asserts.saturating_sub(1);
-                        }
-                        test.total_asserts += h.total_asserts;
-                        test.strong_asserts += h.strong_asserts;
-                        test.tautologies += h.tautologies;
-                        test.fatal_asserts += h.fatal_asserts;
-                        if h.total_asserts > h.tautologies {
-                            test.helper_checks += 1;
-                        }
-                    }
-                }
+                super::resolve_test_same_file_helpers(test, calls, self.vocab, |call| {
+                    super::helper_through_wrappers(call, &self.helpers)
+                });
             }
         }
     }
@@ -1011,7 +999,12 @@ impl<'a> Extractor<'a> {
                                         && !NON_EVALUATING_MACROS.contains(&callee_name)
                                     {
                                         direct_calls.push(callee_name.to_string());
-                                        if self.vocab.helper_fns.iter().any(|h| h == callee_name) {
+                                        if self
+                                            .vocab
+                                            .helper_fns
+                                            .iter()
+                                            .any(|h| super::helper_call_matches(callee_name, h))
+                                        {
                                             test.total_asserts += 1;
                                         }
                                     }
@@ -1033,7 +1026,10 @@ impl<'a> Extractor<'a> {
                     }
                     let callee = f.utf8_text(src).unwrap_or("");
                     let callee_name = last_segment(callee).to_string();
-                    if self.vocab.helper_fns.contains(&callee_name) {
+                    if self.vocab.helper_fns.iter().any(|h| {
+                        super::helper_call_matches(callee, h)
+                            || super::helper_call_matches(&callee_name, h)
+                    }) {
                         test.total_asserts += 1;
                     }
                     direct_calls.push(callee_name);
@@ -1143,10 +1139,14 @@ impl<'a> Extractor<'a> {
                             }
                         }
                     }
+                    let full_call = self.text(f);
                     let name = self
                         .selected_callee(f)
-                        .unwrap_or_else(|| last_segment(self.text(f)).to_string());
-                    if self.vocab.helper_fns.contains(&name) {
+                        .unwrap_or_else(|| last_segment(full_call).to_string());
+                    if self.vocab.helper_fns.iter().any(|h| {
+                        super::helper_call_matches(full_call, h)
+                            || super::helper_call_matches(&name, h)
+                    }) {
                         test.total_asserts += 1;
                     }
                     direct_calls.push(name);
@@ -1210,7 +1210,12 @@ impl<'a> Extractor<'a> {
                     })
                 {
                     direct_calls.push(name.to_string());
-                    if self.vocab.helper_fns.iter().any(|h| h == name) {
+                    if self
+                        .vocab
+                        .helper_fns
+                        .iter()
+                        .any(|h| super::helper_call_matches(name, h))
+                    {
                         test.total_asserts += 1;
                     }
                 }
