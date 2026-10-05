@@ -618,6 +618,80 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
     pairs
 }
 
+/// What a test's calls to paired helpers add to it across a change.
+struct HelperCallGain<'a> {
+    total: usize,
+    strong: usize,
+    names: Vec<&'a str>,
+}
+
+/// The checks the calls of `head` to paired helpers account for beyond those of `base`.
+///
+/// Each call is resolved to the first pair whose head helper it names exactly
+/// ([`crate::ast::helper_call_matches`], on the helper's name or its last `::` segment).
+/// A pair contributes its head count for every head call site less its base count for
+/// every base call site: the head count for a helper the test newly calls, the count the
+/// helper gained for one the base test already called. A call to a helper listed in
+/// `configured` (`assert_helper_fns`) is already one assertion of the test and counts one
+/// less.
+fn helper_call_gain<'a>(
+    base: &TestFn,
+    head: &TestFn,
+    helpers: &[HelperPair<'a>],
+    configured: &[String],
+) -> HelperCallGain<'a> {
+    let paired: Vec<(
+        &'a crate::ast::TestHelperFacts,
+        &'a crate::ast::TestHelperFacts,
+    )> = helpers
+        .iter()
+        .filter_map(|hp| hp.head.map(|head_helper| (hp.base, head_helper)))
+        .collect();
+    let sites = |calls: &[String]| -> Vec<(usize, usize)> {
+        let mut per_pair = vec![(0usize, 0usize); paired.len()];
+        for call in calls {
+            let named = paired.iter().position(|(_, helper)| {
+                let leaf = helper.name.rsplit("::").next().unwrap_or(&helper.name);
+                crate::ast::helper_call_matches(call, &helper.name)
+                    || crate::ast::helper_call_matches(call, leaf)
+            });
+            if let Some(i) = named {
+                per_pair[i].0 += 1;
+                if configured
+                    .iter()
+                    .any(|name| crate::ast::helper_call_matches(call, name))
+                {
+                    per_pair[i].1 += 1;
+                }
+            }
+        }
+        per_pair
+    };
+    let (base_sites, head_sites) = (sites(&base.direct_calls), sites(&head.direct_calls));
+    let mut gain = HelperCallGain {
+        total: 0,
+        strong: 0,
+        names: Vec::new(),
+    };
+    for (i, &(base_helper, head_helper)) in paired.iter().enumerate() {
+        let (base_calls, base_counted) = base_sites[i];
+        let (head_calls, head_counted) = head_sites[i];
+        let total = (head_calls * head_helper.effective_asserts())
+            .saturating_sub(head_counted)
+            .saturating_sub(
+                (base_calls * base_helper.effective_asserts()).saturating_sub(base_counted),
+            );
+        let strong = (head_calls * head_helper.strong_asserts)
+            .saturating_sub(base_calls * base_helper.strong_asserts);
+        if total > 0 || strong > 0 {
+            gain.total += total;
+            gain.strong += strong;
+            gain.names.push(head_helper.name.as_str());
+        }
+    }
+    gain
+}
+
 pub(crate) fn leaf_name(test: &TestFn) -> &str {
     let s = test.name.rsplit("::").next().unwrap_or(&test.name);
     let s = s.rsplit('#').next().unwrap_or(s);
@@ -827,16 +901,6 @@ pub fn evaluate_assertion_reduction(
         }
     }
 
-    let mut head_helpers: std::collections::HashMap<&str, &crate::ast::TestHelperFacts> =
-        std::collections::HashMap::new();
-    for hp in helpers {
-        if let Some(h) = hp.head {
-            head_helpers.insert(&h.name, h);
-            let leaf = h.name.rsplit("::").next().unwrap_or(&h.name);
-            head_helpers.insert(leaf, h);
-        }
-    }
-
     for hp in helpers.iter().filter(|hp| !exempt.matches(hp.path)) {
         let b = hp.base;
         let (total_drop, strong_drop, fatal_drop, h_eff) = match hp.head {
@@ -992,21 +1056,41 @@ pub fn evaluate_assertion_reduction(
                 p.path, h.line, h.name
             ));
         }
+        // A base side with a literal count is compared with whatever the head side is:
+        // a head with no literal count is a reduction that cannot be measured, not an
+        // unchanged test. One literal case is one run with or without its parametrization.
+        let case_change = match (b.cases, h.cases) {
+            (Some(b_cases), Some(h_cases)) if h_cases < b_cases => {
+                Some(CaseDrop::Fewer(b_cases, h_cases))
+            }
+            (Some(b_cases), None) if b_cases >= 2 => Some(if h.non_literal_cases {
+                CaseDrop::NotLiteral(b_cases)
+            } else {
+                CaseDrop::NotParametrized(b_cases)
+            }),
+            _ => None,
+        };
         let mut cases_drop = false;
         let mut cases_drop_info = None;
-        if let (Some(b_cases), Some(h_cases)) = (b.cases, h.cases) {
-            if h_cases < b_cases {
-                let base_file_total = file_base_cases.get(p.path).copied().unwrap_or(0);
-                let head_file_total = file_head_cases.get(p.path).copied().unwrap_or(0);
-                if head_file_total >= base_file_total {
-                    out.notes.push(format!(
-                        "`{}` in `{}`: test cases {} -> {} read as preserved across tests in same file ({} -> {} total cases)",
-                        h.name, p.path, b_cases, h_cases, base_file_total, head_file_total
-                    ));
-                } else {
-                    cases_drop = true;
-                    cases_drop_info = Some((b_cases, h_cases));
-                }
+        if let Some(change) = case_change {
+            let base_file_total = file_base_cases.get(p.path).copied().unwrap_or(0);
+            let head_file_total = file_head_cases.get(p.path).copied().unwrap_or(0);
+            if head_file_total >= base_file_total {
+                let moved = match change {
+                    CaseDrop::Fewer(b_cases, h_cases) => {
+                        format!("test cases {b_cases} -> {h_cases}")
+                    }
+                    CaseDrop::NotLiteral(b_cases) | CaseDrop::NotParametrized(b_cases) => {
+                        format!("{b_cases} literal test cases no longer counted on it")
+                    }
+                };
+                out.notes.push(format!(
+                    "`{}` in `{}`: {} read as preserved across tests in same file ({} -> {} total cases)",
+                    h.name, p.path, moved, base_file_total, head_file_total
+                ));
+            } else {
+                cases_drop = true;
+                cases_drop_info = Some(change);
             }
         }
         let b_eff = b.effective_asserts();
@@ -1030,51 +1114,34 @@ pub fn evaluate_assertion_reduction(
             strong_drop = false;
         }
 
-        // Checks moved into a helper (in another file or same file) that has assertions/checks.
+        // Checks moved into a paired helper (in another file or same file): the helper stands
+        // for the checks its calls add to this test, and no more. A helper the test newly
+        // calls adds its head checks per call; one the base already called adds what it
+        // gained. What that does not cover is still a drop, reported with the helper's
+        // share counted in.
+        let mut helper_total = 0;
+        let mut helper_strong = 0;
         if total_drop || strong_drop {
-            let mut moved_into_helper = None;
-            for call in &h.direct_calls {
-                let call_leaf = call.rsplit("::").next().unwrap_or(call);
-                let call_leaf = call_leaf.rsplit('.').next().unwrap_or(call_leaf);
-                if let Some(target_helper) = head_helpers
-                    .get(call.as_str())
-                    .or_else(|| head_helpers.get(call_leaf))
-                {
-                    if target_helper.effective_asserts() > 0
-                        || target_helper.strong_asserts > 0
-                        || target_helper.fatal_asserts > 0
-                    {
-                        let base_called = b.direct_calls.iter().any(|c| {
-                            let c_leaf = c.rsplit("::").next().unwrap_or(c);
-                            let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
-                            c_leaf == call_leaf || c == call
-                        });
-                        let helper_gained = helpers.iter().any(|hp| {
-                            if let (Some(h_fact), b_fact) = (hp.head, hp.base) {
-                                (h_fact.name == target_helper.name
-                                    || h_fact.name.ends_with(call_leaf))
-                                    && h_fact.effective_asserts() > b_fact.effective_asserts()
-                            } else {
-                                false
-                            }
-                        });
-                        if !base_called || helper_gained {
-                            moved_into_helper = Some((
-                                target_helper.name.clone(),
-                                target_helper.effective_asserts(),
-                            ));
-                            break;
-                        }
-                    }
-                }
+            let moved = helper_call_gain(b, h, helpers, &settings.assert_helper_fns);
+            if total_drop && h_eff + newly_caught.len() + moved.total >= b_eff {
+                total_drop = false;
             }
-            if let Some((helper_name, helper_checks)) = moved_into_helper {
+            if strong_drop && h.strong_asserts + moved.strong >= b.strong_asserts {
+                strong_drop = false;
+            }
+            if total_drop || strong_drop {
+                helper_total = moved.total;
+                helper_strong = moved.strong;
+            } else {
                 out.notes.push(format!(
                     "`{}` in `{}`: assertions {} -> {} read as moved into helper `{}` ({} check(s))",
-                    h.name, p.path, b_eff, h_eff, helper_name, helper_checks
+                    h.name,
+                    p.path,
+                    b_eff,
+                    h_eff,
+                    moved.names.join("`, `"),
+                    moved.total
                 ));
-                total_drop = false;
-                strong_drop = false;
             }
         }
 
@@ -1304,7 +1371,7 @@ pub fn evaluate_assertion_reduction(
             continue;
         }
 
-        if let Some((b_cases, h_cases)) = cases_drop_info {
+        if let Some(change) = cases_drop_info {
             if !case_drop_allowed {
                 let severity = if is_staged {
                     crate::config::Severity::Warning
@@ -1317,10 +1384,18 @@ pub fn evaluate_assertion_reduction(
                     &crate::findings::TEST_CASES_REDUCED,
                     Some(p.path),
                     Some(violation_line),
-                    format!(
-                        "{test_label}: test cases in parametrized / table-driven test dropped from {} to {}.",
-                        b_cases, h_cases
-                    ),
+                    // Counts only: a case source is the change's own text and is not echoed.
+                    match change {
+                        CaseDrop::Fewer(b_cases, h_cases) => format!(
+                            "{test_label}: test cases in parametrized / table-driven test dropped from {b_cases} to {h_cases}."
+                        ),
+                        CaseDrop::NotLiteral(b_cases) => format!(
+                            "{test_label}: the case source is no longer a literal list and its cases cannot be counted; it had {b_cases} literal cases."
+                        ),
+                        CaseDrop::NotParametrized(b_cases) => format!(
+                            "{test_label}: ran {b_cases} cases and is no longer read as parametrized; no case list is found on it."
+                        ),
+                    },
                     &format!(
                         "Restore the test cases, or justify the drop on its own line in the PR body or \
                          a commit message: `allow-case-drop: {} <reason>`.",
@@ -1370,16 +1445,19 @@ pub fn evaluate_assertion_reduction(
             continue;
         }
 
+        // The head side counts the checks the test's paired-helper calls account for, so
+        // a partly moved test reads as what it still checks, not as its inline count.
         let what = if total_drop {
             format!(
                 "effective assertions dropped from {} to {}",
                 b.effective_asserts(),
-                h.effective_asserts()
+                h.effective_asserts() + helper_total
             )
         } else {
             format!(
                 "equality / pattern assertions dropped from {} to {} (weakened to a looser form)",
-                b.strong_asserts, h.strong_asserts
+                b.strong_asserts,
+                h.strong_asserts + helper_strong
             )
         };
         let test_label = if p.forced {
@@ -1411,6 +1489,17 @@ pub fn evaluate_assertion_reduction(
         );
     }
     Ok(out)
+}
+
+/// How the literal case count of a paired parametrized test went down.
+#[derive(Clone, Copy)]
+enum CaseDrop {
+    /// Both sides are literal: base count, head count.
+    Fewer(usize, usize),
+    /// The head's case source is an expression whose cases cannot be counted; base count.
+    NotLiteral(usize),
+    /// No case source is read on the head at all; base count.
+    NotParametrized(usize),
 }
 
 pub fn evaluate_vacuous_tests(
@@ -3229,6 +3318,115 @@ mod tests {
             .any(|n| n.contains("non-literal test case source in `test_method_source`")));
     }
 
+    /// A paired test with one assertion on each side and the given case facts.
+    fn case_test(name: &str, cases: Option<usize>, non_literal_cases: bool) -> TestFn {
+        TestFn {
+            name: name.to_string(),
+            line: 10,
+            cases,
+            non_literal_cases,
+            total_asserts: 1,
+            strong_asserts: 1,
+            ..Default::default()
+        }
+    }
+
+    fn case_outcome(b: &TestFn, h: &TestFn, added: &[Located]) -> GateOutcome {
+        let pairs = [TestPair {
+            path: "tests/test_foo.py",
+            base: b,
+            head: h,
+            forced: false,
+        }];
+        let settings = crate::config::AssertionGate::default();
+        evaluate_assertion_reduction(&pairs, added, &[], &settings, &[], false).unwrap()
+    }
+
+    #[test]
+    fn a_counted_base_with_a_non_literal_head_is_a_case_reduction() {
+        let b = case_test("test_param", Some(3), false);
+        let h = case_test("test_param", None, true);
+        let out = case_outcome(&b, &h, &[]);
+        assert_eq!(out.violations.len(), 1);
+        assert_eq!(
+            out.violations[0].code,
+            "assertion-reduction/test-cases-reduced"
+        );
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_param`: the case source is no longer a literal list and its cases cannot be counted; it had 3 literal cases."
+        );
+        assert!(out.violations[0]
+            .remediation
+            .as_deref()
+            .is_some_and(|r| r.contains("allow-case-drop: test_param")));
+    }
+
+    #[test]
+    fn a_counted_base_with_an_unparametrized_head_is_a_case_reduction() {
+        let b = case_test("test_param", Some(2), false);
+        let h = case_test("test_param", None, false);
+        let out = case_outcome(&b, &h, &[]);
+        assert_eq!(out.violations.len(), 1);
+        assert_eq!(
+            out.violations[0].code,
+            "assertion-reduction/test-cases-reduced"
+        );
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_param`: ran 2 cases and is no longer read as parametrized; no case list is found on it."
+        );
+    }
+
+    /// Controls: one literal case is one run either way; an uncounted base says nothing.
+    #[test]
+    fn an_uncounted_head_is_no_reduction_without_two_counted_base_cases() {
+        for (b_cases, b_non_literal, h_cases, h_non_literal) in [
+            (Some(1), false, None, false),
+            (Some(1), false, None, true),
+            (Some(0), false, None, false),
+            (None, true, Some(3), false),
+            (None, true, None, true),
+            (None, false, None, true),
+            (None, false, Some(3), false),
+        ] {
+            let b = case_test("test_param", b_cases, b_non_literal);
+            let h = case_test("test_param", h_cases, h_non_literal);
+            let out = case_outcome(&b, &h, &[]);
+            assert!(
+                out.violations.is_empty(),
+                "{b_cases:?}/{b_non_literal} -> {h_cases:?}/{h_non_literal}: {:?}",
+                out.violations
+                    .iter()
+                    .map(|v| &v.message)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// The same-file excusal reads an uncounted head as the literal one: cases that
+    /// reappear on another test of the file are a note.
+    #[test]
+    fn an_uncounted_head_whose_cases_reappear_in_the_file_is_a_note() {
+        let b = case_test("test_param", Some(3), false);
+        let h = case_test("test_param", None, false);
+        let moved = case_test("test_param_table", Some(3), false);
+        let added = [Located {
+            path: "tests/test_foo.py",
+            file_survives: true,
+            test: &moved,
+        }];
+        let out = case_outcome(&b, &h, &added);
+        assert!(out.violations.is_empty());
+        assert!(
+            out.notes.iter().any(|n| n.contains(
+                "3 literal test cases no longer counted on it read as preserved across tests in same file (3 -> 3 total cases)"
+            )),
+            "{:?}",
+            out.notes
+        );
+    }
+
     #[test]
     fn test_evaluate_assertion_reduction_helper_weakened_reports_violation_and_cites_calling_tests()
     {
@@ -3413,6 +3611,218 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.contains("read as moved into helper `custom_assert`")));
+    }
+
+    fn helper_facts(name: &str, total: usize, strong: usize) -> crate::ast::TestHelperFacts {
+        crate::ast::TestHelperFacts {
+            name: name.to_string(),
+            line: 5,
+            end_line: 10,
+            total_asserts: total,
+            strong_asserts: strong,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+        }
+    }
+
+    fn calling_test(total: usize, strong: usize, calls: &[&str]) -> TestFn {
+        TestFn {
+            name: "test_create".to_string(),
+            line: 20,
+            total_asserts: total,
+            strong_asserts: strong,
+            direct_calls: calls.iter().map(|c| c.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The outcome of one test changing from `b` to `h` beside the given helper pairs.
+    fn helper_move_outcome(
+        b: &TestFn,
+        h: &TestFn,
+        helpers: &[HelperPair],
+        settings: &crate::config::AssertionGate,
+    ) -> GateOutcome {
+        let pairs = [TestPair {
+            path: "tests/test_api.py",
+            base: b,
+            head: h,
+            forced: false,
+        }];
+        evaluate_assertion_reduction(&pairs, &[], helpers, settings, &[], false).unwrap()
+    }
+
+    fn moved_note(out: &GateOutcome) -> bool {
+        out.notes
+            .iter()
+            .any(|n| n.contains("read as moved into helper"))
+    }
+
+    #[test]
+    fn test_helper_excusal_newly_called_helper_accounts_for_its_head_checks_only() {
+        let settings = crate::config::AssertionGate::default();
+        let helper = helper_facts("check_status", 1, 1);
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &helper,
+            head: Some(&helper),
+        }];
+        let b = calling_test(3, 3, &[]);
+        let h = calling_test(0, 0, &["check_status"]);
+        let out = helper_move_outcome(&b, &h, &helpers, &settings);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.notes);
+        assert_eq!(
+            out.violations[0].code,
+            "assertion-reduction/assertions-reduced"
+        );
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_create`: effective assertions dropped from 3 to 1."
+        );
+        assert!(!moved_note(&out), "{:?}", out.notes);
+
+        // Control: the helper holds as many checks as the test drops.
+        let whole = helper_facts("check_status", 3, 3);
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &whole,
+            head: Some(&whole),
+        }];
+        let out = helper_move_outcome(&b, &h, &helpers, &settings);
+        assert_eq!(out.violations.len(), 0, "{:?}", out.violations);
+        assert!(out.notes.iter().any(|n| n
+            .contains("assertions 3 -> 0 read as moved into helper `check_status` (3 check(s))")));
+    }
+
+    #[test]
+    fn test_helper_excusal_already_called_helper_accounts_for_its_gain_only() {
+        let settings = crate::config::AssertionGate::default();
+        let base_helper = helper_facts("check_status", 1, 1);
+        let b = calling_test(3, 3, &["check_status"]);
+        let h = calling_test(0, 0, &["check_status"]);
+
+        let gained_one = helper_facts("check_status", 2, 2);
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &base_helper,
+            head: Some(&gained_one),
+        }];
+        let out = helper_move_outcome(&b, &h, &helpers, &settings);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.notes);
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_create`: effective assertions dropped from 3 to 1."
+        );
+
+        // Control: the helper gains the three checks the test drops.
+        let gained_three = helper_facts("check_status", 4, 4);
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &base_helper,
+            head: Some(&gained_three),
+        }];
+        let out = helper_move_outcome(&b, &h, &helpers, &settings);
+        assert_eq!(out.violations.len(), 0, "{:?}", out.violations);
+        assert!(moved_note(&out), "{:?}", out.notes);
+    }
+
+    #[test]
+    fn test_helper_excusal_matches_the_helper_by_exact_name() {
+        let settings = crate::config::AssertionGate::default();
+        let check = helper_facts("check", 1, 1);
+        let precheck_base = helper_facts("precheck", 1, 1);
+        let precheck_head = helper_facts("precheck", 4, 4);
+        // `precheck` is paired first: a suffix match would resolve the call to it.
+        let helpers = [
+            HelperPair {
+                path: "tests/helpers.py",
+                base: &precheck_base,
+                head: Some(&precheck_head),
+            },
+            HelperPair {
+                path: "tests/helpers.py",
+                base: &check,
+                head: Some(&check),
+            },
+        ];
+        let b = calling_test(3, 3, &["check"]);
+        let h = calling_test(0, 0, &["check"]);
+        let out = helper_move_outcome(&b, &h, &helpers, &settings);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.notes);
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_create`: effective assertions dropped from 3 to 0."
+        );
+
+        // A qualified call still reaches the helper named by its last segment.
+        let whole = helper_facts("check", 3, 3);
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &whole,
+            head: Some(&whole),
+        }];
+        let h = calling_test(0, 0, &["helpers.check"]);
+        let out = helper_move_outcome(&calling_test(3, 3, &[]), &h, &helpers, &settings);
+        assert_eq!(out.violations.len(), 0, "{:?}", out.violations);
+        assert!(moved_note(&out), "{:?}", out.notes);
+    }
+
+    #[test]
+    fn test_helper_excusal_does_not_excuse_a_strength_drop_the_helper_cannot_cover() {
+        let settings = crate::config::AssertionGate::default();
+        let weak = helper_facts("check_all", 3, 1);
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &weak,
+            head: Some(&weak),
+        }];
+        let b = calling_test(3, 3, &[]);
+        let h = calling_test(0, 0, &["check_all"]);
+        let out = helper_move_outcome(&b, &h, &helpers, &settings);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.notes);
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_create`: equality / pattern assertions dropped from 3 to 1 (weakened to a looser form)."
+        );
+    }
+
+    #[test]
+    fn test_helper_excusal_counts_each_call_site_and_a_configured_helper_call_once() {
+        let settings = crate::config::AssertionGate::default();
+        let helper = helper_facts("check_pair", 2, 2);
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &helper,
+            head: Some(&helper),
+        }];
+        // Two calls to a two-check helper stand for four inline assertions; one does not.
+        let b = calling_test(4, 4, &[]);
+        let twice = calling_test(0, 0, &["check_pair", "check_pair"]);
+        let out = helper_move_outcome(&b, &twice, &helpers, &settings);
+        assert_eq!(out.violations.len(), 0, "{:?}", out.violations);
+        let once = calling_test(0, 0, &["check_pair"]);
+        let out = helper_move_outcome(&b, &once, &helpers, &settings);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.notes);
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_create`: effective assertions dropped from 4 to 2."
+        );
+
+        // A call to a helper listed in `assert_helper_fns` is already one assertion of the
+        // test: the helper's two checks add one more, not two.
+        let configured = crate::config::AssertionGate {
+            assert_helper_fns: vec!["check_pair".to_string()],
+            ..Default::default()
+        };
+        let b = calling_test(3, 0, &[]);
+        let h = calling_test(1, 0, &["check_pair"]);
+        let out = helper_move_outcome(&b, &h, &helpers, &configured);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.notes);
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_create`: effective assertions dropped from 3 to 2."
+        );
     }
 
     #[test]

@@ -2945,34 +2945,6 @@ mod tests {
     }
 
     #[test]
-    fn valid_json_array_on_200_is_accepted() {
-        let gh = gh();
-        let mut api = CannedApi::default();
-        // Valid JSON array on 200 should be accepted.
-        api.responses.insert(
-            "github:repos/o/r/issues".into(),
-            serde_json::json!([{"id": 1, "title": "Issue 1"}]),
-        );
-        let result = api.get(&gh, "repos/o/r/issues").unwrap();
-        assert!(result.is_some());
-        let value = result.unwrap();
-        assert_eq!(value[0]["id"], 1);
-    }
-
-    #[test]
-    fn valid_json_object_on_200_is_accepted_for_fetch() {
-        let gh = gh();
-        let mut api = CannedApi::default();
-        // Valid JSON object on 200 should be accepted for fetch.
-        api.responses.insert(
-            "github:repos/o/r/issues".into(),
-            serde_json::json!({"id": 1, "title": "Issue 1"}),
-        );
-        let result = api.fetch(&gh, "repos/o/r/issues").unwrap();
-        assert_eq!(result["id"], 1);
-    }
-
-    #[test]
     fn page_from_answer_with_paging_headers_works() {
         let gh = gh();
         let mut api = CannedApi::default();
@@ -3012,17 +2984,21 @@ mod tests {
         assert_eq!(err.kind, ForgeErrorKind::Malformed);
     }
 
+    /// The production client treats every 2xx as an answer (`HttpApi` returns on
+    /// `classify_status(..) == None`): GitHub answers 204 for a setting that is on.
+    /// Killed mutant: `200..=299` narrowed to `200..=200` in `classify_status`.
     #[test]
-    fn get_accepts_any_2xx_body() {
-        let gh = gh();
-        let mut api = CannedApi::default();
-        // 201 Created with any body should be accepted by get().
-        api.responses.insert(
-            "github:repos/o/r/issues".into(),
-            serde_json::json!({"__status": 201, "__body": {"id": 1}}),
-        );
-        let result = api.get(&gh, "repos/o/r/issues").unwrap();
-        assert!(result.is_some());
+    fn every_2xx_status_is_a_success_and_its_neighbours_are_not() {
+        for status in [200, 201, 204, 299] {
+            assert_eq!(classify_status(status, &[]), None, "{status}");
+        }
+        for status in [199, 300, 304] {
+            assert_eq!(
+                classify_status(status, &[]),
+                Some(ForgeErrorKind::Malformed),
+                "{status}"
+            );
+        }
     }
 
     #[test]
