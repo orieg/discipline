@@ -161,7 +161,6 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.timeout_seconds` | integer | *(unset)* | Execution timeout in seconds (default: 60s) |
 | `gates.command.zero_items_pattern` | string | *(unset)* | Pattern that indicates zero items were executed |
 | `gates.commit-provenance.agent_markers` | list | *(12 entries)* | Substrings of a trailer line, author name or author email that identify an agent-produced commit |
-| `gates.commit-provenance.allow_author_review` | boolean | `false` | The review trailer may name the commit's author when the author is a person and the reviewer is not an agent (single-maintainer repositories; default: false) |
 | `gates.commit-provenance.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.commit-provenance.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.commit-provenance.require_agent_review` | boolean | `true` | Whether an agent-produced commit must carry review_trailer; false switches the rule off. The trailer is a claim: reviewer separation is the forge's required review (default: true) |

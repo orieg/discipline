@@ -449,7 +449,6 @@
       "gates.commit-provenance.agent_markers",
       "gates.commit-provenance.agent_markers.items",
       "gates.commit-provenance.agent_markers.reset",
-      "gates.commit-provenance.allow_author_review",
       "gates.commit-provenance.enabled",
       "gates.commit-provenance.exempt_paths",
       "gates.commit-provenance.exempt_paths.items",

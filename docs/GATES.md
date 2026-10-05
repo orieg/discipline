@@ -893,7 +893,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - `Commit Trailer Missing`: a commit without one of `required_trailers` (`Signed-off-by`, `Agent-Tool`, ...).
   - `Agent Commit Without Review`: a commit matching an `agent_markers` entry (a trailer line, the author name or the author email; defaults cover `Agent-Tool:`, `Agent:`, `Generated-by:`, `Co-authored-by: Claude` / `Copilot` / `Gemini` / `Codex` / `Cursor` / `aider`, `[bot]`, `noreply@anthropic.com`, `noreply@openai.com`) with no `review_trailer` (`Reviewed-by` by default; `require_agent_review = false` switches this rule off, and an empty `review_trailer` is a configuration error).
-  - `Agent Commit Reviewed By Its Author`: the review trailer names the commit's own author (by name or email). With `allow_author_review = true` a person may name themselves: the commit passes when no `agent_markers` entry matches the author name or email and none matches the review trailer line. This fits a single-maintainer repository, where a squash merge makes the maintainer the author of an agent's pull request and the agent becomes `Co-authored-by:`. Leave it off where a second person must review: the squash author is then whoever opened the pull request, and the reviewer must be someone else.
+  - `Agent Commit Reviewed By Its Author`: the review trailer names the commit's own author (by name or email).
 - **Failing commit (rejected):**
   ```text
   feat: parser
@@ -911,7 +911,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Anything in a `--staged` check, which has no commit range: reported as not evaluated.
 - **Lifting directive:** `allow-commit-provenance: <sha> <reason>` (7 or 40 characters).
 - **Default:** off (which trailers a repository requires is its own policy), severity `error`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `required_trailers`, `agent_markers`, `review_trailer`, `require_agent_review` (default `true`; `false` is a weakening under `config-integrity`), `allow_author_review` (default `false`; setting it `true` is a weakening under `config-integrity`).
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `required_trailers`, `agent_markers`, `review_trailer`, `require_agent_review` (default `true`; `false` is a weakening under `config-integrity`).
 
 #### `citation-metadata`
 - **Rule:** The repository's citation record is valid and consistent: `CITATION.cff` (Citation File Format 1.2.0, rendered by GitHub under "Cite this repository") and `.zenodo.json` (read by Zenodo's GitHub integration when it archives a published release), each checked when it exists at the repository root. A problem is reported only when the change adds or edits one of the two files; one the base already had in files the change leaves alone is a note, which the next change to either file must resolve.
