@@ -82,6 +82,9 @@ pub(crate) fn assert_vocabulary_for_head(ctx: &Context) -> Result<AssertVocabula
     Ok(vocab)
 }
 
+/// A base configuration that does not load falls back to the head vocabulary:
+/// `config-integrity` reports that case (`base-configuration-unreadable`) and cannot be
+/// switched off by the change while it holds.
 pub(crate) fn assert_vocabulary_for_base(ctx: &Context) -> Result<AssertVocabulary> {
     let base_cfg = ctx
         .base_config_text()?
