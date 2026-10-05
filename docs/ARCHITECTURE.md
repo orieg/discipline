@@ -270,11 +270,12 @@ flowchart TD
     SCAN_AST --> CNT_ASSERT["Count Assertions & Matchers"]
     CNT_ASSERT --> TAUT{"Inspect Assertion AST Expressions"}
     TAUT -->|"assert_eq!(1, 1), assert!(true)"| FLG_TAUT["Increment tautological_count"]
-    TAUT -->|"Other Call"| SAME_FILE{"Same-file helper that asserts?"}
-    SAME_FILE -->|"Yes (3 calls deep in C/C++ and Python, 1 elsewhere)"| ADD_HELP["Add the Helper's Assertion Counts"]
-    SAME_FILE -->|"No"| CHK_HELP{"In assert_helper_fns?"}
-    CHK_HELP -->|"Yes"| INC_HELP["Count as Effective Assertion"]
+    TAUT -->|"Other Call"| CHK_HELP{"In assert_helper_fns?"}
+    CHK_HELP -->|"Yes"| INC_HELP["Count one total, no strong assertion"]
     CHK_HELP -->|"No"| REG_CALL["Regular Function Call"]
+    INC_HELP --> SAME_FILE{"Helper body in this file, or a same-file helper that asserts?"}
+    REG_CALL --> SAME_FILE
+    SAME_FILE -->|"Yes (3 calls deep in C/C++ and Python, 1 elsewhere)"| ADD_HELP["Replace the call's credit with the Helper's Assertion Counts"]
     TAUT -->|"Standard Assert Macro / Expect Matcher"| INC_STD["Count Effective & Strong Assertions"]
 
     FLG_SKIP --> FACTS["Output ParsedFileFacts (tests, assertions, unsafe)"]

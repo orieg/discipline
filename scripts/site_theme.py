@@ -7,10 +7,34 @@ Follows the Ecosystem Theme Contract v1:
 
 localStorage['orieg-theme'] stores only an explicit override ('light'/'dark');
 absence means 'system'. Migration key is 'discipline-theme'.
+
+Also home to the small packaging helpers shared by build_apt_repo.py and
+build_rpm_repo.py (default version from Cargo.toml, file hashing).
 """
+
+import hashlib
+import os
 
 THEME_STORAGE_KEY = "orieg-theme"
 THEME_LEGACY_KEY = "discipline-theme"
+
+
+def get_default_version() -> str:
+    cargo_toml = os.path.join(os.path.dirname(__file__), "..", "Cargo.toml")
+    if os.path.isfile(cargo_toml):
+        with open(cargo_toml, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("version ="):
+                    return line.split("=")[1].strip().strip('"')
+    return "0.3.0"
+
+
+def sha256_file(filepath: str) -> str:
+    h = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
 
 DARK_PALETTE = {
     "bg": "#090d16",

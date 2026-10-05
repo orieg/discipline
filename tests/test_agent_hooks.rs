@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::Repo;
+use common::{Repo, CONFIG_HEAD};
 use discipline::hook::{guarded, guarded_pretool, Agent};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -22,25 +22,11 @@ fn hook(repo: &Repo, args: &[&str], stdin: &str) -> HookRun {
 }
 
 fn hook_env(repo: &Repo, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> HookRun {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
+    let mut cmd = common::discipline_cmd(repo.path());
     cmd.args(args)
-        .current_dir(repo.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("DISCIPLINE_NO_NETWORK", "1");
-    for var in common::ISOLATED_ENV_VARS
-        .iter()
-        .chain(common::GIT_REPOSITORY_ENV_VARS)
-    {
-        cmd.env_remove(var);
-    }
-    for (k, _) in std::env::vars() {
-        if k.starts_with("DISCIPLINE_") && k != "DISCIPLINE_NO_NETWORK" {
-            cmd.env_remove(k);
-        }
-    }
-    cmd.env("COPILOT_HOME", common::NO_COPILOT_HOME);
+        .stderr(Stdio::piped());
     cmd.envs(env.iter().copied());
     let mut child = cmd.spawn().unwrap();
     child
@@ -565,7 +551,7 @@ fn if_configured_checks_only_repositories_that_adopted_discipline() {
         plain.stdout
     );
 
-    repo.write("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n");
+    repo.write("discipline.toml", CONFIG_HEAD);
     let adopted = hook(&repo, &args, stop);
     let v: serde_json::Value = serde_json::from_str(&adopted.stdout).unwrap();
     assert_eq!(v["decision"], "block", "{}", adopted.stdout);
@@ -575,11 +561,9 @@ fn if_configured_checks_only_repositories_that_adopted_discipline() {
         .contains("[assertion-reduction/assertions-reduced]"));
 
     let outside = tempfile::tempdir().unwrap();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
+    let mut cmd = common::discipline_cmd(outside.path());
     let out = cmd
         .args(args)
-        .current_dir(outside.path())
-        .env("DISCIPLINE_NO_NETWORK", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -626,7 +610,7 @@ fn the_user_level_copilot_hook_leaves_a_trusted_repository_to_its_own_hook() {
     let home = tempfile::tempdir().unwrap();
     let env = [("COPILOT_HOME", home.path().to_str().unwrap())];
     let repo = Repo::new();
-    repo.write("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n");
+    repo.write("discipline.toml", CONFIG_HEAD);
     weakened(&repo);
     let root = repo.path().canonicalize().unwrap();
     let blocks = |run: &HookRun| run.stdout.contains(r#""decision":"block""#);
@@ -1670,24 +1654,11 @@ fn hook_run_on_shallow_clone_refuses_when_base_cannot_measure_change() {
         .unwrap();
     assert!(clone_status.success());
 
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"));
+    let mut cmd = common::discipline_cmd(&shallow);
     cmd.args(["hook", "run", "--agent", "claude-code"])
-        .current_dir(&shallow)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .env("DISCIPLINE_NO_NETWORK", "1");
-    for var in common::ISOLATED_ENV_VARS
-        .iter()
-        .chain(common::GIT_REPOSITORY_ENV_VARS)
-    {
-        cmd.env_remove(var);
-    }
-    for (k, _) in std::env::vars() {
-        if k.starts_with("DISCIPLINE_") && k != "DISCIPLINE_NO_NETWORK" {
-            cmd.env_remove(k);
-        }
-    }
+        .stderr(std::process::Stdio::piped());
     let out = cmd.output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);

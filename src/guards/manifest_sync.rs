@@ -4,10 +4,9 @@
 //! manifest declarations (e.g. `package.xml`, `.nuspec`) to ensure no unbundled
 //! files exist and no phantom files are packaged.
 
-use crate::guards::{Context, GateOutcome};
+use crate::guards::{Context, GateOutcome, PathFilter};
 use crate::tokens;
 use anyhow::{bail, Context as _, Result};
-use globset::{GlobBuilder, GlobSetBuilder};
 use regex::Regex;
 use std::collections::BTreeSet;
 
@@ -71,36 +70,16 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
             }
         }
 
-        let mut w_builder = GlobSetBuilder::new();
-        for w in &rule.watched_paths {
-            w_builder.add(
-                GlobBuilder::new(w)
-                    .literal_separator(false)
-                    .build()
-                    .with_context(|| {
-                        format!("invalid watched glob `{w}` in `{}`", rule.manifest)
-                    })?,
-            );
-        }
-        let watched_set = w_builder.build()?;
+        let watched = PathFilter::new(&rule.watched_paths)
+            .with_context(|| format!("invalid watched glob in manifest `{}`", rule.manifest))?;
 
-        let mut ex_builder = GlobSetBuilder::new();
-        for ex in &rule.exclude_paths {
-            ex_builder.add(
-                GlobBuilder::new(ex)
-                    .literal_separator(false)
-                    .build()
-                    .with_context(|| {
-                        format!("invalid exclude glob `{ex}` in `{}`", rule.manifest)
-                    })?,
-            );
-        }
-        let exclude_set = ex_builder.build()?;
+        let exclude = PathFilter::new(&rule.exclude_paths)
+            .with_context(|| format!("invalid exclude glob in manifest `{}`", rule.manifest))?;
 
         let mut watched_git_files = BTreeSet::new();
         for f in &tracked_files {
             let norm = f.replace('\\', "/");
-            if watched_set.is_match(&norm) && !exclude_set.is_match(&norm) {
+            if watched.matches(&norm) && !exclude.matches(&norm) {
                 watched_git_files.insert(norm);
             }
         }
@@ -145,9 +124,7 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
 
         let mut ghost = Vec::new();
         for path in &manifest_files {
-            if watched_set.is_match(path)
-                && !exclude_set.is_match(path)
-                && !watched_git_files.contains(path)
+            if watched.matches(path) && !exclude.matches(path) && !watched_git_files.contains(path)
             {
                 let allowed = ctx
                     .find_override(

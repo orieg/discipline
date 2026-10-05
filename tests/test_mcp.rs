@@ -5,27 +5,14 @@ mod common;
 use common::Repo;
 use serde_json::{json, Value};
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 fn session(repo: &Repo, messages: &[Value]) -> Vec<Value> {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
+    let mut cmd = common::discipline_cmd(repo.path());
     cmd.arg("mcp")
-        .current_dir(repo.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("DISCIPLINE_NO_NETWORK", "1");
-    for var in common::ISOLATED_ENV_VARS
-        .iter()
-        .chain(common::GIT_REPOSITORY_ENV_VARS)
-    {
-        cmd.env_remove(var);
-    }
-    for (k, _) in std::env::vars() {
-        if k.starts_with("DISCIPLINE_") && k != "DISCIPLINE_NO_NETWORK" {
-            cmd.env_remove(k);
-        }
-    }
+        .stderr(Stdio::piped());
     let mut child = cmd.spawn().unwrap();
     {
         let mut stdin = child.stdin.take().unwrap();
@@ -198,24 +185,11 @@ fn check_diff_ignores_an_agent_chosen_base_and_the_changes_own_config() {
 }
 
 fn session_at(dir: &std::path::Path, messages: &[Value]) -> Vec<Value> {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
+    let mut cmd = common::discipline_cmd(dir);
     cmd.arg("mcp")
-        .current_dir(dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("DISCIPLINE_NO_NETWORK", "1");
-    for var in common::ISOLATED_ENV_VARS
-        .iter()
-        .chain(common::GIT_REPOSITORY_ENV_VARS)
-    {
-        cmd.env_remove(var);
-    }
-    for (k, _) in std::env::vars() {
-        if k.starts_with("DISCIPLINE_") && k != "DISCIPLINE_NO_NETWORK" {
-            cmd.env_remove(k);
-        }
-    }
+        .stderr(Stdio::piped());
     let mut child = cmd.spawn().unwrap();
     {
         let mut stdin = child.stdin.take().unwrap();

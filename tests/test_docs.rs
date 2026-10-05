@@ -409,7 +409,7 @@ fn closed_stdout_pipe_does_not_panic() {
     use std::os::unix::process::ExitStatusExt;
     let (reader, writer) = std::io::pipe().unwrap();
     drop(reader);
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+    let out = common::discipline_cmd(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
         .arg("gates")
         .stdout(writer)
         .stderr(std::process::Stdio::piped())
@@ -430,7 +430,7 @@ fn committed_completion_scripts_match_the_binary() {
         ("bash", "discipline.bash"),
         ("fish", "discipline.fish"),
     ] {
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+        let out = common::discipline_cmd(root)
             .args(["completions", shell])
             .output()
             .unwrap();
@@ -443,4 +443,41 @@ fn committed_completion_scripts_match_the_binary() {
             "completions/{file} is stale: run `discipline docs --write`"
         );
     }
+}
+
+/// The installer the README serves (`docs/install.sh`, via the Pages site) is a
+/// byte copy of the tested root `install.sh`: a fix to one without the other
+/// would ship an untested installer.
+/// Killed mutant: a byte appended to either copy.
+#[test]
+fn served_installer_is_a_byte_copy_of_the_tested_installer() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tested = std::fs::read(root.join("install.sh")).expect("install.sh must exist");
+    let served = std::fs::read(root.join("docs/install.sh")).expect("docs/install.sh must exist");
+    assert_eq!(
+        served, tested,
+        "docs/install.sh drifted from install.sh: copy install.sh over docs/install.sh"
+    );
+}
+
+/// `discipline docs --check` over the working tree itself, through the isolated
+/// helper: the single drift check covering every schema, man page and
+/// completion together (man pages have no per-file test under `cargo test`).
+/// The per-file tests above stay; their fix hints agree on `discipline docs
+/// --write`.
+/// Killed mutant: any generated file perturbed.
+#[test]
+fn docs_check_passes_over_the_working_tree() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = common::discipline_cmd(root)
+        .args(["docs", "--check"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "docs --check drifted: run `discipline docs --write`\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

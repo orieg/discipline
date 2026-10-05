@@ -54,6 +54,7 @@ RULES: Dict[str, List[str]] = {
         "src/**",
         "action.yml",
         ".gitea/**",
+        ".forgejo/**",
         "Dockerfile*",
         "Cargo.toml",
         "Cargo.lock",
@@ -219,6 +220,13 @@ def run_tests() -> None:
     ci_wf = [".github/workflows/ci.yml"]
     res = evaluate_files(ci_wf, "pull_request")
     assert all(v for v in res.values()), f"Expected all True for ci.yml, got {res}"
+
+    # 8b. Forgejo workflow change runs the same suite as the Gitea one
+    forgejo = [".forgejo/workflows/action-selftest.yml"]
+    res = evaluate_files(forgejo, "pull_request")
+    assert res["action-gitea"] is True
+    gitea = [".gitea/workflows/action-selftest.yml"]
+    assert evaluate_files(gitea, "pull_request") == res
 
     # 9. Push event on main (must run all suites unconditionally)
     res_push = evaluate_files(docs_only, "push")

@@ -1,4 +1,5 @@
 mod common;
+use common::CONFIG_HEAD;
 use discipline::config::{split_list, DisciplineConfig, Overrides, Severity, GATES};
 use std::path::Path;
 
@@ -52,7 +53,7 @@ fn defaults_round_trip_through_toml() {
 
 #[test]
 fn schema_is_strict() {
-    let head = "[meta]\nversion = 1\nname = \"t\"\n";
+    let head = CONFIG_HEAD;
     for bad in [
         "[gates.pii]\nlan_ipz = false\n",
         "[gates.no-such-gate]\nenabled = true\n",
@@ -228,7 +229,7 @@ fn schema_does_not_drift() {
     let generated = discipline::schema::generate_schema();
     assert_eq!(
         committed_val, generated,
-        "committed discipline.schema.json does not match discipline::schema::generate_schema(); run `cargo run -- schema > discipline.schema.json`"
+        "committed discipline.schema.json does not match discipline::schema::generate_schema(); run `discipline docs --write` to update"
     );
 
     // Assert that every available gate has a property in the schema, and no planned gate does
@@ -782,7 +783,7 @@ fn a_renamed_key_is_read_under_its_old_name_with_a_deprecation_note() {
             new: "exempt_paths",
         },
     ];
-    let head = "[meta]\nversion = 1\nname = \"t\"\n";
+    let head = CONFIG_HEAD;
 
     // The old name alone: read as the new one, with one note per rewrite.
     let cfg = DisciplineConfig::from_toml_str_with_aliases(
