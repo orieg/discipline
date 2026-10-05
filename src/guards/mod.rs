@@ -669,7 +669,11 @@ pub fn run_checks(
             | "unsafe-safety-comment"
             | "deletion-rationale" => {
                 if ast_outcomes.is_none() {
-                    ast_outcomes = Some(agent_diff::run(ctx)?);
+                    ast_outcomes = Some(
+                        agent_diff::run(ctx)
+                            .with_context(|| format!("gate `{}` could not run", gate.id))
+                            .map_err(|e| crate::could_not_check::tag_gate(gate.id, e))?,
+                    );
                 }
                 let all: &Vec<GateOutcome> = ast_outcomes.as_ref().expect("just set");
                 Ok(all
@@ -844,13 +848,15 @@ pub fn run_checks(
             .iter_mut()
             .flat_map(|o| o.violations.iter_mut())
             .collect();
-        crate::baseline::fill_fingerprints(&mut all, |f| ctx.git.head_content(f).ok().flatten());
+        let reads = crate::gitctx::ReadRecorder::new();
+        crate::baseline::fill_fingerprints(&mut all, reads.head(ctx.git));
+        reads.finish()?;
     }
 
     // Grandfathered findings baseline matching
     let mut deprecations = ctx.config.deprecations.clone();
     if let Some(baseline) = ctx.baseline {
-        crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes);
+        crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes)?;
         if baseline.version < crate::baseline::FINGERPRINT_VERSION {
             deprecations.push(format!(
                 "`{}` uses fingerprint version {}, which keys on finding titles: run `discipline baseline --migrate` in a change of its own to rewrite it to version {}",

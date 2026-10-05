@@ -64,35 +64,38 @@ pub(crate) fn assert_vocabulary(config: &crate::config::DisciplineConfig) -> Ass
     }
 }
 
-pub(crate) fn assert_vocabulary_for_head(ctx: &Context) -> AssertVocabulary {
+pub(crate) fn assert_vocabulary_for_head(ctx: &Context) -> Result<AssertVocabulary> {
     let mut vocab = assert_vocabulary(ctx.config);
-    let manifests = cargo_manifests(ctx.git.tracked_files().unwrap_or_default());
+    let manifests = cargo_manifests(ctx.git.tracked_files()?);
+    let reads = crate::gitctx::ReadRecorder::new();
+    let head = reads.head(ctx.git);
     vocab.runner_rules =
         crate::ast::runner_collection::RunnerCollectionRules::from_files_with_manifests(
             |path| {
-                ctx.git.head_content(path).ok().flatten().or_else(|| {
+                head(path).or_else(|| {
                     std::fs::read_to_string(std::path::Path::new(ctx.git.root()).join(path)).ok()
                 })
             },
             &manifests,
         );
-    vocab
+    reads.finish()?;
+    Ok(vocab)
 }
 
-pub(crate) fn assert_vocabulary_for_base(ctx: &Context) -> AssertVocabulary {
+pub(crate) fn assert_vocabulary_for_base(ctx: &Context) -> Result<AssertVocabulary> {
     let base_cfg = ctx
-        .base_config_text()
-        .ok()
-        .flatten()
+        .base_config_text()?
         .and_then(|s| crate::config::DisciplineConfig::from_toml_str(&s).ok());
     let mut vocab = assert_vocabulary(base_cfg.as_ref().unwrap_or(ctx.config));
-    let manifests = cargo_manifests(ctx.git.base_tracked_files().unwrap_or_default());
+    let manifests = cargo_manifests(ctx.git.base_tracked_files()?);
+    let reads = crate::gitctx::ReadRecorder::new();
     vocab.runner_rules =
         crate::ast::runner_collection::RunnerCollectionRules::from_files_with_manifests(
-            |path| ctx.git.base_content(path).ok().flatten(),
+            reads.base(ctx.git),
             &manifests,
         );
-    vocab
+    reads.finish()?;
+    Ok(vocab)
 }
 
 fn cargo_manifests(files: Vec<String>) -> Vec<String> {
@@ -106,8 +109,8 @@ fn cargo_manifests(files: Vec<String>) -> Vec<String> {
 /// Disabled gates are filtered by the caller; computing them is cheap.
 pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     let gates = &ctx.config.gates;
-    let base_vocab = assert_vocabulary_for_base(ctx);
-    let head_vocab = assert_vocabulary_for_head(ctx);
+    let base_vocab = assert_vocabulary_for_base(ctx)?;
+    let head_vocab = assert_vocabulary_for_head(ctx)?;
 
     let registry = default_registry();
     let changed = ctx.git.changed_files()?;

@@ -605,11 +605,7 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
         let content = match ctx.git.head_content(file) {
             Ok(Some(c)) => c,
             Ok(None) => continue,
-            Err(e) => {
-                out.notes
-                    .push(format!("could not read content of {file}: {e}"));
-                continue;
-            }
+            Err(e) => return Err(e.context(format!("shell-secrets could not read `{file}`"))),
         };
 
         let logical_lines = parse_logical_lines(&content);

@@ -823,21 +823,22 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
                 continue;
             }
             out.examined += 1;
-            let added_in_owner: Vec<String> = changed
-                .iter()
-                .find(|f| f.path == owner.test_file)
-                .and_then(|f| {
-                    let content = ctx.git.head_content(&f.path).ok().flatten()?;
-                    Some(
+            let owner_file = changed.iter().find(|f| f.path == owner.test_file);
+            let added_in_owner: Vec<String> = match owner_file {
+                Some(f) => ctx
+                    .git
+                    .head_content(&f.path)?
+                    .map(|content| {
                         content
                             .lines()
                             .enumerate()
                             .filter(|(i, _)| f.added_lines.contains(&(i + 1)))
                             .map(|(_, l)| l.to_string())
-                            .collect(),
-                    )
-                })
-                .unwrap_or_default();
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
             let unmatched: Vec<&String> = owner
                 .tests
                 .iter()

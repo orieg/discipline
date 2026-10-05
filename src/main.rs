@@ -1111,7 +1111,8 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     let summary = run_checks(&config, args.suite, &ctx)?;
 
     let baseline_path = git.root().join(&args.baseline_file);
-    let read_head = |f: &str| git.head_content(f).ok().flatten();
+    let reads = discipline::gitctx::ReadRecorder::new();
+    let read_head = reads.head(&git);
 
     if args.migrate {
         let old = existing_baseline.expect("checked above");
@@ -1121,7 +1122,8 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             .filter(|o| o.enabled)
             .flat_map(|o| &o.violations)
             .collect();
-        let (migrated, report) = discipline::baseline::migrate(&old, &findings, read_head);
+        let (migrated, report) = discipline::baseline::migrate(&old, &findings, &read_head);
+        reads.finish()?;
         migrated.write_to_file(&baseline_path)?;
         println!(
             "{} rewrote {} to fingerprint version {}: {} entr{} migrated, {} stale entr{} dropped",
@@ -1169,10 +1171,11 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
                 continue;
             }
             recorded.add(v.severity, v.gate);
-            entries.push(discipline::baseline::entry_for(v, read_head));
+            entries.push(discipline::baseline::entry_for(v, &read_head));
         }
     }
 
+    reads.finish()?;
     entries.sort();
 
     let baseline_obj = discipline::baseline::DisciplineBaseline {

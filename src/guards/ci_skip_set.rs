@@ -1071,11 +1071,15 @@ fn evaluate_with(
         ));
         return Ok(out);
     };
-    let workflow = resolve_workflow(
+    let reads = crate::gitctx::ReadRecorder::new();
+    let head = reads.head(ctx.git);
+    let resolved = resolve_workflow(
         &settings.workflow,
         std::env::var("GITHUB_WORKFLOW_REF").ok().as_deref(),
-        |p| ctx.git.head_content(p).ok().flatten().is_some(),
-    )?;
+        |p| head(p).is_some(),
+    );
+    reads.finish()?;
+    let workflow = resolved?;
     if workflow != settings.workflow {
         out.notes.push(format!("workflow: `{workflow}` (detected)"));
     }
