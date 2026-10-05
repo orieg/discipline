@@ -573,6 +573,15 @@ pub fn run_checks(
         bail!("git tracks no files here; refusing to report a pass over an empty tree");
     }
 
+    // Compile every configured glob before any gate runs: a gate that returns early would
+    // not, and the change's own copy is not otherwise read when the policy comes from the
+    // base side.
+    let selected_ids: Vec<&str> = selected.iter().map(|g| g.id).collect();
+    check_configured_globs(config, &selected_ids)?;
+    if let Some(head) = ctx.head_config {
+        check_configured_globs(head, &selected_ids)?;
+    }
+
     // Gates whose rule describes a change (base against head). A whole-tree run has no
     // change: every file is "added", so these would record every dependency, every
     // ignored test and every instruction file as debt.
@@ -920,6 +929,78 @@ impl PathFilter {
     pub fn matches(&self, path: &str) -> bool {
         self.0.is_match(path)
     }
+}
+
+/// Configuration keys whose value is a list of globs, wherever they sit in a gate's table
+/// (an entry of `rules`, the `scratch` table) or under `[tests]`.
+const GLOB_LIST_KEYS: &[&str] = &[
+    "exempt_paths",
+    "paths",
+    "include",
+    "workflows",
+    "manifests",
+    "allowed_paths",
+    "forbidden_paths",
+    "protected_paths",
+    "never_ratifiable",
+    "watched_paths",
+    "exclude_paths",
+    "corpus_dirs",
+    "instruction_files",
+    "superseded_json_paths",
+    "required_paths",
+];
+
+/// The first glob under `value` that does not compile, with the dotted key it sits at.
+fn first_invalid_glob(value: &toml::Value, at: &str) -> Option<(String, String, globset::Error)> {
+    match value {
+        toml::Value::Table(table) => table.iter().find_map(|(key, v)| {
+            let here = format!("{at}.{key}");
+            if GLOB_LIST_KEYS.contains(&key.as_str()) {
+                if let Some(globs) = v.as_array() {
+                    return globs.iter().filter_map(toml::Value::as_str).find_map(|g| {
+                        Glob::new(g).err().map(|e| (here.clone(), g.to_string(), e))
+                    });
+                }
+            }
+            first_invalid_glob(v, &here)
+        }),
+        toml::Value::Array(items) => items.iter().find_map(|v| first_invalid_glob(v, at)),
+        _ => None,
+    }
+}
+
+/// Fails on the first glob that does not compile in `[tests] paths` or in the table of an
+/// enabled gate among `gate_ids`. A glob in a gate's table is that gate's failure, as it
+/// is when the gate compiles it; `[tests] paths` belongs to no gate.
+pub fn check_configured_globs(config: &DisciplineConfig, gate_ids: &[&str]) -> Result<()> {
+    let value = toml::Value::try_from(config)?;
+    if let Some((key, glob, e)) = value
+        .get("tests")
+        .and_then(|tests| first_invalid_glob(tests, "tests"))
+    {
+        return Err(crate::could_not_check::tag(
+            crate::could_not_check::Reason::Configuration,
+            anyhow!("invalid glob `{glob}` in configuration (`{key}`): {e}"),
+        ));
+    }
+    for id in gate_ids {
+        if !config.gates.settings(id).is_some_and(|s| s.enabled()) {
+            continue;
+        }
+        let at = format!("gates.{id}");
+        if let Some((key, glob, e)) = value
+            .get("gates")
+            .and_then(|gates| gates.get(*id))
+            .and_then(|gate| first_invalid_glob(gate, &at))
+        {
+            return Err(crate::could_not_check::tag_gate(
+                id,
+                anyhow!("invalid glob `{glob}` in configuration (`{key}`): {e}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn exempt_filter(settings: &dyn GateSettings) -> Result<PathFilter> {
