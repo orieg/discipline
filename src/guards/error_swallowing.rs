@@ -63,7 +63,7 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
         }
         // Base-anchored classification: a renamed file with an unchanged extension is
         // judged by its base path, so a move into test scope cannot silence its findings.
-        let anchored = super::base_anchored_classification(&file, &registry);
+        let anchored = super::base_anchored_classification(&file, &registry, &vocab.test_paths);
         // A rename out of test scope into it is reported once, here, before any
         // head-side early exit; `stub-bodies` judges the same file's bodies and
         // skips it. Paths only, no contents.
