@@ -541,6 +541,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Kotlin: `@Disabled`, `@Ignore`, `@Test(enabled = false)`, Kotest `"!name"`, `xtest` / `xit` / `xdescribe` / `xcontext`, `.config(enabled = false)` (a class-level `@Disabled` and an `x`-container propagate).
   - C / C++: `DISABLED_` test or suite prefix, `GTEST_SKIP()`, Catch2 `SKIP()` or `[.]`/`[!hide]` hidden tags.
   - Conditional early exits under environment or CI checks: a test that returns early or invokes framework skips (`pytest.skip`, `t.Skip*`) under an environment check (`std::env::var`, `os.environ`, `process.env`, `os.Getenv`) or CI environment check (`CI`, `GITHUB_ACTIONS`, etc.) is flagged as `Test Conditionally Skipped` (`Error` for CI checks by default, `Note` for generic environment checks; softened to `Warning` in staged mode). In Rust, Python, JavaScript / TypeScript, and Go. Liftable via `allow-ignore: <test> <reason>`, or approved via `approved_predicates` in `discipline.toml` (severity configurable via `ci_skip_severity`).
+  - A CI condition added to a conditional skip the test already had (`if testing.Short()` becoming `if testing.Short() || os.Getenv("CI") != ""`) is reported like a new CI-conditional skip. The two sides are compared by whether a CI variable decides the skip, not by their text; a skip that was already CI-conditional on the base side is not reported again.
 - **Failing diff example (rejected):**
   ```typescript
   // Skipping failing test instead of fixing — rejected by ignored-tests:
