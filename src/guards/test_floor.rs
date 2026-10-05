@@ -26,9 +26,19 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     let filter = exempt_filter(settings)?;
 
     // Read base discipline.toml to get base configuration
-    let base_cfg = ctx
-        .base_config_text()?
-        .and_then(|s| crate::config::DisciplineConfig::from_toml_str(&s).ok());
+    let base_cfg = match ctx.base_config_text()? {
+        None => None,
+        Some(s) => match crate::config::DisciplineConfig::from_toml_str(&s) {
+            Ok(cfg) => Some(cfg),
+            Err(_) => {
+                out.notes.push(
+                    "the base-side configuration does not load with this binary; the base `min_tests` ratchet was not checked"
+                        .to_string(),
+                );
+                None
+            }
+        },
+    };
     let base_min_tests = base_cfg.as_ref().and_then(|c| c.gates.test_floor.min_tests);
     let head_min_tests = settings.min_tests;
 

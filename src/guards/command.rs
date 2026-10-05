@@ -278,7 +278,15 @@ fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Retrieves the base min_count ratchet floor for a named command.
+/// Whether a base-side configuration exists and does not load with this binary.
+fn base_config_does_not_load(ctx: &Context) -> Result<bool> {
+    Ok(ctx
+        .base_config_text()?
+        .is_some_and(|src| DisciplineConfig::from_toml_str(&src).is_err()))
+}
+
+/// Retrieves the base min_count ratchet floor for a named command. A base configuration
+/// that does not load has no floor to give; `evaluate_command` notes it.
 fn get_base_min_count(ctx: &Context, name: &str) -> Result<Option<u64>> {
     let Some(base_src) = ctx.base_config_text()? else {
         return Ok(None);
@@ -876,6 +884,12 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
 
         // Check count ratchet against BASE ref
         let base_min = get_base_min_count(ctx, &item.name)?;
+        if base_config_does_not_load(ctx)? {
+            let note = "the base-side configuration does not load with this binary; the base `min_count` ratchet was not checked";
+            if !outcome.notes.iter().any(|n| n == note) {
+                outcome.notes.push(note.to_string());
+            }
+        }
         let effective_floor = item.min_count.unwrap_or(0).max(base_min.unwrap_or(0));
 
         if effective_floor > 0 {
