@@ -822,3 +822,29 @@ fn a_renamed_key_is_read_under_its_old_name_with_a_deprecation_note() {
     )
     .is_err());
 }
+
+/// `review_trailer` names a trailer; it is no longer the agent review rule's switch.
+/// Killed mutant: the empty-name check removed from configuration loading.
+#[test]
+fn an_empty_review_trailer_is_refused_and_require_agent_review_switches_the_rule() {
+    let head = "[meta]\nversion = 1\nname = \"t\"\n";
+    for empty in ["\"\"", "\"  \""] {
+        let err = DisciplineConfig::from_toml_str(&format!(
+            "{head}[gates.commit-provenance]\nreview_trailer = {empty}\n"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("require_agent_review"), "{err}");
+    }
+    let defaults = DisciplineConfig::from_toml_str(head).unwrap();
+    assert!(defaults.gates.commit_provenance.require_agent_review);
+    assert_eq!(
+        defaults.gates.commit_provenance.review_trailer,
+        "Reviewed-by"
+    );
+    let off = DisciplineConfig::from_toml_str(&format!(
+        "{head}[gates.commit-provenance]\nrequire_agent_review = false\n"
+    ))
+    .unwrap();
+    assert!(!off.gates.commit_provenance.require_agent_review);
+}

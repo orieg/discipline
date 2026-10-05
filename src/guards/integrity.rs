@@ -104,6 +104,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("deterministic_units", Direction::Grown),
     ("agent_markers", Direction::Shrunk),
     ("review_trailer", Direction::Evidence),
+    ("require_agent_review", Direction::LooserWhenFalse),
     ("mock_assert_fns", Direction::Shrunk),
     ("rules", Direction::Shrunk),
     ("groups", Direction::Shrunk),

@@ -1578,8 +1578,12 @@ pub struct CommitProvenanceGate {
     /// email that identify an agent-produced commit.
     pub agent_markers: Vec<String>,
     /// Trailer an agent-produced commit must carry, naming someone other than its
-    /// author. Empty switches the agent rule off.
+    /// author. Never empty: `require_agent_review` switches the rule.
     pub review_trailer: String,
+    /// Whether an agent-produced commit must carry `review_trailer`. The trailer is the
+    /// change's own claim; separating reviewer from author is the forge's required
+    /// review (and `directives.require_approval`), which `discipline doctor` reports.
+    pub require_agent_review: bool,
     /// The review trailer may name the commit's author when that author is a person (no
     /// `agent_markers` entry matches the author name or email) and the reviewer is not an
     /// agent. For a single-maintainer repository, where a squash merge makes the
@@ -1613,6 +1617,7 @@ impl Default for CommitProvenanceGate {
             .map(|s| s.to_string())
             .collect(),
             review_trailer: "Reviewed-by".to_string(),
+            require_agent_review: true,
             allow_author_review: false,
         }
     }
@@ -2412,6 +2417,17 @@ impl DisciplineConfig {
             .try_into()
             .context("discipline configuration failed schema validation")?;
         config.normalize();
+        if config
+            .gates
+            .commit_provenance
+            .review_trailer
+            .trim()
+            .is_empty()
+        {
+            bail!(
+                "`gates.commit-provenance.review_trailer` is empty: name the trailer (default `Reviewed-by`); to switch the agent review rule off, set `require_agent_review = false`"
+            );
+        }
         config.deprecations = deprecations;
         if config.meta.version != SCHEMA_VERSION {
             bail!(

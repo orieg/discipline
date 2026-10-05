@@ -454,6 +454,7 @@
       "gates.commit-provenance.exempt_paths",
       "gates.commit-provenance.exempt_paths.items",
       "gates.commit-provenance.exempt_paths.reset",
+      "gates.commit-provenance.require_agent_review",
       "gates.commit-provenance.required_trailers",
       "gates.commit-provenance.required_trailers.items",
       "gates.commit-provenance.required_trailers.reset",

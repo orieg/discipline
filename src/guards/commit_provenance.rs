@@ -209,11 +209,17 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
     out.examined = non_merges.len();
+    // An empty review key switches the agent rule off in `judge_with`.
+    let review_key = if settings.require_agent_review {
+        settings.review_trailer.as_str()
+    } else {
+        ""
+    };
     for f in judge_with(
         &commits,
         &settings.required_trailers,
         &settings.agent_markers,
-        &settings.review_trailer,
+        review_key,
         settings.allow_author_review,
     ) {
         let short: String = f.sha.chars().take(7).collect();
