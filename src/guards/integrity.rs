@@ -54,6 +54,10 @@ pub enum Direction {
 /// reading (`noise_margin_pct` absent is 0).
 pub const ABSENT_IS_UNLIMITED: &[&str] = &["max_noise_cv"];
 
+/// Optional `Tolerance` keys whose absence means no tolerance is added, so adding one
+/// above zero loosens.
+pub const ABSENT_IS_NONE: &[&str] = &["noise_margin_pct", "ratio_tolerance_pct"];
+
 pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     // Common to every gate.
     ("enabled", Direction::LooserWhenFalse),
@@ -120,6 +124,9 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("tolerance", Direction::Tolerance),
     ("min_count", Direction::Floor),
     ("min_tests", Direction::Floor),
+    ("test_report", Direction::Evidence),
+    ("base_report", Direction::Evidence),
+    ("head_report", Direction::Evidence),
     ("min_assertions_per_test", Direction::Floor),
     // A lower cap leaves more archive entries unscanned.
     ("max_entry_bytes", Direction::Floor),
@@ -469,6 +476,15 @@ pub fn advisory_mode_unapproved(ctx: &Context) -> Result<bool> {
                 "meta",
             )
             .is_none())
+}
+
+/// `error` > `warning` > `note`, for severities as configuration strings.
+fn severity_rank(s: &str) -> u8 {
+    match s {
+        "error" => 2,
+        "warning" => 1,
+        _ => 0,
+    }
 }
 
 /// The stricter of two severities.
@@ -1089,6 +1105,17 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                     {
                         note(w(key, Change::Removed).was(bv))
                     }
+                    // An optional severity removed: the gate's `severity` applies again,
+                    // a loosening when that is lower than the value removed.
+                    Direction::Severity => {
+                        if let (Value::String(was), Some(Value::String(now))) =
+                            (bv, h.get("severity"))
+                        {
+                            if severity_rank(now) < severity_rank(was) {
+                                note(w(key, Change::Lowered).values(was, now));
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 continue;
@@ -1172,11 +1199,33 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                 _ => {}
             }
         }
-        // A key only on head: unset `ci_skip_severity` means the gate's `severity`. No other
-        // optional gate key can loosen by being added (an added cap only tightens).
+        // A key only on head is an optional key the base left unset, judged by what unset
+        // means: `ci_skip_severity` unset is the gate's `severity`; a tolerance in
+        // `ABSENT_IS_NONE` unset adds none; a gate's `allow_hidden` unset inherits
+        // `[directives] allow_hidden`. An added floor, cap or evidence key adds a check.
         for (key, hv) in h {
             if b.contains_key(key) {
                 continue;
+            }
+            match direction_of(key) {
+                Some(Direction::Tolerance) if ABSENT_IS_NONE.contains(&key.as_str()) => {
+                    let added = match hv {
+                        Value::Integer(i) => *i as f64,
+                        Value::Float(f) => *f,
+                        _ => 0.0,
+                    };
+                    if added > 0.0 {
+                        note(w(key, Change::Increased).values("unset", hv));
+                    }
+                }
+                Some(Direction::LooserWhenTrue)
+                    if key == "allow_hidden"
+                        && *hv == Value::Boolean(true)
+                        && !base.directives.allow_hidden =>
+                {
+                    note(w(key, Change::Changed).values("unset", hv));
+                }
+                _ => {}
             }
             if gate == "ignored-tests" && key == "ci_skip_severity" {
                 if let (Some(Value::String(bs)), Value::String(hs)) = (b.get("severity"), hv) {
@@ -2007,6 +2056,97 @@ mod tests {
             cfg("[gates.dependency-delta]\nallow_dependencies = [\"serde\", \"left-pad\"]\n");
         assert!(diff_configs(&none, &adopted).unwrap().is_empty());
         assert_eq!(diff_configs(&adopted, &grown).unwrap().len(), 1);
+    }
+
+    /// An optional key is absent from the compared table when unset, so a key only on one
+    /// side is judged by what its absence means (#520).
+    #[test]
+    fn an_optional_key_removed_or_added_is_judged_by_what_its_absence_means() {
+        let one = |base: &str, head: &str| {
+            let found = diff_configs(&cfg(base), &cfg(head)).unwrap();
+            assert_eq!(found.len(), 1, "{base:?} -> {head:?}: {found:?}");
+            found.into_iter().next().unwrap()
+        };
+        let none = |base: &str, head: &str| {
+            let found = diff_configs(&cfg(base), &cfg(head)).unwrap();
+            assert!(found.is_empty(), "{base:?} -> {head:?}: {found:?}");
+        };
+
+        // `ci_skip_severity` removed: the gate's `severity` applies again.
+        let w = one(
+            "[gates.ignored-tests]\nseverity = \"warning\"\nci_skip_severity = \"error\"\n",
+            "[gates.ignored-tests]\nseverity = \"warning\"\n",
+        );
+        assert_eq!(
+            (w.gate.as_str(), w.key(), w.change),
+            ("ignored-tests", "ci_skip_severity", Change::Lowered)
+        );
+        assert_eq!(
+            (w.before.as_deref(), w.after.as_deref()),
+            (Some("error"), Some("warning"))
+        );
+        // Removed where it equalled or sat below the gate severity: nothing loosens.
+        none(
+            "[gates.ignored-tests]\nseverity = \"error\"\nci_skip_severity = \"error\"\n",
+            "[gates.ignored-tests]\nseverity = \"error\"\n",
+        );
+        none(
+            "[gates.ignored-tests]\nci_skip_severity = \"warning\"\n",
+            "",
+        );
+
+        // A tolerance whose absence means none: adding one above zero widens it.
+        for key in ["noise_margin_pct", "ratio_tolerance_pct"] {
+            let w = one("", &format!("[gates.bench-regression]\n{key} = 50.0\n"));
+            assert_eq!(
+                (w.gate.as_str(), w.key(), w.change),
+                ("bench-regression", key, Change::Increased)
+            );
+            none("", &format!("[gates.bench-regression]\n{key} = 0.0\n"));
+        }
+        // `max_noise_cv` absent means no noise check: adding it only tightens.
+        none("", "[gates.bench-regression]\nmax_noise_cv = 0.05\n");
+
+        // A gate's own `allow_hidden = true` over a global `false`.
+        let w = one(
+            "[directives]\nallow_hidden = false\n",
+            "[directives]\nallow_hidden = false\n[gates.deletion-rationale]\nallow_hidden = true\n",
+        );
+        assert_eq!(
+            (w.gate.as_str(), w.key(), w.change),
+            ("deletion-rationale", "allow_hidden", Change::Changed)
+        );
+        // Over a global `true` the gate already accepted hidden directives.
+        none(
+            "[directives]\nallow_hidden = true\n",
+            "[directives]\nallow_hidden = true\n[gates.deletion-rationale]\nallow_hidden = true\n",
+        );
+        none(
+            "[directives]\nallow_hidden = true\n",
+            "[directives]\nallow_hidden = true\n[gates.deletion-rationale]\nallow_hidden = false\n",
+        );
+
+        // The test-identity report: removing or repointing it replaces the check.
+        for key in ["test_report", "base_report", "head_report"] {
+            let w = one(
+                &format!("[gates.test-floor]\n{key} = \"reports/junit.xml\"\n"),
+                "",
+            );
+            assert_eq!(
+                (w.gate.as_str(), w.key(), w.change),
+                ("test-floor", key, Change::Removed)
+            );
+            let w = one(
+                &format!("[gates.test-floor]\n{key} = \"reports/junit.xml\"\n"),
+                &format!("[gates.test-floor]\n{key} = \"other.xml\"\n"),
+            );
+            assert_eq!((w.key(), w.change), (key, Change::Changed));
+            // Adopting it adds a check.
+            none(
+                "",
+                &format!("[gates.test-floor]\n{key} = \"reports/junit.xml\"\n"),
+            );
+        }
     }
 
     #[test]

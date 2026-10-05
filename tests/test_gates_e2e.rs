@@ -2050,6 +2050,64 @@ fn lowered_floors_and_repointed_commands_are_weakenings() {
     assert!(repo.check(&[]).titles("config-integrity").is_empty());
 }
 
+/// Optional keys only one side sets (#520): each change below loosened a gate and was not
+/// reported, because an unset optional key is absent from the compared table.
+#[test]
+fn optional_keys_added_or_removed_on_head_are_reported_as_weakenings() {
+    let message_for = |base: &str, head: &str| -> Vec<String> {
+        let repo = repo_with_base_config(&format!("{CONFIG_HEAD}{base}"));
+        repo.write("discipline.toml", &format!("{CONFIG_HEAD}{head}"));
+        repo.commit("chore: configuration");
+        let run = repo.check(&[]);
+        let messages: Vec<String> = run
+            .violations("config-integrity")
+            .iter()
+            .map(|v| v["message"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            run.code,
+            if messages.is_empty() { 0 } else { 1 },
+            "{}{}",
+            run.stdout,
+            run.stderr
+        );
+        messages
+    };
+
+    assert_eq!(
+        message_for(
+            "[gates.ignored-tests]\nseverity = \"warning\"\nci_skip_severity = \"error\"\n",
+            "[gates.ignored-tests]\nseverity = \"warning\"\n",
+        ),
+        vec!["[ignored-tests] `ci_skip_severity` lowered from error to warning."]
+    );
+    assert_eq!(
+        message_for("", "[gates.bench-regression]\nnoise_margin_pct = 50.0\n"),
+        vec!["[bench-regression] `noise_margin_pct` increased from unset to 50.0."]
+    );
+    assert_eq!(
+        message_for(
+            "[directives]\nallow_hidden = false\n",
+            "[directives]\nallow_hidden = false\n[gates.deletion-rationale]\nallow_hidden = true\n",
+        ),
+        vec!["[deletion-rationale] `allow_hidden` changed from unset to true."]
+    );
+    assert_eq!(
+        message_for(
+            "[gates.test-floor]\ntest_report = \"reports/junit.xml\"\n",
+            "",
+        ),
+        vec!["[test-floor] `test_report` removed (was \"reports/junit.xml\")."]
+    );
+    // Controls: a removal or an addition that does not loosen is not reported.
+    assert!(message_for(
+        "[gates.ignored-tests]\nci_skip_severity = \"warning\"\n",
+        ""
+    )
+    .is_empty());
+    assert!(message_for("", "[gates.bench-regression]\nmax_noise_cv = 0.05\n").is_empty());
+}
+
 #[test]
 fn adding_ci_skip_severity_note_on_head_is_detected_as_config_integrity_weakening() {
     let repo = repo_with_base_config(CONFIG_HEAD);

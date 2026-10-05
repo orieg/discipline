@@ -318,14 +318,17 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.test-budget.scan_scripts` | boolean | `true` | Whether to scan shell scripts |
 | `gates.test-budget.scan_workflows` | boolean | `true` | Whether to scan workflow files |
 | `gates.test-budget.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.test-floor.base_report` | string | *(unset)* | JUnit XML report of the base-side test run, a file on disk; used with head_report |
 | `gates.test-floor.constant_file` | string | *(unset)* | File containing a floor constant |
 | `gates.test-floor.constant_name` | string | *(unset)* | Name of the floor constant in constant_file |
 | `gates.test-floor.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.test-floor.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.test-floor.head_report` | string | *(unset)* | JUnit XML report of the head-side test run, a file on disk; used with base_report |
 | `gates.test-floor.min_tests` | integer | *(unset)* | Minimum required workspace test count |
 | `gates.test-floor.required_suites` | list | `[]` | Required test suite files that must exist |
 | `gates.test-floor.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.test-floor.test_command` | string | *(unset)* | Custom command to list or count tests |
+| `gates.test-floor.test_report` | string | *(unset)* | JUnit XML report of the test run, read from the working tree for the head side and from the base ref for the base side; switches on the test-identity ratchet |
 | `gates.test-floor.tolerance` | integer | `0` | Allowed test count decrease below floor or base before violation (default: 0) |
 | `gates.time-estimates.allow_patterns` | list | `[]` | Regex patterns permitted as operational exceptions; matched per line and across soft-wrapped lines of a paragraph, exempting only the matched text |
 | `gates.time-estimates.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
