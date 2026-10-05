@@ -412,80 +412,40 @@ fn merged_pull_bodies(
 }
 
 fn detect_pr_body_from_ci() -> Option<String> {
-    for var in &[
-        "FORGEJO_EVENT_PATH",
-        "GITEA_EVENT_PATH",
-        "GITHUB_EVENT_PATH",
-    ] {
-        if let Ok(path) = std::env::var(var) {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(body) = json
-                        .get("pull_request")
-                        .and_then(|pr| pr.get("body"))
-                        .and_then(|b| b.as_str())
-                    {
-                        if !body.trim().is_empty() {
-                            return Some(body.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
+    discipline::gitctx::event_payload()?
+        .get("pull_request")
+        .and_then(|pr| pr.get("body"))
+        .and_then(|b| b.as_str())
+        .filter(|b| !b.trim().is_empty())
+        .map(|b| b.to_string())
 }
 
 fn detect_pull_context_from_ci() -> Option<discipline::override_policy::PullContext> {
-    [
-        "FORGEJO_EVENT_PATH",
-        "GITEA_EVENT_PATH",
-        "GITHUB_EVENT_PATH",
-    ]
-    .iter()
-    .filter_map(|var| std::env::var(var).ok())
-    .filter_map(|path| std::fs::read_to_string(path).ok())
-    .filter_map(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-    .find_map(|json| discipline::override_policy::pull_context(&json))
-    .or_else(|| {
-        // GitLab has no event payload; a merge-request pipeline sets these. No variable
-        // names the merge request's author (`GITLAB_USER_LOGIN` is the login that started
-        // the pipeline), so a check that needs the author reads it from the forge.
-        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
-        let number = env("CI_MERGE_REQUEST_IID")?.parse().ok()?;
-        let head_sha =
-            env("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA").or_else(|| env("CI_COMMIT_SHA"))?;
-        Some(discipline::override_policy::PullContext {
-            number,
-            author: None,
-            head_sha,
+    discipline::gitctx::event_payload()
+        .and_then(|json| discipline::override_policy::pull_context(&json))
+        .or_else(|| {
+            // GitLab has no event payload; a merge-request pipeline sets these. No variable
+            // names the merge request's author (`GITLAB_USER_LOGIN` is the login that started
+            // the pipeline), so a check that needs the author reads it from the forge.
+            let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+            let number = env("CI_MERGE_REQUEST_IID")?.parse().ok()?;
+            let head_sha =
+                env("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA").or_else(|| env("CI_COMMIT_SHA"))?;
+            Some(discipline::override_policy::PullContext {
+                number,
+                author: None,
+                head_sha,
+            })
         })
-    })
 }
 
 fn detect_pr_title_from_ci() -> Option<String> {
-    for var in &[
-        "FORGEJO_EVENT_PATH",
-        "GITEA_EVENT_PATH",
-        "GITHUB_EVENT_PATH",
-    ] {
-        if let Ok(path) = std::env::var(var) {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(title) = json
-                        .get("pull_request")
-                        .and_then(|pr| pr.get("title"))
-                        .and_then(|b| b.as_str())
-                    {
-                        if !title.trim().is_empty() {
-                            return Some(title.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
+    discipline::gitctx::event_payload()?
+        .get("pull_request")
+        .and_then(|pr| pr.get("title"))
+        .and_then(|b| b.as_str())
+        .filter(|b| !b.trim().is_empty())
+        .map(|b| b.to_string())
 }
 
 fn write_structured_reports(

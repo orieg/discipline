@@ -136,10 +136,52 @@ pub fn is_push_event_environment() -> bool {
     is_push_event_environment_with_env(|k| std::env::var(k).ok())
 }
 
-fn extract_before_sha_from_event_path(path_str: &str) -> Option<String> {
-    let content = std::fs::read_to_string(path_str).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
-    parsed
+/// The variables naming the CI event payload, in the one order every consumer uses: the
+/// forge-specific variable wins over the GitHub-compatible one a runner also sets.
+pub const EVENT_PATH_VARS: [&str; 3] = [
+    "FORGEJO_EVENT_PATH",
+    "GITEA_EVENT_PATH",
+    "GITHUB_EVENT_PATH",
+];
+
+/// The CI event payload, read once from the first of [`EVENT_PATH_VARS`] that is set and
+/// non-empty. That variable alone decides: an unreadable or unparseable file yields `None`
+/// rather than falling through to a later variable, so no two consumers read different files.
+pub fn event_payload_with_env<F>(get_env: F) -> Option<serde_json::Value>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let path = EVENT_PATH_VARS
+        .iter()
+        .find_map(|var| get_env(var).filter(|v| !v.trim().is_empty()))?;
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+pub fn event_payload() -> Option<serde_json::Value> {
+    event_payload_with_env(|k| std::env::var(k).ok())
+}
+
+/// A push event's `before` as a base ref: all zeros means no previous commit (`HEAD~1`), a
+/// hex SHA of at least seven digits is itself, and empty or anything else is `None`.
+pub fn normalize_before(before: &str) -> Option<String> {
+    let trimmed = before.trim();
+    if trimmed.is_empty() {
+        None
+    } else if trimmed.chars().all(|c| c == '0') {
+        Some("HEAD~1".to_string())
+    } else if trimmed.len() >= 7 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn event_before_sha<F>(get_env: &F) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    event_payload_with_env(get_env)?
         .get("before")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -169,18 +211,7 @@ where
             }
         }
     }
-    for event_path_var in &[
-        "GITHUB_EVENT_PATH",
-        "GITEA_EVENT_PATH",
-        "FORGEJO_EVENT_PATH",
-    ] {
-        if let Some(path_str) = get_env(event_path_var) {
-            if extract_before_sha_from_event_path(&path_str).is_some() {
-                return true;
-            }
-        }
-    }
-    false
+    event_before_sha(&get_env).is_some()
 }
 
 pub fn detect_base_ref_with_env<F>(
@@ -227,36 +258,12 @@ where
             "GITEA_EVENT_BEFORE",
             "CI_COMMIT_BEFORE_SHA",
         ] {
-            if let Some(before) = get_env(var) {
-                let trimmed = before.trim();
-                if !trimmed.is_empty() {
-                    if trimmed.chars().all(|c| c == '0') {
-                        return "HEAD~1".to_string();
-                    } else if trimmed.len() >= 7 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-                        return trimmed.to_string();
-                    }
-                }
+            if let Some(base) = get_env(var).and_then(|b| normalize_before(&b)) {
+                return base;
             }
         }
-        for event_path_var in &[
-            "GITHUB_EVENT_PATH",
-            "GITEA_EVENT_PATH",
-            "FORGEJO_EVENT_PATH",
-        ] {
-            if let Some(path_str) = get_env(event_path_var) {
-                if let Some(before) = extract_before_sha_from_event_path(&path_str) {
-                    let trimmed = before.trim();
-                    if !trimmed.is_empty() {
-                        if trimmed.chars().all(|c| c == '0') {
-                            return "HEAD~1".to_string();
-                        } else if trimmed.len() >= 7
-                            && trimmed.chars().all(|c| c.is_ascii_hexdigit())
-                        {
-                            return trimmed.to_string();
-                        }
-                    }
-                }
-            }
+        if let Some(base) = event_before_sha(&get_env).and_then(|b| normalize_before(&b)) {
+            return base;
         }
         return "HEAD~1".to_string();
     }
@@ -1571,6 +1578,98 @@ mod tests {
             detect_base_ref_with_env(None, None, None, lookup_zero),
             "HEAD~1"
         );
+    }
+
+    fn payload_files(
+        vars: &[(&'static str, &str)],
+    ) -> (
+        Vec<tempfile::NamedTempFile>,
+        std::collections::HashMap<&'static str, String>,
+    ) {
+        let mut files = Vec::new();
+        let mut env = std::collections::HashMap::new();
+        for (var, json) in vars {
+            let f = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(f.path(), json).unwrap();
+            env.insert(*var, f.path().to_string_lossy().to_string());
+            files.push(f);
+        }
+        (files, env)
+    }
+
+    #[test]
+    fn event_payload_order_is_forgejo_then_gitea_then_github() {
+        let all = [
+            ("GITHUB_EVENT_PATH", r#"{"who":"github"}"#),
+            ("GITEA_EVENT_PATH", r#"{"who":"gitea"}"#),
+            ("FORGEJO_EVENT_PATH", r#"{"who":"forgejo"}"#),
+        ];
+        let who = |vars: &[(&'static str, &str)]| {
+            let (_files, env) = payload_files(vars);
+            event_payload_with_env(|k| env.get(k).cloned())
+                .map(|v| v["who"].as_str().unwrap().to_string())
+        };
+        assert_eq!(who(&all).as_deref(), Some("forgejo"));
+        assert_eq!(who(&all[..2]).as_deref(), Some("gitea"));
+        assert_eq!(who(&all[..1]).as_deref(), Some("github"));
+        assert_eq!(who(&[]), None);
+    }
+
+    #[test]
+    fn event_payload_does_not_fall_through_a_broken_first_choice() {
+        let (_files, mut env) = payload_files(&[("GITHUB_EVENT_PATH", r#"{"who":"github"}"#)]);
+        env.insert("FORGEJO_EVENT_PATH", "/nonexistent/event.json".to_string());
+        assert_eq!(event_payload_with_env(|k| env.get(k).cloned()), None);
+        let (_f2, mut env2) = payload_files(&[
+            ("GITHUB_EVENT_PATH", r#"{"who":"github"}"#),
+            ("FORGEJO_EVENT_PATH", "not json"),
+        ]);
+        env2.insert("GITEA_EVENT_PATH", String::new());
+        assert_eq!(event_payload_with_env(|k| env2.get(k).cloned()), None);
+    }
+
+    #[test]
+    fn normalize_before_table() {
+        let sha = "fedcba9876543210fedcba9876543210fedcba98";
+        let cases: [(&str, Option<&str>); 7] = [
+            ("0000000000000000000000000000000000000000", Some("HEAD~1")),
+            ("0", Some("HEAD~1")),
+            ("", None),
+            ("   ", None),
+            (sha, Some(sha)),
+            (" fedcba9 ", Some("fedcba9")),
+            ("abc", None),
+        ];
+        for (input, want) in cases {
+            assert_eq!(normalize_before(input).as_deref(), want, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn base_ref_reads_the_forge_payload_when_event_paths_conflict() {
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let c = "c".repeat(40);
+        let json = |sha: &str| format!(r#"{{"before": "{sha}"}}"#);
+        let (_files, env) = payload_files(&[
+            ("GITHUB_EVENT_PATH", &json(&a)),
+            ("GITEA_EVENT_PATH", &json(&b)),
+            ("FORGEJO_EVENT_PATH", &json(&c)),
+        ]);
+        let base = |drop: &[&str]| {
+            detect_base_ref_with_env(None, None, None, |k| {
+                if k == "GITHUB_EVENT_NAME" {
+                    Some("push".into())
+                } else if drop.contains(&k) {
+                    None
+                } else {
+                    env.get(k).cloned()
+                }
+            })
+        };
+        assert_eq!(base(&[]), c);
+        assert_eq!(base(&["FORGEJO_EVENT_PATH"]), b);
+        assert_eq!(base(&["FORGEJO_EVENT_PATH", "GITEA_EVENT_PATH"]), a);
     }
 
     #[test]
