@@ -1806,12 +1806,11 @@ pub fn read_pulls(
     let mut read = ForgeRead::default();
     for c in changes {
         read.changes += 1;
-        let found =
-            crate::forge::merged_pull_for_commit(api, forge, &c.sha).and_then(|m| match m {
-                None => Ok(None),
-                Some(m) => crate::forge::pull_approvers(api, forge, m.number, &m.head_sha)
-                    .map(|approvers| Some((m, approvers))),
-            });
+        let found = crate::forge::merged_pull_on_forge(api, forge, &c.sha).and_then(|m| match m {
+            None => Ok(None),
+            Some(m) => crate::forge::pull_approvers(api, forge, m.number, &m.head_sha)
+                .map(|approvers| Some((m, approvers))),
+        });
         match found {
             Ok(None) => {}
             Ok(Some((m, approvers))) => {
@@ -3338,6 +3337,71 @@ mod tests {
                 .state,
             "clean"
         );
+    }
+
+    /// The three checks the forge answers, as `(id, state, detail)`, after `read_pulls`
+    /// asked a GitHub that answers the commit's pulls endpoint with `answer`.
+    fn forge_states(answer: serde_json::Value) -> (ForgeRead, Vec<(String, String, String)>) {
+        let a = at(0, None);
+        let api = canned(&[(&format!("github:repos/o/r/commits/{}/pulls", a.sha), answer)]);
+        let (pulls, read, body) = read_pulls(&api, &github(), &[a], &[], false);
+        assert!(pulls.is_empty() && body.is_empty());
+        let mut checks = signals(&[], &[]).1;
+        forge_checks(&mut checks, &read, &pulls, &[]);
+        let states = [
+            "pull-request-body-directives",
+            "independent-review",
+            "pull-request-body-edited",
+        ]
+        .iter()
+        .map(|id| {
+            let c = checks.iter().find(|c| c.id == *id).unwrap();
+            (id.to_string(), c.state.to_string(), c.detail.clone())
+        })
+        .collect();
+        (read, states)
+    }
+
+    #[test]
+    fn a_commit_the_forge_does_not_have_leaves_the_questions_not_checked() {
+        // GitHub answers 422 for a commit it does not have: an unpushed `--ref`, or a
+        // `--repo` that is another repository. Nothing about its review was read.
+        let (read, states) = forge_states(serde_json::json!({
+            "__status": 422,
+            "__body": {"message": "No commit found for SHA"}
+        }));
+        assert_eq!((read.changes, read.failed), (1, 1), "{:?}", read.error);
+        assert_eq!(read.failed_shas, vec![at(0, None).sha]);
+        for (id, state, detail) in &states {
+            assert_eq!(state, "not-checked", "{id}: {detail}");
+            assert!(
+                detail.starts_with("the forge could not answer for 1 of 1 changes"),
+                "{id}: {detail}"
+            );
+            assert!(
+                detail.contains("the forge does not have commit"),
+                "{id}: {detail}"
+            );
+        }
+        // The message names the commit by its short id only.
+        let error = read.error.unwrap();
+        let sha = at(0, None).sha;
+        assert!(error.contains(&sha[..10.min(sha.len())]), "{error}");
+        assert!(
+            !error.contains("http") && !error.contains("token"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_commit_the_forge_has_outside_any_pull_request_is_read_and_clean() {
+        // The control: GitHub answers 404 for a commit it has that no pull request
+        // carries. That is an answer, so nothing failed and the review check is clean.
+        let (read, states) = forge_states(serde_json::json!({"__status": 404}));
+        assert_eq!((read.changes, read.failed), (1, 0), "{:?}", read.error);
+        let review = states.iter().find(|s| s.0 == "independent-review").unwrap();
+        assert_eq!(review.1, "clean", "{}", review.2);
+        assert_eq!(review.2, "no change arrived through a pull request");
     }
 
     /// A repository with `commits`, each `(time, [(path, content)])`, on one line.

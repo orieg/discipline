@@ -53,7 +53,7 @@ fn tools() -> Value {
         {
             "name": "check_diff",
             "title": "Check the change",
-            "description": "Run discipline's gates on the change so far and return each finding with its location and the repair. The working tree (committed on the branch and uncommitted) is measured against the merge base with the default branch, under the default branch's configuration. Call it before committing; fix every finding it reports.",
+            "description": "Run discipline's gates on the change so far and return each finding with its location and the repair. The working tree (committed on the branch and uncommitted) is measured against the merge base with the repository's default branch (origin's default branch, else main, master or trunk; DISCIPLINE_BASE_REF in the server's environment names another), under that base's configuration. Call it before committing; fix every finding it reports.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
             "outputSchema": crate::output_schema::mcp_check_schema(),
             "annotations": read_only

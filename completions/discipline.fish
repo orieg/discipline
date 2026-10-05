@@ -170,7 +170,7 @@ copilot\t'GitHub Copilot CLI (`.github/hooks/discipline.json`, sessionStart + pr
 agy\t'Antigravity CLI (`.agents/hooks.json`, SessionStart + PreToolUse + Stop)'
 qwen\t'Qwen Code (`.qwen/settings.json`, SessionStart + PreToolUse + PostToolUse + Stop)'
 opencode\t'OpenCode (`.opencode/plugins/discipline.js`, a plugin on session start, before tools and after edit tools)'"
-complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s b -l base -d 'Base to measure the change against (default: the merge base with origin\'s default branch, else main / master)' -r
+complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -s b -l base -d 'Base to measure the change against (default: DISCIPLINE_BASE_REF or the CI base, else the merge base with origin\'s default branch, else main / master / trunk)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand hook; and __fish_seen_subcommand_from run" -l event -d 'The hook event: `pre-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); `session-start` takes this worktree\'s lease for the session on stdin (never blocks); the default checks the change so far' -r -f -a "check\t'After an edit or at the end of a turn: check the change so far'
 pre-tool\t'Before a tool runs: refuse an edit outside this session\'s worktree'
 session-start\t'When a session starts: take this worktree\'s lease for it (never blocks)'"

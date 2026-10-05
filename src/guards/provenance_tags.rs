@@ -33,7 +33,7 @@ static MECHANISM_TERMS: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static MECHANISM_NEGATION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:cannot see|can(?:'|')?t see|does not (?:see|measure|model|capture)|blind to|ignores?|invisible to|no counter|unable to (?:see|measure))").expect("valid regex")
+    Regex::new(r"(?i)(?:cannot see|can(?:'|\u{2019})?t see|does not (?:see|measure|model|capture)|blind to|ignores?|invisible to|no counter|unable to (?:see|measure))").expect("valid regex")
 });
 
 static MECHANISM_EVIDENCE: LazyLock<Regex> = LazyLock::new(|| {
@@ -845,6 +845,31 @@ mod tests {
         let hypothesis = "Hypothesis: the arm is memory-latency-bound.\n";
         let findings = scan_markdown_text(hypothesis, "t.md", false, true, false, false);
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn mechanism_negation_accepts_ascii_and_typographic_apostrophes() {
+        // Control: the same sentence without a negation is a claim.
+        let claim = "The arm is memory-latency-bound, which the profiler will see.\n";
+        let findings = scan_markdown_text(claim, "t.md", false, true, false, false);
+        assert_eq!(findings.len(), 1, "control must be reported");
+        assert_eq!(
+            findings[0].kind.code,
+            crate::findings::MECHANISM_CLAIM_WITHOUT_EVIDENCE.code
+        );
+
+        let ascii = "The arm is memory-latency-bound, which the profiler can't see.\n";
+        let findings = scan_markdown_text(ascii, "t.md", false, true, false, false);
+        assert!(findings.is_empty(), "ASCII apostrophe: {}", findings.len());
+
+        // U+2019, as an editor's smart quotes write the contraction.
+        let typographic = "The arm is memory-latency-bound, which the profiler can\u{2019}t see.\n";
+        let findings = scan_markdown_text(typographic, "t.md", false, true, false, false);
+        assert!(
+            findings.is_empty(),
+            "typographic apostrophe: {} finding(s)",
+            findings.len()
+        );
     }
 
     #[test]
