@@ -607,6 +607,10 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     if args.trust_workspace {
         std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
     }
+    // Before the base is detected and before any reader of the payload: a payload variable
+    // that names an unusable file stops the run here, so the readers below, which cannot
+    // fail, never take it for a run with no payload.
+    discipline::gitctx::try_event_payload()?;
     let base_ref = discipline::gitctx::detect_base_ref(
         args.base.as_deref(),
         args.commit.as_deref(),
@@ -1015,6 +1019,8 @@ fn schema() -> Result<bool> {
 }
 
 fn baseline(mut args: BaselineArgs) -> Result<bool> {
+    // The base detection and the gates read the event payload, as in `check`.
+    discipline::gitctx::try_event_payload()?;
     if args.baseline_file == std::path::Path::new(discipline::baseline::DEFAULT_BASELINE_FILE) {
         if let Some(p) = std::env::var("DISCIPLINE_BASELINE")
             .ok()
