@@ -150,18 +150,63 @@ pub const EVENT_PATH_VARS: [&str; 3] = [
     "GITHUB_EVENT_PATH",
 ];
 
-/// The CI event payload, read once from the first of [`EVENT_PATH_VARS`] that is set and
-/// non-empty. That variable alone decides: an unreadable or unparseable file yields `None`
-/// rather than falling through to a later variable, so no two consumers read different files.
+/// The CI event payload, from the first of [`EVENT_PATH_VARS`] that is set and non-empty.
+/// That variable alone decides; a later one is never tried, so no two consumers read
+/// different files. `Ok(None)` is no variable set. A variable that is set but names a
+/// file that cannot be read, or that is not JSON, is an error: the CI environment handed
+/// the run a payload it cannot use, which is not the same as handing it none.
+///
+/// The error names the variable and what failed. It carries neither the path nor any of
+/// the file's content.
+pub fn try_event_payload_with_env<F>(get_env: F) -> Result<Option<serde_json::Value>>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let Some((var, path)) = EVENT_PATH_VARS.iter().find_map(|var| {
+        get_env(var)
+            .filter(|v| !v.trim().is_empty())
+            .map(|v| (*var, v))
+    }) else {
+        return Ok(None);
+    };
+    use crate::could_not_check::{tag, Reason};
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        tag(
+            Reason::Configuration,
+            anyhow!(
+                "`{var}` is set, but the event payload file it names cannot be read ({}); \
+                 no other payload variable is tried",
+                e.kind()
+            ),
+        )
+    })?;
+    let json = serde_json::from_str(&content).map_err(|e| {
+        tag(
+            Reason::Configuration,
+            anyhow!(
+                "`{var}` is set, but the event payload file it names is not valid JSON \
+                 (line {}, column {}); no other payload variable is tried",
+                e.line(),
+                e.column()
+            ),
+        )
+    })?;
+    Ok(Some(json))
+}
+
+/// [`try_event_payload_with_env`] over the process environment. `check` and `baseline`
+/// call it before anything reads the payload, so an unusable one stops the run (exit 2).
+pub fn try_event_payload() -> Result<Option<serde_json::Value>> {
+    try_event_payload_with_env(|k| std::env::var(k).ok())
+}
+
+/// The payload for a reader that cannot fail: an unusable file reads as no payload. Sound
+/// only after [`try_event_payload`] has passed in the same run.
 pub fn event_payload_with_env<F>(get_env: F) -> Option<serde_json::Value>
 where
     F: Fn(&str) -> Option<String>,
 {
-    let path = EVENT_PATH_VARS
-        .iter()
-        .find_map(|var| get_env(var).filter(|v| !v.trim().is_empty()))?;
-    let content = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    try_event_payload_with_env(get_env).ok().flatten()
 }
 
 pub fn event_payload() -> Option<serde_json::Value> {
@@ -1648,6 +1693,67 @@ mod tests {
         ]);
         env2.insert("GITEA_EVENT_PATH", String::new());
         assert_eq!(event_payload_with_env(|k| env2.get(k).cloned()), None);
+    }
+
+    #[test]
+    fn try_event_payload_is_none_when_no_variable_is_set_or_all_are_empty() {
+        assert_eq!(try_event_payload_with_env(|_| None).unwrap(), None);
+        let empty = |k: &str| EVENT_PATH_VARS.contains(&k).then(|| "  ".to_string());
+        assert_eq!(try_event_payload_with_env(empty).unwrap(), None);
+    }
+
+    #[test]
+    fn try_event_payload_returns_the_first_set_file_whatever_it_holds() {
+        let (_files, mut env) = payload_files(&[
+            ("GITHUB_EVENT_PATH", r#"{"who":"github"}"#),
+            ("GITEA_EVENT_PATH", "[]"),
+        ]);
+        // An empty earlier variable is not set; the next one decides.
+        env.insert("FORGEJO_EVENT_PATH", String::new());
+        assert_eq!(
+            try_event_payload_with_env(|k| env.get(k).cloned()).unwrap(),
+            Some(serde_json::json!([]))
+        );
+    }
+
+    #[test]
+    fn try_event_payload_errs_on_an_unreadable_first_choice_and_names_its_variable() {
+        let (_files, mut env) = payload_files(&[("GITHUB_EVENT_PATH", r#"{"who":"github"}"#)]);
+        env.insert("FORGEJO_EVENT_PATH", "/nonexistent/event.json".to_string());
+        let err = try_event_payload_with_env(|k| env.get(k).cloned()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("`FORGEJO_EVENT_PATH`"), "{msg}");
+        assert!(msg.contains("cannot be read"), "{msg}");
+        assert!(!msg.contains("/nonexistent"), "{msg}");
+        assert!(!msg.contains("GITHUB_EVENT_PATH"), "{msg}");
+        // The infallible reader still sees no payload, and still does not fall through.
+        assert_eq!(event_payload_with_env(|k| env.get(k).cloned()), None);
+    }
+
+    #[test]
+    fn try_event_payload_errs_on_a_file_that_is_not_json_without_quoting_it() {
+        let (_files, env) = payload_files(&[
+            ("GITHUB_EVENT_PATH", r#"{"who":"github"}"#),
+            ("GITEA_EVENT_PATH", r#"{"token": SENTINEL-not-for-output"#),
+        ]);
+        let err = try_event_payload_with_env(|k| env.get(k).cloned()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("`GITEA_EVENT_PATH`"), "{msg}");
+        assert!(msg.contains("not valid JSON"), "{msg}");
+        assert!(!msg.contains("SENTINEL"), "{msg}");
+        assert!(!msg.contains(env["GITEA_EVENT_PATH"].as_str()), "{msg}");
+        assert_eq!(event_payload_with_env(|k| env.get(k).cloned()), None);
+    }
+
+    /// A payload carrying `before` makes the run a push with no event name set.
+    #[test]
+    fn a_payload_with_before_alone_is_a_push() {
+        let (_files, env) = payload_files(&[("GITHUB_EVENT_PATH", r#"{"before":"abc1234"}"#)]);
+        assert!(is_push_event_environment_with_env(|k| env.get(k).cloned()));
+        let (_f2, env2) = payload_files(&[("GITHUB_EVENT_PATH", r#"{"after":"abc1234"}"#)]);
+        assert!(!is_push_event_environment_with_env(|k| env2
+            .get(k)
+            .cloned()));
     }
 
     #[test]
