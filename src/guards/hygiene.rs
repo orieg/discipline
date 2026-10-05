@@ -294,7 +294,7 @@ fn is_exempt_question(clause: &str, line: &str) -> bool {
         return false;
     }
     let q_re = Regex::new(
-        r"(?i)(?:\b(?:question|ask|answering|quoting|faq)\b|Q[1-4]\s*[-—–:)?.]|\(Q[1-4]\)|Q[1-4]['']s|\*\*Q[1-4]|\[Q[1-4]\]|###?\s*Q[1-4])",
+        r"(?i)(?:\b(?:question|ask|answering|quoting|faq)\b|Q[1-4]\s*[-—–:)?.]|\(Q[1-4]\)|Q[1-4]['\u{2019}]s|\*\*Q[1-4]|\[Q[1-4]\]|###?\s*Q[1-4])",
     )
     .expect("valid regex");
     q_re.is_match(clause) || q_re.is_match(line)
@@ -1446,6 +1446,9 @@ mod tests {
             ("### Q2: Why judy?", "Q2"),
             ("Q3. How does this scale?", "Q3"),
             ("only Q1's is ours", "Q1"),
+            // The typographic apostrophe (U+2019), as an editor's smart
+            // quotes write a possessive.
+            ("only Q1\u{2019}s is ours", "Q1"),
             ("Quoting Q2 as", "Q2"),
             (
                 "A 10-Minute Description of How Judy Arrays Work",

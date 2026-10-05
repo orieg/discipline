@@ -1551,7 +1551,9 @@ pub enum CommitOrigin {
     NotOnForge,
 }
 
-/// [`commit_origin`] without the reason there is no merged pull request.
+/// [`commit_origin`] without the reason there is no merged pull request: a direct push
+/// and a commit made only locally both read as `None`. A caller that expects the forge
+/// to have the commit uses [`merged_pull_on_forge`], where the second is an error.
 pub fn merged_pull_for_commit(
     api: &dyn ForgeApi,
     forge: &Forge,
@@ -1561,6 +1563,28 @@ pub fn merged_pull_for_commit(
         CommitOrigin::Merged(pull) => Some(pull),
         CommitOrigin::DirectPush | CommitOrigin::NotOnForge => None,
     })
+}
+
+/// [`commit_origin`] for a caller whose commits are expected to be on the forge (`audit
+/// --forge`, `replay`): a commit the forge does not have is a lookup that failed, never
+/// "no pull request". Asked about a repository that lacks the commit (an unpushed ref,
+/// the wrong repository), the forge has said nothing about how the change was merged.
+/// `Ok(None)` is a direct push only.
+pub fn merged_pull_on_forge(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    sha: &str,
+) -> Result<Option<MergedPull>, String> {
+    match commit_origin(api, forge, sha)? {
+        CommitOrigin::Merged(pull) => Ok(Some(pull)),
+        CommitOrigin::DirectPush => Ok(None),
+        CommitOrigin::NotOnForge => {
+            let short: String = sha.chars().take(10).collect();
+            Err(format!(
+                "the forge does not have commit {short} (not pushed, or another repository)"
+            ))
+        }
+    }
 }
 
 /// Where a commit came from: the merged pull request that carries it, a direct push, or
@@ -2921,34 +2945,6 @@ mod tests {
     }
 
     #[test]
-    fn valid_json_array_on_200_is_accepted() {
-        let gh = gh();
-        let mut api = CannedApi::default();
-        // Valid JSON array on 200 should be accepted.
-        api.responses.insert(
-            "github:repos/o/r/issues".into(),
-            serde_json::json!([{"id": 1, "title": "Issue 1"}]),
-        );
-        let result = api.get(&gh, "repos/o/r/issues").unwrap();
-        assert!(result.is_some());
-        let value = result.unwrap();
-        assert_eq!(value[0]["id"], 1);
-    }
-
-    #[test]
-    fn valid_json_object_on_200_is_accepted_for_fetch() {
-        let gh = gh();
-        let mut api = CannedApi::default();
-        // Valid JSON object on 200 should be accepted for fetch.
-        api.responses.insert(
-            "github:repos/o/r/issues".into(),
-            serde_json::json!({"id": 1, "title": "Issue 1"}),
-        );
-        let result = api.fetch(&gh, "repos/o/r/issues").unwrap();
-        assert_eq!(result["id"], 1);
-    }
-
-    #[test]
     fn page_from_answer_with_paging_headers_works() {
         let gh = gh();
         let mut api = CannedApi::default();
@@ -2988,17 +2984,21 @@ mod tests {
         assert_eq!(err.kind, ForgeErrorKind::Malformed);
     }
 
+    /// The production client treats every 2xx as an answer (`HttpApi` returns on
+    /// `classify_status(..) == None`): GitHub answers 204 for a setting that is on.
+    /// Killed mutant: `200..=299` narrowed to `200..=200` in `classify_status`.
     #[test]
-    fn get_accepts_any_2xx_body() {
-        let gh = gh();
-        let mut api = CannedApi::default();
-        // 201 Created with any body should be accepted by get().
-        api.responses.insert(
-            "github:repos/o/r/issues".into(),
-            serde_json::json!({"__status": 201, "__body": {"id": 1}}),
-        );
-        let result = api.get(&gh, "repos/o/r/issues").unwrap();
-        assert!(result.is_some());
+    fn every_2xx_status_is_a_success_and_its_neighbours_are_not() {
+        for status in [200, 201, 204, 299] {
+            assert_eq!(classify_status(status, &[]), None, "{status}");
+        }
+        for status in [199, 300, 304] {
+            assert_eq!(
+                classify_status(status, &[]),
+                Some(ForgeErrorKind::Malformed),
+                "{status}"
+            );
+        }
     }
 
     #[test]
