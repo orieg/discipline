@@ -5166,6 +5166,51 @@ fn commit_provenance_reads_trailers_and_authorship_of_every_commit_in_the_range(
 }
 
 #[test]
+fn commit_provenance_require_agent_review_false_keeps_only_the_required_trailers() {
+    let run_with = |cfg: &str| {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(
+            "discipline.toml",
+            &format!("[meta]\nversion = 1\nname = \"t\"\n[gates.commit-provenance]\nenabled = true\nrequired_trailers = [\"Signed-off-by\"]\n{cfg}"),
+        );
+        repo.commit("chore: policy\n\nSigned-off-by: Owner <owner@example.test>");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        // An agent commit with no review trailer, and a commit with no sign-off.
+        repo.write("a.txt", "a\n");
+        repo.commit("feat: a\n\nSigned-off-by: Owner <owner@example.test>\nCo-authored-by: Claude <noreply@anthropic.com>");
+        repo.write("b.txt", "b\n");
+        repo.commit("feat: b");
+        repo.check(&[])
+    };
+
+    // Positive control: by default the agent commit needs a review trailer.
+    let on = run_with("");
+    let mut titles = on.titles("commit-provenance");
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec!["Agent Commit Without Review", "Commit Trailer Missing"]
+    );
+
+    // Off: the review rule is gone, the required trailer still holds.
+    let off = run_with("require_agent_review = false\n");
+    assert_eq!(
+        off.titles("commit-provenance"),
+        vec!["Commit Trailer Missing"]
+    );
+
+    // An empty trailer name is a configuration error, never a silent switch.
+    let empty = run_with("review_trailer = \"\"\n");
+    assert_eq!(empty.code, 2, "{}{}", empty.stdout, empty.stderr);
+    assert!(
+        empty.stderr.contains("require_agent_review"),
+        "{}",
+        empty.stderr
+    );
+}
+
+#[test]
 fn commit_provenance_skips_merge_commits() {
     const CFG: &str =
         "[gates.commit-provenance]\nenabled = true\nrequired_trailers = [\"Signed-off-by\"]\n";

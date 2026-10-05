@@ -785,6 +785,19 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: an empty review_trailer is refused; require_agent_review switches the rule",
+        || {
+            let head = "[meta]\nversion = 1\nname = \"t\"\n[gates.commit-provenance]\n";
+            let empty = crate::config::DisciplineConfig::from_toml_str(&format!(
+                "{head}review_trailer = \"\"\n"
+            ));
+            let off = crate::config::DisciplineConfig::from_toml_str(&format!(
+                "{head}require_agent_review = false\n"
+            ))?;
+            Ok(empty.is_err() && !off.gates.commit_provenance.require_agent_review)
+        },
+    ),
+    (
         "commit-provenance: trailers a squash merge split into paragraphs are all read",
         || {
             use crate::guards::commit_provenance::trailers;

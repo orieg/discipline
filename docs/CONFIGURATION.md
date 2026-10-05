@@ -164,8 +164,9 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.commit-provenance.allow_author_review` | boolean | `false` | The review trailer may name the commit's author when the author is a person and the reviewer is not an agent (single-maintainer repositories; default: false) |
 | `gates.commit-provenance.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.commit-provenance.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.commit-provenance.require_agent_review` | boolean | `true` | Whether an agent-produced commit must carry review_trailer; false switches the rule off. The trailer is a claim: reviewer separation is the forge's required review (default: true) |
 | `gates.commit-provenance.required_trailers` | list | `[]` | Trailer keys every commit in the change must carry |
-| `gates.commit-provenance.review_trailer` | string | `"Reviewed-by"` | Trailer an agent-produced commit must carry, naming someone other than its author; empty switches the rule off (default: Reviewed-by) |
+| `gates.commit-provenance.review_trailer` | string | `"Reviewed-by"` | Trailer an agent-produced commit must carry, naming someone other than its author (default: Reviewed-by) |
 | `gates.commit-provenance.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.config-integrity.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.config-integrity.exempt_paths` | list | `[]` | File path globs exempted from this gate |

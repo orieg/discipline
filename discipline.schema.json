@@ -477,12 +477,17 @@
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"
         },
+        "require_agent_review": {
+          "description": "Whether an agent-produced commit must carry review_trailer; false switches the rule off. The trailer is a claim: reviewer separation is the forge's required review (default: true)",
+          "type": "boolean"
+        },
         "required_trailers": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Trailer keys every commit in the change must carry"
         },
         "review_trailer": {
-          "description": "Trailer an agent-produced commit must carry, naming someone other than its author; empty switches the rule off (default: Reviewed-by)",
+          "description": "Trailer an agent-produced commit must carry, naming someone other than its author (default: Reviewed-by)",
+          "minLength": 1,
           "type": "string"
         },
         "severity": {
