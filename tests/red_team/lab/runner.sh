@@ -33,7 +33,7 @@ docker run -d --name rt-act --platform "$PLATFORM" \
   -v "${RT_TARGET_VOLUME:-discipline-rt-target}":/target:ro -w /tmp \
   discipline-rt-act bash -c 'act_runner register --no-interactive --instance http://rt-gitea:3000 \
     --token "$RUNNER_TOKEN" --name rt-act --labels lab:host >/dev/null && unset RUNNER_TOKEN \
-    && exec act_runner daemon' >/dev/null
+    && exec act_runner daemon' >/dev/null # secrets-argv-ok: one-use registration token for throwaway lab Gitea on internal Docker network; container process listing out of scope
 
 for _ in $(seq 1 30); do
   docker logs rt-act 2>&1 | grep -q "declare successfully" && break
