@@ -732,27 +732,10 @@ impl<'a> PythonExtractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         let (helpers, helper_calls) = (&self.helpers, &self.helper_calls);
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
-            test.direct_calls = calls.clone();
-            for call in calls {
+            super::resolve_test_same_file_helpers(test, calls, self.vocab, |call| {
                 let mut path = Vec::new();
-                let Some(h) = super::transitive_helper(call, helpers, helper_calls, &mut path)
-                else {
-                    continue;
-                };
-                // A configured assertion helper was already counted once at
-                // the call site; its body now speaks for it.
-                let leaf = call.rsplit("::").next().unwrap_or(call);
-                if self.vocab.helper_fns.iter().any(|name| name == leaf) {
-                    test.total_asserts = test.total_asserts.saturating_sub(1);
-                }
-                test.total_asserts += h.total_asserts;
-                test.strong_asserts += h.strong_asserts;
-                test.tautologies += h.tautologies;
-                test.fatal_asserts += h.fatal_asserts;
-                if h.total_asserts > h.tautologies {
-                    test.helper_checks += 1;
-                }
-            }
+                super::transitive_helper(call, helpers, helper_calls, &mut path)
+            });
         }
     }
 
@@ -879,7 +862,7 @@ impl<'a> PythonExtractor<'a> {
                         .vocab
                         .helper_fns
                         .iter()
-                        .any(|h| func_name == h || func_name.ends_with(&format!(".{h}")))
+                        .any(|h| super::helper_call_matches(func_name, h))
                     {
                         test.total_asserts += 1;
                     }

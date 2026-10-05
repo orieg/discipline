@@ -481,24 +481,10 @@ impl<'a> CCppExtractor<'a> {
         let (helpers, helper_calls) = (&self.helpers, &self.helper_calls);
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
-                test.direct_calls = calls.clone();
-                for call in calls {
+                super::resolve_test_same_file_helpers(test, calls, self.vocab, |call| {
                     let mut path = Vec::new();
-                    if let Some(h) =
-                        super::transitive_helper(call, helpers, helper_calls, &mut path).as_ref()
-                    {
-                        if self.vocab.helper_fns.iter().any(|name| name == call) {
-                            test.total_asserts = test.total_asserts.saturating_sub(1);
-                        }
-                        test.total_asserts += h.total_asserts;
-                        test.strong_asserts += h.strong_asserts;
-                        test.tautologies += h.tautologies;
-                        test.fatal_asserts += h.fatal_asserts;
-                        if h.total_asserts > h.tautologies {
-                            test.helper_checks += 1;
-                        }
-                    }
-                }
+                    super::transitive_helper(call, helpers, helper_calls, &mut path)
+                });
             }
         }
     }
@@ -944,6 +930,17 @@ impl<'a> CCppExtractor<'a> {
                 })
                 .unwrap_or_default();
 
+            // 0. A configured helper counts one total and no strong assertion.
+            if self
+                .vocab
+                .helper_fns
+                .iter()
+                .any(|h| super::helper_call_matches(fn_name, h))
+            {
+                test_fn.total_asserts += 1;
+                return;
+            }
+
             // 1. GoogleTest macros: EXPECT_* / ASSERT_*
             if fn_name.starts_with("EXPECT_") || fn_name.starts_with("ASSERT_") {
                 self.handle_gtest_assertion(fn_name, &args, test_fn);
@@ -987,9 +984,7 @@ impl<'a> CCppExtractor<'a> {
             }
 
             // 5. Configured extra macros or helper fns
-            if self.vocab.extra_macros.iter().any(|m| m == fn_name)
-                || self.vocab.helper_fns.iter().any(|h| h == fn_name)
-            {
+            if self.vocab.extra_macros.iter().any(|m| m == fn_name) {
                 test_fn.total_asserts += 1;
                 test_fn.strong_asserts += 1;
                 return;
