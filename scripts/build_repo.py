@@ -9,8 +9,9 @@ import sys
 # Ensure local scripts directory is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from build_apt_repo import build_apt_repo, get_default_version
+from build_apt_repo import build_apt_repo
 from build_rpm_repo import build_rpm_repo
+from site_theme import get_default_version
 
 
 def main():

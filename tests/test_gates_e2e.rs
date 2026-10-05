@@ -3,7 +3,7 @@
 //! the released interface: the binary, a real git repository, JSON output.
 
 mod common;
-use common::{FakeForge, Repo, Run, GOOD_LIB, GOOD_TEST};
+use common::{FakeForge, Repo, Run, CONFIG_HEAD, GOOD_LIB, GOOD_TEST};
 
 #[test]
 fn clean_change_passes_and_reports_what_it_examined() {
@@ -1760,8 +1760,6 @@ fn agents_md_gate_fires_when_missing_or_forked() {
 }
 
 // ---- config-integrity ------------------------------------------------------
-
-const CONFIG_HEAD: &str = "[meta]\nversion = 1\nname = \"t\"\n";
 
 #[test]
 fn a_change_cannot_weaken_its_own_config_without_a_scoped_token() {
@@ -7363,9 +7361,8 @@ fn could_not_check_is_exit_2_never_a_pass() {
     assert_eq!(repo.check(&["--config-override", "gates = 3"]).code, 2);
 
     let outside = tempfile::tempdir().unwrap();
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+    let out = common::discipline_cmd(outside.path())
         .args(["check"])
-        .current_dir(outside.path())
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2), "not a git repository");
@@ -7728,30 +7725,10 @@ fn empty_tree_first_commit_staged_mode_passes() {
         .status()
         .unwrap();
 
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"));
-    cmd.args(["check", "--staged", "--format", "json"])
-        .current_dir(repo_path);
-    for var in [
-        "PR_BODY",
-        "GITHUB_STEP_SUMMARY",
-        "GITHUB_BASE_REF",
-        "GITHUB_EVENT_PATH",
-        "GITEA_BASE_REF",
-        "GITEA_EVENT_PATH",
-        "FORGEJO_BASE_REF",
-        "FORGEJO_EVENT_PATH",
-        "FORGEJO_ACTIONS",
-        "DISCIPLINE_CONFIG",
-        "DISCIPLINE_CONFIG_OVERRIDE",
-        "DISCIPLINE_ENABLE",
-        "DISCIPLINE_DISABLE",
-        "DISCIPLINE_BASE_REF",
-        "DISCIPLINE_FAIL_ON_WARNINGS",
-        "DISCIPLINE_HOSTNAME_DENYLIST",
-    ] {
-        cmd.env_remove(var);
-    }
-    let out = cmd.output().unwrap();
+    let out = common::discipline_cmd(repo_path)
+        .args(["check", "--staged", "--format", "json"])
+        .output()
+        .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
@@ -7773,10 +7750,10 @@ fn empty_repo_unstaged_mode_fails_closed_exit_2() {
         .status()
         .unwrap();
 
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"));
-    cmd.args(["check", "--base", "main", "--format", "json"])
-        .current_dir(repo_path);
-    let out = cmd.output().unwrap();
+    let out = common::discipline_cmd(repo_path)
+        .args(["check", "--base", "main", "--format", "json"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(2));
 }
 
@@ -10041,14 +10018,12 @@ fn exit_2_names_the_stage_that_stopped_the_run() {
         assert_eq!(run.json()["outcomes"], serde_json::json!([]));
         run.could_not_check()
     };
-    let cfg = "[meta]\nversion = 1\nname = \"t\"\n";
+    let cfg = CONFIG_HEAD;
 
     // Not a repository.
     let dir = tempfile::tempdir().unwrap();
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+    let out = common::discipline_cmd(dir.path())
         .args(["check", "--format", "json", "--base", "main"])
-        .current_dir(dir.path())
-        .env("DISCIPLINE_NO_NETWORK", "1")
         .output()
         .unwrap();
     let outside = Run {
@@ -11980,7 +11955,7 @@ fn pii_tells_a_tools_config_location_from_personal_content() {
         strict.stdout
     );
 
-    repo.write("discipline.toml", "[meta]\nversion = 1\nname = \"t\"\n");
+    repo.write("discipline.toml", CONFIG_HEAD);
     repo.write(
         "docs/setup.md",
         &format!("# Setup\n\nFollow {}{}.\n", "~", "/.claude/CLAUDE.md"),
