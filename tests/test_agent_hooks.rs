@@ -4,7 +4,7 @@
 mod common;
 
 use common::{Repo, CONFIG_HEAD};
-use discipline::hook::{guarded, guarded_pretool, Agent};
+use discipline::hook::{config_for_mode, guarded, guarded_pretool, Agent};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -1665,5 +1665,241 @@ fn hook_run_on_shallow_clone_refuses_when_base_cannot_measure_change() {
     assert!(
         stderr.contains("could not check this change (reason: repository)"),
         "{stderr}"
+    );
+}
+
+/// The hook files this repository commits (AGENTS.md §1) are what `hook install --observe`
+/// of this source writes, byte for byte: a template change that is not followed by a
+/// reinstall, or a hand edit of a committed file, fails here.
+#[test]
+fn the_committed_hook_files_are_what_hook_install_observe_writes() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut differing = Vec::new();
+    for agent in [
+        Agent::Opencode,
+        Agent::ClaudeCode,
+        Agent::Agy,
+        Agent::Copilot,
+    ] {
+        let (rel, generated) = config_for_mode(agent, true);
+        let committed = std::fs::read_to_string(root.join(rel))
+            .unwrap_or_else(|e| panic!("{rel} is committed in this repository: {e}"));
+        if committed != generated {
+            let line = committed
+                .lines()
+                .zip(generated.lines())
+                .position(|(c, g)| c != g)
+                .map_or_else(
+                    || committed.lines().count().min(generated.lines().count()) + 1,
+                    |i| i + 1,
+                );
+            differing.push(format!("{rel} (first difference at line {line})"));
+        }
+    }
+    assert!(
+        differing.is_empty(),
+        "committed hook files differ from `discipline hook install --observe`: {differing:?}"
+    );
+}
+
+/// A stand-in for the Bun shell, for running the generated OpenCode plugin under `node`.
+/// It mimics only what the template calls: a tagged template whose result chains
+/// `.cwd()`, `.nothrow()` and `.quiet()` and is awaited for `exitCode`, `stdout` and
+/// `stderr`. `behaviour` picks what the command does: exits 0, exits 1, throws from the
+/// call itself, or rejects when awaited (both stand for a command that cannot be run).
+const OPENCODE_DRIVER: &str = r#"
+let behaviour = "exit-0"
+const ran = []
+function shell(strings) {
+  ran.push(strings.join("<arg>"))
+  if (behaviour === "throws") throw new Error("command not found: discipline")
+  const result = {
+    exitCode: behaviour === "exit-1" ? 1 : 0,
+    stdout: Buffer.from("refused: outside this worktree"),
+    stderr: Buffer.from(""),
+  }
+  const pending = {
+    cwd: () => pending,
+    nothrow: () => pending,
+    quiet: () => pending,
+    then: (ok, err) =>
+      (behaviour === "rejects"
+        ? Promise.reject(new Error("command not found: discipline"))
+        : Promise.resolve(result)
+      ).then(ok, err),
+  }
+  return pending
+}
+globalThis.__shell = shell
+const plugin = await import("./plugin.mjs")
+const directory = process.cwd()
+const v1 = await plugin.Discipline({ $: shell, directory })
+
+const notices = []
+const realError = console.error
+console.error = (...words) => notices.push(words.join(" "))
+const v2 = {}
+let setupThrew = false
+try {
+  plugin.default.setup({
+    tool: { hook: (name, handler) => { v2[name] = handler } },
+    event: { subscribe: (handler) => { v2.event = handler } },
+    location: { directory },
+  })
+} catch { setupThrew = true }
+const registeredNotices = notices.length
+// An OpenCode whose plugin API has no `tool.hook`: nothing can be registered.
+try { plugin.default.setup({}) } catch { setupThrew = true }
+console.error = realError
+
+const handlers = {
+  "v1 session": () => v1.event({ event: { type: "session.created", properties: { sessionID: "s" } } }),
+  "v1 pre-tool": () => v1["tool.execute.before"]({ tool: "edit", sessionID: "s" }, { args: { filePath: "a.rs" } }),
+  "v1 post-edit": () => v1["tool.execute.after"]({ tool: "edit" }, { output: "" }),
+  "v2 session": () => v2.event({ type: "session.created", properties: { sessionID: "s" } }),
+  "v2 pre-tool": () => v2["execute.before"]({ tool: "edit", sessionID: "s", input: { filePath: "a.rs" } }),
+  "v2 post-edit": () => v2["execute.after"]({ tool: "edit", result: { output: "" } }),
+}
+const outcome = {}
+const commands = {}
+for (behaviour of ["exit-0", "exit-1", "throws", "rejects"]) {
+  for (const [name, call] of Object.entries(handlers)) {
+    ran.length = 0
+    let threw = false
+    try { await call() } catch { threw = true }
+    outcome[behaviour + " " + name] = threw
+    commands[behaviour + " " + name] = ran.slice()
+  }
+}
+behaviour = "exit-1"
+ran.length = 0
+await v1["tool.execute.before"]({ tool: "read" }, { args: {} })
+await v2["execute.before"]({ tool: "read", input: {} })
+console.log(JSON.stringify({
+  registered: Object.keys(v2).sort(),
+  setupThrew,
+  registeredNotices,
+  unregisteredNotices: notices.slice(registeredNotices),
+  outcome,
+  commands,
+  ranForARead: ran.length,
+}))
+"#;
+
+/// Runs the OpenCode plugin `hook install` generates (in observe mode with `observe`)
+/// under `node`, with [`OPENCODE_DRIVER`] standing in for the Bun shell, and returns what
+/// each handler did. `None`, said on stderr past the test harness's capture, when `node`
+/// is not installed: the test then proved nothing.
+fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
+    if Command::new("node").arg("--version").output().is_err() {
+        // Written to the stream itself: the test harness captures `eprintln!` of a test
+        // that passes, and a skip nobody sees reads as evidence.
+        std::io::stderr()
+            .write_all(
+                format!(
+                    "SKIPPED {test}: `node` is not installed, so the generated OpenCode plugin was not executed\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        return None;
+    }
+    let (_, text) = config_for_mode(Agent::Opencode, observe);
+    let import = "import { $ } from \"bun\"\n";
+    assert_eq!(text.matches(import).count(), 1, "{text}");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("plugin.mjs"),
+        text.replace(import, "const $ = globalThis.__shell\n"),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("driver.mjs"), OPENCODE_DRIVER).unwrap();
+    let out = Command::new("node")
+        .arg("driver.mjs")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "node driver.mjs: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // Controls, in either mode: both blocks registered their three hooks, every handler
+    // ran its command, and a tool that is neither an edit nor a shell command ran none.
+    assert_eq!(
+        v["registered"],
+        serde_json::json!(["event", "execute.after", "execute.before"])
+    );
+    assert_eq!(v["setupThrew"], false, "{v}");
+    assert_eq!(v["registeredNotices"], 0, "{v}");
+    assert_eq!(v["ranForARead"], 0, "{v}");
+    for (key, ran) in v["commands"].as_object().unwrap() {
+        let want = if key.ends_with("session") {
+            "--event session-start"
+        } else if key.ends_with("pre-tool") {
+            "--event pre-tool"
+        } else {
+            "discipline hook run --agent opencode"
+        };
+        let ran = ran.as_array().unwrap();
+        assert_eq!(ran.len(), 1, "{key}: {ran:?}");
+        assert!(ran[0].as_str().unwrap().contains(want), "{key}: {ran:?}");
+    }
+    Some(v)
+}
+
+/// Issue 570: an observe-mode OpenCode plugin never refuses a call. Whatever the command
+/// does (exit 0, exit 1, cannot be run), no handler of either block throws, and the 2.x
+/// `setup` that could register nothing stays silent.
+#[test]
+fn the_opencode_observe_plugin_never_throws_whatever_the_command_does() {
+    let Some(v) = run_opencode_plugin(
+        true,
+        "the_opencode_observe_plugin_never_throws_whatever_the_command_does",
+    ) else {
+        return;
+    };
+    let outcome = v["outcome"].as_object().unwrap();
+    assert_eq!(outcome.len(), 24, "{v}");
+    let threw: Vec<&String> = outcome
+        .iter()
+        .filter(|(_, threw)| threw.as_bool() != Some(false))
+        .map(|(key, _)| key)
+        .collect();
+    assert!(threw.is_empty(), "observe mode threw from: {threw:?}");
+    assert_eq!(v["unregisteredNotices"], serde_json::json!([]), "{v}");
+}
+
+/// Issue 570: an enforcing OpenCode plugin stays fail-closed. The pre-tool handler of
+/// either block lets a call through on exit 0 only: exit 1 and a command that cannot be
+/// run both throw. A 2.x `setup` that found no `tool.hook` says so once on stderr and
+/// does not throw.
+#[test]
+fn the_opencode_enforcing_plugin_refuses_a_call_it_could_not_check() {
+    let Some(v) = run_opencode_plugin(
+        false,
+        "the_opencode_enforcing_plugin_refuses_a_call_it_could_not_check",
+    ) else {
+        return;
+    };
+    for block in ["v1", "v2"] {
+        for (behaviour, threw) in [
+            ("exit-0", false),
+            ("exit-1", true),
+            ("throws", true),
+            ("rejects", true),
+        ] {
+            let key = format!("{behaviour} {block} pre-tool");
+            assert_eq!(v["outcome"][&key], threw, "{key}: {v}");
+        }
+    }
+    let notices = v["unregisteredNotices"].as_array().unwrap();
+    assert_eq!(notices.len(), 1, "{v}");
+    let notice = notices[0].as_str().unwrap();
+    assert!(
+        notice.starts_with("discipline: ") && notice.contains("pre-tool check was not registered"),
+        "{notice}"
     );
 }

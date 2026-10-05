@@ -881,7 +881,7 @@ pub fn config_for_opts(
         ),
         Agent::Opencode => (
             ".opencode/plugins/discipline.js",
-            opencode_plugin(&cmd, &pre, &start),
+            opencode_plugin(&cmd, &pre, &start, observe),
         ),
     }
 }
@@ -913,42 +913,152 @@ pub fn guarded_pretool(run: &str) -> String {
 pub const MISSING_BINARY: &str =
     "discipline is not on PATH; the discipline hook did not run (https://orieg.github.io/discipline/)";
 
+/// The line an observe-mode OpenCode plugin carries: every handler below it runs inside a
+/// `try` with an empty `catch`, so nothing the plugin does refuses a tool call.
+pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
+    "// Observe mode: no hook below refuses a tool call or throws, whatever the command does (a non-zero exit, a command that is not found, any other error).";
+
 /// The OpenCode plugin: when a session is created, take the worktree's lease; before an
 /// edit or shell tool, the pre-tool check; after an edit tool, run the hook and append a failure to the
 /// tool's output, which is the text the model reads.
-fn opencode_plugin(cmd: &str, pre: &str, start: &str) -> String {
+///
+/// Enforcing, a pre-tool command that exits non-zero or cannot be run throws, which
+/// refuses the call. With `observe` no handler can throw: the pre-tool handlers have no
+/// `throw`, and every handler body is inside a `try` with an empty `catch`, so a missing
+/// `discipline`, a release that does not know the arguments and any other error let the
+/// call through. The plugin writes nothing to the observation log, which the binary owns.
+///
+/// The `export default` block is for OpenCode 2.x and was never seen firing. Its
+/// registrations are optional calls, so an API without `tool.hook` registers nothing;
+/// enforcing, `setup` then says so on stderr (it does not throw: the API it would be
+/// refusing to load on is one this template was not verified against).
+fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
+    // A handler body, as written when enforcing; in observe mode, inside `try`/`catch`.
+    let guard = |indent: usize, body: String| -> String {
+        if !observe {
+            return body;
+        }
+        let pad = " ".repeat(indent);
+        let inner: String = body.lines().map(|l| format!("  {l}\n")).collect();
+        format!("{pad}try {{\n{inner}{pad}}} catch {{}}\n")
+    };
+    // The pre-tool command reading `stdin`: enforcing, a non-zero exit refuses the call.
+    let pre_call = |indent: usize, stdin: &str| -> String {
+        let pad = " ".repeat(indent);
+        let run = format!("await $`{pre} < ${{{stdin}}}`.cwd(directory).nothrow().quiet()");
+        if observe {
+            return format!("{pad}{run}\n");
+        }
+        format!(
+            "{pad}const r = {run}
+{pad}if (r.exitCode !== 0) {{
+{pad}  throw new Error(r.stdout.toString() + r.stderr.toString())
+{pad}}}
+"
+        )
+    };
+    let mode = if observe {
+        format!("{OPENCODE_OBSERVE_NEVER_BLOCKS}\n")
+    } else {
+        String::new()
+    };
+    let v1_session = guard(
+        4,
+        format!(
+            "    if (event.type !== \"session.created\") return
+    const start = new Response(JSON.stringify({{ input: {{ sessionID: event.properties?.sessionID }}, cwd: event.properties?.info?.directory ?? directory }}))
+    await $`{start} < ${{start}}`.nothrow().quiet()
+"
+        ),
+    );
+    let v1_before = guard(
+        4,
+        format!(
+            "    if (!EDIT_TOOLS.includes(input.tool) && input.tool !== \"bash\") return
+    const call = new Response(JSON.stringify({{ input, output, cwd: directory }}))
+{}",
+            pre_call(4, "call")
+        ),
+    );
+    let v1_after = guard(
+        4,
+        format!(
+            "    if (!EDIT_TOOLS.includes(input.tool)) return
+    const r = await $`{cmd}`.cwd(directory).nothrow().quiet()
+    if (r.exitCode !== 0) {{
+      output.output += \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
+    }}
+"
+        ),
+    );
+    let v2_session = guard(
+        6,
+        format!(
+            "      if (e?.type !== \"session.created\") return
+      const start = new Response(JSON.stringify({{
+        input: {{ sessionID: e.properties?.sessionID }},
+        cwd: e.properties?.info?.directory ?? directory
+      }}))
+      await $`{start} < ${{start}}`.nothrow().quiet()
+"
+        ),
+    );
+    let v2_before = guard(
+        6,
+        format!(
+            "      const toolName = call.tool ?? call.input?.tool
+      if (!EDIT_TOOLS.includes(toolName) && toolName !== \"bash\") return
+      const payload = new Response(JSON.stringify({{
+        input: {{ tool: toolName, sessionID: call.sessionID }},
+        output: {{ args: call.input ?? {{}} }},
+        cwd: directory
+      }}))
+{}",
+            pre_call(6, "payload")
+        ),
+    );
+    let v2_after = guard(
+        6,
+        format!(
+            "      const toolName = call.tool ?? call.input?.tool
+      if (!EDIT_TOOLS.includes(toolName)) return
+      const r = await $`{cmd}`.cwd(directory).nothrow().quiet()
+      if (r.exitCode !== 0) {{
+        if (call.result) {{
+          call.result.output = (call.result.output ?? \"\") + \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
+        }}
+      }}
+"
+        ),
+    );
+    // Enforcing only: `tool?.hook?.(…)` above did nothing when there is no `tool.hook`.
+    let unregistered = if observe {
+        ""
+    } else {
+        "
+    if (typeof tool?.hook !== \"function\") {
+      console.error(\"discipline: this OpenCode offered the plugin no tool.hook; the pre-tool check was not registered and no tool call will be checked\")
+    }
+"
+    };
     format!(
         "// Written by `discipline hook install --agent opencode`.
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
 // the model reads it and repairs the change.
-import {{ $ }} from \"bun\"
+{mode}import {{ $ }} from \"bun\"
 
 const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
 
 export const Discipline = async ({{ $, directory }}) => ({{
   // A new session takes this worktree's lease; it never blocks the session.
   event: async ({{ event }}) => {{
-    if (event.type !== \"session.created\") return
-    const start = new Response(JSON.stringify({{ input: {{ sessionID: event.properties?.sessionID }}, cwd: event.properties?.info?.directory ?? directory }}))
-    await $`{start} < ${{start}}`.nothrow().quiet()
-  }},
+{v1_session}  }},
   \"tool.execute.before\": async (input, output) => {{
-    if (!EDIT_TOOLS.includes(input.tool) && input.tool !== \"bash\") return
-    const call = new Response(JSON.stringify({{ input, output, cwd: directory }}))
-    const r = await $`{pre} < ${{call}}`.cwd(directory).nothrow().quiet()
-    if (r.exitCode !== 0) {{
-      throw new Error(r.stdout.toString() + r.stderr.toString())
-    }}
-  }},
+{v1_before}  }},
   \"tool.execute.after\": async (input, output) => {{
-    if (!EDIT_TOOLS.includes(input.tool)) return
-    const r = await $`{cmd}`.cwd(directory).nothrow().quiet()
-    if (r.exitCode !== 0) {{
-      output.output += \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
-    }}
-  }},
+{v1_after}  }},
 }})
 
 export default {{
@@ -957,39 +1067,14 @@ export default {{
     const directory = location?.directory ?? process.cwd()
 
     event?.subscribe?.(async (e) => {{
-      if (e?.type !== \"session.created\") return
-      const start = new Response(JSON.stringify({{
-        input: {{ sessionID: e.properties?.sessionID }},
-        cwd: e.properties?.info?.directory ?? directory
-      }}))
-      await $`{start} < ${{start}}`.nothrow().quiet()
-    }})
+{v2_session}    }})
 
     tool?.hook?.(\"execute.before\", async (call) => {{
-      const toolName = call.tool ?? call.input?.tool
-      if (!EDIT_TOOLS.includes(toolName) && toolName !== \"bash\") return
-      const payload = new Response(JSON.stringify({{
-        input: {{ tool: toolName, sessionID: call.sessionID }},
-        output: {{ args: call.input ?? {{}} }},
-        cwd: directory
-      }}))
-      const r = await $`{pre} < ${{payload}}`.cwd(directory).nothrow().quiet()
-      if (r.exitCode !== 0) {{
-        throw new Error(r.stdout.toString() + r.stderr.toString())
-      }}
-    }})
+{v2_before}    }})
 
     tool?.hook?.(\"execute.after\", async (call) => {{
-      const toolName = call.tool ?? call.input?.tool
-      if (!EDIT_TOOLS.includes(toolName)) return
-      const r = await $`{cmd}`.cwd(directory).nothrow().quiet()
-      if (r.exitCode !== 0) {{
-        if (call.result) {{
-          call.result.output = (call.result.output ?? \"\") + \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
-        }}
-      }}
-    }})
-  }}
+{v2_after}    }})
+{unregistered}  }}
 }}
 "
     )
@@ -3166,5 +3251,110 @@ mod tests {
         // Only Copilot has a user-level file.
         let (_, now) = user_config_for(Agent::Copilot, false, None).unwrap();
         assert_eq!(generated_user_json_hooks(Agent::Qwen, &now), None);
+    }
+
+    /// The hook registrations of the OpenCode plugin, in the order the template writes
+    /// them: the 1.x named export, then the 2.x default export.
+    const OPENCODE_REGISTRATIONS: &[&str] = &[
+        "export const Discipline = async ({ $, directory }) => ({\n",
+        "  event: async ({ event }) => {\n",
+        "  \"tool.execute.before\": async (input, output) => {\n",
+        "  \"tool.execute.after\": async (input, output) => {\n",
+        "export default {\n",
+        "  id: \"discipline\",\n",
+        "  setup({ tool, event, location }) {\n",
+        "    event?.subscribe?.(async (e) => {\n",
+        "    tool?.hook?.(\"execute.before\", async (call) => {\n",
+        "    tool?.hook?.(\"execute.after\", async (call) => {\n",
+    ];
+
+    /// Issue 570: both blocks of the OpenCode plugin keep every hook registration, once
+    /// and in order, and each of the three commands is run by both blocks.
+    #[test]
+    fn the_opencode_plugin_registers_every_hook_in_both_blocks() {
+        for observe in [false, true] {
+            let (_, text) = config_for_mode(Agent::Opencode, observe);
+            let mut from = 0;
+            for line in OPENCODE_REGISTRATIONS {
+                assert_eq!(
+                    text.matches(line).count(),
+                    1,
+                    "observe={observe}: {line:?} is written once\n{text}"
+                );
+                let at = text[from..]
+                    .find(line)
+                    .unwrap_or_else(|| panic!("observe={observe}: {line:?} is out of order"));
+                from += at + line.len();
+            }
+            let flag = if observe { " --observe" } else { "" };
+            for run in [
+                "$`discipline hook run --agent opencode --event session-start < ${start}`"
+                    .to_string(),
+                format!("$`discipline hook run --agent opencode --event pre-tool{flag} < ${{"),
+                format!("$`discipline hook run --agent opencode{flag}`"),
+            ] {
+                assert_eq!(
+                    text.matches(&run).count(),
+                    2,
+                    "observe={observe}: {run:?} runs in both blocks\n{text}"
+                );
+            }
+        }
+    }
+
+    /// Issue 570: an observe-mode plugin has no statement that refuses a call. Every
+    /// handler body is inside a `try` whose `catch` is empty, so a non-zero exit, a
+    /// command that is not found and any other error all let the call through.
+    #[test]
+    fn the_opencode_observe_plugin_has_no_throw_and_guards_every_handler() {
+        let (_, observe) = config_for_mode(Agent::Opencode, true);
+        let throws: Vec<&str> = observe
+            .lines()
+            .filter(|l| l.trim_start().starts_with("throw "))
+            .collect();
+        assert!(throws.is_empty(), "observe mode throws: {throws:?}");
+        assert!(!observe.contains("throw new Error"), "{observe}");
+        assert_eq!(
+            observe.matches(OPENCODE_OBSERVE_NEVER_BLOCKS).count(),
+            1,
+            "{observe}"
+        );
+        // Six handlers (three per block), each one guarded.
+        assert_eq!(observe.matches(" try {\n").count(), 6, "{observe}");
+        assert_eq!(observe.matches(" } catch {}\n").count(), 6, "{observe}");
+        assert!(!observe.contains("console.error"), "{observe}");
+    }
+
+    /// Issue 570: enforcing mode stays fail-closed. Both pre-tool handlers refuse on a
+    /// non-zero exit, nothing swallows an error of the shell call, and a 2.x `setup` that
+    /// found no `tool.hook` to register on says so on stderr without throwing.
+    #[test]
+    fn the_opencode_enforcing_plugin_refuses_on_a_non_zero_exit_and_reports_no_registration() {
+        let (_, enforcing) = config_for_mode(Agent::Opencode, false);
+        let v1 = "    const r = await $`discipline hook run --agent opencode --event pre-tool < ${call}`.cwd(directory).nothrow().quiet()
+    if (r.exitCode !== 0) {
+      throw new Error(r.stdout.toString() + r.stderr.toString())
+    }
+  },
+";
+        let v2 = "      const r = await $`discipline hook run --agent opencode --event pre-tool < ${payload}`.cwd(directory).nothrow().quiet()
+      if (r.exitCode !== 0) {
+        throw new Error(r.stdout.toString() + r.stderr.toString())
+      }
+    })
+";
+        assert_eq!(enforcing.matches(v1).count(), 1, "{enforcing}");
+        assert_eq!(enforcing.matches(v2).count(), 1, "{enforcing}");
+        assert!(!enforcing.contains("try {"), "{enforcing}");
+        assert!(!enforcing.contains("catch"), "{enforcing}");
+        assert!(!enforcing.contains(OPENCODE_OBSERVE_NEVER_BLOCKS));
+        let notice = "    if (typeof tool?.hook !== \"function\") {
+      console.error(\"discipline: this OpenCode offered the plugin no tool.hook; the pre-tool check was not registered and no tool call will be checked\")
+    }
+  }
+}
+";
+        assert!(enforcing.ends_with(notice), "{enforcing}");
+        assert_eq!(enforcing.matches("console.error").count(), 1);
     }
 }
