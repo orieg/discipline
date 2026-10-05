@@ -965,4 +965,153 @@ mod tests {
         );
         assert!(g.tests.is_empty());
     }
+
+    /// The literal case count and the non-literal marker of the one test in a class body
+    /// holding `annotations` over `fun t(..)`, read from parsed source.
+    fn cases_of(annotations: &str) -> (Option<usize>, bool) {
+        let src = format!(
+            "class ATest {{\n    {annotations}\n    fun t(s: String) {{\n        assertEquals(1, s.length)\n    }}\n}}\n"
+        );
+        let f = facts("src/test/kotlin/ATest.kt", &src);
+        assert_eq!(f.tests.len(), 1, "one test expected in:\n{src}");
+        assert_eq!(f.tests[0].name, "ATest.t");
+        (f.tests[0].cases, f.tests[0].non_literal_cases)
+    }
+
+    #[test]
+    fn cases_value_source_string_collection_literal_is_counted() {
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @ValueSource(strings = [\"a\", \"b\", \"c\"])"),
+            (Some(3), false)
+        );
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @ValueSource(strings = [\"a\"])"),
+            (Some(1), false)
+        );
+    }
+
+    #[test]
+    fn cases_value_source_int_collection_literal_is_counted() {
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @ValueSource(ints = [1, 2, 3])"),
+            (Some(3), false)
+        );
+    }
+
+    #[test]
+    fn cases_value_source_qualified_annotation_name_is_counted() {
+        assert_eq!(
+            cases_of(
+                "@ParameterizedTest\n    @org.junit.jupiter.params.provider.ValueSource(ints = [1, 2])"
+            ),
+            (Some(2), false)
+        );
+    }
+
+    #[test]
+    fn cases_value_source_array_of_call_is_counted() {
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @ValueSource(ints = intArrayOf(1, 2, 3))"),
+            (Some(3), false)
+        );
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @ValueSource(strings = arrayOf(\"a\", \"b\"))"),
+            (Some(2), false)
+        );
+    }
+
+    #[test]
+    fn cases_csv_source_positional_rows_are_counted() {
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @CsvSource(\"a,1\", \"b,2\", \"c,3\")"),
+            (Some(3), false)
+        );
+    }
+
+    #[test]
+    fn cases_csv_source_named_value_rows_are_counted() {
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @CsvSource(value = [\"a,1\", \"b,2\"])"),
+            (Some(2), false)
+        );
+        // Another named argument is not a row.
+        assert_eq!(
+            cases_of(
+                "@ParameterizedTest\n    @CsvSource(value = [\"a;1\", \"b;2\"], delimiter = ';')"
+            ),
+            (Some(2), false)
+        );
+    }
+
+    /// A comment between two values is not a case.
+    #[test]
+    fn cases_a_comment_inside_the_literal_is_not_a_case() {
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @ValueSource(ints = [1, /* 2, */ 3])"),
+            (Some(2), false)
+        );
+    }
+
+    #[test]
+    fn cases_csv_source_text_block_rows_are_counted() {
+        assert_eq!(
+            cases_of(
+                "@ParameterizedTest\n    @CsvSource(textBlock = \"\"\"\n        a,1\n        b,2\n\n        c,3\n    \"\"\")"
+            ),
+            (Some(3), false)
+        );
+    }
+
+    /// A spread stands for a number of rows the source does not show.
+    #[test]
+    fn cases_a_spread_source_is_non_literal() {
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @CsvSource(*ROWS)"),
+            (None, true)
+        );
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @ValueSource(ints = intArrayOf(1, *MORE))"),
+            (None, true)
+        );
+    }
+
+    /// Literal sources stacked on one function add up.
+    #[test]
+    fn cases_stacked_literal_sources_add_up() {
+        assert_eq!(
+            cases_of(
+                "@ParameterizedTest\n    @ValueSource(strings = [\"a\", \"b\"])\n    @CsvSource(\"c\", \"d\", \"e\")"
+            ),
+            (Some(5), false)
+        );
+    }
+
+    /// Negative control: a test that is not parametrized has no count and no marker.
+    #[test]
+    fn cases_a_plain_test_has_no_count() {
+        assert_eq!(cases_of("@Test"), (None, false));
+        assert_eq!(cases_of("@ParameterizedTest"), (None, false));
+    }
+
+    /// Negative control: a provider named by a string is one argument, not one case.
+    #[test]
+    fn cases_method_source_is_non_literal_not_a_count() {
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @MethodSource(\"provider\")"),
+            (None, true)
+        );
+    }
+
+    /// A value that is not a literal list (a named constant) is not counted as one case.
+    #[test]
+    fn cases_a_source_whose_value_is_not_a_literal_list_is_non_literal() {
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @ValueSource(ints = SIZES)"),
+            (None, true)
+        );
+        assert_eq!(
+            cases_of("@ParameterizedTest\n    @CsvSource(value = ROWS)"),
+            (None, true)
+        );
+    }
 }
