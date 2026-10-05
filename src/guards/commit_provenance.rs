@@ -89,40 +89,22 @@ pub fn is_agent_commit(
     })
 }
 
-/// Whether a marker matches the author name or email: the author is an agent, not a
-/// person committing with an agent's help.
-fn author_is_agent(c: &CommitDetail, markers: &[String]) -> bool {
-    let name = c.author_name.to_lowercase();
-    let email = c.author_email.to_lowercase();
-    markers.iter().any(|m| {
-        let m = m.to_lowercase();
-        name.contains(&m) || email.contains(&m)
-    })
-}
-
-/// Whether the review trailer names an acceptable reviewer: someone other than the
-/// author, or, under `allow_author_review`, the author when the author is a person and
-/// the reviewer is not an agent.
+/// Whether the review trailer names someone other than the author.
 fn reviewed_by_someone_else(
     c: &CommitDetail,
     trailers: &[(String, String)],
     review_key: &str,
-    markers: &[String],
-    allow_author_review: bool,
 ) -> bool {
-    let author_may_review = allow_author_review && !author_is_agent(c, markers);
     trailers
         .iter()
         .filter(|(k, _)| k.eq_ignore_ascii_case(review_key))
-        .any(|(k, v)| {
-            let line = format!("{k}: {v}").to_lowercase();
+        .any(|(_, v)| {
             let v = v.to_lowercase();
             let name = c.author_name.to_lowercase();
             let email = c.author_email.to_lowercase();
-            let names_author =
-                (name.len() > 2 && v.contains(&name)) || (email.len() > 2 && v.contains(&email));
-            let names_agent = markers.iter().any(|m| line.contains(&m.to_lowercase()));
-            !v.is_empty() && (!names_author || (author_may_review && !names_agent))
+            !v.is_empty()
+                && !(name.len() > 2 && v.contains(&name))
+                && !(email.len() > 2 && v.contains(&email))
         })
 }
 
@@ -138,17 +120,6 @@ pub fn judge(
     required: &[String],
     markers: &[String],
     review_key: &str,
-) -> Vec<Finding> {
-    judge_with(commits, required, markers, review_key, false)
-}
-
-/// [`judge`] with the `allow_author_review` setting.
-pub fn judge_with(
-    commits: &[CommitDetail],
-    required: &[String],
-    markers: &[String],
-    review_key: &str,
-    allow_author_review: bool,
 ) -> Vec<Finding> {
     let mut out = Vec::new();
     for c in commits {
@@ -177,7 +148,7 @@ pub fn judge_with(
                         "commit {short} identifies itself as agent-produced and carries no `{review_key}:` trailer"
                     ),
                 });
-            } else if !reviewed_by_someone_else(c, &t, review_key, markers, allow_author_review) {
+            } else if !reviewed_by_someone_else(c, &t, review_key) {
                 out.push(Finding {
                     kind: &crate::findings::AGENT_COMMIT_REVIEWED_BY_AUTHOR,
                     sha: c.sha.clone(),
@@ -209,18 +180,17 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
     out.examined = non_merges.len();
-    // An empty review key switches the agent rule off in `judge_with`.
+    // An empty review key switches the agent rule off in `judge`.
     let review_key = if settings.require_agent_review {
         settings.review_trailer.as_str()
     } else {
         ""
     };
-    for f in judge_with(
+    for f in judge(
         &commits,
         &settings.required_trailers,
         &settings.agent_markers,
         review_key,
-        settings.allow_author_review,
     ) {
         let short: String = f.sha.chars().take(7).collect();
         if let Some(ov) = ctx
@@ -300,52 +270,6 @@ mod tests {
         assert_eq!(
             judge(&[c], &[], &markers, "Reviewed-by")[0].kind.title,
             "Agent Commit Without Review"
-        );
-    }
-
-    #[test]
-    fn allow_author_review_lets_a_person_review_their_own_agent_assisted_commit() {
-        let markers = v(&["Co-authored-by: Claude", "noreply@anthropic.com", "[bot]"]);
-        // The squash merge of an agent's pull request: the maintainer is the author.
-        let squashed = commit(
-            "Ada",
-            "ada@x",
-            "feat: x (#1)\n\nReviewed-by: Ada <ada@x>\n\nCo-authored-by: Claude <noreply@anthropic.com>\n",
-        );
-        let strict = judge_with(
-            std::slice::from_ref(&squashed),
-            &[],
-            &markers,
-            "Reviewed-by",
-            false,
-        );
-        assert_eq!(strict[0].kind.title, "Agent Commit Reviewed By Its Author");
-        assert!(judge_with(&[squashed], &[], &markers, "Reviewed-by", true).is_empty());
-
-        // An agent author never reviews itself, whatever the setting: the author name
-        // carries a marker, the review line does not.
-        let agent_author = commit(
-            "coder[bot]",
-            "coder@x",
-            "feat: x\n\nReviewed-by: coder <coder@x>\n",
-        );
-        assert_eq!(
-            judge_with(&[agent_author], &[], &markers, "Reviewed-by", true)[0]
-                .kind
-                .title,
-            "Agent Commit Reviewed By Its Author"
-        );
-        // A reviewer that is an agent is not a person's review.
-        let agent_reviewer = commit(
-            "Ada",
-            "ada@x",
-            "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>\nReviewed-by: Ada <ada@x>, Claude <noreply@anthropic.com>\n",
-        );
-        assert_eq!(
-            judge_with(&[agent_reviewer], &[], &markers, "Reviewed-by", true)[0]
-                .kind
-                .title,
-            "Agent Commit Reviewed By Its Author"
         );
     }
 

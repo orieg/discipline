@@ -1584,12 +1584,6 @@ pub struct CommitProvenanceGate {
     /// change's own claim; separating reviewer from author is the forge's required
     /// review (and `directives.require_approval`), which `discipline doctor` reports.
     pub require_agent_review: bool,
-    /// The review trailer may name the commit's author when that author is a person (no
-    /// `agent_markers` entry matches the author name or email) and the reviewer is not an
-    /// agent. For a single-maintainer repository, where a squash merge makes the
-    /// maintainer the author of an agent-assisted commit. Off: the reviewer must be
-    /// someone other than the author.
-    pub allow_author_review: bool,
 }
 
 impl Default for CommitProvenanceGate {
@@ -1618,7 +1612,6 @@ impl Default for CommitProvenanceGate {
             .collect(),
             review_trailer: "Reviewed-by".to_string(),
             require_agent_review: true,
-            allow_author_review: false,
         }
     }
 }

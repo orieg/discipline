@@ -466,10 +466,6 @@
           "$ref": "#/$defs/StringListOrReset",
           "description": "Substrings of a trailer line, author name or author email that identify an agent-produced commit"
         },
-        "allow_author_review": {
-          "description": "The review trailer may name the commit's author when the author is a person and the reviewer is not an agent (single-maintainer repositories; default: false)",
-          "type": "boolean"
-        },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"

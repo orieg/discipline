@@ -495,8 +495,7 @@ pub fn generate_schema() -> Value {
                     "required_trailers": { "$ref": "#/$defs/StringListOrReset", "description": "Trailer keys every commit in the change must carry" },
                     "agent_markers": { "$ref": "#/$defs/StringListOrReset", "description": "Substrings of a trailer line, author name or author email that identify an agent-produced commit" },
                     "review_trailer": { "type": "string", "minLength": 1, "description": "Trailer an agent-produced commit must carry, naming someone other than its author (default: Reviewed-by)" },
-                    "require_agent_review": { "type": "boolean", "description": "Whether an agent-produced commit must carry review_trailer; false switches the rule off. The trailer is a claim: reviewer separation is the forge's required review (default: true)" },
-                    "allow_author_review": { "type": "boolean", "description": "The review trailer may name the commit's author when the author is a person and the reviewer is not an agent (single-maintainer repositories; default: false)" }
+                    "require_agent_review": { "type": "boolean", "description": "Whether an agent-produced commit must carry review_trailer; false switches the rule off. The trailer is a claim: reviewer separation is the forge's required review (default: true)" }
                 }
             },
             "IssueLinkGate": {
