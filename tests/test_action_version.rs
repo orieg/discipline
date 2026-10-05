@@ -157,7 +157,13 @@ fn install_tool_script_invokes_correct_version_command() {
         "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --output) touch \"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nexit 0\n",
     )
     .unwrap();
-    std::fs::write(stub_bin.join("sha256sum"), "#!/bin/sh\nexit 0\n").unwrap();
+    // Read the checksum line as the real tool does: a stub that exits first leaves
+    // `echo ... | sha256sum --check` to die of SIGPIPE under `pipefail`.
+    std::fs::write(
+        stub_bin.join("sha256sum"),
+        "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+    )
+    .unwrap();
     std::fs::write(
         stub_bin.join("tar"),
         format!(
