@@ -22,6 +22,34 @@ const CASES: &[Case] = &[
         Ok(base.tests[0].strong_asserts == 1 && head.tests[0].strong_asserts == 0)
     }),
     (
+        "ast: configured assertion helper counts total only and acquires strong only from visible body",
+        || {
+            let reg = crate::ast::default_registry();
+            let mut v = AssertVocabulary::default();
+            v.helper_fns.push("check_result".to_string());
+            if !cfg!(feature = "lang-go") {
+                return Ok(true);
+            }
+            let Some(go_pack) = reg.find_pack("pkg/a_test.go") else {
+                bail!("the Go pack is compiled in but not registered");
+            };
+            let unseen = go_pack.extract(
+                "pkg/a_test.go",
+                "package a\nimport \"testing\"\nfunc TestT(t *testing.T) { check_result(t, 1) }\n",
+                &v,
+            )?;
+            let same_file = go_pack.extract(
+                "pkg/a_test.go",
+                "package a\nimport \"testing\"\nfunc check_result(t *testing.T, x int) { if x != 1 { t.Errorf(\"bad\") } }\nfunc TestT(t *testing.T) { check_result(t, 1) }\n",
+                &v,
+            )?;
+            Ok(unseen.tests[0].total_asserts == 1
+                && unseen.tests[0].strong_asserts == 0
+                && same_file.tests[0].total_asserts == 1
+                && same_file.tests[0].strong_asserts == 1)
+        },
+    ),
+    (
         "ast: tautological test is vacuous, real test is not",
         || {
             let v = AssertVocabulary::default();

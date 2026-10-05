@@ -73,7 +73,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.archive-contents.scan_contents` | boolean | `false` | Read each entry and report source maps whose sourcesContent embeds the original source, as .map entries or inline base64 sourceMappingURL comments |
 | `gates.archive-contents.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.archive-contents.strip_components` | integer | `0` | Leading directory components to strip from archive paths |
-| `gates.assertion-reduction.assert_helper_fns` | list | `[]` | Additional function names treated as assertions |
+| `gates.assertion-reduction.assert_helper_fns` | list | `[]` | Function names (final `::`/`.` segment) whose call counts as one assertion, not a strong one; a same-file body's own assertions replace that credit |
 | `gates.assertion-reduction.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.assertion-reduction.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.assertion-reduction.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions (a trailing `!` is optional) |
@@ -347,7 +347,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.unsafe-safety-comment.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.unsafe-safety-comment.placeholders` | list | *(17 entries)* | Additional placeholder words or phrases to reject in SAFETY comments |
 | `gates.unsafe-safety-comment.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.vacuous-tests.assert_helper_fns` | list | `[]` | Additional function names treated as assertions |
+| `gates.vacuous-tests.assert_helper_fns` | list | `[]` | Function names (final `::`/`.` segment) whose call counts as one assertion, not a strong one; a same-file body's own assertions replace that credit |
 | `gates.vacuous-tests.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.vacuous-tests.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.vacuous-tests.extra_assert_macros` | list | `[]` | Additional macro names treated as assertions (a trailing `!` is optional) |

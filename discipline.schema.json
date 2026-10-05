@@ -59,7 +59,7 @@
       "properties": {
         "assert_helper_fns": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Additional function names treated as assertions"
+          "description": "Function names (final `::`/`.` segment) whose call counts as one assertion, not a strong one; a same-file body's own assertions replace that credit"
         },
         "enabled": {
           "description": "Whether this gate is active",

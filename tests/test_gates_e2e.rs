@@ -9426,6 +9426,48 @@ func TestCalc(t *testing.T) {
 }
 
 #[test]
+fn go_replacing_strong_assertion_with_external_helper_is_reported_as_assertion_reduction() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_go = r#"package calc_test
+
+import "testing"
+
+func TestCalc(t *testing.T) {
+    if 1+1 != 2 {
+        t.Errorf("unexpected")
+    }
+}
+"#;
+    repo.write("calc_test.go", base_go);
+    repo.commit("feat: initial go test with strong assertion");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    let head_go = r#"package calc_test
+
+import "testing"
+
+func TestCalc(t *testing.T) {
+    customHelper(t)
+}
+"#;
+    repo.write("calc_test.go", head_go);
+    repo.commit("test: replace strong assertion with external helper");
+
+    let run = repo.check(&[
+        "--config-override",
+        "[gates.assertion-reduction]\nassert_helper_fns = [\"customHelper\"]",
+    ]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("assertion-reduction");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"],
+        "assertion-reduction/assertions-reduced"
+    );
+}
+
+#[test]
 fn go_skipped_tests_detected_and_accepts_override() {
     let repo = Repo::new();
     repo.write(
