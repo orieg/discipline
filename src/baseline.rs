@@ -386,8 +386,11 @@ pub fn apply_baseline_with_git(
     git: &crate::gitctx::GitCtx,
     baseline: &DisciplineBaseline,
     outcomes: &mut [GateOutcome],
-) -> BaselineMatchResult {
-    apply_baseline_with_reader(|f| git.head_content(f).ok().flatten(), baseline, outcomes)
+) -> anyhow::Result<BaselineMatchResult> {
+    let reads = crate::gitctx::ReadRecorder::new();
+    let matched = apply_baseline_with_reader(reads.head(git), baseline, outcomes);
+    reads.finish()?;
+    Ok(matched)
 }
 
 /// Match detected violations against the baseline with custom line reader.

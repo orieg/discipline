@@ -279,10 +279,14 @@ fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
 }
 
 /// Retrieves the base min_count ratchet floor for a named command.
-fn get_base_min_count(ctx: &Context, name: &str) -> Option<u64> {
-    let base_src = ctx.base_config_text().ok()??;
-    let base_cfg = DisciplineConfig::from_toml_str(&base_src).ok()?;
-    if name == "command" || name == "default" {
+fn get_base_min_count(ctx: &Context, name: &str) -> Result<Option<u64>> {
+    let Some(base_src) = ctx.base_config_text()? else {
+        return Ok(None);
+    };
+    let Ok(base_cfg) = DisciplineConfig::from_toml_str(&base_src) else {
+        return Ok(None);
+    };
+    Ok(if name == "command" || name == "default" {
         base_cfg.gates.command.min_count
     } else {
         base_cfg
@@ -293,7 +297,7 @@ fn get_base_min_count(ctx: &Context, name: &str) -> Option<u64> {
             .find(|c| c.name == name)
             .and_then(|c| c.min_count)
             .or(base_cfg.gates.command.min_count)
-    }
+    })
 }
 
 struct ResolvedCommand {
@@ -704,7 +708,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
 
         // 0. Check required policy files for stealth deletion
         for pf in &item.policy_files {
-            if let Ok(Some(_)) = ctx.git.base_content(pf) {
+            if ctx.git.base_content(pf)?.is_some() {
                 let pf_path = ctx.git.root().join(pf);
                 if !pf_path.exists() {
                     command_violations.push(Violation::new(
@@ -871,7 +875,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         }
 
         // Check count ratchet against BASE ref
-        let base_min = get_base_min_count(ctx, &item.name);
+        let base_min = get_base_min_count(ctx, &item.name)?;
         let effective_floor = item.min_count.unwrap_or(0).max(base_min.unwrap_or(0));
 
         if effective_floor > 0 {
@@ -962,7 +966,7 @@ fn check_snapshot(
     let bytes = match std::fs::read(&file) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if matches!(ctx.git.base_content(&snap.path), Ok(Some(_))) {
+            if ctx.git.base_content(&snap.path)?.is_some() {
                 // Reported as `policy-file-deleted`.
                 return Ok(None);
             }
@@ -1198,7 +1202,7 @@ fn evaluate_base_tests(
 
     // Overlay base test files onto head code
     for tf in &base_test_files {
-        if let Ok(Some(content)) = ctx.git.base_content(tf) {
+        if let Some(content) = ctx.git.base_content(tf)? {
             let dst = temp_path.join(tf);
             if let Some(parent) = dst.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -1208,16 +1212,14 @@ fn evaluate_base_tests(
     }
 
     // Remove any test files that were added newly in head (did not exist in base)
-    if let Ok(changed) = ctx.git.changed_files() {
-        for cf in changed {
-            if cf.kind == crate::gitctx::ChangeKind::Added
-                && (crate::ast::functions::declared_test_path(&cf.path, &ctx.config.tests.paths)
-                    || crate::ast::functions::test_path(&cf.path))
-            {
-                let dst = temp_path.join(&cf.path);
-                if dst.exists() {
-                    let _ = std::fs::remove_file(&dst); // discipline:allow(error-swallowing): best-effort removal of newly added head test file
-                }
+    for cf in ctx.git.changed_files()? {
+        if cf.kind == crate::gitctx::ChangeKind::Added
+            && (crate::ast::functions::declared_test_path(&cf.path, &ctx.config.tests.paths)
+                || crate::ast::functions::test_path(&cf.path))
+        {
+            let dst = temp_path.join(&cf.path);
+            if dst.exists() {
+                let _ = std::fs::remove_file(&dst); // discipline:allow(error-swallowing): best-effort removal of newly added head test file
             }
         }
     }

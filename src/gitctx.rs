@@ -331,6 +331,55 @@ pub fn format_discover_error(err: &git2::Error, path: &std::path::Path) -> anyho
     }
 }
 
+/// The two sides of one file: each `None` when the file does not exist (or is binary)
+/// there. A failed read is never represented here; see `GitCtx::sides`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Sides {
+    pub base: Option<String>,
+    pub head: Option<String>,
+}
+
+/// For a reader that cannot return `Result` (a closure handed to a parser or to the
+/// baseline code): keeps the first read error instead of dropping it, so the caller
+/// ends with `finish()?` and the gate is "could not run", not a pass over a missing file.
+#[derive(Default)]
+pub struct ReadRecorder {
+    first: std::cell::RefCell<Option<anyhow::Error>>,
+}
+
+impl ReadRecorder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Passes a successful read through (`None` for an absent file) and keeps a failed one.
+    pub fn keep(&self, read: Result<Option<String>>) -> Option<String> {
+        match read {
+            Ok(content) => content,
+            Err(e) => {
+                self.first.borrow_mut().get_or_insert(e);
+                None
+            }
+        }
+    }
+
+    pub fn head<'a>(&'a self, git: &'a GitCtx) -> impl Fn(&str) -> Option<String> + 'a {
+        move |p| self.keep(git.head_content(p))
+    }
+
+    pub fn base<'a>(&'a self, git: &'a GitCtx) -> impl Fn(&str) -> Option<String> + 'a {
+        move |p| self.keep(git.base_content(p))
+    }
+
+    /// The first read error seen, if any.
+    pub fn finish(&self) -> Result<()> {
+        match self.first.borrow_mut().take() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+}
+
 pub fn discover_repository(path: impl AsRef<std::path::Path>) -> Result<Repository> {
     let trust_workspace = std::env::var("DISCIPLINE_TRUST_WORKSPACE")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -657,6 +706,9 @@ impl GitCtx {
         };
         let rel_path = self.normalize_repo_path(path);
         match tree.get_path(std::path::Path::new(rel_path)) {
+            // A directory or a gitlink (submodule) is not a file here, the same as an
+            // absent path; only a blob that cannot be read is an error.
+            Ok(entry) if entry.kind() != Some(git2::ObjectType::Blob) => Ok(None),
             Ok(entry) => {
                 let blob = self.repo.find_blob(entry.id())?;
                 Ok(Some(blob.content().to_vec()))
@@ -668,7 +720,10 @@ impl GitCtx {
 
     /// Content of `path` on the base side; `None` when it did not exist there or is binary.
     pub fn base_content(&self, path: &str) -> Result<Option<String>> {
-        let Some(bytes) = self.base_bytes(path)? else {
+        let Some(bytes) = self
+            .base_bytes(path)
+            .with_context(|| format!("failed to read `{path}` on the base side"))?
+        else {
             return Ok(None);
         };
         if is_binary_file(path, &bytes) {
@@ -685,6 +740,10 @@ impl GitCtx {
             let Some(entry) = index.get_path(std::path::Path::new(rel_path), 0) else {
                 return Ok(None);
             };
+            // A gitlink (submodule pointer) is not a file.
+            if entry.mode == 0o160000 {
+                return Ok(None);
+            }
             Ok(Some(self.repo.find_blob(entry.id)?.content().to_vec()))
         } else {
             let root = self
@@ -692,7 +751,7 @@ impl GitCtx {
                 .workdir()
                 .ok_or_else(|| anyhow!("repository has no working tree"))?;
             let full_path = root.join(rel_path);
-            if !full_path.exists() {
+            if !full_path.exists() || full_path.is_dir() {
                 return Ok(None);
             }
             if let Ok(canon) = full_path.canonicalize() {
@@ -713,13 +772,25 @@ impl GitCtx {
     /// Content of `path` on the head side (index when staged, else worktree).
     /// `None` for binary content (executable, image, archive, or known binary format).
     pub fn head_content(&self, path: &str) -> Result<Option<String>> {
-        let Some(bytes) = self.head_bytes(path)? else {
+        let Some(bytes) = self
+            .head_bytes(path)
+            .with_context(|| format!("failed to read `{path}` on the head side"))?
+        else {
             return Ok(None);
         };
         if is_binary_file(path, &bytes) {
             return Ok(None);
         }
         Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+    }
+
+    /// Both sides of a file (`None` where it does not exist there). A read that fails is
+    /// an `Err` naming the path, never an absent side.
+    pub fn sides(&self, base_path: &str, head_path: &str) -> Result<Sides> {
+        Ok(Sides {
+            base: self.base_content(base_path)?,
+            head: self.head_content(head_path)?,
+        })
     }
 
     /// Tracked regular files. Symlinks are skipped so `CLAUDE.md -> AGENTS.md`
@@ -1702,5 +1773,138 @@ mod tests {
             !formatted.contains("code=Owner (-36)"),
             "non-owner error must not claim code=Owner: {formatted}"
         );
+    }
+
+    #[cfg(unix)]
+    /// A repository with one commit holding `a.txt`, opened with that commit as base and
+    /// the working tree as head.
+    fn repo_with_base_file() -> (tempfile::TempDir, GitCtx, Oid) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        std::fs::write(dir.path().join("a.txt"), "base\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        let blob = tree.get_name("a.txt").unwrap().id();
+        drop(tree);
+        let git = GitCtx {
+            repo,
+            base: Some(commit),
+            base_label: "base".to_string(),
+            staged: false,
+        };
+        (dir, git, blob)
+    }
+
+    #[cfg(unix)]
+    fn remove_loose_object(dir: &std::path::Path, oid: Oid) {
+        let hex = oid.to_string();
+        let obj = dir.join(".git/objects").join(&hex[..2]).join(&hex[2..]);
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&obj, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::remove_file(obj).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sides_tell_an_absent_file_from_a_failed_read() {
+        let (dir, git, blob) = repo_with_base_file();
+        std::fs::write(dir.path().join("a.txt"), "head\n").unwrap();
+
+        let both = git.sides("a.txt", "a.txt").unwrap();
+        assert_eq!(both.base.as_deref(), Some("base\n"));
+        assert_eq!(both.head.as_deref(), Some("head\n"));
+        // Absent is Ok(None) on each side, not an error.
+        let absent = git.sides("nope.txt", "nope.txt").unwrap();
+        assert_eq!(absent, Sides::default());
+
+        remove_loose_object(dir.path(), blob);
+        let err = git.sides("a.txt", "a.txt").unwrap_err();
+        let shown = format!("{err:#}");
+        assert!(shown.contains("`a.txt` on the base side"), "{shown}");
+        // The head side still reads: only the base blob is gone.
+        assert_eq!(
+            git.head_content("a.txt").unwrap().as_deref(),
+            Some("head\n")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recorded_read_failure_is_surfaced_not_dropped() {
+        let (dir, git, blob) = repo_with_base_file();
+        let reads = ReadRecorder::new();
+        let base = reads.base(&git);
+        assert_eq!(base("a.txt").as_deref(), Some("base\n"));
+        assert_eq!(base("nope.txt"), None);
+        reads.finish().unwrap();
+
+        remove_loose_object(dir.path(), blob);
+        assert_eq!(base("a.txt"), None);
+        let err = reads.finish().unwrap_err();
+        assert!(format!("{err:#}").contains("`a.txt` on the base side"));
+        // Reported once: the recorder is drained.
+        reads.finish().unwrap();
+    }
+
+    #[test]
+    fn a_tree_or_a_gitlink_is_not_a_file_on_either_side() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("somedir")).unwrap();
+        std::fs::write(dir.path().join("somedir/in.txt"), "x\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(std::path::Path::new("somedir/in.txt"))
+            .unwrap();
+        let id = repo.blob(b"x\n").unwrap();
+        let entry = git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o160000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id,
+            flags: 0,
+            flags_extended: 0,
+            path: b"vendor/sub".to_vec(),
+        };
+        index.add(&entry).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        drop(tree);
+        std::fs::create_dir_all(dir.path().join("vendor/sub")).unwrap();
+        for staged in [false, true] {
+            let git = GitCtx {
+                repo: Repository::open(dir.path()).unwrap(),
+                base: Some(commit),
+                base_label: "base".to_string(),
+                staged,
+            };
+            for path in ["somedir", "vendor/sub"] {
+                assert_eq!(git.base_content(path).unwrap(), None, "{path} base");
+                assert_eq!(
+                    git.head_content(path).unwrap(),
+                    None,
+                    "{path} head, staged={staged}"
+                );
+            }
+            assert_eq!(
+                git.base_content("somedir/in.txt").unwrap().as_deref(),
+                Some("x\n")
+            );
+        }
     }
 }

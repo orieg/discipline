@@ -880,7 +880,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
 
     // Load deny.toml policy if configured or auto-detected
     let deny_policy = if let Some(ref deny_path) = gate.deny_file {
-        if let Ok(Some(content)) = ctx.git.head_content(deny_path) {
+        if let Some(content) = ctx.git.head_content(deny_path)? {
             parse_deny_toml(&content).unwrap_or_default()
         } else {
             DenyPolicy::default()

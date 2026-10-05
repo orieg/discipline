@@ -120,8 +120,9 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
             Some(c) => c,
             None => {
                 // Workflow file deleted in head
-                if let Ok(Some(base_src)) = ctx.git.base_content(path) {
-                    if let Ok(base_val) = serde_yaml::from_str::<serde_yaml::Value>(&base_src) {
+                if let Some(base_src) = ctx.git.base_content(path)? {
+                    if let Some(base_val) = parse_yaml_side(&mut out, path, "base", Some(&base_src))
+                    {
                         let (base_jobs, _) =
                             parse_workflow_jobs(&base_src, settings.rollup_job.as_deref());
                         let verification: Vec<(&String, &serde_yaml::Value)> = base_jobs
@@ -167,11 +168,9 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         };
 
         out.examined += 1;
-        let base_content = ctx.git.base_content(path).unwrap_or(None);
-        let head_val = serde_yaml::from_str::<serde_yaml::Value>(&head_content).ok();
-        let base_val = base_content
-            .as_deref()
-            .and_then(|s| serde_yaml::from_str::<serde_yaml::Value>(s).ok());
+        let base_content = ctx.git.base_content(path)?;
+        let head_val = parse_yaml_side(&mut out, path, "head", Some(&head_content));
+        let base_val = parse_yaml_side(&mut out, path, "base", base_content.as_deref());
 
         if let (Some(b), Some(h)) = (&base_val, &head_val) {
             let mut head_pins = discipline_pins(h);
@@ -1364,9 +1363,7 @@ fn added_job_steps(
         };
         let base_jobs: HashSet<String> = ctx
             .git
-            .base_content(p)
-            .ok()
-            .flatten()
+            .base_content(p)?
             .and_then(|b| serde_yaml::from_str::<serde_yaml::Value>(&b).ok())
             .and_then(|b| {
                 b.get("jobs").and_then(|j| j.as_mapping()).map(|m| {
@@ -2605,6 +2602,32 @@ fn check_banned(
     Ok(())
 }
 
+/// Parses one side of a CI file. `None` for an absent side (nothing to say) and, with a
+/// note naming the file and the side, for a side that does not parse: the checks that
+/// compare that side are skipped, which is reported, never silent.
+pub(crate) fn parse_yaml_side(
+    out: &mut GateOutcome,
+    path: &str,
+    side: &str,
+    text: Option<&str>,
+) -> Option<serde_yaml::Value> {
+    let text = text?;
+    match serde_yaml::from_str::<serde_yaml::Value>(text) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            // Location only: the parser's message can quote the text near the error.
+            let at = e
+                .location()
+                .map(|l| format!(" (line {}, column {})", l.line(), l.column()))
+                .unwrap_or_default();
+            out.notes.push(format!(
+                "{path}: the {side} side does not parse as YAML{at}; the pin, exposure and rollup checks that read it were skipped"
+            ));
+            None
+        }
+    }
+}
+
 /// `ci-integrity` for a composite action's metadata file: pinning of its nested
 /// `uses:` only.
 fn evaluate_action_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Result<()> {
@@ -2619,10 +2642,8 @@ fn evaluate_action_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
         ));
         return Ok(());
     };
-    let base = ctx.git.base_content(path).unwrap_or(None);
-    let base_doc = base
-        .as_deref()
-        .and_then(|b| serde_yaml::from_str::<serde_yaml::Value>(b).ok());
+    let base = ctx.git.base_content(path)?;
+    let base_doc = parse_yaml_side(out, path, "base", base.as_deref());
     if settings.pin_actions {
         let base_refs = base_pin_set(
             base_doc
@@ -3361,5 +3382,25 @@ jobs:
         assert_eq!(find_key_line(c, "q", 1), Some(6));
         assert_eq!(find_key_line(c, "jobs", 1), Some(1));
         assert_eq!(find_key_line(c, "rr", 3), None);
+    }
+
+    #[test]
+    fn a_side_that_does_not_parse_is_noted_with_its_path_and_side() {
+        let mut out = GateOutcome::new(GATE);
+        assert!(parse_yaml_side(&mut out, ".github/workflows/ci.yml", "head", None).is_none());
+        assert!(out.notes.is_empty(), "an absent side has nothing to say");
+        assert!(parse_yaml_side(&mut out, "w.yml", "base", Some("on: push\n")).is_some());
+        assert!(out.notes.is_empty());
+
+        assert!(parse_yaml_side(
+            &mut out,
+            ".github/workflows/ci.yml",
+            "head",
+            Some("jobs:\n\tbuild: [")
+        )
+        .is_none());
+        assert_eq!(out.notes.len(), 1, "{:?}", out.notes);
+        assert!(out.notes[0].starts_with(".github/workflows/ci.yml: the head side does not parse"));
+        assert!(out.notes[0].contains("were skipped"), "{:?}", out.notes);
     }
 }

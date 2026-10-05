@@ -27,9 +27,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
 
     // Read base discipline.toml to get base configuration
     let base_cfg = ctx
-        .base_config_text()
-        .ok()
-        .flatten()
+        .base_config_text()?
         .and_then(|s| crate::config::DisciplineConfig::from_toml_str(&s).ok());
     let base_min_tests = base_cfg.as_ref().and_then(|c| c.gates.test_floor.min_tests);
     let head_min_tests = settings.min_tests;
@@ -176,7 +174,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         };
         if lowered {
             if let Some(ov) =
-                find_test_floor_override(ctx, &crate::findings::CONFIGURED_FLOOR_DECREASED)
+                find_test_floor_override(ctx, &crate::findings::CONFIGURED_FLOOR_DECREASED)?
             {
                 out.overrides.push(ov);
             } else {
@@ -459,7 +457,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     if let Some(floor) = explicit_floor {
         if measured_count + settings.tolerance < floor {
             if let Some(ov) =
-                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)
+                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
             {
                 out.overrides.push(ov);
             } else {
@@ -487,7 +485,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         let base_count = base_cases.len();
         if base_count > 0 && measured_count + settings.tolerance < base_count {
             if let Some(ov) =
-                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)
+                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
             {
                 out.overrides.push(ov);
             } else {
@@ -523,7 +521,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         let base_count = base.running;
         if base_count > 0 && measured_count + settings.tolerance < base_count {
             if let Some(ov) =
-                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)
+                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
             {
                 out.overrides.push(ov);
             } else {
@@ -562,69 +560,66 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
 fn find_test_floor_override(
     ctx: &Context,
     lifts: &crate::findings::FindingKind,
-) -> Option<crate::tokens::OverrideRecord> {
+) -> Result<Option<crate::tokens::OverrideRecord>> {
     if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_GATE_WEAKENING, GATE) {
-        return Some(ov);
+        return Ok(Some(ov));
     }
     if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, "min_tests") {
-        return Some(ov);
+        return Ok(Some(ov));
     }
-    if let Ok(changed) = ctx.git.changed_files() {
-        let registry = crate::ast::default_registry();
-        let base_v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx);
-        let head_v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx);
+    let changed = ctx.git.changed_files()?;
+    let registry = crate::ast::default_registry();
+    let base_v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx)?;
+    let head_v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx)?;
 
-        for cf in &changed {
-            if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, &cf.path) {
-                return Some(ov);
+    for cf in &changed {
+        if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, &cf.path) {
+            return Ok(Some(ov));
+        }
+        if cf.old_path != cf.path {
+            if let Some(ov) =
+                ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, &cf.old_path)
+            {
+                return Ok(Some(ov));
             }
-            if cf.old_path != cf.path {
-                if let Some(ov) =
-                    ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, &cf.old_path)
-                {
-                    return Some(ov);
-                }
+        }
+        if let Some(file_name) = cf.path.rsplit('/').next() {
+            if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, file_name) {
+                return Ok(Some(ov));
             }
-            if let Some(file_name) = cf.path.rsplit('/').next() {
-                if let Some(ov) =
-                    ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, file_name)
-                {
-                    return Some(ov);
-                }
+        }
+        if let Some(stem) = Path::new(&cf.path).file_stem().and_then(|s| s.to_str()) {
+            if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, stem) {
+                return Ok(Some(ov));
             }
-            if let Some(stem) = Path::new(&cf.path).file_stem().and_then(|s| s.to_str()) {
-                if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, stem) {
-                    return Some(ov);
-                }
-            }
+        }
 
-            if let Ok(Some(base_src)) = ctx.git.base_content(&cf.old_path) {
-                if let Some(pack) = registry.find_pack(&cf.old_path) {
-                    if crate::ast::runner_collection::is_runner_collected(&cf.old_path, &base_v) {
-                        if let Ok(base_facts) = pack.extract(&cf.old_path, &base_src, &base_v) {
-                            let head_names: std::collections::HashSet<String> = if cf.is_deleted()
-                                || !crate::ast::runner_collection::is_runner_collected(
-                                    &cf.path, &head_v,
+        if let Some(base_src) = ctx.git.base_content(&cf.old_path)? {
+            if let Some(pack) = registry.find_pack(&cf.old_path) {
+                if crate::ast::runner_collection::is_runner_collected(&cf.old_path, &base_v) {
+                    if let Ok(base_facts) = pack.extract(&cf.old_path, &base_src, &base_v) {
+                        let head_names: std::collections::HashSet<String> = if cf.is_deleted()
+                            || !crate::ast::runner_collection::is_runner_collected(
+                                &cf.path, &head_v,
+                            ) {
+                            std::collections::HashSet::new()
+                        } else if let Some(head_src) = ctx.git.head_content(&cf.path)? {
+                            pack.extract(&cf.path, &head_src, &head_v)
+                                .map(|f| f.tests.into_iter().map(|t| t.name).collect())
+                                .unwrap_or_default()
+                        } else {
+                            std::collections::HashSet::new()
+                        };
+
+                        for t in base_facts.tests {
+                            if !head_names.contains(&t.name) {
+                                if let Some(ov) = ctx.find_override(
+                                    GATE,
+                                    lifts,
+                                    tokens::ALLOW_TEST_SHRINK,
+                                    &t.name,
                                 ) {
-                                std::collections::HashSet::new()
-                            } else if let Ok(Some(head_src)) = ctx.git.head_content(&cf.path) {
-                                pack.extract(&cf.path, &head_src, &head_v)
-                                    .map(|f| f.tests.into_iter().map(|t| t.name).collect())
-                                    .unwrap_or_default()
-                            } else {
-                                std::collections::HashSet::new()
-                            };
-
-                            for t in base_facts.tests {
-                                if !head_names.contains(&t.name) {
-                                    if let Some(ov) = ctx.find_override(
-                                        GATE,
-                                        lifts,
-                                        tokens::ALLOW_TEST_SHRINK,
-                                        &t.name,
-                                    ) {
-                                        return Some(ov);
-                                    }
+                                    return Ok(Some(ov));
                                 }
                             }
                         }
@@ -633,7 +628,7 @@ fn find_test_floor_override(
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// A static test count over one side of the change.
@@ -718,7 +713,7 @@ pub fn count_workspace_ast_tests(
     filter: &crate::guards::PathFilter,
 ) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
-    let v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx);
+    let v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx)?;
     let mut count = AstTestCount::default();
     let mut unknown_reasons = std::collections::BTreeSet::new();
     for path in ctx.git.tracked_files()? {
@@ -757,7 +752,7 @@ pub fn count_base_workspace_ast_tests(
     filter: &crate::guards::PathFilter,
 ) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
-    let v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx);
+    let v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx)?;
     let mut count = AstTestCount::default();
     let mut unknown_reasons = std::collections::BTreeSet::new();
     for path in ctx.git.base_tracked_files()? {
@@ -775,12 +770,7 @@ pub fn count_base_workspace_ast_tests(
         if !collected {
             continue;
         }
-        count.add(
-            &path,
-            ctx.git.base_content(&path).ok().flatten(),
-            &registry,
-            &v,
-        );
+        count.add(&path, ctx.git.base_content(&path)?, &registry, &v);
     }
     for reason in unknown_reasons {
         count.notes.push(format!(

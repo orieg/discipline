@@ -3359,6 +3359,29 @@ jobs:
         },
     ),
     (
+        "git reads: a failed read is an error and an unparsable CI side is noted, neither reads as absent",
+        || {
+            use crate::gitctx::ReadRecorder;
+            use crate::guards::ci_integrity::parse_yaml_side;
+            let absent = ReadRecorder::new();
+            let absent_is_none = absent.keep(Ok(None)).is_none() && absent.finish().is_ok();
+            let failed = ReadRecorder::new();
+            let kept = failed.keep(Err(anyhow::anyhow!("failed to read `w.yml` on the base side")));
+            let failed_is_error = kept.is_none()
+                && failed
+                    .finish()
+                    .is_err_and(|e| format!("{e:#}").contains("`w.yml`"));
+            let mut out = crate::guards::GateOutcome::new("ci-integrity");
+            let parsed = parse_yaml_side(&mut out, "w.yml", "head", Some("jobs:\n\tbuild: ["));
+            let noted = parsed.is_none()
+                && out.notes.len() == 1
+                && out.notes[0].starts_with("w.yml: the head side does not parse");
+            let absent_side = parse_yaml_side(&mut out, "w.yml", "base", None).is_none()
+                && out.notes.len() == 1;
+            Ok(absent_is_none && failed_is_error && noted && absent_side)
+        },
+    ),
+    (
         "ci-integrity: reusable workflows need a commit SHA, container images a digest",
         || {
             use crate::guards::ci_integrity::{pin_verdict, workflow_pin_refs, PinKind, PinVerdict};
