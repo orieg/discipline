@@ -5,7 +5,11 @@
 //!   from `pyproject.toml`, `pytest.ini`, `setup.cfg`, `tox.ini`.
 //! - JS / TS (Jest / Vitest): `testMatch`, `testRegex`, `include` from `package.json`, `jest.config.*`.
 //! - Go: `_test.go` suffix.
-//! - Rust: `tests/*.rs`, `tests/*/main.rs`, and explicit `[[test]] path` in `Cargo.toml`.
+//! - Rust: any `.rs` under a `src/` or `tests/` directory, and explicit `[[test]] path` in
+//!   `Cargo.toml`.
+//! - Python with no pytest configuration, and every language with no runner model here
+//!   (Java, Kotlin, C#, Scala, Swift, Objective-C, Ruby, PHP, C / C++): not determined.
+//!   Only a parsed runner configuration excludes a file.
 //! - Rust `#[cfg]` on a test: `cfg(feature = "x")` where `x` is not declared in `[features]`,
 //!   or `cfg(any())` / `cfg(all(any()))`, treated as an unconditional ignore.
 
@@ -35,6 +39,10 @@ pub struct PytestCollectionRules {
     pub python_classes: Vec<String>,
     pub python_functions: Vec<String>,
     pub testpaths: Vec<String>,
+    /// A pytest configuration was found: a `[tool.pytest.ini_options]` table, a
+    /// `pytest.ini`, or a `[pytest]` / `[tool:pytest]` section. Without one the runner
+    /// may be unittest or Django, and pytest's defaults are not known to apply.
+    pub configured: bool,
 }
 
 impl Default for PytestCollectionRules {
@@ -44,11 +52,21 @@ impl Default for PytestCollectionRules {
             python_classes: vec!["Test*".to_string()],
             python_functions: vec!["test_*".to_string()],
             testpaths: Vec::new(),
+            configured: false,
         }
     }
 }
 
 impl PytestCollectionRules {
+    /// Whether any collection pattern differs from pytest's defaults.
+    fn overrides_defaults(&self) -> bool {
+        let defaults = Self::default();
+        self.python_files != defaults.python_files
+            || self.python_classes != defaults.python_classes
+            || self.python_functions != defaults.python_functions
+            || self.testpaths != defaults.testpaths
+    }
+
     pub fn is_collected(&self, path: &str) -> bool {
         let norm = path.replace('\\', "/");
         if !norm.ends_with(".py") {
@@ -99,6 +117,7 @@ impl PytestCollectionRules {
             .and_then(toml::Value::as_table);
 
         if let Some(tbl) = ini_opts {
+            rules.configured = true;
             Self::extract_from_toml_table(tbl, &mut rules);
         }
         rules
@@ -145,6 +164,7 @@ impl PytestCollectionRules {
             if let Some(sect) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
                 let s = sect.trim();
                 in_section = s == "pytest" || s == "tool:pytest";
+                rules.configured |= in_section;
                 current_key.clear();
                 continue;
             }
@@ -234,6 +254,8 @@ pub struct JsCollectionRules {
     pub unparseable_config: Option<String>,
     pub mocha_detected: Option<String>,
     pub invalid_pattern: Option<String>,
+    /// What kind of problem `invalid_pattern` is, without the configured value it quotes.
+    invalid_kind: Option<&'static str>,
     pub test_match: Vec<String>,
     pub test_regex: Vec<String>,
     pub include: Vec<String>,
@@ -314,17 +336,45 @@ fn resolve_root_token(pattern: &str, root_dir: &str) -> String {
     }
 }
 
+/// Whether a lower-cased path has an extension the JS / TS runner rules apply to.
+fn js_runner_extension(lower: &str) -> bool {
+    [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
 impl JsCollectionRules {
+    /// Why collection is not determined, for a report note: the kind of problem, never
+    /// the configured value. `None` when `is_collected` decides.
+    fn unknown_kind(&self) -> Option<String> {
+        if self.invalid_pattern.is_some() {
+            return Some(
+                self.invalid_kind
+                    .unwrap_or("a configured pattern cannot be evaluated statically")
+                    .to_string(),
+            );
+        }
+        if let Some(unparseable) = &self.unparseable_config {
+            return Some(format!("cannot parse statically: {unparseable}"));
+        }
+        if let Some(mocha) = &self.mocha_detected {
+            return Some(mocha.clone());
+        }
+        (!self.config_parsed).then(|| "no runner config found".to_string())
+    }
+
     pub fn compile_patterns(&mut self) {
         self.compiled_regexes.clear();
         self.compiled_globs.clear();
         self.effective_roots.clear();
         self.invalid_pattern = None;
+        self.invalid_kind = None;
 
         if let Some(key) = &self.vitest_root {
             self.invalid_pattern = Some(format!(
                 "vitest `{key}` moves where `include` resolves, cannot evaluate statically"
             ));
+            self.invalid_kind = Some("a vitest `root` or `dir` moves where `include` resolves");
             return;
         }
         // Jest `rootDir` is relative to the configuration file, which is read at the
@@ -337,6 +387,8 @@ impl JsCollectionRules {
                     self.invalid_pattern = Some(format!(
                         "jest rootDir {v} cannot be resolved to a repository path"
                     ));
+                    self.invalid_kind =
+                        Some("jest `rootDir` cannot be resolved to a repository path");
                     return;
                 }
             },
@@ -361,6 +413,8 @@ impl JsCollectionRules {
                         self.invalid_pattern = Some(format!(
                             "jest roots {v} cannot be resolved to repository paths"
                         ));
+                        self.invalid_kind =
+                            Some("jest `roots` cannot be resolved to repository paths");
                         return;
                     }
                 }
@@ -376,6 +430,7 @@ impl JsCollectionRules {
                     if self.invalid_pattern.is_none() {
                         self.invalid_pattern =
                             Some(format!("regex pattern failed to compile: '{r}'"));
+                        self.invalid_kind = Some("a configured regex pattern does not compile");
                     }
                 }
             }
@@ -392,6 +447,7 @@ impl JsCollectionRules {
                     self.invalid_pattern = Some(format!(
                         "glob pattern uses extglob, cannot evaluate statically: '{trimmed}'"
                     ));
+                    self.invalid_kind = Some("a configured glob pattern uses extglob");
                 }
                 continue;
             }
@@ -404,6 +460,7 @@ impl JsCollectionRules {
                     if self.invalid_pattern.is_none() {
                         self.invalid_pattern =
                             Some(format!("glob pattern failed to compile: '{trimmed}'"));
+                        self.invalid_kind = Some("a configured glob pattern does not compile");
                     }
                 }
             }
@@ -413,13 +470,7 @@ impl JsCollectionRules {
     pub fn is_collected(&self, path: &str) -> JsCollectionResult {
         let norm = path.replace('\\', "/");
         let lower = norm.to_ascii_lowercase();
-        let valid_ext = lower.ends_with(".js")
-            || lower.ends_with(".jsx")
-            || lower.ends_with(".ts")
-            || lower.ends_with(".tsx")
-            || lower.ends_with(".mjs")
-            || lower.ends_with(".cjs");
-        if !valid_ext {
+        if !js_runner_extension(&lower) {
             return JsCollectionResult::NotCollected;
         }
 
@@ -1000,21 +1051,26 @@ impl RunnerCollectionRules {
         let mut rules = Self::default();
 
         // 1. Pytest
+        let mut pytest_configured = false;
         if let Some(src) = reader("pyproject.toml") {
             let parsed = PytestCollectionRules::parse_pyproject_toml(&src);
-            if parsed != PytestCollectionRules::default() {
+            pytest_configured |= parsed.configured;
+            if parsed.overrides_defaults() {
                 rules.pytest = parsed;
             }
         }
         for ini_file in &["pytest.ini", "setup.cfg", "tox.ini"] {
             if let Some(src) = reader(ini_file) {
                 let parsed = PytestCollectionRules::parse_ini(&src);
-                if parsed != PytestCollectionRules::default() {
+                // A `pytest.ini` is a pytest configuration even with no section in it.
+                pytest_configured |= parsed.configured || *ini_file == "pytest.ini";
+                if parsed.overrides_defaults() {
                     rules.pytest = parsed;
                     break;
                 }
             }
         }
+        rules.pytest.configured = pytest_configured;
 
         // 2. JS / Jest / Vitest / Mocha
         if let Some(src) = reader("package.json") {
@@ -1101,6 +1157,10 @@ pub enum RunnerCollectionStatus {
 }
 
 /// Evaluates whether a file path is collected by its language runner given repository vocabulary.
+///
+/// `NotCollected` only when a parsed runner configuration, or a rule the language fixes
+/// (`_test.go`, Cargo's target layout), excludes the file. Everything else that is not
+/// known to be collected is `Unknown`, with a reason that quotes no configured value.
 pub fn check_runner_collected(
     path: &str,
     vocab: &crate::ast::AssertVocabulary,
@@ -1114,22 +1174,23 @@ pub fn check_runner_collected(
     let lower = norm.to_ascii_lowercase();
 
     if lower.ends_with(".py") {
-        if vocab.runner_rules.pytest.is_collected(&norm) {
+        let pytest = &vocab.runner_rules.pytest;
+        if pytest.is_collected(&norm) {
             RunnerCollectionStatus::Collected
-        } else {
+        } else if pytest.configured {
             RunnerCollectionStatus::NotCollected
+        } else {
+            // The runner may be unittest or Django, which collect by other rules.
+            RunnerCollectionStatus::Unknown("no pytest configuration found".to_string())
         }
-    } else if lower.ends_with(".js")
-        || lower.ends_with(".jsx")
-        || lower.ends_with(".ts")
-        || lower.ends_with(".tsx")
-        || lower.ends_with(".mjs")
-        || lower.ends_with(".cjs")
-    {
-        match vocab.runner_rules.js.is_collected(&norm) {
+    } else if js_runner_extension(&lower) {
+        let js = &vocab.runner_rules.js;
+        match js.is_collected(&norm) {
             JsCollectionResult::Collected => RunnerCollectionStatus::Collected,
             JsCollectionResult::NotCollected => RunnerCollectionStatus::NotCollected,
-            JsCollectionResult::Unknown(reason) => RunnerCollectionStatus::Unknown(reason),
+            JsCollectionResult::Unknown(reason) => {
+                RunnerCollectionStatus::Unknown(js.unknown_kind().unwrap_or(reason))
+            }
         }
     } else if lower.ends_with(".rs") {
         if vocab.runner_rules.rust.is_collected(&norm) {
@@ -1144,23 +1205,19 @@ pub fn check_runner_collected(
             RunnerCollectionStatus::NotCollected
         }
     } else {
-        if crate::ast::functions::test_path(&norm) {
-            RunnerCollectionStatus::Collected
-        } else {
-            RunnerCollectionStatus::NotCollected
-        }
+        // Java, Kotlin, C#, Scala, Swift, Objective-C, Ruby, PHP, C / C++: no runner
+        // configuration is read for these, so nothing here can exclude the file.
+        RunnerCollectionStatus::Unknown("no runner model for this language".to_string())
     }
 }
 
+/// Whether the tests a pack finds in the file count: yes unless a parsed runner
+/// configuration excludes it. A file whose collection is not determined counts.
 pub fn is_runner_collected(path: &str, vocab: &crate::ast::AssertVocabulary) -> bool {
-    match check_runner_collected(path, vocab) {
-        RunnerCollectionStatus::Collected => true,
-        RunnerCollectionStatus::NotCollected => false,
-        RunnerCollectionStatus::Unknown(_) => {
-            let norm = path.replace('\\', "/");
-            crate::ast::functions::test_path(&norm)
-        }
-    }
+    !matches!(
+        check_runner_collected(path, vocab),
+        RunnerCollectionStatus::NotCollected
+    )
 }
 
 #[cfg(test)]
@@ -1445,6 +1502,157 @@ python_files = test_*.py
             known_jest.is_collected("test/foo.spec.js"),
             JsCollectionResult::Collected
         );
+    }
+
+    fn vocab_with(files: &[(&str, &str)]) -> crate::ast::AssertVocabulary {
+        crate::ast::AssertVocabulary {
+            runner_rules: RunnerCollectionRules::from_files(|p| {
+                files
+                    .iter()
+                    .find(|(name, _)| *name == p)
+                    .map(|(_, content)| content.to_string())
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn is_unknown(path: &str, vocab: &crate::ast::AssertVocabulary) -> bool {
+        matches!(
+            check_runner_collected(path, vocab),
+            RunnerCollectionStatus::Unknown(_)
+        )
+    }
+
+    #[test]
+    fn test_language_without_a_runner_model_is_unknown() {
+        let vocab = vocab_with(&[]);
+        // No runner model: never a decision, whatever the path looks like.
+        for path in [
+            "MyAppTests/LoginTests.swift",
+            "Sources/App/Login.swift",
+            "src/test/java/FooTest.java",
+            "src/main/java/Foo.java",
+            "app/src/test/kotlin/FooTest.kt",
+            "Tests/FooTests.cs",
+            "src/test/scala/FooSpec.scala",
+            "AppTests/FooTests.m",
+            "spec/foo_spec.rb",
+            "tests/FooTest.php",
+            "tests/foo_test.c",
+            "tests/foo_test.cpp",
+        ] {
+            assert!(is_unknown(path, &vocab), "{path} must be Unknown");
+        }
+        // Control: a language with a runner model still decides.
+        assert_eq!(
+            check_runner_collected("pkg/service.go", &vocab),
+            RunnerCollectionStatus::NotCollected
+        );
+        assert_eq!(
+            check_runner_collected("pkg/service_test.go", &vocab),
+            RunnerCollectionStatus::Collected
+        );
+        // Control: a declared test path is collected in any language.
+        let declared = crate::ast::AssertVocabulary {
+            test_paths: vec!["MyAppTests/**".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(
+            check_runner_collected("MyAppTests/LoginTests.swift", &declared),
+            RunnerCollectionStatus::Collected
+        );
+    }
+
+    #[test]
+    fn test_mts_and_cts_follow_the_js_rules() {
+        let jest = vocab_with(&[("package.json", r#"{"jest": {}}"#)]);
+        for ext in ["mts", "cts"] {
+            assert_eq!(
+                check_runner_collected(&format!("src/a.test.{ext}"), &jest),
+                RunnerCollectionStatus::Collected,
+                "{ext}"
+            );
+            assert_eq!(
+                check_runner_collected(&format!("src/index.{ext}"), &jest),
+                RunnerCollectionStatus::NotCollected,
+                "{ext}"
+            );
+            // No runner configuration: unknown, as for `.ts`.
+            assert_eq!(
+                check_runner_collected(&format!("src/a.test.{ext}"), &vocab_with(&[])),
+                RunnerCollectionStatus::Unknown("no runner config found".to_string()),
+                "{ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_python_without_pytest_configuration_is_unknown() {
+        // No pytest configuration: the runner may be unittest or Django.
+        for files in [
+            vec![],
+            vec![("pyproject.toml", "[project]\nname = \"p\"\n")],
+            vec![("setup.cfg", "[metadata]\nname = p\n")],
+            vec![("tox.ini", "[tox]\nenvlist = py3\n")],
+        ] {
+            let vocab = vocab_with(&files);
+            assert!(is_unknown("polls/tests.py", &vocab), "{files:?}");
+            assert!(is_unknown("tests/helpers.py", &vocab), "{files:?}");
+            // A file every Python runner's defaults pick up is collected either way.
+            assert_eq!(
+                check_runner_collected("tests/test_o.py", &vocab),
+                RunnerCollectionStatus::Collected,
+                "{files:?}"
+            );
+        }
+
+        // A pytest configuration is present: its rules decide, defaults included.
+        for files in [
+            vec![(
+                "pyproject.toml",
+                "[tool.pytest.ini_options]\naddopts = \"-q\"\n",
+            )],
+            vec![("pytest.ini", "")],
+            vec![("pytest.ini", "[pytest]\naddopts = -q\n")],
+            vec![("setup.cfg", "[tool:pytest]\naddopts = -q\n")],
+            vec![("tox.ini", "[pytest]\naddopts = -q\n")],
+            vec![(
+                "pyproject.toml",
+                "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n",
+            )],
+        ] {
+            let vocab = vocab_with(&files);
+            assert_eq!(
+                check_runner_collected("polls/tests.py", &vocab),
+                RunnerCollectionStatus::NotCollected,
+                "{files:?}"
+            );
+            assert_eq!(
+                check_runner_collected("tests/test_o.py", &vocab),
+                RunnerCollectionStatus::Collected,
+                "{files:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unknown_reason_does_not_quote_a_configured_value() {
+        for pkg in [
+            r#"{"jest": {"testRegex": ["[marker-value"]}}"#,
+            r#"{"jest": {"testMatch": ["***[marker-value"]}}"#,
+            r#"{"jest": {"testMatch": ["**/+(marker-value).js"]}}"#,
+            r#"{"jest": {"rootDir": "../marker-value"}}"#,
+            r#"{"jest": {"roots": ["marker-value/*"]}}"#,
+        ] {
+            let vocab = vocab_with(&[("package.json", pkg)]);
+            match check_runner_collected("test/a.test.js", &vocab) {
+                RunnerCollectionStatus::Unknown(reason) => {
+                    assert!(!reason.contains("marker-value"), "{pkg}: {reason}");
+                    assert!(!reason.is_empty(), "{pkg}");
+                }
+                other => panic!("{pkg} must be Unknown, got {other:?}"),
+            }
+        }
     }
 
     fn eval_cfg_str(code: &str, features: Option<&HashSet<String>>) -> (CfgValue, String) {
