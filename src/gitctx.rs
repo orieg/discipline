@@ -65,6 +65,8 @@ pub struct GitCtx {
 /// 3. Explicit CLI argument (`--commit-range <before>..<after>` -> `<before>`)
 /// 4. `DISCIPLINE_BASE_REF` environment variable
 /// 5. Push event before SHA: `GITHUB_EVENT_BEFORE`, `FORGEJO_EVENT_BEFORE`, `GITEA_EVENT_BEFORE`, `CI_COMMIT_BEFORE_SHA`
+///    then the event payload's `before`, read only for a push (the event is named `push`, or
+///    nothing names it and the payload holds no `pull_request`)
 /// 6. GitLab Merge Request Target Branch: `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` (`origin/<branch>`)
 /// 7. GitLab Merge Request Diff Base SHA: `CI_MERGE_REQUEST_DIFF_BASE_SHA`
 /// 8. Forgejo Pull Request Base Branch: `FORGEJO_BASE_REF` (`origin/<branch>`)
@@ -228,11 +230,53 @@ pub fn normalize_before(before: &str) -> Option<String> {
     }
 }
 
-fn event_before_sha<F>(get_env: &F) -> Option<String>
+/// The variables naming the CI event, one per platform.
+const EVENT_NAME_VARS: [&str; 4] = [
+    "GITHUB_EVENT_NAME",
+    "CI_PIPELINE_SOURCE",
+    "FORGEJO_EVENT_NAME",
+    "GITEA_EVENT_NAME",
+];
+
+/// What the environment names the event as: `Some(true)` when any of [`EVENT_NAME_VARS`]
+/// says `push`, `Some(false)` when one names another event and none says `push`, `None`
+/// when none is set.
+fn named_event_is_push<F>(get_env: &F) -> Option<bool>
 where
     F: Fn(&str) -> Option<String>,
 {
-    event_payload_with_env(get_env)?
+    let names: Vec<String> = EVENT_NAME_VARS
+        .iter()
+        .filter_map(|var| get_env(var))
+        .collect();
+    if names.iter().any(|n| n == "push") {
+        Some(true)
+    } else if names.iter().any(|n| !n.trim().is_empty()) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The payload's `before` when it is a push's: the one reading both the push test and the
+/// base share. `before` alone does not make a push: a pull request event carries it too
+/// (GitHub's `synchronize` puts the previous head there), and taking it as the base would
+/// examine the latest push only instead of the pull request. So it counts when the
+/// environment names the event `push`; or when nothing names the event and the payload
+/// holds no `pull_request`. An event named anything else is never a push by its payload.
+fn push_before_from_payload<F>(get_env: &F) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let named_push = named_event_is_push(get_env);
+    if named_push == Some(false) {
+        return None;
+    }
+    let payload = event_payload_with_env(get_env)?;
+    if named_push.is_none() && payload.get("pull_request").is_some_and(|p| !p.is_null()) {
+        return None;
+    }
+    payload
         .get("before")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -242,11 +286,7 @@ pub fn is_push_event_environment_with_env<F>(get_env: F) -> bool
 where
     F: Fn(&str) -> Option<String>,
 {
-    if get_env("GITHUB_EVENT_NAME").as_deref() == Some("push")
-        || get_env("CI_PIPELINE_SOURCE").as_deref() == Some("push")
-        || get_env("FORGEJO_EVENT_NAME").as_deref() == Some("push")
-        || get_env("GITEA_EVENT_NAME").as_deref() == Some("push")
-    {
+    if named_event_is_push(&get_env) == Some(true) {
         return true;
     }
     for var in &[
@@ -262,7 +302,7 @@ where
             }
         }
     }
-    event_before_sha(&get_env).is_some()
+    push_before_from_payload(&get_env).is_some()
 }
 
 pub fn detect_base_ref_with_env<F>(
@@ -328,7 +368,7 @@ where
                 return Some(base);
             }
         }
-        if let Some(base) = event_before_sha(&get_env).and_then(|b| normalize_before(&b)) {
+        if let Some(base) = push_before_from_payload(&get_env).and_then(|b| normalize_before(&b)) {
             return Some(base);
         }
         return Some("HEAD~1".to_string());
@@ -1771,6 +1811,104 @@ mod tests {
         for (input, want) in cases {
             assert_eq!(normalize_before(input).as_deref(), want, "input {input:?}");
         }
+    }
+
+    const PREVIOUS_HEAD: &str = "1111111111111111111111111111111111111111";
+
+    /// GitHub's `pull_request` event, action `synchronize`: `before` and `after` sit
+    /// beside the `pull_request` object.
+    fn synchronize_payload() -> String {
+        format!(
+            r#"{{"action":"synchronize","number":7,"before":"{PREVIOUS_HEAD}","after":"2222222222222222222222222222222222222222","pull_request":{{"number":7,"base":{{"ref":"main"}}}}}}"#
+        )
+    }
+
+    fn push_payload() -> String {
+        format!(r#"{{"ref":"refs/heads/work","before":"{PREVIOUS_HEAD}"}}"#)
+    }
+
+    /// `(is a push, named base)` for one payload under `GITHUB_EVENT_PATH` plus `vars`.
+    fn push_and_base(payload: &str, vars: &[(&'static str, &str)]) -> (bool, Option<String>) {
+        let (_files, mut env) = payload_files(&[("GITHUB_EVENT_PATH", payload)]);
+        for (k, v) in vars {
+            env.insert(*k, v.to_string());
+        }
+        (
+            is_push_event_environment_with_env(|k| env.get(k).cloned()),
+            named_base_ref_with_env(None, None, None, |k| env.get(k).cloned()),
+        )
+    }
+
+    #[test]
+    fn a_synchronize_payload_on_a_pull_request_event_is_not_a_push() {
+        for name in [
+            "GITHUB_EVENT_NAME",
+            "GITEA_EVENT_NAME",
+            "FORGEJO_EVENT_NAME",
+        ] {
+            for event in ["pull_request", "pull_request_target"] {
+                let (push, base) = push_and_base(
+                    &synchronize_payload(),
+                    &[(name, event), ("GITHUB_BASE_REF", "main")],
+                );
+                assert!(!push, "{name}={event}");
+                assert_eq!(base.as_deref(), Some("origin/main"), "{name}={event}");
+            }
+        }
+    }
+
+    /// The `pull_request` object alone decides when nothing names the event.
+    #[test]
+    fn a_payload_with_a_pull_request_and_no_event_name_is_not_a_push() {
+        let (push, base) = push_and_base(&synchronize_payload(), &[("GITHUB_BASE_REF", "main")]);
+        assert!(!push);
+        assert_eq!(base.as_deref(), Some("origin/main"));
+        // With no base variable either, nothing names a base: never the previous head.
+        assert_eq!(push_and_base(&synchronize_payload(), &[]), (false, None));
+    }
+
+    /// The event name alone decides when the payload has `before` and no `pull_request`.
+    #[test]
+    fn a_named_event_other_than_push_does_not_read_before_from_the_payload() {
+        for event in ["pull_request", "merge_group", "workflow_dispatch"] {
+            let (push, base) = push_and_base(
+                &push_payload(),
+                &[("GITHUB_EVENT_NAME", event), ("GITHUB_BASE_REF", "main")],
+            );
+            assert!(!push, "{event}");
+            assert_eq!(base.as_deref(), Some("origin/main"), "{event}");
+        }
+    }
+
+    /// Control: a push keeps its `before`, named or not, and an empty event name is not a
+    /// name.
+    #[test]
+    fn a_push_payload_still_gives_its_before() {
+        for vars in [
+            &[("GITHUB_EVENT_NAME", "push")][..],
+            &[("GITEA_EVENT_NAME", "push")][..],
+            &[("FORGEJO_EVENT_NAME", "push")][..],
+            &[("GITHUB_EVENT_NAME", "push"), ("GITHUB_BASE_REF", "main")][..],
+            &[("GITHUB_BASE_REF", "main")][..],
+            &[("GITHUB_EVENT_NAME", " ")][..],
+            &[][..],
+        ] {
+            assert_eq!(
+                push_and_base(&push_payload(), vars),
+                (true, Some(PREVIOUS_HEAD.to_string())),
+                "{vars:?}"
+            );
+        }
+    }
+
+    /// Control: a `before` variable is a push whatever the payload holds.
+    #[test]
+    fn a_before_variable_is_still_a_push_beside_a_pull_request_payload() {
+        let sha = "3333333333333333333333333333333333333333";
+        assert_eq!(
+            push_and_base(&synchronize_payload(), &[("GITHUB_EVENT_BEFORE", sha)]),
+            (true, Some(sha.to_string()))
+        );
     }
 
     #[test]
