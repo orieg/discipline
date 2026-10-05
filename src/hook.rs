@@ -254,8 +254,8 @@ pub fn parse_payload(raw: &str) -> Payload {
 
 /// The default branch of the repository: origin's default branch (`origin/HEAD`), else
 /// local `main` or `master`. `None` when none resolves or when the candidate holds `HEAD`
-/// on a non-default branch. Callers that check a change defer to `discipline check`'s own
-/// fail-closed resolution when this returns `None`.
+/// on a non-default branch. `audit` and `replay` read it for their default `--ref`; an
+/// agent-facing check resolves its base with [`change_base`].
 pub fn default_base(repo: &git2::Repository) -> Option<String> {
     if std::env::var("DISCIPLINE_BASE_REF").is_ok_and(|b| !b.trim().is_empty()) {
         return None;
@@ -296,6 +296,90 @@ pub fn default_base(repo: &git2::Repository) -> Option<String> {
         }
     }
     None
+}
+
+/// Branch names tried as the default branch when `origin/HEAD` does not decide.
+const DEFAULT_BRANCH_NAMES: [&str; 3] = ["main", "master", "trunk"];
+
+/// The base an agent-facing check names when no `--base` and no environment variable
+/// does: `None` leaves it to `discipline check`, whose fallback is `origin/main`.
+///
+/// `Some` only for a ref that resolves and has a merge base with `HEAD`, tried in this
+/// order: `origin/HEAD`'s branch, then `origin/master`, `master`, `origin/trunk`, `trunk`.
+/// A repository that has `origin/main` or `main`, and whose `origin/HEAD` does not name
+/// another usable branch, gets `None`: `check` resolves those itself.
+///
+/// The one candidate refused is the branch `HEAD` is on, under a name outside
+/// [`DEFAULT_BRANCH_NAMES`], when it holds `HEAD`: after `git clone --branch <change>`
+/// with one branch fetched, `origin/HEAD` is the change's own branch, and measuring
+/// against it is an empty diff (#476). A branch only cut from a candidate is measured
+/// against it: before the first commit the candidate holds `HEAD` there too.
+pub fn change_base(repo: &git2::Repository) -> Option<String> {
+    let head_ref = repo.head().ok()?;
+    let head = head_ref.peel_to_commit().ok()?.id();
+    let current = head_ref
+        .is_branch()
+        .then(|| head_ref.shorthand().ok().map(str::to_string))
+        .flatten();
+    // `(name passed as --base, full ref name, branch name)`.
+    let usable = |(_, full, branch): &(String, String, String)| -> bool {
+        let Some(commit) = repo
+            .find_reference(full)
+            .ok()
+            .and_then(|r| r.peel_to_commit().ok())
+        else {
+            return false;
+        };
+        let Ok(merge_base) = repo.merge_base(commit.id(), head) else {
+            return false;
+        };
+        let own_branch = current.as_deref() == Some(branch.as_str())
+            && !DEFAULT_BRANCH_NAMES.contains(&branch.as_str());
+        !(own_branch && merge_base == head)
+    };
+    let remote = |branch: &str| {
+        (
+            format!("origin/{branch}"),
+            format!("refs/remotes/origin/{branch}"),
+            branch.to_string(),
+        )
+    };
+    let local = |branch: &str| {
+        (
+            branch.to_string(),
+            format!("refs/heads/{branch}"),
+            branch.to_string(),
+        )
+    };
+    let origin_head = repo
+        .find_reference("refs/remotes/origin/HEAD")
+        .ok()
+        .and_then(|r| r.symbolic_target().ok().flatten().map(str::to_string))
+        .and_then(|t| t.strip_prefix("refs/remotes/origin/").map(str::to_string))
+        .map(|branch| remote(&branch))
+        .filter(&usable);
+    if let Some((name, _, branch)) = origin_head {
+        return (branch != "main").then_some(name);
+    }
+    let exists = |full: &str| repo.find_reference(full).is_ok();
+    if exists("refs/remotes/origin/main") || exists("refs/heads/main") {
+        return None;
+    }
+    DEFAULT_BRANCH_NAMES
+        .iter()
+        .filter(|b| **b != "main")
+        .flat_map(|b| [remote(b), local(b)])
+        .find(&usable)
+        .map(|(name, _, _)| name)
+}
+
+/// [`change_base`] of the repository at `dir`, unless the environment names the base
+/// (`DISCIPLINE_BASE_REF`, a CI base variable): then `check` reads it, as it does in CI.
+fn default_side_base(dir: &Path) -> Option<String> {
+    if crate::gitctx::environment_names_base() {
+        return None;
+    }
+    change_base(&crate::gitctx::discover_repository(dir).ok()?)
 }
 
 /// Runs the check for the agent and returns what the hook emits.
@@ -527,7 +611,9 @@ fn agy_guarded(
 /// What an agent-facing check measures the change against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckSide {
-    /// `check`'s own resolution (`DISCIPLINE_BASE_REF`, else `main`).
+    /// The working tree against the merge base with the base the environment names
+    /// (`DISCIPLINE_BASE_REF`, a CI base variable), else with the repository's default
+    /// branch ([`change_base`]), else with `check`'s fallback, `origin/main`.
     Default,
     /// The working tree against the merge base with this ref.
     Base(String),
@@ -561,7 +647,11 @@ pub fn run_check(dir: &Path, side: &CheckSide) -> Result<CheckRun> {
         .env_remove(crate::guards::REPLAY_CASE_ENV)
         .env(HOOK_RUN_ENV, "1");
     match side {
-        CheckSide::Default => {}
+        CheckSide::Default => {
+            if let Some(b) = default_side_base(dir) {
+                cmd.args(["--base", &b]);
+            }
+        }
         CheckSide::Base(b) => {
             cmd.args(["--base", b]);
         }
@@ -1941,6 +2031,133 @@ pub fn repo_root() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An empty-tree commit on `refname` (`None`: referenced by nothing), on `parents`.
+    fn commit_on(
+        repo: &git2::Repository,
+        refname: Option<&str>,
+        parents: &[git2::Oid],
+        message: &str,
+    ) -> git2::Oid {
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let parents: Vec<git2::Commit> = parents
+            .iter()
+            .map(|p| repo.find_commit(*p).unwrap())
+            .collect();
+        let parents: Vec<&git2::Commit> = parents.iter().collect();
+        repo.commit(refname, &sig, &sig, message, &tree, &parents)
+            .unwrap()
+    }
+
+    /// A repository whose `HEAD` is on `branch`, with one commit.
+    fn repo_on(branch: &str) -> (tempfile::TempDir, git2::Repository, git2::Oid) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.set_head(&format!("refs/heads/{branch}")).unwrap();
+        let first = commit_on(&repo, Some("HEAD"), &[], "base");
+        (dir, repo, first)
+    }
+
+    fn point(repo: &git2::Repository, name: &str, at: git2::Oid) {
+        repo.reference(name, at, true, "test").unwrap();
+    }
+
+    /// #530: the default branch is the base under any of its usual names, on it and on a
+    /// branch cut from it, and a `main` repository is left to `check`.
+    #[test]
+    fn change_base_names_a_default_branch_that_is_not_main() {
+        for name in ["master", "trunk"] {
+            let (_dir, repo, first) = repo_on(name);
+            assert_eq!(change_base(&repo).as_deref(), Some(name), "on {name}");
+            point(&repo, "refs/heads/work", first);
+            repo.set_head("refs/heads/work").unwrap();
+            assert_eq!(change_base(&repo).as_deref(), Some(name), "cut from {name}");
+            repo.set_head_detached(first).unwrap();
+            assert_eq!(change_base(&repo).as_deref(), Some(name), "detached");
+            point(&repo, &format!("refs/remotes/origin/{name}"), first);
+            assert_eq!(
+                change_base(&repo),
+                Some(format!("origin/{name}")),
+                "the remote branch comes before the local one"
+            );
+        }
+        let (_dir, repo, first) = repo_on("main");
+        assert_eq!(change_base(&repo), None, "`check` resolves `main` itself");
+        point(&repo, "refs/heads/master", first);
+        assert_eq!(change_base(&repo), None, "`main` comes before `master`");
+        let (_dir, repo, first) = repo_on("work");
+        point(&repo, "refs/remotes/origin/main", first);
+        point(&repo, "refs/remotes/origin/master", first);
+        assert_eq!(change_base(&repo), None, "`origin/main` too");
+        let (_dir, repo, _) = repo_on("work");
+        assert_eq!(change_base(&repo), None, "no candidate at all");
+    }
+
+    /// #530: `origin/HEAD` decides before any name, so a release branch called `main`
+    /// is not taken for the default branch.
+    #[test]
+    fn change_base_follows_origin_head_before_a_branch_named_main() {
+        let (_dir, repo, release) = repo_on("work");
+        point(&repo, "refs/remotes/origin/main", release);
+        let develop = commit_on(&repo, Some("HEAD"), &[release], "merged work");
+        point(&repo, "refs/remotes/origin/develop", develop);
+        assert_eq!(change_base(&repo), None, "no origin/HEAD: `check` decides");
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/develop",
+            true,
+            "test",
+        )
+        .unwrap();
+        assert_eq!(change_base(&repo).as_deref(), Some("origin/develop"));
+        commit_on(&repo, Some("HEAD"), &[develop], "the change");
+        assert_eq!(change_base(&repo).as_deref(), Some("origin/develop"));
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "test",
+        )
+        .unwrap();
+        assert_eq!(change_base(&repo), None, "origin/HEAD is origin/main");
+    }
+
+    /// #476: `origin/HEAD` naming the branch `HEAD` is on, and holding `HEAD`, is the
+    /// change itself; a commit on top makes it a base. A candidate with no history in
+    /// common with `HEAD` is never one.
+    #[test]
+    fn change_base_refuses_the_changes_own_branch_and_an_unrelated_history() {
+        let (_dir, repo, first) = repo_on("work");
+        point(&repo, "refs/remotes/origin/work", first);
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/work",
+            true,
+            "test",
+        )
+        .unwrap();
+        assert_eq!(change_base(&repo), None, "the clone of one branch");
+        point(&repo, "refs/heads/trunk", first);
+        assert_eq!(
+            change_base(&repo).as_deref(),
+            Some("trunk"),
+            "a named candidate is still tried after it"
+        );
+        repo.find_reference("refs/heads/trunk")
+            .unwrap()
+            .delete()
+            .unwrap();
+        commit_on(&repo, Some("HEAD"), &[first], "the change");
+        assert_eq!(change_base(&repo).as_deref(), Some("origin/work"));
+
+        let (_dir, repo, _) = repo_on("work");
+        let unrelated = commit_on(&repo, None, &[], "another root");
+        point(&repo, "refs/heads/master", unrelated);
+        assert_eq!(change_base(&repo), None, "no merge base with HEAD");
+    }
 
     #[test]
     fn findings_block_in_each_agents_contract() {
