@@ -357,7 +357,7 @@ pub fn change_base(repo: &git2::Repository) -> Option<String> {
         .and_then(|r| r.symbolic_target().ok().flatten().map(str::to_string))
         .and_then(|t| t.strip_prefix("refs/remotes/origin/").map(str::to_string))
         .map(|branch| remote(&branch))
-        .filter(&usable);
+        .filter(usable);
     if let Some((name, _, branch)) = origin_head {
         return (branch != "main").then_some(name);
     }
