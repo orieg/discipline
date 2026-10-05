@@ -350,8 +350,8 @@ fn merged_pull_bodies(
             discipline::could_not_check::tag(discipline::could_not_check::Reason::Repository, e)
         })?;
         let oid = &full;
-        match discipline::forge::merged_pull_for_commit(&api, &forge, oid) {
-            Ok(Some(pull)) => {
+        match discipline::forge::commit_origin(&api, &forge, oid) {
+            Ok(discipline::forge::CommitOrigin::Merged(pull)) => {
                 if out.pulls.iter().any(|p| p.number == pull.number) {
                     continue;
                 }
@@ -368,9 +368,14 @@ fn merged_pull_bodies(
                 });
                 out.pulls.push(pull);
             }
-            Ok(None) => out.notes.push(format!(
+            Ok(discipline::forge::CommitOrigin::DirectPush) => out.notes.push(format!(
                 "merged-pr-body: commit {} arrived through no merged pull request (direct push); its message is the only directive source",
                 &oid[..oid.len().min(10)]
+            )),
+            Ok(discipline::forge::CommitOrigin::NotOnForge) => out.notes.push(format!(
+                "merged-pr-body: commit {} is not on {} (a local commit), so no merged pull request carries it; its message is the only directive source",
+                &oid[..oid.len().min(10)],
+                forge.kind.label()
             )),
             // The client refuses non-loopback hosts under DISCIPLINE_NO_NETWORK: the
             // operator's choice, reported as a note, not a failed lookup.
@@ -535,6 +540,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
         outcomes,
         policy_failures: Vec::new(),
         deprecations: Vec::new(),
+        directive_notes: Vec::new(),
         unused_directives: Vec::new(),
     };
     let json_summary = empty(

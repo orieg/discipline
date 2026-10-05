@@ -552,6 +552,57 @@ fn resolve_helper(
     Some(out)
 }
 
+/// Checks whether a call expression or target text matches a configured helper name.
+/// Matches if the call text equals `helper_name` or if its final segment after `::` or `.` equals `helper_name`.
+pub fn helper_call_matches(call_text: &str, helper_name: &str) -> bool {
+    if call_text == helper_name {
+        return true;
+    }
+    let segment = call_text
+        .rsplit("::")
+        .next()
+        .unwrap_or(call_text)
+        .rsplit('.')
+        .next()
+        .unwrap_or(call_text);
+    segment == helper_name
+}
+
+/// Resolves same-file helper calls for a single test.
+///
+/// If `resolve_fn(call)` returns `Some(h)`:
+/// - If `call` matches any configured helper in `vocab.helper_fns`, subtract 1 from `test.total_asserts` (call-site credit).
+/// - Add `h.total_asserts`, `h.strong_asserts`, `h.tautologies`, `h.fatal_asserts`.
+/// - If `h.total_asserts > h.tautologies`, increment `test.helper_checks`.
+pub fn resolve_test_same_file_helpers<F>(
+    test: &mut TestFn,
+    calls: &[String],
+    vocab: &AssertVocabulary,
+    mut resolve_fn: F,
+) where
+    F: FnMut(&str) -> Option<HelperFacts>,
+{
+    test.direct_calls = calls.to_vec();
+    for call in calls {
+        if let Some(h) = resolve_fn(call) {
+            if vocab
+                .helper_fns
+                .iter()
+                .any(|name| helper_call_matches(call, name))
+            {
+                test.total_asserts = test.total_asserts.saturating_sub(1);
+            }
+            test.total_asserts += h.total_asserts;
+            test.strong_asserts += h.strong_asserts;
+            test.tautologies += h.tautologies;
+            test.fatal_asserts += h.fatal_asserts;
+            if h.total_asserts > h.tautologies {
+                test.helper_checks += 1;
+            }
+        }
+    }
+}
+
 /// How a pack's grammar spells a function body that is one call.
 pub struct WrapperSpec {
     /// Bodies, statement lists and statements looked through when they hold exactly
@@ -1403,6 +1454,225 @@ mod tests {
             let t = &facts.tests[0];
             assert_eq!((t.total_asserts, t.helper_checks), (1, 1), "{path}: {t:?}");
         }
+    }
+
+    /// B3a (#492): one rule for configured assertion helpers in every pack. A call to a
+    /// configured helper (`helper_fns`) counts as one total assertion and no strong
+    /// assertion at the call site. When the helper's body is defined in the same file,
+    /// resolution replaces the call-site count with the body's own counts, so a visible
+    /// body holding one strong assertion reads `(total, strong) == (1, 1)` with no
+    /// double count. Each entry is the pack's path, the configured helper name, a test
+    /// calling a helper whose body is not in the file (reads `(1, 0)`), and a test
+    /// calling the same-file helper whose body holds one strong assertion (reads
+    /// `(1, 1)`).
+    #[test]
+    fn configured_helper_calls_count_total_only_in_every_pack() {
+        struct Case {
+            path: &'static str,
+            enabled: bool,
+            helper: &'static str,
+            unseen: &'static str,
+            same_file: &'static str,
+        }
+        let cases: &[Case] = &[
+            Case {
+                path: "tests/t.rs",
+                enabled: cfg!(feature = "lang-rust"),
+                helper: "check_state",
+                unseen: "#[test]\nfn t() { check_state(1); }\n",
+                same_file: "fn check_state(x: u32) { assert_eq!(x, 1); }\n#[test]\nfn t() { check_state(1); }\n",
+            },
+            Case {
+                path: "pkg/t_test.go",
+                enabled: cfg!(feature = "lang-go"),
+                helper: "checkResult",
+                unseen: "package a\nimport \"testing\"\nfunc TestT(t *testing.T) { checkResult(t, 1) }\n",
+                same_file: "package a\nimport \"testing\"\nfunc checkResult(t *testing.T, x int) { if x != 1 { t.Errorf(\"bad\") } }\nfunc TestT(t *testing.T) { checkResult(t, 1) }\n",
+            },
+            Case {
+                path: "tests/test_t.py",
+                enabled: cfg!(feature = "lang-python"),
+                helper: "check_state",
+                unseen: "def test_t():\n    check_state(1)\n",
+                same_file: "def check_state(x):\n    assert x == 1\n\ndef test_t():\n    check_state(1)\n",
+            },
+            Case {
+                path: "test/t.test.js",
+                enabled: cfg!(feature = "lang-javascript"),
+                helper: "checkState",
+                unseen: "test('t', () => { checkState(1); });\n",
+                same_file: "function checkState(x) { assert.strictEqual(x, 1); }\ntest('t', () => { checkState(1); });\n",
+            },
+            Case {
+                path: "src/test/java/ATest.java",
+                enabled: cfg!(feature = "lang-java"),
+                helper: "checkState",
+                unseen: "class ATest {\n  @Test\n  void t() { checkState(1); }\n}\n",
+                same_file: "class ATest {\n  void checkState(int x) { assertEquals(1, x); }\n  @Test\n  void t() { checkState(1); }\n}\n",
+            },
+            Case {
+                path: "src/test/kotlin/ATest.kt",
+                enabled: cfg!(feature = "lang-kotlin"),
+                helper: "checkState",
+                unseen: "class ATest {\n    @Test\n    fun t() { checkState(1) }\n}\n",
+                same_file: "class ATest {\n    private fun checkState(x: Int) { assertEquals(1, x) }\n    @Test\n    fun t() { checkState(1) }\n}\n",
+            },
+            Case {
+                path: "Tests/ATests.swift",
+                enabled: cfg!(feature = "lang-swift"),
+                helper: "checkState",
+                unseen: "import XCTest\nfinal class ATests: XCTestCase {\n    func testT() { checkState(1) }\n}\n",
+                same_file: "import XCTest\nfinal class ATests: XCTestCase {\n    func checkState(_ x: Int) { XCTAssertEqual(1, x) }\n    func testT() { checkState(1) }\n}\n",
+            },
+            Case {
+                path: "src/test/scala/ATest.scala",
+                enabled: cfg!(feature = "lang-scala"),
+                helper: "checkState",
+                unseen: "class ATest extends AnyFunSuite {\n  test(\"t\") { checkState(1) }\n}\n",
+                same_file: "class ATest extends AnyFunSuite {\n  private def checkState(x: Int): Unit = assertEquals(1, x)\n  test(\"t\") { checkState(1) }\n}\n",
+            },
+            Case {
+                path: "Tests/ATests.m",
+                enabled: cfg!(feature = "lang-objc"),
+                helper: "checkState",
+                unseen: "@interface ATests : XCTestCase\n@end\n@implementation ATests\n- (void)testT {\n    checkState(1);\n}\n@end\n",
+                same_file: "static void checkState(int x) { XCTAssertEqual(1, x); }\n@interface ATests : XCTestCase\n@end\n@implementation ATests\n- (void)testT {\n    checkState(1);\n}\n@end\n",
+            },
+            Case {
+                path: "test/t_test.rb",
+                enabled: cfg!(feature = "lang-ruby"),
+                helper: "check_state",
+                unseen: "class TTest < Minitest::Test\n  def test_t\n    check_state(1)\n  end\nend\n",
+                same_file: "class TTest < Minitest::Test\n  def check_state(x)\n    assert_equal(1, x)\n  end\n  def test_t\n    check_state(1)\n  end\nend\n",
+            },
+            Case {
+                path: "tests/ATest.php",
+                enabled: cfg!(feature = "lang-php"),
+                helper: "checked",
+                unseen: "<?php\nclass ATest extends TestCase {\n    public function testT(): void { $this->checked(1); }\n}\n",
+                same_file: "<?php\nclass ATest extends TestCase {\n    private function checked(int $x): void { $this->assertSame(1, $x); }\n    public function testT(): void { $this->checked(1); }\n}\n",
+            },
+            Case {
+                path: "tests/ATests.cs",
+                enabled: cfg!(feature = "lang-csharp"),
+                helper: "CheckState",
+                unseen: "public class ATests {\n  [Fact]\n  public void T() { CheckState(1); }\n}\n",
+                same_file: "public class ATests {\n  private void CheckState(int x) { Assert.Equal(1, x); }\n  [Fact]\n  public void T() { CheckState(1); }\n}\n",
+            },
+            Case {
+                path: "tests/t_test.cc",
+                enabled: cfg!(feature = "lang-cpp"),
+                helper: "check_state",
+                unseen: "TEST(T, State) { check_state(1); }\n",
+                same_file: "void check_state(int x) { assert(x == 1); }\nTEST(T, State) { check_state(1); }\n",
+            },
+            // Precedence: the configured name also looks like a built-in or custom
+            // assertion of the pack; it still counts one total and no strong assertion.
+            Case {
+                path: "src/test/java/BTest.java",
+                enabled: cfg!(feature = "lang-java"),
+                helper: "assertFoo",
+                unseen: "class BTest {\n  @Test\n  void t() { assertFoo(1); }\n}\n",
+                same_file: "class BTest {\n  void assertFoo(int x) { assertEquals(1, x); }\n  @Test\n  void t() { assertFoo(1); }\n}\n",
+            },
+            Case {
+                path: "src/test/kotlin/BTest.kt",
+                enabled: cfg!(feature = "lang-kotlin"),
+                helper: "assertFoo",
+                unseen: "class BTest {\n    @Test\n    fun t() { assertFoo(1) }\n}\n",
+                same_file: "class BTest {\n    private fun assertFoo(x: Int) { assertEquals(1, x) }\n    @Test\n    fun t() { assertFoo(1) }\n}\n",
+            },
+            Case {
+                path: "test/b_test.rb",
+                enabled: cfg!(feature = "lang-ruby"),
+                helper: "assert_foo",
+                unseen: "class BTest < Minitest::Test\n  def test_t\n    assert_foo(1)\n  end\nend\n",
+                same_file: "class BTest < Minitest::Test\n  def assert_foo(x)\n    assert_equal(1, x)\n  end\n  def test_t\n    assert_foo(1)\n  end\nend\n",
+            },
+        ];
+        let reg = default_registry();
+        let mut ran = 0;
+        let mut expected = 0;
+        let mut wrong = Vec::new();
+        for c in cases {
+            if !c.enabled {
+                continue;
+            }
+            expected += 1;
+            let Some(pack) = reg.find_pack(c.path) else {
+                wrong.push(format!(
+                    "{}: no pack found though its feature is on",
+                    c.path
+                ));
+                continue;
+            };
+            ran += 1;
+            let mut vocab = AssertVocabulary::default();
+            vocab.helper_fns.push(c.helper.to_string());
+            // Each source is read a second time with the same name also configured as
+            // an extra assertion macro: the helper rule still wins.
+            for macro_too in [false, true] {
+                if macro_too {
+                    vocab.extra_macros.push(c.helper.to_string());
+                }
+                let check = |src: &str, want: (usize, usize)| {
+                    let facts = pack.extract(c.path, src, &vocab).expect(c.path);
+                    if facts.tests.len() != 1 {
+                        return Some(format!(
+                            "{}: expected 1 test, got {:?}",
+                            c.path,
+                            facts.tests.iter().map(|t| &t.name).collect::<Vec<_>>()
+                        ));
+                    }
+                    let t = &facts.tests[0];
+                    if (t.total_asserts, t.strong_asserts) != want {
+                        return Some(format!("{}: got {t:?}, want {want:?}", c.path));
+                    }
+                    None
+                };
+                if let Some(problem) = check(c.unseen, (1, 0)) {
+                    wrong.push(format!("unseen helper: {problem}"));
+                }
+                if let Some(problem) = check(c.same_file, (1, 1)) {
+                    wrong.push(format!("same-file helper: {problem}"));
+                }
+            }
+        }
+        assert_eq!(ran, expected, "every enabled pack must run");
+        assert!(ran > 0, "no pack compiled in");
+        assert!(wrong.is_empty(), "{wrong:#?}");
+
+        // B3a (#492): a dotted call to a configured helper resolves through the same
+        // matcher: `self.check(x)` with helper `check` and a same-file
+        // `def check(self, x): assert x == 1` reads `(1, 1)` (no double count).
+        let dotted = "import unittest\nclass TestThing(unittest.TestCase):\n    def check(self, x):\n        assert x == 1\n    def test_t(self):\n        self.check(1)\n";
+        if let Some(pack) = reg.find_pack("tests/test_t.py") {
+            let mut vocab = AssertVocabulary::default();
+            vocab.helper_fns.push("check".to_string());
+            let facts = pack
+                .extract("tests/test_t.py", dotted, &vocab)
+                .expect("python pack extracts");
+            assert_eq!(facts.tests.len(), 1, "{:?}", facts.tests);
+            let t = &facts.tests[0];
+            assert_eq!((t.total_asserts, t.strong_asserts), (1, 1), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn helper_call_matcher_matches_exact_and_final_segment() {
+        assert!(!helper_call_matches("Foo::check", "other"));
+        assert!(helper_call_matches("Foo::check", "check"));
+        assert!(helper_call_matches("self.check", "check"));
+        assert!(helper_call_matches("check", "check"));
+        // A different name that merely contains or extends the helper's does not match.
+        assert!(!helper_call_matches("xcheck", "check"));
+        assert!(!helper_call_matches("Foo::checker", "check"));
+        assert!(!helper_call_matches("obj.checker", "check"));
+        assert!(!helper_call_matches("", "check"));
+        // The final segment after the last `::` or `.` is what is compared.
+        assert!(helper_call_matches("a.b::c", "c"));
+        assert!(helper_call_matches("a::b.c", "c"));
+        assert!(!helper_call_matches("a.b::c", "b"));
     }
 
     fn helper(total: usize, wraps: Option<&str>) -> HelperFacts {

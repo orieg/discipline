@@ -417,6 +417,8 @@ pub struct ForgeError {
     pub kind: ForgeErrorKind,
     pub message: String,
     pub attempts: u32,
+    /// The HTTP status the forge answered with, when it answered at all.
+    pub status: Option<u16>,
 }
 
 impl ForgeError {
@@ -425,7 +427,14 @@ impl ForgeError {
             kind,
             message: message.into(),
             attempts: 1,
+            status: None,
         }
+    }
+
+    /// The same error, recording the HTTP status the forge answered with.
+    pub fn with_status(mut self, status: u16) -> Self {
+        self.status = Some(status);
+        self
     }
 
     /// The message, with the attempt count when the read was retried.
@@ -808,7 +817,9 @@ impl ForgeApi for CannedApi {
             .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
         match classify_status(status, &headers) {
             None => Ok(body),
-            Some(kind) => Err(ForgeError::new(kind, canned_refusal(status, path, &body))),
+            Some(kind) => {
+                Err(ForgeError::new(kind, canned_refusal(status, path, &body)).with_status(status))
+            }
         }
     }
 
@@ -1327,9 +1338,10 @@ impl HttpApi<'_> {
                     kind: ForgeErrorKind::Unavailable,
                     message: format!("more than {limit} forge requests in one run; stopping"),
                     attempts: attempt,
+                    status: None,
                 });
             }
-            let (kind, message, headers) =
+            let (kind, message, headers, status) =
                 match self.exchange(forge, url, base_host, insecure_ok, post) {
                     Ok(a) => match classify_status(a.status, &a.headers) {
                         None => return Ok(a),
@@ -1341,11 +1353,11 @@ impl HttpApi<'_> {
                             let text = format!("{base_host} answered HTTP {} {message}", a.status)
                                 .trim_end()
                                 .to_string();
-                            (kind, text, a.headers)
+                            (kind, text, a.headers, Some(a.status))
                         }
                     },
                     Err(e) if e.kind == ForgeErrorKind::Unavailable => {
-                        (e.kind, e.message, Vec::new())
+                        (e.kind, e.message, Vec::new(), None)
                     }
                     Err(mut e) => {
                         e.attempts = attempt;
@@ -1366,6 +1378,7 @@ impl HttpApi<'_> {
                         kind,
                         message,
                         attempts: attempt,
+                        status,
                     })
                 }
             }
@@ -1526,11 +1539,33 @@ pub struct MergedPull {
 /// (`commits/{sha}/pull`, 404 when none). GitLab lists the merge requests
 /// (`repository/commits/:sha/merge_requests`), filtered to `state == "merged"`.
 /// `Ok(None)` is a direct push: no merged pull request carried the commit.
+/// What the forge says about where a commit came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitOrigin {
+    /// It arrived through this merged pull request.
+    Merged(MergedPull),
+    /// The forge has the commit, and no merged pull request carries it (a direct push).
+    DirectPush,
+    /// The forge does not have the commit (GitHub answers 422 "No commit found for SHA"):
+    /// a commit made only locally, such as a test fixture. No pull request can carry it.
+    NotOnForge,
+}
+
+/// [`commit_origin`] without the reason there is no merged pull request.
 pub fn merged_pull_for_commit(
     api: &dyn ForgeApi,
     forge: &Forge,
     sha: &str,
 ) -> Result<Option<MergedPull>, String> {
+    Ok(match commit_origin(api, forge, sha)? {
+        CommitOrigin::Merged(pull) => Some(pull),
+        CommitOrigin::DirectPush | CommitOrigin::NotOnForge => None,
+    })
+}
+
+/// Where a commit came from: the merged pull request that carries it, a direct push, or
+/// nowhere the forge knows of.
+pub fn commit_origin(api: &dyn ForgeApi, forge: &Forge, sha: &str) -> Result<CommitOrigin, String> {
     let str_of = |v: &serde_json::Value, keys: &[&str]| -> String {
         let mut cur = v;
         for k in keys {
@@ -1544,8 +1579,15 @@ pub fn merged_pull_for_commit(
     match forge.kind {
         ForgeKind::GitHub => {
             let path = format!("repos/{}/commits/{sha}/pulls", forge.repo);
-            let Some(list) = api.get(forge, &path)? else {
-                return Ok(None);
+            let list = match api.fetch(forge, &path) {
+                Ok(list) => list,
+                Err(e) if e.kind == ForgeErrorKind::NotFound => {
+                    return Ok(CommitOrigin::DirectPush)
+                }
+                // GitHub's answer for a commit it does not have; a definite answer, not a
+                // failed lookup.
+                Err(e) if e.status == Some(422) => return Ok(CommitOrigin::NotOnForge),
+                Err(e) => return Err(e.detail()),
             };
             let list = list
                 .as_array()
@@ -1555,8 +1597,8 @@ pub fn merged_pull_for_commit(
                 .filter(|pr| pr.get("merged_at").is_some_and(|m| !m.is_null()))
                 .collect();
             match merged.as_slice() {
-                [] => Ok(None),
-                [pr] => Ok(Some(MergedPull {
+                [] => Ok(CommitOrigin::DirectPush),
+                [pr] => Ok(CommitOrigin::Merged(MergedPull {
                     number: pr.get("number").and_then(|n| n.as_u64()).unwrap_or(0),
                     author: str_of(pr, &["user", "login"]),
                     body: str_of(pr, &["body"]),
@@ -1572,13 +1614,13 @@ pub fn merged_pull_for_commit(
         ForgeKind::Gitea | ForgeKind::Forgejo => {
             let path = format!("repos/{}/commits/{sha}/pull", forge.repo);
             let Some(pr) = api.get(forge, &path)? else {
-                return Ok(None);
+                return Ok(CommitOrigin::DirectPush);
             };
             let merged = pr.get("merged").and_then(|m| m.as_bool()).unwrap_or(false);
             if !merged {
-                return Ok(None);
+                return Ok(CommitOrigin::DirectPush);
             }
-            Ok(Some(MergedPull {
+            Ok(CommitOrigin::Merged(MergedPull {
                 number: pr.get("number").and_then(|n| n.as_u64()).unwrap_or(0),
                 author: str_of(&pr, &["user", "login"]),
                 body: str_of(&pr, &["body"]),
@@ -1592,7 +1634,7 @@ pub fn merged_pull_for_commit(
                 gitlab_project_id(&forge.repo)
             );
             let Some(list) = api.get(forge, &path)? else {
-                return Ok(None);
+                return Ok(CommitOrigin::DirectPush);
             };
             let list = list
                 .as_array()
@@ -1602,8 +1644,8 @@ pub fn merged_pull_for_commit(
                 .filter(|mr| mr.get("state").and_then(|s| s.as_str()) == Some("merged"))
                 .collect();
             match merged.as_slice() {
-                [] => Ok(None),
-                [mr] => Ok(Some(MergedPull {
+                [] => Ok(CommitOrigin::DirectPush),
+                [mr] => Ok(CommitOrigin::Merged(MergedPull {
                     number: mr.get("iid").and_then(|n| n.as_u64()).unwrap_or(0),
                     author: str_of(mr, &["author", "username"]),
                     body: str_of(mr, &["description"]),
@@ -2397,6 +2439,44 @@ mod tests {
         assert!(pull_body_edits(&short, &gh, &[51])
             .unwrap_err()
             .contains("#51 is missing"));
+    }
+
+    #[test]
+    fn a_422_for_an_unknown_commit_is_a_commit_not_on_the_forge() {
+        use super::{commit_origin, CannedApi, CommitOrigin};
+        let gh = Forge {
+            kind: ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "github:repos/o/r/commits/fff/pulls".into(),
+            serde_json::json!({"__status": 422, "__body": {"message": "No commit found for SHA: fff"}}),
+        );
+        api.responses.insert(
+            "github:repos/o/r/commits/aaa/pulls".into(),
+            serde_json::json!([]),
+        );
+        api.responses.insert(
+            "github:repos/o/r/commits/ddd/pulls".into(),
+            serde_json::json!({"__status": 403, "__body": {"message": "Resource not accessible"}}),
+        );
+        api.responses.insert(
+            "github:repos/o/r/commits/eee/pulls".into(),
+            serde_json::json!({"__status": 500, "__body": {"message": "boom"}}),
+        );
+        assert_eq!(
+            commit_origin(&api, &gh, "fff").unwrap(),
+            CommitOrigin::NotOnForge
+        );
+        assert_eq!(
+            commit_origin(&api, &gh, "aaa").unwrap(),
+            CommitOrigin::DirectPush
+        );
+        // Any other refusal is still a failed lookup.
+        assert!(commit_origin(&api, &gh, "ddd").unwrap_err().contains("403"));
+        assert!(commit_origin(&api, &gh, "eee").unwrap_err().contains("500"));
     }
 
     #[test]

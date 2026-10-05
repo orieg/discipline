@@ -576,9 +576,13 @@ impl<'a> ScalaExtractor<'a> {
             }
             "cancel" => test_fn.ignored = true,
             other => {
-                if self.vocab.helper_fns.iter().any(|h| h == other) {
+                if self
+                    .vocab
+                    .helper_fns
+                    .iter()
+                    .any(|h| super::helper_call_matches(other, h))
+                {
                     test_fn.total_asserts += 1;
-                    test_fn.strong_asserts += 1;
                 }
             }
         }
@@ -586,23 +590,9 @@ impl<'a> ScalaExtractor<'a> {
 
     fn resolve_same_file_helpers(&mut self) {
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
-            test.direct_calls = calls.clone();
-            for call in calls {
-                let Some(h) = super::helper_through_wrappers(call, &self.helpers) else {
-                    continue;
-                };
-                if self.vocab.helper_fns.iter().any(|n| n == call) {
-                    test.total_asserts = test.total_asserts.saturating_sub(1);
-                    test.strong_asserts = test.strong_asserts.saturating_sub(1);
-                }
-                test.total_asserts += h.total_asserts;
-                test.strong_asserts += h.strong_asserts;
-                test.tautologies += h.tautologies;
-                test.fatal_asserts += h.fatal_asserts;
-                if h.total_asserts > h.tautologies {
-                    test.helper_checks += 1;
-                }
-            }
+            super::resolve_test_same_file_helpers(test, calls, self.vocab, |call| {
+                super::helper_through_wrappers(call, &self.helpers)
+            });
         }
     }
 }

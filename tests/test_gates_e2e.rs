@@ -6111,6 +6111,96 @@ fn a_push_run_says_why_a_pr_body_waiver_is_out_of_scope() {
 }
 
 #[test]
+fn a_push_run_on_a_commit_the_forge_does_not_have_reports_it_once() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("a.txt", "a\n");
+    repo.commit("chore: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("b.txt", "b\n");
+    repo.commit("chore: local only");
+    let out = common::git_command()
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo.dir.path())
+        .output()
+        .unwrap();
+    let sha = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let run = |api: &FakeForge| {
+        let url = api.url();
+        repo.run(
+            &["check", "--base", "main", "--format", "json"],
+            &[
+                ("GITHUB_EVENT_NAME", "push"),
+                ("GITHUB_REPOSITORY", "o/r"),
+                ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+                ("PR_BODY", ""),
+            ],
+        )
+    };
+    let all_gate_notes = |r: &common::Run| -> Vec<String> {
+        r.json()["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|o| o["notes"].as_array().unwrap().clone())
+            .map(|n| n.as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // GitHub answers 422 for a commit it does not have: a definite answer, not a failure.
+    let api = FakeForge::start();
+    api.serve_raw(
+        &format!("repos/o/r/commits/{sha}/pulls"),
+        422,
+        &[],
+        &format!(r#"{{"message":"No commit found for SHA: {sha}"}}"#),
+    );
+    let local = run(&api);
+    assert_eq!(local.code, 0, "{}{}", local.stdout, local.stderr);
+    let notes: Vec<String> = local.json()["directive_notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|n| n.contains("is not on github"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+    assert!(!local.stdout.contains("cannot resolve"), "{}", local.stdout);
+    // Reported once for the run, never on each gate.
+    assert!(
+        all_gate_notes(&local)
+            .iter()
+            .all(|n| !n.starts_with("merged-pr-body:")),
+        "{:?}",
+        all_gate_notes(&local)
+    );
+
+    // Positive control: another refusal is still a failed lookup.
+    let api = FakeForge::start();
+    api.serve_raw(
+        &format!("repos/o/r/commits/{sha}/pulls"),
+        403,
+        &[],
+        r#"{"message":"Resource not accessible by integration"}"#,
+    );
+    let denied = run(&api);
+    assert!(
+        denied
+            .stdout
+            .contains("cannot resolve the merged pull request"),
+        "{}{}",
+        denied.stdout,
+        denied.stderr
+    );
+}
+
+#[test]
 fn a_push_run_reads_the_merged_pull_requests_body() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
@@ -9333,6 +9423,48 @@ func TestCalc(t *testing.T) {
     assert_eq!(run_vac.code, 1);
     let outcome_vac = run_vac.outcome("vacuous-tests");
     assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn go_replacing_strong_assertion_with_external_helper_is_reported_as_assertion_reduction() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "main"]);
+    let base_go = r#"package calc_test
+
+import "testing"
+
+func TestCalc(t *testing.T) {
+    if 1+1 != 2 {
+        t.Errorf("unexpected")
+    }
+}
+"#;
+    repo.write("calc_test.go", base_go);
+    repo.commit("feat: initial go test with strong assertion");
+    repo.git(&["checkout", "-B", "work", "main"]);
+
+    let head_go = r#"package calc_test
+
+import "testing"
+
+func TestCalc(t *testing.T) {
+    customHelper(t)
+}
+"#;
+    repo.write("calc_test.go", head_go);
+    repo.commit("test: replace strong assertion with external helper");
+
+    let run = repo.check(&[
+        "--config-override",
+        "[gates.assertion-reduction]\nassert_helper_fns = [\"customHelper\"]",
+    ]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("assertion-reduction");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"],
+        "assertion-reduction/assertions-reduced"
+    );
 }
 
 #[test]
