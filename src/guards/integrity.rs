@@ -442,10 +442,15 @@ fn base_config_source(ctx: &Context) -> Result<Option<String>> {
 
 /// Whether the base side runs this gate. The change under review cannot switch off the
 /// gate that judges its configuration: `enabled = false` takes effect once it has merged.
+///
+/// A base configuration that exists but does not load cannot say the gate was off, so it
+/// counts as on: the gate then reports that it could not compare.
 pub fn enabled_on_base(ctx: &Context) -> Result<bool> {
-    Ok(base_config_source(ctx)?
-        .and_then(|src| DisciplineConfig::from_toml_str(&src).ok())
-        .is_some_and(|base| base.gates.config_integrity.enabled()))
+    Ok(match base_config_source(ctx)? {
+        None => false,
+        Some(src) => DisciplineConfig::from_toml_str(&src)
+            .map_or(true, |base| base.gates.config_integrity.enabled()),
+    })
 }
 
 /// Whether this change is what switched the run to advisory mode, with no scoped override
@@ -456,9 +461,12 @@ pub fn advisory_mode_unapproved(ctx: &Context) -> Result<bool> {
     if ctx.config.meta.mode != RunMode::Advisory {
         return Ok(false);
     }
-    let base_enforcing = base_config_source(ctx)?
-        .and_then(|src| DisciplineConfig::from_toml_str(&src).ok())
-        .is_some_and(|base| base.meta.mode == RunMode::Enforcing);
+    // A base configuration that does not load cannot say the run was advisory already.
+    let base_enforcing = match base_config_source(ctx)? {
+        None => false,
+        Some(src) => DisciplineConfig::from_toml_str(&src)
+            .map_or(true, |base| base.meta.mode == RunMode::Enforcing),
+    };
     Ok(base_enforcing
         && ctx
             .find_override(
@@ -557,7 +565,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                     &crate::findings::BASE_CONFIGURATION_UNREADABLE,
                     Some(ctx.config_path),
                     None,
-                    format!("The base-side configuration does not load with this binary ({e:#}); weakening could not be checked."),
+                    format!("The base-side configuration does not load with this binary ({e:#}); weakening could not be checked, and the base-side `min_tests` and `min_count` ratchets and assertion vocabulary were not read."),
                     "Repair the configuration on the base branch.",
                 );
             }
@@ -573,11 +581,21 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
     let baseline_filename = ctx
         .baseline_path
         .unwrap_or(crate::baseline::DEFAULT_BASELINE_FILE);
-    let base_baseline: Option<crate::baseline::DisciplineBaseline> =
-        match ctx.git.base_content(baseline_filename)? {
-            Some(s) => toml::from_str(&s).ok(),
-            None => None,
-        };
+    let base_baseline: Option<crate::baseline::DisciplineBaseline> = match ctx
+        .git
+        .base_content(baseline_filename)?
+    {
+        Some(s) => match toml::from_str(&s) {
+            Ok(baseline) => Some(baseline),
+            Err(_) => {
+                out.notes.push(format!(
+                        "`{baseline_filename}` does not parse on the base side; baseline growth was not checked"
+                    ));
+                None
+            }
+        },
+        None => None,
+    };
 
     let head_baseline_path = ctx.git.root().join(baseline_filename);
     let head_baseline: Option<crate::baseline::DisciplineBaseline> = if head_baseline_path.exists()
