@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::ci_condition::{CiVerdict, Lang, SkipCondition};
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -54,6 +55,7 @@ impl LanguagePack for JavaPack {
             },
             helpers: std::collections::HashMap::new(),
             test_calls: Vec::new(),
+            class_skips: Vec::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -150,6 +152,9 @@ struct JavaExtractor<'a> {
     facts: ParsedFileFacts,
     helpers: std::collections::HashMap<String, super::HelperFacts>,
     test_calls: Vec<Vec<String>>,
+    /// Conditional skips of the enclosing classes (`@DisabledOnOs(..)` on a class),
+    /// outermost first: the annotation as reported and what a CI variable decides.
+    class_skips: Vec<Vec<(String, CiVerdict)>>,
 }
 
 impl<'a> JavaExtractor<'a> {
@@ -211,15 +216,18 @@ impl<'a> JavaExtractor<'a> {
                     .unwrap_or_else(|| "Anonymous".to_string());
 
                 let (class_has_disabled, _) = self.check_modifiers_for_test_and_ignore(node);
-                let is_class_ignored = parent_ignored || class_has_disabled;
+                let (always, conditional) = self.conditional_annotations(node);
+                let is_class_ignored = parent_ignored || class_has_disabled || always;
 
                 class_stack.push(class_name);
+                self.class_skips.push(conditional);
                 if let Some(body) = node.child_by_field_name("body") {
                     let mut cursor = body.walk();
                     for child in body.children(&mut cursor) {
                         self.visit_node(child, class_stack, is_class_ignored);
                     }
                 }
+                self.class_skips.pop();
                 class_stack.pop();
             }
             "method_declaration" => {
@@ -243,6 +251,70 @@ impl<'a> JavaExtractor<'a> {
             }
         }
         None
+    }
+
+    /// JUnit 5 conditional annotations on a class or method
+    /// (`@DisabledIfEnvironmentVariable(named = "CI", ..)`, `@DisabledOnOs(..)`): whether
+    /// one always skips, and each conditional skip as the annotation and its verdict.
+    fn conditional_annotations(&self, node: Node) -> (bool, Vec<(String, CiVerdict)>) {
+        let mut always = false;
+        let mut conditional = Vec::new();
+        let Some(modifiers) = Self::get_modifiers(node) else {
+            return (always, conditional);
+        };
+        let mut cursor = modifiers.walk();
+        for annotation in modifiers.children(&mut cursor) {
+            if !matches!(annotation.kind(), "annotation" | "marker_annotation") {
+                continue;
+            }
+            let name = annotation
+                .child_by_field_name("name")
+                .map(|n| self.text(n))
+                .unwrap_or("");
+            let name = name.rsplit('.').next().unwrap_or(name);
+            let (mut named, mut matches) = (None, None);
+            if let Some(arguments) = annotation.child_by_field_name("arguments") {
+                let mut pairs = arguments.walk();
+                for pair in arguments.named_children(&mut pairs) {
+                    if pair.kind() != "element_value_pair" {
+                        continue;
+                    }
+                    let key = pair.child_by_field_name("key").map(|k| self.text(k));
+                    let value = pair
+                        .child_by_field_name("value")
+                        .filter(|v| v.kind() == "string_literal")
+                        .map(|v| self.text(v).trim_matches('"'));
+                    match key {
+                        Some("named") => named = value,
+                        Some("matches") => matches = value,
+                        _ => {}
+                    }
+                }
+            }
+            match super::ci_condition::jvm_annotation(name, named, matches) {
+                Some(SkipCondition::Always) => always = true,
+                Some(SkipCondition::When(verdict)) => {
+                    conditional.push((self.text(annotation).trim().to_string(), verdict));
+                }
+                Some(SkipCondition::Never) | None => {}
+            }
+        }
+        (always, conditional)
+    }
+
+    /// JUnit assumptions among the statements of a test body (`assumeTrue(..)`,
+    /// `Assumptions.assumeFalse(..)`, `assumingThat(..)`), read by their condition.
+    fn record_assumptions(&self, body: Node, test: &mut TestFn) {
+        let mut cursor = body.walk();
+        for statement in body.named_children(&mut cursor) {
+            match super::ci_condition::jvm_assumption(Lang::Java, statement, self.src) {
+                Some((_, SkipCondition::Always)) => test.ignored = true,
+                Some((text, SkipCondition::When(verdict))) => {
+                    test.record_conditional_skip(text, verdict);
+                }
+                Some((_, SkipCondition::Never)) | None => {}
+            }
+        }
     }
 
     fn check_modifiers_for_test_and_ignore(&self, node: Node) -> (bool, bool) {
@@ -351,6 +423,17 @@ impl<'a> JavaExtractor<'a> {
             if let Some(body) = node.child_by_field_name("body") {
                 self.scan_method_body(body, &mut test_fn, &mut direct_calls);
                 super::dispatch_calls(body, self.src, &JAVA_DISPATCH, &mut direct_calls);
+            }
+            let (always, conditional) = self.conditional_annotations(node);
+            test_fn.ignored |= always;
+            if let Some(body) = node.child_by_field_name("body") {
+                self.record_assumptions(body, &mut test_fn);
+            }
+            if !test_fn.ignored {
+                let inherited = self.class_skips.iter().flatten().cloned();
+                for (text, verdict) in inherited.chain(conditional) {
+                    test_fn.record_conditional_skip(text, verdict);
+                }
             }
 
             self.facts.tests.push(test_fn);
@@ -1021,5 +1104,287 @@ class DomainTest {
         assert_eq!(t.total_asserts, 3);
         assert_eq!(t.strong_asserts, 3);
         assert!(!t.is_vacuous());
+    }
+}
+
+/// Conditional skips of JUnit: annotations and assumptions (#597). The sources are
+/// fixtures, kept out of the test bodies.
+#[cfg(test)]
+mod conditional_skip_tests {
+    use super::*;
+
+    const ANNOTATED: &str = r#"
+@DisabledOnOs(OS.WINDOWS)
+class QTest {
+    @Test
+    @DisabledIfEnvironmentVariable(named = "CI", matches = "true")
+    void inCi() { assertEquals(2, 1 + 1); }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "CI", matches = "true")
+    void outsideCi() { assertEquals(2, 1 + 1); }
+
+    @Test
+    @DisabledIfSystemProperty(named = "os.arch", matches = ".*32.*")
+    void property() { assertEquals(2, 1 + 1); }
+
+    @Test
+    void inherits() { assertEquals(2, 1 + 1); }
+
+    @Test
+    @Disabled("x")
+    void off() { assertEquals(2, 1 + 1); }
+}
+"#;
+
+    const ASSUMED: &str = r#"
+class QTest {
+    private static boolean inCi() {
+        return System.getenv("CI") != null;
+    }
+
+    @Test
+    void skipsInCi() {
+        assumeFalse(inCi());
+        assertEquals(2, 1 + 1);
+    }
+
+    @Test
+    void runsOnlyInCi() {
+        Assumptions.assumeTrue("true".equals(System.getenv("GITHUB_ACTIONS")));
+        assertEquals(2, 1 + 1);
+    }
+
+    @Test
+    void platform() {
+        assumeTrue(System.getProperty("os.name").startsWith("Linux"));
+        assertEquals(2, 1 + 1);
+    }
+
+    @Test
+    void otherSpellings() {
+        assumeTrue(System.getenv().get("CI") == null);
+        assumeFalse(Boolean.parseBoolean(System.getenv("TRAVIS")));
+        assumeTrue(Objects.isNull(System.getenv("CIRCLECI")));
+        assumeFalse(System.getenv().containsKey("BUILDKITE"));
+        assumeTrue(System.getenv("GITLAB_CI").isEmpty());
+        assumeFalse(Boolean.getBoolean("ci"));
+        assertEquals(2, 1 + 1);
+    }
+
+    @Test
+    void never() {
+        assumeTrue(false);
+        assertEquals(2, 1 + 1);
+    }
+
+    @Test
+    void always() {
+        assumeTrue(true);
+        assertEquals(2, 1 + 1);
+    }
+}
+"#;
+
+    /// `(name, unconditionally skipped, condition, skips in CI)` of each test.
+    fn read(src: &str) -> Vec<(String, bool, Option<String>, bool)> {
+        JavaPack
+            .extract(
+                "src/test/java/QTest.java",
+                src,
+                &AssertVocabulary::default(),
+            )
+            .unwrap()
+            .tests
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    t.ignored,
+                    t.conditional_ignore.clone(),
+                    t.is_ci_skip(),
+                )
+            })
+            .collect()
+    }
+
+    fn row(
+        name: &str,
+        ignored: bool,
+        cond: Option<&str>,
+        ci: bool,
+    ) -> (String, bool, Option<String>, bool) {
+        (name.to_string(), ignored, cond.map(str::to_string), ci)
+    }
+
+    #[test]
+    fn conditional_annotations_are_read_on_a_method_and_inherited_from_its_class() {
+        assert_eq!(
+            read(ANNOTATED),
+            vec![
+                row(
+                    "QTest.inCi",
+                    false,
+                    Some("@DisabledIfEnvironmentVariable(named = \"CI\", matches = \"true\")"),
+                    true
+                ),
+                // The class condition comes first; neither is a skip in CI.
+                row(
+                    "QTest.outsideCi",
+                    false,
+                    Some("@DisabledOnOs(OS.WINDOWS)"),
+                    false
+                ),
+                row(
+                    "QTest.property",
+                    false,
+                    Some("@DisabledOnOs(OS.WINDOWS)"),
+                    false
+                ),
+                row(
+                    "QTest.inherits",
+                    false,
+                    Some("@DisabledOnOs(OS.WINDOWS)"),
+                    false
+                ),
+                row("QTest.off", true, None, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn assumptions_are_read_by_their_condition() {
+        assert_eq!(
+            read(ASSUMED),
+            vec![
+                row("QTest.skipsInCi", false, Some("assumeFalse(inCi())"), true),
+                row(
+                    "QTest.runsOnlyInCi",
+                    false,
+                    Some("Assumptions.assumeTrue(\"true\".equals(System.getenv(\"GITHUB_ACTIONS\")))"),
+                    false
+                ),
+                row(
+                    "QTest.platform",
+                    false,
+                    Some("assumeTrue(System.getProperty(\"os.name\").startsWith(\"Linux\"))"),
+                    false
+                ),
+                row(
+                    "QTest.otherSpellings",
+                    false,
+                    Some("assumeTrue(System.getenv().get(\"CI\") == null)"),
+                    true
+                ),
+                row("QTest.never", true, None, false),
+                row("QTest.always", false, None, false),
+            ]
+        );
+        // Each spelling of the test above is a skip in CI on its own variable.
+        let facts = JavaPack
+            .extract(
+                "src/test/java/QTest.java",
+                ASSUMED,
+                &AssertVocabulary::default(),
+            )
+            .unwrap();
+        let spellings = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "QTest.otherSpellings")
+            .unwrap();
+        assert_eq!(
+            spellings.ci_skip_vars(),
+            vec!["CI", "TRAVIS", "CIRCLECI", "BUILDKITE", "GITLAB_CI"]
+        );
+    }
+
+    #[test]
+    fn junit_conditional_annotations_are_read_by_name_and_variable() {
+        use crate::ast::ci_condition::jvm_annotation;
+        let skips = |var: &str| Some(SkipCondition::When(CiVerdict::Skips(vec![var.to_string()])));
+        let other = Some(SkipCondition::When(CiVerdict::NotCi));
+        for (name, named, matches, want) in [
+            (
+                "DisabledIfEnvironmentVariable",
+                Some("CI"),
+                Some("true"),
+                skips("CI"),
+            ),
+            (
+                "DisabledIfEnvironmentVariable",
+                Some("CI_JOB_ID"),
+                Some(".*"),
+                skips("CI_JOB_ID"),
+            ),
+            (
+                "DisabledIfEnvironmentVariable",
+                Some("SLOW"),
+                Some(".*"),
+                other.clone(),
+            ),
+            ("DisabledIfEnvironmentVariable", None, None, other.clone()),
+            (
+                "EnabledIfEnvironmentVariable",
+                Some("CI"),
+                Some("true"),
+                other.clone(),
+            ),
+            (
+                "EnabledIfEnvironmentVariable",
+                Some("CI"),
+                Some("false"),
+                skips("CI"),
+            ),
+            (
+                "EnabledIfEnvironmentVariable",
+                Some("DB_URL"),
+                Some("false"),
+                other.clone(),
+            ),
+            (
+                "DisabledIfSystemProperty",
+                Some("ci"),
+                Some("true"),
+                skips("CI"),
+            ),
+            (
+                "DisabledIfSystemProperty",
+                Some("CI_JOB_ID"),
+                Some(".*"),
+                other.clone(),
+            ),
+            (
+                "DisabledIfSystemProperty",
+                Some("os.arch"),
+                Some(".*"),
+                other.clone(),
+            ),
+            (
+                "EnabledIfSystemProperty",
+                Some("ci"),
+                Some("true"),
+                other.clone(),
+            ),
+            (
+                "EnabledIfSystemProperty",
+                Some("ci"),
+                Some("false"),
+                skips("CI"),
+            ),
+            ("DisabledOnOs", None, None, other.clone()),
+            ("EnabledOnOs", None, None, other.clone()),
+            ("DisabledOnJre", None, None, other.clone()),
+            ("EnabledForJreRange", None, None, other.clone()),
+            ("DisabledIf", None, None, other.clone()),
+            ("Disabled", None, None, None),
+            ("Tag", Some("CI"), None, None),
+        ] {
+            assert_eq!(
+                jvm_annotation(name, named, matches),
+                want,
+                "{name} {named:?} {matches:?}"
+            );
+        }
     }
 }

@@ -3683,6 +3683,125 @@ command = "cargo test"
         },
     ),
     (
+        "ignored-tests: a skip that takes a condition is read by it: CI is an error, a platform a note, a constant unconditional",
+        || {
+            use crate::ast::default_registry;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            // `(title, severity)` of the finding for the one test of a file that arrives.
+            type Finding = Option<(String, Severity)>;
+            let finding_of = |path: &str, src: &str| -> anyhow::Result<Finding> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                let tests = pack.extract(path, src, &v)?.tests;
+                let test = tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                let added = [Located {
+                    path,
+                    file_survives: true,
+                    test,
+                }];
+                let out =
+                    evaluate_ignored_tests(&[], &added, &IgnoredTestsGate::default(), &[], false)?;
+                Ok(out.violations.first().map(|v| (v.title.to_string(), v.severity)))
+            };
+            let conditional = |severity: Severity| Some(("Test Conditionally Skipped".to_string(), severity));
+            let unconditional = Some(("Ignored Test Added".to_string(), Severity::Error));
+            let py = |decorator: &str| {
+                format!("import os\nimport sys\nimport pytest\n\n{decorator}\ndef test_q():\n    assert 1 + 1 == 2\n")
+            };
+            let js = |call: &str| format!("{call}('adds', () => {{\n  expect(1 + 1).toBe(2);\n}});\n");
+            let java = |annotation: &str, first: &str| {
+                format!("class QTest {{\n    {annotation}\n    @Test\n    void adds() {{\n        {first}\n        assertEquals(2, 1 + 1);\n    }}\n}}\n")
+            };
+            let cases: Vec<(&str, String, Finding)> = vec![
+                ("test_q.py", py("@pytest.mark.skipif(os.environ.get(\"CI\"), reason=\"x\")"), conditional(Severity::Error)),
+                ("test_q.py", py("@pytest.mark.skipif(not os.environ.get(\"CI\"), reason=\"x\")"), conditional(Severity::Note)),
+                ("test_q.py", py("@pytest.mark.skipif(sys.platform == \"win32\", reason=\"x\")"), conditional(Severity::Note)),
+                ("test_q.py", py("@pytest.mark.skipif(True, reason=\"x\")"), unconditional.clone()),
+                ("test_q.py", py("@pytest.mark.skipif(False, reason=\"x\")"), None),
+                ("test_q.py", py("@pytest.mark.skip(reason=\"x\")"), unconditional.clone()),
+                ("a.test.js", js("test.skipIf(process.env.CI)"), conditional(Severity::Error)),
+                ("a.test.js", js("test.skipIf(process.platform === 'win32')"), conditional(Severity::Note)),
+                ("a.test.js", js("test.runIf(process.env.CI)"), conditional(Severity::Note)),
+                ("a.test.js", js("test.skip"), unconditional.clone()),
+                (
+                    "src/test/java/QTest.java",
+                    java("@DisabledIfEnvironmentVariable(named = \"CI\", matches = \"true\")", ""),
+                    conditional(Severity::Error),
+                ),
+                ("src/test/java/QTest.java", java("@DisabledOnOs(OS.WINDOWS)", ""), conditional(Severity::Note)),
+                (
+                    "src/test/java/QTest.java",
+                    java("", "assumeTrue(System.getenv(\"CI\") == null);"),
+                    conditional(Severity::Error),
+                ),
+                ("src/test/java/QTest.java", java("@Disabled", ""), unconditional.clone()),
+                (
+                    "src/test/kotlin/QTest.kt",
+                    "class QTest {\n    @Test\n    fun adds() {\n        assumeFalse(System.getenv(\"CI\") != null)\n        assertEquals(2, 1 + 1)\n    }\n}\n".to_string(),
+                    conditional(Severity::Error),
+                ),
+            ];
+            for (path, src, want) in cases {
+                if finding_of(path, &src)? != want {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        },
+    ),
+    (
+        "ignored-tests: a CI variable added to a CI-conditional skip is reported unless approved",
+        || {
+            use crate::ast::TestFn;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, TestPair};
+            let skip_under = |cond: &str| TestFn {
+                name: "TestA".to_string(),
+                line: 9,
+                conditional_ignore: Some(cond.to_string()),
+                ..Default::default()
+            };
+            let ci = skip_under("os.Getenv(\"CI\") != \"\"");
+            let ci_or_github =
+                skip_under("os.Getenv(\"CI\") != \"\" || os.Getenv(\"GITHUB_ACTIONS\") != \"\"");
+            let ci_and_short = skip_under("os.Getenv(\"CI\") != \"\" && testing.Short()");
+            let run = |head: &TestFn, approved: &[&str]| -> anyhow::Result<Vec<(Severity, String)>> {
+                let pairs = [TestPair {
+                    path: "p_test.go",
+                    base: &ci,
+                    head,
+                    forced: false,
+                }];
+                let settings = IgnoredTestsGate {
+                    approved_predicates: approved.iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                };
+                let out = evaluate_ignored_tests(&pairs, &[], &settings, &[], false)?;
+                Ok(out
+                    .violations
+                    .iter()
+                    .map(|v| (v.severity, v.message.clone()))
+                    .collect())
+            };
+            let names_added = |found: &[(Severity, String)]| {
+                found.len() == 1
+                    && found[0].0 == Severity::Error
+                    && found[0].1.contains("adds CI variable `GITHUB_ACTIONS`")
+            };
+            Ok(names_added(&run(&ci_or_github, &[])?)
+                && names_added(&run(&ci_or_github, &["CI"])?)
+                && run(&ci_or_github, &["CI", "GITHUB_ACTIONS"])?.is_empty()
+                && run(&ci_and_short, &[])?.is_empty()
+                && run(&ci, &[])?.is_empty())
+        },
+    ),
+    (
         "hygiene: terms of art and historical narration exempt from time-estimates",
         || {
             let banned = crate::guards::hygiene::time_estimate_patterns()
