@@ -664,13 +664,12 @@ impl<'a> PhpExtractor<'a> {
         {
             test_fn.total_asserts += 1;
             test_fn.strong_asserts += 1;
-            let exp = super::expected_exceptions::ExpectedException {
-                line: node.start_position().row + 1,
-                skeleton: format!("$this->{}#", call_name),
-                kind: call_name.to_string(),
-                exception_type: None,
-                matcher: None,
-            };
+            let exp = super::expected_exceptions::php_expectation(
+                call_name,
+                args.first().copied(),
+                std::str::from_utf8(self.src).unwrap_or(""),
+                node.start_position().row + 1,
+            );
             test_fn.should_panic = Some(exp.clone());
             test_fn.expected_exceptions.push(exp);
             return;
