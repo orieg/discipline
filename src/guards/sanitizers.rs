@@ -196,6 +196,29 @@ pub(crate) fn executed_keys(gates: &crate::config::Gates) -> ExecutedKeys {
 /// The configuration key of the sanitizer name, as a message names it.
 pub const SANITIZER_KEY: &str = "gates.sanitizers.sanitizer";
 
+/// The configuration key of the canary switch, as a message names it.
+pub const CANARY_KEY: &str = "gates.sanitizers.canary";
+
+/// The one sanitizer the built-in canary belongs to: the canary is a data race, and the
+/// diagnostic it is expected to print is ThreadSanitizer's.
+pub const CANARY_SANITIZER: &str = "thread";
+
+/// `canary = true` with a `sanitizer` other than [`CANARY_SANITIZER`] is a configuration
+/// error naming the key: no other sanitizer prints the diagnostic the canary is checked
+/// for, so the pair could only ever report a missing diagnostic.
+pub fn check_canary_sanitizer(settings: &crate::config::SanitizersGate) -> Result<()> {
+    if !settings.canary || settings.sanitizer == CANARY_SANITIZER {
+        return Ok(());
+    }
+    Err(crate::could_not_check::tag(
+        crate::could_not_check::Reason::Configuration,
+        anyhow::anyhow!(
+            "`{CANARY_KEY}` is set with `{SANITIZER_KEY} = {:?}`: the built-in canary is a data race and the diagnostic it is checked for is ThreadSanitizer's, which only `sanitizer = \"{CANARY_SANITIZER}\"` prints; set `sanitizer = \"{CANARY_SANITIZER}\"` or `canary = false`",
+            settings.sanitizer
+        ),
+    ))
+}
+
 /// The longest sanitizer name accepted.
 const MAX_SANITIZER_NAME: usize = 32;
 

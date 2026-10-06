@@ -805,7 +805,7 @@
           "$ref": "#/$defs/StringListOrReset"
         },
         "pinned_version": {
-          "description": "Explicit MSRV version string (e.g. \"1.90.0\")",
+          "description": "Explicit MSRV version string (e.g. \"1.90.0\"); config-integrity reports a change that lowers it, compared as a version, or removes it",
           "type": [
             "string",
             "null"
@@ -1068,7 +1068,7 @@
       "additionalProperties": false,
       "properties": {
         "canary": {
-          "description": "Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it",
+          "description": "Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it. The canary is checked for ThreadSanitizer's diagnostic: with a sanitizer other than \"thread\" it is a configuration error",
           "type": "boolean"
         },
         "enabled": {

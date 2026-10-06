@@ -1442,12 +1442,118 @@ pub fn capture_pattern(pattern: &str, key: &str) -> Result<regex::Regex> {
     Ok(re)
 }
 
+/// How a configured pattern is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatternForm {
+    /// A regular expression.
+    Regex,
+    /// One of the forms of `ratio_satisfied_by` (`interval`, `marker:<word>`,
+    /// `artifact:<glob>`, `regex:<pattern>`).
+    RatioEvidence,
+}
+
+/// Configuration keys whose value is a regular expression or a list of them, wherever
+/// they sit in a gate's table (an entry of `rules`, of `groups`, of `commands`). The
+/// gate that reads one compiles it when it gets that far; [`unusable_patterns`] compiles
+/// every one before any gate runs. The patterns of `command` and `ci-integrity` that
+/// carry a rule of their own (a capture group, a message of their own) are checked by
+/// name there and are not listed here.
+const PATTERN_KEYS: &[(&str, PatternForm)] = &[
+    ("allow_patterns", PatternForm::Regex),
+    ("extra_patterns", PatternForm::Regex),
+    ("extra_secret_patterns", PatternForm::Regex),
+    ("forbidden_patterns", PatternForm::Regex),
+    ("snapshot_ignore", PatternForm::Regex),
+    ("pattern", PatternForm::Regex),
+    ("extract_regex", PatternForm::Regex),
+    ("regex", PatternForm::Regex),
+    ("ratio_satisfied_by", PatternForm::RatioEvidence),
+];
+
+/// Compiles one configured value of a [`PATTERN_KEYS`] key. A value that does not compile
+/// is a configuration error naming `key`.
+fn check_configured_pattern(pattern: &str, key: &str, form: PatternForm) -> Result<()> {
+    let checked = match form {
+        PatternForm::Regex => regex::Regex::new(pattern)
+            .map(|_| ())
+            .map_err(|e| anyhow!("`{key}` pattern `{pattern}` is not a valid regex: {e}")),
+        PatternForm::RatioEvidence => {
+            provenance_tags::interval_evidence_regex(&[pattern.to_string()])
+                .map(|_| ())
+                .map_err(|e| anyhow!("`{key}` entry does not compile: {e:#}"))
+        }
+    };
+    checked
+        .map_err(|e| crate::could_not_check::tag(crate::could_not_check::Reason::Configuration, e))
+}
+
+/// Every [`PATTERN_KEYS`] key under `value` holding a pattern that does not compile:
+/// where the key sits, its dotted name, and the error of its first such pattern. An entry
+/// of an array of tables is named by its `name` when it has one (`commands[api]`), else by
+/// its index (`rules[0]`).
+fn invalid_patterns(
+    value: &toml::Value,
+    at: &str,
+    path: &mut Vec<Seg>,
+    out: &mut Vec<(Vec<Seg>, String, anyhow::Error)>,
+) {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, v) in table {
+                let here = format!("{at}.{key}");
+                path.push(Seg::Key(key.clone()));
+                let form = PATTERN_KEYS
+                    .iter()
+                    .find(|(k, _)| *k == key.as_str())
+                    .map(|(_, form)| *form);
+                let patterns: Option<Vec<&str>> = match (form, v) {
+                    (Some(_), toml::Value::String(one)) => Some(vec![one.as_str()]),
+                    (Some(_), toml::Value::Array(items)) => {
+                        Some(items.iter().filter_map(toml::Value::as_str).collect())
+                    }
+                    _ => None,
+                };
+                match (form, patterns) {
+                    (Some(form), Some(patterns)) => {
+                        let bad = patterns
+                            .iter()
+                            .find_map(|p| check_configured_pattern(p, &here, form).err());
+                        if let Some(e) = bad {
+                            out.push((path.clone(), here, e));
+                        }
+                    }
+                    _ => invalid_patterns(v, &here, path, out),
+                }
+                path.pop();
+            }
+        }
+        toml::Value::Array(items) => {
+            for (i, v) in items.iter().enumerate() {
+                let entry = match v.get("name").and_then(toml::Value::as_str) {
+                    Some(name) => format!("{at}[{name}]"),
+                    None => format!("{at}[{i}]"),
+                };
+                path.push(Seg::Index(i));
+                invalid_patterns(v, &entry, path, out);
+                path.pop();
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Every configured value, other than a glob list, that an enabled gate among `gate_ids`
 /// could not use, in the order the run reports them: the capture patterns of
-/// `ci-integrity` and `command`, the output patterns of `command`, and the globs among `bench-regression`'s
-/// `exempt_arms` (a list of names and globs, so not one of [`GLOB_LIST_KEYS`]). Each
-/// error is the gate's, with the reason `configuration`.
-fn unusable_patterns(config: &DisciplineConfig, gate_ids: &[&'static str]) -> Vec<UnusableValue> {
+/// `ci-integrity` and `command`, the output patterns of `command`, the shapes of the
+/// values `miri` and `sanitizers` place in a command, a `sanitizers` canary under a
+/// sanitizer that cannot produce its diagnostic, the globs among `bench-regression`'s
+/// `exempt_arms` (a list of names and globs, so not one of [`GLOB_LIST_KEYS`]), and then
+/// every other configured regular expression ([`PATTERN_KEYS`]) of every gate. Each error
+/// is the gate's, with the reason `configuration`.
+fn unusable_patterns(
+    config: &DisciplineConfig,
+    gate_ids: &[&'static str],
+) -> Result<Vec<UnusableValue>> {
     let on =
         |id: &str| gate_ids.contains(&id) && config.gates.settings(id).is_some_and(|s| s.enabled());
     let mut out = Vec::new();
@@ -1557,6 +1663,13 @@ fn unusable_patterns(config: &DisciplineConfig, gate_ids: &[&'static str]) -> Ve
                 sanitizers::SANITIZER_KEY.to_string(),
                 e,
             );
+        } else if let Err(e) = sanitizers::check_canary_sanitizer(&config.gates.sanitizers) {
+            push(
+                sanitizers::GATE,
+                key_path(&["gates", sanitizers::GATE, "canary"]),
+                sanitizers::CANARY_KEY.to_string(),
+                e,
+            );
         }
     }
     if on(perf::GATE) {
@@ -1569,7 +1682,22 @@ fn unusable_patterns(config: &DisciplineConfig, gate_ids: &[&'static str]) -> Ve
             );
         }
     }
-    out
+    // Every other configured regular expression, of every enabled gate.
+    let value = toml::Value::try_from(config)?;
+    let mut found = Vec::new();
+    for id in gate_ids {
+        if !on(id) {
+            continue;
+        }
+        if let Some(gate) = value.get("gates").and_then(|gates| gates.get(*id)) {
+            let at = format!("gates.{id}");
+            invalid_patterns(gate, &at, &mut key_path(&["gates", id]), &mut found);
+        }
+        for (path, key, e) in found.drain(..) {
+            push(id, path, key, e);
+        }
+    }
+    Ok(out)
 }
 
 /// Settings of an enabled gate among `gate_ids` that only work together and are set apart:
@@ -1618,7 +1746,7 @@ pub fn check_configured_patterns(
     config: &DisciplineConfig,
     gate_ids: &[&'static str],
 ) -> Result<()> {
-    match unusable_patterns(config, gate_ids).into_iter().next() {
+    match unusable_patterns(config, gate_ids)?.into_iter().next() {
         Some(first) => Err(first.error),
         None => Ok(()),
     }
@@ -1692,7 +1820,7 @@ pub fn base_policy_repaired_by_head(
     let ids = selected_gate_ids(suite);
     let unusable = |config: &DisciplineConfig| -> Result<Vec<UnusableValue>> {
         let mut found = unusable_globs(config, &ids)?;
-        found.extend(unusable_patterns(config, &ids));
+        found.extend(unusable_patterns(config, &ids)?);
         found.extend(unusable_pairs(config, &ids));
         Ok(found)
     };
@@ -1906,8 +2034,8 @@ mod tests {
         "mock_assert_fns",
         "mock_setup_fns",
         "placeholders",
-        // Regular expressions, compiled by the gate that reads them or, for
-        // `forbid_output`, by `check_configured_patterns`.
+        // Regular expressions, compiled by `check_configured_patterns` (`PATTERN_KEYS`,
+        // and `forbid_output` by name).
         "allow_patterns",
         "extra_patterns",
         "extra_secret_patterns",
@@ -1919,8 +2047,8 @@ mod tests {
         // Literal files or directories.
         "citation_source_paths",
         "required_suites",
-        // Names and globs mixed, compiled by `check_configured_patterns`; prefixed forms
-        // (`artifact:<glob>`, `regex:<pattern>`) the gate compiles itself.
+        // Names and globs mixed, and prefixed forms (`artifact:<glob>`,
+        // `regex:<pattern>`); both compiled by `check_configured_patterns`.
         "exempt_arms",
         "ratio_satisfied_by",
     ];
@@ -2013,6 +2141,414 @@ mod tests {
             &mut found,
         );
         assert!(found.is_empty());
+    }
+
+    /// The pattern keys [`unusable_patterns`] checks by name, under a rule of their own
+    /// (a capture group, the message of an output pattern), and not through
+    /// [`PATTERN_KEYS`].
+    const PATTERN_KEYS_CHECKED_BY_NAME: &[&str] = &[
+        "canary_expected_diagnostic",
+        "count_pattern",
+        "documented_job_count_pattern",
+        "forbid_output",
+        "zero_items_pattern",
+    ];
+
+    /// String values of the schema that are not regular expressions, by what they are.
+    /// Every string value is here, or is a pattern key compiled before any gate runs.
+    const NOT_PATTERN_SCALARS: &[&str] = &[
+        // Paths of files, and one glob.
+        "archive_path",
+        "base_file",
+        "base_report",
+        "constant_file",
+        "deny_file",
+        "documented_job_count_path",
+        "head_file",
+        "head_report",
+        "manifest",
+        "path",
+        "ratio_baseline",
+        "snapshot",
+        "superseded_registry",
+        "test_report",
+        "workflow",
+        // Command lines.
+        "canary_command",
+        "command",
+        "test_command",
+        // Names: jobs, steps, constants, presets, sanitizers, groups, actions.
+        "change_job",
+        "constant_name",
+        "guard",
+        "job",
+        "name",
+        "preset",
+        "rollup_job",
+        "sanitizer",
+        "uses",
+        // Text compared or printed as written.
+        "description",
+        "marker",
+        "pinned_version",
+        "provenance",
+        "reason",
+        "review_trailer",
+    ];
+
+    /// How many string lists hold neither globs nor patterns (`NOT_GLOB_LISTS` without
+    /// the pattern keys). A list added there changes this count, which is where its
+    /// author says whether its entries are regular expressions.
+    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 33;
+
+    /// Every string and string-list property of the configuration schema:
+    /// `(name, is a list, description)`.
+    fn schema_strings(v: &serde_json::Value, out: &mut Vec<(String, bool, String)>) {
+        match v {
+            serde_json::Value::Object(map) => {
+                if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
+                    for (name, prop) in props {
+                        let is_list = prop.get("$ref").and_then(|r| r.as_str())
+                            == Some("#/$defs/StringListOrReset");
+                        let is_string = match prop.get("type") {
+                            Some(serde_json::Value::String(t)) => t == "string",
+                            Some(serde_json::Value::Array(ts)) => {
+                                ts.iter().any(|t| t == "string")
+                                    && ts.iter().all(|t| t == "string" || t == "null")
+                            }
+                            _ => false,
+                        };
+                        // A closed set of words is not free text.
+                        if is_list || (is_string && prop.get("enum").is_none()) {
+                            let description = prop
+                                .get("description")
+                                .and_then(|d| d.as_str())
+                                .unwrap_or_default()
+                                .to_lowercase();
+                            out.push((name.clone(), is_list, description));
+                        }
+                    }
+                }
+                map.values().for_each(|c| schema_strings(c, out));
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|c| schema_strings(c, out)),
+            _ => {}
+        }
+    }
+
+    fn is_pattern_key(name: &str) -> bool {
+        PATTERN_KEYS.iter().any(|(k, _)| *k == name) || PATTERN_KEYS_CHECKED_BY_NAME.contains(&name)
+    }
+
+    /// `PATTERN_KEYS` is written by hand. This ties it to the schema: every string value
+    /// the schema declares is a pattern key, compiled before any gate runs, or is named as
+    /// something else. A string added to the schema is in neither and fails here, and so
+    /// does one whose description calls it a regular expression while it is not compiled.
+    #[test]
+    fn every_string_of_the_schema_is_a_pattern_compiled_up_front_or_named_otherwise() {
+        let mut strings = Vec::new();
+        schema_strings(&crate::schema::generate_schema(), &mut strings);
+        assert!(
+            strings.len() > PATTERN_KEYS.len() + NOT_PATTERN_SCALARS.len(),
+            "the schema walk found too little"
+        );
+        for (name, is_list, description) in &strings {
+            let name = name.as_str();
+            let pattern = is_pattern_key(name);
+            if *is_list {
+                assert!(
+                    pattern || GLOB_LIST_KEYS.contains(&name) || NOT_GLOB_LISTS.contains(&name),
+                    "`{name}` is a string list in the schema and is not classified"
+                );
+                assert!(
+                    !(pattern && GLOB_LIST_KEYS.contains(&name)),
+                    "`{name}` is a glob list and a pattern key"
+                );
+            } else {
+                assert!(
+                    pattern != NOT_PATTERN_SCALARS.contains(&name),
+                    "`{name}` is a string in the schema and must be in exactly one of \
+                     PATTERN_KEYS (it is then compiled before any gate runs), the keys \
+                     `unusable_patterns` checks by name, or NOT_PATTERN_SCALARS under what \
+                     it is"
+                );
+            }
+            let says_regex = ["regex", "regular expression"]
+                .iter()
+                .any(|w| description.contains(w));
+            assert!(
+                !says_regex || pattern,
+                "the schema describes `{name}` as a regular expression; add it to PATTERN_KEYS"
+            );
+        }
+        let declared = |key: &str| strings.iter().any(|(name, _, _)| name == key);
+        for key in PATTERN_KEYS
+            .iter()
+            .map(|(k, _)| *k)
+            .chain(PATTERN_KEYS_CHECKED_BY_NAME.iter().copied())
+            .chain(NOT_PATTERN_SCALARS.iter().copied())
+        {
+            assert!(
+                declared(key),
+                "`{key}` is classified here and is no string in the schema"
+            );
+        }
+        for key in PATTERN_KEYS_CHECKED_BY_NAME {
+            assert!(
+                !PATTERN_KEYS.iter().any(|(k, _)| k == key),
+                "`{key}` is listed twice"
+            );
+        }
+        let neither = NOT_GLOB_LISTS.iter().filter(|k| !is_pattern_key(k)).count();
+        assert_eq!(
+            neither, LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS,
+            "a string list was added to or taken from NOT_GLOB_LISTS: if its entries are \
+             regular expressions, add it to PATTERN_KEYS so that they are compiled before \
+             any gate runs; then update LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS"
+        );
+    }
+
+    /// A pattern key is compiled wherever it sits: every key of `PATTERN_KEYS`, set to a
+    /// value that does not compile, as one value or in a list, in a gate's table or in an
+    /// entry of an array of tables, is found and named.
+    #[test]
+    fn every_pattern_key_is_compiled_wherever_it_sits() {
+        let found_in = |gate: toml::Table| {
+            let mut found = Vec::new();
+            invalid_patterns(
+                &toml::Value::Table(gate),
+                "gates.x",
+                &mut key_path(&["gates", "x"]),
+                &mut found,
+            );
+            found
+        };
+        let text = |s: &str| toml::Value::String(s.to_string());
+        for (key, form) in PATTERN_KEYS {
+            let bad = match form {
+                PatternForm::Regex => "(a",
+                PatternForm::RatioEvidence => "regex:(a",
+            };
+            let good = match form {
+                PatternForm::Regex => "(a)",
+                PatternForm::RatioEvidence => "regex:(a)",
+            };
+            for value in [text(bad), toml::Value::Array(vec![text(good), text(bad)])] {
+                let mut gate = toml::Table::new();
+                gate.insert(key.to_string(), value.clone());
+                let found = found_in(gate);
+                assert_eq!(found.len(), 1, "{key}");
+                assert_eq!(found[0].1, format!("gates.x.{key}"));
+                let mut path = key_path(&["gates", "x"]);
+                path.push(Seg::Key(key.to_string()));
+                assert_eq!(found[0].0, path);
+                let shown = format!("{:#}", found[0].2);
+                assert!(shown.contains(&format!("`gates.x.{key}`")), "{shown}");
+                let (reason, _) = crate::could_not_check::classify(&found[0].2);
+                assert_eq!(reason, crate::could_not_check::Reason::Configuration);
+
+                // In an entry of an array of tables: named by `name`, else by index.
+                let mut unnamed = toml::Table::new();
+                unnamed.insert(key.to_string(), value.clone());
+                let mut named = unnamed.clone();
+                named.insert("name".to_string(), text("api"));
+                // `name` is no pattern key, so the entry's name is never compiled.
+                assert!(!is_pattern_key("name"));
+                let mut gate = toml::Table::new();
+                gate.insert(
+                    "entries".to_string(),
+                    toml::Value::Array(vec![
+                        toml::Value::Table(unnamed),
+                        toml::Value::Table(named),
+                    ]),
+                );
+                let found = found_in(gate);
+                let keys: Vec<&str> = found.iter().map(|f| f.1.as_str()).collect();
+                assert_eq!(
+                    keys,
+                    [
+                        format!("gates.x.entries[0].{key}"),
+                        format!("gates.x.entries[api].{key}")
+                    ]
+                );
+                let mut path = key_path(&["gates", "x", "entries"]);
+                path.push(Seg::Index(1));
+                path.push(Seg::Key(key.to_string()));
+                assert_eq!(found[1].0, path);
+            }
+            // Controls: a value that compiles, and an empty list.
+            for value in [text(good), toml::Value::Array(Vec::new())] {
+                let mut gate = toml::Table::new();
+                gate.insert(key.to_string(), value);
+                assert!(found_in(gate).is_empty(), "{key}");
+            }
+        }
+        // Control: a key that is not a pattern key is not compiled as one.
+        let mut gate = toml::Table::new();
+        gate.insert("exempt_paths".to_string(), text("(a"));
+        gate.insert("command".to_string(), text("(a"));
+        assert!(found_in(gate).is_empty());
+        // The other forms of `ratio_satisfied_by` are read as what they are, and an
+        // unknown form is refused.
+        for (entry, ok) in [
+            ("interval", true),
+            ("marker:(a", true),
+            ("artifact:results/(a*", true),
+            ("regex:(a", false),
+            ("pattern:x", false),
+        ] {
+            let mut gate = toml::Table::new();
+            gate.insert(
+                "ratio_satisfied_by".to_string(),
+                toml::Value::Array(vec![text(entry)]),
+            );
+            assert_eq!(found_in(gate).is_empty(), ok, "{entry}");
+        }
+    }
+
+    /// Through the check the run makes: the pattern keys of real gate tables, and the keys
+    /// checked by name, stop it with the gate, the key and the reason `configuration`;
+    /// the same table with a pattern that compiles, or with the gate off, does not.
+    #[test]
+    fn a_pattern_of_any_gate_that_does_not_compile_fails_the_check_made_up_front() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "time-estimates",
+                "[gates.time-estimates]\nenabled = true\nallow_patterns = ['(a']\n",
+                "gates.time-estimates.allow_patterns",
+            ),
+            (
+                "pii",
+                "[gates.pii]\nenabled = true\nextra_patterns = ['(a']\n",
+                "gates.pii.extra_patterns",
+            ),
+            (
+                "shell-secrets",
+                "[gates.shell-secrets]\nenabled = true\nextra_secret_patterns = ['(a']\n",
+                "gates.shell-secrets.extra_secret_patterns",
+            ),
+            (
+                "issue-link",
+                "[gates.issue-link]\nenabled = true\npattern = '(a'\n",
+                "gates.issue-link.pattern",
+            ),
+            (
+                "archive-contents",
+                "[gates.archive-contents]\nenabled = true\narchive_path = \"d/*.tgz\"\nforbidden_patterns = ['(a']\n",
+                "gates.archive-contents.forbidden_patterns",
+            ),
+            (
+                "manifest-sync",
+                "[gates.manifest-sync]\nenabled = true\n[[gates.manifest-sync.rules]]\nmanifest = \"a.toml\"\nextract_regex = '(a'\nwatched_paths = [\"a/**\"]\n",
+                "gates.manifest-sync.rules[0].extract_regex",
+            ),
+            (
+                "version-lockstep",
+                "[gates.version-lockstep]\nenabled = true\n[[gates.version-lockstep.groups]]\nname = \"g\"\n[[gates.version-lockstep.groups.sources]]\npath = \"a\"\nregex = '(a'\n",
+                "gates.version-lockstep.groups[g].sources[0].regex",
+            ),
+            (
+                "provenance-tags",
+                "[gates.provenance-tags]\nenabled = true\nratio_satisfied_by = ['regex:(a']\n",
+                "gates.provenance-tags.ratio_satisfied_by",
+            ),
+            (
+                "command",
+                "[gates.command]\nenabled = true\ncommand = \"true\"\nsnapshot_ignore = ['(a']\n",
+                "gates.command.snapshot_ignore",
+            ),
+            (
+                "command",
+                "[gates.command]\nenabled = true\n[[gates.command.commands]]\nname = \"api\"\ncommand = \"true\"\nsnapshot_ignore = ['(a']\n",
+                "gates.command.commands[api].snapshot_ignore",
+            ),
+            // Checked by name.
+            (
+                "command",
+                "[gates.command]\nenabled = true\ncommand = \"true\"\ncount_pattern = '(a'\n",
+                "gates.command.count_pattern",
+            ),
+            (
+                "command",
+                "[gates.command]\nenabled = true\ncommand = \"true\"\nzero_items_pattern = '(a'\n",
+                "gates.command.zero_items_pattern",
+            ),
+            (
+                "command",
+                "[gates.command]\nenabled = true\ncommand = \"true\"\ncanary_expected_diagnostic = '(a'\n",
+                "gates.command.canary_expected_diagnostic",
+            ),
+            (
+                "command",
+                "[gates.command]\nenabled = true\ncommand = \"true\"\nforbid_output = ['(a']\n",
+                "gates.command.forbid_output",
+            ),
+            (
+                "ci-integrity",
+                "[gates.ci-integrity]\nenabled = true\ndocumented_job_count_path = \"d.md\"\ndocumented_job_count_pattern = '(a'\n",
+                "gates.ci-integrity.documented_job_count_pattern",
+            ),
+        ];
+        let ids: Vec<&'static str> = GATES.iter().map(|g| g.id).collect();
+        for (gate, body, key) in cases {
+            let e = check_configured_patterns(&policy(body), &ids).unwrap_err();
+            let (reason, named) = crate::could_not_check::classify(&e);
+            assert_eq!(
+                reason,
+                crate::could_not_check::Reason::Configuration,
+                "{key}"
+            );
+            assert_eq!(named.as_deref(), Some(*gate), "{key}");
+            let shown = format!("{e:#}");
+            assert!(shown.contains(&format!("`{key}`")), "{shown}");
+            // Controls.
+            let good = policy(&body.replace("(a", "(a)"));
+            assert!(check_configured_patterns(&good, &ids).is_ok(), "{key}");
+            let off = policy(&body.replace("enabled = true", "enabled = false"));
+            assert!(check_configured_patterns(&off, &ids).is_ok(), "{key}");
+            // A gate the run did not select is not read.
+            let others: Vec<&'static str> = ids.iter().copied().filter(|i| i != gate).collect();
+            assert!(
+                check_configured_patterns(&policy(body), &others).is_ok(),
+                "{key}"
+            );
+        }
+    }
+
+    const CANARY_ADDRESS: &str =
+        "[gates.sanitizers]\nenabled = true\nsanitizer = \"address\"\ncanary = true\n";
+    const CANARY_THREAD: &str =
+        "[gates.sanitizers]\nenabled = true\nsanitizer = \"thread\"\ncanary = true\n";
+    const NO_CANARY_ADDRESS: &str =
+        "[gates.sanitizers]\nenabled = true\nsanitizer = \"address\"\ncanary = false\n";
+
+    #[test]
+    fn a_canary_under_a_sanitizer_other_than_thread_fails_the_check_made_up_front() {
+        let ids = ["sanitizers"];
+        let e = check_configured_patterns(&policy(CANARY_ADDRESS), &ids).unwrap_err();
+        let (reason, gate) = crate::could_not_check::classify(&e);
+        assert_eq!(reason, crate::could_not_check::Reason::Configuration);
+        assert_eq!(gate.as_deref(), Some("sanitizers"));
+        let shown = format!("{e:#}");
+        assert!(shown.contains("`gates.sanitizers.canary`"), "{shown}");
+        assert!(
+            shown.contains("`gates.sanitizers.sanitizer = \"address\"`"),
+            "{shown}"
+        );
+        // Controls.
+        for ok in [CANARY_THREAD, NO_CANARY_ADDRESS] {
+            assert!(check_configured_patterns(&policy(ok), &ids).is_ok(), "{ok}");
+        }
+        let off = CANARY_ADDRESS.replace("enabled = true", "enabled = false");
+        assert!(check_configured_patterns(&policy(&off), &ids).is_ok());
+        // A name of the wrong shape is reported first, as before.
+        let misshapen = CANARY_ADDRESS.replace("address", "Address");
+        let e = check_configured_patterns(&policy(&misshapen), &ids).unwrap_err();
+        assert!(format!("{e:#}").contains("is not a sanitizer name"));
+        // Under `--policy-from base` a change that drops the canary repairs it.
+        let (config, taken) = repaired(CANARY_ADDRESS, NO_CANARY_ADDRESS).expect("a repair");
+        assert!(!config.gates.sanitizers.canary);
+        assert!(taken[0].note.contains("`gates.sanitizers.canary`"));
     }
 
     const POLICY_HEAD: &str = "[meta]\nversion = 1\nname = \"t\"\n";

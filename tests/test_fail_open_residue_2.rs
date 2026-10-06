@@ -726,10 +726,10 @@ fn a_missing_baseline_inside_the_repository_is_named_by_its_relative_path() {
     assert!(d.contains("`policy/known.toml`") && !d.contains(dir), "{d}");
 }
 
-/// Control: a baseline outside the repository has no relative name; its path is printed
-/// as given.
+/// A baseline outside the repository has no relative name; only its file name is printed,
+/// since its directory is the runner's.
 #[test]
-fn a_baseline_outside_the_repository_keeps_its_absolute_path() {
+fn a_baseline_outside_the_repository_is_named_by_its_file_name() {
     let repo = Repo::new();
     let elsewhere = tempfile::tempdir().unwrap();
     let outside = elsewhere.path().join("known.toml");
@@ -738,7 +738,10 @@ fn a_baseline_outside_the_repository_keeps_its_absolute_path() {
     let run = repo.check(&["--baseline-file", outside]);
     assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
     assert_eq!(run.could_not_check(), ("baseline".to_string(), None));
-    assert!(detail(&run).contains(outside), "{}", detail(&run));
+    let d = detail(&run);
+    let dir = elsewhere.path().file_name().unwrap().to_str().unwrap();
+    assert!(d.contains("`known.toml`") && !d.contains(dir), "{d}");
+    assert!(!run.stderr.contains(dir), "{}", run.stderr);
 }
 
 // ---- test-budget: fuzz_targets -----------------------------------------------------------

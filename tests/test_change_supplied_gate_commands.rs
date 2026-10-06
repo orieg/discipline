@@ -704,7 +704,11 @@ fn a_sanitizer_name_in_a_configuration_the_change_adds_is_not_run() {
 /// `canary` selects a second built-in command; a change that turns it on adds a run.
 #[test]
 fn a_sanitizer_canary_added_by_the_change_is_not_run() {
-    let repo = repo_with(SANITIZERS_ON, &format!("{SANITIZERS_ON}{CANARY_ON}"));
+    // The canary belongs to `thread`, which both sides name.
+    let repo = repo_with(
+        &format!("{SANITIZERS_ON}{SANITIZER_THREAD}"),
+        &format!("{SANITIZERS_ON}{SANITIZER_THREAD}{CANARY_ON}"),
+    );
     let run = check_with_cargo(&repo, &[], &[]);
     let ran = argv(&repo);
     assert_eq!(
@@ -741,7 +745,11 @@ fn a_sanitizer_canary_removed_by_the_change_is_not_run() {
 
 #[test]
 fn a_sanitizers_gate_the_change_enables_with_a_canary_is_not_run() {
-    let repo = repo_with(NO_GATES, &format!("{SANITIZERS_ON}{CANARY_ON}"));
+    // The canary belongs to `thread`; the change supplies both keys.
+    let repo = repo_with(
+        NO_GATES,
+        &format!("{SANITIZERS_ON}{SANITIZER_THREAD}{CANARY_ON}"),
+    );
     let run = check_with_cargo(&repo, &[], &[]);
     let ran = argv(&repo);
     assert_eq!(
