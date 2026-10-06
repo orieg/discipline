@@ -420,25 +420,11 @@ impl<'a> JavaExtractor<'a> {
             let mut cursor = modifiers.walk();
             for child in modifiers.children(&mut cursor) {
                 if child.kind() == "annotation" {
-                    let text = self.text(child);
-                    if text.contains("expected =") || text.contains("expected=") {
-                        let idx = text.find("expected")?;
-                        let rest = text[idx + "expected".len()..].trim_start();
-                        let rest = rest.strip_prefix('=')?.trim_start();
-                        let val_str = rest
-                            .trim_end_matches(')')
-                            .trim()
-                            .trim_end_matches(".class")
-                            .trim();
-                        if !val_str.is_empty() {
-                            return Some(super::expected_exceptions::ExpectedException {
-                                line: child.start_position().row + 1,
-                                skeleton: "@Test(expected = #)".to_string(),
-                                kind: "test_expected".to_string(),
-                                exception_type: Some(val_str.to_string()),
-                                matcher: None,
-                            });
-                        }
+                    if let Some(exp) = super::expected_exceptions::java_annotation_expected(
+                        child,
+                        std::str::from_utf8(self.src).unwrap_or(""),
+                    ) {
+                        return Some(exp);
                     }
                 }
             }
