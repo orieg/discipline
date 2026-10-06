@@ -273,7 +273,16 @@ impl<'a> Extractor<'a> {
                 let mut direct_calls = Vec::new();
                 let test_opt = self.test_fn(node, mods, &mut direct_calls);
                 let is_test = test_opt.is_some();
-                if let Some(test) = test_opt {
+                if let Some(mut test) = test_opt {
+                    // `proptest!(|(x in 0..10)| { .. })`: the closure's body is a token
+                    // tree, read the way a property function's is.
+                    let mut closures = Vec::new();
+                    if let Some(body) = node.child_by_field_name("body") {
+                        self.proptest_closure_bodies(body, &mut closures);
+                    }
+                    for closure in closures {
+                        self.read_property_body(closure, &mut test, &mut direct_calls, false);
+                    }
                     self.facts.tests.push(test);
                     self.test_calls.push(direct_calls);
                 } else if let Some(name_node) = node.child_by_field_name("name") {
@@ -441,6 +450,7 @@ impl<'a> Extractor<'a> {
         let mut ci_verdict = None;
         let mut should_panic = None;
         let mut has_commented_out_test = false;
+        let mut is_quickcheck = false;
         let mut prev = node.prev_sibling();
         while let Some(p) = prev {
             match p.kind() {
@@ -448,6 +458,7 @@ impl<'a> Extractor<'a> {
                     let text = self.text(p);
                     let name = attribute_name(text);
                     let attr_line = p.start_position().row + 1;
+                    is_quickcheck |= name == "quickcheck";
                     let mut check_attr = |n: &str| match n {
                         "test" | "rstest" | "test_case" | "quickcheck" => is_test = true,
                         "ignore" => ignored = true,
@@ -469,6 +480,7 @@ impl<'a> Extractor<'a> {
                                     "test" | "rstest" | "test_case" | "quickcheck"
                                 ) {
                                     is_test = true;
+                                    is_quickcheck |= sub_name == "quickcheck";
                                 } else if sub_name == "ignore" {
                                     if let Some(verdict) = self.apply_cfg_attr_ignore(
                                         p,
@@ -527,7 +539,8 @@ impl<'a> Extractor<'a> {
             .collect::<Vec<_>>()
             .join("::");
 
-        let (cases, non_literal_cases) = super::test_cases::extract_rust_cases(node, self.src);
+        let (cases, non_literal_cases, case_rows) =
+            super::test_cases::extract_rust_cases(node, self.src).into_parts();
 
         let mut test = TestFn {
             name: qualified,
@@ -553,6 +566,7 @@ impl<'a> Extractor<'a> {
             expected_exceptions: should_panic.into_iter().collect(),
             cases,
             non_literal_cases,
+            case_rows,
             direct_calls: Vec::new(),
             tautology_spans: Vec::new(),
             method_checks: 0,
@@ -568,6 +582,15 @@ impl<'a> Extractor<'a> {
             .unwrap_or(false);
         if let Some(body) = node.child_by_field_name("body") {
             self.count_asserts(body, &mut test, is_fallible_return, direct_calls);
+            if is_quickcheck {
+                // A `#[quickcheck]` function is the property a `quickcheck!` one is.
+                count_property_result(
+                    body,
+                    self.src,
+                    &|name| self.is_assert_macro(name),
+                    &mut test,
+                );
+            }
             self.macro_argument_calls(body, &mut test, direct_calls);
             super::dispatch_calls(body, self.src, &RS_DISPATCH, direct_calls);
             if !test.ignored {
@@ -905,9 +928,25 @@ impl<'a> Extractor<'a> {
                 }
 
                 let body_node = children[i];
-                let body_text = self.text(body_node);
                 let end_line = body_node.end_position().row + 1;
                 i += 1;
+
+                // `proptest!` writes the function out with the attributes it was given,
+                // so one without `#[test]` is not run as a test. `quickcheck!` adds the
+                // attribute itself.
+                let runs_as_test = macro_name != "proptest"
+                    || current_attrs.iter().any(|(_, attr_text, _)| {
+                        attribute_name(attr_text) == "test"
+                            || (attribute_name(attr_text) == "cfg_attr"
+                                && parse_cfg_attr(attr_text).is_some_and(|(_, subs)| {
+                                    subs.iter().any(|sub| attribute_name(sub) == "test")
+                                }))
+                    });
+                if !runs_as_test {
+                    current_attrs.clear();
+                    attr_start_line = None;
+                    continue;
+                }
 
                 let test_name = mods
                     .iter()
@@ -976,43 +1015,11 @@ impl<'a> Extractor<'a> {
                     ..Default::default()
                 };
 
-                let fake_fn = format!("fn __discipline_prop() {body_text}");
-                let mut p = Parser::new();
+                let is_qc = macro_name == "quickcheck"
+                    || return_type.contains("bool")
+                    || return_type.contains("TestResult");
                 let mut direct_calls = Vec::new();
-
-                if p.set_language(&tree_sitter_rust::LANGUAGE.into()).is_ok() {
-                    if let Some(tree) = p.parse(&fake_fn, None) {
-                        let root = tree.root_node();
-                        // The macro's token tree accepts tokens that are not a function
-                        // body. A body the grammar cannot read is reported like any other
-                        // source that parsed with errors, not counted as far as it went.
-                        if let (true, error_line, _) = super::collect_error_nodes_info(root) {
-                            self.facts.has_parse_errors = true;
-                            if self.facts.first_parse_error_line.is_none() {
-                                self.facts.first_parse_error_line =
-                                    Some(body_node.start_position().row + error_line.unwrap_or(1));
-                            }
-                        }
-                        // Reachability of the body as written, in the offsets of the
-                        // re-parsed text.
-                        let dead = super::reach::dead_ranges(root, &fake_fn, &RS_REACH);
-                        if let Some(fn_item) = root.child(0) {
-                            if let Some(body) = fn_item.child_by_field_name("body") {
-                                let is_qc = macro_name == "quickcheck"
-                                    || return_type.contains("bool")
-                                    || return_type.contains("TestResult");
-                                self.count_property_body_asserts(
-                                    body,
-                                    fake_fn.as_bytes(),
-                                    &dead,
-                                    &mut test,
-                                    &mut direct_calls,
-                                    is_qc,
-                                );
-                            }
-                        }
-                    }
-                }
+                self.read_property_body(body_node, &mut test, &mut direct_calls, is_qc);
 
                 self.facts.tests.push(test);
                 self.test_calls.push(direct_calls);
@@ -1035,6 +1042,128 @@ impl<'a> Extractor<'a> {
         }
     }
 
+    /// Reads a property body the grammar keeps as a token tree (`{ .. }` of a function in
+    /// `proptest!` / `quickcheck!`, or of the closure in `proptest!(|(..)| { .. })`) by
+    /// re-parsing its text as a function body, and adds to `test` what an ordinary test
+    /// body contributes: its assertions, the numeric bounds and expected values of those
+    /// assertions, and the assertions a handler catches. Lines and byte offsets are
+    /// mapped back to the file. With `result_is_checked` the value the body evaluates to
+    /// is the property's result (`count_property_result`).
+    fn read_property_body(
+        &mut self,
+        body_node: Node,
+        test: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+        result_is_checked: bool,
+    ) {
+        const PREFIX: &str = "fn __discipline_prop() ";
+        let fake_fn = format!("{PREFIX}{}", self.text(body_node));
+        let mut p = Parser::new();
+        if p.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
+            return;
+        }
+        let Some(tree) = p.parse(&fake_fn, None) else {
+            return;
+        };
+        let root = tree.root_node();
+        // The first line of the re-parsed text is the line the body starts on.
+        let first_row = body_node.start_position().row;
+        // The macro's token tree accepts tokens that are not a function body. A body the
+        // grammar cannot read is reported like any other source that parsed with errors,
+        // not counted as far as it went.
+        if let (true, error_line, _) = super::collect_error_nodes_info(root) {
+            self.facts.has_parse_errors = true;
+            if self.facts.first_parse_error_line.is_none() {
+                self.facts.first_parse_error_line = Some(first_row + error_line.unwrap_or(1));
+            }
+        }
+        // Reachability of the body as written, in the offsets of the re-parsed text.
+        let dead = super::reach::dead_ranges(root, &fake_fn, &RS_REACH);
+        let Some(body) = root
+            .child(0)
+            .and_then(|fn_item| fn_item.child_by_field_name("body"))
+        else {
+            return;
+        };
+        self.count_property_body_asserts(body, fake_fn.as_bytes(), &dead, test, direct_calls);
+        if result_is_checked {
+            count_property_result(
+                body,
+                fake_fn.as_bytes(),
+                &|name| self.is_assert_macro(name),
+                test,
+            );
+        }
+
+        // The checks made on an ordinary test body, on this one: read into a test that
+        // spans the re-parsed text, then moved to the lines and offsets of the file.
+        let mut read = [TestFn {
+            line: 1,
+            end_line: usize::MAX,
+            ..Default::default()
+        }];
+        super::bounds::rust(root, &fake_fn, &mut read);
+        super::expectations::rust(root, &fake_fn, &mut read);
+        super::caught_assertions::rust(root, &fake_fn, &mut read);
+        let [read] = read;
+        let file_byte = |byte: usize| body_node.start_byte() + byte.saturating_sub(PREFIX.len());
+        for mut bound in read.bounds {
+            bound.line += first_row;
+            if !test.bounds.contains(&bound) {
+                test.bounds.push(bound);
+            }
+        }
+        for mut expectation in read.expectations {
+            expectation.line += first_row;
+            if !test.expectations.contains(&expectation) {
+                test.expectations.push(expectation);
+            }
+        }
+        for mut caught in read.caught_assertions {
+            caught.line += first_row;
+            caught.handler_line += first_row;
+            caught.span = (file_byte(caught.span.0), file_byte(caught.span.1));
+            test.caught_assertions.push(caught);
+        }
+    }
+
+    /// The bodies of the closures handed to `proptest!` under `node`: the braced token
+    /// tree that follows the closure's parameters (`|(x in 0..10)| { .. }`). Nested
+    /// functions and code no execution reaches are not read.
+    fn proptest_closure_bodies<'t>(&self, node: Node<'t>, out: &mut Vec<Node<'t>>) {
+        if node.kind() == "function_item" || super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
+        if node.kind() == "macro_invocation" {
+            let is_proptest = node
+                .child_by_field_name("macro")
+                .is_some_and(|m| last_segment(self.text(m)) == "proptest");
+            if is_proptest {
+                let mut cursor = node.walk();
+                let tree = node
+                    .children(&mut cursor)
+                    .find(|c| c.kind() == "token_tree");
+                if let Some(tree) = tree {
+                    let mut tree_cursor = tree.walk();
+                    let tokens: Vec<Node> = tree
+                        .children(&mut tree_cursor)
+                        .filter(|c| !matches!(c.kind(), "line_comment" | "block_comment"))
+                        .collect();
+                    out.extend(tokens.windows(2).filter_map(|pair| {
+                        let braced = pair[1].kind() == "token_tree"
+                            && pair[1].child(0).is_some_and(|open| open.kind() == "{");
+                        (pair[0].kind() == "|" && braced).then_some(pair[1])
+                    }));
+                }
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.proptest_closure_bodies(child, out);
+        }
+    }
+
     fn count_property_body_asserts(
         &self,
         node: Node,
@@ -1042,7 +1171,6 @@ impl<'a> Extractor<'a> {
         dead: &super::reach::DeadRanges,
         test: &mut TestFn,
         direct_calls: &mut Vec<String>,
-        is_quickcheck: bool,
     ) {
         // An assertion no execution reaches (`if false { .. }`, after an early `return`)
         // checks nothing, in a property body as in an ordinary test.
@@ -1127,53 +1255,9 @@ impl<'a> Extractor<'a> {
             _ => {}
         }
 
-        if is_quickcheck && test.total_asserts == 0 {
-            if node.kind() == "block" {
-                let mut cursor = node.walk();
-                let children: Vec<Node> = node.children(&mut cursor).collect();
-                if let Some(last) = children.iter().rev().find(|c| c.is_named()) {
-                    if last.kind() != "expression_statement"
-                        && !matches!(last.kind(), "line_comment" | "block_comment")
-                    {
-                        self.eval_quickcheck_expr(*last, src, test);
-                    }
-                }
-            } else if node.kind() == "return_expression" {
-                if let Some(expr) = node.children(&mut node.walk()).find(|c| c.is_named()) {
-                    self.eval_quickcheck_expr(expr, src, test);
-                }
-            }
-        }
-
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.count_property_body_asserts(child, src, dead, test, direct_calls, is_quickcheck);
-        }
-    }
-
-    fn eval_quickcheck_expr(&self, expr: Node, src: &[u8], test: &mut TestFn) {
-        match expr.kind() {
-            "binary_expression" => {
-                test.total_asserts += 1;
-                let mut cursor = expr.walk();
-                for child in expr.children(&mut cursor) {
-                    if child.kind() == "==" || child.kind() == "!=" {
-                        test.strong_asserts += 1;
-                        break;
-                    }
-                }
-            }
-            "boolean_literal" => {
-                let text = expr.utf8_text(src).unwrap_or("");
-                test.total_asserts += 1;
-                if text == "true" {
-                    test.tautologies += 1;
-                }
-            }
-            "call_expression" | "unary_expression" => {
-                test.total_asserts += 1;
-            }
-            _ => {}
+            self.count_property_body_asserts(child, src, dead, test, direct_calls);
         }
     }
 
@@ -1740,6 +1824,228 @@ fn without_type_arguments(path: &str) -> &str {
 
 fn is_strong(name: &str) -> bool {
     name.contains("_eq") || name.contains("_ne") || name.contains("matches")
+}
+
+/// What the value a quickcheck property evaluates to says about the property.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PropertyResult {
+    /// It depends on something computed: the property checks. `strong` for an equality.
+    Checks { strong: bool },
+    /// It is true whatever the inputs: `true`, `TestResult::passed()`, `x == x`.
+    AlwaysTrue,
+}
+
+/// How many `let` bindings an identifier result is followed through.
+const RESULT_BINDING_DEPTH: usize = 4;
+
+/// Counts the result of a quickcheck property as its assertion: the tail expression of
+/// `body`, or the value of a `return` that ends it. quickcheck fails the property when
+/// that value is `false` (or a failed `TestResult`), so it is what the property checks,
+/// and one that is true whatever the inputs is a tautology. A body that ends in an
+/// assertion macro, or in a statement, has no result to count.
+fn count_property_result(
+    body: Node,
+    src: &[u8],
+    is_assert_macro: &dyn Fn(&str) -> bool,
+    test: &mut TestFn,
+) {
+    let Some(result) = block_result(body) else {
+        return;
+    };
+    if result.kind() == "macro_invocation" {
+        let asserts = result
+            .child_by_field_name("macro")
+            .and_then(|m| m.utf8_text(src).ok())
+            .is_some_and(|name| is_assert_macro(last_segment(name)));
+        if asserts {
+            return;
+        }
+    }
+    test.total_asserts += 1;
+    match property_result(result, body, src, RESULT_BINDING_DEPTH) {
+        PropertyResult::Checks { strong } => test.strong_asserts += usize::from(strong),
+        PropertyResult::AlwaysTrue => test.tautologies += 1,
+    }
+}
+
+/// The expression a block evaluates to: its tail expression, or the value of a `return`
+/// that is its last statement. `None` when it ends in a statement.
+fn block_result(block: Node) -> Option<Node> {
+    let mut cursor = block.walk();
+    let last = block
+        .named_children(&mut cursor)
+        .filter(|c| !matches!(c.kind(), "line_comment" | "block_comment"))
+        .last()?;
+    fn returned(node: Node) -> Option<Node> {
+        node.named_child(0)
+    }
+    match last.kind() {
+        "return_expression" => returned(last),
+        "expression_statement" => {
+            let mut cursor = last.walk();
+            let ends_statement = last.children(&mut cursor).any(|c| c.kind() == ";");
+            let inner = last.named_child(0)?;
+            match inner.kind() {
+                "return_expression" => returned(inner),
+                // A block-like expression in tail position has no `;`.
+                _ if !ends_statement => Some(inner),
+                _ => None,
+            }
+        }
+        kind if kind.ends_with("_declaration") || kind.ends_with("_item") => None,
+        _ => Some(last),
+    }
+}
+
+/// Judges one result expression. `body` is the property's body, where an identifier is
+/// looked up; `depth` bounds how many bindings are followed.
+fn property_result(expr: Node, body: Node, src: &[u8], depth: usize) -> PropertyResult {
+    use PropertyResult::{AlwaysTrue, Checks};
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    // Every branch must be true whatever the inputs for the whole to be.
+    let all = |branches: Vec<Option<Node>>| {
+        let mut strong = false;
+        let mut always = !branches.is_empty();
+        for branch in branches {
+            match branch.map(|b| property_result(b, body, src, depth)) {
+                Some(AlwaysTrue) => {}
+                Some(Checks { strong: s }) => {
+                    always = false;
+                    strong |= s;
+                }
+                None => always = false,
+            }
+        }
+        if always {
+            AlwaysTrue
+        } else {
+            Checks { strong }
+        }
+    };
+    match expr.kind() {
+        "parenthesized_expression" => expr
+            .named_child(0)
+            .map_or(Checks { strong: false }, |inner| {
+                property_result(inner, body, src, depth)
+            }),
+        "block" | "unsafe_block" => block_result(expr).map_or(Checks { strong: false }, |tail| {
+            property_result(tail, body, src, depth)
+        }),
+        "return_expression" => expr
+            .named_child(0)
+            .map_or(Checks { strong: false }, |inner| {
+                property_result(inner, body, src, depth)
+            }),
+        "boolean_literal" if text(expr) == "true" => AlwaysTrue,
+        "identifier" if depth > 0 => {
+            // The last `let` of the body that binds this name.
+            let name = text(expr);
+            let mut cursor = body.walk();
+            let bound = body
+                .named_children(&mut cursor)
+                .filter(|s| s.kind() == "let_declaration" && s.end_byte() <= expr.start_byte())
+                .filter(|s| {
+                    s.child_by_field_name("pattern")
+                        .is_some_and(|p| p.kind() == "identifier" && text(p) == name)
+                })
+                .last()
+                .and_then(|s| s.child_by_field_name("value"));
+            bound.map_or(Checks { strong: false }, |value| {
+                property_result(value, body, src, depth - 1)
+            })
+        }
+        "if_expression" => {
+            let mut branches = vec![expr.child_by_field_name("consequence")];
+            // `else { .. }` or `else if ..`; without an `else` one path has no value.
+            branches.push(
+                expr.child_by_field_name("alternative")
+                    .and_then(|alternative| alternative.named_child(0)),
+            );
+            all(branches)
+        }
+        "match_expression" => {
+            let arms = expr
+                .child_by_field_name("body")
+                .map_or_else(Vec::new, |block| {
+                    let mut cursor = block.walk();
+                    block
+                        .named_children(&mut cursor)
+                        .filter(|arm| arm.kind() == "match_arm")
+                        .map(|arm| arm.child_by_field_name("value"))
+                        .collect()
+                });
+            all(arms)
+        }
+        "call_expression" => {
+            let function = expr.child_by_field_name("function");
+            let mut cursor = expr.walk();
+            let arguments: Vec<Node> = expr
+                .child_by_field_name("arguments")
+                .map(|args| {
+                    args.named_children(&mut cursor)
+                        .filter(|a| !matches!(a.kind(), "line_comment" | "block_comment"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            // `TestResult::passed()` and `quickcheck::TestResult::from_bool(..)`, by path.
+            let method = function
+                .filter(|f| f.kind() == "scoped_identifier")
+                .filter(|f| {
+                    f.child_by_field_name("path").is_some_and(|path| {
+                        let owner = match path.kind() {
+                            "scoped_identifier" => path.child_by_field_name("name"),
+                            _ => Some(path),
+                        };
+                        owner.is_some_and(|o| text(o) == "TestResult")
+                    })
+                })
+                .and_then(|f| f.child_by_field_name("name"))
+                .map(text);
+            match (method, arguments.as_slice()) {
+                (Some("passed"), []) => AlwaysTrue,
+                (Some("from_bool"), [value]) => property_result(*value, body, src, depth),
+                _ => Checks { strong: false },
+            }
+        }
+        "unary_expression" => {
+            let mut cursor = expr.walk();
+            let negates = expr.children(&mut cursor).any(|c| c.kind() == "!");
+            let operand = expr.named_child(0);
+            if negates
+                && operand.is_some_and(|o| o.kind() == "boolean_literal" && text(o) == "false")
+            {
+                AlwaysTrue
+            } else {
+                Checks { strong: false }
+            }
+        }
+        "binary_expression" => {
+            let operator = expr
+                .child_by_field_name("operator")
+                .map_or("", |o| o.kind());
+            let (Some(left), Some(right)) = (
+                expr.child_by_field_name("left"),
+                expr.child_by_field_name("right"),
+            ) else {
+                return Checks { strong: false };
+            };
+            let side = |n: Node| property_result(n, body, src, depth);
+            match operator {
+                // An operand compared with itself.
+                "==" | "<=" | ">="
+                    if super::test_cases::row_text(left, src)
+                        == super::test_cases::row_text(right, src) =>
+                {
+                    AlwaysTrue
+                }
+                "||" if side(left) == AlwaysTrue || side(right) == AlwaysTrue => AlwaysTrue,
+                "&&" if side(left) == AlwaysTrue && side(right) == AlwaysTrue => AlwaysTrue,
+                "==" | "!=" => Checks { strong: true },
+                _ => Checks { strong: false },
+            }
+        }
+        _ => Checks { strong: false },
+    }
 }
 
 fn is_tautology(name: &str, token_tree: &str) -> bool {
@@ -2788,12 +3094,18 @@ mod tests {
             prop_assert!(add(a, b) >= a as u64);
         }
 
+        #[test]
         #[ignore]
         fn ignored_prop(x in 0..10) {
             prop_assert!(x < 10);
         }
 
+        #[test]
         fn vacuous_prop(x in 0..10) {}
+
+        fn not_run(x in 0..10) {
+            prop_assert!(x < 10);
+        }
     }
 
     quickcheck! {
@@ -2813,6 +3125,7 @@ mod tests {
     }
 }
 proptest! {
+    #[test]
     fn top_level_prop(x in 0..10) {
         assert!(x < 20);
     }
@@ -2859,8 +3172,10 @@ proptest! {
         assert_eq!(top_level.total_asserts, 1);
         assert!(!top_level.is_vacuous());
 
-        // 7. prop_compose is not extracted as a test
+        // 7. prop_compose is not extracted as a test, and neither is a function in
+        // `proptest!` without `#[test]`: the macro does not run it
         assert!(f.tests.iter().all(|t| !t.name.contains("arb_point")));
+        assert!(f.tests.iter().all(|t| !t.name.contains("not_run")));
 
         // 8. total tests count: exactly 6
         assert_eq!(f.tests.len(), 6);
@@ -2870,6 +3185,169 @@ proptest! {
             .notes
             .iter()
             .any(|n| n.contains("proptest") && n.contains("not analysed")));
+    }
+
+    /// A property `holds` with this result type and body, in the macro and as a
+    /// `#[quickcheck]` function.
+    fn quickcheck_forms(ty: &str, body: &str) -> [String; 2] {
+        [
+            format!("quickcheck! {{\n    fn holds(x: u32) -> {ty} {{\n{body}\n    }}\n}}\n"),
+            format!("#[quickcheck]\nfn holds(x: u32) -> {ty} {{\n{body}\n}}\n"),
+        ]
+    }
+
+    const RESULT_CHECKS: &[(&str, &str, usize)] = &[
+        ("bool", "double(x) == x + x", 1),
+        ("bool", "double(x) > x", 0),
+        ("bool", "holds_for(x)", 0),
+        ("bool", "matches!(double(x), 0..=9)", 0),
+        ("bool", "let ok = double(x) == x + x;\nok", 1),
+        ("bool", "if x > 0 { double(x) > x } else { true }", 0),
+        ("bool", "match x { 0 => true, _ => double(x) == x + x }", 1),
+        ("bool", "x == x && double(x) > x", 0),
+        ("bool", "return double(x) != x;", 1),
+        ("bool", "x", 0),
+        ("TestResult", "TestResult::from_bool(double(x) == x + x)", 1),
+        (
+            "TestResult",
+            "if x == 0 { return TestResult::discard(); }\nTestResult::from_bool(double(x) > x)",
+            0,
+        ),
+    ];
+
+    const RESULT_ALWAYS_TRUE: &[(&str, &str)] = &[
+        ("bool", "true"),
+        ("bool", "x == x"),
+        ("bool", "x <= x"),
+        ("bool", "(x + 1) == (x+1)"),
+        ("bool", "!false"),
+        ("bool", "let ok = true;\nok"),
+        ("bool", "let ok = true;\nlet fine = ok;\nfine"),
+        ("bool", "if x > 0 { true } else { x == x }"),
+        (
+            "bool",
+            "if x > 0 { true } else if x > 1 { true } else { true }",
+        ),
+        ("bool", "match x { 0 => true, _ => { true } }"),
+        ("bool", "double(x) > x || true"),
+        ("bool", "return true;"),
+        ("TestResult", "TestResult::passed()"),
+        ("TestResult", "quickcheck::TestResult::passed()"),
+        ("TestResult", "TestResult::from_bool(true)"),
+        ("TestResult", "let r = TestResult::passed();\nr"),
+    ];
+
+    #[test]
+    fn quickcheck_result_is_the_assertion_of_the_property_in_both_forms() {
+        for (ty, body, strong) in RESULT_CHECKS {
+            for src in quickcheck_forms(ty, body) {
+                let f = facts(&src);
+                let t = &f.tests[0];
+                assert_eq!(
+                    (t.total_asserts, t.strong_asserts, t.tautologies),
+                    (1, *strong, 0),
+                    "{src}"
+                );
+                assert!(!t.is_vacuous(), "{src}");
+            }
+        }
+        for (ty, body) in RESULT_ALWAYS_TRUE {
+            for src in quickcheck_forms(ty, body) {
+                let f = facts(&src);
+                let t = &f.tests[0];
+                assert_eq!((t.total_asserts, t.tautologies), (1, 1), "{src}");
+                assert!(t.is_vacuous(), "{src}");
+            }
+        }
+    }
+
+    #[test]
+    fn quickcheck_result_is_counted_beside_the_assertions_of_the_body() {
+        // An assertion and a constant result: the assertion is the check that is left.
+        for src in quickcheck_forms("bool", "assert!(double(x) >= x);\ntrue") {
+            let t = &facts(&src).tests[0];
+            assert_eq!((t.total_asserts, t.tautologies), (2, 1), "{src}");
+            assert_eq!(t.effective_asserts(), 1, "{src}");
+        }
+        // A body that ends in a statement or in an assertion has no result to count.
+        for body in ["assert!(double(x) >= x);", "assert!(double(x) >= x)"] {
+            for src in quickcheck_forms("()", body) {
+                let t = &facts(&src).tests[0];
+                assert_eq!((t.total_asserts, t.tautologies), (1, 0), "{src}");
+            }
+        }
+    }
+
+    const PROPTEST_CLOSURE_FORM: &str = "#[test]\nfn outer() {\n    let n = 3;\n    proptest!(ProptestConfig::with_cases(8), move |(a in 0..10i32)| {\n        prop_assert!(a < 10);\n        prop_assert_eq!(digits(a), 1);\n    });\n    assert_eq!(n, 3);\n}\n";
+
+    #[test]
+    fn proptest_closure_body_counts_toward_the_enclosing_test() {
+        let f = facts(PROPTEST_CLOSURE_FORM);
+        assert_eq!(f.tests.len(), 1);
+        let t = &f.tests[0];
+        assert_eq!((t.total_asserts, t.strong_asserts), (3, 2));
+        // The bound and the expected value inside the closure, on the lines of the file.
+        let bound = t
+            .bounds
+            .iter()
+            .find(|b| b.literal == "10")
+            .expect("a bound");
+        assert_eq!(bound.line, 5);
+        let lines: Vec<(usize, &str)> = t
+            .expectations
+            .iter()
+            .map(|e| (e.line, e.literal.as_str()))
+            .collect();
+        assert!(lines.contains(&(6, "1")), "{lines:?}");
+        assert!(lines.contains(&(8, "3")), "{lines:?}");
+
+        // Control: without the closure's checks the test has its own one.
+        let emptied = PROPTEST_CLOSURE_FORM
+            .replace("        prop_assert!(a < 10);\n", "")
+            .replace("        prop_assert_eq!(digits(a), 1);\n", "");
+        assert_eq!(facts(&emptied).tests[0].total_asserts, 1);
+    }
+
+    const PROPTEST_BODY_CHECKS: &str = "// Properties.\nproptest! {\n    #[test]\n    fn bounded(a in 0..10i32) {\n        prop_assert!(a < 10);\n        prop_assert_eq!(digits(a), 1);\n        let _ = std::panic::catch_unwind(|| {\n            assert!(a >= 0);\n        });\n    }\n}\n";
+
+    #[test]
+    fn proptest_body_checks_are_read_on_the_lines_of_the_file() {
+        let f = facts(PROPTEST_BODY_CHECKS);
+        let t = &f.tests[0];
+        assert_eq!(
+            t.bounds
+                .iter()
+                .map(|b| (b.line, b.literal.as_str()))
+                .collect::<Vec<_>>(),
+            [(5, "10"), (8, "0")]
+        );
+        assert_eq!(
+            t.expectations
+                .iter()
+                .map(|e| (e.line, e.literal.as_str()))
+                .collect::<Vec<_>>(),
+            [(6, "1")]
+        );
+        assert_eq!(t.caught_assertions.len(), 1);
+        let caught = &t.caught_assertions[0];
+        assert_eq!((caught.line, caught.handler_line), (8, 7));
+        assert_eq!(
+            &PROPTEST_BODY_CHECKS[caught.span.0..caught.span.1],
+            "assert!(a >= 0)"
+        );
+        // Three assertions, one of them caught.
+        assert_eq!((t.total_asserts, t.effective_asserts()), (3, 2));
+    }
+
+    const PROPTEST_ATTRIBUTES: &str = "proptest! {\n    #[test]\n    fn runs(a in 0..10i32) {\n        prop_assert!(a < 10);\n    }\n\n    #[cfg_attr(not(miri), test)]\n    fn runs_off_miri(a in 0..10i32) {\n        prop_assert!(a < 10);\n    }\n\n    fn not_run(a in 0..10i32) {\n        prop_assert!(a < 10);\n    }\n\n    #[ignore]\n    fn not_run_either(a in 0..10i32) {}\n}\n\nquickcheck! {\n    fn always_run(a: u8) -> bool {\n        double(a) >= a\n    }\n}\n";
+
+    #[test]
+    fn a_function_in_proptest_is_a_test_only_with_the_test_attribute() {
+        let f = facts(PROPTEST_ATTRIBUTES);
+        let names: Vec<&str> = f.tests.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["runs", "runs_off_miri", "always_run"]);
+        // A macro holding only functions it does not run is still one that was read.
+        assert!(f.notes.is_empty(), "{:?}", f.notes);
     }
 
     #[test]

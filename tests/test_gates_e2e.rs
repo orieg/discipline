@@ -19454,7 +19454,7 @@ fn proptest_and_quickcheck_assertion_reduction_and_vacuous_e2e() {
     repo.git(&["checkout", "-q", "-B", "stronger-props", "main"]);
     repo.write(
         "tests/prop_test.rs",
-        "use proptest::prelude::*;\n\nproptest! {\n    #[test]\n    fn parses_dates(s in \"[0-9]{4}\") {\n        prop_assert!(!s.is_empty());\n        prop_assert_eq!(s.len(), 4);\n        prop_assert_ne!(s.len(), 0);\n    }\n}\n\nquickcheck::quickcheck! {\n    fn prop_roundtrip(x: u32) -> bool {\n        x == x\n    }\n}\n",
+        "use proptest::prelude::*;\n\nproptest! {\n    #[test]\n    fn parses_dates(s in \"[0-9]{4}\") {\n        prop_assert!(!s.is_empty());\n        prop_assert_eq!(s.len(), 4);\n        prop_assert_ne!(s.len(), 0);\n    }\n}\n\nquickcheck::quickcheck! {\n    fn prop_roundtrip(x: u32) -> bool {\n        decode(encode(x)) == x\n    }\n}\n",
     );
     repo.commit("test: strengthened proptest assertions and added real quickcheck");
     let run_pass = repo.check(&["--base", "main"]);

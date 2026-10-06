@@ -511,9 +511,11 @@ impl<'a> GoExtractor<'a> {
         };
         let mut direct_calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
-            let (cases, non_literal_cases) = super::test_cases::extract_go_cases(body, self.src);
+            let (cases, non_literal_cases, case_rows) =
+                super::test_cases::extract_go_cases(body, self.src).into_parts();
             test_fn.cases = cases;
             test_fn.non_literal_cases = non_literal_cases;
+            test_fn.case_rows = case_rows;
             self.scan_block(body, &mut test_fn, name, &mut direct_calls);
             super::dispatch_calls(body, self.src, &GO_DISPATCH, &mut direct_calls);
             if !test_fn.ignored {

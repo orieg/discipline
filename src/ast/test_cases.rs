@@ -13,8 +13,12 @@
 //!
 //! A case turned into a comment is a comment node to every grammar and is never counted.
 //!
-//! Non-literal sources (fixtures, generators, dynamic function calls) yield `cases = None`
-//! and set `non_literal = true`, so gate notes report that they were not compared.
+//! Non-literal sources (fixtures, generators, dynamic function calls, a list holding a
+//! spread or splat element) yield no count and set `non_literal`, so gate notes report
+//! that they were not compared.
+//!
+//! A literal source also yields its rows as text (`row_text`), so a case that leaves one
+//! test can be looked for in another by what it is, not by how many there are.
 
 use tree_sitter::Node;
 
@@ -32,18 +36,141 @@ fn elements(node: Node) -> Vec<Node> {
         .collect()
 }
 
-/// Two case counts that multiply: a source on a class and one on its method, a suite's
+/// What a test's case sources say: how many literal cases it runs, and what they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CaseList {
+    /// The number of literal cases; `None` with no case source, or with one that cannot
+    /// be counted.
+    pub count: Option<usize>,
+    /// A case source is there and its cases cannot be counted from the source.
+    pub non_literal: bool,
+    /// Each literal case as text (`row_text`), `count` of them. `None` when there is no
+    /// count, and for a product of sources larger than `ROW_PRODUCT_LIMIT`.
+    pub rows: Option<Vec<String>>,
+}
+
+/// The largest product of case sources whose combinations are written out as rows.
+const ROW_PRODUCT_LIMIT: usize = 4096;
+
+impl CaseList {
+    /// No case source.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// A case source whose cases cannot be counted.
+    pub fn non_literal() -> Self {
+        Self {
+            count: None,
+            non_literal: true,
+            rows: None,
+        }
+    }
+
+    /// A literal case source with these rows.
+    pub fn literal(rows: Vec<String>) -> Self {
+        Self {
+            count: Some(rows.len()),
+            non_literal: false,
+            rows: Some(rows),
+        }
+    }
+
+    /// The three facts a test keeps: `TestFn::cases`, `non_literal_cases`, `case_rows`.
+    pub fn into_parts(self) -> (Option<usize>, bool, Option<Vec<String>>) {
+        (self.count, self.non_literal, self.rows)
+    }
+}
+
+/// The tokens of `node` in source order, comments left out. Text the grammar keeps
+/// between two children without a node of its own is a token too.
+fn row_tokens<'a>(node: Node, src: &'a [u8], out: &mut Vec<&'a str>) {
+    if node.kind().ends_with("comment") {
+        return;
+    }
+    if node.child_count() == 0 {
+        let token = text(node, src).trim();
+        if !token.is_empty() {
+            out.push(token);
+        }
+        return;
+    }
+    let between = |from: usize, to: usize| -> &'a str {
+        src.get(from..to)
+            .and_then(|gap| std::str::from_utf8(gap).ok())
+            .map_or("", str::trim)
+    };
+    let mut at = node.start_byte();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        let gap = between(at, child.start_byte());
+        if !gap.is_empty() {
+            out.push(gap);
+        }
+        row_tokens(child, src, out);
+        at = child.end_byte();
+    }
+    let gap = between(at, node.end_byte());
+    if !gap.is_empty() {
+        out.push(gap);
+    }
+}
+
+/// Joins tokens into the text of one case: one space between two tokens, and no comma
+/// before a closing bracket or at the end.
+fn join_row(tokens: &[&str]) -> String {
+    let mut out = String::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let closes = tokens
+            .get(i + 1)
+            .is_none_or(|next| matches!(*next, ")" | "]" | "}"));
+        if *token == "," && closes {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(token);
+    }
+    out
+}
+
+/// One case as text, from its syntax node: its tokens joined by one space, so that
+/// layout, comments and a trailing comma are not part of it. Two rows with the same text
+/// are the same case.
+pub(super) fn row_text(node: Node, src: &[u8]) -> String {
+    let mut tokens = Vec::new();
+    row_tokens(node, src, &mut tokens);
+    join_row(&tokens)
+}
+
+/// Two case lists that multiply: a source on a class and one on its method, a suite's
 /// table and a test's. A side that cannot be counted makes the whole uncountable; a side
-/// with no case source leaves the other as it is.
-pub fn multiply_cases(
-    outer: (Option<usize>, bool),
-    inner: (Option<usize>, bool),
-) -> (Option<usize>, bool) {
-    match (outer, inner) {
-        ((_, true), _) | (_, (_, true)) => (None, true),
-        ((Some(a), false), (Some(b), false)) => (Some(a.saturating_mul(b)), false),
-        ((Some(n), false), (None, false)) | ((None, false), (Some(n), false)) => (Some(n), false),
-        ((None, false), (None, false)) => (None, false),
+/// with no case source leaves the other as it is. Each row of the product is a row of
+/// one side beside a row of the other.
+pub fn multiply_cases(outer: CaseList, inner: CaseList) -> CaseList {
+    if outer.non_literal || inner.non_literal {
+        return CaseList::non_literal();
+    }
+    match (outer.count, inner.count) {
+        (Some(a), Some(b)) => {
+            let count = a.saturating_mul(b);
+            let rows = match (&outer.rows, &inner.rows) {
+                (Some(left), Some(right)) if count <= ROW_PRODUCT_LIMIT => Some(
+                    left.iter()
+                        .flat_map(|l| right.iter().map(move |r| format!("{l} \u{d7} {r}")))
+                        .collect(),
+                ),
+                _ => None,
+            };
+            CaseList {
+                count: Some(count),
+                non_literal: false,
+                rows,
+            }
+        }
+        (Some(_), None) => outer,
+        _ => inner,
     }
 }
 
@@ -52,9 +179,10 @@ pub fn multiply_cases(
 // ============================================================================
 
 /// Reads one call as `pytest.mark.parametrize(names, values)`: `None` when it is another
-/// call, `Some(Ok(n))` for a list or tuple of `n` values, `Some(Err(()))` when the values
-/// are not a literal list.
-fn python_parametrize_call(call: Node, src: &[u8]) -> Option<Result<usize, ()>> {
+/// call, a literal list for a list or tuple of values, and a non-literal one when the
+/// values are not a literal list. A list holding a splat (`[1, *more]`) stands for a
+/// number of values the source does not show, and is not literal.
+fn python_parametrize_call(call: Node, src: &[u8]) -> Option<CaseList> {
     if call.kind() != "call" {
         return None;
     }
@@ -82,30 +210,21 @@ fn python_parametrize_call(call: Node, src: &[u8]) -> Option<Result<usize, ()>> 
         }
     }
     Some(match values_node {
-        Some(values) if matches!(values.kind(), "list" | "tuple") => Ok(elements(values).len()),
-        _ => Err(()),
+        Some(values) if matches!(values.kind(), "list" | "tuple") => {
+            let values = elements(values);
+            if values.iter().any(|v| v.kind() == "list_splat") {
+                CaseList::non_literal()
+            } else {
+                CaseList::literal(values.into_iter().map(|v| row_text(v, src)).collect())
+            }
+        }
+        _ => CaseList::non_literal(),
     })
 }
 
 /// Folds `parametrize` calls into one count: stacked parametrizations multiply.
-fn python_product(calls: impl Iterator<Item = Result<usize, ()>>) -> (Option<usize>, bool) {
-    let mut total_cases: usize = 1;
-    let mut found = false;
-    let mut has_non_literal = false;
-    for call in calls {
-        found = true;
-        match call {
-            Ok(count) => total_cases = total_cases.saturating_mul(count),
-            Err(()) => has_non_literal = true,
-        }
-    }
-    if has_non_literal {
-        (None, true)
-    } else if found {
-        (Some(total_cases), false)
-    } else {
-        (None, false)
-    }
+fn python_product(calls: impl Iterator<Item = CaseList>) -> CaseList {
+    calls.fold(CaseList::none(), multiply_cases)
 }
 
 /// Extracts test case count from Python decorators.
@@ -116,9 +235,9 @@ fn python_product(calls: impl Iterator<Item = Result<usize, ()>>) -> (Option<usi
 /// When multiple `@pytest.mark.parametrize` decorators are present,
 /// computes the Cartesian product (total test executions).
 /// Non-literal values (function calls, identifiers) set `non_literal = true`.
-pub fn extract_python_cases(decorators: Option<&[Node]>, src: &[u8]) -> (Option<usize>, bool) {
+pub fn extract_python_cases(decorators: Option<&[Node]>, src: &[u8]) -> CaseList {
     let Some(decs) = decorators else {
-        return (None, false);
+        return CaseList::none();
     };
     python_product(decs.iter().flat_map(|dec| {
         // Decorator has an expression, usually a call: `@pytest.mark.parametrize(...)`
@@ -131,7 +250,7 @@ pub fn extract_python_cases(decorators: Option<&[Node]>, src: &[u8]) -> (Option<
 /// Extracts the case count a `pytestmark = ...` assignment gives every test of its
 /// module or class: one `pytest.mark.parametrize(...)` call, or a list or tuple of marks.
 /// `block` is the module or the class body; only its own statements are read.
-pub fn extract_python_pytestmark_cases(block: Node, src: &[u8]) -> (Option<usize>, bool) {
+pub fn extract_python_pytestmark_cases(block: Node, src: &[u8]) -> CaseList {
     let mut calls = Vec::new();
     for statement in elements(block) {
         if statement.kind() != "expression_statement" {
@@ -167,16 +286,63 @@ pub fn extract_python_pytestmark_cases(block: Node, src: &[u8]) -> (Option<usize
 // JavaScript / TypeScript
 // ============================================================================
 
-/// The rows of a `test.each` tagged template: its table lines after the header row. A
-/// template holding only its header runs no case.
-fn javascript_template_rows(template: Node, src: &[u8]) -> Option<usize> {
-    let lines = text(template, src)
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && l.contains('|'))
-        .count();
-    // The first table line is the header row (a | b | expected), the rest are cases.
-    lines.checked_sub(1)
+/// The rows of a `test.each` tagged template: the lines of its text after the header
+/// row, one case each, whatever the number of columns. A line is a line of the template's
+/// own text: a line break inside a `${..}` value is part of that value, not a row. A
+/// template holding only its header runs no case, and one with no text has no table.
+fn javascript_template_rows(template: Node, src: &[u8]) -> Option<Vec<String>> {
+    fn add_text(fragment: &str, lines: &mut Vec<String>) {
+        for (i, part) in fragment.split('\n').enumerate() {
+            if i > 0 {
+                lines.push(String::new());
+            }
+            if let Some(line) = lines.last_mut() {
+                line.push_str(part);
+            }
+        }
+    }
+    let mut lines = vec![String::new()];
+    let between = |from: usize, to: usize| -> &str {
+        src.get(from..to)
+            .and_then(|gap| std::str::from_utf8(gap).ok())
+            .unwrap_or("")
+    };
+    let mut at = template.start_byte();
+    let mut cursor = template.walk();
+    for child in template.children(&mut cursor) {
+        add_text(between(at, child.start_byte()), &mut lines);
+        at = child.end_byte();
+        match child.kind() {
+            "`" => {}
+            "template_substitution" => {
+                if let Some(line) = lines.last_mut() {
+                    line.push(' ');
+                    line.push_str(&row_text(child, src));
+                    line.push(' ');
+                }
+            }
+            _ => add_text(text(child, src), &mut lines),
+        }
+    }
+    add_text(between(at, template.end_byte()), &mut lines);
+    let mut rows = lines
+        .iter()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty());
+    // The first line is the header row (`a | b | expected`), the rest are cases.
+    rows.next()?;
+    Some(rows.collect())
+}
+
+/// The rows of a `test.each([..])` array. An array holding a spread (`[row, ...more]`)
+/// stands for a number of rows the source does not show, and is not literal.
+fn javascript_array_rows(array: Node, src: &[u8]) -> CaseList {
+    let rows = elements(array);
+    if rows.iter().any(|row| row.kind() == "spread_element") {
+        CaseList::non_literal()
+    } else {
+        CaseList::literal(rows.into_iter().map(|row| row_text(row, src)).collect())
+    }
 }
 
 /// Extracts test cases from JS/TS `test.each(...)`, `it.each(...)`, `describe.each(...)`.
@@ -184,7 +350,7 @@ fn javascript_template_rows(template: Node, src: &[u8]) -> Option<usize> {
 /// In JS AST: `test.each([...])("title", fn)` has an outer call whose `function` child
 /// is an inner call `test.each([...])` or a tagged template `test.each`\`...\`.
 /// A comment between the rows of the array is not a row.
-pub fn extract_javascript_cases(func_node: Node, src: &[u8]) -> (Option<usize>, bool) {
+pub fn extract_javascript_cases(func_node: Node, src: &[u8]) -> CaseList {
     if func_node.kind() == "call_expression" {
         let mut cursor = func_node.walk();
         let children: Vec<Node> = func_node.children(&mut cursor).collect();
@@ -193,7 +359,7 @@ pub fn extract_javascript_cases(func_node: Node, src: &[u8]) -> (Option<usize>, 
             if fn_text.ends_with(".each") || fn_text == "each" {
                 if let Some(template) = children.iter().find(|c| c.kind() == "template_string") {
                     if let Some(rows) = javascript_template_rows(*template, src) {
-                        return (Some(rows), false);
+                        return CaseList::literal(rows);
                     }
                 }
             }
@@ -205,9 +371,9 @@ pub fn extract_javascript_cases(func_node: Node, src: &[u8]) -> (Option<usize>, 
                 if let Some(args) = func_node.child_by_field_name("arguments") {
                     if let Some(arg) = elements(args).first() {
                         if arg.kind() == "array" {
-                            return (Some(elements(*arg).len()), false);
+                            return javascript_array_rows(*arg, src);
                         } else {
-                            return (None, true);
+                            return CaseList::non_literal();
                         }
                     }
                 }
@@ -225,12 +391,12 @@ pub fn extract_javascript_cases(func_node: Node, src: &[u8]) -> (Option<usize>, 
                     .children(&mut cursor)
                     .find(|c| c.kind() == "template_string");
                 if let Some(rows) = template.and_then(|t| javascript_template_rows(t, src)) {
-                    return (Some(rows), false);
+                    return CaseList::literal(rows);
                 }
             }
         }
     }
-    (None, false)
+    CaseList::none()
 }
 
 // ============================================================================
@@ -242,7 +408,8 @@ pub fn extract_javascript_cases(func_node: Node, src: &[u8]) -> (Option<usize>, 
 enum GoRows {
     /// Not rows: a scalar, an unknown type, or the empty struct of a set.
     No,
-    /// A struct written in place, or a type named for cases: a table wherever it stands.
+    /// A struct written in place, or a type whose name says it holds cases: a table
+    /// wherever it stands.
     Table,
     /// A struct type declared in this file: a table when the test ranges over it, and
     /// an ordinary value (an expected result, a fixture) when it does not.
@@ -258,6 +425,42 @@ fn go_struct_has_fields(struct_type: Node) -> bool {
         .filter(|c| c.kind() == "field_declaration_list")
         .any(|list| !elements(list).is_empty());
     has_fields
+}
+
+/// The words of a Go identifier: `testCase` is `test`, `case`; `HTTPCases` is `http`,
+/// `cases`; `Showcase` is the one word `showcase`.
+fn go_name_words(name: &str) -> Vec<String> {
+    let chars: Vec<char> = name.chars().collect();
+    let mut words = vec![String::new()];
+    for (i, c) in chars.iter().enumerate() {
+        if !c.is_alphabetic() {
+            words.push(String::new());
+            continue;
+        }
+        let after_lower = i > 0 && chars[i - 1].is_lowercase();
+        let ends_acronym = i > 0
+            && chars[i - 1].is_uppercase()
+            && chars.get(i + 1).is_some_and(|next| next.is_lowercase());
+        if c.is_uppercase() && (after_lower || ends_acronym) {
+            words.push(String::new());
+        }
+        if let Some(word) = words.last_mut() {
+            word.extend(c.to_lowercase());
+        }
+    }
+    words.retain(|word| !word.is_empty());
+    words
+}
+
+/// The identifier that names an element type: `T` of `T`, `*T`, `pkg.T` and `T[K]`.
+fn go_type_name(node: Node) -> Option<Node> {
+    match node.kind() {
+        "type_identifier" => Some(node),
+        "pointer_type" | "parenthesized_type" => elements(node).into_iter().find_map(go_type_name),
+        "qualified_type" => node.child_by_field_name("name"),
+        "generic_type" => node.child_by_field_name("type").and_then(go_type_name),
+        _ => None,
+    }
 }
 
 /// What the file a test stands in says about the names its body uses.
@@ -348,27 +551,24 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
     /// How the element type of a slice, array or map literal reads as a row type.
     fn rows(&self, type_node: Node) -> GoRows {
         let src = self.src;
-        let (row, by_name) = match type_node.kind() {
+        // The words that name a row of cases: a slice of `testCase` or `tests`, a map of
+        // `caseRow`. A word is a whole word of the type's name, so `Showcase` and
+        // `Contestant` are not rows.
+        let (row, words): (Node, &[&str]) = match type_node.kind() {
             "slice_type" | "array_type" => {
                 let Some(elem) = type_node.child_by_field_name("element") else {
                     return GoRows::No;
                 };
-                let name = text(elem, src);
-                let lower = name.to_lowercase();
                 (
                     elem,
-                    name.contains("struct") || lower.contains("case") || lower.contains("test"),
+                    &["case", "cases", "test", "tests", "testcase", "testcases"],
                 )
             }
             "map_type" => {
                 let Some(value) = type_node.child_by_field_name("value") else {
                     return GoRows::No;
                 };
-                let name = text(value, src);
-                (
-                    value,
-                    name.contains("struct") || name.to_lowercase().contains("case"),
-                )
+                (value, &["case", "cases", "testcase", "testcases"])
             }
             _ => return GoRows::No,
         };
@@ -379,6 +579,12 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
                 GoRows::No
             };
         }
+        let Some(name) = go_type_name(row) else {
+            return GoRows::No;
+        };
+        let by_name = go_name_words(text(name, src))
+            .iter()
+            .any(|word| words.contains(&word.as_str()));
         if by_name {
             GoRows::Table
         } else if row.kind() == "type_identifier" && self.struct_types.contains(&text(row, src)) {
@@ -411,8 +617,8 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
         (name.kind() == "identifier").then(|| text(name, self.src))
     }
 
-    /// Adds up the rows of every case table under `node`.
-    fn count_tables(&self, node: Node, total: &mut Option<usize>, non_literal: &mut bool) {
+    /// Collects the rows of every case table under `node`.
+    fn count_tables(&self, node: Node, total: &mut Option<Vec<String>>, non_literal: &mut bool) {
         if node.kind() == "composite_literal" {
             if let (Some(type_node), Some(body)) = (
                 node.child_by_field_name("type"),
@@ -431,7 +637,11 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
                 if is_table {
                     // The body is a `literal_value`; a row turned into a comment is not
                     // one of its elements.
-                    *total = Some(total.unwrap_or(0).saturating_add(elements(body).len()));
+                    total.get_or_insert_with(Vec::new).extend(
+                        elements(body)
+                            .into_iter()
+                            .map(|row| row_text(row, self.src)),
+                    );
                 }
             }
         } else if node.kind() == "range_clause" {
@@ -460,9 +670,9 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
 /// counted, and neither is a set (`map[string]struct{}`).
 /// If a `range` loop in the test iterates over a non-literal (function call or external slice),
 /// sets `non_literal = true`.
-pub fn extract_go_cases(body_node: Node, src: &[u8]) -> (Option<usize>, bool) {
+pub fn extract_go_cases(body_node: Node, src: &[u8]) -> CaseList {
     let file = GoFile::new(body_node, src);
-    let mut table_cases: Option<usize> = None;
+    let mut table_cases: Option<Vec<String>> = None;
     let mut has_non_literal = false;
 
     file.count_tables(body_node, &mut table_cases, &mut has_non_literal);
@@ -478,10 +688,10 @@ pub fn extract_go_cases(body_node: Node, src: &[u8]) -> (Option<usize>, bool) {
         }
     }
 
-    if has_non_literal && table_cases.is_none() {
-        (None, true)
-    } else {
-        (table_cases, false)
+    match table_cases {
+        Some(rows) => CaseList::literal(rows),
+        None if has_non_literal => CaseList::non_literal(),
+        None => CaseList::none(),
     }
 }
 
@@ -493,7 +703,7 @@ pub fn extract_go_cases(body_node: Node, src: &[u8]) -> (Option<usize>, bool) {
 /// lines that are neither blank nor a comment. JUnit reads a line starting with `#` as a
 /// comment, so a row behind one no longer runs. A string that is not a text block is
 /// one row.
-fn text_block_rows(literal: &str) -> usize {
+fn text_block_rows(literal: &str) -> Vec<String> {
     let block = literal
         .strip_prefix("\"\"\"")
         .and_then(|rest| rest.strip_suffix("\"\"\""));
@@ -502,26 +712,30 @@ fn text_block_rows(literal: &str) -> usize {
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .count(),
-        None => 1,
+            .map(str::to_string)
+            .collect(),
+        None => vec![literal.to_string()],
     }
 }
 
-/// The number of values a Java annotation element holds: the elements of an array
-/// initialiser, or one for a single value written without braces. A name (`ROWS`,
-/// `Fixtures.ROWS`) stands for a value the annotation does not show.
-fn java_element_len(value: Node) -> Result<usize, ()> {
+/// The values a Java annotation element holds: the elements of an array initialiser, or
+/// the one value written without braces. A name (`ROWS`, `Fixtures.ROWS`) stands for a
+/// value the annotation does not show.
+fn java_element_rows(value: Node, src: &[u8]) -> Result<Vec<String>, ()> {
     match value.kind() {
-        "element_value_array_initializer" | "array_initializer" => Ok(elements(value).len()),
+        "element_value_array_initializer" | "array_initializer" => Ok(elements(value)
+            .into_iter()
+            .map(|v| row_text(v, src))
+            .collect()),
         "identifier" | "field_access" | "scoped_identifier" => Err(()),
-        _ => Ok(1),
+        _ => Ok(vec![row_text(value, src)]),
     }
 }
 
-/// Reads one Java annotation: `Ok(Some(n))` for a literal case source of `n` cases,
+/// Reads one Java annotation: `Ok(Some(rows))` for a literal case source and its cases,
 /// `Ok(None)` for an annotation that is not a case source, `Err(())` for a case source
 /// whose cases cannot be counted from the source.
-fn java_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>, ()> {
+fn java_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<Vec<String>>, ()> {
     let Some(name_node) = annotation.child_by_field_name("name") else {
         return Ok(None);
     };
@@ -546,29 +760,32 @@ fn java_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>, 
         .unwrap_or_default();
     match name {
         "MethodSource" | "CsvFileSource" | "ArgumentsSource" => Err(()),
-        "NullSource" | "EmptySource" => Ok(Some(1)),
-        "NullAndEmptySource" => Ok(Some(2)),
+        "NullSource" | "EmptySource" => Ok(Some(vec![format!("@{name}")])),
+        "NullAndEmptySource" => Ok(Some(vec![
+            "@NullSource".to_string(),
+            "@EmptySource".to_string(),
+        ])),
         // `@ValueSource(ints = {1, 2})`: one typed array, whichever its name.
         "ValueSource" => match args.as_slice() {
-            [(_, value)] => java_element_len(*value).map(Some),
+            [(_, value)] => java_element_rows(*value, src).map(Some),
             _ => Err(()),
         },
         "CsvSource" => {
-            let mut rows = 0usize;
+            let mut rows = Vec::new();
             let mut found = false;
             for (key, value) in &args {
                 match key {
                     // `@CsvSource({"a,1", "b,2"})` and `@CsvSource(value = {..})`.
                     None | Some("value") => {
-                        rows += match value.kind() {
+                        rows.extend(match value.kind() {
                             "string_literal" => text_block_rows(text(*value, src)),
-                            _ => java_element_len(*value)?,
-                        };
+                            _ => java_element_rows(*value, src)?,
+                        });
                         found = true;
                     }
                     Some("textBlock") => match value.kind() {
                         "string_literal" => {
-                            rows += text_block_rows(text(*value, src));
+                            rows.extend(text_block_rows(text(*value, src)));
                             found = true;
                         }
                         _ => return Err(()),
@@ -589,7 +806,7 @@ fn java_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>, 
         "EnumSource" => {
             let has_mode = args.iter().any(|(key, _)| *key == Some("mode"));
             match args.iter().find(|(key, _)| *key == Some("names")) {
-                Some((_, names)) if !has_mode => java_element_len(*names).map(Some),
+                Some((_, names)) if !has_mode => java_element_rows(*names, src).map(Some),
                 _ => Err(()),
             }
         }
@@ -606,24 +823,30 @@ fn java_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>, 
 /// `@MethodSource`, `@CsvFileSource`, `@ArgumentsSource`, an `@EnumSource` that does not
 /// list its constants, and a source whose value is a name rather than a literal, mark
 /// `non_literal = true`.
-pub fn extract_java_cases(modifiers_node: Node, src: &[u8]) -> (Option<usize>, bool) {
-    let mut total_cases: Option<usize> = None;
+pub fn extract_java_cases(modifiers_node: Node, src: &[u8]) -> CaseList {
+    let mut total_cases: Option<Vec<String>> = None;
     let mut has_non_literal = false;
 
     for child in elements(modifiers_node) {
         if child.kind() == "annotation" || child.kind() == "marker_annotation" {
             match java_annotation_cases(child, src) {
-                Ok(Some(n)) => total_cases = Some(total_cases.unwrap_or(0).saturating_add(n)),
+                Ok(Some(rows)) => total_cases.get_or_insert_with(Vec::new).extend(rows),
                 Ok(None) => {}
                 Err(()) => has_non_literal = true,
             }
         }
     }
 
-    if has_non_literal {
-        (None, true)
-    } else {
-        (total_cases, false)
+    sum_of_sources(total_cases, has_non_literal)
+}
+
+/// The cases of the sources on one test, which add up; one source that cannot be
+/// counted makes the whole uncountable.
+fn sum_of_sources(rows: Option<Vec<String>>, has_non_literal: bool) -> CaseList {
+    match rows {
+        _ if has_non_literal => CaseList::non_literal(),
+        Some(rows) => CaseList::literal(rows),
+        None => CaseList::none(),
     }
 }
 
@@ -664,12 +887,13 @@ fn kotlin_argument<'a, 'tree>(
     (name, value)
 }
 
-/// The number of elements of a literal Kotlin array: `[a, b]`, or a call of `arrayOf` or
-/// one of its typed forms (`intArrayOf(1, 2)`). Any other expression (a constant, another
-/// call) has no count that can be read from the source.
-fn kotlin_literal_array_len(expr: Node, src: &[u8]) -> Option<usize> {
+/// The elements of a literal Kotlin array: `[a, b]`, or a call of `arrayOf` or one of its
+/// typed forms (`intArrayOf(1, 2)`). Any other expression (a constant, another call) has
+/// no elements that can be read from the source.
+fn kotlin_literal_array_rows(expr: Node, src: &[u8]) -> Option<Vec<String>> {
+    let texts = |nodes: Vec<Node>| nodes.into_iter().map(|n| row_text(n, src)).collect();
     match expr.kind() {
-        "collection_literal" => Some(kotlin_elements(expr).len()),
+        "collection_literal" => Some(texts(kotlin_elements(expr))),
         "call_expression" => {
             let parts = kotlin_elements(expr);
             let callee = parts.first()?;
@@ -685,7 +909,7 @@ fn kotlin_literal_array_len(expr: Node, src: &[u8]) -> Option<usize> {
             let all_plain = elements
                 .iter()
                 .all(|a| matches!(kotlin_argument(*a, src), (None, Some(_))));
-            all_plain.then_some(elements.len())
+            all_plain.then(|| texts(elements))
         }
         _ => None,
     }
@@ -693,23 +917,24 @@ fn kotlin_literal_array_len(expr: Node, src: &[u8]) -> Option<usize> {
 
 /// The rows of a `textBlock` string: its lines that are neither blank nor a comment
 /// (JUnit reads a line starting with `#` as one).
-fn kotlin_text_block_rows(literal: Node, src: &[u8]) -> usize {
+fn kotlin_text_block_rows(literal: Node, src: &[u8]) -> Vec<String> {
     text(literal, src)
         .trim_matches('"')
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .count()
+        .map(str::to_string)
+        .collect()
 }
 
-/// Reads one Kotlin annotation: `Ok(Some(n))` for a literal case source of `n` cases,
+/// Reads one Kotlin annotation: `Ok(Some(rows))` for a literal case source and its cases,
 /// `Ok(None)` for an annotation that is not a case source, `Err(())` for a case source
 /// whose cases cannot be counted from the source.
 ///
 /// In the bundled grammar an annotation with arguments is
 /// `annotation > constructor_invocation > (user_type, value_arguments > value_argument*)`,
 /// and one without is `annotation > user_type`.
-fn kotlin_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>, ()> {
+fn kotlin_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<Vec<String>>, ()> {
     let parts = kotlin_elements(annotation);
     let Some(invocation) = parts.iter().find(|c| c.kind() == "constructor_invocation") else {
         // No arguments: a marker such as `@Test`, or a source naming nothing to count.
@@ -724,8 +949,11 @@ fn kotlin_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>
             .map(|n| text(n, src));
         return match name {
             Some("MethodSource" | "CsvFileSource" | "ArgumentsSource") => Err(()),
-            Some("NullSource" | "EmptySource") => Ok(Some(1)),
-            Some("NullAndEmptySource") => Ok(Some(2)),
+            Some(source @ ("NullSource" | "EmptySource")) => Ok(Some(vec![format!("@{source}")])),
+            Some("NullAndEmptySource") => Ok(Some(vec![
+                "@NullSource".to_string(),
+                "@EmptySource".to_string(),
+            ])),
             _ => Ok(None),
         };
     };
@@ -755,11 +983,11 @@ fn kotlin_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>
         "MethodSource" | "CsvFileSource" | "ArgumentsSource" => Err(()),
         // `@ValueSource(ints = [1, 2])`: one typed array, whichever its name.
         "ValueSource" => match args.as_slice() {
-            [(Some(_), Some(value))] => kotlin_literal_array_len(*value, src).map(Some).ok_or(()),
+            [(Some(_), Some(value))] => kotlin_literal_array_rows(*value, src).map(Some).ok_or(()),
             _ => Err(()),
         },
         "CsvSource" => {
-            let mut rows = 0usize;
+            let mut rows = Vec::new();
             let mut found = false;
             for (arg_name, value) in &args {
                 let Some(value) = value else { return Err(()) };
@@ -767,22 +995,22 @@ fn kotlin_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>
                     // `@CsvSource("a,1", "b,2")`: each positional string is one row.
                     None => match value.kind() {
                         "string_literal" | "multiline_string_literal" => {
-                            rows += 1;
+                            rows.push(row_text(*value, src));
                             found = true;
                         }
                         // One positional array is the whole `value`.
                         _ => {
-                            rows += kotlin_literal_array_len(*value, src).ok_or(())?;
+                            rows.extend(kotlin_literal_array_rows(*value, src).ok_or(())?);
                             found = true;
                         }
                     },
                     Some("value") => {
-                        rows += kotlin_literal_array_len(*value, src).ok_or(())?;
+                        rows.extend(kotlin_literal_array_rows(*value, src).ok_or(())?);
                         found = true;
                     }
                     Some("textBlock") => match value.kind() {
                         "string_literal" | "multiline_string_literal" => {
-                            rows += kotlin_text_block_rows(*value, src);
+                            rows.extend(kotlin_text_block_rows(*value, src));
                             found = true;
                         }
                         _ => return Err(()),
@@ -809,8 +1037,8 @@ fn kotlin_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<usize>
 /// Several literal sources on one function add up. `@MethodSource`, `@CsvFileSource`,
 /// `@ArgumentsSource`, and a `@ValueSource` / `@CsvSource` whose value is not a literal
 /// list, mark `non_literal = true`.
-pub fn extract_kotlin_cases(node: Node, src: &[u8]) -> (Option<usize>, bool) {
-    let mut total_cases: Option<usize> = None;
+pub fn extract_kotlin_cases(node: Node, src: &[u8]) -> CaseList {
+    let mut total_cases: Option<Vec<String>> = None;
     let mut has_non_literal = false;
 
     let mut annotations = Vec::new();
@@ -831,17 +1059,13 @@ pub fn extract_kotlin_cases(node: Node, src: &[u8]) -> (Option<usize>, bool) {
     }
     for annotation in annotations {
         match kotlin_annotation_cases(annotation, src) {
-            Ok(Some(n)) => total_cases = Some(total_cases.unwrap_or(0).saturating_add(n)),
+            Ok(Some(rows)) => total_cases.get_or_insert_with(Vec::new).extend(rows),
             Ok(None) => {}
             Err(()) => has_non_literal = true,
         }
     }
 
-    if has_non_literal {
-        (None, true)
-    } else {
-        (total_cases, false)
-    }
+    sum_of_sources(total_cases, has_non_literal)
 }
 
 // ============================================================================
@@ -871,8 +1095,8 @@ fn csharp_row_is_skipped(attr: Node, src: &[u8]) -> bool {
 /// (MSTest). A row whose attribute marks it skipped is not counted.
 /// Non-literal attributes `[MemberData]`, `[ClassData]`, `[TestCaseSource]`,
 /// `[DynamicData]` set `non_literal = true`.
-pub fn extract_csharp_cases(method_node: Node, src: &[u8]) -> (Option<usize>, bool) {
-    let mut count = 0;
+pub fn extract_csharp_cases(method_node: Node, src: &[u8]) -> CaseList {
+    let mut rows = Vec::new();
     let mut found = false;
     let mut has_non_literal = false;
 
@@ -889,7 +1113,16 @@ pub fn extract_csharp_cases(method_node: Node, src: &[u8]) -> (Option<usize>, bo
                             "InlineData" | "TestCase" | "DataRow" => {
                                 found = true;
                                 if !csharp_row_is_skipped(attr, src) {
-                                    count += 1;
+                                    // The row is the attribute's arguments, whichever
+                                    // framework's attribute carries them.
+                                    rows.push(
+                                        elements(attr)
+                                            .into_iter()
+                                            .filter(|c| c.kind() == "attribute_argument_list")
+                                            .map(|list| row_text(list, src))
+                                            .collect::<Vec<_>>()
+                                            .join(" "),
+                                    );
                                 }
                             }
                             "MemberData" | "ClassData" | "TestCaseSource" | "DynamicData" => {
@@ -903,65 +1136,92 @@ pub fn extract_csharp_cases(method_node: Node, src: &[u8]) -> (Option<usize>, bo
         }
     }
 
-    if has_non_literal {
-        (None, true)
-    } else if found {
-        (Some(count), false)
-    } else {
-        (None, false)
-    }
+    sum_of_sources(found.then_some(rows), has_non_literal)
 }
 
 // ============================================================================
 // Rust
 // ============================================================================
 
-/// Whether a Rust `attribute` is one case of its function: `#[case(..)]` of `rstest`
-/// (also `#[case::name(..)]` and `#[rstest::case(..)]`), or `#[test_case(..)]` of the
-/// `test-case` crate, which needs its arguments to be a case.
-fn rust_attribute_is_case(attr: Node, src: &[u8]) -> bool {
-    let attr_text = text(attr, src);
-    if attr_text.starts_with("case") || attr_text.starts_with("rstest::case") {
-        return true;
+/// The path of a Rust `attribute` as its segments (`rstest::case::name` is `rstest`,
+/// `case`, `name`), and its arguments when it has some.
+fn rust_attribute_path<'a, 'tree>(
+    attr: Node<'tree>,
+    src: &'a [u8],
+) -> (Vec<&'a str>, Option<Node<'tree>>) {
+    fn segments<'a>(path: Node, src: &'a [u8], out: &mut Vec<&'a str>) {
+        match path.kind() {
+            "scoped_identifier" => {
+                if let Some(prefix) = path.child_by_field_name("path") {
+                    segments(prefix, src, out);
+                }
+                if let Some(name) = path.child_by_field_name("name") {
+                    segments(name, src, out);
+                }
+            }
+            _ => out.push(text(path, src)),
+        }
     }
+    let mut path = Vec::new();
+    let mut arguments = None;
     let mut cursor = attr.walk();
-    let mut path = None;
-    let mut has_arguments = false;
     for child in attr.children(&mut cursor) {
         match child.kind() {
-            "identifier" | "scoped_identifier" if path.is_none() => path = Some(child),
-            "token_tree" => has_arguments = true,
+            "identifier" | "scoped_identifier" if path.is_empty() => {
+                segments(child, src, &mut path)
+            }
+            "token_tree" => arguments = Some(child),
             _ => {}
         }
     }
-    let Some(path) = path else { return false };
-    let name = match path.kind() {
-        "scoped_identifier" => path.child_by_field_name("name"),
-        _ => Some(path),
-    };
-    has_arguments && name.is_some_and(|n| text(n, src) == "test_case")
+    (path, arguments)
 }
 
-/// The number of values in the token tree of `#[values(..)]`: its comma-separated
-/// arguments. A value is one argument however many tokens it takes (`-1`, `f(2)`); a
-/// comment is not a token of any, and a trailing comma adds none.
-fn rust_values_len(token_tree: Node) -> usize {
-    let mut count = 0;
+/// The arguments of a Rust `attribute` when it is one case of its function: `#[case(..)]`
+/// of `rstest` (also `#[case::name(..)]`, `#[rstest::case(..)]` and
+/// `#[rstest::case::name(..)]`), or `#[test_case(..)]` of the `test-case` crate, which
+/// needs its arguments to be a case. The attribute is told by its path, segment by
+/// segment: `#[case_x(..)]` is another attribute.
+fn rust_case_row(attr: Node, src: &[u8]) -> Option<String> {
+    let (path, arguments) = rust_attribute_path(attr, src);
+    let unqualified = match path.as_slice() {
+        ["rstest", rest @ ..] => rest,
+        all => all,
+    };
+    let row = || arguments.map_or_else(String::new, |args| row_text(args, src));
+    match unqualified {
+        ["case"] | ["case", _] => Some(row()),
+        _ if path.last() == Some(&"test_case") && arguments.is_some() => Some(row()),
+        _ => None,
+    }
+}
+
+/// The values in the token tree of `#[values(..)]`: its comma-separated arguments. A
+/// value is one argument however many tokens it takes (`-1`, `f(2)`); a comment is not a
+/// token of any, and a trailing comma adds none.
+fn rust_values(token_tree: Node, src: &[u8]) -> Vec<String> {
+    let mut values: Vec<Vec<&str>> = Vec::new();
     let mut in_value = false;
+    let last = token_tree.child_count().saturating_sub(1);
     let mut cursor = token_tree.walk();
-    for token in token_tree.children(&mut cursor) {
+    for (i, token) in token_tree.children(&mut cursor).enumerate() {
         match token.kind() {
-            "(" | ")" | "[" | "]" | "{" | "}" | "line_comment" | "block_comment" => {}
+            // The delimiters of the tree itself.
+            "(" | ")" | "[" | "]" | "{" | "}" if i == 0 || i == last => {}
+            "line_comment" | "block_comment" => {}
             "," => in_value = false,
             _ => {
                 if !in_value {
-                    count += 1;
+                    values.push(Vec::new());
                 }
                 in_value = true;
+                if let Some(value) = values.last_mut() {
+                    row_tokens(token, src, value);
+                }
             }
         }
     }
-    count
+    values.iter().map(|tokens| join_row(tokens)).collect()
 }
 
 /// Extracts test cases from Rust outer attributes and arguments (`rstest`, `test-case`).
@@ -969,10 +1229,9 @@ fn rust_values_len(token_tree: Node) -> usize {
 /// Recognizes `#[case(...)]` and `#[test_case(...)]` attribute count on function.
 /// Also handles combinations of `#[values(...)]` in argument attributes, which multiply
 /// each other and the cases they sit beside.
-pub fn extract_rust_cases(fn_node: Node, src: &[u8]) -> (Option<usize>, bool) {
-    let mut case_count: usize = 0;
-    let mut values_product: usize = 1;
-    let mut has_values = false;
+pub fn extract_rust_cases(fn_node: Node, src: &[u8]) -> CaseList {
+    let mut cases: Vec<String> = Vec::new();
+    let mut values = CaseList::none();
 
     // Check preceding attribute_item siblings
     let mut prev = fn_node.prev_sibling();
@@ -981,8 +1240,8 @@ pub fn extract_rust_cases(fn_node: Node, src: &[u8]) -> (Option<usize>, bool) {
             "attribute_item" => {
                 let mut sub_cursor = p.walk();
                 for attr in p.children(&mut sub_cursor) {
-                    if attr.kind() == "attribute" && rust_attribute_is_case(attr, src) {
-                        case_count += 1;
+                    if attr.kind() == "attribute" {
+                        cases.extend(rust_case_row(attr, src));
                     }
                 }
                 prev = p.prev_sibling();
@@ -999,8 +1258,8 @@ pub fn extract_rust_cases(fn_node: Node, src: &[u8]) -> (Option<usize>, bool) {
         if child.kind() == "attribute_item" {
             let mut sub_cursor = child.walk();
             for attr in child.children(&mut sub_cursor) {
-                if attr.kind() == "attribute" && rust_attribute_is_case(attr, src) {
-                    case_count += 1;
+                if attr.kind() == "attribute" {
+                    cases.extend(rust_case_row(attr, src));
                 }
             }
         } else if child.kind() == "parameters" {
@@ -1009,22 +1268,19 @@ pub fn extract_rust_cases(fn_node: Node, src: &[u8]) -> (Option<usize>, bool) {
                 if p_child.kind() == "attribute_item" {
                     let mut a_cursor = p_child.walk();
                     for attr in p_child.children(&mut a_cursor) {
-                        if attr.kind() == "attribute" {
-                            let attr_text = text(attr, src);
-                            if attr_text.starts_with("values")
-                                || attr_text.starts_with("rstest::values")
-                            {
-                                let mut arg_cursor = attr.walk();
-                                let args = attr
-                                    .children(&mut arg_cursor)
-                                    .find(|c| c.kind() == "arguments" || c.kind() == "token_tree");
-                                if let Some(args) = args {
-                                    let count = rust_values_len(args);
-                                    if count > 0 {
-                                        values_product = values_product.saturating_mul(count);
-                                        has_values = true;
-                                    }
-                                }
+                        if attr.kind() != "attribute" {
+                            continue;
+                        }
+                        // `#[values(..)]` and `#[rstest::values(..)]`, by path:
+                        // `#[values_x(..)]` is another attribute.
+                        let (path, arguments) = rust_attribute_path(attr, src);
+                        if !matches!(path.as_slice(), ["values"] | ["rstest", "values"]) {
+                            continue;
+                        }
+                        if let Some(args) = arguments {
+                            let of_argument = rust_values(args, src);
+                            if !of_argument.is_empty() {
+                                values = multiply_cases(values, CaseList::literal(of_argument));
                             }
                         }
                     }
@@ -1033,11 +1289,10 @@ pub fn extract_rust_cases(fn_node: Node, src: &[u8]) -> (Option<usize>, bool) {
         }
     }
 
-    match (case_count > 0, has_values) {
-        (true, true) => (Some(case_count.saturating_mul(values_product)), false),
-        (true, false) => (Some(case_count), false),
-        (false, true) => (Some(values_product), false),
-        (false, false) => (None, false),
+    if cases.is_empty() {
+        values
+    } else {
+        multiply_cases(CaseList::literal(cases), values)
     }
 }
 
@@ -1070,7 +1325,11 @@ def test_add(a, b, s):
                 decorators.push(child);
             }
         }
-        let (cases, non_literal) = extract_python_cases(Some(&decorators), code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_python_cases(Some(&decorators), code.as_bytes());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -1096,7 +1355,11 @@ def test_x(x):
                 decorators.push(child);
             }
         }
-        let (cases, non_literal) = extract_python_cases(Some(&decorators), code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_python_cases(Some(&decorators), code.as_bytes());
         assert_eq!(cases, Some(4));
         assert!(!non_literal);
     }
@@ -1123,7 +1386,11 @@ def test_xy(x, y):
                 decorators.push(child);
             }
         }
-        let (cases, non_literal) = extract_python_cases(Some(&decorators), code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_python_cases(Some(&decorators), code.as_bytes());
         assert_eq!(cases, Some(6));
         assert!(!non_literal);
     }
@@ -1149,7 +1416,11 @@ def test_dynamic(x):
                 decorators.push(child);
             }
         }
-        let (cases, non_literal) = extract_python_cases(Some(&decorators), code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_python_cases(Some(&decorators), code.as_bytes());
         assert_eq!(cases, None);
         assert!(non_literal);
     }
@@ -1170,7 +1441,11 @@ test.each([[1, 2, 3], [2, 2, 4], [-1, 1, 0]])("add %i %i", (a, b, s) => {
         let expr_stmt = root.child(0).unwrap();
         let outer_call = expr_stmt.child(0).unwrap();
         let func_node = outer_call.child_by_field_name("function").unwrap();
-        let (cases, non_literal) = extract_javascript_cases(func_node, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_javascript_cases(func_node, code.as_bytes());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -1191,7 +1466,11 @@ test.each(getCases())("add %i %i", (a, b, s) => {
         let expr_stmt = root.child(0).unwrap();
         let outer_call = expr_stmt.child(0).unwrap();
         let func_node = outer_call.child_by_field_name("function").unwrap();
-        let (cases, non_literal) = extract_javascript_cases(func_node, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_javascript_cases(func_node, code.as_bytes());
         assert_eq!(cases, None);
         assert!(non_literal);
     }
@@ -1229,7 +1508,11 @@ test.each`
                 text(child, code.as_bytes())
             );
         }
-        let (cases, non_literal) = extract_javascript_cases(func_node, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_javascript_cases(func_node, code.as_bytes());
         assert_eq!(cases, Some(2));
         assert!(!non_literal);
     }
@@ -1255,7 +1538,11 @@ func TestAdd(t *testing.T) {
         let root = tree.root_node();
         let fn_node = root.child(1).unwrap();
         let body = fn_node.child_by_field_name("body").unwrap();
-        let (cases, non_literal) = extract_go_cases(body, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_go_cases(body, code.as_bytes());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -1280,7 +1567,11 @@ func TestAdd(t *testing.T) {
         let root = tree.root_node();
         let fn_node = root.child(1).unwrap();
         let body = fn_node.child_by_field_name("body").unwrap();
-        let (cases, non_literal) = extract_go_cases(body, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_go_cases(body, code.as_bytes());
         assert_eq!(cases, None);
         assert!(non_literal);
     }
@@ -1314,7 +1605,11 @@ class TestExample {
             .children(&mut m_cursor)
             .find(|c| c.kind() == "modifiers")
             .unwrap();
-        let (cases, non_literal) = extract_java_cases(modifiers, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_java_cases(modifiers, code.as_bytes());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -1348,7 +1643,11 @@ class TestExample {
             .children(&mut m_cursor)
             .find(|c| c.kind() == "modifiers")
             .unwrap();
-        let (cases, non_literal) = extract_java_cases(modifiers, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_java_cases(modifiers, code.as_bytes());
         assert_eq!(cases, Some(2));
         assert!(!non_literal);
     }
@@ -1382,7 +1681,11 @@ class TestExample {
             .children(&mut m_cursor)
             .find(|c| c.kind() == "modifiers")
             .unwrap();
-        let (cases, non_literal) = extract_java_cases(modifiers, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_java_cases(modifiers, code.as_bytes());
         assert_eq!(cases, None);
         assert!(non_literal);
     }
@@ -1413,7 +1716,11 @@ public class TestClass {
             .children(&mut cursor)
             .find(|c| c.kind() == "method_declaration")
             .unwrap();
-        let (cases, non_literal) = extract_csharp_cases(method_decl, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_csharp_cases(method_decl, code.as_bytes());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -1442,7 +1749,11 @@ public class TestClass {
             .children(&mut cursor)
             .find(|c| c.kind() == "method_declaration")
             .unwrap();
-        let (cases, non_literal) = extract_csharp_cases(method_decl, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_csharp_cases(method_decl, code.as_bytes());
         assert_eq!(cases, None);
         assert!(non_literal);
     }
@@ -1469,7 +1780,11 @@ fn test_add(#[case] a: i32, #[case] b: i32, #[case] s: i32) {
             .children(&mut cursor)
             .find(|c| c.kind() == "function_item")
             .unwrap();
-        let (cases, non_literal) = extract_rust_cases(fn_node, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_rust_cases(fn_node, code.as_bytes());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -1493,8 +1808,225 @@ fn test_matrix(#[values(1, 2)] a: i32, #[values(10, 20, 30)] b: i32) {
             .children(&mut cursor)
             .find(|c| c.kind() == "function_item")
             .unwrap();
-        let (cases, non_literal) = extract_rust_cases(fn_node, code.as_bytes());
+        let CaseList {
+            count: cases,
+            non_literal,
+            ..
+        } = extract_rust_cases(fn_node, code.as_bytes());
         assert_eq!(cases, Some(6));
         assert!(!non_literal);
+    }
+
+    // ------------------------------------------------------------------
+    // Case content, spreads, templates and exact names (issue 596)
+    // ------------------------------------------------------------------
+
+    /// The first test the language pack for `path` reads in `src`.
+    fn first_test(path: &str, src: &str) -> crate::ast::TestFn {
+        let registry = crate::ast::default_registry();
+        let pack = registry.find_pack(path).expect("a language pack");
+        let facts = pack
+            .extract(path, src, &crate::ast::AssertVocabulary::default())
+            .expect("the source parses");
+        facts.tests.first().expect("a test").clone()
+    }
+
+    fn rows(path: &str, src: &str) -> Vec<String> {
+        first_test(path, src).case_rows.expect("literal rows")
+    }
+
+    const PY_LAYOUT_A: &str = "import pytest\n\n@pytest.mark.parametrize(\"a,b\", [(1, 2), (\"x y\", 3)])\ndef test_x(a, b):\n    assert a\n";
+    const PY_LAYOUT_B: &str = "import pytest\n\n@pytest.mark.parametrize(\"a,b\", [\n    (1,2,),  # one\n    (\n        \"x y\",  # inside the row\n        3,\n    ),\n])\ndef test_x(a, b):\n    assert a\n";
+    const PY_OTHER_STRING: &str = "import pytest\n\n@pytest.mark.parametrize(\"a,b\", [(1, 2), (\"x  y\", 3)])\ndef test_x(a, b):\n    assert a\n";
+
+    #[test]
+    fn a_row_is_its_tokens_whatever_the_layout() {
+        let a = rows("tests/test_a.py", PY_LAYOUT_A);
+        assert_eq!(a, ["( 1 , 2 )", "( \" x y \" , 3 )"]);
+        assert_eq!(rows("tests/test_a.py", PY_LAYOUT_B), a);
+        // Control: whitespace inside a string is the string's own.
+        assert_ne!(rows("tests/test_a.py", PY_OTHER_STRING), a);
+    }
+
+    const PY_SPLAT: &str = "import pytest\n\n@pytest.mark.parametrize(\"x\", [1, *MORE])\ndef test_x(x):\n    assert x\n";
+    const PY_NESTED_SPLAT: &str = "import pytest\n\n@pytest.mark.parametrize(\"x\", [(1, *MORE), (2,)])\ndef test_x(x):\n    assert x\n";
+    const JS_SPREAD: &str = "test.each([[1], ...more])('x', (x) => { expect(x).toBe(1); });\n";
+    const JS_NESTED_SPREAD: &str =
+        "test.each([[1, ...more], [2]])('x', (x) => { expect(x).toBe(1); });\n";
+
+    #[test]
+    fn a_list_holding_a_spread_is_not_a_literal_list() {
+        for (path, src) in [("tests/test_a.py", PY_SPLAT), ("a.test.js", JS_SPREAD)] {
+            let test = first_test(path, src);
+            assert_eq!((test.cases, test.non_literal_cases), (None, true), "{path}");
+            assert_eq!(test.case_rows, None, "{path}");
+        }
+        // Control: a spread inside one row is that row's content.
+        for (path, src) in [
+            ("tests/test_a.py", PY_NESTED_SPLAT),
+            ("a.test.js", JS_NESTED_SPREAD),
+        ] {
+            let test = first_test(path, src);
+            assert_eq!(
+                (test.cases, test.non_literal_cases),
+                (Some(2), false),
+                "{path}"
+            );
+        }
+    }
+
+    const JS_ONE_COLUMN: &str =
+        "test.each`\n  n\n  ${1}\n\n  ${2}\n  ${3}\n`('x $n', ({ n }) => { expect(n).toBe(1); });\n";
+    const JS_HEADER_ONLY: &str = "test.each`\n  n\n`('x $n', ({ n }) => { expect(n).toBe(1); });\n";
+    const JS_VALUE_OVER_LINES: &str = "test.each`\n  a | b\n  ${f(\n    A | B\n  )} | ${2}\n  ${1} | ${3}\n`('x $a', ({ a }) => { expect(a).toBe(1); });\n";
+
+    #[test]
+    fn a_template_is_its_header_and_one_case_per_line_after_it() {
+        assert_eq!(
+            rows("a.test.js", JS_ONE_COLUMN),
+            ["${ 1 }", "${ 2 }", "${ 3 }"]
+        );
+        assert_eq!(first_test("a.test.js", JS_HEADER_ONLY).cases, Some(0));
+        // A line break inside a value is not a row of the table.
+        assert_eq!(first_test("a.test.js", JS_VALUE_OVER_LINES).cases, Some(2));
+    }
+
+    #[test]
+    fn go_names_are_split_into_words() {
+        for (name, words) in [
+            ("testCase", vec!["test", "case"]),
+            ("TestCases", vec!["test", "cases"]),
+            ("HTTPCase", vec!["http", "case"]),
+            ("test_case2", vec!["test", "case"]),
+            ("Showcase", vec!["showcase"]),
+            ("Contestant", vec!["contestant"]),
+            ("structured", vec!["structured"]),
+        ] {
+            assert_eq!(go_name_words(name), words, "{name}");
+        }
+    }
+
+    /// A Go test whose table is a slice of `@T@`, walked by index.
+    const GO_TABLE_OF: &str = "package p\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {\n\trows := @T@{{1}, {2}, {3}}\n\tfor i := 0; i < len(rows); i++ {\n\t\tif rows[i].n < 0 {\n\t\t\tt.Fatal(i)\n\t\t}\n\t}\n}\n";
+
+    #[test]
+    fn go_row_type_is_named_for_cases_by_a_whole_word() {
+        for ty in [
+            "[]testCase",
+            "[]*testCase",
+            "[]pkg.TestCase",
+            "[3]addTest",
+            "map[string]caseRow",
+        ] {
+            let src = GO_TABLE_OF.replace("@T@", ty);
+            assert_eq!(first_test("x_test.go", &src).cases, Some(3), "{ty}");
+        }
+        for ty in [
+            "[]Showcase",
+            "[]Contestant",
+            "[]structured",
+            "map[string]Showcase",
+            // A map's rows are named for cases, not for tests.
+            "map[string]addTest",
+        ] {
+            let src = GO_TABLE_OF.replace("@T@", ty);
+            assert_eq!(first_test("x_test.go", &src).cases, None, "{ty}");
+        }
+    }
+
+    /// An `rstest` test with `@ATTRS@` on the function and `@PARAM@` on its argument.
+    const RUST_RSTEST: &str =
+        "#[rstest]\n@ATTRS@\nfn t(@PARAM@ a: i32) {\n    assert!(a > 0);\n}\n";
+
+    #[test]
+    fn rust_case_and_values_are_told_by_their_path() {
+        let cases = |attrs: &str, param: &str| {
+            let src = RUST_RSTEST
+                .replace("@ATTRS@", attrs)
+                .replace("@PARAM@", param);
+            first_test("tests/a.rs", &src).cases
+        };
+        assert_eq!(cases("#[case(1)]\n#[case::two(2)]", "#[case]"), Some(2));
+        assert_eq!(
+            cases("#[rstest::case(1)]\n#[rstest::case::two(2)]", "#[case]"),
+            Some(2)
+        );
+        assert_eq!(
+            cases("#[test_case(1)]\n#[test_case::test_case(2)]", ""),
+            Some(2)
+        );
+        assert_eq!(cases("", "#[values(1, 2, 3)]"), Some(3));
+        assert_eq!(cases("", "#[rstest::values(1, 2, 3)]"), Some(3));
+        // Other attributes whose name starts the same way.
+        assert_eq!(
+            cases("#[case_x(1)]\n#[cases(2)]\n#[casey::case(3)]", ""),
+            None
+        );
+        assert_eq!(cases("", "#[values_x(1, 2, 3)]"), None);
+        assert_eq!(cases("", "#[other::values(1, 2, 3)]"), None);
+    }
+
+    const PY_STACKED: &str = "import pytest\n\n@pytest.mark.parametrize(\"x\", [1, 2])\n@pytest.mark.parametrize(\"y\", [\"a\", \"b\"])\ndef test_x(x, y):\n    assert x\n";
+
+    #[test]
+    fn rows_of_a_product_are_its_combinations() {
+        let mut product = rows("tests/test_a.py", PY_STACKED);
+        product.sort();
+        assert_eq!(product.len(), 4);
+        assert!(
+            product.contains(&"1 \u{d7} \" a \"".to_string()),
+            "{product:?}"
+        );
+        assert!(
+            product.contains(&"2 \u{d7} \" b \"".to_string()),
+            "{product:?}"
+        );
+
+        // Past the limit the count stays and the rows are not written out.
+        let wide = CaseList::literal((0..100).map(|i| i.to_string()).collect());
+        let product = multiply_cases(wide.clone(), wide);
+        assert_eq!(product.count, Some(10_000));
+        assert_eq!(product.rows, None);
+    }
+
+    const JAVA_SOURCES: &str = "class ATest {\n    @ParameterizedTest\n    @NullAndEmptySource\n    @ValueSource(strings = {\"a\", \"b\"})\n    @CsvSource(textBlock = \"\"\"\n        x, 1\n        # y, 2\n        z, 3\n        \"\"\")\n    void t(String s) {\n        assertNotNull(s);\n    }\n}\n";
+    const CSHARP_ROWS: &str = "public class ATest {\n    [Theory]\n    [InlineData(1, 2)]\n    [InlineData( 3,4 )]\n    public void T(int a, int b) {\n        Assert.Equal(a, b);\n    }\n}\n";
+    const KOTLIN_ROWS: &str = "class ATest {\n    @ParameterizedTest\n    @ValueSource(ints = [1, 2])\n    fun t(x: Int) {\n        assertEquals(1, x)\n    }\n}\n";
+    const GO_ROWS: &str = "package p\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {\n\tfor _, c := range []struct{ a, b int }{\n\t\t{1, 2}, // first\n\t\t{a: 3, b: 4},\n\t} {\n\t\tif c.a > c.b {\n\t\t\tt.Fatal(c)\n\t\t}\n\t}\n}\n";
+    const RUST_ROWS: &str = "#[rstest]\n#[case::first(1, 2)]\n#[case( 3,4, )]\nfn t(#[case] a: i32, #[case] b: i32, #[values(-1, f(2))] c: i32) {\n    assert!(a < b);\n}\n";
+
+    #[test]
+    fn every_language_keeps_the_text_of_its_literal_cases() {
+        assert_eq!(
+            rows("src/test/java/ATest.java", JAVA_SOURCES),
+            [
+                "@NullSource",
+                "@EmptySource",
+                "\" a \"",
+                "\" b \"",
+                "x, 1",
+                "z, 3"
+            ]
+        );
+        assert_eq!(
+            rows("tests/ATest.cs", CSHARP_ROWS),
+            ["( 1 , 2 )", "( 3 , 4 )"]
+        );
+        assert_eq!(rows("src/test/kotlin/ATest.kt", KOTLIN_ROWS), ["1", "2"]);
+        assert_eq!(
+            rows("x_test.go", GO_ROWS),
+            ["{ 1 , 2 }", "{ a : 3 , b : 4 }"]
+        );
+        let mut rust = rows("tests/a.rs", RUST_ROWS);
+        rust.sort();
+        assert_eq!(
+            rust,
+            [
+                "( 1 , 2 ) \u{d7} - 1",
+                "( 1 , 2 ) \u{d7} f ( 2 )",
+                "( 3 , 4 ) \u{d7} - 1",
+                "( 3 , 4 ) \u{d7} f ( 2 )"
+            ]
+        );
     }
 }
