@@ -462,8 +462,8 @@ impl<'a> JsExtractor<'a> {
             let mut h = TestFn::default();
             self.scan_test_body(func, &mut h);
             let mut wraps = None;
+            let mut calls = Vec::new();
             if let Some(body) = func.child_by_field_name("body") {
-                let mut calls = Vec::new();
                 self.collect_calls(body, &mut calls);
                 wraps = super::forwarding_wrapper_callee(
                     body,
@@ -482,16 +482,19 @@ impl<'a> JsExtractor<'a> {
             }
             let line = func.start_position().row + 1;
             let end_line = func.end_position().row + 1;
-            self.facts.test_helpers.push(super::TestHelperFacts {
-                name: name.clone(),
-                line,
-                end_line,
-                total_asserts: h.total_asserts,
-                strong_asserts: h.strong_asserts,
-                tautologies: h.tautologies,
-                fatal_asserts: h.fatal_asserts,
-                helper_checks: 0,
-            });
+            self.facts.push_helper(
+                super::TestHelperFacts {
+                    name: name.clone(),
+                    line,
+                    end_line,
+                    total_asserts: h.total_asserts,
+                    strong_asserts: h.strong_asserts,
+                    tautologies: h.tautologies,
+                    fatal_asserts: h.fatal_asserts,
+                    helper_checks: 0,
+                },
+                calls,
+            );
             helpers.insert(
                 name,
                 super::HelperFacts {
@@ -503,10 +506,73 @@ impl<'a> JsExtractor<'a> {
                 },
             );
         }
+        // A class's methods (`class Checker { check(r) { expect(..) } }`) are tracked as
+        // `Class.method`. A call through an object is not resolved to one: which class the
+        // object is, is not known where the call is read.
+        let mut methods = Vec::new();
+        self.class_methods(root, None, &mut methods);
+        for (name, body) in methods {
+            let mut h = TestFn::default();
+            self.scan_test_body(body, &mut h);
+            let mut calls = Vec::new();
+            self.collect_calls(body, &mut calls);
+            h.total_asserts += super::count_failure_exits(
+                body,
+                self.src,
+                &["throw_statement"],
+                &[],
+                JS_FUNCTION_KINDS,
+            );
+            self.facts.push_helper(
+                super::TestHelperFacts {
+                    name,
+                    line: body.start_position().row + 1,
+                    end_line: body.end_position().row + 1,
+                    total_asserts: h.total_asserts,
+                    strong_asserts: h.strong_asserts,
+                    tautologies: h.tautologies,
+                    fatal_asserts: h.fatal_asserts,
+                    helper_checks: 0,
+                },
+                calls,
+            );
+        }
         for (test, calls) in self.facts.tests.iter_mut().zip(&self.test_calls) {
             super::resolve_test_same_file_helpers(test, calls, self.vocab, |call| {
                 super::helper_through_wrappers(call, &helpers)
             });
+        }
+    }
+
+    /// The methods with a body of every named class: `(Class.method, body)`.
+    fn class_methods<'t>(
+        &self,
+        node: Node<'t>,
+        class: Option<&str>,
+        out: &mut Vec<(String, Node<'t>)>,
+    ) {
+        let mut class = class;
+        match node.kind() {
+            "class_declaration" | "class" | "abstract_class_declaration" => {
+                class = node.child_by_field_name("name").map(|n| self.text(n));
+            }
+            "method_definition" => {
+                if let (Some(c), Some(n), Some(body)) = (
+                    class,
+                    node.child_by_field_name("name"),
+                    node.child_by_field_name("body"),
+                ) {
+                    out.push((format!("{c}.{}", self.text(n)), body));
+                }
+                // A class declared inside the method is found under its own name.
+                class = None;
+            }
+            _ => {}
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'t>> = node.children(&mut cursor).collect();
+        for child in children {
+            self.class_methods(child, class, out);
         }
     }
 

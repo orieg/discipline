@@ -318,16 +318,19 @@ impl<'a> Extractor<'a> {
                     self.helpers.insert(fn_name.clone(), facts);
                     let line = node.start_position().row + 1;
                     let end_line = node.end_position().row + 1;
-                    self.facts.test_helpers.push(super::TestHelperFacts {
-                        name: fn_name,
-                        line,
-                        end_line,
-                        total_asserts: helper_test.total_asserts,
-                        strong_asserts: helper_test.strong_asserts,
-                        tautologies: helper_test.tautologies,
-                        fatal_asserts: helper_test.fatal_asserts,
-                        helper_checks: 0,
-                    });
+                    self.facts.push_helper(
+                        super::TestHelperFacts {
+                            name: fn_name,
+                            line,
+                            end_line,
+                            total_asserts: helper_test.total_asserts,
+                            strong_asserts: helper_test.strong_asserts,
+                            tautologies: helper_test.tautologies,
+                            fatal_asserts: helper_test.fatal_asserts,
+                            helper_checks: 0,
+                        },
+                        dummy_calls,
+                    );
                 }
                 self.in_fn += 1;
                 if is_test {
