@@ -127,13 +127,11 @@ pub fn is_scala_test_path(path: &str) -> bool {
         .strip_suffix(".scala")
         .or_else(|| filename.strip_suffix(".sc"))
         .unwrap_or(filename);
-    stem.ends_with("Spec")
-        || stem.ends_with("Suite")
-        || stem.ends_with("Test")
-        || stem.ends_with("Tests")
-        || path.contains("/test/")
-        || path.starts_with("test/")
-        || path.contains("/it/")
+    ["Spec", "Suite", "Test", "Tests"]
+        .iter()
+        .any(|word| functions::ends_with_word(stem, word))
+        || functions::has_dir(path, "test", true)
+        || functions::has_dir(path, "it", true)
 }
 
 /// Verbs of a spec description (`"A cart" should "sum"`, `"x" must { }`, `"x" when { }`).

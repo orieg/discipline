@@ -94,7 +94,8 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
     let vocab = super::agent_diff::assert_vocabulary(ctx.config);
     let mut unsupported: Vec<String> = Vec::new();
 
-    for file in ctx.git.changed_files()? {
+    let changed = ctx.git.changed_files()?;
+    for file in changed.iter().cloned() {
         if file.kind == ChangeKind::Deleted || exempt.matches(&file.path) {
             continue;
         }
@@ -119,7 +120,7 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
                 .into_iter()
                 .chain(anchored.declared_scope_note),
         );
-        let head = match pack.extract(&anchored.classify_path, &head_src, &vocab) {
+        let mut head = match pack.extract(&anchored.classify_path, &head_src, &vocab) {
             Ok(f) => f,
             Err(e) => {
                 out.notes.push(format!(
@@ -136,6 +137,27 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
                 .unwrap_or_default(),
             None => Vec::new(),
         };
+        // A deleted production file added again under a test name, with no test.
+        if let Some((replaced, production)) = head
+            .tests
+            .is_empty()
+            .then(|| {
+                super::replaced_production_file(&file, &changed, pack, &registry, &vocab.test_paths)
+            })
+            .flatten()
+            .and_then(|replaced| {
+                let facts = pack
+                    .extract(&replaced.classify_path, &head_src, &vocab)
+                    .ok()?;
+                (!judge(&base, &facts.functions).is_empty()).then_some((replaced, facts))
+            })
+        {
+            out.notes.push(super::replaced_production_note(
+                &file.path,
+                &replaced.deleted,
+            ));
+            head = production;
+        }
         out.examined += head.functions.iter().filter(|f| !f.is_test).count();
         for f in judge(&base, &head.functions) {
             let lift = |subject: &str| ctx.find_override(GATE, f.kind, tokens::ALLOW_STUB, subject);

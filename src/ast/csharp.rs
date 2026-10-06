@@ -128,15 +128,12 @@ impl LanguagePack for CSharpPack {
 /// Determines whether a path is conventionally a C# test file.
 pub fn is_csharp_test_path(path: &str) -> bool {
     let filename = path.rsplit('/').next().unwrap_or(path);
-    filename.ends_with("Test.cs")
-        || filename.ends_with("Tests.cs")
-        || filename.ends_with("_test.cs")
-        || filename.ends_with("_tests.cs")
-        || filename.starts_with("Test")
-        || path.starts_with("test/")
-        || path.contains("/test/")
-        || path.starts_with("tests/")
-        || path.contains("/tests/")
+    let stem = filename.strip_suffix(".cs").unwrap_or(filename);
+    super::functions::ends_with_word(stem, "Test")
+        || super::functions::ends_with_word(stem, "Tests")
+        || super::functions::starts_with_test_word(stem)
+        || super::functions::has_dir(path, "test", true)
+        || super::functions::has_dir(path, "tests", true)
         || path.contains(".Tests/")
         || path.contains(".Test/")
 }
