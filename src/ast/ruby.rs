@@ -90,6 +90,7 @@ impl LanguagePack for RubyPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &RUBY_RECEIVER_CALLS);
+        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::RUBY);
         super::calls::count(
             root,
             src,

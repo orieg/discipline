@@ -27,6 +27,7 @@ pub mod go_build;
 #[cfg(feature = "lang-golden")]
 pub mod golden;
 pub mod handlers;
+pub mod helper_loops;
 #[cfg(feature = "lang-java")]
 pub mod java;
 #[cfg(feature = "lang-javascript")]
@@ -287,6 +288,11 @@ pub struct TestFn {
     /// Whether the test has dynamic / non-literal test cases (fixture, generator, or function call)
     /// that cannot be statically counted.
     pub non_literal_cases: bool,
+    /// The literal cases as text, `cases` of them (`test_cases::CaseList::rows`): what
+    /// tells a case moved to another test of the file from one dropped beside an
+    /// unrelated new one. `None` when the cases are not literal rows whose content can
+    /// be compared.
+    pub case_rows: Option<Vec<String>>,
     /// Functions called directly in the body of the test.
     pub direct_calls: Vec<String>,
     /// Byte ranges of the assertions counted in `tautologies`, where the pack reads them
@@ -296,11 +302,48 @@ pub struct TestFn {
     /// Checks the test reaches only through a method called on a receiver (`v.done()`)
     /// that a same-file method of that name makes (`method_checks`). `vacuous-tests`
     /// reads them: a test that asserts through such a method is not vacuous. They are not
-    /// part of `total_asserts`, so `assertion-reduction` counts what it counted before.
+    /// part of `total_asserts`, so `assertion-reduction` counts what it counted before;
+    /// what it excuses of a drop is in `helper_reach`.
     pub method_checks: usize,
     /// The calls `resolve_test_same_file_helpers` counted into this test, so a helper
     /// the pack already followed is not followed a second time as a receiver call.
     pub counted_helper_calls: Vec<String>,
+    /// What the test's helper calls reach beyond the checks counted into it.
+    pub helper_reach: HelperReach,
+}
+
+/// What `assertion-reduction` reads about the helpers a test calls, beside the checks
+/// the pack counted into the test (`total_asserts` and the other counts are left as the
+/// pack made them). A drop in the test's own count is excused, as moved into a helper,
+/// up to what is recorded here and no further.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HelperReach {
+    /// Methods the test calls on a receiver other than the object itself
+    /// (`Checks.check(r)`, `checker.check(r)`), one entry per call site the pack did not
+    /// record in `direct_calls` (`method_checks`).
+    pub receiver_calls: Vec<String>,
+    /// Effective, strong and fatal checks the pack counted into the test for each entry
+    /// of `counted_helper_calls`.
+    pub counted: Vec<(usize, usize, usize)>,
+    /// The calls, direct or on a receiver, that name a helper of the test's own file. A
+    /// helper of the same name in another file gives such a call no credit.
+    pub own_file_calls: Vec<String>,
+    /// Checks of the same-file helpers the test calls that the pack did not count into
+    /// it: those of a method called on a receiver, and those a helper reaches more calls
+    /// down than the pack follows, up to `HELPER_DEPTH` calls from the test.
+    pub total: usize,
+    pub strong: usize,
+    pub fatal: usize,
+    /// The helpers those checks are in.
+    pub names: Vec<String>,
+    /// Counted calls to helpers that check, where the check runs in a loop: the call
+    /// sits in a loop of the test, or the helper checks inside a loop of its own
+    /// (`helper_loops`). One such check stands for many inline assertions.
+    pub looped: usize,
+    /// Failure exits guarded by an equality comparison (`if a != b { panic!() }`) in the
+    /// same-file helpers the test calls and the pack counted (`helper_loops`): equality
+    /// checks written by hand, which the pack counts as checks and not as equality ones.
+    pub equality_exits: usize,
 }
 
 impl TestFn {
@@ -594,10 +637,78 @@ impl ParsedFileFacts {
     /// its own callees counted in (`tracked_helper`), or the least over several helpers
     /// of that name. `None` when the file has no helper of that name.
     pub fn least_helper_named(&self, method: &str) -> Option<usize> {
+        self.least_helper(method).map(|h| h.effective_asserts())
+    }
+
+    /// The helper a call of a method named `method` on some receiver stands for: of the
+    /// helpers of this file with that last name segment, callees counted in, the one
+    /// that checks least, because which one the receiver runs is not known here.
+    fn least_helper(&self, method: &str) -> Option<TestHelperFacts> {
         (0..self.test_helpers.len())
             .filter(|i| helper_leaf(&self.test_helpers[*i].name) == method)
-            .map(|i| self.tracked_helper(i, &mut Vec::new()).effective_asserts())
-            .min()
+            .map(|i| self.tracked_helper(i, &mut Vec::new()))
+            .min_by_key(|h| (h.effective_asserts(), h.strong_asserts, h.fatal_asserts))
+    }
+
+    /// Fills each test's [`HelperReach`]: which of its calls name a helper of this file,
+    /// and the checks those helpers hold that the pack did not count into the test.
+    ///
+    /// A direct call resolves as a helper's own calls do (`called_helper`); a call on a
+    /// receiver resolves to the least-checking helper with that last name segment. Each
+    /// stands for the helper's checks with its callees counted in, `HELPER_DEPTH` calls
+    /// from the test, less what the pack counted for that call site. A call to a name in
+    /// `configured` (`assert_helper_fns`) that the pack did not resolve is already one
+    /// assertion of the test and stands for one less.
+    pub fn resolve_helper_reach(&mut self, configured: &[String]) {
+        let mut tests = std::mem::take(&mut self.tests);
+        for test in &mut tests {
+            let mut counted: Vec<(&str, (usize, usize, usize))> = test
+                .counted_helper_calls
+                .iter()
+                .map(String::as_str)
+                .zip(test.helper_reach.counted.iter().copied())
+                .collect();
+            let mut own_file_calls = Vec::new();
+            let (mut total, mut strong, mut fatal) = (0, 0, 0);
+            let mut names: Vec<String> = Vec::new();
+            let direct = test.direct_calls.iter().map(|c| (c, false));
+            let on_receiver = test.helper_reach.receiver_calls.iter().map(|c| (c, true));
+            for (call, receiver) in direct.chain(on_receiver) {
+                let helper = if receiver {
+                    self.least_helper(call)
+                } else {
+                    self.called_helper(call, &mut Vec::new())
+                };
+                let Some(helper) = helper else {
+                    continue;
+                };
+                own_file_calls.push(call.clone());
+                let site = counted.iter().position(|(c, _)| !receiver && *c == call);
+                let already = match site {
+                    Some(at) => counted.swap_remove(at).1,
+                    None if configured.iter().any(|n| helper_call_matches(call, n)) => (1, 0, 0),
+                    None => (0, 0, 0),
+                };
+                let more = (
+                    helper.effective_asserts().saturating_sub(already.0),
+                    helper.strong_asserts.saturating_sub(already.1),
+                    helper.fatal_asserts.saturating_sub(already.2),
+                );
+                if more != (0, 0, 0) {
+                    total += more.0;
+                    strong += more.1;
+                    fatal += more.2;
+                    if !names.contains(&helper.name) {
+                        names.push(helper.name);
+                    }
+                }
+            }
+            let reach = &mut test.helper_reach;
+            reach.own_file_calls = own_file_calls;
+            (reach.total, reach.strong, reach.fatal) = (total, strong, fatal);
+            reach.names = names;
+        }
+        self.tests = tests;
     }
 }
 
@@ -761,6 +872,11 @@ pub fn resolve_test_same_file_helpers<F>(
     for call in calls {
         if let Some(h) = resolve_fn(call) {
             test.counted_helper_calls.push(call.clone());
+            test.helper_reach.counted.push((
+                h.total_asserts.saturating_sub(h.tautologies),
+                h.strong_asserts,
+                h.fatal_asserts,
+            ));
             if vocab
                 .helper_fns
                 .iter()
@@ -1247,10 +1363,12 @@ impl Default for ParsedFileFacts {
                 expected_exceptions: Vec::new(),
                 cases: None,
                 non_literal_cases: false,
+                case_rows: None,
                 direct_calls: Vec::new(),
                 tautology_spans: Vec::new(),
                 method_checks: 0,
                 counted_helper_calls: Vec::new(),
+                helper_reach: HelperReach::default(),
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -1287,10 +1405,12 @@ impl ParsedFileFacts {
             expected_exceptions: Vec::new(),
             cases: None,
             non_literal_cases: false,
+            case_rows: None,
             direct_calls: Vec::new(),
             tautology_spans: Vec::new(),
             method_checks: 0,
             counted_helper_calls: Vec::new(),
+            helper_reach: HelperReach::default(),
         });
     }
 }
@@ -2781,6 +2901,127 @@ mod tests {
         );
         assert!(ci_vars_in_condition("cfg!(miri) || os.Getenv(\"SKIP_SLOW\") != \"\"").is_empty());
     }
+
+    /// A test with the given calls, beside `helpers` (name, checks, calls), after
+    /// [`ParsedFileFacts::resolve_helper_reach`].
+    fn reach_of(
+        helpers: &[(&str, usize, &[&str])],
+        setup: impl FnOnce(&mut TestFn),
+        configured: &[&str],
+    ) -> HelperReach {
+        let mut facts = ParsedFileFacts::default();
+        for (name, total, calls) in helpers {
+            facts.push_helper(
+                tracked(name, *total),
+                calls.iter().map(|c| c.to_string()).collect(),
+            );
+        }
+        let mut test = TestFn::default();
+        setup(&mut test);
+        facts.tests.push(test);
+        facts.resolve_tracked_helpers();
+        let configured: Vec<String> = configured.iter().map(|c| c.to_string()).collect();
+        facts.resolve_helper_reach(&configured);
+        facts.tests.remove(0).helper_reach
+    }
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// #595: a helper the test calls stands for its checks `HELPER_DEPTH` calls from the
+    /// test, less what the pack counted into the test for that call.
+    #[test]
+    fn a_tests_reach_is_what_its_helpers_hold_beyond_what_the_pack_counted() {
+        let chain: &[(&str, usize, &[&str])] = &[
+            ("a", 1, &["b"]),
+            ("b", 2, &["c"]),
+            ("c", 4, &["d"]),
+            ("d", 8, &[]),
+        ];
+        // The pack counted `a`'s own check: `b` and `c` are the reach, `d` is too deep.
+        let reach = reach_of(
+            chain,
+            |t| {
+                t.direct_calls = strs(&["a"]);
+                t.counted_helper_calls = strs(&["a"]);
+                t.helper_reach.counted = vec![(1, 1, 0)];
+            },
+            &[],
+        );
+        assert_eq!((reach.total, reach.strong), (6, 6), "{reach:?}");
+        assert_eq!(reach.own_file_calls, ["a"]);
+        assert_eq!(reach.names, ["a"]);
+        // A pack that follows three calls itself counted all of it: nothing is added.
+        let reach = reach_of(
+            chain,
+            |t| {
+                t.direct_calls = strs(&["a"]);
+                t.counted_helper_calls = strs(&["a"]);
+                t.helper_reach.counted = vec![(7, 7, 0)];
+            },
+            &[],
+        );
+        assert_eq!((reach.total, reach.strong), (0, 0), "{reach:?}");
+        assert!(reach.names.is_empty());
+        // Two call sites, one counted entry each.
+        let reach = reach_of(
+            chain,
+            |t| {
+                t.direct_calls = strs(&["a", "a"]);
+                t.counted_helper_calls = strs(&["a", "a"]);
+                t.helper_reach.counted = vec![(1, 1, 0), (1, 1, 0)];
+            },
+            &[],
+        );
+        assert_eq!(reach.total, 12, "{reach:?}");
+        // A cycle is followed once.
+        let reach = reach_of(
+            &[("a", 0, &["b"]), ("b", 3, &["a"])],
+            |t| t.direct_calls = strs(&["a"]),
+            &[],
+        );
+        assert_eq!(reach.total, 3, "{reach:?}");
+        // A call that names no helper of the file is not the file's own.
+        let reach = reach_of(chain, |t| t.direct_calls = strs(&["elsewhere"]), &[]);
+        assert_eq!(reach.total, 0);
+        assert!(reach.own_file_calls.is_empty());
+    }
+
+    /// #595: a call on a receiver stands for the least-checking helper with that last
+    /// name segment, and a configured helper name is already one assertion of the test.
+    #[test]
+    fn a_receiver_call_reaches_the_least_checking_helper_of_that_name() {
+        let two: &[(&str, usize, &[&str])] = &[("A::check", 5, &[]), ("B::check", 2, &[])];
+        let on_receiver = |t: &mut TestFn| t.helper_reach.receiver_calls = strs(&["check"]);
+        let reach = reach_of(two, on_receiver, &[]);
+        assert_eq!((reach.total, reach.names), (2, strs(&["B::check"])));
+        assert_eq!(reach.own_file_calls, ["check"]);
+        // One of that name checks nothing: the call stands for nothing, and is still
+        // a call to a helper of this file.
+        let reach = reach_of(
+            &[("A::check", 5, &[]), ("B::check", 0, &[])],
+            on_receiver,
+            &[],
+        );
+        assert_eq!(reach.total, 0);
+        assert_eq!(reach.own_file_calls, ["check"]);
+        // The method's own callees count.
+        let reach = reach_of(
+            &[("A::check", 1, &["body"]), ("body", 2, &[])],
+            on_receiver,
+            &[],
+        );
+        assert_eq!(reach.total, 3);
+        // Listed in `assert_helper_fns`: the call is one assertion of the test already.
+        let reach = reach_of(two, on_receiver, &["check"]);
+        assert_eq!(reach.total, 1);
+        // No helper of that name in the file.
+        let reach = reach_of(&[("A::verify", 5, &[])], on_receiver, &[]);
+        assert_eq!(reach.total, 0);
+        assert!(reach.own_file_calls.is_empty());
+    }
+
     /// #598: the test-path rule over a corpus of file names, in both directions. Each
     /// row is `family, path, test|production`; the expectation comes from the convention
     /// the row was written for, so a rule that starts matching `Latest.java` or stops

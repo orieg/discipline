@@ -6,8 +6,12 @@
 //! called on some other receiver is not resolved there: the receiver's type is not known.
 //! This pass reads those calls from the syntax tree and credits the test with what a
 //! same-file helper of that name checks, into `TestFn::method_checks`, which only
-//! `vacuous-tests` reads. The test's assertion counts are left as the pack made them, so
-//! `assertion-reduction` is not affected.
+//! `vacuous-tests` reads. The test's assertion counts are left as the pack made them.
+//!
+//! The same calls are recorded on the test (`HelperReach::receiver_calls`) for
+//! `assertion-reduction`, which counts a test as before and, when the count drops, reads
+//! such a call as a move into the method it names: in the test's own file
+//! (`ParsedFileFacts::resolve_helper_reach`) or in a changed test-support file.
 //!
 //! A call on the object itself (`self`, `this`, `$this`, `super`) is the pack's to read:
 //! it resolves those where it follows them, and where it does not (a closure the test
@@ -94,13 +98,16 @@ fn receiver_method<'a>(node: Node, src: &'a str, spec: &ReceiverCalls) -> Option
     None
 }
 
-/// Credits each test with the checks of the same-file helpers its receiver calls name.
+/// Credits each test with the checks of the same-file helpers its receiver calls name,
+/// and records those calls on the test (`HelperReach::receiver_calls`) for
+/// `assertion-reduction`, which resolves them against the helpers of the change.
 /// Run after the pack has resolved the calls it follows itself, which are skipped here.
 pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &ReceiverCalls) {
-    if facts.tests.is_empty() || facts.test_helpers.is_empty() {
+    if facts.tests.is_empty() {
         return;
     }
     let mut credits: Vec<(usize, usize)> = Vec::new();
+    let mut sites: Vec<(usize, &str)> = Vec::new();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if let Some(method) = receiver_method(node, src, spec) {
@@ -112,6 +119,7 @@ pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &Receiver
                 .filter(|(_, t)| t.line <= line && line <= t.end_line.max(t.line))
                 .min_by_key(|(_, t)| t.end_line.saturating_sub(t.line));
             if let Some((at, test)) = test {
+                sites.push((at, method));
                 let counted = test
                     .counted_helper_calls
                     .iter()
@@ -129,6 +137,34 @@ pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &Receiver
     }
     for (at, checks) in credits {
         facts.tests[at].method_checks += checks;
+    }
+    record_receiver_calls(facts, sites);
+}
+
+/// Records each test's receiver calls, less the call sites the pack already holds in
+/// `direct_calls` under that method name: a pack that records a qualified call itself
+/// (`Checker::check(&c)`) must not have the same site counted a second time.
+fn record_receiver_calls(facts: &mut ParsedFileFacts, mut sites: Vec<(usize, &str)>) {
+    // The walk is depth-first from a stack: restore source order per test and name.
+    sites.sort_unstable();
+    let mut at = 0;
+    while at < sites.len() {
+        let (test, method) = sites[at];
+        let seen = sites[at..]
+            .iter()
+            .take_while(|s| **s == (test, method))
+            .count();
+        at += seen;
+        let test = &mut facts.tests[test];
+        let recorded = test
+            .direct_calls
+            .iter()
+            .flat_map(|call| call.split('|'))
+            .filter(|call| helper_leaf(call) == method)
+            .count();
+        for _ in recorded..seen {
+            test.helper_reach.receiver_calls.push(method.to_string());
+        }
     }
 }
 
@@ -233,5 +269,36 @@ mod tests {
         )
         .remove(0);
         assert_eq!((t.total_asserts, t.method_checks), (0, 1), "{t:?}");
+    }
+
+    /// #595: the receiver calls of a test are recorded for `assertion-reduction`, once
+    /// per call site, whether or not the file has a method of that name; a call on the
+    /// object itself, and a call site the pack already holds, are not.
+    #[test]
+    fn receiver_calls_are_recorded_once_per_site_the_pack_does_not_hold() {
+        let calls = |path: &str, src: &str| {
+            let t = tests_of(path, src).remove(0);
+            (t.helper_reach.receiver_calls, t.direct_calls)
+        };
+        // The Python pack holds no call made on another object: each site is recorded.
+        let (receiver, direct) = calls(
+            "tests/test_t.py",
+            "def test_a():\n    c = make()\n    c.check(1)\n    c.check(2)\n    c.done()\n",
+        );
+        assert_eq!(receiver, ["check", "check", "done"], "{direct:?}");
+        // A call on the object itself is the pack's to read.
+        let (receiver, _) = calls(
+            "tests/test_t.py",
+            "class TestA:\n    def test_a(self):\n        self.check(make())\n        Checker().verify(make())\n",
+        );
+        assert_eq!(receiver, ["verify"]);
+        // The Rust pack holds every call of the test itself (`c.check`): no site is
+        // recorded a second time, so none is counted twice.
+        let (receiver, direct) = calls(
+            "tests/t.rs",
+            "#[test]\nfn t() {\n    let c = make();\n    c.check(1);\n    c.check(2);\n}\n",
+        );
+        assert_eq!(direct.iter().filter(|c| *c == "c.check").count(), 2);
+        assert_eq!(receiver, Vec::<String>::new(), "{direct:?}");
     }
 }

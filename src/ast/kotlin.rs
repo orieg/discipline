@@ -100,6 +100,12 @@ impl LanguagePack for KotlinPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &KOTLIN_RECEIVER_CALLS);
+        super::helper_loops::count(
+            root,
+            src,
+            &mut extractor.facts,
+            &super::helper_loops::KOTLIN,
+        );
         super::calls::count(
             root,
             src,
@@ -535,8 +541,8 @@ impl<'a> KotlinExtractor<'a> {
             } else {
                 format!("{}.{}", class_stack.join("."), name)
             };
-            let (cases, non_literal_cases) =
-                super::test_cases::extract_kotlin_cases(node, self.src);
+            let (cases, non_literal_cases, case_rows) =
+                super::test_cases::extract_kotlin_cases(node, self.src).into_parts();
             let mut test_fn = TestFn {
                 name: full_name,
                 line: node.start_position().row + 1,
@@ -544,6 +550,7 @@ impl<'a> KotlinExtractor<'a> {
                 ignored,
                 cases,
                 non_literal_cases,
+                case_rows,
                 ..Default::default()
             };
             let mut direct_calls = Vec::new();

@@ -16867,7 +16867,9 @@ fn a_helper_refactored_into_a_thin_wrapper_is_not_an_assertion_reduction() {
 /// its own parameters, to a new `git_with_discipline_in` holding the rest of its body; a
 /// test calling it three times outside a macro lost the three `unwrap`s that moved,
 /// although no assertion changed. A wrapper that does other work before the call is
-/// still not a wrapper, and the checks it hides still count as removed.
+/// still not a wrapper: the test's own count drops, and since #595 the drop is read as
+/// moved into the helper it calls, which holds the `unwrap`, with a note. When that
+/// inner helper holds fewer checks than the test lost, the drop is still reported.
 #[test]
 fn a_helper_forwarding_its_parameters_plus_a_local_is_not_an_assertion_reduction() {
     let test = "#[test]\nfn a_rebase_is_refused() {\n    let dir = Path::new(\".\");\n    let before = git_with_hooks(dir, &[\"rev-parse\", \"x\"]).stdout;\n    let out = git_with_hooks(dir, &[\"rebase\"]);\n    assert!(!out.status.success());\n    let _ = git_with_hooks(dir, &[\"rebase\", \"--abort\"]);\n    assert_eq!(before, out.stdout);\n}\n";
@@ -16875,7 +16877,17 @@ fn a_helper_forwarding_its_parameters_plus_a_local_is_not_an_assertion_reduction
     let body = "fn git_with_discipline_in(dir: &Path, args: &[&str], bin: &Path) -> Output {\n    let path = format!(\"{}:{}\", bin.display(), std::env::var(\"PATH\").unwrap_or_default());\n    let mut cmd = Command::new(\"git\");\n    cmd.current_dir(dir).args(args).env(\"PATH\", path);\n    cmd.output().unwrap()\n}\n\n";
     let forwarding = format!("use std::path::Path;\nuse std::process::{{Command, Output}};\n\nfn git_with_hooks(dir: &Path, args: &[&str]) -> Output {{\n    let bin = Path::new(env!(\"CARGO_BIN_EXE_discipline\")).parent().unwrap().to_path_buf();\n    git_with_discipline_in(dir, args, &bin)\n}}\n\n{body}");
     let busy = format!("use std::path::Path;\nuse std::process::{{Command, Output}};\n\nfn git_with_hooks(dir: &Path, args: &[&str]) -> Output {{\n    std::fs::create_dir_all(dir).ok();\n    let bin = Path::new(env!(\"CARGO_BIN_EXE_discipline\")).parent().unwrap().to_path_buf();\n    git_with_discipline_in(dir, args, &bin)\n}}\n\n{body}");
-    for (after, reported) in [(forwarding.as_str(), false), (busy.as_str(), true)] {
+    // The busy helper again, calling a function that no longer unwraps the output.
+    let busy_fewer = busy.replace(
+        "    cmd.output().unwrap()\n",
+        "    cmd.output().unwrap_or_else(|_| empty_output())\n",
+    );
+    assert_ne!(busy_fewer, busy);
+    for (after, reported, moved) in [
+        (forwarding.as_str(), false, false),
+        (busy.as_str(), false, true),
+        (busy_fewer.as_str(), true, false),
+    ] {
         let repo = Repo::new();
         repo.git(&["checkout", "-q", "main"]);
         repo.write("tests/test_lease.rs", &format!("{inline}{test}"));
@@ -16895,24 +16907,40 @@ fn a_helper_forwarding_its_parameters_plus_a_local_is_not_an_assertion_reduction
             "{}",
             run.stdout
         );
+        let noted = notes_of(&run, "assertion-reduction")
+            .iter()
+            .any(|n| n.contains("read as moved into helper `git_with_hooks`"));
+        assert_eq!(noted, moved, "{}", run.stdout);
     }
 }
 
 /// The `tests/test_lease.rs` refactor (#290) in packs other than Rust: a helper that
 /// keeps computing a local and forwards it, with its parameters, to a new function
 /// holding the rest of its body is a wrapper, so its test keeps the moved checks. A
-/// helper doing other work before the call is not, and the drop is still reported.
+/// helper doing other work before the call is not: the test's own count drops, and since
+/// #595 the drop is read as moved into the function it calls, with a note. When that
+/// function holds fewer checks than the test lost, the drop is still reported.
 #[test]
 fn a_helper_forwarding_a_local_is_not_an_assertion_reduction_in_other_packs() {
+    /// The test keeps its count; its drop is read as moved, with a note; it is reported.
+    #[derive(Debug, PartialEq, Clone, Copy)]
+    enum Verdict {
+        Kept,
+        Moved,
+        Reported,
+    }
+    use Verdict::{Kept, Moved, Reported};
     let js_test = "test('a rebase is refused', () => {\n  const out = gitWithHooks('.', ['rebase']);\n  expect(out.stdout).toBe('');\n});\n";
     let go_test = "func TestRebaseIsRefused(t *testing.T) {\n\tout := gitWithHooks(t, \".\")\n\tif out != \"\" {\n\t\tt.Fatal(out)\n\t}\n}\n";
     let cases = [
-        ("test/lease.test.js", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  return gitWithDisciplineIn(dir, args, bin);\n}\n\nfunction gitWithDisciplineIn(dir, args, bin) {\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", js_test, false),
-        ("test/lease.test.js", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", "function gitWithHooks(dir, args) {\n  mkdirSync(dir);\n  const bin = locate();\n  return gitWithDisciplineIn(dir, args, bin);\n}\n\nfunction gitWithDisciplineIn(dir, args, bin) {\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", js_test, true),
-        ("lease/lease_test.go", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\treturn gitWithDisciplineIn(t, dir, bin)\n}\n\nfunc gitWithDisciplineIn(t *testing.T, dir string, bin string) string {\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", go_test, false),
-        ("lease/lease_test.go", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tprepare(dir)\n\tbin := locate()\n\treturn gitWithDisciplineIn(t, dir, bin)\n}\n\nfunc gitWithDisciplineIn(t *testing.T, dir string, bin string) string {\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", go_test, true),
+        ("test/lease.test.js", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  return gitWithDisciplineIn(dir, args, bin);\n}\n\nfunction gitWithDisciplineIn(dir, args, bin) {\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", js_test, Kept),
+        ("test/lease.test.js", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", "function gitWithHooks(dir, args) {\n  mkdirSync(dir);\n  const bin = locate();\n  return gitWithDisciplineIn(dir, args, bin);\n}\n\nfunction gitWithDisciplineIn(dir, args, bin) {\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", js_test, Moved),
+        ("test/lease.test.js", "function gitWithHooks(dir, args) {\n  const bin = locate();\n  const out = run('git', args, { cwd: dir, env: bin });\n  expect(out.status).toBe(0);\n  return out;\n}\n\n", "function gitWithHooks(dir, args) {\n  mkdirSync(dir);\n  const bin = locate();\n  return gitWithDisciplineIn(dir, args, bin);\n}\n\nfunction gitWithDisciplineIn(dir, args, bin) {\n  const out = run('git', args, { cwd: dir, env: bin });\n  return out;\n}\n\n", js_test, Reported),
+        ("lease/lease_test.go", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\treturn gitWithDisciplineIn(t, dir, bin)\n}\n\nfunc gitWithDisciplineIn(t *testing.T, dir string, bin string) string {\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", go_test, Kept),
+        ("lease/lease_test.go", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tprepare(dir)\n\tbin := locate()\n\treturn gitWithDisciplineIn(t, dir, bin)\n}\n\nfunc gitWithDisciplineIn(t *testing.T, dir string, bin string) string {\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", go_test, Moved),
+        ("lease/lease_test.go", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tbin := locate()\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(out)\n}\n\n", "package lease\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc gitWithHooks(t *testing.T, dir string) string {\n\tprepare(dir)\n\tbin := locate()\n\treturn gitWithDisciplineIn(t, dir, bin)\n}\n\nfunc gitWithDisciplineIn(t *testing.T, dir string, bin string) string {\n\tout, err := exec.Command(\"git\", \"-C\", dir, bin).Output()\n\t_ = err\n\treturn string(out)\n}\n\n", go_test, Reported),
     ];
-    for (path, before, after, test, reported) in cases {
+    for (path, before, after, test, verdict) in cases {
         let repo = Repo::new();
         repo.git(&["checkout", "-q", "main"]);
         repo.write(path, &format!("{before}{test}"));
@@ -16921,7 +16949,7 @@ fn a_helper_forwarding_a_local_is_not_an_assertion_reduction_in_other_packs() {
         repo.write(path, &format!("{after}{test}"));
         repo.commit("refactor: lease helper");
         let run = repo.check(&[]);
-        let expected: Vec<&str> = if reported {
+        let expected: Vec<&str> = if verdict == Reported {
             vec!["Assertion Count Decreased In Existing Test"]
         } else {
             Vec::new()
@@ -16929,7 +16957,16 @@ fn a_helper_forwarding_a_local_is_not_an_assertion_reduction_in_other_packs() {
         assert_eq!(
             run.titles("assertion-reduction"),
             expected,
-            "{path} reported={reported}: {}",
+            "{path} {verdict:?}: {}",
+            run.stdout
+        );
+        let noted = notes_of(&run, "assertion-reduction")
+            .iter()
+            .any(|n| n.contains("read as moved into helper `gitWithHooks`"));
+        assert_eq!(
+            noted,
+            verdict == Moved,
+            "{path} {verdict:?}: {}",
             run.stdout
         );
     }
@@ -19417,7 +19454,7 @@ fn proptest_and_quickcheck_assertion_reduction_and_vacuous_e2e() {
     repo.git(&["checkout", "-q", "-B", "stronger-props", "main"]);
     repo.write(
         "tests/prop_test.rs",
-        "use proptest::prelude::*;\n\nproptest! {\n    #[test]\n    fn parses_dates(s in \"[0-9]{4}\") {\n        prop_assert!(!s.is_empty());\n        prop_assert_eq!(s.len(), 4);\n        prop_assert_ne!(s.len(), 0);\n    }\n}\n\nquickcheck::quickcheck! {\n    fn prop_roundtrip(x: u32) -> bool {\n        x == x\n    }\n}\n",
+        "use proptest::prelude::*;\n\nproptest! {\n    #[test]\n    fn parses_dates(s in \"[0-9]{4}\") {\n        prop_assert!(!s.is_empty());\n        prop_assert_eq!(s.len(), 4);\n        prop_assert_ne!(s.len(), 0);\n    }\n}\n\nquickcheck::quickcheck! {\n    fn prop_roundtrip(x: u32) -> bool {\n        decode(encode(x)) == x\n    }\n}\n",
     );
     repo.commit("test: strengthened proptest assertions and added real quickcheck");
     let run_pass = repo.check(&["--base", "main"]);
