@@ -418,6 +418,22 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "integrity: a command key replacing its preset's default is a weakening, the default written down is not",
+        || {
+            let mut base = DisciplineConfig::default_for_repo("t");
+            base.gates.command.preset = Some("cargo-mutants".to_string());
+            let mut weaker = base.clone();
+            weaker.gates.command.zero_items_pattern = Some("never printed".to_string());
+            let mut same = base.clone();
+            same.gates.command.zero_items_pattern = Some("0 mutants tested".to_string());
+            let found = diff_configs(&base, &weaker)?;
+            Ok(found.len() == 1
+                && found[0].gate == "command"
+                && found[0].key() == "zero_items_pattern"
+                && diff_configs(&base, &same)?.is_empty())
+        },
+    ),
+    (
         "overrides: a listed reviewer approves, the author and a stale approval do not",
         || {
             use crate::config::DirectivesConfig;
