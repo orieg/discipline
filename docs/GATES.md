@@ -661,6 +661,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - A file that instructs agents only in this repository (an MCP server's `CONTEXT.md`, a prompt directory) until it is declared in `instruction_files`.
   - A pre-existing line; only added lines are read.
   - Directional marks that a right-to-left localisation table needs: exempt the path.
+- **Baseline:** a finding about the change description has no file and no line. Its fingerprint is anchored on where the text is (`pr-title`, `pr-body`, `commit:<short sha>`), so a baseline entry for one does not match another.
 - **Lifting directive:** `allow-agent-instructions: <path-or-path:line> <reason>`.
 - **Default:** on, `error`; the phrase and blob findings are reported at `warning`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `instruction_files` (globs of the repository's own agent-instruction files, such as a runtime prompt an MCP server loads: `instruction_files = ["CONTEXT.md", "prompts/**"]`; each is reported like `AGENTS.md`, and removing an entry is a `config-integrity` weakening).
@@ -1041,6 +1042,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Mechanism claim citing `perf stat` counters or labeled as `(hypothesis — unmeasured pending PMU counters)`.
   - Wall-clock speedup citing `[2.7x, 3.1x] BCa 95% CI` or `(provisional pending re-measurement)`.
   - Paired comparison citing `(workload: uniform-random)`.
+- **Baseline:** a superseded figure in a JSON file has no line. Its fingerprint is anchored on the key path and the figure (`root.<key>:<figure id>`), so an entry for one key does not match another key of the same file.
 - **Lifting directive:** `allow-provenance: <file-or-path> <reason>` in PR body or commit (aliases: `allow-unpaired-figures`, `discipline:allow(provenance-tags)`). Findings in the PR body itself are not liftable.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `check_tables`, `check_mechanisms`, `check_intervals`, `check_paired_figures`, `superseded_registry`, `superseded_json_paths`, `check_pending_citations`, `require_open_pending_issues`, `pending_issue_repos`, `ratio_satisfied_by`, `deterministic_units`, `diff_only`.
 
@@ -1139,6 +1141,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - A hook that runs a script file (`node scripts/setup.js`) whose contents do the reaching out: the token list reads the hook line, not the file it runs.
   - An unchanged hook, and lines of a build script that did not change.
   - `Makefile` targets, `pyproject.toml` `[build-system]` requirements (see `dependency-delta`), Gradle or Maven plugins.
+- **Baseline:** a lifecycle script has no line and shares its manifest with the others. Its fingerprint is anchored on the script (`script:<name>`), so an entry for `preinstall` does not match `postinstall`.
 - **Lifting directive:** `allow-build-hook: <hook-name-or-path> <reason>`.
 - **Default:** on, `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
@@ -1181,6 +1184,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
     - A recipe line counts every word of the line once a compiler word is on it, so `echo gcc -w` is read as a compiler call. A strict flag lost from one recipe line while another keeps it is not reported (the carrier is `recipe`).
     - Flags with another spelling: MSVC `/W0`, `/WX-`, `-fpermissive`, `-Wl,--no-fatal-warnings`; `.cflag(..)` of the `cmake` crate; `.flag(..)` with a non-literal argument; builder calls inside a macro. A `build.rs` outside the package root name (`build/main.rs`) and a `setup.cfg` are not build files here.
     - A binary built without the Rust or Python grammar (`lang-rust`, `lang-python` off) cannot read `build.rs` or `setup.py`: it says so in a note and does not judge them.
+- **Baseline:** a finding with no line is anchored on its key path (the weakened key, or the key through which the file now inherits), so an entry for one key does not match another key of the same file.
 - **Lifting directive:** `allow-toolchain-weakening: <subject> <reason>`, where the subject is the option's key path (`compilerOptions.strict`), its last segment (`strict`), or the file path (which lifts every finding in that file, and is the only form for a not-analysed or deleted file). For a build-file flag the subject is the flag (`-Wno-error`, `.warnings(false)`), what carries it (`CFLAGS`, `CMAKE_CXX_FLAGS`, `add_compile_options`, `target_compile_options:<target>`, `recipe`, `extra_compile_args`, `cc::Build`), or the file path.
 - **Default:** on, `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
@@ -1283,6 +1287,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - `go.sum` (requiring an already-indirect module leaves it unchanged): its size is noted, its sources and hashes are not read, and the notes say so. Any other lockfile format is not read entry by entry, and deleting one is not `Lockfile Deleted`; it still counts as the lockfile a manifest change must touch.
   - A lockfile entry whose version changed within the same source (a routine update).
   - Dependencies explicitly excused via scoped `allow-dependency: <name> <reason>`.
+- **Baseline:** a lockfile finding has no line. Its fingerprint is anchored on the package name, so an entry for one package does not match another package of the same lockfile.
 - **Lifting directive:** `allow-dependency: <dependency-name> <reason>`. A lockfile entry finding is lifted by naming the **package**; a stale or deleted lockfile by naming the **lockfile path**.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `manifests`, `allow_wildcards`, `require_git_pins`, `deny_file`, `allow_dependencies`, `deny_dependencies`.
 
@@ -1310,6 +1315,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - A budget the pack cannot place: a value computed at runtime, read from an environment variable, or held in a `const` (`cases: CASES`); only integer literals in a configuration position count.
   - Increases or additions of property-testing iterations or new fuzz targets (ratchet permits tightening).
   - Reductions explicitly excused by scoped directive `allow-test-shrink: <target/metric> <reason>`.
+- **Baseline:** a fuzz target removed from a harness list has no line. Its fingerprint is anchored on the target (`fuzz-target:<name>`), so an entry for one target does not match another target of the same harness.
 - **Lifting directive:** `allow-test-shrink: <target-or-metric> <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `corpus_dirs`, `fuzz_targets` (default `fuzz/Cargo.toml`, `fuzz/fuzz_targets/**`), `scan_workflows`, `scan_scripts`.
 
@@ -1356,6 +1362,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - For the exposure rules: `github.event.*` values that are numbers or SHAs are reported like any other (the rule does not know the event payload's types); `${{ }}` in a `with:` input that an action evaluates as code (`actions/github-script`'s `script:`); an expression inside a `run:` of a GitLab pipeline; a secret read through `toJSON(secrets)` in a step of another job that shares an artifact; a write token granted by the repository or organisation setting when the workflow sets no `permissions:` is assumed, not read; `pull_request_target` checkouts of the head ref (reported separately only as the trigger).
   - For `banned_actions`: an image (`docker://`, `container:`, `services`), a GitLab pipeline, a `uses:` written as an expression (a note names it), a banned action pulled in by a remote action or reusable workflow that is not itself listed, and a finding adopted into a committed baseline. The list is configuration: nothing is fetched from an advisory feed.
   - A job listed in `excluded_jobs` (default `detect-changes`) missing from the rollup's `needs`.
+- **Baseline:** a verification job that left a workflow or a GitLab pipeline has no line. Its fingerprint is anchored on the job (`job:<id>`), so an entry for one removed job does not match another job removed from the same file.
 - **Lifting directive:** `allow-ci-weakening: <subject> <reason>`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `workflows`, `rollup_job`, `excluded_jobs`, `pin_actions`, `forbid_continue_on_error`, `forbid_or_true`, `diff_only`, `documented_job_count_path`, `documented_job_count_pattern`, `first_party_action_prefixes`, `banned_actions`.
 
@@ -1380,6 +1387,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Jobs that are not in the rollup's `needs` (`ci-integrity` owns the rollup allow-list).
   - Matrix legs individually: `toJson(needs)` carries one aggregated result per job.
 - **Unreadable input fails closed:** a context that is not JSON, not an object, or has an entry without a string `result`, an unreadable context file, or a workflow missing at `HEAD`, exits 2.
+- **Baseline:** a finding about a job the workflow does not define has no line. Its fingerprint is anchored on the job (`job:<name>`); a finding about a defined job is keyed on the job's line.
 - **Lifting directive:** none. A finding means the run's own evidence is inconsistent; the fix is the filter or the workflow, then a re-run.
 - **Config keys:** `enabled`, `severity`, `exempt_paths` (matched against `workflow`), `workflow` (default `.github/workflows/ci.yml`), `change_job` (default `detect-changes`; `""` = the workflow has no change-detection job), `unconditional_jobs` (default `[]`).
 
@@ -1407,6 +1415,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Test count increases (ratchet permits additions).
   - Reductions within configured `tolerance`.
   - Reductions excused with `allow-test-shrink: <subject> <reason>`, `removes: <subject> <reason>`, or `allow-gate-weakening: test-floor <reason>`.
+- **Baseline:** `Test Dropped From Suite` has no file and no line. Its fingerprint is anchored on the test (`test:<identity>`), so an entry for one dropped test does not match another.
 - **Lifting directive:** `allow-gate-weakening: test-floor <reason>`, or `allow-test-shrink: <subject> <reason>` or `removes: <subject> <reason>` where the subject is what shrank: for a dropped, missing, skipped, or failed test identity, its `test-id` or test function name; for a count below the floor, `min_tests`, a changed test file's path or name, or a removed test's name; for a lowered floor constant, its `constant_name`; for a missing suite, its `required_suites` path.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `min_tests`, `tolerance`, `constant_file`, `constant_name`, `required_suites`, `test_command`, `test_report`, `base_report`, `head_report`.
 
@@ -1594,6 +1603,7 @@ Configuring `test_report` closes these gaps by ratcheting the set of executed te
 - **What it does NOT catch:**
   - Unconfigured files or uncaptured version substrings.
   - Version increments in unversioned changelogs without regex capture groups.
+- **Baseline:** the finding is located at the first drifted file, which two groups can share. Its fingerprint is anchored on the group (`group:<name>`).
 - **Lifting directive:** `allow-version-mismatch: <group-name> <reason>` in PR description or commit message.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `groups` (`name`, `sources` (`path`, `regex`)).
 
@@ -1709,6 +1719,7 @@ Notes for adapting it:
   ```text
   allow-behavior-change: test_calc intentional change to calculator behavior
   ```
+- **Baseline:** a finding located at the configuration file is anchored on the command (`command:<name>`, followed by the policy file or the forbidden pattern when the finding is about one), and a failed base test on the test (`test:<id>`), so an entry for one command or test does not match another.
 - **Lifting directive:** `allow-command: <command-or-preset-name> <reason>` for command execution failures; `allow-behavior-change: <test-name> <reason>` for `command/base-test-failed` under the `base-tests` preset.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `preset`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `snapshot`, `snapshot_ignore`, `commands`.
 
@@ -1783,6 +1794,7 @@ Notes for adapting it:
 - **What it does NOT catch:**
   - Uncommitted benchmark results (benchmark files must be committed or generated in CI workspace).
   - Wall-clock variance from co-resident CPU contention without sample distribution statistics.
+- **Baseline:** a finding about an arm has no line. Its fingerprint is anchored on the arm name (a regression, a removed arm, an arm with no baseline entry), on the entry as written for a stale `exempt_arms` entry (`exempt_arms:<entry>`), and in paired-ratio mode on the cell (`cell:<axis>/<id>`) or on what could not be compared (`baseline`, `platform`, `twin`, `runner-class`, `axis:<name>`, a cell), so an entry for one arm or cell does not match another of the same artifact.
 - **Lifting directive:** `allow-regression: <benchmark-name-or-path> <reason>`.
 - **Sourced overrides and citation freshness (`require_sourced_override = true`):** the reason must cite a CI run URL or a committed artifact path and name the arms it approves. Every citation in the reason is then checked, not only the first, because a reason with two citations rests on both:
   - a cited run whose conclusion is `cancelled`, `timed_out`, `action_required`, `startup_failure`, `stale` or `skipped` voids the override: it may have skipped the job whose numbers are quoted;

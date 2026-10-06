@@ -989,6 +989,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             .and_then(|c| lockfile::parse_lock(fname, c))
             .unwrap_or_default();
         for finding in lockfile::diff_lock(&base_entries, &head_entries) {
+            let before = outcome.violations.len();
             lock_violation(
                 ctx,
                 &mut outcome,
@@ -998,6 +999,10 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
                 &finding.package,
                 format!("{} in `{}`.", finding.message, f.path),
             );
+            // One lockfile holds many packages: the package tells its findings apart.
+            if outcome.violations.len() > before {
+                outcome.anchor_last(finding.package.clone());
+            }
         }
     }
 
