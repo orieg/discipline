@@ -407,7 +407,7 @@ pub fn generate_schema() -> Value {
                     "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed" },
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
                     "canary_expected_diagnostic": { "type": "string", "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text" },
-                    "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match" },
+                    "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs. Needs the table's own command or preset: entries do not inherit it" },
                     "snapshot_ignore": { "$ref": "#/$defs/StringListOrReset", "description": "Regexes for lines left out of the snapshot comparison, on both sides" },
                     "commands": {
                         "type": "array",
@@ -432,7 +432,7 @@ pub fn generate_schema() -> Value {
                     "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed" },
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
                     "canary_expected_diagnostic": { "type": "string", "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text" },
-                    "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match" },
+                    "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs" },
                     "snapshot_ignore": { "$ref": "#/$defs/StringListOrReset", "description": "Regexes for lines left out of the snapshot comparison, on both sides" }
                 }
             },
@@ -505,7 +505,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "pattern": { "type": "string", "description": "Custom regex pattern required in PR title or body" },
+                    "pattern": { "type": "string", "description": "Custom regex pattern required in PR title or body, in place of the built-in one; config-integrity judges adding it as the built-in pattern changed" },
                     "require_in_commit_if_no_pr": { "type": "boolean", "description": "Require issue link in commit messages when no PR metadata is supplied" },
                     "verify_references": { "type": "boolean", "description": "Look each reference up on the forge; at least one must be an issue of this repository or of reference_repos (needs forge access)" },
                     "require_open_issue": { "type": "boolean", "description": "With verify_references: a closed issue does not satisfy the gate (default: true)" },
@@ -562,7 +562,7 @@ pub fn generate_schema() -> Value {
                     "constant_file": { "type": "string", "description": "File containing a floor constant" },
                     "constant_name": { "type": "string", "description": "Name of the floor constant in constant_file" },
                     "required_suites": { "$ref": "#/$defs/StringListOrReset", "description": "Required test suite files that must exist" },
-                    "test_command": { "type": "string", "description": "Custom command to list or count tests" }
+                    "test_command": { "type": "string", "description": "Custom command to list or count tests; run for at most 600 seconds with stdout captured up to 25 MiB, and a timeout or a listing cut off is exit 2" }
                 }
             },
             "CiIntegrityGate": {
