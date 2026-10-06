@@ -789,6 +789,8 @@ pub fn run_checks(
     ];
     let whole_tree = ctx.git.is_whole_tree();
 
+    // Misses recorded by an earlier run on this thread are not this run's.
+    crate::tokens::forget_subject_misses();
     let mut outcomes = Vec::new();
     let mut ast_outcomes = None;
     for gate in selected {
@@ -1021,6 +1023,40 @@ pub fn run_checks(
                 }
             } else if o.gate == target_gate {
                 o.notes.push(note.clone());
+            }
+        }
+    }
+
+    // A directive that names another subject and only mentions this one further on does
+    // not cover it (`tokens::find_override`). The gate that still reports a finding says
+    // which subject the directive was read with, unless another directive lifted the one
+    // it mentions.
+    // A gate may try a path and then its file name: one note for the two.
+    let mut noted: Vec<crate::tokens::SubjectMiss> = Vec::new();
+    for miss in crate::tokens::take_subject_misses() {
+        let same_finding = noted.iter().any(|n| {
+            n.gate == miss.gate
+                && n.directive == miss.directive
+                && n.source == miss.source
+                && n.subject.ends_with(&format!("/{}", miss.subject))
+        });
+        if same_finding {
+            continue;
+        }
+        if let Some(o) = outcomes.iter_mut().find(|o| o.gate == miss.gate) {
+            let lifted = o.overrides.iter().any(|ov| ov.subject == miss.subject);
+            // A gate tries several subjects for one finding (a test's name, then its
+            // file): the note is for a finding the gate still reports, one that names
+            // the subject.
+            let reported = o.violations.iter().any(|v| {
+                v.message.contains(&miss.subject)
+                    || v.file.as_deref().is_some_and(|f| {
+                        f == miss.subject || f.ends_with(&format!("/{}", miss.subject))
+                    })
+            });
+            if reported && !lifted {
+                o.notes.push(miss.note());
+                noted.push(miss);
             }
         }
     }

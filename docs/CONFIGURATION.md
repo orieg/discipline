@@ -723,7 +723,24 @@ discipline: <directive>: <subject> <reason>
 <!-- discipline:allow(<gate-id>): <subject> <reason> -->
 ```
 
-Directives must begin on their own line. Mentions mid-sentence or inside markdown tables never arm the directive (F8). The text after the colon must name the subject and must not be empty or a bare placeholder (`TODO`, `tbd`, `none`, `n/a`, `...`, `<reason>`, `ok`, `temp`, `dummy`, `null`, `placeholder`, `asdf`, folded across Unicode confusables, combining marks, invisible characters, and leetspeak; at least two alphanumeric characters required). A subject with no reason is accepted, so write the reason for the reviewer. Lines inside fenced (```` ``` ```` / `~~~`) code blocks are ignored. A fence closes only on a line of the same character, at least as long, with nothing else on it, so a shorter fence quoted inside a longer one stays code. A line indented four or more columns (a tab counts as four) is an indented code block and is ignored too; up to three spaces of indentation is allowed. A commit's subject line is never read.
+Directives must begin on their own line. Mentions mid-sentence or inside markdown tables never arm the directive (F8). The text after the colon must name the subject and must not be empty or a bare placeholder (`TODO`, `tbd`, `none`, `n/a`, `...`, `<reason>`, `ok`, `temp`, `dummy`, `null`, `placeholder`, `asdf`, folded across Unicode confusables, combining marks, invisible characters, and leetspeak; at least two alphanumeric characters required). The reason is what follows the subject: a subject with nothing after it, or with only a placeholder after it, lifts nothing. Lines inside fenced (```` ``` ```` / `~~~`) code blocks are ignored. A fence closes only on a line of the same character, at least as long, with nothing else on it, so a shorter fence quoted inside a longer one stays code. A line indented four or more columns (a tab counts as four) is an indented code block and is ignored too; up to three spaces of indentation is allowed. A commit's subject line is never read.
+
+**Where the subject is read.** A directive names its subject once, as the first thing after the colon. Everything after the subject is the reason, and a word of the reason never names a subject, quoted or not. One directive line names one subject. There is no list form (`a, b`, `a and b`, `a b`): write one line for each subject.
+
+```text
+allow-assertion-drop: adds the second equality moved to the property suite
+allow-assertion-drop: test_totals the helper adds to the total
+```
+
+The first line lifts the finding on the test `adds`. The second names `test_totals`: it does not lift a finding on `adds`, although its reason uses the word. The gate that still reports the finding adds a note saying which subject the directive was read with.
+
+The subject is written as the finding prints it (a test name, a path, a gate id, a key), optionally in quotes (`"adds"`, `'adds'`, `` `adds` ``). A subject of several words, or with a colon in it (`type: ignore`, a test title with spaces, `path:line`), is written out in full at the start. Three shorter spellings of the first token are read, and nothing else:
+
+- for a path, its file name (`old.rs` for `tests/legacy/old.rs`) or a directory above it written with a slash (`tests/legacy/`, `tests/`; a bare `tests` is a word, not a directory);
+- for a test, a qualified name, which names its last segment (`tests::parses_header` and `HeaderTest#parses_header` name `parses_header`);
+- for an action, the reference with its version (`actions/checkout@v4` names `actions/checkout`).
+
+Where a gate's subject is a keyword (`allow-unsafe`, `allow-msrv`, `allow-miri`, `allow-sanitizers`; each gate lists its keywords in [GATES.md](GATES.md)), the keyword is the first word like any other subject: `allow-msrv: crate the workspace pins its toolchain in another file`, not `allow-msrv: transitional crate`. `allow-regression` under `require_sourced_override` reads the arm it approves the same way, from the start.
 
 | Directive | Lifts | Subject |
 |---|---|---|
@@ -754,7 +771,7 @@ Directives must begin on their own line. Mentions mid-sentence or inside markdow
 | `allow-manifest-drift:` / `discipline:allow(manifest-sync)` / `allow(manifest-sync)` | `manifest-sync` | Manifest path or package field name |
 | `allow-version-mismatch:` / `discipline:allow(version-lockstep)` / `allow(version-lockstep)` | `version-lockstep` | Mismatched crate name or manifest path |
 | `allow-scope:` / `allow-scope-confinement:` / `discipline:allow(scope-confinement)` / `allow(scope-confinement)` | `scope-confinement` | Out-of-scope file path or module prefix |
-| `allow-suppression:` / `allow-suppression-delta:` / `discipline:allow(suppression-delta)` / `allow(suppression-delta)` | `suppression-delta` | Specific suppression rule (`dead_code`, `noqa`, `type: ignore`) and/or file path |
+| `allow-suppression:` / `allow-suppression-delta:` / `discipline:allow(suppression-delta)` / `allow(suppression-delta)` | `suppression-delta` | Specific suppression rule (`dead_code`, `noqa`, `type: ignore`) or file path |
 | `allow-pr-checklist:` / `allow-checklist:` / `discipline:allow(pr-checklist)` / `allow(pr-checklist)` | `pr-checklist` | PR checklist item text or section |
 | `allow-unsafe:` / `allow-unsafe-budget:` / `discipline:allow(unsafe-budget)` / `allow(unsafe-budget)` | `unsafe-budget` | Rust file path, function name, or module |
 | `allow-msrv:` / `discipline:allow(msrv)` / `allow(msrv)` | `msrv` | Crate name or MSRV error diagnostic |
