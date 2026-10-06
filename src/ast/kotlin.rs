@@ -122,7 +122,7 @@ impl LanguagePack for KotlinPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
-        super::caught_assertions::kotlin(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::kotlin(root, src, &mut extractor.facts.tests, vocab);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -860,6 +860,8 @@ pub const KOTLIN_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call_expression", "", "navigation_expression", "")],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const KOTLIN_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

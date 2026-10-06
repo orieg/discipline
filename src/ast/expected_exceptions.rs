@@ -560,6 +560,15 @@ const PHP_HIERARCHY: Hierarchy = &[
     ("TypeError", &["ArgumentCountError"]),
 ];
 
+/// Whether `name` is a Python built-in exception class (or one of the names Python keeps
+/// as aliases of `OSError`).
+pub(super) fn python_standard_exception(name: &str) -> bool {
+    matches!(name, "IOError" | "EnvironmentError" | "WindowsError")
+        || PYTHON_HIERARCHY
+            .iter()
+            .any(|(parent, kids)| *parent == name || kids.contains(&name))
+}
+
 fn hierarchy(fam: Family) -> Hierarchy {
     match fam {
         Family::Python => PYTHON_HIERARCHY,

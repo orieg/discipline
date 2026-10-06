@@ -110,7 +110,7 @@ impl LanguagePack for JavaPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
-        super::caught_assertions::java(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::java(root, src, &mut extractor.facts.tests, vocab);
         super::expected_exceptions::java(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
@@ -767,6 +767,8 @@ pub const JAVA_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[],
         direct: &[("method_invocation", "object", "name")],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const JAVA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

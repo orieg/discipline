@@ -37,6 +37,15 @@ pub struct ReceiverCalls {
     /// Calls that carry the receiver and the method themselves: the call kind, the
     /// receiver field and the method field.
     pub direct: &'static [(&'static str, &'static str, &'static str)],
+    /// Member accesses that call a method when no argument list follows (Scala
+    /// `c.done`): the member-access kind and the field of it that holds the name. One is
+    /// read as a call when it is not the callee of a call and the file has a helper of
+    /// that name; any other member access is a field read.
+    pub bare: &'static [(&'static str, &'static str)],
+    /// Kinds whose children are the tokens of a macro's arguments (Rust `token_tree`),
+    /// where a call is spelled token by token: a receiver, `.`, a name, and a
+    /// parenthesized group.
+    pub tokens: &'static [&'static str],
 }
 
 fn text<'a>(node: Node, src: &'a str) -> &'a str {
@@ -98,6 +107,56 @@ fn receiver_method<'a>(node: Node, src: &'a str, spec: &ReceiverCalls) -> Option
     None
 }
 
+/// The method a member access with no argument list calls (`ReceiverCalls::bare`), when
+/// it is one on a receiver other than the object itself and not the callee of a call.
+fn bare_method<'a>(node: Node, src: &'a str, spec: &ReceiverCalls) -> Option<&'a str> {
+    let (_, name_field) = spec.bare.iter().find(|(kind, _)| node.kind() == *kind)?;
+    let is_callee = node.parent().is_some_and(|p| {
+        spec.member.iter().any(|(call, callee_field, _, _)| {
+            p.kind() == *call
+                && if callee_field.is_empty() {
+                    p.named_child(0) == Some(node)
+                } else {
+                    p.child_by_field_name(callee_field) == Some(node)
+                }
+        })
+    });
+    let own = node
+        .named_child(0)
+        .is_none_or(|r| OWN_OBJECT.contains(&text(r, src).trim()));
+    if is_callee || own {
+        return None;
+    }
+    node.child_by_field_name(name_field)
+        .map(|n| leaf_name(n, src))
+}
+
+/// The methods called on a receiver in the tokens of a macro's arguments
+/// (`ReceiverCalls::tokens`), each with the line of its name: `v.done(..)` is the tokens
+/// `v`, `.`, `done` and a group that opens with `(`.
+fn token_methods<'a>(node: Node, src: &'a str, spec: &ReceiverCalls) -> Vec<(&'a str, usize)> {
+    if !spec.tokens.contains(&node.kind()) {
+        return Vec::new();
+    }
+    let mut cursor = node.walk();
+    let tokens: Vec<Node> = node.children(&mut cursor).collect();
+    let mut found = Vec::new();
+    for window in tokens.windows(4) {
+        let [receiver, dot, name, group] = window else {
+            continue;
+        };
+        if dot.kind() == "."
+            && name.kind() == "identifier"
+            && spec.tokens.contains(&group.kind())
+            && text(*group, src).starts_with('(')
+            && !OWN_OBJECT.contains(&text(*receiver, src).trim())
+        {
+            found.push((text(*name, src), name.start_position().row + 1));
+        }
+    }
+    found
+}
+
 /// Credits each test with the checks of the same-file helpers its receiver calls name,
 /// and records those calls on the test (`HelperReach::receiver_calls`) for
 /// `assertion-reduction`, which resolves them against the helpers of the change.
@@ -110,8 +169,16 @@ pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &Receiver
     let mut sites: Vec<(usize, &str)> = Vec::new();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
+        let mut called: Vec<(&str, usize)> = token_methods(node, src, spec);
+        let line = node.start_position().row + 1;
         if let Some(method) = receiver_method(node, src, spec) {
-            let line = node.start_position().row + 1;
+            called.push((method, line));
+        } else if let Some(method) = bare_method(node, src, spec) {
+            if facts.least_helper_named(method).is_some() {
+                called.push((method, line));
+            }
+        }
+        for (method, line) in called {
             let test = facts
                 .tests
                 .iter()

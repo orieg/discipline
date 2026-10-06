@@ -126,7 +126,7 @@ impl LanguagePack for JavaScriptPack {
         );
         super::bounds::javascript(root, src, &mut extractor.facts.tests);
         super::expectations::javascript(root, src, &mut extractor.facts.tests);
-        super::caught_assertions::javascript(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::javascript(root, src, &mut extractor.facts.tests, vocab);
         super::expected_exceptions::javascript(root, src, &mut extractor.facts.tests);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "template_string"]);
@@ -1114,6 +1114,8 @@ pub const JS_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
             "property",
         )],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const JS_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

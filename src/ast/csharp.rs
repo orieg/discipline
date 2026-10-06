@@ -116,7 +116,7 @@ impl LanguagePack for CSharpPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
-        super::caught_assertions::csharp(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::csharp(root, src, &mut extractor.facts.tests, vocab);
         super::expected_exceptions::csharp(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
@@ -744,6 +744,8 @@ pub const CSHARP_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
             "name",
         )],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const CSHARP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
