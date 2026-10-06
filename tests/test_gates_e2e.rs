@@ -4258,10 +4258,11 @@ fn rename_between_extensions_of_one_pack_is_parsed_with_the_head_grammar() {
     );
 }
 
-/// A rename across packs (`.java` -> `.kt`) is classified by the head path with
-/// a note: here the Kotlin file name is a test file, so its handler is test code.
+/// A rename across packs (`.java` -> `.kt`) does not move production code into
+/// test scope: the Kotlin file name is a test file name, but the file was
+/// production code on the base side, so its handler is reported, with a note.
 #[test]
-fn rename_across_packs_is_classified_by_the_head_path_with_a_note() {
+fn rename_across_packs_into_a_test_file_name_keeps_the_file_production_code() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
     repo.write(
@@ -4277,14 +4278,16 @@ fn rename_across_packs_is_classified_by_the_head_path_with_a_note() {
     );
     repo.commit("refactor: port to kotlin");
     let run = repo.check(&[]);
-    assert!(
-        run.violations("error-swallowing").is_empty(),
-        "{:?}",
-        run.violations("error-swallowing")
-    );
+    assert_eq!(run.code, 1);
+    assert_eq!(run.violations("error-swallowing").len(), 2);
+    for code in ["empty-error-handler-added", "test-path-reclassification"] {
+        assert!(run.stdout.contains(code), "{code}: {}", run.stdout);
+    }
     let notes = run.outcome("error-swallowing")["notes"].to_string();
     assert!(
-        notes.contains("src/main/java/Repo.java") && notes.contains("src/main/java/RepoTest.kt"),
+        notes.contains("src/main/java/Repo.java")
+            && notes.contains("src/main/java/RepoTest.kt")
+            && notes.contains("still judged as production code"),
         "{notes}"
     );
 }

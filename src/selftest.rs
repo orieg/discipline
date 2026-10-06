@@ -154,6 +154,31 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ast: a rename into test scope that changes the extension or the language stays production; a test file's does not",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            let reg = crate::ast::default_registry();
+            let renamed = |old: &str, new: &str| ChangedFile {
+                path: new.to_string(),
+                old_path: old.to_string(),
+                kind: ChangeKind::Renamed,
+                added_lines: std::collections::BTreeSet::new(),
+            };
+            let anchor = |old: &str, new: &str| {
+                crate::guards::base_anchored_classification(&renamed(old, new), &reg, &[])
+            };
+            let one_pack = anchor("src/Repo.cc", "src/RepoTest.cpp");
+            let two_packs = anchor("src/main/java/Repo.java", "src/main/java/RepoTest.kt");
+            let test_file = anchor("tests/util.js", "tests/util.mjs");
+            Ok(one_pack.classify_path == "src/Repo.cpp"
+                && one_pack.reclassified
+                && two_packs.classify_path == "src/main/java/Repo.kt"
+                && two_packs.reclassified
+                && test_file.classify_path == "tests/util.mjs"
+                && !test_file.reclassified)
+        },
+    ),
+    (
         "ast: SAFETY comment above documents, prose about it does not",
         || {
             let v = AssertVocabulary::default();
