@@ -307,11 +307,23 @@ fn entry_tightened(key: &str, entry: &Value, base: &[Value], head: &[Value]) -> 
         } else if shape.stricter_when_shrunk.contains(&field.as_str()) {
             within(hv, bv)
         } else if shape.stricter_when_added.contains(&field.as_str()) && bv.is_none() {
-            true
+            // Over a preset that supplies the field, the added value replaces the
+            // preset's instead of adding a check: stricter only when it is that value.
+            preset_default(b, field).is_none_or(|d| Some(&d) == hv)
         } else {
             bv == hv
         }
     })
+}
+
+/// What a `command` table (the gate's own, or a `commands` entry) reads for `key` when it
+/// leaves it unset and names a preset that supplies it. `None` when unset means no such
+/// check: no preset, an unknown one, or a key the preset does not supply.
+fn preset_default(table: &toml::Table, key: &str) -> Option<Value> {
+    let preset = table.get("preset")?.as_str()?;
+    super::presets::resolve_preset(preset)?
+        .replaced_default(key)
+        .map(|v| Value::String(v.to_string()))
 }
 
 /// Every item of the list `small` is in the list `big`; an absent list reads as empty.
@@ -1202,12 +1214,21 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
         // A key only on head is an optional key the base left unset, judged by what unset
         // means: `ci_skip_severity` unset is the gate's `severity`; a tolerance in
         // `ABSENT_IS_NONE` unset adds none; a gate's `allow_hidden` unset inherits
-        // `[directives] allow_hidden`. An added floor, cap or evidence key adds a check.
+        // `[directives] allow_hidden`; a `command` key its base-side preset supplies unset
+        // is that preset's value. Any other added floor, cap or evidence key adds a check.
         for (key, hv) in h {
             if b.contains_key(key) {
                 continue;
             }
             match direction_of(key) {
+                // Judged as the same key changed from the preset's value would be.
+                Some(Direction::Evidence) if gate == "command" => {
+                    if let Some(default) = preset_default(b, key).filter(|d| d != hv) {
+                        let mut changed = w(key, Change::Changed).values(default, hv);
+                        changed.note = Some("the base value is its preset's default");
+                        note(changed);
+                    }
+                }
                 Some(Direction::Tolerance) if ABSENT_IS_NONE.contains(&key.as_str()) => {
                     let added = match hv {
                         Value::Integer(i) => *i as f64,
@@ -1292,6 +1313,124 @@ mod tests {
     fn cfg(body: &str) -> DisciplineConfig {
         DisciplineConfig::from_toml_str(&format!("[meta]\nversion = 1\nname = \"t\"\n{body}"))
             .unwrap()
+    }
+
+    #[test]
+    fn a_command_key_added_over_its_preset_default_is_judged_as_changed_from_it() {
+        let what = |base: &str, head: &str| -> Vec<String> {
+            diff_configs(&cfg(base), &cfg(head))
+                .unwrap()
+                .iter()
+                .map(|w| format!("{}: {}", w.gate, w.what()))
+                .collect()
+        };
+        let table =
+            |preset: &str, rest: &str| format!("[gates.command]\npreset = \"{preset}\"\n{rest}");
+        let added = |preset: &str, rest: &str| what(&table(preset, ""), &table(preset, rest));
+        let none: [&str; 0] = [];
+
+        // A value other than the preset's replaces the check the preset made.
+        assert_eq!(
+            added("cargo-mutants", "zero_items_pattern = \"never\"\n"),
+            [
+                "command: `zero_items_pattern` changed from \"0 mutants tested\" to \"never\" \
+              (the base value is its preset's default)"
+            ]
+        );
+        assert_eq!(
+            added("sanitizers", "canary_expected_diagnostic = \"ok\"\n"),
+            ["command: `canary_expected_diagnostic` changed from \"ThreadSanitizer: data race\" \
+              to \"ok\" (the base value is its preset's default)"]
+        );
+        assert_eq!(
+            added("cargo-public-api", "snapshot = \"other.txt\"\n"),
+            [
+                "command: `snapshot` changed from \"public-api.txt\" to \"other.txt\" \
+              (the base value is its preset's default)"
+            ]
+        );
+        // The preset's own value written down is no change.
+        assert_eq!(
+            added(
+                "cargo-mutants",
+                "zero_items_pattern = \"0 mutants tested\"\n"
+            ),
+            none
+        );
+        assert_eq!(
+            added("cargo-public-api", "snapshot = \"public-api.txt\"\n"),
+            none
+        );
+        // A key the preset does not supply adds a check, as it does without a preset.
+        assert_eq!(
+            added("cargo-deny", "zero_items_pattern = \"never\"\n"),
+            none
+        );
+        assert_eq!(added("cargo-mutants", "snapshot = \"out.txt\"\n"), none);
+        assert_eq!(
+            added(
+                "cargo-mutants",
+                "count_pattern = '(\\d+) mutants'\nmin_count = 3\n"
+            ),
+            none
+        );
+        assert_eq!(
+            what(
+                "[gates.command]\ncommand = \"true\"\n",
+                "[gates.command]\ncommand = \"true\"\nzero_items_pattern = \"never\"\n"
+            ),
+            none
+        );
+        // The default is the base side's: a preset only the head names supplied nothing
+        // to the base, and the `command` gate refuses the new preset itself.
+        assert_eq!(
+            what(
+                "[gates.command]\n",
+                &table("cargo-mutants", "zero_items_pattern = \"never\"\n")
+            ),
+            none
+        );
+        // Lists are added to the preset's, so growth is judged as on any table.
+        assert_eq!(
+            added("cargo-mutants", "forbid_output = [\"timeout\"]\n"),
+            none
+        );
+        assert_eq!(
+            added("cargo-public-api", "snapshot_ignore = [\"^//\"]\n"),
+            ["command: `snapshot_ignore` gained 1 entr(y/ies)"]
+        );
+
+        // A `commands` entry: `snapshot` added is stricter unless the entry's preset
+        // already supplied one.
+        let entry = |preset: &str, rest: &str| {
+            format!(
+                "[gates.command]\n[[gates.command.commands]]\nname = \"api\"\n\
+                 command = \"true\"\n{preset}{rest}"
+            )
+        };
+        let api = "preset = \"cargo-public-api\"\n";
+        assert_eq!(
+            what(&entry(api, ""), &entry(api, "snapshot = \"other.txt\"\n")),
+            ["command: `commands` lost 1 entr(y/ies)"]
+        );
+        assert_eq!(
+            what(
+                &entry(api, ""),
+                &entry(api, "snapshot = \"public-api.txt\"\n")
+            ),
+            none
+        );
+        assert_eq!(
+            what(&entry("", ""), &entry("", "snapshot = \"other.txt\"\n")),
+            none
+        );
+        assert_eq!(
+            what(
+                &entry("preset = \"cargo-deny\"\n", ""),
+                &entry("preset = \"cargo-deny\"\n", "snapshot = \"other.txt\"\n")
+            ),
+            none
+        );
     }
 
     #[test]
