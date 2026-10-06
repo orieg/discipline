@@ -272,6 +272,22 @@ pub static PRESETS: &[PresetDefinition] = &[
     },
 ];
 
+impl PresetDefinition {
+    /// The value this preset supplies for `key` when the configuration leaves it unset,
+    /// for the keys where a configured value replaces the preset's instead of adding to
+    /// it and nothing is executed: `zero_items_pattern`, `canary_expected_diagnostic` and
+    /// `snapshot`. `forbid_output` and `snapshot_ignore` are added to the configured
+    /// lists, and no preset supplies `count_pattern` or `min_count`.
+    pub fn replaced_default(&self, key: &str) -> Option<&'static str> {
+        match key {
+            "zero_items_pattern" => self.zero_items_pattern,
+            "canary_expected_diagnostic" => self.canary_expected_diagnostic,
+            "snapshot" => self.snapshot,
+            _ => None,
+        }
+    }
+}
+
 /// Resolves a preset by its unique identifier.
 pub fn resolve_preset(id: &str) -> Option<&'static PresetDefinition> {
     PRESETS.iter().find(|p| p.id == id)
@@ -313,6 +329,28 @@ mod tests {
             assert!(!p.description.is_empty());
             assert!(p.default_timeout_seconds > 0);
         }
+    }
+
+    #[test]
+    fn replaced_default_names_only_the_keys_a_configured_value_replaces() {
+        let mutants = resolve_preset("cargo-mutants").unwrap();
+        assert_eq!(
+            mutants.replaced_default("zero_items_pattern"),
+            Some("0 mutants tested")
+        );
+        // Merged with the configured list, so there is no default to replace.
+        assert_eq!(mutants.replaced_default("forbid_output"), None);
+        assert_eq!(mutants.replaced_default("snapshot"), None);
+        let api = resolve_preset("cargo-public-api").unwrap();
+        assert_eq!(api.replaced_default("snapshot"), Some("public-api.txt"));
+        assert_eq!(api.replaced_default("snapshot_ignore"), None);
+        let san = resolve_preset("sanitizers").unwrap();
+        assert_eq!(
+            san.replaced_default("canary_expected_diagnostic"),
+            Some("ThreadSanitizer: data race")
+        );
+        // Executed, so the `command` gate refuses a change to it; not judged here.
+        assert_eq!(san.replaced_default("canary_command"), None);
     }
 
     #[test]
