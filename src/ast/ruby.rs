@@ -80,8 +80,16 @@ impl LanguagePack for RubyPack {
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &RUBY_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &RUBY_HANDLERS,
+                Some(&RUBY_CONSTANTS),
+                &is_test_line,
+            );
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &RUBY_RETRIES);
         if functions::declared_test_path(path, &vocab.test_paths) {
@@ -170,6 +178,34 @@ pub const RUBY_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     silence_kinds: &["rescue_modifier"],
     silences: super::handlers::ruby_silences,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `ops = 150000.0`, `rec.ops = -1` (an attribute writer is a `call` node on the left),
+/// `@raw[:ops] = 2.5e5`, `return 150000`, `return { ops: 1.5 }`, and a number or a
+/// collection of numbers as the last expression. `nil` and `Float::NAN` are not numeric
+/// literals.
+pub const RUBY_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["then"],
+    wrappers: &["parenthesized_statements", "argument_list"],
+    numbers: &["integer", "float", "rational", "complex"],
+    signs: &["unary"],
+    assignments: &["assignment"],
+    targets: &[
+        "identifier",
+        "instance_variable",
+        "class_variable",
+        "global_variable",
+        "element_reference",
+        "call",
+    ],
+    calls: &["call"],
+    returns: &["return"],
+    value_is_last_expression: true,
+    collections: &["array", "hash"],
+    collection_holders: &[],
+    pairs: &["pair"],
+    keys: &["hash_key_symbol", "simple_symbol", "string", "integer"],
 };
 
 pub const RUBY_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
