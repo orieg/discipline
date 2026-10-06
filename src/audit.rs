@@ -7,8 +7,10 @@
 //! * `directive`: a directive line in the commit message, parsed by [`crate::tokens`];
 //! * `config`: a loosening of `discipline.toml` between the change's parent and itself,
 //!   as `config-integrity` judges it ([`crate::guards::integrity::diff_configs`]);
-//! * `config-unreadable`: a side of that comparison that does not parse (an old key this
-//!   binary no longer reads), so the comparison could not be made;
+//! * `config-unreadable`: a side of that comparison that does not parse, so the comparison
+//!   could not be made; or a key a later release removed ([`crate::config::REMOVED_KEYS`])
+//!   that the change itself set, dropped or altered, which is the one part of an
+//!   otherwise compared file that is not judged;
 //! * `baseline`: findings added to `discipline-baseline.toml`, per gate;
 //! * `inline-marker`: an added line carrying a `discipline:allow(<gate>)` marker.
 //!
@@ -102,7 +104,9 @@ pub struct Record {
     /// The reason text: only under `--reasons`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Why a configuration could not be compared: which side, and the parse error.
+    /// Why a configuration could not be compared: which side, and the parse error. On a
+    /// `config` or `config-tightening` record, the keys a later release removed that the
+    /// comparison set aside.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// Where a directive was read: `commit-message` or `pull-request-body`.
@@ -693,13 +697,17 @@ impl Summary {
                     }
                 ),
                 "config" | "config-tightening" => format!(
-                    "{} {}",
+                    "{} {}{}",
                     r.key.as_deref().unwrap_or(""),
                     r.change
                         .map(|c| serde_json::to_value(c)
                             .ok()
                             .and_then(|v| v.as_str().map(str::to_string))
                             .unwrap_or_default())
+                        .unwrap_or_default(),
+                    r.detail
+                        .as_deref()
+                        .map(|note| format!(" ({note})"))
                         .unwrap_or_default()
                 ),
                 "config-unreadable" => r.detail.clone().unwrap_or_default(),
@@ -891,22 +899,28 @@ pub fn config_changes(
         r.detail = Some(detail);
         (vec![r], Vec::new())
     };
+    // History is read leniently: a key a later release removed is set aside, by name, and
+    // the rest of the file is compared. A name that was never a key does not parse.
     let parse = |side: &str, text: &str| {
-        DisciplineConfig::from_toml_str(text)
+        DisciplineConfig::from_history_toml_str(text)
             .map_err(|e| format!("{side}: {}", parse_failure(&e.to_string())))
     };
-    let base_cfg = match parse("parent", base) {
+    let (base_cfg, base_removed) = match parse("parent", base) {
         Ok(c) => c,
         Err(detail) => return unreadable(detail),
     };
     // A removed configuration leaves the built-in defaults in force.
-    let head_cfg = match head {
+    let (head_cfg, head_removed) = match head {
         Some(h) => match parse("change", h) {
             Ok(c) => c,
             Err(detail) => return unreadable(detail),
         },
-        None => DisciplineConfig::default_for_repo(&base_cfg.meta.name),
+        None => (
+            DisciplineConfig::default_for_repo(&base_cfg.meta.name),
+            Vec::new(),
+        ),
     };
+    let set_aside = removed_keys_note(&base_removed, &head_removed);
     let (loosened, tightened) = match (
         integrity::diff_configs(&base_cfg, &head_cfg),
         integrity::diff_configs(&head_cfg, &base_cfg),
@@ -941,22 +955,91 @@ pub fn config_changes(
         r
     };
     let both = |g: &str, k: &str| tightened.iter().any(|t| t.gate == g && t.key == k);
-    let loosened: Vec<Record> = loosened
+    let mut loosened: Vec<Record> = loosened
         .iter()
         .map(|w| {
             let edited = both(&w.gate, &w.key);
             let mut r = at_line(record("config", w.clone(), false));
             r.edited = edited;
+            r.detail = set_aside.clone();
             r
         })
         .collect();
+    // A removed key this change itself set, dropped or altered: what that did is not
+    // judged, so the change is still one to compare by hand, for that key.
+    for (dotted, side) in removed_keys_changed(&base_removed, &head_removed) {
+        let name = dotted.rsplit('.').next().unwrap_or(&dotted);
+        let mut r = Record::new(&change, "config-unreadable", "config");
+        r.file = Some(CONFIG_NAME.to_string());
+        r.detail = Some(format!(
+            "{side}: a key a later release removed changes here and is not compared, the other keys are: unknown key `{name}`"
+        ));
+        loosened.push(r);
+    }
     (
         loosened,
         tightened
             .into_iter()
-            .map(|w| at_line(record("config-tightening", w, true)))
+            .map(|w| {
+                let mut r = at_line(record("config-tightening", w, true));
+                r.detail = set_aside.clone();
+                r
+            })
             .collect(),
     )
+}
+
+/// The note a comparison carries when a removed key was set aside on either side: the
+/// keys by dotted name, and the sides that held each.
+fn removed_keys_note(base: &[(String, String)], head: &[(String, String)]) -> Option<String> {
+    let mut names: Vec<&str> = base.iter().chain(head).map(|(k, _)| k.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        return None;
+    }
+    let held = |name: &str| {
+        let on = |side: &[(String, String)]| side.iter().any(|(k, _)| k == name);
+        match (on(base), on(head)) {
+            (true, true) => "parent and change",
+            (true, false) => "parent",
+            _ => "change",
+        }
+    };
+    let listed: Vec<String> = names
+        .iter()
+        .map(|n| format!("`{n}` ({})", held(n)))
+        .collect();
+    Some(format!(
+        "compared without {}: removed in a later release, so not read",
+        listed.join(", ")
+    ))
+}
+
+/// The removed keys whose presence or value differs between the two sides, each with the
+/// side that holds it (`change` when both do).
+fn removed_keys_changed(
+    base: &[(String, String)],
+    head: &[(String, String)],
+) -> Vec<(String, &'static str)> {
+    let value = |side: &[(String, String)], name: &str| {
+        side.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    };
+    let mut names: Vec<&String> = base.iter().chain(head).map(|(k, _)| k).collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+        .into_iter()
+        .filter(|n| value(base, n) != value(head, n))
+        .map(|n| {
+            let side = if value(head, n).is_some() {
+                "change"
+            } else {
+                "parent"
+            };
+            (n.clone(), side)
+        })
+        .collect()
 }
 
 /// The 1-based line of `key` under its table in a `discipline.toml` text: `[gates.<gate>]`,
@@ -1057,6 +1140,14 @@ fn first_line(s: &str) -> &str {
     s.lines().next().unwrap_or("")
 }
 
+/// A configuration read from history, with the keys a later release removed set aside
+/// ([`DisciplineConfig::from_history_toml_str`]). `None` when it does not parse.
+fn history_config(text: &str) -> Option<DisciplineConfig> {
+    DisciplineConfig::from_history_toml_str(text)
+        .ok()
+        .map(|(config, _)| config)
+}
+
 /// A configuration parse error in one line: its first line, and the key when the parser
 /// stopped on one it does not know (a key a later release removed). Only the key's name is
 /// taken; the line that quotes the source, and any message that quotes a value, is not.
@@ -1128,7 +1219,7 @@ fn protected_records(
     parent_config: Option<&str>,
     info: &ChangeInfoRef,
 ) -> Result<Vec<Record>> {
-    let Some(cfg) = parent_config.and_then(|t| DisciplineConfig::from_toml_str(t).ok()) else {
+    let Some(cfg) = parent_config.and_then(history_config) else {
         return Ok(Vec::new());
     };
     let gate = &cfg.gates.ratified_paths;
@@ -1213,7 +1304,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
     let mut tightenings = Vec::new();
     let mut protected = Vec::new();
     let tip_config = blob_text(&repo, &repo.find_commit(tip)?.tree()?, CONFIG_NAME)?
-        .and_then(|t| DisciplineConfig::from_toml_str(&t).ok())
+        .and_then(|t| history_config(&t))
         .unwrap_or_else(|| DisciplineConfig::default_for_repo("audit"));
     let mut marked = std::collections::BTreeSet::new();
     for (ord, c) in commits.iter().enumerate() {
@@ -1926,7 +2017,7 @@ pub fn judge_protected(
         let commit = repo.find_commit(Oid::from_str(&sha)?)?;
         let parent = commit.parent(0)?;
         let cfg = blob_text(repo, &parent.tree()?, CONFIG_NAME)?
-            .and_then(|t| DisciplineConfig::from_toml_str(&t).ok())
+            .and_then(|t| history_config(&t))
             .map(|c| c.gates.ratified_paths)
             .unwrap_or_default();
         // The audit reads after the merge, which closed the issues the pull request
@@ -2404,7 +2495,8 @@ mod tests {
     /// #599: `allow_author_review` was added and removed between two releases, so the
     /// history of a repository that tracked `main` holds it. Both changes are reported as
     /// unreadable, naming the side and the key; the loosening the key was is not a
-    /// `config` record. Reading a removed key again would be a design change.
+    /// `config` record. A change that leaves the key as it was is compared without it
+    /// (`REMOVED_KEYS`); what the key itself did is never judged.
     #[test]
     fn a_key_removed_from_commit_provenance_is_unreadable_on_the_side_that_holds_it() {
         let head = "[meta]\nversion = 1\nname = \"t\"\n[gates.commit-provenance]\nenabled = true\n";
@@ -2435,6 +2527,85 @@ mod tests {
         );
         // Control: the same two sides without the key record nothing.
         assert!(config_records(Some(head), Some(head), &info()).is_empty());
+    }
+
+    /// #631: a key a later release removed is set aside, and what changed beside it is
+    /// compared. Only a name in [`crate::config::REMOVED_KEYS`] is.
+    #[test]
+    fn a_loosening_beside_a_removed_key_is_recorded_with_the_key_named() {
+        const KEY: &str = "`gates.commit-provenance.allow_author_review`";
+        let cfg = |exempt: &str, extra: &str| {
+            format!(
+                "[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\nexempt_paths = [{exempt}]\n[gates.commit-provenance]\nenabled = true\n{extra}"
+            )
+        };
+        let key = "allow_author_review = true\n";
+        let (narrow, wide) = ("\"a/**\"", "\"a/**\", \"b/**\"");
+        // The key on both sides, unchanged: the loosening and nothing else.
+        let (loosened, tightened) =
+            config_changes(Some(&cfg(narrow, key)), Some(&cfg(wide, key)), &info());
+        assert_eq!(loosened.len(), 1, "{loosened:?}");
+        assert_eq!(loosened[0].kind, "config");
+        assert_eq!(loosened[0].key.as_deref(), Some("exempt_paths"));
+        assert_eq!(
+            loosened[0].detail.as_deref(),
+            Some(format!("compared without {KEY} (parent and change): removed in a later release, so not read").as_str())
+        );
+        assert!(tightened.is_empty(), "{tightened:?}");
+        // Read backwards it is a tightening, with the same note.
+        let (loosened, tightened) =
+            config_changes(Some(&cfg(wide, key)), Some(&cfg(narrow, key)), &info());
+        assert!(loosened.is_empty(), "{loosened:?}");
+        assert_eq!(tightened.len(), 1);
+        assert!(tightened[0].detail.as_deref().unwrap().contains(KEY));
+        // The key dropped in the change that loosens: both are recorded, and the note says
+        // which side held the key.
+        let (loosened, _) = config_changes(Some(&cfg(narrow, key)), Some(&cfg(wide, "")), &info());
+        let kinds: Vec<&str> = loosened.iter().map(|r| r.kind).collect();
+        assert_eq!(kinds, ["config", "config-unreadable"]);
+        assert!(loosened[0].detail.as_deref().unwrap().contains("(parent)"));
+        assert!(loosened[1]
+            .detail
+            .as_deref()
+            .unwrap()
+            .starts_with("parent: "));
+        // The key's value altered: not judged, and said so, on the change's side.
+        let (loosened, _) = config_changes(
+            Some(&cfg(narrow, "allow_author_review = false\n")),
+            Some(&cfg(narrow, key)),
+            &info(),
+        );
+        assert_eq!(loosened.len(), 1, "{loosened:?}");
+        assert_eq!(loosened[0].kind, "config-unreadable");
+        assert!(loosened[0]
+            .detail
+            .as_deref()
+            .unwrap()
+            .starts_with("change: "));
+        // Control: without the key the record carries no note.
+        let (loosened, _) = config_changes(Some(&cfg(narrow, "")), Some(&cfg(wide, "")), &info());
+        assert_eq!(loosened.len(), 1);
+        assert_eq!(loosened[0].detail, None);
+        // Control: a name that was never a key is not set aside, in the same table or as
+        // the removed key's name in another one.
+        for never in [
+            cfg(wide, "never_a_key = true\n"),
+            cfg(wide, "").replace("[gates.pii]\n", "[gates.pii]\nallow_author_review = true\n"),
+        ] {
+            let (loosened, _) = config_changes(Some(&cfg(narrow, "")), Some(&never), &info());
+            assert_eq!(loosened.len(), 1, "{loosened:?}");
+            assert_eq!(loosened[0].kind, "config-unreadable", "{loosened:?}");
+        }
+        // The strict reader, which `check` uses, refuses the removed key.
+        assert!(DisciplineConfig::from_toml_str(&cfg(narrow, key)).is_err());
+        let (_, removed) = DisciplineConfig::from_history_toml_str(&cfg(narrow, key)).unwrap();
+        assert_eq!(
+            removed,
+            [(
+                "gates.commit-provenance.allow_author_review".to_string(),
+                "true".to_string()
+            )]
+        );
     }
 
     #[test]

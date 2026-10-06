@@ -139,7 +139,7 @@ impl LanguagePack for RustPack {
         }
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
-        super::caught_assertions::rust(root, src, &mut cx.facts.tests);
+        super::caught_assertions::rust(root, src, &mut cx.facts.tests, vocab);
         cx.facts.prose = super::prose::extract(
             root,
             src,
@@ -549,7 +549,11 @@ impl<'a> Extractor<'a> {
             strong_asserts: 0,
             tautologies: 0,
             ignored,
-            ci_verdict: ci_verdict.filter(|_| conditional_ignore.is_some()),
+            // A cfg that leaves the test out of a CI build is an unconditional skip
+            // above; any other condition recorded here holds on no CI cfg.
+            ci_verdict: conditional_ignore
+                .as_ref()
+                .map(|_| ci_verdict.unwrap_or(super::ci_condition::CiVerdict::NotCi)),
             conditional_ignore,
             fatal_asserts: 0,
             should_panic: should_panic.clone(),
@@ -1007,7 +1011,11 @@ impl<'a> Extractor<'a> {
                     line: fn_line,
                     end_line,
                     ignored,
-                    ci_verdict: ci_verdict.filter(|_| conditional_ignore.is_some()),
+                    // A cfg that leaves the test out of a CI build is an unconditional skip
+                    // above; any other condition recorded here holds on no CI cfg.
+                    ci_verdict: conditional_ignore
+                        .as_ref()
+                        .map(|_| ci_verdict.unwrap_or(super::ci_condition::CiVerdict::NotCi)),
                     conditional_ignore,
                     should_panic: should_panic.clone(),
                     expected_exceptions: should_panic.into_iter().collect(),
@@ -1103,7 +1111,7 @@ impl<'a> Extractor<'a> {
         }];
         super::bounds::rust(root, &fake_fn, &mut read);
         super::expectations::rust(root, &fake_fn, &mut read);
-        super::caught_assertions::rust(root, &fake_fn, &mut read);
+        super::caught_assertions::rust(root, &fake_fn, &mut read, self.vocab);
         let [read] = read;
         let file_byte = |byte: usize| body_node.start_byte() + byte.saturating_sub(PREFIX.len());
         for mut bound in read.bounds {
@@ -2367,6 +2375,8 @@ pub const RUST_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call_expression", "function", "field_expression", "field")],
         direct: &[],
+        bare: &[],
+        tokens: &["token_tree"],
     };
 
 pub const RUST_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

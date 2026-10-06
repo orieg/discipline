@@ -194,7 +194,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.golden-output.paths` | list | *(8 entries)* | Committed golden/snapshot globs whose edits require a directive |
 | `gates.golden-output.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ignored-tests.approved_predicates` | list | `[]` | Conditional ignore predicates (e.g. miri) approved by policy |
-| `gates.ignored-tests.ci_skip_severity` | string | *(per entry)* | Severity for skips conditioned on CI environment variables (defaults to gate severity) |
+| `gates.ignored-tests.ci_skip_severity` | string | *(the gate's `severity`)* | Severity for skips conditioned on CI environment variables (defaults to gate severity) |
 | `gates.ignored-tests.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.ignored-tests.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.ignored-tests.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
@@ -1198,7 +1198,7 @@ Lists every escape hatch the last N first-parent commits of a branch carried (de
 |---|---|---|---|
 | `directive` | A directive line in the commit message (`class` `process` for `no-issue`, `detector` for a finding waiver) | `claimed` | `C` |
 | `config` | A loosening of `discipline.toml` between the change's parent and itself, as `config-integrity` judges it: `gate`, `key`, `change` (`changed`, `removed`, `increased`, `decreased`, `lowered`, `gained`, `lost`, `emptied`), `before` / `after` or `count`. A list's entries are counted, never named | `applied` | `A` |
-| `config-unreadable` | A side of that comparison that does not parse (an option this binary no longer reads), with the side and the parse error in `detail`, and the key when the parser stopped on one it does not know. The audit continues | `applied` | `A` |
+| `config-unreadable` | A side of that comparison that does not parse (an option this binary does not know), with the side and the parse error in `detail`, and the key when the parser stopped on one it does not know. A key this project accepted and a later release removed (`gates.commit-provenance.allow_author_review`) is not such a failure: it is set aside, the rest of the file is compared, and each `config` or `config-tightening` record of that comparison names the key and the side that held it in `detail`; a change that itself sets, drops or alters such a key also gets one `config-unreadable` record for it, since what the key did is not judged. A name that was never a key is not set aside. `check` reads neither list: to it a removed key is an unknown key (exit `2`). The audit continues | `applied` | `A` |
 | `baseline` | Findings added to `discipline-baseline.toml`, counted per gate | `applied` | `A` |
 | `inline-marker` | An added line whose comment opens with `discipline:allow(<gate>)` for a gate this binary has | `claimed` | `A` |
 

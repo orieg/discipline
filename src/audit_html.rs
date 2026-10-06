@@ -103,6 +103,14 @@ fn change_str(r: &Record) -> String {
         .unwrap_or_default()
 }
 
+/// The removed keys a configuration comparison set aside, for the end of its line.
+fn set_aside(r: &Record) -> String {
+    match r.detail.as_deref() {
+        Some(note) => format!(" ({})", esc(note)),
+        None => String::new(),
+    }
+}
+
 fn signal_sentence(s: &Signal, summary: &Summary) -> String {
     let n = s.count;
     let c = s.changes.len();
@@ -1112,14 +1120,16 @@ pub fn render(s: &Summary) -> String {
                     lifted_badge(r)
                 ),
                 "config" => format!(
-                    "Loosened <code>{g}.{}</code>: {} {}",
+                    "Loosened <code>{g}.{}</code>: {} {}{}",
                     esc(r.key.as_deref().unwrap_or("")),
                     change_str(r),
-                    r.count.map(|c| c.to_string()).unwrap_or_default()
+                    r.count.map(|c| c.to_string()).unwrap_or_default(),
+                    set_aside(r)
                 ),
                 "config-tightening" => format!(
-                    "Tightened <code>{g}.{}</code>",
-                    esc(r.key.as_deref().unwrap_or(""))
+                    "Tightened <code>{g}.{}</code>{}",
+                    esc(r.key.as_deref().unwrap_or("")),
+                    set_aside(r)
                 ),
                 "config-unreadable" => format!(
                     "Configuration unreadable: {}",

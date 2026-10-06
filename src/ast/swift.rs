@@ -8,6 +8,7 @@
 use anyhow::Result;
 use tree_sitter::Node;
 
+use super::ci_condition::{read_skip, Grammar, SkipCondition, SkipRead};
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -132,6 +133,7 @@ impl LanguagePack for SwiftPack {
             },
             helpers: std::collections::HashMap::new(),
             test_calls: Vec::new(),
+            inherited_skips: Vec::new(),
         };
 
         extractor.collect_escape_hatches(root);
@@ -235,6 +237,8 @@ struct SwiftExtractor<'a> {
     facts: ParsedFileFacts,
     helpers: std::collections::HashMap<String, super::HelperFacts>,
     test_calls: Vec<Vec<String>>,
+    /// Conditional skips of the enclosing suites (`@Suite(.disabled(if: ..))`).
+    inherited_skips: Vec<SkipRead>,
 }
 
 impl<'a> SwiftExtractor<'a> {
@@ -255,6 +259,72 @@ impl<'a> SwiftExtractor<'a> {
                         let name = m.named_child(0).map(|t| self.text(t).trim()).unwrap_or("");
                         out.push((name, self.text(m)));
                     }
+                }
+            }
+        }
+        out
+    }
+
+    /// What the Swift Testing traits of a `@Test` or `@Suite` attribute on `node` do:
+    /// `.disabled(..)` skips, `.disabled(if: c)` skips when `c` holds, `.enabled(if: c)`
+    /// when it does not. A trait that takes its condition another way (a closure) is
+    /// read through the whole trait.
+    fn trait_skips(&self, node: Node, attribute: &str) -> Vec<SkipRead> {
+        let mut out = Vec::new();
+        let mut cursor = node.walk();
+        for modifiers in node.children(&mut cursor) {
+            if modifiers.kind() != "modifiers" {
+                continue;
+            }
+            let mut inner = modifiers.walk();
+            for attr in modifiers.children(&mut inner) {
+                let name = attr.named_child(0).map(|t| self.text(t).trim());
+                if attr.kind() != "attribute" || name != Some(attribute) {
+                    continue;
+                }
+                let mut args = attr.walk();
+                for call in attr.named_children(&mut args) {
+                    if call.kind() != "call_expression" {
+                        continue;
+                    }
+                    let callee = call
+                        .named_child(0)
+                        .filter(|c| c.kind() == "prefix_expression")
+                        .and_then(|c| c.child_by_field_name("target"))
+                        .map(|t| self.text(t));
+                    let enabled = match callee {
+                        Some("disabled") => false,
+                        Some("enabled") => true,
+                        _ => continue,
+                    };
+                    let mut stack = vec![call];
+                    let mut labelled = None;
+                    let mut trailing_closure = false;
+                    while let Some(n) = stack.pop() {
+                        if n.kind() == "lambda_literal" {
+                            trailing_closure = true;
+                            continue;
+                        }
+                        if n.kind() == "value_argument" {
+                            let label = n.child_by_field_name("name").map(|l| self.text(l));
+                            if label.map(str::trim) == Some("if") {
+                                labelled = Some(n);
+                            }
+                            continue;
+                        }
+                        if n.id() == call.id()
+                            || matches!(n.kind(), "call_suffix" | "value_arguments")
+                        {
+                            let mut c = n.walk();
+                            stack.extend(n.named_children(&mut c));
+                        }
+                    }
+                    let own = match labelled {
+                        Some(condition) => Some((condition, enabled)),
+                        None if enabled || trailing_closure => Some((call, false)),
+                        None => None,
+                    };
+                    out.push(read_skip(Grammar::Swift, attr, own, self.src));
                 }
             }
         }
@@ -318,11 +388,11 @@ impl<'a> SwiftExtractor<'a> {
                     .map(|n| self.text(n).to_string())
                     .unwrap_or_else(|| "Anonymous".to_string());
                 let xctest = self.is_xctest_case(node);
-                let ignored = parent_ignored
-                    || self
-                        .attributes(node)
-                        .iter()
-                        .any(|(n, t)| *n == "Suite" && t.contains(".disabled"));
+                let suite = self.trait_skips(node, "Suite");
+                let ignored =
+                    parent_ignored || suite.iter().any(|r| r.outcome == SkipCondition::Always);
+                let inherited = self.inherited_skips.len();
+                self.inherited_skips.extend(suite);
                 type_stack.push(name);
                 if let Some(body) = node.child_by_field_name("body") {
                     let mut cursor = body.walk();
@@ -331,6 +401,7 @@ impl<'a> SwiftExtractor<'a> {
                         self.visit_node(m, type_stack, xctest, ignored);
                     }
                 }
+                self.inherited_skips.truncate(inherited);
                 type_stack.pop();
             }
             "function_declaration" => {
@@ -368,15 +439,14 @@ impl<'a> SwiftExtractor<'a> {
             .map(|n| self.text(n).trim_matches('`'))
             .unwrap_or("");
         let mut annotated = false;
-        let mut ignored = parent_ignored;
-        for (aname, atext) in self.attributes(node) {
+        let ignored = parent_ignored;
+        for (aname, _) in self.attributes(node) {
             if aname == "Test" {
                 annotated = true;
-                if atext.contains(".disabled") {
-                    ignored = true;
-                }
             }
         }
+        let mut skips = self.inherited_skips.clone();
+        skips.extend(self.trait_skips(node, "Test"));
         // XCTest runs `func test*()` with no parameters in an `XCTestCase` subclass (or
         // any type in a test path, whose superclass may live in another file).
         let xctest = name.starts_with("test")
@@ -395,6 +465,9 @@ impl<'a> SwiftExtractor<'a> {
                 ignored,
                 ..Default::default()
             };
+            for read in skips {
+                test_fn.record_skip(read);
+            }
             let mut direct_calls = Vec::new();
             if let Some(body) = Self::function_body(node) {
                 self.scan_node(body, &mut test_fn, &mut direct_calls);
@@ -506,9 +579,14 @@ impl<'a> SwiftExtractor<'a> {
             "macro_invocation" => self.inspect_macro(node, test_fn),
             "control_transfer_statement" => {
                 // `throw XCTSkip("...")` skips the test.
+                // A thrown call is read where the call is; this is a thrown value.
                 let t = self.text(node);
-                if t.starts_with("throw") && t.contains("XCTSkip") {
-                    test_fn.ignored = true;
+                let mut cursor = node.walk();
+                let throws_call = node
+                    .named_children(&mut cursor)
+                    .any(|c| c.kind() == "call_expression");
+                if t.starts_with("throw") && t.contains("XCTSkip") && !throws_call {
+                    test_fn.record_skip(read_skip(Grammar::Swift, node, None, self.src));
                 }
             }
             _ => {}
@@ -553,7 +631,14 @@ impl<'a> SwiftExtractor<'a> {
             direct_calls.push(name.to_string());
         }
         if name.starts_with("XCTSkip") {
-            test_fn.ignored = true;
+            // `XCTSkipIf(c)` skips when `c` holds, `XCTSkipUnless(c)` when it does not.
+            let condition = self.arguments(node).first().copied();
+            let own = match name {
+                "XCTSkipIf" => condition.map(|c| (c, false)),
+                "XCTSkipUnless" => condition.map(|c| (c, true)),
+                _ => None,
+            };
+            test_fn.record_skip(read_skip(Grammar::Swift, node, own, self.src));
             return;
         }
         let args = self.arguments(node);
@@ -643,6 +728,8 @@ pub const SWIFT_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call_expression", "", "navigation_expression", "suffix")],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const SWIFT_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
@@ -818,7 +905,10 @@ final class WrapTests: XCTestCase {
             (3, 1, 1)
         );
         let skipped = by("CartTests.testSkipped");
-        assert!(skipped.ignored);
+        // `isCI` is not bound in the file: a conditional skip, and not a CI one.
+        assert!(!skipped.ignored);
+        assert_eq!(skipped.conditional_ignore.as_deref(), Some("isCI"));
+        assert!(!skipped.is_ci_skip());
         assert_eq!(skipped.tautologies, 1);
         assert!(by("CartTests.testEmpty").is_vacuous());
         let via = by("CartTests.testViaHelper");

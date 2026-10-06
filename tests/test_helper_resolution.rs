@@ -1032,11 +1032,12 @@ fn deleted_go_suite_tests_lower_the_static_test_count() {
         "{}",
         run.stdout
     );
-    // The fixture repository holds three tests of its own. With them: the runner
-    // function and three suite tests, then the runner function and one.
+    // The fixture repository holds two tests of its own. With them: the runner function
+    // and three suite tests (2 + 1 + 3), then the runner function and one (2 + 1 + 1).
+    // `suite.Run` is the runner function's entry into the suite, not a subtest.
     let message = messages(&run, "test-floor").join(" / ");
     assert!(
-        message.contains("Workspace test count (5) dropped below base ref count (7)"),
+        message.contains("Workspace test count (4) dropped below base ref count (6)"),
         "{message}"
     );
 }

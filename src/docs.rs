@@ -388,16 +388,22 @@ fn collect_rows(
             rows.push(ConfigKeyRow {
                 path: path.clone(),
                 ty: "array of tables".to_string(),
-                default: format_default(prop, required.contains(&key.as_str()), child_default),
+                default: format_default(
+                    &path,
+                    prop,
+                    required.contains(&key.as_str()),
+                    child_default,
+                ),
                 description: describe(root, key, prop),
             });
             collect_rows(root, items, &format!("{path}[]"), None, rows);
             continue;
         }
+        let default = format_default(&path, prop, required.contains(&key.as_str()), child_default);
         rows.push(ConfigKeyRow {
             path,
             ty: type_label(prop),
-            default: format_default(prop, required.contains(&key.as_str()), child_default),
+            default,
             description: describe(root, key, prop),
         });
     }
@@ -438,7 +444,15 @@ fn describe(root: &serde_json::Value, key: &str, prop: &serde_json::Value) -> St
     table_cell(&text)
 }
 
+/// Keys whose default is another key's value, which the default configuration does not
+/// carry as a value of their own.
+const DERIVED_DEFAULTS: &[(&str, &str)] = &[(
+    "gates.ignored-tests.ci_skip_severity",
+    "*(the gate's `severity`)*",
+)];
+
 fn format_default(
+    path: &str,
     prop: &serde_json::Value,
     required: bool,
     value: Option<&serde_json::Value>,
@@ -448,6 +462,9 @@ fn format_default(
     }
     if required {
         return "*(required)*".to_string();
+    }
+    if let Some((_, derived)) = DERIVED_DEFAULTS.iter().find(|(key, _)| *key == path) {
+        return derived.to_string();
     }
     let Some(value) = value else {
         return "*(per entry)*".to_string();
