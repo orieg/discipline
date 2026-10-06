@@ -2128,25 +2128,46 @@ pub fn evaluate_ignored_tests(
     // had one that no CI variable decided and the head side's is CI-conditional: the test
     // stops running in CI. The two sides are compared by that classification, never by
     // their text, so a reworded or reordered condition is not a change. A condition that
-    // was already CI-conditional on the base side is not reported again. A skip that
-    // holds only outside CI (`if os.Getenv("CI") == ""`) is not CI-conditional: the test
-    // still runs there.
+    // was already CI-conditional on the base side is reported again only when the head
+    // side reads a CI variable the base side did not and `approved_predicates` does not
+    // list it: the test stops running on one more CI system. A condition that narrows
+    // (`CI` to `CI && short`) reads no new CI variable. A skip that holds only outside CI
+    // (`if os.Getenv("CI") == ""`) is not CI-conditional: the test still runs there.
+    let approves = |var: &str| {
+        settings.approved_predicates.iter().any(|p| {
+            p.eq_ignore_ascii_case(var)
+                || crate::ast::cond_contains_ident(var, p)
+                || crate::ast::cond_contains_ident(p, var)
+        })
+    };
+    let added_ci_vars = |p: &TestPair| -> Vec<String> {
+        if !(p.base.is_ci_skip() && p.head.is_ci_skip()) {
+            return Vec::new();
+        }
+        let before = p.base.ci_skip_vars();
+        p.head
+            .ci_skip_vars()
+            .into_iter()
+            .filter(|var| !before.contains(var) && !approves(var))
+            .collect()
+    };
     let newly_cond_ignored = pairs
         .iter()
-        .filter(|p| {
-            p.head.conditional_ignore.is_some()
-                && !p.head.ignored
-                && (p.base.conditional_ignore.is_none()
-                    || (p.head.is_ci_skip() && !p.base.is_ci_skip()))
+        .filter(|p| p.head.conditional_ignore.is_some() && !p.head.ignored)
+        .filter_map(|p| {
+            let added_vars = added_ci_vars(p);
+            (p.base.conditional_ignore.is_none()
+                || (p.head.is_ci_skip() && !p.base.is_ci_skip())
+                || !added_vars.is_empty())
+            .then_some((p.path, p.head, added_vars))
         })
-        .map(|p| (p.path, p.head))
         .chain(
             added
                 .iter()
                 .filter(|a| a.test.conditional_ignore.is_some() && !a.test.ignored)
-                .map(|a| (a.path, a.test)),
+                .map(|a| (a.path, a.test, Vec::new())),
         );
-    for (path, test) in newly_cond_ignored {
+    for (path, test, added_vars) in newly_cond_ignored {
         if exempt.matches(path) {
             continue;
         }
@@ -2154,15 +2175,11 @@ pub fn evaluate_ignored_tests(
         let ci_vars = test.ci_skip_vars();
         let is_ci = test.is_ci_skip();
 
-        let is_approved = if is_ci {
-            !settings.approved_predicates.is_empty()
-                && ci_vars.iter().all(|var| {
-                    settings.approved_predicates.iter().any(|p| {
-                        p.eq_ignore_ascii_case(var)
-                            || crate::ast::cond_contains_ident(var, p)
-                            || crate::ast::cond_contains_ident(p, var)
-                    })
-                })
+        let is_approved = if !added_vars.is_empty() {
+            // Each added variable is one `approved_predicates` does not list.
+            false
+        } else if is_ci {
+            !settings.approved_predicates.is_empty() && ci_vars.iter().all(|var| approves(var))
         } else {
             settings
                 .approved_predicates
@@ -2204,7 +2221,14 @@ pub fn evaluate_ignored_tests(
             &crate::findings::TEST_CONDITIONALLY_SKIPPED,
             Some(path),
             Some(test.line),
-            if is_ci && !ci_vars.iter().any(|v| crate::ast::cond_contains_ident(cond, v)) {
+            if !added_vars.is_empty() {
+                format!(
+                    "Test `{}` is conditionally skipped under predicate `{}`, which adds CI variable `{}` to a skip that was already CI-conditional.",
+                    test.name,
+                    cond,
+                    added_vars.join("`, `")
+                )
+            } else if is_ci && !ci_vars.iter().any(|v| crate::ast::cond_contains_ident(cond, v)) {
                 // The condition reaches the variable through a name of its own.
                 format!(
                     "Test `{}` is conditionally skipped under predicate `{}`, which reads CI variable `{}`.",
@@ -3322,7 +3346,6 @@ mod tests {
     #[test]
     fn ignored_tests_conditional_skip_that_gains_no_ci_condition_is_not_reported() {
         let settings = crate::config::IgnoredTestsGate::default();
-        let ci = "os.Getenv(\"CI\") != \"\"";
         for (base, head) in [
             // Unchanged, CI-conditional on both sides: the gate is delta-only.
             (SHORT_OR_CI, SHORT_OR_CI),
@@ -3334,15 +3357,84 @@ mod tests {
             (SHORT, "testing.Short() || runtime.GOOS == \"windows\""),
             // CI condition removed: a tightening.
             (SHORT_OR_CI, SHORT),
-            // A CI variable added to a skip that was already CI-conditional.
-            (
-                ci,
-                "os.Getenv(\"CI\") != \"\" || os.Getenv(\"GITHUB_ACTIONS\") != \"\"",
-            ),
         ] {
             let out = changed_condition_outcome(base, head, &settings, &[], false);
             assert_eq!(out.violations.len(), 0, "`{base}` -> `{head}`");
             assert_eq!(out.overrides.len(), 0, "`{base}` -> `{head}`");
+        }
+    }
+
+    const CI_ONLY: &str = "os.Getenv(\"CI\") != \"\"";
+    const CI_OR_GITHUB: &str = "os.Getenv(\"CI\") != \"\" || os.Getenv(\"GITHUB_ACTIONS\") != \"\"";
+
+    /// #597: a skip that was already CI-conditional and reads one more CI variable stops
+    /// the test on one more CI system (`CI` to `CI || GITHUB_ACTIONS`, the row that was
+    /// pinned as not reported before the rule existed).
+    #[test]
+    fn ignored_tests_ci_variable_added_to_a_ci_conditional_skip_is_reported_unless_approved() {
+        let settings = crate::config::IgnoredTestsGate::default();
+        let out = changed_condition_outcome(CI_ONLY, CI_OR_GITHUB, &settings, &[], false);
+        assert_eq!(out.violations.len(), 1);
+        let v = &out.violations[0];
+        assert_eq!(v.title, "Test Conditionally Skipped");
+        assert_eq!(v.severity, crate::config::Severity::Error);
+        assert_eq!(
+            v.message,
+            format!("Test `TestA` is conditionally skipped under predicate `{CI_OR_GITHUB}`, which adds CI variable `GITHUB_ACTIONS` to a skip that was already CI-conditional.")
+        );
+
+        // The base variable approved, the added one not: still reported.
+        let ci_approved = crate::config::IgnoredTestsGate {
+            approved_predicates: vec!["CI".to_string()],
+            ..Default::default()
+        };
+        let out = changed_condition_outcome(CI_ONLY, CI_OR_GITHUB, &ci_approved, &[], false);
+        assert_eq!(out.violations.len(), 1);
+        assert!(out.violations[0]
+            .message
+            .contains("adds CI variable `GITHUB_ACTIONS`"));
+
+        // The added variable approved: not reported, whether or not the base one is.
+        for approved in [vec!["GITHUB_ACTIONS"], vec!["CI", "GITHUB_ACTIONS"]] {
+            let both = crate::config::IgnoredTestsGate {
+                approved_predicates: approved.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            };
+            let out = changed_condition_outcome(CI_ONLY, CI_OR_GITHUB, &both, &[], false);
+            assert_eq!(out.violations.len(), 0, "{approved:?}");
+        }
+
+        // `ci_skip_severity`, staged mode and the directive apply as to any CI skip.
+        let warning = crate::config::IgnoredTestsGate {
+            ci_skip_severity: Some(crate::config::Severity::Warning),
+            ..Default::default()
+        };
+        let out = changed_condition_outcome(CI_ONLY, CI_OR_GITHUB, &warning, &[], false);
+        assert_eq!(out.violations[0].severity, crate::config::Severity::Warning);
+        let staged = changed_condition_outcome(CI_ONLY, CI_OR_GITHUB, &settings, &[], true);
+        assert_eq!(
+            staged.violations[0].severity,
+            crate::config::Severity::Warning
+        );
+        let directive = [crate::tokens::ParsedDirective {
+            directive: "allow-ignore".to_string(),
+            reason: "TestA flaky on the shared runner".to_string(),
+            source: crate::tokens::OverrideSource::PrBody,
+            hidden: false,
+        }];
+        let lifted = changed_condition_outcome(CI_ONLY, CI_OR_GITHUB, &settings, &directive, false);
+        assert_eq!(lifted.violations.len(), 0);
+        assert_eq!(lifted.overrides.len(), 1);
+
+        // Controls: no CI variable is added.
+        for (base, head) in [
+            (CI_OR_GITHUB, CI_OR_GITHUB),
+            (CI_OR_GITHUB, CI_ONLY),
+            (CI_ONLY, "os.Getenv(\"CI\") != \"\" && testing.Short()"),
+            (CI_ONLY, "\"\" != os.Getenv(\"CI\")"),
+        ] {
+            let out = changed_condition_outcome(base, head, &settings, &[], false);
+            assert_eq!(out.violations.len(), 0, "`{base}` -> `{head}`");
         }
     }
 

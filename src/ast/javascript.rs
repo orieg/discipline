@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::ci_condition::SkipCondition;
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -64,6 +65,7 @@ impl LanguagePack for JavaScriptPack {
             },
             test_calls: Vec::new(),
             suite_cases: Vec::new(),
+            suite_skips: Vec::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -235,6 +237,9 @@ struct JsExtractor<'a> {
     /// The case counts of the enclosing suites: a `describe.each` table runs every test
     /// of its suite once per row.
     suite_cases: Vec<(Option<usize>, bool)>,
+    /// Conditional skips of the enclosing suites (`describe.skipIf(..)`), outermost first:
+    /// the condition as reported and what a CI variable decides about it.
+    suite_skips: Vec<Vec<(String, super::ci_condition::CiVerdict)>>,
 }
 
 /// Function nodes whose body runs only when called.
@@ -320,7 +325,24 @@ impl<'a> JsExtractor<'a> {
     fn visit_node(&mut self, node: Node, scope: &mut Vec<String>, parent_ignored: bool) {
         if node.kind() == "call_expression" {
             if let Some(func_node) = node.child_by_field_name("function") {
-                let (is_test, is_suite, is_ignored, is_todo) = self.classify_call(func_node);
+                let (is_test, is_suite, mut is_ignored, is_todo) = self.classify_call(func_node);
+                // `test.skipIf(<condition>)`, `describe.runIf(<condition>)`: a conditional
+                // skip, read by its condition. The text rule above reads `.skipIf` as
+                // `.skip`, so the modifiers of the chain are read again from the tree.
+                let mut conditional = Vec::new();
+                if is_test || is_suite {
+                    let (plain_skip, conditions) = self.chain_modifiers(func_node);
+                    if !conditions.is_empty() {
+                        is_ignored = plain_skip;
+                    }
+                    for (text, condition) in conditions {
+                        match condition {
+                            SkipCondition::Always => is_ignored = true,
+                            SkipCondition::Never => {}
+                            SkipCondition::When(verdict) => conditional.push((text, verdict)),
+                        }
+                    }
+                }
                 if is_suite {
                     let title = self.extract_first_arg_title(node);
                     scope.push(title);
@@ -328,11 +350,13 @@ impl<'a> JsExtractor<'a> {
                         .push(super::test_cases::extract_javascript_cases(
                             func_node, self.src,
                         ));
+                    self.suite_skips.push(conditional);
                     if let Some(args) = node.child_by_field_name("arguments") {
                         if let Some(callback) = Self::find_callback(args) {
                             self.visit_node(callback, scope, parent_ignored || is_ignored);
                         }
                     }
+                    self.suite_skips.pop();
                     self.suite_cases.pop();
                     scope.pop();
                     return;
@@ -366,7 +390,10 @@ impl<'a> JsExtractor<'a> {
                     };
 
                     if !test_fn.ignored {
-                        self.record_run_condition(func_node, &mut test_fn);
+                        let inherited = self.suite_skips.iter().flatten().cloned();
+                        for (text, verdict) in inherited.chain(conditional) {
+                            test_fn.record_conditional_skip(text, verdict);
+                        }
                     }
 
                     let mut calls = Vec::new();
@@ -648,7 +675,7 @@ impl<'a> JsExtractor<'a> {
             "call_expression" => {
                 self.check_assertion_call(body_or_fn, test);
                 if !test.ignored {
-                    self.record_ci_conditional_this_skip(body_or_fn, test);
+                    self.record_this_skip(body_or_fn, test);
                 }
                 let mut cursor = body_or_fn.walk();
                 for child in body_or_fn.children(&mut cursor) {
@@ -664,43 +691,78 @@ impl<'a> JsExtractor<'a> {
         }
     }
 
-    /// `test.runIf(<condition>)(...)` runs the test only under the condition. Where the
-    /// condition holds only outside CI (`runIf(!process.env.CI)`), the test is skipped
-    /// in CI. A run condition on anything else is not read.
-    fn record_run_condition(&self, func: Node, test: &mut TestFn) {
-        use super::ci_condition::{self, CiVerdict, Lang};
-        if func.kind() != "call_expression" {
-            return;
+    /// The modifiers of a test or suite call (`test.skip.each`, `test.skipIf(c)`,
+    /// `describe.runIf(c)`), read from the member chain of its function: whether one is
+    /// exactly `skip`, `only` or `todo`, and each condition a `skipIf` / `runIf` takes,
+    /// as the condition under which the test is skipped and what it does.
+    fn chain_modifiers(&self, func: Node) -> (bool, Vec<(String, SkipCondition)>) {
+        use super::ci_condition::{self, Lang};
+        let mut plain_skip = false;
+        let mut conditions = Vec::new();
+        let mut cur = func;
+        loop {
+            match cur.kind() {
+                "call_expression" => {
+                    let Some(callee) = cur.child_by_field_name("function") else {
+                        break;
+                    };
+                    let modifier = (callee.kind() == "member_expression")
+                        .then(|| callee.child_by_field_name("property"))
+                        .flatten()
+                        .map(|p| self.text(p));
+                    if let Some(name @ ("skipIf" | "runIf")) = modifier {
+                        let condition = cur.child_by_field_name("arguments").and_then(|args| {
+                            let mut cursor = args.walk();
+                            let first = args.named_children(&mut cursor).next();
+                            first
+                        });
+                        match condition {
+                            Some(condition) => {
+                                let run_if = name == "runIf";
+                                let text = self.text(condition).trim();
+                                conditions.push((
+                                    if run_if {
+                                        format!("!({text})")
+                                    } else {
+                                        text.to_string()
+                                    },
+                                    ci_condition::skip_condition(
+                                        Lang::JavaScript,
+                                        condition,
+                                        self.src,
+                                        run_if,
+                                    ),
+                                ));
+                            }
+                            // `test.skipIf()`: no condition to read.
+                            None => plain_skip = true,
+                        }
+                    }
+                    cur = callee;
+                }
+                "member_expression" => {
+                    if let Some(property) = cur.child_by_field_name("property") {
+                        if matches!(self.text(property), "skip" | "only" | "todo") {
+                            plain_skip = true;
+                        }
+                    }
+                    let Some(object) = cur.child_by_field_name("object") else {
+                        break;
+                    };
+                    cur = object;
+                }
+                _ => break,
+            }
         }
-        let Some(modifier) = func.child_by_field_name("function") else {
-            return;
-        };
-        if modifier.kind() != "member_expression"
-            || modifier
-                .child_by_field_name("property")
-                .map(|p| self.text(p))
-                != Some("runIf")
-        {
-            return;
-        }
-        let Some(args) = func.child_by_field_name("arguments") else {
-            return;
-        };
-        let mut cursor = args.walk();
-        let Some(condition) = args.named_children(&mut cursor).next() else {
-            return;
-        };
-        if let Some(verdict @ CiVerdict::Skips(_)) =
-            ci_condition::expression(Lang::JavaScript, condition, self.src, true)
-        {
-            test.record_conditional_skip(format!("!({})", self.text(condition).trim()), verdict);
-        }
+        (plain_skip, conditions)
     }
 
-    /// Mocha's `this.skip()` under an `if` that makes the test skip in CI. Elsewhere the
-    /// call is not read.
-    fn record_ci_conditional_this_skip(&self, call: Node, test: &mut TestFn) {
-        use super::ci_condition::{self, CiVerdict, Lang};
+    /// Mocha's `this.skip()`. As a statement of the test it is an unconditional skip;
+    /// under an `if` it is a conditional skip read by its condition, and in the `else`
+    /// branch of a condition on no CI variable it is unconditional, as a skip call is in
+    /// the other packs. Elsewhere (a loop, a nested callback) it is not read.
+    fn record_this_skip(&self, call: Node, test: &mut TestFn) {
+        use super::ci_condition::{self, Lang};
         let Some(func) = call.child_by_field_name("function") else {
             return;
         };
@@ -710,9 +772,31 @@ impl<'a> JsExtractor<'a> {
         {
             return;
         }
-        if let Some(site) = ci_condition::site(Lang::JavaScript, call, self.src) {
-            if matches!(site.verdict, CiVerdict::Skips(_)) {
-                test.record_conditional_skip(site.text, site.verdict);
+        match ci_condition::site(Lang::JavaScript, call, self.src) {
+            Some(site) if site.in_else && !site.related => test.ignored = true,
+            Some(site) => test.record_conditional_skip(site.text, site.verdict),
+            None => {
+                // `this.skip();` directly in the body of the test callback.
+                let statement = call.parent().filter(|p| p.kind() == "expression_statement");
+                let block = statement
+                    .and_then(|s| s.parent())
+                    .filter(|b| b.kind() == "statement_block");
+                let callback = block.and_then(|b| b.parent()).filter(|f| {
+                    matches!(
+                        f.kind(),
+                        "arrow_function" | "function_expression" | "function"
+                    )
+                });
+                let test_call = callback
+                    .and_then(|f| f.parent())
+                    .filter(|args| args.kind() == "arguments")
+                    .and_then(|args| args.parent());
+                if test_call.is_some_and(|c| {
+                    c.start_position().row + 1 == test.line
+                        && c.end_position().row + 1 == test.end_line
+                }) {
+                    test.ignored = true;
+                }
             }
         }
     }
@@ -1515,5 +1599,174 @@ function helperGuard() {
         assert_eq!(no_exit.conditional_ignore, None);
 
         assert!(facts.tests.iter().all(|t| t.name != "helperGuard"));
+    }
+}
+
+/// `skipIf` / `runIf` modifiers and Mocha's `this.skip()` (#597). The sources are
+/// fixtures, kept out of the test bodies.
+#[cfg(test)]
+mod conditional_skip_tests {
+    use super::*;
+
+    const MODIFIERS: &str = r#"
+const isCI = !!process.env.CI;
+test.skipIf(isCI)('skip in ci', () => { expect(1).toBe(1); });
+test.skipIf(process.platform === 'win32')('skip on windows', () => { expect(1).toBe(1); });
+test.skipIf(true)('skip always', () => { expect(1).toBe(1); });
+test.skipIf(false)('skip never', () => { expect(1).toBe(1); });
+test.runIf(isCI)('run in ci', () => { expect(1).toBe(1); });
+test.skipIf(isCI).each([1, 2])('each in ci', (n) => { expect(n).toBe(n); });
+test.skip.each([1, 2])('each skipped', (n) => { expect(n).toBe(n); });
+describe.skipIf(isCI)('suite in ci', () => {
+  test('inner', () => { expect(1).toBe(1); });
+  test.skipIf(process.platform === 'win32')('inner windows', () => { expect(1).toBe(1); });
+});
+describe.runIf(process.platform === 'linux')('suite on linux', () => {
+  test('inner', () => { expect(1).toBe(1); });
+});
+describe.runIf(false)('suite never', () => {
+  test('inner', () => { expect(1).toBe(1); });
+});
+"#;
+
+    const THIS_SKIP: &str = r#"
+it('top', function () {
+  this.skip();
+  expect(1).toBe(1);
+});
+it('under if', function () {
+  if (process.platform === 'win32') { this.skip(); }
+  expect(1).toBe(1);
+});
+it('else of another condition', function () {
+  if (haveDb) { setup(); } else { this.skip(); }
+  expect(1).toBe(1);
+});
+it('nested callback', function () {
+  items.forEach(function () { this.skip(); });
+  expect(1).toBe(1);
+});
+it('another receiver', function () {
+  queue.skip();
+  expect(1).toBe(1);
+});
+"#;
+
+    /// `(name, unconditionally skipped, condition, skips in CI)` of each test.
+    fn read(src: &str) -> Vec<(String, bool, Option<String>, bool)> {
+        JavaScriptPack
+            .extract("a.test.js", src, &AssertVocabulary::default())
+            .unwrap()
+            .tests
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    t.ignored,
+                    t.conditional_ignore.clone(),
+                    t.is_ci_skip(),
+                )
+            })
+            .collect()
+    }
+
+    fn row(
+        name: &str,
+        ignored: bool,
+        cond: Option<&str>,
+        ci: bool,
+    ) -> (String, bool, Option<String>, bool) {
+        (name.to_string(), ignored, cond.map(str::to_string), ci)
+    }
+
+    #[test]
+    fn skip_if_and_run_if_are_read_by_their_condition_on_a_test_and_a_suite() {
+        assert_eq!(
+            read(MODIFIERS),
+            vec![
+                row("skip in ci", false, Some("isCI"), true),
+                row(
+                    "skip on windows",
+                    false,
+                    Some("process.platform === 'win32'"),
+                    false
+                ),
+                row("skip always", true, None, false),
+                row("skip never", false, None, false),
+                row("run in ci", false, Some("!(isCI)"), false),
+                row("each in ci", false, Some("isCI"), true),
+                row("each skipped", true, None, false),
+                row("suite in ci > inner", false, Some("isCI"), true),
+                // The suite's condition is the one a CI variable decides: it is kept.
+                row("suite in ci > inner windows", false, Some("isCI"), true),
+                row(
+                    "suite on linux > inner",
+                    false,
+                    Some("!(process.platform === 'linux')"),
+                    false
+                ),
+                row("suite never > inner", true, None, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn this_skip_is_unconditional_as_a_statement_and_conditional_under_an_if() {
+        assert_eq!(
+            read(THIS_SKIP),
+            vec![
+                row("top", true, None, false),
+                row(
+                    "under if",
+                    false,
+                    Some("process.platform === 'win32'"),
+                    false
+                ),
+                row("else of another condition", true, None, false),
+                row("nested callback", false, None, false),
+                row("another receiver", false, None, false),
+            ]
+        );
+    }
+
+    /// `(unconditional skip, conditional skip, a CI variable decides it)` of a test
+    /// under `test.skipIf(<condition>)`.
+    fn skip_if(condition: &str) -> (bool, bool, bool) {
+        let src =
+            format!("test.skipIf({condition})('adds', () => {{\n  expect(1 + 1).toBe(2);\n}});\n");
+        let facts = JavaScriptPack
+            .extract("a.test.js", &src, &AssertVocabulary::default())
+            .unwrap();
+        let test = &facts.tests[0];
+        (
+            test.ignored,
+            test.conditional_ignore.is_some(),
+            test.is_ci_skip(),
+        )
+    }
+
+    #[test]
+    fn a_constant_skip_if_condition_is_an_unconditional_skip_or_no_skip() {
+        for condition in [
+            "true",
+            "!false",
+            "1 === 1",
+            "1",
+            "(true)",
+            "true || isSlow()",
+        ] {
+            assert_eq!(skip_if(condition), (true, false, false), "{condition}");
+        }
+        for condition in ["false", "!true", "0", "1 === 2", "false && isSlow()"] {
+            assert_eq!(skip_if(condition), (false, false, false), "{condition}");
+        }
+        // Controls: a condition, not a constant.
+        assert_eq!(
+            skip_if("process.platform === 'win32'"),
+            (false, true, false)
+        );
+        assert_eq!(skip_if("true && isSlow()"), (false, true, false));
+        assert_eq!(skip_if("process.env.CI"), (false, true, true));
+        assert_eq!(skip_if("!process.env.CI"), (false, true, false));
     }
 }
