@@ -451,7 +451,8 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                     code: crate::findings::full_code(GATE, &crate::findings::TEST_IDENTITY_DROPPED),
                     fingerprint: String::new(),
                     title: crate::findings::TEST_IDENTITY_DROPPED.title.to_string(),
-                    anchor: None,
+                    // No file and no line: the test's identity tells it from another.
+                    anchor: Some(format!("test:{}", viol.id)),
                     legacy_title: crate::findings::TEST_IDENTITY_DROPPED.was_title(),
                     file: None,
                     line: None,

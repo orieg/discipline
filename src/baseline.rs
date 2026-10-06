@@ -362,7 +362,6 @@ pub fn compute_violation_fingerprint(repo_root: &Path, v: &Violation) -> String 
 pub struct BaselineMatchResult {
     pub baselined_count: usize,
     pub stale_count: usize,
-    pub stale_by_gate: BTreeMap<String, usize>,
 }
 
 /// Match detected violations against the baseline using repository root path.
@@ -465,9 +464,7 @@ where
             .push(entry);
     }
 
-    let mut stale_by_gate: BTreeMap<String, usize> = BTreeMap::new();
     for (gate, entries) in &stale_entries_by_gate {
-        stale_by_gate.insert(gate.clone(), entries.len());
         if let Some(outcome) = outcomes.iter_mut().find(|o| o.gate == *gate) {
             if !outcome.enabled {
                 continue;
@@ -502,7 +499,6 @@ where
     BaselineMatchResult {
         baselined_count: total_baselined,
         stale_count,
-        stale_by_gate,
     }
 }
 
@@ -575,6 +571,66 @@ mod tests {
             fingerprint_for_version(&at(1, "a"), read, 1),
             fingerprint_for_version(&at(2, "b"), read, 1),
             "version 1 is unchanged"
+        );
+    }
+
+    /// Anchoring a kind changes its version-2 fingerprint and nothing about version 1: a
+    /// version-1 baseline keeps matching, with or without a readable line.
+    #[test]
+    fn an_anchor_never_changes_a_version_one_fingerprint() {
+        let none = |_: &str| None;
+        let read = |_: &str| Some("  let x = danger();  \n".to_string());
+        for line in [None, Some(1)] {
+            let plain = Violation {
+                line,
+                ..finding("Old Title", "gate/code")
+            };
+            let anchored = Violation {
+                anchor: Some("job:lint".to_string()),
+                ..plain.clone()
+            };
+            assert_eq!(
+                fingerprint_for_version(&plain, read, 1),
+                fingerprint_for_version(&anchored, read, 1),
+                "line {line:?}"
+            );
+            assert_eq!(
+                fingerprint_for_version(&plain, none, 1),
+                fingerprint_for_version(&anchored, none, 1),
+                "line {line:?}, unreadable"
+            );
+            assert_ne!(
+                fingerprint_for_version(&plain, read, 2),
+                fingerprint_for_version(&anchored, read, 2),
+                "line {line:?}: version 2 does hash the anchor"
+            );
+        }
+        // The version-1 formula itself: gate, title, path and the hash of the message
+        // (no line) or of the trimmed source line.
+        let anchored = Violation {
+            anchor: Some("job:lint".to_string()),
+            ..finding("Old Title", "gate/code")
+        };
+        let v1 = |content: &str| {
+            sha256_hex(
+                format!(
+                    "unsafe-safety-comment:Old Title:src/lib.rs:{}",
+                    sha256_hex(content.as_bytes())
+                )
+                .as_bytes(),
+            )
+        };
+        assert_eq!(
+            fingerprint_for_version(&anchored, none, 1),
+            v1("unsafe block")
+        );
+        let at_line = Violation {
+            line: Some(1),
+            ..anchored
+        };
+        assert_eq!(
+            fingerprint_for_version(&at_line, read, 1),
+            v1("let x = danger();")
         );
     }
 

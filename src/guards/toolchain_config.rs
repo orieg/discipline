@@ -1884,10 +1884,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                     out.overrides.push(ov);
                     continue;
                 }
-                let sev = match settings.severity() {
-                    Severity::Error => Severity::Warning,
-                    other => other,
-                };
+                let sev = settings.severity().capped_at_warning();
                 out.push(
                     ctx.overridable(sev),
                     &crate::findings::TOOLCHAIN_CHANGE_NOT_ANALYSED,
@@ -1946,10 +1943,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                         out.overrides.push(ov);
                         continue;
                     }
-                    let sev = match settings.severity() {
-                        Severity::Error => Severity::Warning,
-                        other => other,
-                    };
+                    let sev = settings.severity().capped_at_warning();
                     out.push(
                         ctx.overridable(sev),
                         &crate::findings::TOOLCHAIN_CHANGE_NOT_ANALYSED,
@@ -1963,6 +1957,8 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                             "Review the inherited configuration; record it with `allow-toolchain-weakening: {key} <reason>` if it is intended."
                         ),
                     );
+                    // One file can inherit through several keys: the key tells them apart.
+                    out.anchor_last(key.clone());
                 }
                 for w in diff_trees(&base_tree, &head_tree, &rules) {
                     if let Some(ov) = lift(&crate::findings::TOOLCHAIN_CONFIG_WEAKENED, &w.key)

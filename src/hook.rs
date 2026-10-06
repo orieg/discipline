@@ -383,11 +383,12 @@ fn default_side_base(dir: &Path) -> Option<String> {
 }
 
 /// Runs the check for the agent and returns what the hook emits.
+#[cfg(test)]
 pub fn run(agent: Agent, base: Option<String>, stdin: &str) -> Result<HookOutput> {
     run_with(agent, base, stdin, false, false)
 }
 
-/// [`run`], and with `if_configured` a silent pass outside a git repository whose root
+/// `run`, and with `if_configured` a silent pass outside a git repository whose root
 /// has a `discipline.toml`: the guard of a user-level hook, which runs in every folder
 /// the agent opens.
 ///
@@ -617,8 +618,6 @@ pub enum CheckSide {
     Default,
     /// The working tree against the merge base with this ref.
     Base(String),
-    /// The index against `HEAD`.
-    Staged,
 }
 
 /// Runs this binary's `check --format agent-prompt` in `dir` and returns its exit
@@ -655,9 +654,6 @@ pub fn run_check(dir: &Path, side: &CheckSide) -> Result<CheckRun> {
         CheckSide::Base(b) => {
             cmd.args(["--base", b]);
         }
-        CheckSide::Staged => {
-            cmd.arg("--staged");
-        }
     }
     let out = cmd.output().context("cannot run discipline check")?;
     Ok(CheckRun {
@@ -691,11 +687,12 @@ impl CheckRun {
 
 /// The configuration file an agent reads, relative to the repository root, and the
 /// content that wires the hook in.
+#[cfg(test)]
 pub fn config_for(agent: Agent) -> (&'static str, String) {
     config_for_mode(agent, false)
 }
 
-/// [`config_for`], with every check command in observe mode (`hook run --observe`).
+/// `config_for`, with every check command in observe mode (`hook run --observe`).
 pub fn config_for_mode(agent: Agent, observe: bool) -> (&'static str, String) {
     config_for_opts(agent, observe, None)
 }
@@ -1492,11 +1489,12 @@ fn generated_json_against(
 }
 
 /// Writes the agent's configuration under `root` when the file does not exist.
+#[cfg(test)]
 pub fn install(agent: Agent, root: &Path, observe: bool) -> Result<Installed> {
     install_with(agent, root, observe, false, None)
 }
 
-/// [`install`], rewriting a generated file an earlier release wrote when `upgrade`.
+/// `install`, rewriting a generated file an earlier release wrote when `upgrade`.
 /// `timeout` replaces [`default_timeout`] in the agents whose file carries one.
 ///
 /// A file some release generated keeps the mode it was written in (`observe` can only
@@ -2014,11 +2012,12 @@ exit 0
 }
 
 /// Write [`CLAUDE_BOOTSTRAP`] under `root` unless a file is there.
+#[cfg(test)]
 pub fn install_claude_bootstrap(root: &Path) -> Result<Installed> {
     install_claude_bootstrap_with(root, false, None)
 }
 
-/// [`install_claude_bootstrap`], rewriting one an earlier release wrote when `upgrade`.
+/// `install_claude_bootstrap`, rewriting one an earlier release wrote when `upgrade`.
 /// With `pin`, the script checks the download against those digests ([`claude_bootstrap_script_with`]).
 pub fn install_claude_bootstrap_with(
     root: &Path,
@@ -2107,11 +2106,12 @@ pub fn copilot_setup_steps() -> String {
 
 /// Write [`COPILOT_SETUP_STEPS`] under `root`. A workflow that already installs
 /// discipline is left as it is; any other is refused with the step to merge into it.
+#[cfg(test)]
 pub fn install_cloud_agent(root: &Path) -> Result<Installed> {
     install_cloud_agent_with(root, false)
 }
 
-/// [`install_cloud_agent`], rewriting one an earlier release wrote when `upgrade`.
+/// `install_cloud_agent`, rewriting one an earlier release wrote when `upgrade`.
 pub fn install_cloud_agent_with(root: &Path, upgrade: bool) -> Result<Installed> {
     let path = root.join(COPILOT_SETUP_STEPS);
     if path.exists() {

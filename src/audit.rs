@@ -865,6 +865,7 @@ impl ChangeInfoRef {
 
 /// The configuration records of one change, from the two sides' `discipline.toml` text
 /// (`None`: the side has no such file).
+#[cfg(test)]
 pub fn config_records(base: Option<&str>, head: Option<&str>, info: &ChangeInfoRef) -> Vec<Record> {
     config_changes(base, head, info).0
 }
