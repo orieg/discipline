@@ -4583,6 +4583,183 @@ command = "cargo test"
         },
     ),
     (
+        "ignored-tests: C#, Ruby, PHP, Swift, Scala, C / C++ and Objective-C read a skip under a condition: CI is an error, another condition a note",
+        || {
+            use crate::ast::default_registry;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            // `(title, severity)` of the finding for the one test of a file that arrives.
+            type Finding = Option<(String, Severity)>;
+            let finding_of = |path: &str, src: &str| -> anyhow::Result<Finding> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                let tests = pack.extract(path, src, &v)?.tests;
+                let test = tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                let added = [Located {
+                    path,
+                    file_survives: true,
+                    test,
+                }];
+                let out =
+                    evaluate_ignored_tests(&[], &added, &IgnoredTestsGate::default(), &[], false)?;
+                Ok(out.violations.first().map(|v| (v.title.to_string(), v.severity)))
+            };
+            let conditional = |severity: Severity| Some(("Test Conditionally Skipped".to_string(), severity));
+            let unconditional = Some(("Ignored Test Added".to_string(), Severity::Error));
+            let cs = |body: &str| {
+                format!("public class QTests\n{{\n    [Test]\n    public void Adds()\n    {{\n        {body}\n        Assert.AreEqual(2, 1 + 1);\n    }}\n}}\n")
+            };
+            let rb = |body: &str| {
+                format!("class QTest < Minitest::Test\n  def test_adds\n    {body}\n    assert_equal 2, 1 + 1\n  end\nend\n")
+            };
+            let php = |attribute: &str, body: &str| {
+                format!("<?php\nclass QTest extends TestCase\n{{\n    {attribute}\n    public function testAdds(): void\n    {{\n        {body}\n        $this->assertSame(2, 1 + 1);\n    }}\n}}\n")
+            };
+            let swift = |body: &str| {
+                format!("import XCTest\n\nfinal class QTests: XCTestCase {{\n    func testAdds() throws {{\n        {body}\n        XCTAssertEqual(1 + 1, 2)\n    }}\n}}\n")
+            };
+            let swift_testing = |attribute: &str| {
+                format!("import Testing\n\n{attribute} func adds() {{\n    #expect(1 + 1 == 2)\n}}\n")
+            };
+            let scala = |body: &str| {
+                format!("class QSuite extends AnyFunSuite {{\n  test(\"adds\") {{\n    {body}\n    assert(1 + 1 == 2)\n  }}\n}}\n")
+            };
+            let cpp = |body: &str| format!("TEST(Q, Adds) {{\n  {body}\n  EXPECT_EQ(1 + 1, 2);\n}}\n");
+            let unity = |body: &str| {
+                format!("#include \"unity.h\"\n\nvoid test_adds(void) {{\n  {body}\n  TEST_ASSERT_EQUAL(2, 1 + 1);\n}}\n")
+            };
+            let objc = |body: &str| {
+                format!("@implementation QTests\n- (void)testAdds {{\n  {body}\n  XCTAssertEqual(1 + 1, 2);\n}}\n@end\n")
+            };
+            const CS: &str = "tests/QTests.cs";
+            const RB: &str = "test/q_test.rb";
+            const PHP: &str = "tests/QTest.php";
+            const SWIFT: &str = "Tests/QTests/QTests.swift";
+            const SCALA: &str = "src/test/scala/QSuite.scala";
+            const CPP: &str = "tests/q_test.cpp";
+            const UNITY: &str = "test/test_q.c";
+            const OBJC: &str = "Tests/QTests.m";
+            let cases: Vec<(&str, String, Finding)> = vec![
+                (CS, cs("if (Environment.GetEnvironmentVariable(\"CI\") != null) { Assert.Ignore(\"x\"); }"), conditional(Severity::Error)),
+                (CS, cs("if (Environment.GetEnvironmentVariable(\"CI\") == null) { Assert.Ignore(\"x\"); }"), conditional(Severity::Note)),
+                (CS, cs("Assume.That(Environment.GetEnvironmentVariable(\"CI\") == null);"), conditional(Severity::Error)),
+                (CS, cs("Skip.If(OperatingSystem.IsWindows());"), conditional(Severity::Note)),
+                (CS, cs("Assert.Ignore(\"x\");"), unconditional.clone()),
+                (RB, rb("skip \"x\" if ENV[\"CI\"]"), conditional(Severity::Error)),
+                (RB, rb("skip \"x\" unless ENV[\"CI\"]"), conditional(Severity::Note)),
+                (RB, rb("if File.exist?(\"db\")\n      puts 1\n    else\n      skip \"x\"\n    end"), conditional(Severity::Note)),
+                (RB, rb("skip \"x\""), unconditional.clone()),
+                (PHP, php("", "if (getenv('CI')) { $this->markTestSkipped('x'); }"), conditional(Severity::Error)),
+                (PHP, php("", "if (!getenv('CI')) { $this->markTestSkipped('x'); }"), conditional(Severity::Note)),
+                (PHP, php("#[RequiresOperatingSystem('Linux')]", ""), conditional(Severity::Note)),
+                (PHP, php("", "$this->markTestSkipped('x');"), unconditional.clone()),
+                (SWIFT, swift("try XCTSkipIf(ProcessInfo.processInfo.environment[\"CI\"] != nil)"), conditional(Severity::Error)),
+                (SWIFT, swift("try XCTSkipUnless(ProcessInfo.processInfo.environment[\"CI\"] != nil)"), conditional(Severity::Note)),
+                (SWIFT, swift("guard ProcessInfo.processInfo.environment[\"CI\"] == nil else { throw XCTSkip(\"x\") }"), conditional(Severity::Error)),
+                (SWIFT, swift("throw XCTSkip(\"x\")"), unconditional.clone()),
+                (SWIFT, swift_testing("@Test(.disabled(if: ProcessInfo.processInfo.environment[\"CI\"] != nil))"), conditional(Severity::Error)),
+                (SWIFT, swift_testing("@Test(.enabled(if: ProcessInfo.processInfo.environment[\"CI\"] != nil))"), conditional(Severity::Note)),
+                (SWIFT, swift_testing("@Test(.disabled(\"x\"))"), unconditional.clone()),
+                (SCALA, scala("assume(!sys.env.contains(\"CI\"))"), conditional(Severity::Error)),
+                (SCALA, scala("assume(sys.env.contains(\"CI\"))"), conditional(Severity::Note)),
+                (SCALA, scala("if (sys.env.contains(\"CI\")) cancel(\"x\")"), conditional(Severity::Error)),
+                (SCALA, scala("cancel(\"x\")"), unconditional.clone()),
+                (CPP, cpp("if (std::getenv(\"CI\") != nullptr) { GTEST_SKIP(); }"), conditional(Severity::Error)),
+                (CPP, cpp("if (std::getenv(\"CI\") == nullptr) { GTEST_SKIP(); }"), conditional(Severity::Note)),
+                (CPP, cpp("GTEST_SKIP();"), unconditional.clone()),
+                (UNITY, unity("if (getenv(\"CI\") != NULL) { TEST_IGNORE(); }"), conditional(Severity::Error)),
+                (UNITY, unity("if (getenv(\"CI\") == NULL) { TEST_IGNORE(); }"), conditional(Severity::Note)),
+                (UNITY, unity("TEST_IGNORE();"), unconditional.clone()),
+                (OBJC, objc("XCTSkipIf(NSProcessInfo.processInfo.environment[@\"CI\"] != nil, @\"x\");"), conditional(Severity::Error)),
+                (OBJC, objc("XCTSkipUnless(NSProcessInfo.processInfo.environment[@\"CI\"] != nil, @\"x\");"), conditional(Severity::Note)),
+                (OBJC, objc("XCTSkip(@\"x\");"), unconditional.clone()),
+            ];
+            for (path, src, want) in cases {
+                if finding_of(path, &src)? != want {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        },
+    ),
+    (
+        "ignored-tests: a mark bound to a name, xfail with a condition, a `ci` feature, an else branch and JUnit's method conditions are read by their condition",
+        || {
+            use crate::ast::default_registry;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            // `(title, severity)` of the finding for the one test of a file that arrives.
+            type Finding = Option<(String, Severity)>;
+            let finding_of = |path: &str, src: &str| -> anyhow::Result<Finding> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                let tests = pack.extract(path, src, &v)?.tests;
+                let test = tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                let added = [Located {
+                    path,
+                    file_survives: true,
+                    test,
+                }];
+                let out =
+                    evaluate_ignored_tests(&[], &added, &IgnoredTestsGate::default(), &[], false)?;
+                Ok(out.violations.first().map(|v| (v.title.to_string(), v.severity)))
+            };
+            let conditional = |severity: Severity| Some(("Test Conditionally Skipped".to_string(), severity));
+            let unconditional = Some(("Ignored Test Added".to_string(), Severity::Error));
+            let py = |module: &str, decorator: &str, body: &str| {
+                format!("import os\nimport sys\nimport pytest\n\n{module}\n\n{decorator}\ndef test_q():\n    {body}\n    assert 1 + 1 == 2\n")
+            };
+            let rs = |attribute: &str| format!("{attribute}\n#[test]\nfn adds() {{\n    assert_eq!(1 + 1, 2);\n}}\n");
+            let java = |member: &str, annotation: &str, first: &str| {
+                format!("class QTest {{\n    {member}\n    {annotation}\n    @Test\n    void adds() {{\n        {first}\n        assertEquals(2, 1 + 1);\n    }}\n}}\n")
+            };
+            const PY: &str = "test_q.py";
+            const RS: &str = "tests/q.rs";
+            const JAVA: &str = "src/test/java/QTest.java";
+            let on_ci = "boolean onCi() { return System.getenv(\"CI\") != null; }";
+            let cases: Vec<(&str, String, Finding)> = vec![
+                (PY, py("off_ci = pytest.mark.skipif(os.environ.get(\"CI\"), reason=\"x\")", "@off_ci", "pass"), conditional(Severity::Error)),
+                (PY, py("posix = pytest.mark.skipif(sys.platform == \"win32\", reason=\"x\")", "@posix", "pass"), conditional(Severity::Note)),
+                (PY, py("parked = pytest.mark.skip(reason=\"x\")", "@parked", "pass"), unconditional.clone()),
+                (PY, py("from marks import posix", "@posix", "pass"), None),
+                (PY, py("", "@pytest.mark.xfail(os.environ.get(\"CI\"), reason=\"x\")", "pass"), conditional(Severity::Error)),
+                (PY, py("", "@pytest.mark.xfail(sys.platform == \"win32\", reason=\"x\")", "pass"), conditional(Severity::Note)),
+                (PY, py("", "@pytest.mark.xfail(reason=\"x\")", "pass"), unconditional.clone()),
+                (PY, py("", "", "if sys.platform == \"linux\":\n        pass\n    else:\n        pytest.skip(\"x\")"), conditional(Severity::Note)),
+                (PY, py("", "", "if not os.environ.get(\"CI\"):\n        pass\n    else:\n        pytest.skip(\"x\")"), conditional(Severity::Error)),
+                (PY, py("", "", "if os.environ.get(\"CI\"):\n        pass\n    else:\n        pytest.skip(\"x\")"), conditional(Severity::Note)),
+                (RS, rs("#[cfg_attr(feature = \"ci\", ignore)]"), conditional(Severity::Error)),
+                (RS, rs("#[cfg_attr(not(feature = \"ci\"), ignore)]"), conditional(Severity::Note)),
+                (RS, rs("#[cfg_attr(feature = \"ci-tools\", ignore)]"), conditional(Severity::Note)),
+                (RS, rs("#[cfg(feature = \"ci\")]"), conditional(Severity::Note)),
+                (RS, rs("#[cfg(not(feature = \"ci\"))]"), unconditional.clone()),
+                (JAVA, java(on_ci, "@DisabledIf(\"onCi\")", ""), conditional(Severity::Error)),
+                (JAVA, java(on_ci, "@EnabledIf(\"onCi\")", ""), conditional(Severity::Note)),
+                (JAVA, java("", "@DisabledIf(\"onCi\")", ""), conditional(Severity::Note)),
+                (JAVA, java("", "", "assumeThat(System.getenv(\"CI\"), nullValue());"), conditional(Severity::Error)),
+                (JAVA, java("", "", "assumeThat(System.getenv(\"CI\"), notNullValue());"), conditional(Severity::Note)),
+                (JAVA, java("", "", "if (System.getenv(\"CI\") != null) { assumeTrue(up()); }"), conditional(Severity::Error)),
+                (JAVA, java("", "", "if (isLinux()) { assumeTrue(up()); }"), conditional(Severity::Note)),
+            ];
+            for (path, src, want) in cases {
+                if finding_of(path, &src)? != want {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        },
+    ),
+    (
         "ignored-tests: a CI variable added to a CI-conditional skip is reported unless approved",
         || {
             use crate::ast::TestFn;

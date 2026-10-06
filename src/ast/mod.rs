@@ -250,8 +250,9 @@ pub struct TestFn {
     pub ignored: bool,
     /// Specific conditional predicate (e.g. `miri`, `target_os = "..."`), or `None` if unconditionally ignored.
     pub conditional_ignore: Option<String>,
-    /// Whether a CI variable decides `conditional_ignore`, where the language pack read
-    /// the condition from the syntax tree (`ci_condition`). `None` leaves the question to
+    /// Whether a CI variable decides `conditional_ignore`, as the language pack read the
+    /// condition from the syntax tree (`ci_condition`). Every pack sets it with the
+    /// condition; `None`, which facts built without a pack carry, leaves the question to
     /// the condition's text.
     pub ci_verdict: Option<ci_condition::CiVerdict>,
     /// Fatal assertions that abort execution on failure (e.g. `require.*`, `ASSERT_*`).
@@ -414,6 +415,17 @@ impl TestFn {
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
+        }
+    }
+
+    /// Records what one skip read by [`ci_condition::read_skip`] does to the test.
+    pub fn record_skip(&mut self, read: ci_condition::SkipRead) {
+        match read.outcome {
+            ci_condition::SkipCondition::Always => self.ignored = true,
+            ci_condition::SkipCondition::Never => {}
+            ci_condition::SkipCondition::When(verdict) => {
+                self.record_conditional_skip(read.text, verdict)
+            }
         }
     }
 
