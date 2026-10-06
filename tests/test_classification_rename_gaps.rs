@@ -102,6 +102,14 @@ fn py_head() -> String {
     )
 }
 
+/// `py_head()` with a test that checks something.
+fn py_head_with_a_test() -> String {
+    format!(
+        "{}\n\ndef test_load():\n    assert load(\"missing\") is None\n",
+        py_head()
+    )
+}
+
 fn js_base() -> String {
     padded("//", "export function load(x) {\n  return fetch(x);\n}\n")
 }
@@ -389,57 +397,75 @@ fn control_a_rename_out_of_test_scope_is_production_code() {
     }
 }
 
-// ---- Documented behaviour, pinned as it is (see the report on #565). ----
+// ---- Files the change adds (#565, #630). ----
 
-/// A file the change adds has no base side and is classified by its head path:
-/// `docs/GATES.md` states it ("Files the change adds are classified by their
-/// head path").
+/// A file the change adds has no base side. Under a test name or a test directory it
+/// is test code when it holds a test that checks something, and production code when
+/// it holds none: `docs/GATES.md` states it ("A new file that is test scope by its
+/// name only").
 #[test]
-fn pinned_an_added_file_is_classified_by_its_head_path() {
-    let py_h = py_head();
-    assert_test_code(
-        "added app/test_service.py",
-        &added(("app/test_service.py", &py_h), None),
-    );
-    assert_test_code(
-        "added tests/service.py",
-        &added(("tests/service.py", &py_h), None),
-    );
+fn an_added_file_under_a_test_name_is_test_code_only_with_a_test_that_checks() {
+    let (py_h, py_t) = (py_head(), py_head_with_a_test());
+    for path in ["app/test_service.py", "tests/service.py"] {
+        let run = added((path, &py_h), None);
+        assert_reported_as_production(&format!("added {path}"), &run, false);
+        assert!(
+            notes(&run, "error-swallowing").contains(path)
+                && notes(&run, "stub-bodies").contains(path),
+            "{path}: {}",
+            run.stdout
+        );
+        assert_test_code(
+            &format!("added {path} with a test"),
+            &added((path, &py_t), None),
+        );
+    }
     let run = added(("app/service.py", &py_h), None);
     assert_reported_as_production("added app/service.py", &run, false);
 }
 
-/// The base path is known only when git's similarity detection pairs the two
-/// sides. A delete and an add it does not pair are an added file, classified by
-/// its head path: `docs/GATES.md` lists this as not closed.
+/// The base path is known only when git's similarity detection pairs the two sides.
+/// A delete and an add it does not pair are an added file; `handler.go` deleted and
+/// `handler_test.go` added in the same directory with no test are paired by their
+/// stems, and the added file is judged as production code. Control: the deleted file
+/// is in another directory, and the added file stays test code.
 #[test]
-fn pinned_a_rename_git_does_not_detect_is_an_added_file() {
-    let repo = Repo::new();
-    repo.git(&["checkout", "-q", "main"]);
-    repo.write(
-        "pkg/handler.go",
-        "package pkg\n\nfunc Load(p string) int {\n\treturn run(p) * 2\n}\n",
-    );
-    repo.commit("feat: base");
-    repo.git(&["checkout", "-q", "-B", "work"]);
-    repo.git(&["rm", "-q", "pkg/handler.go"]);
-    repo.write(
-        "pkg/handler_test.go",
-        "package pkg\n\nimport \"os\"\n\nfunc Fetch(name string) int {\n\tpanic(\"not implemented\")\n}\n\nfunc Store(name string) int {\n\tpanic(\"not implemented\")\n}\n",
-    );
-    repo.commit("refactor: move");
-    let status = repo.git_output(&["diff", "-M", "--name-status", "main", "HEAD"]);
-    assert!(
-        !status.lines().any(|l| l.starts_with('R')),
-        "the fixture must not be a detected rename: {status}"
-    );
-    // The deletion is not silent (`deletion-rationale` asks for a `removes:` line), but
-    // neither gate under test reports the stub bodies.
-    let run = repo.check(&[]);
-    assert!(
-        codes(&run, "error-swallowing").is_empty() && codes(&run, "stub-bodies").is_empty(),
+fn a_go_rename_git_does_not_detect_is_paired_by_stem_and_judged_as_production_code() {
+    let unpaired_rename = |gone: &str| {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(
+            gone,
+            "package pkg\n\nfunc Load(p string) int {\n\treturn run(p) * 2\n}\n",
+        );
+        repo.commit("feat: base");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.git(&["rm", "-q", gone]);
+        repo.write(
+            "pkg/handler_test.go",
+            "package pkg\n\nimport \"os\"\n\nfunc Fetch(name string) int {\n\tpanic(\"not implemented\")\n}\n\nfunc Store(name string) int {\n\tpanic(\"not implemented\")\n}\n",
+        );
+        repo.commit("refactor: move");
+        let status = repo.git_output(&["diff", "-M", "--name-status", "main", "HEAD"]);
+        assert!(
+            !status.lines().any(|l| l.starts_with('R')),
+            "the fixture must not be a detected rename: {status}"
+        );
+        repo.check(&[])
+    };
+    // The deletion is reported as well (`deletion-rationale` asks for a `removes:` line).
+    let run = unpaired_rename("pkg/handler.go");
+    assert!(codes(&run, "error-swallowing").is_empty(), "{}", run.stdout);
+    assert_eq!(
+        codes(&run, "stub-bodies"),
+        vec![STUB_ADDED, STUB_ADDED],
         "{}",
         run.stdout
+    );
+    let notes = notes(&run, "stub-bodies");
+    assert!(
+        notes.contains("pkg/handler_test.go") && notes.contains("pkg/handler.go"),
+        "{notes}"
     );
     assert_eq!(
         codes(&run, "deletion-rationale"),
@@ -447,15 +473,24 @@ fn pinned_a_rename_git_does_not_detect_is_an_added_file() {
         "{}",
         run.stdout
     );
+    let elsewhere = unpaired_rename("other/handler.go");
+    assert!(
+        codes(&elsewhere, "error-swallowing").is_empty()
+            && codes(&elsewhere, "stub-bodies").is_empty(),
+        "{}",
+        elsewhere.stdout
+    );
 }
 
 /// A file-name rule matches at a word boundary (#598): a name that only starts or
-/// ends with the letters of a test name is production code, and a name with a test
-/// word at a boundary is whole-file test code whatever the file holds.
+/// ends with the letters of a test name is production code. A name with a test word
+/// at a boundary is a test name, and a name cannot settle what a new file is (#630):
+/// holding no test it is judged as production code, and declared under `[tests] paths`
+/// it is test code whatever it holds.
 #[test]
-fn pinned_a_test_word_at_a_boundary_is_test_code_and_a_near_miss_name_is_not() {
+fn a_new_file_with_a_test_word_at_a_boundary_is_production_code_until_declared() {
     let (py_h, java_h) = (py_head(), java_head());
-    for (path, src, test_code) in [
+    for (path, src, test_name) in [
         (
             "src/main/java/TestimonialController.java",
             java_h.as_str(),
@@ -466,10 +501,20 @@ fn pinned_a_test_word_at_a_boundary_is_test_code_and_a_near_miss_name_is_not() {
         ("src/TestDataBuilder.cs", CS_HEAD, true),
     ] {
         let run = added((path, src), None);
-        if test_code {
-            assert_test_code(path, &run);
-        } else {
-            assert_reported_as_production(path, &run, false);
+        assert_reported_as_production(path, &run, false);
+        // Only a file in test scope by its name is named in the notes for its tests.
+        assert_eq!(
+            notes(&run, "error-swallowing").contains("holds no test"),
+            test_name,
+            "{path}: {}",
+            run.stdout
+        );
+        if test_name {
+            let config = format!("[tests]\npaths = [\"{path}\"]\n");
+            assert_test_code(
+                &format!("{path}, declared"),
+                &added((path, src), Some(&config)),
+            );
         }
     }
     let run = added(("src/main/java/Other.java", &java_h), None);

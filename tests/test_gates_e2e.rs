@@ -3799,9 +3799,11 @@ fn error_swallowing_is_a_delta_outside_tests_across_languages() {
 #[test]
 fn error_swallowing_ignores_a_handler_in_an_own_convention_test_path() {
     let repo = Repo::new();
+    // The test keeps the new file test code: one that holds no test is judged as
+    // production code whatever its name.
     repo.write(
         "src/test_helper.py",
-        "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n",
+        "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n\n\ndef test_load():\n    assert load(\"missing\") is None\n",
     );
     repo.write(
         "src/helper.py",
@@ -3825,9 +3827,11 @@ fn error_swallowing_ignores_a_handler_in_an_own_convention_test_path() {
 #[test]
 fn error_swallowing_ignores_a_java_handler_in_an_own_convention_test_path() {
     let repo = Repo::new();
+    // The test keeps the new file test code: one that holds no test is judged as
+    // production code whatever its name.
     repo.write(
         "src/main/java/TestHelper.java",
-        "class TestHelper {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n",
+        "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nclass TestHelper {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n\n  @Test\n  void runs() {\n    assertEquals(2, g());\n  }\n}\n",
     );
     repo.write(
         "src/main/java/Helper.java",
@@ -4108,11 +4112,12 @@ fn rename_into_test_scope_stays_production_code_and_is_reported_swift() {
 /// reclassification finding.
 #[test]
 fn rename_evasion_negative_controls() {
-    // An added file has no base side: head-path classification, still test code.
+    // An added file has no base side: head-path classification, and with a test that
+    // checks something in it, still test code.
     let repo = Repo::new();
     repo.write(
         "src/main/java/TestNew.java",
-        "class TestNew {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n",
+        "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nclass TestNew {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n\n  @Test\n  void runs() {\n    assertEquals(2, g());\n  }\n}\n",
     );
     repo.commit("feat: new test helper");
     let run = repo.check(&[]);
@@ -5796,7 +5801,7 @@ fn php_ruby_and_c_cpp_supply_function_handler_and_prose_facts() {
     );
     repo.write(
         "tests/LoaderTest.php",
-        "<?php\nfunction testLoad() { try { load('x'); } catch (E $e) { } }\n",
+        "<?php\nuse PHPUnit\\Framework\\TestCase;\n\nclass LoaderTest extends TestCase {\n    public function testLoad() {\n        try { load('x'); } catch (E $e) { }\n        $this->assertSame(1, loaded());\n    }\n}\n",
     );
     repo.commit("refactor: handle");
     let quiet = repo.check(&[]);
