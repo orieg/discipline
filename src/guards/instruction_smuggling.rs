@@ -18,7 +18,7 @@
 use super::confusables::CONFUSABLES;
 use super::{Context, GateOutcome, PathFilter};
 use crate::ast::{default_registry, Fact};
-use crate::config::{GateSettings, Severity};
+use crate::config::GateSettings;
 use crate::gitctx::ChangeKind;
 use crate::tokens;
 use anyhow::Result;
@@ -722,10 +722,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 }
             }
         }
-        let heuristic_sev = match settings.severity() {
-            Severity::Error => Severity::Warning,
-            other => other,
-        };
+        let heuristic_sev = settings.severity().capped_at_warning();
         // One finding at `lines[0]`; a directive naming the path or any of `lines` lifts it.
         let report = |out: &mut GateOutcome, lines: &[usize], classes: &[&str]| {
             let line = lines[0];
@@ -859,10 +856,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             changed.contains(path)
         }
     };
-    let heuristic_sev = match settings.severity() {
-        Severity::Error => Severity::Warning,
-        other => other,
-    };
+    let heuristic_sev = settings.severity().capped_at_warning();
     for (where_, text, source) in texts {
         out.examined += 1;
         let quoting: std::collections::BTreeSet<usize> = source

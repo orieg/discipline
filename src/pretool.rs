@@ -369,6 +369,7 @@ pub fn answer(agent: Agent, verdict: &Verdict) -> HookOutput {
 /// contract. In `observe` mode a deny is said on stderr and logged, and the call passes.
 /// A check that cannot be made (a repository or lease that cannot be read) refuses an
 /// edit, never lets it through.
+#[cfg(test)]
 pub fn run(agent: Agent, stdin: &str, observe: bool) -> HookOutput {
     run_with(agent, stdin, observe, false)
 }
@@ -383,7 +384,7 @@ fn silent_pass() -> HookOutput {
     }
 }
 
-/// [`run`], and with `if_configured` a silent pass unless the payload's directory (else
+/// `run`, and with `if_configured` a silent pass unless the payload's directory (else
 /// the working directory) is in a git repository with a `discipline.toml` at its root:
 /// the guard of a user-level hook, which runs in every folder the agent opens.
 pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -> HookOutput {
@@ -804,6 +805,7 @@ pub fn parse_session_start(agent: Agent, raw: &str) -> Option<(String, Option<Pa
 /// - A live lease of another session on this worktree is left alone (said).
 /// - A branch another worktree's live lease claims is not taken; the worktree is still
 ///   leased to this session, without it (said).
+#[cfg(test)]
 pub fn session_start(agent: Agent, stdin: &str) -> HookOutput {
     session_start_with(agent, stdin, false)
 }
@@ -824,7 +826,7 @@ fn payload_dir(stdin: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// [`session_start`], and with `if_configured` a silent pass outside a repository with a
+/// `session_start`, and with `if_configured` a silent pass outside a repository with a
 /// `discipline.toml`, so a user-level hook takes no lease in a repository that has not
 /// adopted discipline.
 pub fn session_start_with(agent: Agent, stdin: &str, if_configured: bool) -> HookOutput {
