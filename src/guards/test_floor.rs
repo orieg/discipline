@@ -684,12 +684,16 @@ pub struct AstTestCount {
     /// Files with tests that were counted although runner collection was not
     /// determined, by reason.
     pub unknown_collection: std::collections::BTreeMap<String, usize>,
+    /// Files with tests that were left out because nothing tracked in the repository
+    /// could run a test in their language, by reason.
+    pub no_runner: std::collections::BTreeMap<String, usize>,
 }
 
 impl AstTestCount {
     /// As [`Self::add`], for a file runner collection gave `status` for. A file is left
-    /// out only when a parsed runner configuration excludes it; one whose collection is
-    /// not determined counts every test its pack finds, and is recorded for the notes.
+    /// out when a parsed runner configuration excludes it, or, with a note, when the
+    /// repository holds no manifest a runner of its language needs; one whose collection
+    /// is not determined counts every test its pack finds, and is recorded for the notes.
     fn add_collected(
         &mut self,
         path: &str,
@@ -703,6 +707,15 @@ impl AstTestCount {
             RunnerCollectionStatus::Collected => None,
             RunnerCollectionStatus::NotCollected => return Ok(()),
             RunnerCollectionStatus::Unknown(reason) => Some(reason),
+            RunnerCollectionStatus::NoRunner(reason) => {
+                // Not counted; the note still says how many such files hold tests.
+                let mut found = AstTestCount::default();
+                found.add(path, content()?, registry, v);
+                if found.running + found.ignored > 0 {
+                    *self.no_runner.entry(reason).or_default() += 1;
+                }
+                return Ok(());
+            }
         };
         let before = self.running + self.ignored;
         self.add(path, content()?, registry, v);
@@ -756,6 +769,11 @@ impl AstTestCount {
         for (reason, files) in &self.unknown_collection {
             notes.push(format!(
                 "{side}: runner collection unknown ({reason}): every test the language packs found in {files} file(s) is counted"
+            ));
+        }
+        for (reason, files) in &self.no_runner {
+            notes.push(format!(
+                "{side}: {reason}: the tests the language packs found in {files} file(s) are not counted"
             ));
         }
         if self.ignored > 0 {
