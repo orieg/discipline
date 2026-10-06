@@ -921,6 +921,30 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: a finding is anchored by its commit, a missing trailer by its key too",
+        || {
+            use crate::guards::commit_provenance::judge;
+            let commit = |sha: &str| crate::gitctx::CommitDetail {
+                sha: sha.to_string(),
+                author_name: "A".to_string(),
+                author_email: "a@x".to_string(),
+                committer_email: "a@x".to_string(),
+                message: "fix: x\n".to_string(),
+                parent_count: 1,
+            };
+            let required = ["Signed-off-by".to_string(), "Ticket".to_string()];
+            let found = judge(&[commit("aaaa"), commit("bbbb")], &required, &[], "");
+            let anchors: Vec<&str> = found.iter().map(|f| f.anchor.as_str()).collect();
+            Ok(anchors
+                == [
+                    "commit:aaaa:signed-off-by",
+                    "commit:aaaa:ticket",
+                    "commit:bbbb:signed-off-by",
+                    "commit:bbbb:ticket",
+                ])
+        },
+    ),
+    (
         "build-hooks: a lifecycle script gaining curl is reported, an unchanged one is not",
         || {
             use crate::gitctx::{ChangeKind, ChangedFile};

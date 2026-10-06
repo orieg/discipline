@@ -1619,6 +1619,27 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     )
                 })
                 .flatten();
+            // The mode of the agent's hook file after this run, when it is a generated
+            // file whose mode can be read: said with what was done to it.
+            let hook_file = match results.first() {
+                Some(
+                    Installed::Written(p)
+                    | Installed::AlreadyPresent(p)
+                    | Installed::Upgraded(p)
+                    | Installed::Outdated(p)
+                    | Installed::ModeDiffers(p),
+                ) => Some(p.clone()),
+                _ => None,
+            };
+            let observing = hook_file.as_ref().and_then(|p| {
+                let text = std::fs::read_to_string(p).ok()?;
+                discipline::hook::generated_mode(a.agent, a.user, &text)
+            });
+            let mode_of = |p: &std::path::Path| match observing {
+                Some(true) if hook_file.as_deref() == Some(p) => ", in observe mode",
+                Some(false) if hook_file.as_deref() == Some(p) => ", in enforcing mode",
+                _ => "",
+            };
             let mut ok = true;
             for installed in results {
                 match installed {
@@ -1630,22 +1651,47 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     }
                     Installed::AlreadyPresent(p) => {
                         println!(
-                            "{} {} already runs discipline for {}",
+                            "{} {} already runs discipline for {}{}",
                             style::green("ok:"),
                             p.display(),
-                            a.agent.id()
+                            a.agent.id(),
+                            mode_of(&p)
                         );
+                        // `hook install` only turns observe mode on; `--upgrade` keeps it.
+                        if !a.upgrade && !a.observe && mode_of(&p) == ", in observe mode" {
+                            println!(
+                                "{} {} is in observe mode and this command asked for enforcing mode; it was not changed. `hook install` only turns observe mode on: to enforce, delete the file and run this command again",
+                                style::yellow("note:"),
+                                p.display()
+                            );
+                        }
                         if let Some(why) = discipline::hook::ignored_by_git(&p) {
                             println!("{} {why}", style::yellow("warning:"));
                         }
                     }
                     Installed::Upgraded(p) => {
                         println!(
-                            "{} upgraded {} to discipline {}",
+                            "{} upgraded {} to discipline {}{}",
                             style::green("ok:"),
                             p.display(),
-                            env!("CARGO_PKG_VERSION")
+                            env!("CARGO_PKG_VERSION"),
+                            mode_of(&p)
                         );
+                    }
+                    Installed::ModeDiffers(p) => {
+                        println!(
+                            "{} {} is in enforcing mode and this command asked for observe mode; it was not changed. Run this command again with `--upgrade` to rewrite it in observe mode",
+                            style::yellow("note:"),
+                            p.display()
+                        );
+                    }
+                    Installed::ModeUnreadable(p) => {
+                        println!(
+                            "{} was written by `discipline hook install` but its mode cannot be read (its observe-mode marker line and the `--observe` flag of its commands disagree); it was not changed. Run this command again with `--upgrade --observe` to rewrite it in observe mode, or delete the file and run `discipline hook install --agent {}` to write an enforcing one",
+                            p.display(),
+                            a.agent.id()
+                        );
+                        ok = false;
                     }
                     Installed::Outdated(p) => {
                         println!(

@@ -879,7 +879,7 @@ pub fn config_changes(
     };
     let parse = |side: &str, text: &str| {
         DisciplineConfig::from_toml_str(text)
-            .map_err(|e| format!("{side}: {}", first_line(&e.to_string())))
+            .map_err(|e| format!("{side}: {}", parse_failure(&e.to_string())))
     };
     let base_cfg = match parse("parent", base) {
         Ok(c) => c,
@@ -1041,6 +1041,23 @@ pub fn marker_gate(line: &str) -> Option<&'static str> {
 
 fn first_line(s: &str) -> &str {
     s.lines().next().unwrap_or("")
+}
+
+/// A configuration parse error in one line: its first line, and the key when the parser
+/// stopped on one it does not know (a key a later release removed). Only the key's name is
+/// taken; the line that quotes the source, and any message that quotes a value, is not.
+fn parse_failure(error: &str) -> String {
+    let unknown_key = error
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .and_then(|l| l.trim().strip_prefix("unknown field `"))
+        .and_then(|rest| rest.split_once('`'))
+        .map(|(key, _)| key);
+    match unknown_key {
+        Some(key) => format!("{}: unknown key `{key}`", first_line(error)),
+        None => first_line(error).to_string(),
+    }
 }
 
 fn blob_text(repo: &Repository, tree: &git2::Tree, path: &str) -> Result<Option<String>> {
@@ -2368,6 +2385,42 @@ mod tests {
         // Removing it leaves the defaults, which is compared too.
         let strict = "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = true\nmin_tests = 40\n";
         assert!(!config_records(Some(strict), None, &info()).is_empty());
+    }
+
+    /// #599: `allow_author_review` was added and removed between two releases, so the
+    /// history of a repository that tracked `main` holds it. Both changes are reported as
+    /// unreadable, naming the side and the key; the loosening the key was is not a
+    /// `config` record. Reading a removed key again would be a design change.
+    #[test]
+    fn a_key_removed_from_commit_provenance_is_unreadable_on_the_side_that_holds_it() {
+        let head = "[meta]\nversion = 1\nname = \"t\"\n[gates.commit-provenance]\nenabled = true\n";
+        let with_key = format!("{head}allow_author_review = true\n");
+        for (base, change, side) in [
+            (head, with_key.as_str(), "change: "),
+            (with_key.as_str(), head, "parent: "),
+        ] {
+            let r = config_records(Some(base), Some(change), &info());
+            assert_eq!(r.len(), 1, "{r:?}");
+            assert_eq!(r[0].kind, "config-unreadable");
+            let detail = r[0].detail.as_deref().unwrap();
+            assert!(detail.starts_with(side), "{detail}");
+            assert!(
+                detail.ends_with(": unknown key `allow_author_review`"),
+                "{detail}"
+            );
+            assert_eq!(detail.lines().count(), 1, "{detail}");
+        }
+        // A failure that is not an unknown key keeps its first line and quotes no value.
+        let wrong_type = format!("{head}require_agent_review = \"s3cr3t\"\n");
+        let r = config_records(Some(head), Some(&wrong_type), &info());
+        let detail = r[0].detail.as_deref().unwrap();
+        assert!(detail.starts_with("change: "), "{detail}");
+        assert!(
+            !detail.contains("s3cr3t") && !detail.contains("unknown key"),
+            "{detail}"
+        );
+        // Control: the same two sides without the key record nothing.
+        assert!(config_records(Some(head), Some(head), &info()).is_empty());
     }
 
     #[test]
