@@ -815,6 +815,21 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: the trailers of every entry of a multi-commit squash are read, an indented quote is not",
+        || {
+            use crate::guards::commit_provenance::trailers;
+            let keys = |m: &str| -> Vec<String> { trailers(m).into_iter().map(|(k, _)| k).collect() };
+            let squash = "feat: x (#7)\n\n* feat: x\n\nBody.\n\nReviewed-by: A <a@x>\n\n* test: x\n\nAgent-Tool: t\n\n---------\n\nCo-authored-by: B <b@x>\n";
+            let prose = "feat: x (#7)\n\n* feat: x\n\nReviewed-by: A <a@x>\n\nprose\n\n* test: x\n";
+            let quoted = "fix: x\n\nIt ended with:\n\n    Reviewed-by: A <a@x>\n";
+            let picked = "fix: x\r\n\r\nReviewed-by: A <a@x>\r\n(cherry picked from commit 0123456)\r\n";
+            Ok(keys(squash) == ["Reviewed-by", "Agent-Tool", "Co-authored-by"]
+                && keys(prose).is_empty()
+                && keys(quoted).is_empty()
+                && keys(picked) == ["Reviewed-by"])
+        },
+    ),
+    (
         "build-hooks: a lifecycle script gaining curl is reported, an unchanged one is not",
         || {
             use crate::gitctx::{ChangeKind, ChangedFile};
@@ -1693,8 +1708,14 @@ const CASES: &[Case] = &[
                 "github:repos/o/r/commits/ddd/pulls".into(),
                 serde_json::json!({"__status": 403, "__body": {}}),
             );
+            // A 422 that says something else is a failed lookup, like the 403 (#568).
+            api.responses.insert(
+                "github:repos/o/r/commits/eee/pulls".into(),
+                serde_json::json!({"__status": 422, "__body": {"message": "Validation Failed"}}),
+            );
             Ok(commit_origin(&api, &forge, "fff").ok() == Some(CommitOrigin::NotOnForge)
-                && commit_origin(&api, &forge, "ddd").is_err())
+                && commit_origin(&api, &forge, "ddd").is_err()
+                && commit_origin(&api, &forge, "eee").is_err())
         },
     ),
     (
@@ -4706,6 +4727,44 @@ smoke_cost::set_contains
                 && names(&rule, "gates.manifest-sync.rules.watched_paths")
                 && names(&tests, "tests.paths")
                 && check_configured_globs(&good, &ids).is_ok())
+        },
+    ),
+    (
+        "configuration: a capture pattern with no group or that does not compile, and a malformed exempt_arms glob, are found before any gate runs",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::check_configured_patterns;
+            let head = "[meta]\nversion = 1\nname = \"t\"\n";
+            let load = |body: &str| DisciplineConfig::from_toml_str(&format!("{head}{body}"));
+            let ids = ["ci-integrity", "command", "bench-regression"];
+            let names = |body: &str, needle: &str| -> Result<bool> {
+                Ok(check_configured_patterns(&load(body)?, &ids)
+                    .err()
+                    .is_some_and(|e| format!("{e:#}").contains(needle)))
+            };
+            let passes = |body: &str| -> Result<bool> {
+                Ok(check_configured_patterns(&load(body)?, &ids).is_ok())
+            };
+            Ok(names(
+                "[gates.ci-integrity]\ndocumented_job_count_pattern = '\\d+ jobs'\n",
+                "gates.ci-integrity.documented_job_count_pattern",
+            )? && names(
+                "[gates.ci-integrity]\ndocumented_job_count_pattern = '(\\d+ jobs'\n",
+                "not a valid regular expression",
+            )? && names(
+                "[gates.command]\nenabled = true\ncommand = \"true\"\ncount_pattern = '\\d+ passed'\n",
+                "gates.command.count_pattern",
+            )? && names(
+                "[gates.command]\nenabled = true\n[[gates.command.commands]]\nname = \"unit\"\ncommand = \"true\"\ncount_pattern = '(a'\n",
+                "gates.command.commands[unit].count_pattern",
+            )? && names(
+                "[gates.bench-regression]\nenabled = true\nexempt_arms = [\"heap[\"]\n",
+                "gates.bench-regression.exempt_arms",
+            )? && passes(
+                "[gates.ci-integrity]\nenabled = false\ndocumented_job_count_pattern = '(a'\n",
+            )? && passes(
+                "[gates.ci-integrity]\ndocumented_job_count_pattern = '(\\d+) jobs'\n[gates.command]\nenabled = true\ncommand = \"true\"\ncount_pattern = '(\\d+) passed'\n[gates.bench-regression]\nenabled = true\nexempt_arms = [\"*.heap.*\", \"map_get/random\"]\n",
+            )?)
         },
     ),
     (

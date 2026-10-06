@@ -419,6 +419,10 @@ pub struct ForgeError {
     pub attempts: u32,
     /// The HTTP status the forge answered with, when it answered at all.
     pub status: Option<u16>,
+    /// The `message` of the forge's JSON error body ([`error_body_message`]), when it sent
+    /// one: what the forge said, apart from the status it said it with. For deciding what
+    /// a refusal means; `message` is the text to print.
+    pub forge_message: Option<String>,
 }
 
 impl ForgeError {
@@ -428,12 +432,19 @@ impl ForgeError {
             message: message.into(),
             attempts: 1,
             status: None,
+            forge_message: None,
         }
     }
 
     /// The same error, recording the HTTP status the forge answered with.
     pub fn with_status(mut self, status: u16) -> Self {
         self.status = Some(status);
+        self
+    }
+
+    /// The same error, recording the `message` of the forge's error body.
+    pub fn with_forge_message(mut self, message: Option<String>) -> Self {
+        self.forge_message = message;
         self
     }
 
@@ -634,6 +645,36 @@ pub fn refusal_message(body: &serde_json::Value) -> Option<String> {
         .map(|m| m.chars().take(300).collect())
 }
 
+/// The `message` of a forge's JSON error body, when it is a non-empty string: the field
+/// GitHub, Gitea, Forgejo and GitLab all put their reason in. At most 300 characters.
+/// Unlike [`refusal_message`] it reads that one field only, so a caller that decides by
+/// it is not answered by a field the forge uses for something else.
+pub fn error_body_message(body: &serde_json::Value) -> Option<String> {
+    body.get("message")
+        .and_then(|m| m.as_str())
+        .filter(|m| !m.is_empty())
+        .map(|m| m.chars().take(300).collect())
+}
+
+/// How GitHub's answer for a commit the repository does not have begins.
+///
+/// `GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls` ("List pull requests associated
+/// with a commit") answers such a commit with HTTP 422 and the body
+/// `{"message": "No commit found for SHA: <sha>", "documentation_url": ..., "status": "422"}`,
+/// the body "Get a commit" gives for a ref it cannot resolve. GitHub's REST reference
+/// lists the status and does not spell the message out, so the match is on how it
+/// begins. The status alone says only that the request could not be processed: a
+/// validation failure, a proxy and a replica that has not yet seen a push answer 422 too.
+const GITHUB_NO_COMMIT: &str = "No commit found for SHA";
+
+/// Whether a 422 from GitHub says the repository does not have the commit.
+fn github_says_no_commit(e: &ForgeError) -> bool {
+    e.status == Some(422)
+        && e.forge_message
+            .as_deref()
+            .is_some_and(|m| m.starts_with(GITHUB_NO_COMMIT))
+}
+
 /// The paging query for `page` (1-based) of a list endpoint. Gitea and Forgejo read
 /// `limit` and ignore `per_page`; their largest page is 50 unless the instance says
 /// otherwise.
@@ -817,9 +858,9 @@ impl ForgeApi for CannedApi {
             .map_err(|e| ForgeError::new(ForgeErrorKind::Unavailable, e))?;
         match classify_status(status, &headers) {
             None => Ok(body),
-            Some(kind) => {
-                Err(ForgeError::new(kind, canned_refusal(status, path, &body)).with_status(status))
-            }
+            Some(kind) => Err(ForgeError::new(kind, canned_refusal(status, path, &body))
+                .with_status(status)
+                .with_forge_message(error_body_message(&body))),
         }
     }
 
@@ -1339,25 +1380,26 @@ impl HttpApi<'_> {
                     message: format!("more than {limit} forge requests in one run; stopping"),
                     attempts: attempt,
                     status: None,
+                    forge_message: None,
                 });
             }
-            let (kind, message, headers, status) =
+            let (kind, message, headers, status, forge_message) =
                 match self.exchange(forge, url, base_host, insecure_ok, post) {
                     Ok(a) => match classify_status(a.status, &a.headers) {
                         None => return Ok(a),
                         Some(kind) => {
-                            let message = serde_json::from_str::<serde_json::Value>(&a.body)
-                                .ok()
-                                .and_then(|v| refusal_message(&v))
-                                .unwrap_or_default();
+                            let body = serde_json::from_str::<serde_json::Value>(&a.body).ok();
+                            let message =
+                                body.as_ref().and_then(refusal_message).unwrap_or_default();
                             let text = format!("{base_host} answered HTTP {} {message}", a.status)
                                 .trim_end()
                                 .to_string();
-                            (kind, text, a.headers, Some(a.status))
+                            let said = body.as_ref().and_then(error_body_message);
+                            (kind, text, a.headers, Some(a.status), said)
                         }
                     },
                     Err(e) if e.kind == ForgeErrorKind::Unavailable => {
-                        (e.kind, e.message, Vec::new(), None)
+                        (e.kind, e.message, Vec::new(), None, None)
                     }
                     Err(mut e) => {
                         e.attempts = attempt;
@@ -1379,6 +1421,7 @@ impl HttpApi<'_> {
                         message,
                         attempts: attempt,
                         status,
+                        forge_message,
                     })
                 }
             }
@@ -1546,8 +1589,10 @@ pub enum CommitOrigin {
     Merged(MergedPull),
     /// The forge has the commit, and no merged pull request carries it (a direct push).
     DirectPush,
-    /// The forge does not have the commit (GitHub answers 422 "No commit found for SHA"):
-    /// a commit made only locally, such as a test fixture. No pull request can carry it.
+    /// The forge says it does not have the commit (GitHub answers 422 with the message
+    /// "No commit found for SHA: ..."): a commit made only locally, such as a test
+    /// fixture. No pull request can carry it. A 422 that says anything else, or nothing,
+    /// is a lookup that failed, never this.
     NotOnForge,
 }
 
@@ -1609,8 +1654,16 @@ pub fn commit_origin(api: &dyn ForgeApi, forge: &Forge, sha: &str) -> Result<Com
                     return Ok(CommitOrigin::DirectPush)
                 }
                 // GitHub's answer for a commit it does not have; a definite answer, not a
-                // failed lookup.
-                Err(e) if e.status == Some(422) => return Ok(CommitOrigin::NotOnForge),
+                // failed lookup. It is told by the body, never by the status (#568).
+                Err(e) if github_says_no_commit(&e) => return Ok(CommitOrigin::NotOnForge),
+                // Any other 422 is a lookup that failed. The description is fixed: a 422
+                // body can repeat what the request carried, so none of it is printed.
+                Err(e) if e.status == Some(422) => {
+                    let short: String = sha.chars().take(10).collect();
+                    return Err(format!(
+                        "the forge answered HTTP 422 for commit {short} without saying the commit is missing"
+                    ));
+                }
                 Err(e) => return Err(e.detail()),
             };
             let list = list
@@ -2501,6 +2554,143 @@ mod tests {
         // Any other refusal is still a failed lookup.
         assert!(commit_origin(&api, &gh, "ddd").unwrap_err().contains("403"));
         assert!(commit_origin(&api, &gh, "eee").unwrap_err().contains("500"));
+    }
+
+    #[test]
+    fn a_422_is_read_by_what_its_body_says_never_by_the_status() {
+        use super::{commit_origin, CannedApi, CommitOrigin};
+        let f = |kind: ForgeKind| Forge {
+            kind,
+            url: "https://forge.example".into(),
+            repo: "o/r".into(),
+        };
+        let gh = f(ForgeKind::GitHub);
+        let answer = |forge: &Forge, path: &str, body: serde_json::Value| {
+            let mut api = CannedApi::default();
+            api.responses.insert(
+                format!("{}:{path}", forge.kind.label()),
+                serde_json::json!({"__status": 422, "__body": body}),
+            );
+            commit_origin(&api, forge, "abcdef0123456789")
+        };
+        let gh_path = "repos/o/r/commits/abcdef0123456789/pulls";
+        // GitHub's answer for a commit it does not have, with and without the id.
+        for body in [
+            serde_json::json!({"message": "No commit found for SHA: abcdef0123456789",
+                "documentation_url": "https://docs.github.com/rest", "status": "422"}),
+            serde_json::json!({"message": "No commit found for SHA"}),
+        ] {
+            assert_eq!(
+                answer(&gh, gh_path, body.clone()).unwrap(),
+                CommitOrigin::NotOnForge,
+                "{body}"
+            );
+        }
+        // Any other 422 is a lookup that failed, and nothing the body said is repeated.
+        for body in [
+            serde_json::json!({"message": "Validation Failed MARKER", "errors": [{"code": "custom"}]}),
+            serde_json::json!({"message": "MARKER: No commit found for SHA: abcdef0123456789"}),
+            serde_json::json!({"message": "no commit found for sha: abcdef0123456789"}),
+            serde_json::json!({"message": {"text": "No commit found for SHA"}}),
+            serde_json::json!({"error": "No commit found for SHA"}),
+            serde_json::json!({"errors": ["No commit found for SHA"]}),
+            serde_json::json!("No commit found for SHA"),
+            serde_json::json!({}),
+            serde_json::Value::Null,
+        ] {
+            let e = answer(&gh, gh_path, body.clone()).unwrap_err();
+            assert_eq!(
+                e,
+                "the forge answered HTTP 422 for commit abcdef0123 without saying the commit is missing",
+                "{body}"
+            );
+        }
+        // Control: Gitea, Forgejo and GitLab have no such answer; a 422 from them was and
+        // is a failed lookup, GitHub's words included.
+        for (forge, path) in [
+            (
+                f(ForgeKind::Gitea),
+                "repos/o/r/commits/abcdef0123456789/pull".to_string(),
+            ),
+            (
+                f(ForgeKind::Forgejo),
+                "repos/o/r/commits/abcdef0123456789/pull".to_string(),
+            ),
+            (
+                f(ForgeKind::GitLab),
+                "projects/o%2Fr/repository/commits/abcdef0123456789/merge_requests".to_string(),
+            ),
+        ] {
+            let e = answer(
+                &forge,
+                &path,
+                serde_json::json!({"message": "No commit found for SHA: abcdef0123456789"}),
+            )
+            .unwrap_err();
+            assert!(e.contains("422"), "{}: {e}", forge.kind.label());
+        }
+    }
+
+    #[test]
+    fn merged_pull_on_forge_tells_a_missing_commit_from_a_failed_lookup() {
+        use super::{merged_pull_on_forge, CannedApi};
+        let gh = Forge {
+            kind: ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        let mut put = |sha: &str, v: serde_json::Value| {
+            api.responses
+                .insert(format!("github:repos/o/r/commits/{sha}/pulls"), v);
+        };
+        put(
+            "aaaaaaaaaaaaaaaa",
+            serde_json::json!([{"number": 12, "merged_at": "2026-09-21T00:00:00Z",
+                "user": {"login": "agent"}, "body": "b", "head": {"sha": "h12"}}]),
+        );
+        put("bbbbbbbbbbbbbbbb", serde_json::json!([]));
+        put("cccccccccccccccc", serde_json::Value::Null);
+        put(
+            "dddddddddddddddd",
+            serde_json::json!({"__status": 422, "__body": {"message": "No commit found for SHA: dddddddddddddddd"}}),
+        );
+        put(
+            "eeeeeeeeeeeeeeee",
+            serde_json::json!({"__status": 422, "__body": {"message": "Validation Failed MARKER"}}),
+        );
+        put(
+            "ffffffffffffffff",
+            serde_json::json!({"__status": 403, "__body": {"message": "Resource not accessible"}}),
+        );
+        assert_eq!(
+            merged_pull_on_forge(&api, &gh, "aaaaaaaaaaaaaaaa")
+                .unwrap()
+                .map(|p| p.number),
+            Some(12)
+        );
+        // A direct push, as an empty list and as a 404.
+        assert_eq!(
+            merged_pull_on_forge(&api, &gh, "bbbbbbbbbbbbbbbb").unwrap(),
+            None
+        );
+        assert_eq!(
+            merged_pull_on_forge(&api, &gh, "cccccccccccccccc").unwrap(),
+            None
+        );
+        // The forge says it does not have the commit: an error that says so.
+        assert_eq!(
+            merged_pull_on_forge(&api, &gh, "dddddddddddddddd").unwrap_err(),
+            "the forge does not have commit dddddddddd (not pushed, or another repository)"
+        );
+        // Another 422: an error that does not claim the commit is missing.
+        assert_eq!(
+            merged_pull_on_forge(&api, &gh, "eeeeeeeeeeeeeeee").unwrap_err(),
+            "the forge answered HTTP 422 for commit eeeeeeeeee without saying the commit is missing"
+        );
+        assert!(merged_pull_on_forge(&api, &gh, "ffffffffffffffff")
+            .unwrap_err()
+            .contains("403"));
     }
 
     #[test]

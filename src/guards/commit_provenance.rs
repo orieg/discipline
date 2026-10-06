@@ -4,7 +4,8 @@
 //! Trailers are self-asserted text, so this is hygiene: it makes a missing statement
 //! visible, it does not prove one. The signals a change cannot forge are the forge's
 //! review state and commit signatures; `discipline doctor` reads those from branch
-//! protection, and `directives.require_approval` reads the reviews.
+//! protection. `directives.require_approval` reads the reviews only for a change that
+//! carries an override directive.
 //!
 //! Default off: which trailers a repository requires is its own policy.
 
@@ -16,41 +17,94 @@ use anyhow::Result;
 
 pub const GATE: &str = "commit-provenance";
 
-/// Trailer lines at the end of a commit message: every line of the trailing paragraphs
-/// in which each line is `Key: value`, in the order written. Case of the key is kept.
+/// Trailer lines of a commit message, in the order written. Case of the key is kept.
 ///
-/// A trailer block is usually one paragraph, but a forge's squash merge can split it:
-/// GitHub writes each trailer it does not recognise as its own paragraph and appends its
-/// own `Signed-off-by:` / `Co-authored-by:` block last. Reading only the last paragraph
-/// would then drop a `Reviewed-by:` the author wrote. The run stops at the first paragraph,
-/// read from the end, that holds a line that is not a trailer.
+/// The baseline is git's (`git interpret-trailers`): the last paragraph, when every line
+/// of it is `Key: value`. Two forge layouts widen it, because a squash merge moves the
+/// trailers an author wrote away from the end of the message:
+///
+/// - A squash of one commit can split one block into paragraphs: GitHub writes each
+///   trailer it does not recognise as its own paragraph and appends its own
+///   `Signed-off-by:` / `Co-authored-by:` block last. So the trailing run of paragraphs
+///   in which every line is a trailer is read, back to the first paragraph that holds any
+///   other line.
+/// - A squash of several commits lists them: a paragraph that starts with `* ` at the
+///   start of a line opens an entry (`* subject`, then that commit's body and trailers),
+///   and a paragraph that is one line of dashes separates the last entry from the block
+///   the forge gathers. The run of trailer paragraphs that ends each entry, directly
+///   before the next entry or the dashed line, is read the same way as the run that ends
+///   the message.
+///
+/// The subject paragraph is never read. A line that starts with whitespace continues the
+/// trailer above it, as in git, and a paragraph that opens with one is prose. The line
+/// `git cherry-pick -x` appends to a trailer block is skipped. CRLF line endings are read
+/// as LF, and a line of whitespace separates paragraphs like an empty one.
 pub fn trailers(message: &str) -> Vec<(String, String)> {
-    let body = message.trim_end();
+    // `str::lines` ends a line at LF or CRLF, and a line of whitespace ends a paragraph.
+    let mut paragraphs: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in message.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current);
+    }
+    let mut out = Vec::new();
+    // Trailer paragraphs seen since the last prose paragraph: kept when an entry or the
+    // message ends right after them, dropped when prose follows.
+    let mut run: Vec<(String, String)> = Vec::new();
     // The subject paragraph is never a trailer block, whatever it looks like.
-    let Some((_, rest)) = body.split_once("\n\n") else {
-        return Vec::new();
-    };
-    let mut blocks = Vec::new();
-    let paragraphs: Vec<&str> = rest.split("\n\n").collect();
-    for paragraph in paragraphs.into_iter().rev() {
-        if paragraph.trim().is_empty() {
+    for paragraph in paragraphs.iter().skip(1) {
+        if ends_a_squash_entry(paragraph) {
+            out.append(&mut run);
             continue;
         }
         match trailer_block(paragraph) {
-            Some(block) => blocks.push(block),
-            None => break,
+            Some(block) => run.extend(block),
+            None => run.clear(),
         }
     }
-    blocks.into_iter().rev().flatten().collect()
+    out.append(&mut run);
+    out
+}
+
+/// Whether a paragraph is a boundary in a forge's message for a squash of several
+/// commits: the `* subject` paragraph that opens the next entry, or the line of dashes
+/// before the trailers the forge gathers.
+fn ends_a_squash_entry(paragraph: &[&str]) -> bool {
+    let first = paragraph[0];
+    first.starts_with("* ")
+        || (paragraph.len() == 1 && first.len() >= 3 && first.chars().all(|c| c == '-'))
+}
+
+/// `(cherry picked from commit <sha>)`, which `git cherry-pick -x` appends to the last
+/// paragraph of a message, trailer block or not.
+fn is_cherry_pick_line(line: &str) -> bool {
+    line.strip_prefix("(cherry picked from commit ")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .is_some_and(|sha| sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// The `Key: value` lines of one paragraph, or `None` when any line is not a trailer:
 /// that paragraph is prose.
-fn trailer_block(paragraph: &str) -> Option<Vec<(String, String)>> {
-    let mut out = Vec::new();
-    for line in paragraph.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+fn trailer_block(paragraph: &[&str]) -> Option<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for raw in paragraph {
+        let line = raw.trim();
+        if is_cherry_pick_line(line) {
+            continue;
+        }
+        if raw.starts_with([' ', '\t']) {
+            // A continuation of the trailer above; with none above, an indented block.
+            let (_, value) = out.last_mut()?;
+            value.push(' ');
+            value.push_str(line);
             continue;
         }
         let (k, v) = line.split_once(':')?;
@@ -179,13 +233,29 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
             .push("not evaluated: no non-merge commits between the base and HEAD".to_string());
         return Ok(out);
     }
-    out.examined = non_merges.len();
     // An empty review key switches the agent rule off in `judge`.
     let review_key = if settings.require_agent_review {
         settings.review_trailer.as_str()
     } else {
         ""
     };
+    if settings.required_trailers.is_empty() {
+        let review_off = if review_key.is_empty() {
+            Some("`require_agent_review` is false")
+        } else if settings.agent_markers.is_empty() {
+            Some("`agent_markers` is empty, so no commit can be read as agent-produced")
+        } else {
+            None
+        };
+        if let Some(why) = review_off {
+            out.notes.push(format!(
+                "not evaluated: no rule is on (`required_trailers` is empty and {why}), so none of the {} commit(s) between the base and HEAD was checked",
+                non_merges.len()
+            ));
+            return Ok(out);
+        }
+    }
+    out.examined = non_merges.len();
     for f in judge(
         &commits,
         &settings.required_trailers,
@@ -318,6 +388,141 @@ mod tests {
         // Without a review key the agent rule is off.
         let agent = commit("Ada", "ada@x", "feat: x\n\nAgent-Tool: coder 1.2\n");
         assert!(judge(&[agent], &[], &markers, "").is_empty());
+    }
+
+    /// GitHub's message for a squash of two commits, as it writes it: the pull request
+    /// title, one `* subject` entry per commit followed by that commit's body and trailers,
+    /// then a dashed rule and the `Signed-off-by:` / `Co-authored-by:` lines it gathers.
+    fn squash(first_trailers: &str, second_trailers: &str, gathered: &str) -> String {
+        let mut m = format!(
+            "feat: parser (#7)\n\n* feat: parser\n\nFirst body, wrapped\nover two lines.\n\n\
+             {first_trailers}\n\n* test: cover the parser\n\nSecond body.\n\n{second_trailers}\n"
+        );
+        if !gathered.is_empty() {
+            m.push_str(&format!("\n---------\n\n{gathered}\n"));
+        }
+        m
+    }
+
+    fn keys(message: &str) -> Vec<String> {
+        trailers(message).into_iter().map(|(k, _)| k).collect()
+    }
+
+    #[test]
+    fn trailers_of_every_entry_of_a_multi_commit_squash_are_read() {
+        let m = squash(
+            "Reviewed-by: Rev Iewer <rev@example.com>\nAgent-Tool: coder 1.2",
+            "Ticket: 12",
+            "Signed-off-by: Dev Eloper <dev@example.com>\nCo-authored-by: Dev Eloper <dev@example.com>",
+        );
+        assert_eq!(
+            keys(&m),
+            [
+                "Reviewed-by",
+                "Agent-Tool",
+                "Ticket",
+                "Signed-off-by",
+                "Co-authored-by"
+            ]
+        );
+        // Without the gathered block the last entry's trailers end the message.
+        let m = squash("Agent-Tool: coder 1.2", "Ticket: 12", "");
+        assert_eq!(keys(&m), ["Agent-Tool", "Ticket"]);
+        // Entries that are a subject and nothing else.
+        assert_eq!(
+            keys("feat: x (#7)\n\n* feat: x\n\n* test: x\n\n---------\n\nCo-authored-by: D <d@example.com>\n"),
+            ["Co-authored-by"]
+        );
+    }
+
+    #[test]
+    fn a_squash_entry_reads_only_the_paragraphs_that_end_it() {
+        // Control: inside an entry the rule is the one for a whole message. A `Key: value`
+        // paragraph followed by prose is body text, in the first entry as in the last.
+        let m = "feat: x (#7)\n\n* feat: x\n\nAgent-Tool: coder 1.2\n\nProse after it.\n\n\
+                 * test: x\n\nReviewed-by: R <r@example.com>\n\nProse after it.\n\nTicket: 12\n";
+        assert_eq!(keys(m), ["Ticket"]);
+        // Control: a bullet inside a paragraph, an indented bullet and a dashed line inside
+        // a paragraph start nothing.
+        let m = "feat: x\n\nAgent-Tool: coder 1.2\n\nNotes:\n* one\n  * two\n-----\n\nTicket: 12\n";
+        assert_eq!(keys(m), ["Ticket"]);
+    }
+
+    #[test]
+    fn the_agent_rule_reads_a_squash_in_both_directions() {
+        let markers = v(&["Agent-Tool:", "Co-authored-by: Claude"]);
+        // The review sits in the first entry, the marker in the gathered block.
+        let reviewed = squash(
+            "Reviewed-by: Rev Iewer <rev@example.com>",
+            "Ticket: 12",
+            "Co-authored-by: Claude <agent@example.com>",
+        );
+        let c = commit("Dev Eloper", "dev@example.com", &reviewed);
+        assert!(judge(&[c], &[], &markers, "Reviewed-by").is_empty());
+        // The marker sits in the first entry and nowhere else.
+        let marked = squash(
+            "Agent-Tool: coder 1.2",
+            "Ticket: 12",
+            "Signed-off-by: Dev Eloper <dev@example.com>",
+        );
+        let c = commit("Dev Eloper", "dev@example.com", &marked);
+        let f = judge(&[c], &[], &markers, "Reviewed-by");
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].kind.title, "Agent Commit Without Review");
+        // A person reviewing their own agent-assisted commit, squashed.
+        let own = squash(
+            "Reviewed-by: Dev Eloper <dev@example.com>\nAgent-Tool: coder 1.2",
+            "Ticket: 12",
+            "Signed-off-by: Dev Eloper <dev@example.com>",
+        );
+        let c = commit("Dev Eloper", "dev@example.com", &own);
+        let f = judge(&[c], &[], &markers, "Reviewed-by");
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].kind.title, "Agent Commit Reviewed By Its Author");
+    }
+
+    #[test]
+    fn an_indented_line_is_a_continuation_and_never_a_trailer() {
+        // A quoted block of another commit's trailers, indented.
+        let quoted = "fix: x\n\nThe reverted commit ended with:\n\n    Signed-off-by: Dev Eloper <dev@example.com>\n    Agent-Tool: coder 1.2\n";
+        assert!(trailers(quoted).is_empty());
+        // git folds an indented line into the trailer above it.
+        let folded = "fix: x\n\nReviewed-by: Rev Iewer\n  <rev@example.com>\nTicket: 12\n";
+        assert_eq!(
+            trailers(folded),
+            [
+                (
+                    "Reviewed-by".to_string(),
+                    "Rev Iewer <rev@example.com>".to_string()
+                ),
+                ("Ticket".to_string(), "12".to_string())
+            ]
+        );
+        // Control: the same lines unindented are trailers.
+        assert_eq!(
+            keys("fix: x\n\nSigned-off-by: Dev Eloper <dev@example.com>\nAgent-Tool: coder 1.2\n"),
+            ["Signed-off-by", "Agent-Tool"]
+        );
+    }
+
+    #[test]
+    fn a_cherry_pick_line_and_crlf_line_endings_do_not_void_the_block() {
+        let picked = "fix: x\n\nBody.\n\nSigned-off-by: Dev Eloper <dev@example.com>\n\
+                      (cherry picked from commit 0123456789abcdef0123456789abcdef01234567)\n";
+        assert_eq!(keys(picked), ["Signed-off-by"]);
+        // Control: any other non-trailer line still makes the paragraph prose.
+        let prose = "fix: x\n\nSigned-off-by: Dev Eloper <dev@example.com>\n(see the tracker)\n";
+        assert!(trailers(prose).is_empty());
+        let crlf = "fix: x\r\n\r\nBody.\r\n\r\nSigned-off-by: Dev Eloper <dev@example.com>\r\n";
+        assert_eq!(
+            trailers(crlf),
+            [(
+                "Signed-off-by".to_string(),
+                "Dev Eloper <dev@example.com>".to_string()
+            )]
+        );
+        // Control: the subject of a CRLF message is still never a trailer.
+        assert!(trailers("fix: x\r\n").is_empty());
     }
 
     #[test]
