@@ -1254,6 +1254,44 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ast: a NUL byte ends no comment, so the test after it is read",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let Some(pack) = reg.find_pack("tests/t.rs") else {
+                return Ok(true);
+            };
+            let file = |between: &str| {
+                format!("#[test]\nfn a() {{ assert_eq!(f(), 1); }}\n{between}\n#[test]\nfn b() {{ assert_eq!(g(), 2); }}\n")
+            };
+            let comment = pack.extract("tests/t.rs", &file("// c\0c"), &v)?;
+            let stray = pack.extract("tests/t.rs", &file("\0"), &v)?;
+            Ok(comment.tests.len() == 2
+                && !comment.has_parse_errors
+                && comment.tests[1].line == 5
+                && stray.tests.len() == 2
+                && stray.has_parse_errors)
+        },
+    ),
+    #[cfg(feature = "lang-swift")]
+    (
+        "swift: a file ending in a directive reads as the same file with a line break",
+        || {
+            use crate::ast::LanguagePack;
+            let pack = crate::ast::swift::SwiftPack;
+            let v = AssertVocabulary::default();
+            let body = "#if DEBUG\nfinal class ATests: XCTestCase {\n  func testA() { XCTAssertEqual(f(), 1) }\n}\n#endif";
+            let bare = pack.extract("Tests/ATests.swift", body, &v)?;
+            let ended = pack.extract("Tests/ATests.swift", &format!("{body}\n"), &v)?;
+            let broken = pack.extract("Tests/ATests.swift", "#if", &v)?;
+            Ok(format!("{bare:?}") == format!("{ended:?}")
+                && bare.tests.len() == 1
+                && bare.tests[0].total_asserts == 1
+                && !bare.has_parse_errors
+                && broken.has_parse_errors)
+        },
+    ),
+    (
         "dispatch tables: helpers named in an array a test loops over resolve like calls",
         || {
             let reg = crate::ast::default_registry();
@@ -4447,9 +4485,9 @@ test tests::c: test
             let mut features = HashSet::new();
             features.insert("known_feat".to_string());
 
-            let t_known = parser.parse("#[cfg(feature = \"known_feat\")]", None).unwrap();
-            let t_unknown = parser.parse("#[cfg(feature = \"unknown_feat\")]", None).unwrap();
-            let t_any = parser.parse("#[cfg(any())]", None).unwrap();
+            let t_known = crate::ast::source_text::parse(&mut parser, "#[cfg(feature = \"known_feat\")]").unwrap();
+            let t_unknown = crate::ast::source_text::parse(&mut parser, "#[cfg(feature = \"unknown_feat\")]").unwrap();
+            let t_any = crate::ast::source_text::parse(&mut parser, "#[cfg(any())]").unwrap();
 
             let (known, _) = evaluate_rust_cfg(
                 t_known.root_node().child(0).unwrap(),

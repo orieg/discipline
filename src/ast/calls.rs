@@ -520,7 +520,7 @@ mod tests {
         let read = |language: tree_sitter::Language, src: &str| {
             let mut parser = Parser::new();
             parser.set_language(&language).unwrap();
-            let tree = parser.parse(src, None).unwrap();
+            let tree = crate::ast::source_text::parse(&mut parser, src).unwrap();
             super::code_text(tree.root_node(), src)
         };
         let js = "f(`a ${g(\"x\")} b`, 'c') // d\n";

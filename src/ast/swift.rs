@@ -5,11 +5,75 @@
 //! the `.disabled` trait), `// swiftlint:disable` as an escape hatch, `catch { }` and a
 //! discarded `try?` as swallowed errors.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+
+/// The Swift parser, reachable only through a text that ends in a line break.
+///
+/// tree-sitter-swift 0.7.3 matches a compiler directive after `#` against the table `if`,
+/// `elseif`, `else`, `endif` one character at a time (`src/scanner.c`,
+/// `find_possible_compiler_directive`). A candidate stays possible while the character the
+/// lexer is looking at equals the candidate's byte at the current index, and that test is
+/// made on the byte that ends the candidate's string too. The lexer's character is 0 at
+/// the end of the file and at a NUL byte, so there the terminator compares equal, the
+/// index moves on, and the next pass reads the byte after the string: index 3 of `if`,
+/// 5 of `else`, 6 of `endif`, 7 of `elseif`, and further for as long as the bytes it
+/// finds are 0 (#621). That needs the character 0 right after a whole directive, which is
+/// a file ending in `#if`, `#else`, `#elseif` or `#endif` with no line break after it, or
+/// a NUL byte after one.
+///
+/// So the parser is given neither. The text it parses ends in a line break, so the end of
+/// the file follows a line break and never a directive, and `crate::ast::source_text`
+/// replaces every NUL byte in the copy the grammar reads. A file that already ends in a
+/// line break is parsed as it is. One that does not is read as the same file with the
+/// line break added: no byte offset or line of the file moves, and the tree of a
+/// well-formed file is the same below its root. The pack reads node text from the
+/// line-ended text, because a node the grammar marks as missing at the end of a broken
+/// file can start at the added byte.
+///
+/// The compiler holds this: `LineEndedSource` has a private field, so outside this module
+/// the only way to make one is `line_ended`, and `parse`, the only function that names
+/// the grammar, takes nothing else.
+mod swift_tree {
+    use std::borrow::Cow;
+
+    use anyhow::{anyhow, Result};
+
+    /// A source that ends in a line break.
+    pub(super) struct LineEndedSource<'a>(Cow<'a, str>);
+
+    impl LineEndedSource<'_> {
+        pub(super) fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    /// `src`, with a line break added when it does not end in one.
+    pub(super) fn line_ended(src: &str) -> LineEndedSource<'_> {
+        LineEndedSource(if src.ends_with('\n') {
+            Cow::Borrowed(src)
+        } else {
+            Cow::Owned(format!("{src}\n"))
+        })
+    }
+
+    /// The syntax tree of the text; its byte ranges are the text's.
+    pub(super) fn parse(text: &LineEndedSource) -> Result<tree_sitter::Tree> {
+        debug_assert!(
+            text.0.ends_with('\n'),
+            "the Swift scanner must not reach the end of the file right after a directive"
+        );
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_swift::LANGUAGE.into())
+            .map_err(|e| anyhow!("failed to load the Swift grammar: {e}"))?;
+        crate::ast::source_text::parse(&mut parser, &text.0)
+            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))
+    }
+}
 
 /// Swift language pack implementing [`LanguagePack`].
 pub struct SwiftPack;
@@ -39,13 +103,10 @@ impl LanguagePack for SwiftPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_swift::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Swift grammar: {e}"))?;
-        let tree = parser
-            .parse(src, None)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        // Everything below reads the line-ended text: the tree's byte ranges are its own.
+        let text = swift_tree::line_ended(src);
+        let src = text.as_str();
+        let tree = swift_tree::parse(&text)?;
         let root = tree.root_node();
 
         let mut extractor = SwiftExtractor {
@@ -804,5 +865,202 @@ final class WrapTests: XCTestCase {
             (1, 1, 1)
         );
         assert_eq!(by("testSemaphore"), 0);
+    }
+
+    /// What `find_possible_compiler_directive` (tree-sitter-swift 0.7.3, `src/scanner.c`)
+    /// reads for the text that follows a `#`: how many times it reads a directive's string
+    /// at an index past its terminating byte. The lexer's character is 0 at the end of
+    /// the text and at a NUL byte. A byte past a string is taken as unequal to the
+    /// character, which ends that candidate, so the count is a lower bound.
+    fn reads_past_a_directive_string(after_hash: &[u8]) -> usize {
+        const DIRECTIVES: [&[u8]; 4] = [b"if\0", b"elseif\0", b"else\0", b"endif\0"];
+        let mut possible = [true; 4];
+        let mut past = 0;
+        let mut index = 0;
+        loop {
+            let lookahead = after_hash.get(index).copied().unwrap_or(0);
+            for (candidate, directive) in DIRECTIVES.iter().enumerate() {
+                if !possible[candidate] {
+                    continue;
+                }
+                let Some(&expected) = directive.get(index) else {
+                    past += 1;
+                    possible[candidate] = false;
+                    continue;
+                };
+                if expected != lookahead {
+                    possible[candidate] = false;
+                }
+            }
+            if !possible.contains(&true) {
+                return past;
+            }
+            index += 1;
+        }
+    }
+
+    /// The reads past a directive string over every `#` of `text`.
+    fn reads_past_in(text: &str) -> usize {
+        text.match_indices('#')
+            .map(|(at, _)| reads_past_a_directive_string(&text.as_bytes()[at + 1..]))
+            .sum()
+    }
+
+    /// The text the grammar is handed for `src`.
+    fn parsed_text(src: &str) -> String {
+        crate::ast::source_text::parse_text(swift_tree::line_ended(src).as_str()).into_owned()
+    }
+
+    /// The scan reads past a directive's string exactly when the character 0 follows a
+    /// whole directive: the end of the file, or a NUL byte. The text the parser is given
+    /// has neither. Controls: a directive followed by anything else, and a `#` that is
+    /// not a directive, read nothing past a string.
+    #[test]
+    fn the_parser_is_never_given_a_directive_followed_by_the_character_zero() {
+        for directive in ["if", "elseif", "else", "endif"] {
+            let at_end = format!("let a = 1\n#{directive}");
+            let before_nul = format!("#{directive}\0 X\nlet a = 1\n");
+            assert_eq!(reads_past_in(&at_end), 1, "{at_end:?}");
+            assert_eq!(reads_past_in(&before_nul), 1, "{before_nul:?}");
+            for src in [at_end, before_nul] {
+                let text = parsed_text(&src);
+                assert_eq!(reads_past_in(&text), 0, "{text:?}");
+                assert!(text.ends_with('\n') && !text.contains('\0'), "{text:?}");
+            }
+            for control in [
+                format!("#{directive}\n"),
+                format!("#{directive} X\n"),
+                format!("#{directive}x"),
+            ] {
+                assert_eq!(reads_past_in(&control), 0, "{control:?}");
+            }
+        }
+        for control in ["#", "#e", "#els", "#selector(f)", "#\0", "let s = #\"x\"#"] {
+            assert_eq!(reads_past_in(control), 0, "{control:?}");
+        }
+    }
+
+    #[test]
+    fn a_source_gains_a_line_break_only_when_it_has_none() {
+        assert_eq!(swift_tree::line_ended("#endif").as_str(), "#endif\n");
+        assert_eq!(swift_tree::line_ended("").as_str(), "\n");
+        assert_eq!(swift_tree::line_ended("#endif\r").as_str(), "#endif\r\n");
+        for kept in ["#endif\n", "\n", "a\r\n"] {
+            assert_eq!(swift_tree::line_ended(kept).as_str(), kept);
+        }
+    }
+
+    /// A file that ends in a directive, with and without the line break, reads the same:
+    /// tests, their lines and assertions, functions, and no parse error.
+    #[test]
+    fn a_file_ending_in_a_directive_reads_as_the_same_file_with_a_line_break() {
+        let body = "import XCTest\n#if DEBUG\nfinal class ATests: XCTestCase {\n    func testA() {\n        XCTAssertEqual(f(), 1)\n    }\n}\n#endif";
+        let bare = facts("Tests/ATests.swift", body);
+        let ended = facts("Tests/ATests.swift", &format!("{body}\n"));
+        assert_eq!(format!("{bare:?}"), format!("{ended:?}"));
+        assert!(!bare.has_parse_errors);
+        assert_eq!(bare.tests.len(), 1);
+        assert_eq!(
+            (bare.tests[0].line, bare.tests[0].total_asserts),
+            (4, 1),
+            "{:?}",
+            bare.tests[0]
+        );
+        // A broken file whose missing token the grammar places at the added byte still
+        // reads, and is named as parsed with errors.
+        for broken in ["#if", "let a = \"open", "class A {\n  func f() {", "#"] {
+            assert!(
+                facts("Sources/A.swift", broken).has_parse_errors,
+                "{broken:?}"
+            );
+        }
+    }
+
+    /// The fuzz seeds for this pack (`fuzz/corpus/language_packs/swift_*`): each one
+    /// selects this pack in the fuzz target, makes the unguarded scan read past a
+    /// directive string, and is read by the pack without that.
+    #[test]
+    fn the_fuzz_seeds_reach_the_directive_scan_and_are_read_without_it() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let target =
+            std::fs::read_to_string(format!("{root}/fuzz/fuzz_targets/language_packs.rs")).unwrap();
+        let paths: Vec<&str> = target
+            .split_once("const PATHS: &[&str] = &[")
+            .and_then(|(_, rest)| rest.split_once("];"))
+            .map(|(list, _)| list.split('"').skip(1).step_by(2).collect())
+            .expect("the fuzz target's path table");
+        let mut seeds = 0;
+        for entry in std::fs::read_dir(format!("{root}/fuzz/corpus/language_packs")).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.starts_with("swift_") {
+                continue;
+            }
+            seeds += 1;
+            let bytes = std::fs::read(&path).unwrap();
+            let (selector, body) = bytes.split_first().unwrap();
+            assert_eq!(
+                paths[(selector & 0x1f) as usize % paths.len()],
+                "m.swift",
+                "{name}"
+            );
+            let src = String::from_utf8_lossy(body);
+            assert!(reads_past_in(&src) > 0, "{name} does not reproduce");
+            assert_eq!(reads_past_in(&parsed_text(&src)), 0, "{name}");
+            let file = if selector & 0x20 != 0 {
+                "tests/m.swift"
+            } else {
+                "src/m.swift"
+            };
+            let read = facts(file, &src);
+            if name == "swift_endif_at_end_of_file" || name == "swift_nul_after_endif" {
+                assert_eq!(read.tests.len(), 1, "{name}");
+                assert_eq!(read.tests[0].total_asserts, 1, "{name}");
+            }
+        }
+        assert_eq!(seeds, 6);
+    }
+
+    /// `swift_tree::parse` takes a `LineEndedSource`, whose field is private to that
+    /// module, so the compiler refuses any other text. What it cannot refuse is a second
+    /// parser built somewhere else: the grammar is named once in `src/`, inside
+    /// `swift_tree`, and this file builds no other parser.
+    #[test]
+    fn the_swift_grammar_is_named_only_inside_the_guarded_parser() {
+        let grammar = ["tree_sitter", "_swift"].concat();
+        let parser = ["Parser", "::new"].concat();
+        let mut named = Vec::new();
+        let mut dirs = vec![std::path::PathBuf::from(format!(
+            "{}/src",
+            env!("CARGO_MANIFEST_DIR")
+        ))];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    named.extend(
+                        text.match_indices(&grammar)
+                            .map(|(at, _)| (path.clone(), text[..at].lines().count())),
+                    );
+                }
+            }
+        }
+        assert_eq!(named.len(), 1, "{named:?}");
+        assert!(named[0].0.ends_with("src/ast/swift.rs"), "{named:?}");
+        let here = std::fs::read_to_string(&named[0].0).unwrap();
+        let module = here
+            .split_once("\nmod swift_tree {\n")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .map(|(body, _)| body)
+            .expect("the module");
+        assert!(module.contains(&grammar));
+        assert!(module.contains("fn parse(text: &LineEndedSource)"));
+        assert!(module.contains("pub(super) struct LineEndedSource<'a>(Cow<'a, str>);"));
+        assert!(module.contains("crate::ast::source_text::parse(&mut parser, &text.0)"));
+        assert_eq!(here.matches(&parser).count(), 1);
+        assert_eq!(module.matches(&parser).count(), 1);
     }
 }

@@ -85,8 +85,7 @@ impl CPack {
         let src = masked.as_deref().unwrap_or(src);
         let guarded = super::c_macros::mask_cplusplus_guards(src);
         let src = guarded.as_deref().unwrap_or(src);
-        let tree = parser
-            .parse(src, None)
+        let tree = crate::ast::source_text::parse(&mut parser, src)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
@@ -152,8 +151,7 @@ impl LanguagePack for CppPack {
             .map_err(|e| anyhow!("failed to load the C++ grammar: {e}"))?;
         let masked = mask_macros(src, vocab);
         let src = masked.as_deref().unwrap_or(src);
-        let tree = parser
-            .parse(src, None)
+        let tree = crate::ast::source_text::parse(&mut parser, src)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
