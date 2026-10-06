@@ -489,6 +489,102 @@ impl TestHelperFacts {
     }
 }
 
+impl ParsedFileFacts {
+    /// Records a non-test function as a helper, with the calls its body makes.
+    pub fn push_helper(&mut self, helper: TestHelperFacts, calls: Vec<String>) {
+        // Kept by position: a helper recorded without its calls would shift every later one.
+        self.helper_calls
+            .resize(self.test_helpers.len(), Vec::new());
+        self.test_helpers.push(helper);
+        self.helper_calls.push(calls);
+    }
+
+    /// Each helper with the checks of the same-file helpers it calls counted in, up to
+    /// `HELPER_DEPTH` calls from it; a call back into the chain is not followed again.
+    ///
+    /// This is what a helper checks for the tests that call it, so a helper that stops
+    /// calling a checking helper has lost those checks, and one whose checks move into a
+    /// helper it calls has lost none. A call resolves to the helper it names exactly, else
+    /// to one whose last `::` / `.` segment it names; of several such helpers (two types
+    /// with a method of the same name, overloads) the one with the fewest checks counts,
+    /// because which one runs is not known here.
+    pub fn resolve_tracked_helpers(&mut self) {
+        self.tracked_helpers = (0..self.test_helpers.len())
+            .map(|i| self.tracked_helper(i, &mut Vec::new()))
+            .collect();
+    }
+
+    fn tracked_helper(&self, at: usize, path: &mut Vec<usize>) -> TestHelperFacts {
+        let mut out = self.test_helpers[at].clone();
+        if path.len() + 1 >= HELPER_DEPTH {
+            return out;
+        }
+        path.push(at);
+        for call in self.helper_calls.get(at).into_iter().flatten() {
+            let Some(callee) = self.called_helper(call, path) else {
+                continue;
+            };
+            out.total_asserts += callee.total_asserts;
+            out.strong_asserts += callee.strong_asserts;
+            out.tautologies += callee.tautologies;
+            out.fatal_asserts += callee.fatal_asserts;
+        }
+        path.pop();
+        out
+    }
+
+    /// The helper `call` runs, with its own callees counted in; `None` when it names no
+    /// helper of this file, or only helpers already on `path`.
+    fn called_helper(&self, call: &str, path: &mut Vec<usize>) -> Option<TestHelperFacts> {
+        if call.contains('|') {
+            // A callee chosen at the call (`a|b`): only what every choice checks is sure.
+            let mut sure: Option<TestHelperFacts> = None;
+            for choice in call.split('|') {
+                let f = self.called_helper(choice, path)?;
+                sure = Some(match sure {
+                    None => f,
+                    Some(mut s) => {
+                        s.total_asserts = s.total_asserts.min(f.total_asserts);
+                        s.strong_asserts = s.strong_asserts.min(f.strong_asserts);
+                        s.tautologies = s.tautologies.min(f.tautologies);
+                        s.fatal_asserts = s.fatal_asserts.min(f.fatal_asserts);
+                        s
+                    }
+                });
+            }
+            return sure;
+        }
+        let named = |exact: bool| -> Vec<usize> {
+            (0..self.test_helpers.len())
+                .filter(|i| {
+                    let name = &self.test_helpers[*i].name;
+                    if exact {
+                        call == name
+                    } else {
+                        helper_call_matches(call, helper_leaf(name))
+                    }
+                })
+                .collect()
+        };
+        let mut candidates = named(true);
+        if candidates.is_empty() {
+            candidates = named(false);
+        }
+        candidates.retain(|i| !path.contains(i));
+        candidates
+            .into_iter()
+            .map(|i| self.tracked_helper(i, path))
+            .min_by_key(|h| (h.effective_asserts(), h.strong_asserts, h.fatal_asserts))
+    }
+}
+
+/// A helper's own name without the type or module it is recorded under
+/// (`Base::check`, `Suite.check`).
+pub fn helper_leaf(name: &str) -> &str {
+    let name = name.rsplit("::").next().unwrap_or(name);
+    name.rsplit('.').next().unwrap_or(name)
+}
+
 /// How many calls deep a test's same-file helpers are followed: a C or C++ test `main`
 /// drives check functions that call one `require`-style helper that aborts, and a
 /// script's `self_test` calls a function that calls the validator that raises.
@@ -1054,6 +1150,12 @@ pub struct ParsedFileFacts {
     pub tests: Vec<TestFn>,
     /// Assertions and checks inside non-test helper functions defined in this file.
     pub test_helpers: Vec<TestHelperFacts>,
+    /// The calls each helper's body makes, by position in `test_helpers`
+    /// ([`ParsedFileFacts::tracked_helpers`] follows them).
+    pub helper_calls: Vec<Vec<String>>,
+    /// `test_helpers` with the checks of the helpers each one calls counted in, once
+    /// [`ParsedFileFacts::resolve_tracked_helpers`] has run; empty before.
+    pub tracked_helpers: Vec<TestHelperFacts>,
     pub unsafe_sites: Vec<UnsafeSite>,
     pub escape_hatches: Vec<EscapeHatchSite>,
     /// Every function with a body, and what the body amounts to (`Fact::Functions`).
@@ -1085,6 +1187,8 @@ impl Default for ParsedFileFacts {
         Self {
             tests: Vec::new(),
             test_helpers: Vec::new(),
+            helper_calls: Vec::new(),
+            tracked_helpers: Vec::new(),
             unsafe_sites: Vec::new(),
             escape_hatches: Vec::new(),
             functions: Vec::new(),
@@ -1773,6 +1877,205 @@ mod tests {
             let t = &facts.tests[0];
             assert_eq!((t.total_asserts, t.strong_asserts), (1, 1), "{t:?}");
         }
+    }
+
+    /// #562: every pack records its helpers with the calls they make, so a helper counts
+    /// the helpers it calls. `check` holds one assertion and calls `check_body`, which
+    /// holds two: `check` is recorded with one and tracked with three.
+    #[test]
+    fn every_pack_records_a_helper_with_the_helpers_it_calls() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "tests/helpers.py",
+                "def check(r):\n    assert r.a == 1\n    check_body(r)\n\ndef check_body(r):\n    assert r.b == 2\n    assert r.c == 3\n",
+            ),
+            (
+                "tests/common/mod.rs",
+                "pub fn check(r: &R) {\n    assert_eq!(r.a, 1);\n    check_body(r);\n}\n\npub fn check_body(r: &R) {\n    assert_eq!(r.b, 2);\n    assert_eq!(r.c, 3);\n}\n",
+            ),
+            (
+                "helpers_test.go",
+                "package x\n\nfunc check(t *testing.T, r R) {\n\tif r.A != 1 {\n\t\tt.Fatal(\"a\")\n\t}\n\tcheck_body(t, r)\n}\n\nfunc check_body(t *testing.T, r R) {\n\tif r.B != 2 {\n\t\tt.Fatal(\"b\")\n\t}\n\tif r.C != 3 {\n\t\tt.Fatal(\"c\")\n\t}\n}\n",
+            ),
+            (
+                "tests/test-utils.ts",
+                "export function check(r: R) {\n  expect(r.a).toBe(1);\n  check_body(r);\n}\n\nexport function check_body(r: R) {\n  expect(r.b).toBe(2);\n  expect(r.c).toBe(3);\n}\n",
+            ),
+            (
+                "src/test/java/Checks.java",
+                "class Checks {\n    static void check(R r) {\n        assertEquals(1, r.a);\n        check_body(r);\n    }\n\n    static void check_body(R r) {\n        assertEquals(2, r.b);\n        assertEquals(3, r.c);\n    }\n}\n",
+            ),
+            (
+                "tests/Checks.cs",
+                "public class Checks\n{\n    public static void check(R r)\n    {\n        Assert.Equal(1, r.A);\n        check_body(r);\n    }\n\n    public static void check_body(R r)\n    {\n        Assert.Equal(2, r.B);\n        Assert.Equal(3, r.C);\n    }\n}\n",
+            ),
+            (
+                "src/test/kotlin/Checks.kt",
+                "fun check(r: R) {\n    assertEquals(1, r.a)\n    check_body(r)\n}\n\nfun check_body(r: R) {\n    assertEquals(2, r.b)\n    assertEquals(3, r.c)\n}\n",
+            ),
+            (
+                "tests/AppTests/Checks.swift",
+                "func check(_ r: R) {\n    XCTAssertEqual(r.a, 1)\n    check_body(r)\n}\n\nfunc check_body(_ r: R) {\n    XCTAssertEqual(r.b, 2)\n    XCTAssertEqual(r.c, 3)\n}\n",
+            ),
+            (
+                "src/test/scala/Checks.scala",
+                "object Checks {\n  def check(r: R): Unit = {\n    assert(r.a == 1)\n    check_body(r)\n  }\n\n  def check_body(r: R): Unit = {\n    assert(r.b == 2)\n    assert(r.c == 3)\n  }\n}\n",
+            ),
+            (
+                "test/support/checks.rb",
+                "module Checks\n  def check(r)\n    assert_equal 1, r.a\n    check_body(r)\n  end\n\n  def check_body(r)\n    assert_equal 2, r.b\n    assert_equal 3, r.c\n  end\nend\n",
+            ),
+            (
+                "tests/Checks.php",
+                "<?php\n\ntrait Checks\n{\n    protected function check($r): void\n    {\n        $this->assertSame(1, $r->a);\n        $this->check_body($r);\n    }\n\n    protected function check_body($r): void\n    {\n        $this->assertSame(2, $r->b);\n        $this->assertSame(3, $r->c);\n    }\n}\n",
+            ),
+            (
+                "tests/checks.cc",
+                "void check(const R& r) {\n  EXPECT_EQ(r.a, 1);\n  check_body(r);\n}\n\nvoid check_body(const R& r) {\n  EXPECT_EQ(r.b, 2);\n  EXPECT_EQ(r.c, 3);\n}\n",
+            ),
+            (
+                "tests/Checks.m",
+                "void check(R *r) {\n    XCTAssertEqual(r.a, 1);\n    check_body(r);\n}\n\nvoid check_body(R *r) {\n    XCTAssertEqual(r.b, 2);\n    XCTAssertEqual(r.c, 3);\n}\n",
+            ),
+        ];
+        let registry = default_registry();
+        for (path, src) in cases {
+            let pack = registry.find_pack(path).unwrap();
+            let mut facts = pack
+                .extract(path, src, &AssertVocabulary::default())
+                .unwrap();
+            facts.resolve_tracked_helpers();
+            let counts = |helpers: &[TestHelperFacts]| -> Vec<(String, usize)> {
+                helpers
+                    .iter()
+                    .map(|h| (helper_leaf(&h.name).to_string(), h.effective_asserts()))
+                    .collect()
+            };
+            assert_eq!(
+                counts(&facts.test_helpers),
+                vec![("check".to_string(), 1), ("check_body".to_string(), 2)],
+                "{path}: own"
+            );
+            assert_eq!(
+                counts(&facts.tracked_helpers),
+                vec![("check".to_string(), 3), ("check_body".to_string(), 2)],
+                "{path}: tracked"
+            );
+            assert_eq!(facts.helper_calls.len(), 2, "{path}");
+        }
+    }
+
+    /// #562: a method of a type is a helper under `Type.method` in Go and JS / TS, and a
+    /// trait's method under `Trait::method` in PHP.
+    #[test]
+    fn methods_of_a_type_are_recorded_as_helpers() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "helpers_test.go",
+                "package x\n\ntype Suite struct{}\n\nfunc (s *Suite) check(t *testing.T, r R) {\n\tif r.A != 1 {\n\t\tt.Fatal(\"a\")\n\t}\n}\n",
+                "Suite.check",
+            ),
+            (
+                "tests/test-utils.ts",
+                "export class Checker {\n  check(r: R) {\n    expect(r.a).toBe(1);\n  }\n}\n",
+                "Checker.check",
+            ),
+            (
+                "tests/Checks.php",
+                "<?php\n\ntrait Checks\n{\n    protected function check($r): void\n    {\n        $this->assertSame(1, $r->a);\n    }\n}\n",
+                "Checks::check",
+            ),
+        ];
+        let registry = default_registry();
+        for (path, src, name) in cases {
+            let facts = registry
+                .find_pack(path)
+                .unwrap()
+                .extract(path, src, &AssertVocabulary::default())
+                .unwrap();
+            let recorded: Vec<(&str, usize)> = facts
+                .test_helpers
+                .iter()
+                .map(|h| (h.name.as_str(), h.effective_asserts()))
+                .collect();
+            assert_eq!(recorded, vec![(*name, 1)], "{path}");
+        }
+    }
+
+    fn tracked(name: &str, total: usize) -> TestHelperFacts {
+        TestHelperFacts {
+            name: name.to_string(),
+            total_asserts: total,
+            strong_asserts: total,
+            ..Default::default()
+        }
+    }
+
+    fn tracked_counts(helpers: &[(&str, usize, &[&str])]) -> Vec<usize> {
+        let mut facts = ParsedFileFacts::default();
+        for (name, total, calls) in helpers {
+            facts.push_helper(
+                tracked(name, *total),
+                calls.iter().map(|c| c.to_string()).collect(),
+            );
+        }
+        facts.resolve_tracked_helpers();
+        facts
+            .tracked_helpers
+            .iter()
+            .map(|h| h.effective_asserts())
+            .collect()
+    }
+
+    /// #562: a tracked helper counts the helpers it calls `HELPER_DEPTH` calls deep, does
+    /// not follow a call back into its own chain, takes the fewest checks among helpers of
+    /// one name, and what every choice of a chosen callee runs.
+    #[test]
+    fn a_tracked_helper_counts_what_it_calls_within_bounds() {
+        // a -> b -> c -> d: `a` reaches `c`, not `d`.
+        assert_eq!(
+            tracked_counts(&[
+                ("a", 1, &["b"]),
+                ("b", 2, &["c"]),
+                ("c", 4, &["d"]),
+                ("d", 8, &[]),
+            ]),
+            vec![7, 14, 12, 8]
+        );
+        // A cycle is followed once.
+        assert_eq!(
+            tracked_counts(&[("a", 1, &["b"]), ("b", 2, &["a"])]),
+            vec![3, 3]
+        );
+        // Two methods named `check`: the call counts the one with fewer checks.
+        assert_eq!(
+            tracked_counts(&[
+                ("run", 0, &["check"]),
+                ("A::check", 5, &[]),
+                ("B::check", 2, &[]),
+            ]),
+            vec![2, 5, 2]
+        );
+        // A scoped call names its helper exactly.
+        assert_eq!(
+            tracked_counts(&[
+                ("run", 0, &["A::check"]),
+                ("A::check", 5, &[]),
+                ("B::check", 2, &[]),
+            ]),
+            vec![5, 5, 2]
+        );
+        // A chosen callee: what both run; a choice that is no helper leaves nothing.
+        assert_eq!(
+            tracked_counts(&[("run", 0, &["a|b"]), ("a", 3, &[]), ("b", 1, &[])]),
+            vec![1, 3, 1]
+        );
+        assert_eq!(
+            tracked_counts(&[("run", 0, &["a|other"]), ("a", 3, &[])]),
+            vec![0, 3]
+        );
+        // A call that names no helper of the file counts nothing.
+        assert_eq!(tracked_counts(&[("run", 1, &["elsewhere"])]), vec![1]);
     }
 
     #[test]

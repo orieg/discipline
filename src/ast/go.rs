@@ -144,8 +144,8 @@ pub fn is_go_test_path(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
     let filename = p.rsplit('/').next().unwrap_or(&p);
     filename.ends_with("_test.go")
-        || filename.ends_with("testutil.go")
-        || filename.ends_with("testutils.go")
+        || super::functions::names_file(filename, "testutil.go")
+        || super::functions::names_file(filename, "testutils.go")
         || p.starts_with("test/")
         || p.contains("/test/")
         || p.starts_with("tests/")
@@ -209,6 +209,8 @@ impl<'a> GoExtractor<'a> {
         for child in root.children(&mut cursor) {
             if child.kind() == "function_declaration" {
                 self.visit_function(child);
+            } else if child.kind() == "method_declaration" && self.is_test_path {
+                self.visit_method(child);
             }
         }
     }
@@ -255,45 +257,87 @@ impl<'a> GoExtractor<'a> {
             self.facts.tests.push(test_fn);
             self.test_calls.push(direct_calls);
         } else if self.is_test_path {
-            if let Some(body) = node.child_by_field_name("body") {
-                let mut helper_fn = TestFn::default();
-                let mut dummy_calls = Vec::new();
-                self.scan_block(body, &mut helper_fn, func_name, &mut dummy_calls);
-                helper_fn.total_asserts += super::count_failure_exits(
-                    body,
-                    self.src,
-                    &["call_expression"],
-                    &["panic("],
-                    &["func_literal"],
-                );
-                let facts = super::HelperFacts {
-                    total_asserts: helper_fn.total_asserts,
-                    strong_asserts: helper_fn.strong_asserts,
-                    tautologies: helper_fn.tautologies,
-                    fatal_asserts: helper_fn.fatal_asserts,
-                    wraps: super::forwarding_wrapper_callee(
-                        body,
-                        &GO_WRAPPER,
-                        &GO_LOCALS,
-                        &dummy_calls,
-                        self.src,
-                    ),
-                };
-                self.helpers.insert(func_name.to_string(), facts);
-                let line = node.start_position().row + 1;
-                let end_line = node.end_position().row + 1;
-                self.facts.test_helpers.push(super::TestHelperFacts {
-                    name: func_name.to_string(),
-                    line,
-                    end_line,
-                    total_asserts: helper_fn.total_asserts,
-                    strong_asserts: helper_fn.strong_asserts,
-                    tautologies: helper_fn.tautologies,
-                    fatal_asserts: helper_fn.fatal_asserts,
-                    helper_checks: 0,
-                });
-            }
+            self.record_helper(node, func_name.to_string(), true);
         }
+    }
+
+    /// A method of a type in a test file (`func (s Suite) check(t *testing.T)`): a helper
+    /// tracked under `Type.method`. A call through a receiver is not resolved to it, since
+    /// the receiver's type is not known where the call is read.
+    fn visit_method(&mut self, node: Node) {
+        let method = node
+            .child_by_field_name("name")
+            .map(|n| self.text(n))
+            .unwrap_or("");
+        let receiver = node
+            .child_by_field_name("receiver")
+            .and_then(|r| Self::first_of_kind(r, "type_identifier"))
+            .map(|n| self.text(n))
+            .unwrap_or("");
+        if method.is_empty() || receiver.is_empty() {
+            return;
+        }
+        self.record_helper(node, format!("{receiver}.{method}"), false);
+    }
+
+    fn first_of_kind<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'t>> = node.children(&mut cursor).collect();
+        children
+            .into_iter()
+            .find_map(|c| Self::first_of_kind(c, kind))
+    }
+
+    /// Records a non-test function or method as a helper; `resolvable` when a test's
+    /// `name(...)` call in this file runs it.
+    fn record_helper(&mut self, node: Node, name: String, resolvable: bool) {
+        let Some(body) = node.child_by_field_name("body") else {
+            return;
+        };
+        let mut helper_fn = TestFn::default();
+        let mut dummy_calls = Vec::new();
+        self.scan_block(body, &mut helper_fn, &name, &mut dummy_calls);
+        helper_fn.total_asserts += super::count_failure_exits(
+            body,
+            self.src,
+            &["call_expression"],
+            &["panic("],
+            &["func_literal"],
+        );
+        if resolvable {
+            let facts = super::HelperFacts {
+                total_asserts: helper_fn.total_asserts,
+                strong_asserts: helper_fn.strong_asserts,
+                tautologies: helper_fn.tautologies,
+                fatal_asserts: helper_fn.fatal_asserts,
+                wraps: super::forwarding_wrapper_callee(
+                    body,
+                    &GO_WRAPPER,
+                    &GO_LOCALS,
+                    &dummy_calls,
+                    self.src,
+                ),
+            };
+            self.helpers.insert(name.clone(), facts);
+        }
+        let line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+        self.facts.push_helper(
+            super::TestHelperFacts {
+                name,
+                line,
+                end_line,
+                total_asserts: helper_fn.total_asserts,
+                strong_asserts: helper_fn.strong_asserts,
+                tautologies: helper_fn.tautologies,
+                fatal_asserts: helper_fn.fatal_asserts,
+                helper_checks: 0,
+            },
+            dummy_calls,
+        );
     }
 
     fn is_benchmark_signature(&self, func_node: Node) -> bool {
