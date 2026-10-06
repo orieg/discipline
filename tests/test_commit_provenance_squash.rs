@@ -187,7 +187,7 @@ fn a_person_reviewing_their_own_agent_assisted_commit_is_reported_in_a_squash() 
 }
 
 #[test]
-fn a_required_trailer_in_any_entry_of_a_squash_counts() {
+fn a_required_trailer_is_needed_in_each_entry_of_a_squash() {
     const CFG: &str = "required_trailers = [\"Ticket\"]\nrequire_agent_review = false\n";
     let run = check_one(
         CFG,
@@ -197,13 +197,35 @@ fn a_required_trailer_in_any_entry_of_a_squash_counts() {
             "Signed-off-by: Dev Eloper <dev@example.com>",
         ),
     );
+    // The first entry carries it and the second does not: one finding, for the second.
+    assert_eq!(
+        titles(&run),
+        ["Commit Trailer Missing"],
+        "{:?}",
+        run.violations("commit-provenance")
+    );
+    let message = run.violations("commit-provenance")[0]["message"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    assert!(message.contains("entry 2 of 2"), "{message}");
+
+    // Control: every entry carries it.
+    let run = check_one(
+        CFG,
+        &squash(
+            "Ticket: 12\nSigned-off-by: Dev Eloper <dev@example.com>",
+            "Ticket: 13\nSigned-off-by: Dev Eloper <dev@example.com>",
+            "Signed-off-by: Dev Eloper <dev@example.com>",
+        ),
+    );
     assert!(
         titles(&run).is_empty(),
         "{:?}",
         run.violations("commit-provenance")
     );
 
-    // Control: no entry carries it.
+    // No entry carries it: one finding for each.
     let run = check_one(
         CFG,
         &squash(
@@ -212,7 +234,10 @@ fn a_required_trailer_in_any_entry_of_a_squash_counts() {
             "Signed-off-by: Dev Eloper <dev@example.com>",
         ),
     );
-    assert_eq!(titles(&run), ["Commit Trailer Missing"]);
+    assert_eq!(
+        titles(&run),
+        ["Commit Trailer Missing", "Commit Trailer Missing"]
+    );
 }
 
 #[test]

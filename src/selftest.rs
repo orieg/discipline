@@ -1190,6 +1190,50 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: a required trailer is judged for each entry of a squash, and for the whole message when the entries cannot be placed",
+        || {
+            use crate::guards::commit_provenance::{judge, squash_entries, Entries};
+            let commit = |message: &str| crate::gitctx::CommitDetail {
+                sha: "1".repeat(40),
+                author_name: "A".to_string(),
+                author_email: "a@x".to_string(),
+                committer_email: "a@x".to_string(),
+                message: message.to_string(),
+                parent_count: 1,
+            };
+            let required = ["Signed-off-by".to_string()];
+            let found = |message: &str| judge(&[commit(message)], &required, &[], "");
+            let half = "feat: x (#7)\n\n* feat: x\n\nSigned-off-by: A <a@x>\n\n* test: x\n\nBody.\n\n---------\n\nSigned-off-by: A <a@x>\n";
+            let both = half.replace("Body.", "Signed-off-by: A <a@x>");
+            // The same entries under a subject with no pull request number: a list.
+            let unplaced = half.replace(" (#7)", "");
+            let one = found(half);
+            Ok(one.len() == 1
+                && one[0].entry == Some(2)
+                && one[0].what.contains("`test: x`")
+                && one[0].anchor.ends_with(":signed-off-by:entry:2")
+                && found(&both).is_empty()
+                && found(&unplaced).is_empty()
+                && matches!(squash_entries(&unplaced), Entries::Undelimited(_))
+                && squash_entries("fix: x\n\n* one\n* two\n") == Entries::None)
+        },
+    ),
+    (
+        "audit: a configuration key a later release removed is set aside by name, and a name that was never a key is refused",
+        || {
+            use crate::config::DisciplineConfig;
+            let head = "[meta]\nversion = 1\nname = \"t\"\n[gates.commit-provenance]\n";
+            let removed = format!("{head}allow_author_review = true\n");
+            let never = format!("{head}never_a_key = true\n");
+            let (_, set_aside) = DisciplineConfig::from_history_toml_str(&removed)?;
+            Ok(set_aside.len() == 1
+                && set_aside[0].0 == "gates.commit-provenance.allow_author_review"
+                && DisciplineConfig::from_toml_str(&removed).is_err()
+                && DisciplineConfig::from_history_toml_str(&never).is_err()
+                && DisciplineConfig::from_history_toml_str(head)?.1.is_empty())
+        },
+    ),
+    (
         "commit-provenance: a finding is anchored by its commit, a missing trailer by its key too",
         || {
             use crate::guards::commit_provenance::judge;
