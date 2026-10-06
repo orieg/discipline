@@ -1431,6 +1431,65 @@ mod tests {
         }
     }
 
+    /// #565: the rule above is restated by each pack's `is_test_path` trait
+    /// method, which the base-anchored classification calls. This reaches every
+    /// override through the registry, with a positive and a negative path each.
+    #[cfg(all(
+        feature = "lang-rust",
+        feature = "lang-javascript",
+        feature = "lang-python",
+        feature = "lang-go",
+        feature = "lang-java",
+        feature = "lang-csharp",
+        feature = "lang-c",
+        feature = "lang-cpp",
+        feature = "lang-php",
+        feature = "lang-ruby",
+        feature = "lang-kotlin",
+        feature = "lang-swift",
+        feature = "lang-scala",
+        feature = "lang-objc"
+    ))]
+    #[test]
+    fn every_pack_answers_is_test_path_through_the_registry() {
+        let reg = default_registry();
+        let cases: &[(&str, &str, bool)] = &[
+            ("go", "pkg/a_test.go", true),
+            ("go", "pkg/a.go", false),
+            ("java", "src/main/java/TestHelper.java", true),
+            ("java", "src/main/java/Helper.java", false),
+            ("csharp", "src/TestHelper.cs", true),
+            ("csharp", "src/Helper.cs", false),
+            ("python", "src/test_a.py", true),
+            ("python", "src/a.py", false),
+            ("kotlin", "src/main/kotlin/RepoSpec.kt", true),
+            ("kotlin", "src/main/kotlin/Repo.kt", false),
+            ("swift", "Sources/App/CartTests.swift", true),
+            ("swift", "Sources/App/Cart.swift", false),
+            ("scala", "src/main/scala/CartSuite.scala", true),
+            ("scala", "src/main/scala/Cart.scala", false),
+            ("objc", "AppTests/CartTests.m", true),
+            ("objc", "App/Cart.m", false),
+            ("php", "src/test_a.php", true),
+            ("php", "src/a.php", false),
+            ("ruby", "spec/a.rb", true),
+            ("ruby", "src/a.rb", false),
+            ("c", "src/smoke_foo.c", true),
+            ("c", "src/foo.c", false),
+            ("cpp", "src/BarTest.cpp", true),
+            ("cpp", "src/Bar.cpp", false),
+            ("javascript", "web/a.test.js", true),
+            ("javascript", "web/a.js", false),
+            ("rust", "benches/a.rs", true),
+            ("rust", "src/a.rs", false),
+        ];
+        for (id, path, expected) in cases {
+            let pack = reg.find_pack(path).expect(path);
+            assert_eq!(pack.id(), *id, "{path}");
+            assert_eq!(pack.is_test_path(path), *expected, "{path}");
+        }
+    }
+
     #[test]
     fn language_dispatch_is_by_extension() {
         assert_eq!(language_for("src/a.rs"), Some(Language::Rust));

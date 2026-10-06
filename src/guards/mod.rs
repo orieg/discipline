@@ -103,23 +103,63 @@ pub fn unread_note(path: &str) -> String {
 
 /// Base-anchored classification for one changed file, shared by the gates that
 /// read whole-file and per-function test scope (`error-swallowing`,
-/// `stub-bodies`): a file that exists on the base side is classified by its
-/// base path, so a rename cannot move production code into test scope. Files
-/// the change adds, and renames that change the extension or the language, are
-/// classified by their head path: the extension also selects the grammar a pack
-/// parses with, so the base path is only used when both sides have the same
-/// extension (compared case-sensitively).
+/// `stub-bodies`): a file that was production code on the base side stays
+/// production code through a rename, so a rename cannot move it into test scope.
+/// A file that was test code on the base side, and a file the change adds, are
+/// classified by their head path.
+///
+/// The extension also selects the grammar a pack parses with, so a rename that
+/// changes the extension or the language is never classified by the base path
+/// itself: a production file is classified by its base path carrying the head
+/// extension ([`production_path_for`]), which keeps the head grammar.
 pub struct BaseAnchored {
     /// Path to pass to `pack.extract` for classification; the reporting path
     /// stays `file.path`.
     pub classify_path: String,
-    /// A same-language rename out of test scope into it: the caller in
-    /// `error-swallowing` reports it once as `test-path-reclassification`;
-    /// `stub-bodies` skips it (it already judges the same file's bodies).
+    /// A rename of production code into a path a pack's convention reads as
+    /// test code: the caller in `error-swallowing` reports it once as
+    /// `test-path-reclassification`; `stub-bodies` skips it (it already judges
+    /// the same file's bodies).
     pub reclassified: bool,
-    /// A rename across languages or extensions: classification keeps the
-    /// head-path behaviour; the caller records this as a gate note.
+    /// A rename across languages or extensions; the caller records this as a
+    /// gate note.
     pub language_changed_note: Option<String>,
+    /// A rename of production code, extension unchanged, into a path that only
+    /// `[tests] paths` reads as test code: it stays production code and no
+    /// finding says so, so the caller records this as a gate note.
+    pub declared_scope_note: Option<String>,
+}
+
+/// A path the head-side pack parses with the grammar of `head_path` and reads
+/// as production code, for a file that was production code at `base_path`: the
+/// base path with the head extension, or a bare file name with that extension
+/// when the head pack's convention reads even that as test code (`Spec.java`
+/// to `tests/Spec.kt`). `None` when there is no such path: the head path has
+/// no extension, or a `[tests] paths` glob covers every file of the extension.
+fn production_path_for(
+    base_path: &str,
+    head_path: &str,
+    head_pack: &dyn crate::ast::LanguagePack,
+    registry: &crate::ast::LanguageRegistry,
+    declared_test_paths: &[String],
+) -> Option<String> {
+    let head_ext = crate::ast::extension(head_path)?;
+    let with_head_ext = match crate::ast::extension(base_path) {
+        Some(base_ext) => format!(
+            "{}{head_ext}",
+            &base_path[..base_path.len() - base_ext.len()]
+        ),
+        None => format!("{base_path}.{head_ext}"),
+    };
+    [with_head_ext, format!("renamed.{head_ext}")]
+        .into_iter()
+        .find(|candidate| {
+            registry
+                .find_pack(candidate)
+                .is_some_and(|p| p.id() == head_pack.id())
+                && !head_pack.is_test_path(candidate)
+                && !crate::ast::functions::declared_test_path(candidate, declared_test_paths)
+        })
 }
 
 pub fn base_anchored_classification(
@@ -127,47 +167,80 @@ pub fn base_anchored_classification(
     registry: &crate::ast::LanguageRegistry,
     declared_test_paths: &[String],
 ) -> BaseAnchored {
+    let by_head_path = |language_changed_note: Option<String>| BaseAnchored {
+        classify_path: file.path.clone(),
+        reclassified: false,
+        language_changed_note,
+        declared_scope_note: None,
+    };
     if file.old_path == file.path {
-        return BaseAnchored {
-            classify_path: file.path.clone(),
-            reclassified: false,
-            language_changed_note: None,
-        };
+        return by_head_path(None);
     }
-    let same_language = registry
-        .find_pack(&file.path)
-        .zip(registry.find_pack(&file.old_path))
-        .is_some_and(|(head, base)| head.id() == base.id());
+    let by_new_path = || {
+        format!(
+            "`{}` was renamed from `{}` to another language or extension; classified by its new path",
+            file.path, file.old_path
+        )
+    };
+    let Some(head_pack) = registry.find_pack(&file.path) else {
+        return by_head_path(Some(by_new_path()));
+    };
+    let base_pack = registry.find_pack(&file.old_path);
+    let same_language = base_pack.is_some_and(|base| base.id() == head_pack.id());
     let same_extension = crate::ast::extension(&file.path) == crate::ast::extension(&file.old_path);
-    if !same_language || !same_extension {
+    let declared =
+        |path: &str| crate::ast::functions::declared_test_path(path, declared_test_paths);
+    // Whether the path moved into test scope does not depend on the grammar: the base
+    // path is judged by the pack that read it there, or by the head pack when no pack
+    // read it (`notes.txt` to `test_notes.py`).
+    let base_by_convention = base_pack.unwrap_or(head_pack).is_test_path(&file.old_path);
+    let head_by_convention = head_pack.is_test_path(&file.path);
+    if same_language && same_extension {
+        // The anchor exists so that a move into test scope cannot silence a production
+        // file. A file that was test code on the base side has nothing to keep: it is
+        // judged by where it is now, so a move out of test scope makes it production code.
+        let base_is_test = base_by_convention || declared(&file.old_path);
         return BaseAnchored {
-            classify_path: file.path.clone(),
-            reclassified: false,
-            language_changed_note: Some(format!(
-                "`{}` was renamed from `{}` to another language or extension; classified by its new path",
-                file.path, file.old_path
-            )),
+            classify_path: if base_is_test {
+                file.path.clone()
+            } else {
+                file.old_path.clone()
+            },
+            reclassified: !base_by_convention && head_by_convention,
+            language_changed_note: None,
+            declared_scope_note: (!base_is_test && !head_by_convention && declared(&file.path))
+                .then(|| {
+                    format!(
+                        "`{}` was renamed from `{}` into a path under `[tests] paths`; it was production code on the base side and is still judged as production code",
+                        file.path, file.old_path
+                    )
+                }),
         };
     }
-    let base_pack = registry
-        .find_pack(&file.old_path)
-        .expect("same-language rename has a base pack");
-    let head_pack = registry
-        .find_pack(&file.path)
-        .expect("same-language rename has a head pack");
-    // The anchor exists so that a move into test scope cannot silence a production file.
-    // A file that was test code on the base side has nothing to keep: it is judged by
-    // where it is now, so a move out of test scope makes it production code.
-    let base_is_test = base_pack.is_test_path(&file.old_path)
-        || crate::ast::functions::declared_test_path(&file.old_path, declared_test_paths);
+    if base_by_convention || declared(&file.old_path) {
+        return by_head_path(Some(by_new_path()));
+    }
+    if !head_by_convention && !declared(&file.path) {
+        // Production code on both sides: the head path says so itself.
+        return by_head_path(Some(by_new_path()));
+    }
+    let Some(classify_path) = production_path_for(
+        &file.old_path,
+        &file.path,
+        head_pack,
+        registry,
+        declared_test_paths,
+    ) else {
+        return by_head_path(Some(by_new_path()));
+    };
     BaseAnchored {
-        classify_path: if base_is_test {
-            file.path.clone()
-        } else {
-            file.old_path.clone()
-        },
-        reclassified: !base_pack.is_test_path(&file.old_path) && head_pack.is_test_path(&file.path),
-        language_changed_note: None,
+        classify_path,
+        reclassified: head_by_convention,
+        language_changed_note: Some(format!(
+            "`{}` was renamed from `{}` to another language or extension; it was production code on the base side and is still judged as production code",
+            file.path, file.old_path
+        )),
+        declared_scope_note: None,
     }
 }
 
@@ -1207,6 +1280,112 @@ mod tests {
         let same = base_anchored_classification(&renamed("web/a.ts", "web/test_a.ts"), &reg, &[]);
         assert_eq!(same.classify_path, "web/a.ts");
         assert!(same.language_changed_note.is_none());
+    }
+
+    /// #565: whether a rename moved production code into test scope does not depend
+    /// on the grammar. Across extensions and packs the file is classified by a path
+    /// the head pack parses with the head grammar and reads as production code.
+    #[test]
+    fn a_production_file_stays_production_through_an_extension_or_language_change() {
+        use crate::gitctx::{ChangeKind, ChangedFile};
+        let reg = crate::ast::default_registry();
+        let renamed = |old: &str, new: &str| ChangedFile {
+            path: new.to_string(),
+            old_path: old.to_string(),
+            kind: ChangeKind::Renamed,
+            added_lines: std::collections::BTreeSet::new(),
+        };
+        for (old, new, classify) in [
+            ("src/Repo.cc", "src/RepoTest.cpp", "src/Repo.cpp"),
+            ("src/Repo.kt", "src/RepoTest.kts", "src/Repo.kts"),
+            ("web/api.js", "tests/api.mjs", "web/api.mjs"),
+            ("web/api.ts", "web/__tests__/api.tsx", "web/api.tsx"),
+            (
+                "src/main/java/Repo.java",
+                "src/main/java/RepoTest.kt",
+                "src/main/java/Repo.kt",
+            ),
+            // No pack reads the base path: the head pack judges it.
+            ("docs/service.txt", "app/test_service.py", "docs/service.py"),
+            ("docs/LICENSE", "app/test_license.py", "docs/LICENSE.py"),
+            // The base name is a test name for the head pack only.
+            (
+                "src/main/java/RepoSpec.java",
+                "src/main/java/RepoSpec.kt",
+                "renamed.kt",
+            ),
+        ] {
+            let got = base_anchored_classification(&renamed(old, new), &reg, &[]);
+            assert_eq!(got.classify_path, classify, "{old} -> {new}");
+            assert!(got.reclassified, "{old} -> {new}");
+            assert!(
+                got.language_changed_note.is_some_and(|n| n.contains(old)
+                    && n.contains(new)
+                    && n.contains("still judged as production code")),
+                "{old} -> {new}"
+            );
+            let head = reg.find_pack(new).expect("head pack");
+            assert!(
+                reg.find_pack(classify)
+                    .is_some_and(|p| p.id() == head.id() && !p.is_test_path(classify)),
+                "{classify}"
+            );
+        }
+        // Negative controls: test code on the base side is classified by the head path.
+        for (old, new) in [
+            ("tests/util.js", "tests/util.mjs"),
+            ("tests/util.js", "web/util.mjs"),
+            ("src/test/java/RepoTest.java", "src/test/kotlin/RepoTest.kt"),
+            ("spec/notes.txt", "spec/notes_spec.rb"),
+        ] {
+            let got = base_anchored_classification(&renamed(old, new), &reg, &[]);
+            assert_eq!(got.classify_path, new, "{old} -> {new}");
+            assert!(!got.reclassified, "{old} -> {new}");
+            assert!(
+                got.language_changed_note
+                    .is_some_and(|n| n.contains("classified by its new path")),
+                "{old} -> {new}"
+            );
+        }
+    }
+
+    /// A path only `[tests] paths` reads as test code: production code renamed into
+    /// it stays production code with a note and no finding, with and without an
+    /// extension change; a glob that covers every file of the head extension leaves
+    /// no production path, so the head path decides.
+    #[test]
+    fn a_rename_into_a_declared_test_path_is_noted() {
+        use crate::gitctx::{ChangeKind, ChangedFile};
+        let reg = crate::ast::default_registry();
+        let renamed = |old: &str, new: &str| ChangedFile {
+            path: new.to_string(),
+            old_path: old.to_string(),
+            kind: ChangeKind::Renamed,
+            added_lines: std::collections::BTreeSet::new(),
+        };
+        let qa = ["qa/**".to_string()];
+        let same = base_anchored_classification(&renamed("app/a.py", "qa/a.py"), &reg, &qa);
+        assert_eq!(same.classify_path, "app/a.py");
+        assert!(!same.reclassified);
+        assert!(same
+            .declared_scope_note
+            .is_some_and(|n| n.contains("qa/a.py") && n.contains("[tests] paths")));
+        let crossed = base_anchored_classification(&renamed("web/a.js", "qa/a.mjs"), &reg, &qa);
+        assert_eq!(crossed.classify_path, "web/a.mjs");
+        assert!(!crossed.reclassified);
+        assert!(crossed
+            .language_changed_note
+            .is_some_and(|n| n.contains("still judged as production code")));
+        // Negative controls: no glob, no note; a rename inside production code, no note.
+        let plain = base_anchored_classification(&renamed("app/a.py", "qa/a.py"), &reg, &[]);
+        assert!(plain.declared_scope_note.is_none());
+        let inside = base_anchored_classification(&renamed("qa/a.py", "qa/b.py"), &reg, &qa);
+        assert!(inside.declared_scope_note.is_none());
+        assert_eq!(inside.classify_path, "qa/b.py");
+        let every = ["**/*.mjs".to_string()];
+        let all = base_anchored_classification(&renamed("web/a.js", "web/a.mjs"), &reg, &every);
+        assert_eq!(all.classify_path, "web/a.mjs");
+        assert!(!all.reclassified);
     }
 
     #[test]

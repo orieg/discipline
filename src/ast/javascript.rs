@@ -63,6 +63,7 @@ impl LanguagePack for JavaScriptPack {
                 ..Default::default()
             },
             test_calls: Vec::new(),
+            suite_cases: Vec::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -230,6 +231,9 @@ struct JsExtractor<'a> {
     facts: ParsedFileFacts,
     /// Same-file callees of each test, in `facts.tests` order.
     test_calls: Vec<Vec<String>>,
+    /// The case counts of the enclosing suites: a `describe.each` table runs every test
+    /// of its suite once per row.
+    suite_cases: Vec<(Option<usize>, bool)>,
 }
 
 /// Function nodes whose body runs only when called.
@@ -319,11 +323,16 @@ impl<'a> JsExtractor<'a> {
                 if is_suite {
                     let title = self.extract_first_arg_title(node);
                     scope.push(title);
+                    self.suite_cases
+                        .push(super::test_cases::extract_javascript_cases(
+                            func_node, self.src,
+                        ));
                     if let Some(args) = node.child_by_field_name("arguments") {
                         if let Some(callback) = Self::find_callback(args) {
                             self.visit_node(callback, scope, parent_ignored || is_ignored);
                         }
                     }
+                    self.suite_cases.pop();
                     scope.pop();
                     return;
                 } else if is_test {
@@ -336,8 +345,10 @@ impl<'a> JsExtractor<'a> {
 
                     let line = node.start_position().row + 1;
                     let end_line = node.end_position().row + 1;
-                    let (cases, non_literal_cases) =
-                        super::test_cases::extract_javascript_cases(func_node, self.src);
+                    let (cases, non_literal_cases) = self.suite_cases.iter().fold(
+                        super::test_cases::extract_javascript_cases(func_node, self.src),
+                        |own, suite| super::test_cases::multiply_cases(*suite, own),
+                    );
 
                     let mut test_fn = TestFn {
                         name: full_name,

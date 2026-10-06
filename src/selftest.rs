@@ -154,6 +154,31 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ast: a rename into test scope that changes the extension or the language stays production; a test file's does not",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            let reg = crate::ast::default_registry();
+            let renamed = |old: &str, new: &str| ChangedFile {
+                path: new.to_string(),
+                old_path: old.to_string(),
+                kind: ChangeKind::Renamed,
+                added_lines: std::collections::BTreeSet::new(),
+            };
+            let anchor = |old: &str, new: &str| {
+                crate::guards::base_anchored_classification(&renamed(old, new), &reg, &[])
+            };
+            let one_pack = anchor("src/Repo.cc", "src/RepoTest.cpp");
+            let two_packs = anchor("src/main/java/Repo.java", "src/main/java/RepoTest.kt");
+            let test_file = anchor("tests/util.js", "tests/util.mjs");
+            Ok(one_pack.classify_path == "src/Repo.cpp"
+                && one_pack.reclassified
+                && two_packs.classify_path == "src/main/java/Repo.kt"
+                && two_packs.reclassified
+                && test_file.classify_path == "tests/util.mjs"
+                && !test_file.reclassified)
+        },
+    ),
+    (
         "ast: SAFETY comment above documents, prose about it does not",
         || {
             let v = AssertVocabulary::default();
@@ -2829,6 +2854,118 @@ command = "cargo test"
         },
     ),
     (
+        "assertion-reduction: a case row turned into a comment is not counted (Python, JS/TS, Go, Java)",
+        || {
+            let py = "import pytest\n\n@pytest.mark.parametrize(\"x\", [\n    1,\n    # 2,\n    3,\n])\ndef test_x(x):\n    assert x > 0\n";
+            let js = "test.each([\n  [1],\n  // [2],\n  /* [3], [4], */\n  [5],\n])(\"t %i\", (a) => {\n  expect(a).toBe(a);\n});\n";
+            let go = "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tcases := []struct{ a int }{\n\t\t{1},\n\t\t// {2},\n\t\t{3},\n\t}\n\tfor _, c := range cases {\n\t\tif c.a == 0 {\n\t\t\tt.Fatal(c)\n\t\t}\n\t}\n}\n";
+            let java = "class ATest {\n    @ParameterizedTest\n    @ValueSource(ints = {\n        1,\n        // 2,\n        3\n    })\n    void t(int x) {\n        assertTrue(x > 0);\n    }\n}\n";
+            Ok(first_test_cases("tests/test_a.py", py)? == (Some(2), false)
+                && first_test_cases("tests/a.test.js", js)? == (Some(2), false)
+                && first_test_cases("a_test.go", go)? == (Some(2), false)
+                && first_test_cases("src/test/java/ATest.java", java)? == (Some(2), false))
+        },
+    ),
+    (
+        "assertion-reduction: a Go table moved to a package variable keeps its rows; every table of a test counts, a set of empty structs does not",
+        || {
+            let local = "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tcases := []struct{ a int }{{1}, {2}, {3}}\n\tfor _, c := range cases {\n\t\tif c.a == 0 {\n\t\t\tt.Fatal(c)\n\t\t}\n\t}\n}\n";
+            let package = "package p\n\nimport \"testing\"\n\nvar cases = []struct{ a int }{{1}, {2}, {3}}\n\nvar unread = []struct{ a int }{{1}, {2}}\n\nfunc TestA(t *testing.T) {\n\tfor _, c := range cases {\n\t\tif c.a == 0 {\n\t\t\tt.Fatal(c)\n\t\t}\n\t}\n}\n";
+            let two = "package p\n\nimport \"testing\"\n\ntype row struct{ a int }\n\nfunc TestA(t *testing.T) {\n\tgood := []struct{ a int }{{1}, {2}, {3}}\n\tbad := []row{{4}, {5}}\n\twant := []row{{6}}\n\tseen := map[string]struct{}{\"a\": {}, \"b\": {}}\n\tfor _, c := range good {\n\t\tif c.a == 0 {\n\t\t\tt.Fatal(c)\n\t\t}\n\t}\n\tfor _, c := range bad {\n\t\tif c.a == 0 {\n\t\t\tt.Fatal(c, want, seen)\n\t\t}\n\t}\n}\n";
+            Ok(first_test_cases("a_test.go", local)? == (Some(3), false)
+                && first_test_cases("a_test.go", package)? == (Some(3), false)
+                && first_test_cases("a_test.go", two)? == (Some(5), false))
+        },
+    ),
+    (
+        "assertion-reduction: rstest values count by argument and multiply the cases beside them; test_case attributes count",
+        || {
+            let values = "#[rstest]\nfn t(#[values(-1, f(2), /* 3, */ 4,)] a: i32) {\n    assert!(a != 0);\n}\n";
+            let both = "#[rstest]\n#[case(1)]\n#[case(2)]\nfn t(#[case] a: i32, #[values(10, 20, 30)] b: i32) {\n    assert!(a < b);\n}\n";
+            let test_case = "#[test_case(1, 2)]\n#[test_case(2, 3 ; \"two\")]\nfn t(a: i32, b: i32) {\n    assert_eq!(a + 1, b);\n}\n";
+            Ok(first_test_cases("tests/a.rs", values)? == (Some(3), false)
+                && first_test_cases("tests/a.rs", both)? == (Some(6), false)
+                && first_test_cases("tests/a.rs", test_case)? == (Some(2), false))
+        },
+    ),
+    (
+        "assertion-reduction: a describe.each table and a class or module parametrization are the cases of the tests under them; a header-only template has none",
+        || {
+            let suite = "describe.each([[1], [2], [3]])(\"s %i\", (a) => {\n  test(\"t\", () => {\n    expect(a).toBe(a);\n  });\n});\n";
+            let header = "test.each`\n  a | b\n`(\"t\", ({ a, b }) => {\n  expect(a).toBe(b);\n});\n";
+            let class = "import pytest\n\n@pytest.mark.parametrize(\"x\", [1, 2, 3])\nclass TestA:\n    @pytest.mark.parametrize(\"y\", [1, 2])\n    def test_x(self, x, y):\n        assert x > y\n";
+            let module = "import pytest\n\npytestmark = [pytest.mark.slow, pytest.mark.parametrize(\"x\", [1, 2, 3])]\n\ndef test_x(x):\n    assert x > 0\n";
+            Ok(first_test_cases("tests/a.test.js", suite)? == (Some(3), false)
+                && first_test_cases("tests/a.test.js", header)? == (Some(0), false)
+                && first_test_cases("tests/test_a.py", class)? == (Some(6), false)
+                && first_test_cases("tests/test_a.py", module)? == (Some(3), false))
+        },
+    ),
+    (
+        "assertion-reduction: JUnit case sources add up; a text block counts its rows only; null sources and enum names count; a named constant is not a literal list",
+        || {
+            let java = |annotations: &str| {
+                first_test_cases(
+                    "src/test/java/ATest.java",
+                    &format!("class ATest {{\n    @ParameterizedTest\n{annotations}\n    void t(String x) {{\n        assertNotNull(x);\n    }}\n}}\n"),
+                )
+            };
+            let kotlin = |annotations: &str| {
+                first_test_cases(
+                    "src/test/kotlin/ATest.kt",
+                    &format!("class ATest {{\n    @ParameterizedTest\n{annotations}\n    fun t(x: String?) {{\n        assertNotNull(x)\n    }}\n}}\n"),
+                )
+            };
+            Ok(java("    @ValueSource(strings = {\"a\", \"b\", \"c\"})\n    @CsvSource({\"x\", \"y\"})")? == (Some(5), false)
+                && java("    @CsvSource(nullValues = {\"N\", \"M\"}, value = {\"a\", \"b\", \"c\"})")? == (Some(3), false)
+                && java("    @CsvSource(textBlock = \"\"\"\n        a\n        # b\n        c\n        \"\"\")")? == (Some(2), false)
+                && java("    @NullAndEmptySource\n    @EmptySource\n    @EnumSource(value = M.class, names = {\"A\", \"B\"})")? == (Some(5), false)
+                && java("    @EnumSource(value = M.class, names = {\"A\"}, mode = EnumSource.Mode.EXCLUDE)")? == (None, true)
+                && java("    @ValueSource(strings = \"a\")")? == (Some(1), false)
+                && java("    @ValueSource(strings = ROWS)")? == (None, true)
+                && kotlin("    @NullAndEmptySource\n    @ValueSource(strings = [\"a\", \"b\"])")? == (Some(4), false)
+                && kotlin("    @CsvSource(textBlock = \"\"\"\n        a\n        # b\n        c\n    \"\"\")")? == (Some(2), false))
+        },
+    ),
+    (
+        "assertion-reduction: C# DataRow rows count, and a row its attribute marks skipped does not",
+        || {
+            let cs = |attributes: &str| {
+                first_test_cases(
+                    "tests/ATest.cs",
+                    &format!("public class ATest {{\n{attributes}\n    public void T(int a) {{\n        Assert.Equal(a, a);\n    }}\n}}\n"),
+                )
+            };
+            Ok(cs("    [DataTestMethod]\n    [DataRow(1)]\n    [DataRow(2)]\n    [DataRow(3)]")? == (Some(3), false)
+                && cs("    [Theory]\n    [InlineData(1)]\n    [InlineData(2, Skip = \"flaky\")]\n    [InlineData(3)]")? == (Some(2), false)
+                && cs("    [TestCase(1, TestName = \"one\")]\n    [TestCase(2, Ignore = \"flaky\")]")? == (Some(1), false)
+                && cs("    [DataTestMethod]\n    [DynamicData(nameof(Rows))]")? == (None, true))
+        },
+    ),
+    (
+        "assertion-reduction: in a proptest! body an unreachable assertion is not counted and a body that does not parse is a parse error",
+        || {
+            use crate::ast::LanguagePack;
+            let vocab = AssertVocabulary::default();
+            let facts = |body: &str| {
+                crate::ast::rust::RustPack.extract(
+                    "tests/prop.rs",
+                    &format!("proptest! {{\n    #[test]\n    fn p(a in 0..10i32) {{\n{body}    }}\n}}\n"),
+                    &vocab,
+                )
+            };
+            let live = facts("        prop_assert!(a < 10);\n        if a > 0 {\n            prop_assert_eq!(a, a);\n        }\n")?;
+            let dead = facts("        prop_assert!(a < 10);\n        if false {\n            prop_assert_eq!(a, a);\n        }\n        return Ok(());\n        prop_assert!(a >= 0);\n")?;
+            let broken = facts("        prop_assert!(a < 10);\n        let x = ;\n")?;
+            Ok(live.tests[0].total_asserts == 2
+                && !live.has_parse_errors
+                && dead.tests[0].total_asserts == 1
+                && !dead.has_parse_errors
+                && broken.has_parse_errors
+                && broken.first_parse_error_line == Some(5))
+        },
+    ),
+    (
         "assertion-reduction: shared assertion helper weakened in test path reports finding, waived by allow-assertion-drop",
         || {
             use crate::ast::TestHelperFacts;
@@ -4760,4 +4897,19 @@ pub fn run() -> Result<bool> {
     }
     println!("\n{} case(s), {failed} failed", CASES.len());
     Ok(failed == 0)
+}
+
+/// The case count and non-literal flag the language pack for `path` reads on the first
+/// test of `src`: what `assertion-reduction` compares across a change.
+fn first_test_cases(path: &str, src: &str) -> Result<(Option<usize>, bool)> {
+    let registry = crate::ast::default_registry();
+    let pack = registry
+        .find_pack(path)
+        .ok_or_else(|| anyhow::anyhow!("no language pack for {path}"))?;
+    let facts = pack.extract(path, src, &AssertVocabulary::default())?;
+    let test = facts
+        .tests
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("no test read in {path}"))?;
+    Ok((test.cases, test.non_literal_cases))
 }

@@ -61,9 +61,13 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             unsupported.push(file.path.clone());
             continue;
         }
-        // Base-anchored classification: a renamed file with an unchanged extension is
-        // judged by its base path, so a move into test scope cannot silence its findings.
+        // Base-anchored classification: a renamed file that was production code on the
+        // base side stays it, so a move into test scope cannot silence its findings.
         let anchored = super::base_anchored_classification(&file, &registry, &vocab.test_paths);
+        if file.old_path != file.path {
+            // The rename check is an item looked at, whatever the file holds.
+            out.examined += 1;
+        }
         // A rename out of test scope into it is reported once, here, before any
         // head-side early exit; `stub-bodies` judges the same file's bodies and
         // skips it. Paths only, no contents.
@@ -101,9 +105,12 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             out.notes.push(super::unread_note(&file.path));
             continue;
         };
-        if let Some(note) = anchored.language_changed_note {
-            out.notes.push(note);
-        }
+        out.notes.extend(
+            anchored
+                .language_changed_note
+                .into_iter()
+                .chain(anchored.declared_scope_note),
+        );
         let head = match pack.extract(&anchored.classify_path, &head_src, &vocab) {
             Ok(f) => f.swallowed,
             Err(e) => {
