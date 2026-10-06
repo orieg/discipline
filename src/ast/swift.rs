@@ -351,16 +351,19 @@ impl<'a> SwiftExtractor<'a> {
                 });
             let line = node.start_position().row + 1;
             let end_line = node.end_position().row + 1;
-            self.facts.test_helpers.push(super::TestHelperFacts {
-                name: name.to_string(),
-                line,
-                end_line,
-                total_asserts: helper_fn.total_asserts,
-                strong_asserts: helper_fn.strong_asserts,
-                tautologies: helper_fn.tautologies,
-                fatal_asserts: helper_fn.fatal_asserts,
-                helper_checks: 0,
-            });
+            self.facts.push_helper(
+                super::TestHelperFacts {
+                    name: name.to_string(),
+                    line,
+                    end_line,
+                    total_asserts: helper_fn.total_asserts,
+                    strong_asserts: helper_fn.strong_asserts,
+                    tautologies: helper_fn.tautologies,
+                    fatal_asserts: helper_fn.fatal_asserts,
+                    helper_checks: 0,
+                },
+                dummy_calls,
+            );
         }
     }
 

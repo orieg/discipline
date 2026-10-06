@@ -528,11 +528,22 @@ pub fn is_test_file(path: &str, own: Option<fn(&str) -> bool>) -> bool {
 /// `examples/` are compiled as their own crates and are not shipped code.
 pub fn test_path(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
-    p.contains("/tests/")
+    test_support(&p)
         || p.contains("/benches/")
         || p.contains("/examples/")
         || p.starts_with("benches/")
         || p.starts_with("examples/")
+}
+
+/// A path whose functions are test code that tests call: [`test_path`] without Cargo's
+/// `benches/` and `examples/`, which no test can call into. `assertion-reduction` tracks
+/// the assertion helpers of these files.
+pub fn test_support_path(path: &str) -> bool {
+    test_support(&path.to_ascii_lowercase())
+}
+
+fn test_support(p: &str) -> bool {
+    p.contains("/tests/")
         || p.contains("/test/")
         || p.starts_with("tests/")
         || p.starts_with("test/")
@@ -544,17 +555,17 @@ pub fn test_path(path: &str) -> bool {
         || p == "conftest.py"
         || p.ends_with("/conftest.py")
         || p.ends_with("_test.go")
-        || p.ends_with("testutil.go")
-        || p.ends_with("testutils.go")
+        || names_file(p, "testutil.go")
+        || names_file(p, "testutils.go")
         || p.ends_with("_test.py")
         || p.ends_with(".test.ts")
         || p.ends_with(".test.js")
         || p.ends_with(".spec.ts")
         || p.ends_with(".spec.js")
-        || p.ends_with("test-utils.ts")
-        || p.ends_with("test-utils.js")
-        || p.ends_with("test_utils.ts")
-        || p.ends_with("test_utils.js")
+        || names_file(p, "test-utils.ts")
+        || names_file(p, "test-utils.js")
+        || names_file(p, "test_utils.ts")
+        || names_file(p, "test_utils.js")
         || p.ends_with("test.java")
         || p.ends_with("tests.cs")
         || p.ends_with("_spec.rb")
@@ -562,9 +573,69 @@ pub fn test_path(path: &str) -> bool {
         || p.ends_with("test.php")
 }
 
+/// Whether the file of `p` is named `name`, alone or after a separator
+/// (`test-utils.ts`, `db/test-utils.ts`, `render-test-utils.ts`): `latest-utils.ts`
+/// only ends with the same letters.
+pub fn names_file(p: &str, name: &str) -> bool {
+    p.strip_suffix(name).is_some_and(|before| {
+        before
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_ascii_alphanumeric())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #562: a test-utility name is matched as a file name, alone or after a separator,
+    /// not as the last letters of another name.
+    #[test]
+    fn a_test_utility_name_is_a_file_name_not_a_suffix() {
+        for path in [
+            "src/test-utils.ts",
+            "test-utils.js",
+            "src/render-test-utils.ts",
+            "src/db_test_utils.js",
+            "pkg/testutil.go",
+            "pkg/db_testutils.go",
+        ] {
+            assert!(test_path(path), "{path}");
+        }
+        for path in [
+            "src/latest-utils.ts",
+            "src/latest_utils.js",
+            "pkg/latestutil.go",
+            "pkg/contestutils.go",
+        ] {
+            assert!(!test_path(path), "{path}");
+        }
+    }
+
+    /// #562: `examples/` and `benches/` are test paths, but not test support: no test
+    /// calls into them, so their functions are not assertion helpers.
+    #[test]
+    fn examples_and_benches_are_test_paths_but_not_test_support() {
+        for path in [
+            "examples/show.rs",
+            "benches/load.rs",
+            "crates/a/examples/x.rs",
+        ] {
+            assert!(test_path(path), "{path}");
+            assert!(!test_support_path(path), "{path}");
+        }
+        for path in [
+            "tests/common/mod.rs",
+            "tests/examples/helpers.py",
+            "conftest.py",
+            "pkg/helpers_test.go",
+            "src/test-utils.ts",
+        ] {
+            assert!(test_path(path), "{path}");
+            assert!(test_support_path(path), "{path}");
+        }
+    }
 
     #[test]
     fn is_test_file_with_no_own_convention_is_the_shared_rule() {
