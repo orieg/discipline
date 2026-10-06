@@ -692,6 +692,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         //    and consecutive non-blank lines of a prose file, form one group, so a phrase
         //    split across lines is read whole.
         let mut groups: Vec<Vec<(usize, String)>> = Vec::new();
+        let mut unparsed = None;
         let mut last_joins = false;
         let mut add_span = |line: usize, text: String, joins: bool| {
             match groups.last_mut() {
@@ -704,13 +705,21 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         };
         if let Some(pack) = registry.find_pack(&file.path) {
             if pack.supplies(Fact::Prose) {
-                if let Ok(facts) = pack.extract(&file.path, &head, &vocab) {
-                    for p in facts.prose {
-                        if (p.line..=p.end_line).any(|l| file.added_lines.contains(&l)) {
-                            let line_comment = p.line == p.end_line
-                                && ["//", "#", "--"].iter().any(|l| p.text.starts_with(l));
-                            add_span(p.line, p.text, line_comment);
+                match pack.extract(&file.path, &head, &vocab) {
+                    Ok(facts) => {
+                        for p in facts.prose {
+                            if (p.line..=p.end_line).any(|l| file.added_lines.contains(&l)) {
+                                let line_comment = p.line == p.end_line
+                                    && ["//", "#", "--"].iter().any(|l| p.text.starts_with(l));
+                                add_span(p.line, p.text, line_comment);
+                            }
                         }
+                    }
+                    // No tree, no comment or string to read: said, not passed.
+                    Err(e) => {
+                        unparsed = Some(format!(
+                        "{e}, so its comments and strings were not read for instruction phrases"
+                    ))
                     }
                 }
             }
@@ -721,6 +730,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 }
             }
         }
+        out.notes.extend(unparsed);
         let heuristic_sev = settings.severity().capped_at_warning();
         // One finding at `lines[0]`; a directive naming the path or any of `lines` lifts it.
         let report = |out: &mut GateOutcome, lines: &[usize], classes: &[&str]| {

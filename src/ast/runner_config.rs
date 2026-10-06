@@ -145,7 +145,7 @@ pub fn parse_vitest_config(file_name: &str, source: &str) -> VitestConfig {
     if parser.set_language(&language).is_err() {
         return VitestConfig::Dynamic;
     }
-    let Some(tree) = crate::ast::source_text::parse(&mut parser, source) else {
+    let Ok(tree) = crate::ast::source_text::parse(&mut parser, source) else {
         return VitestConfig::Dynamic;
     };
     let root = tree.root_node();
@@ -483,7 +483,7 @@ pub fn parse_conftest(source: &str) -> ConftestIgnores {
     {
         return ConftestIgnores::Dynamic;
     }
-    let Some(tree) = crate::ast::source_text::parse(&mut parser, source) else {
+    let Ok(tree) = crate::ast::source_text::parse(&mut parser, source) else {
         return ConftestIgnores::Dynamic;
     };
     let root = tree.root_node();
