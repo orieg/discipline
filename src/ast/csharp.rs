@@ -38,8 +38,7 @@ impl LanguagePack for CSharpPack {
         parser
             .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the C# grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse(&mut parser, src)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
         let root = tree.root_node();
 
         let (has_errors, first_line, error_count) = super::collect_error_nodes_info(root);

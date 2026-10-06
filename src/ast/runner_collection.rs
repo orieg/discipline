@@ -1611,7 +1611,7 @@ fn scan_rust_modules(source: &str) -> ModuleScan {
         scan.open = true;
         return scan;
     }
-    let Some(tree) = crate::ast::source_text::parse(&mut parser, source) else {
+    let Ok(tree) = crate::ast::source_text::parse(&mut parser, source) else {
         scan.open = true;
         return scan;
     };

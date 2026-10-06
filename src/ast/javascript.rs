@@ -50,8 +50,7 @@ impl LanguagePack for JavaScriptPack {
         parser
             .set_language(&lang)
             .map_err(|e| anyhow!("failed to load JS/TS grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse(&mut parser, src)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
         let root = tree.root_node();
 
         let mut extractor = JsExtractor {

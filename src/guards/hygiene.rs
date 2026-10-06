@@ -1079,16 +1079,30 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
         test_paths: declared.paths.clone(),
         ..Default::default()
     };
-    let declared_test_spans = |path: &str, text: &str| -> (bool, Vec<(usize, usize)>) {
+    type Spans = (bool, Vec<(usize, usize)>, Option<String>);
+    let declared_test_spans = |path: &str, text: &str| -> Spans {
         if declared.functions.is_empty() && declared.paths.is_empty() {
-            return (false, Vec::new());
+            return (false, Vec::new(), None);
         }
         if crate::ast::functions::declared_test_path(path, &declared.paths) {
-            return (true, Vec::new());
+            return (true, Vec::new(), None);
         }
-        let spans = registry
+        // A file the pack cannot parse has no function to exempt: each of its lines is
+        // scanned, and the report says why.
+        let (facts, unparsed) = match registry
             .find_pack(path)
-            .and_then(|pack| pack.extract(path, text, &vocab).ok())
+            .map(|pack| pack.extract(path, text, &vocab))
+        {
+            Some(Ok(facts)) => (Some(facts), None),
+            Some(Err(e)) => (
+                None,
+                Some(format!(
+                    "{e}, so no line of it is read as inside a declared test function"
+                )),
+            ),
+            None => (None, None),
+        };
+        let spans = facts
             .map(|facts| {
                 facts
                     .tests
@@ -1101,17 +1115,18 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                     .collect()
             })
             .unwrap_or_default();
-        (false, spans)
+        (false, spans, unparsed)
     };
     let scan = |label: &str,
                 text: &str,
                 added_lines: Option<&std::collections::BTreeSet<usize>>,
                 out: &mut GateOutcome| {
         let active_cfg = is_active_config(label);
-        let (whole_file_is_test, test_spans) = declared_test_spans(label, text);
+        let (whole_file_is_test, test_spans, unparsed) = declared_test_spans(label, text);
         if whole_file_is_test {
             return;
         }
+        out.notes.extend(unparsed);
         for (idx, line) in text.lines().enumerate() {
             let line_num = idx + 1;
             if let Some(lines) = added_lines {

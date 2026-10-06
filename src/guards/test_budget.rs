@@ -69,18 +69,18 @@ pub fn parse_duration_or_count(s: &str) -> Option<u64> {
 /// Budgets a language pack reads from the syntax tree (`Fact::Budgets`): a named
 /// integer in a configuration position. The same word in a string or a comment, or an
 /// unrelated assignment (`min_tests = 40`), is not one.
-pub fn extract_ast_budgets(content: &str, path: &str) -> Vec<BudgetMetric> {
+///
+/// An error is why the file's budgets could not be read: the pack could not parse it.
+fn read_ast_budgets(content: &str, path: &str) -> Result<Vec<BudgetMetric>> {
     let reg = crate::ast::default_registry();
     let Some(pack) = reg.find_pack(path) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     if !pack.supplies(crate::ast::Fact::Budgets) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let Ok(facts) = pack.extract(path, content, &crate::ast::AssertVocabulary::default()) else {
-        return Vec::new();
-    };
-    facts
+    let facts = pack.extract(path, content, &crate::ast::AssertVocabulary::default())?;
+    Ok(facts
         .budgets
         .into_iter()
         .map(|b| BudgetMetric {
@@ -90,7 +90,7 @@ pub fn extract_ast_budgets(content: &str, path: &str) -> Vec<BudgetMetric> {
             path: path.to_string(),
             line: b.line,
         })
-        .collect()
+        .collect())
 }
 
 /// Extracts workflow and script flags (`PROPTEST_CASES`, `-max_total_time`, `-runs`, `-fuzztime`).
@@ -200,19 +200,24 @@ fn is_fuzz_harness(fuzz: &PathFilter, path: &str) -> bool {
 
 /// Extracts budgets for any supported file type based on extension / path.
 pub fn extract_budgets_for_file(content: &str, path: &str) -> Vec<BudgetMetric> {
+    read_budgets_for_file(content, path).unwrap_or_default()
+}
+
+/// [`extract_budgets_for_file`], or why the file's budgets could not be read.
+fn read_budgets_for_file(content: &str, path: &str) -> Result<Vec<BudgetMetric>> {
     let p = Path::new(path);
     let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
     let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
     match ext {
         "rs" | "py" | "pyi" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" => {
-            extract_ast_budgets(content, path)
+            read_ast_budgets(content, path)
         }
-        "sh" | "bash" | "yml" | "yaml" => extract_script_and_workflow_budgets(content, path),
+        "sh" | "bash" | "yml" | "yaml" => Ok(extract_script_and_workflow_budgets(content, path)),
         _ if file_name == ".gitlab-ci.yml" || path.contains(".github/workflows/") => {
-            extract_script_and_workflow_budgets(content, path)
+            Ok(extract_script_and_workflow_budgets(content, path))
         }
-        _ => Vec::new(),
+        _ => Ok(Vec::new()),
     }
 }
 
@@ -389,8 +394,19 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
             continue;
         };
 
-        let base_metrics = extract_budgets_for_file(&base_content, &f.old_path);
-        let head_metrics = extract_budgets_for_file(&head_content, &f.path);
+        // A side the pack could not parse has no budgets to compare: said, not passed.
+        let (base_metrics, head_metrics) = match (
+            read_budgets_for_file(&base_content, &f.old_path),
+            read_budgets_for_file(&head_content, &f.path),
+        ) {
+            (Ok(base), Ok(head)) => (base, head),
+            (Err(e), _) | (_, Err(e)) => {
+                outcome
+                    .notes
+                    .push(format!("{e}, so its test budgets were not compared"));
+                continue;
+            }
+        };
 
         if base_metrics.is_empty() {
             continue;
