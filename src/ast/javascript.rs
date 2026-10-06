@@ -364,6 +364,10 @@ impl<'a> JsExtractor<'a> {
                         ..Default::default()
                     };
 
+                    if !test_fn.ignored {
+                        self.record_run_condition(func_node, &mut test_fn);
+                    }
+
                     let mut calls = Vec::new();
                     if let Some(args) = node.child_by_field_name("arguments") {
                         if let Some(callback) = Self::find_callback(args) {
@@ -371,11 +375,8 @@ impl<'a> JsExtractor<'a> {
                             if let Some(body) = callback.child_by_field_name("body") {
                                 self.collect_calls(body, &mut calls);
                                 super::dispatch_calls(body, self.src, &JS_DISPATCH, &mut calls);
-                                if test_fn.conditional_ignore.is_none() && !test_fn.ignored {
-                                    if let Some(cond) = self.detect_js_conditional_early_exit(body)
-                                    {
-                                        test_fn.conditional_ignore = Some(cond);
-                                    }
+                                if !test_fn.ignored {
+                                    self.record_conditional_early_exits(body, &mut test_fn);
                                 }
                             }
                         }
@@ -645,6 +646,9 @@ impl<'a> JsExtractor<'a> {
             }
             "call_expression" => {
                 self.check_assertion_call(body_or_fn, test);
+                if !test.ignored {
+                    self.record_ci_conditional_this_skip(body_or_fn, test);
+                }
                 let mut cursor = body_or_fn.walk();
                 for child in body_or_fn.children(&mut cursor) {
                     self.scan_test_body(child, test);
@@ -659,7 +663,79 @@ impl<'a> JsExtractor<'a> {
         }
     }
 
-    fn detect_js_conditional_early_exit(&self, body: Node) -> Option<String> {
+    /// `test.runIf(<condition>)(...)` runs the test only under the condition. Where the
+    /// condition holds only outside CI (`runIf(!process.env.CI)`), the test is skipped
+    /// in CI. A run condition on anything else is not read.
+    fn record_run_condition(&self, func: Node, test: &mut TestFn) {
+        use super::ci_condition::{self, CiVerdict, Lang};
+        if func.kind() != "call_expression" {
+            return;
+        }
+        let Some(modifier) = func.child_by_field_name("function") else {
+            return;
+        };
+        if modifier.kind() != "member_expression"
+            || modifier
+                .child_by_field_name("property")
+                .map(|p| self.text(p))
+                != Some("runIf")
+        {
+            return;
+        }
+        let Some(args) = func.child_by_field_name("arguments") else {
+            return;
+        };
+        let mut cursor = args.walk();
+        let Some(condition) = args.named_children(&mut cursor).next() else {
+            return;
+        };
+        if let Some(verdict @ CiVerdict::Skips(_)) =
+            ci_condition::expression(Lang::JavaScript, condition, self.src, true)
+        {
+            test.record_conditional_skip(format!("!({})", self.text(condition).trim()), verdict);
+        }
+    }
+
+    /// Mocha's `this.skip()` under an `if` that makes the test skip in CI. Elsewhere the
+    /// call is not read.
+    fn record_ci_conditional_this_skip(&self, call: Node, test: &mut TestFn) {
+        use super::ci_condition::{self, CiVerdict, Lang};
+        let Some(func) = call.child_by_field_name("function") else {
+            return;
+        };
+        if func.kind() != "member_expression"
+            || func.child_by_field_name("object").map(|o| o.kind()) != Some("this")
+            || func.child_by_field_name("property").map(|p| self.text(p)) != Some("skip")
+        {
+            return;
+        }
+        if let Some(site) = ci_condition::site(Lang::JavaScript, call, self.src) {
+            if matches!(site.verdict, CiVerdict::Skips(_)) {
+                test.record_conditional_skip(site.text, site.verdict);
+            }
+        }
+    }
+
+    /// Early exits under a condition: the first `if` the text rule below accepts, then
+    /// every `return` under an `if` (nested and `else` branches included) that a CI
+    /// variable is involved in, through a variable, constant or helper of this file.
+    fn record_conditional_early_exits(&self, body: Node, test: &mut TestFn) {
+        use super::ci_condition::{self, CiVerdict, Lang};
+        if let Some((cond, consequence)) = self.detect_js_conditional_early_exit(body) {
+            let verdict = ci_condition::site(Lang::JavaScript, consequence, self.src)
+                .map_or(CiVerdict::NotCi, |s| s.verdict);
+            test.record_conditional_skip(cond, verdict);
+        }
+        for exit in ci_condition::exits_under_if(body, &|n| n.kind() == "return_statement") {
+            if let Some(site) = ci_condition::site(Lang::JavaScript, exit, self.src) {
+                if site.related {
+                    test.record_conditional_skip(site.text, site.verdict);
+                }
+            }
+        }
+    }
+
+    fn detect_js_conditional_early_exit<'t>(&self, body: Node<'t>) -> Option<(String, Node<'t>)> {
         if body.kind() != "statement_block" {
             return None;
         }
@@ -704,7 +780,7 @@ impl<'a> JsExtractor<'a> {
                 if is_env_check {
                     let consequence = child.child_by_field_name("consequence")?;
                     if js_consequence_returns_early(consequence) {
-                        return Some(unwrapped.to_string());
+                        return Some((unwrapped.to_string(), consequence));
                     }
                 }
             }
