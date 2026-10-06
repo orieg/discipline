@@ -207,6 +207,46 @@ pub fn find_override(
     None
 }
 
+/// The line a directive's subject carries when it is written as `path:line`
+/// (`pkg/io.py:4 <reason>`): the first token, a `:`, digits, and then the end of the
+/// subject. `None` for a bare path, and for a subject whose `:` is followed by anything
+/// else (`tests/test_io.py::test_load`, `type: ignore`).
+pub fn subject_line(reason: &str) -> Option<usize> {
+    let text = reason.trim_start().trim_start_matches(QUOTES);
+    let rest = text[first_token(reason).len()..].strip_prefix(':')?;
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    let closes = rest[end..]
+        .chars()
+        .next()
+        .is_none_or(|c| c.is_whitespace() || QUOTES.contains(&c));
+    if end == 0 || !closes {
+        return None;
+    }
+    rest[..end].parse().ok()
+}
+
+/// [`find_override`] for a finding with a line, by the file it sits in: `subject` is the
+/// path or the file name. A directive whose subject carries a line (`pkg/io.py:4`) names
+/// the finding on that line and nothing else, so it is not read here; the gate offers it
+/// the finding's own `path:line` through [`find_override`]. Without this, the `:` would
+/// end the subject and `pkg/io.py:4` would lift every finding in `pkg/io.py`.
+pub fn find_whole_file_override(
+    directives: &[ParsedDirective],
+    gate: &str,
+    lifts: &crate::findings::FindingKind,
+    names: &[&str],
+    subject: &str,
+) -> Option<OverrideRecord> {
+    let whole_file: Vec<ParsedDirective> = directives
+        .iter()
+        .filter(|d| subject_line(&d.reason).is_none())
+        .cloned()
+        .collect();
+    find_override(&whole_file, gate, lifts, names, subject)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectiveSubjectKind {
     /// Test function name, suite path, or count ratchet (e.g. `test_foo`, `tests/e2e.rs`, `test-floor`)
@@ -302,7 +342,7 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         deprecated: None,
         gate: "error-swallowing",
         subject_kind: DirectiveSubjectKind::FilePath,
-        subject_doc: "File path, or `path:line` of the handler",
+        subject_doc: "File path (every finding in the file), or `path:line` of the handler (that finding only)",
     },
     DirectiveSpec {
         canonical: "allow-agent-instructions",
@@ -2524,5 +2564,81 @@ removes: tests/old.rs inside a fence
         );
         assert!(find_override(&named, "ignored-tests", kind, ALLOW_IGNORE, "flaky_test").is_some());
         assert!(take_subject_misses().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod subject_line_tests {
+    use super::*;
+
+    const WITH_A_LINE: &[(&str, usize)] = &[
+        ("pkg/io.py:4 a missing file is the first run", 4),
+        ("io.py:12 optional", 12),
+        ("`pkg/io.py:4` optional", 4),
+        ("\"pkg/io.py:4\" optional", 4),
+        ("  pkg/io.py:4", 4),
+    ];
+    const WITHOUT_A_LINE: &[&str] = &[
+        "pkg/io.py a missing file is the first run",
+        "pkg/io.py: 4 handlers are optional",
+        "pkg/io.py:4th handler is optional",
+        "pkg/io.py:4:2 optional",
+        "tests/test_io.py::test_load flaky",
+        "type: ignore is needed here",
+        "pkg/io.py handler at :4 is optional",
+        "",
+    ];
+
+    #[test]
+    fn a_subject_carries_a_line_only_as_path_colon_digits() {
+        for (reason, line) in WITH_A_LINE {
+            assert_eq!(subject_line(reason), Some(*line), "{reason}");
+        }
+        for reason in WITHOUT_A_LINE {
+            assert_eq!(subject_line(reason), None, "{reason}");
+        }
+    }
+
+    fn directive(reason: &str) -> ParsedDirective {
+        ParsedDirective {
+            directive: "allow-swallow".to_string(),
+            reason: reason.to_string(),
+            source: OverrideSource::PrBody,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn a_directive_with_a_line_is_not_read_as_naming_the_whole_file() {
+        let kind = &crate::findings::EMPTY_ERROR_HANDLER_ADDED;
+        let find = |reason: &str, subject: &str| {
+            find_whole_file_override(
+                &[directive(reason)],
+                "error-swallowing",
+                kind,
+                ALLOW_SWALLOW,
+                subject,
+            )
+            .is_some()
+        };
+        // Control: a bare path or file name names the file.
+        assert!(find("pkg/io.py both files are optional", "pkg/io.py"));
+        assert!(find("io.py both files are optional", "io.py"));
+        // With a line it names that line, which only `find_override` is offered.
+        assert!(!find("pkg/io.py:4 the first run", "pkg/io.py"));
+        assert!(!find("io.py:4 the first run", "io.py"));
+        let exact = |subject: &str| {
+            find_override(
+                &[directive("pkg/io.py:4 the first run")],
+                "error-swallowing",
+                kind,
+                ALLOW_SWALLOW,
+                subject,
+            )
+            .is_some()
+        };
+        assert!(exact("pkg/io.py:4"));
+        assert!(!exact("pkg/io.py:8"));
+        assert!(!exact("pkg/io.py:44"));
     }
 }

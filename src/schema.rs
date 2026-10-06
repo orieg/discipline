@@ -23,7 +23,7 @@ pub fn generate_schema() -> Value {
             "toolchain-config" => "#/$defs/BasicGate",
             "sandbox-config" => "#/$defs/BasicGate",
             "stub-bodies" => "#/$defs/BasicGate",
-            "error-swallowing" => "#/$defs/BasicGate",
+            "error-swallowing" => "#/$defs/ErrorSwallowingGate",
             "instruction-smuggling" => "#/$defs/InstructionSmugglingGate",
             "build-hooks" => "#/$defs/BasicGate",
             "bench-regression" => "#/$defs/BenchRegressionGate",
@@ -288,6 +288,16 @@ pub fn generate_schema() -> Value {
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified lines in the git diff rather than all tracked files" },
                     "agent_config_refs": { "type": "boolean", "description": "When true, flags references to personal agent configuration directories and playbook docs" },
                     "agent_config_standard_paths": { "type": "boolean", "description": "With agent_config_refs: do not report a reference to an agent tool's home directory itself or to an entry the tool documents there (settings, hooks, skills, agents, commands, rules, plugins, MCP configuration, its instruction file); false reports every one" }
+                }
+            },
+            "ErrorSwallowingGate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Whether this gate is active" },
+                    "severity": { "$ref": "#/$defs/Severity" },
+                    "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
+                    "constant_fallback_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs of the files (a benchmark or evaluation harness) in which a new error handler that puts a numeric literal in place of the result is reported, at warning at most; empty turns the check off (default: [])" }
                 }
             },
             "InstructionSmugglingGate": {

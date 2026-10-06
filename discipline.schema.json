@@ -562,6 +562,26 @@
       },
       "type": "object"
     },
+    "ErrorSwallowingGate": {
+      "additionalProperties": false,
+      "properties": {
+        "constant_fallback_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Globs of the files (a benchmark or evaluation harness) in which a new error handler that puts a numeric literal in place of the result is reported, at warning at most; empty turns the check off (default: [])"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "GoldenGate": {
       "additionalProperties": false,
       "properties": {
@@ -1594,7 +1614,7 @@
         "error-swallowing": {
           "allOf": [
             {
-              "$ref": "#/$defs/BasicGate"
+              "$ref": "#/$defs/ErrorSwallowingGate"
             }
           ],
           "description": "no new empty error handler or discarded Result outside tests"
