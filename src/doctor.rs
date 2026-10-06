@@ -947,7 +947,7 @@ pub fn test_report_finding(
                 ),
             )
             .fix(format!(
-                "Configure test_command and test_report in [gates.test-floor] (e.g. `{}`) or pass test_report in CI to enable identity ratcheting.",
+                "Configure test_command and test_report in [gates.test-floor] (e.g. `{}`) or pass test_report in CI to enable identity ratcheting. In a repository whose base ref already has a discipline.toml, the change that adds test_report or test_command is reported by config-integrity as a new counting basis: put `allow-gate-weakening: test-floor <reason>` in its PR body or a commit message.",
                 runner.test_report()
             ))
         })

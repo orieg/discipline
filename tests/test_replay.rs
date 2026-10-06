@@ -351,9 +351,10 @@ fn a_blocked_change_the_forge_does_not_have_is_not_checked() {
         "{s}"
     );
     assert!(!detail.contains(&weakening), "{s}");
-    // The control: 404 is GitHub's answer for a commit it has that no pull request
-    // carries. That is an answer, and the change is blocked on its commit message alone.
-    let s = run(404, r#"{"message":"Not Found"}"#);
+    // The control: 200 with an empty list is GitHub's answer for a commit it has that
+    // no pull request carries. That is an answer, and the change is blocked on its
+    // commit message alone.
+    let s = run(200, "[]");
     assert_eq!(
         verdicts(&s),
         [(3, "passed".to_string()), (2, "blocked".to_string())],
@@ -363,6 +364,23 @@ fn a_blocked_change_the_forge_does_not_have_is_not_checked() {
         s["cases_detail"][1]["directives_from"], "commit message only: no merged pull request",
         "{s}"
     );
+    // A 404 is not that answer (#634): GitHub gives it for a repository that is not
+    // there or that the token cannot see, so the change is not checked.
+    let s = run(404, r#"{"message":"Not Found"}"#);
+    assert_eq!(
+        verdicts(&s),
+        [
+            (3, "passed".to_string()),
+            (2, "could_not_check".to_string())
+        ],
+        "{s}"
+    );
+    let case = &s["cases_detail"][1];
+    assert_eq!(case["reason"], "forge", "{s}");
+    let detail = case["detail"].as_str().unwrap();
+    assert!(detail.contains("pull request could not be read"), "{s}");
+    assert!(detail.contains("HTTP 404"), "{s}");
+    assert!(!detail.contains("does not have commit"), "{s}");
 }
 
 #[test]

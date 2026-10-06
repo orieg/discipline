@@ -739,7 +739,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "pinned_version": { "type": ["string", "null"], "description": "Explicit MSRV version string (e.g. \"1.90.0\")" },
+                    "pinned_version": { "type": ["string", "null"], "description": "Explicit MSRV version string (e.g. \"1.90.0\"); config-integrity reports a change that lowers it, compared as a version, or removes it" },
                     "command": { "type": ["string", "null"], "description": "Command to run to verify MSRV compatibility. It is executed, so a change under review cannot add or alter it" }
                 }
             },
@@ -762,7 +762,7 @@ pub fn generate_schema() -> Value {
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "sanitizer": { "type": "string", "description": "Sanitizer name to activate (e.g. \"address\", \"thread\"): a lower-case letter, then lower-case letters, digits and -. It reaches the command that runs, so a change under review cannot alter it" },
-                    "canary": { "type": "boolean", "description": "Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it" },
+                    "canary": { "type": "boolean", "description": "Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it. The canary is checked for ThreadSanitizer's diagnostic: with a sanitizer other than \"thread\" it is a configuration error" },
                     "timeout_seconds": { "type": "integer", "description": "Maximum execution time in seconds (default: 300)" }
                 }
             }

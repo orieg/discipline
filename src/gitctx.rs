@@ -457,24 +457,30 @@ pub fn format_discover_error(err: &git2::Error, path: &std::path::Path) -> anyho
     }
 }
 
-/// The two sides of one file: each `None` when the file does not exist (or is binary)
-/// there. A failed read is never represented here; see `GitCtx::sides`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Sides {
-    pub base: Option<String>,
-    pub head: Option<String>,
+/// For a reader that cannot return `Result` (a closure handed to a parser or to the
+/// baseline code): keeps every read error instead of dropping it, so the caller ends with
+/// `finish()?` and the gate is "could not run", not a pass over a missing file. The first
+/// [`ReadRecorder::MAX_KEPT`] distinct errors are kept whole and the rest are counted.
+#[derive(Default)]
+#[must_use = "a recorder that is never `finish()`ed drops the read errors it kept"]
+pub struct ReadRecorder {
+    failed: std::cell::RefCell<FailedReads>,
 }
 
-/// For a reader that cannot return `Result` (a closure handed to a parser or to the
-/// baseline code): keeps the first read error instead of dropping it, so the caller
-/// ends with `finish()?` and the gate is "could not run", not a pass over a missing file.
 #[derive(Default)]
-#[must_use = "a recorder that is never `finish()`ed drops the read error it kept"]
-pub struct ReadRecorder {
-    first: std::cell::RefCell<Option<anyhow::Error>>,
+struct FailedReads {
+    /// The first distinct errors, in the order they happened.
+    kept: Vec<anyhow::Error>,
+    /// What each kept error prints, to tell a repeated read from another failure.
+    shown: Vec<String>,
+    /// Distinct errors past [`ReadRecorder::MAX_KEPT`].
+    more: usize,
 }
 
 impl ReadRecorder {
+    /// How many distinct read errors are kept whole; later ones are counted.
+    pub const MAX_KEPT: usize = 5;
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -484,7 +490,17 @@ impl ReadRecorder {
         match read {
             Ok(content) => content,
             Err(e) => {
-                self.first.borrow_mut().get_or_insert(e);
+                let mut failed = self.failed.borrow_mut();
+                let shown = format!("{e:#}");
+                // The same file read twice fails twice with one error.
+                if !failed.shown.contains(&shown) {
+                    if failed.kept.len() < Self::MAX_KEPT {
+                        failed.kept.push(e);
+                        failed.shown.push(shown);
+                    } else {
+                        failed.more += 1;
+                    }
+                }
                 None
             }
         }
@@ -498,12 +514,27 @@ impl ReadRecorder {
         move |p| self.keep(git.base_content(p))
     }
 
-    /// The first read error seen, if any.
+    /// The read errors seen, if any, as one error: the first one, which keeps its reason,
+    /// under a line that lists the others and counts those past [`Self::MAX_KEPT`].
     pub fn finish(&self) -> Result<()> {
-        match self.first.borrow_mut().take() {
-            Some(e) => Err(e),
-            None => Ok(()),
+        let failed = std::mem::take(&mut *self.failed.borrow_mut());
+        let mut kept = failed.kept.into_iter();
+        let Some(first) = kept.next() else {
+            return Ok(());
+        };
+        let others: Vec<String> = failed.shown.into_iter().skip(1).collect();
+        if others.is_empty() {
+            return Err(first);
         }
+        let uncounted = match failed.more {
+            0 => String::new(),
+            n => format!(", and {n} more not listed"),
+        };
+        Err(first.context(format!(
+            "{} reads failed; the others: {}{uncounted}; the first",
+            1 + others.len() + failed.more,
+            others.join("; ")
+        )))
     }
 }
 
@@ -951,15 +982,6 @@ impl GitCtx {
             return Ok(None);
         }
         Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
-    }
-
-    /// Both sides of a file (`None` where it does not exist there). A read that fails is
-    /// an `Err` naming the path, never an absent side.
-    pub fn sides(&self, base_path: &str, head_path: &str) -> Result<Sides> {
-        Ok(Sides {
-            base: self.base_content(base_path)?,
-            head: self.head_content(head_path)?,
-        })
     }
 
     /// Tracked regular files. Symlinks are skipped so `CLAUDE.md -> AGENTS.md`
@@ -2433,30 +2455,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn sides_tell_an_absent_file_from_a_failed_read() {
-        let (dir, git, blob) = repo_with_base_file();
-        std::fs::write(dir.path().join("a.txt"), "head\n").unwrap();
-
-        let both = git.sides("a.txt", "a.txt").unwrap();
-        assert_eq!(both.base.as_deref(), Some("base\n"));
-        assert_eq!(both.head.as_deref(), Some("head\n"));
-        // Absent is Ok(None) on each side, not an error.
-        let absent = git.sides("nope.txt", "nope.txt").unwrap();
-        assert_eq!(absent, Sides::default());
-
-        remove_loose_object(dir.path(), blob);
-        let err = git.sides("a.txt", "a.txt").unwrap_err();
-        let shown = format!("{err:#}");
-        assert!(shown.contains("`a.txt` on the base side"), "{shown}");
-        // The head side still reads: only the base blob is gone.
-        assert_eq!(
-            git.head_content("a.txt").unwrap().as_deref(),
-            Some("head\n")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn a_recorded_read_failure_is_surfaced_not_dropped() {
         let (dir, git, blob) = repo_with_base_file();
         let reads = ReadRecorder::new();
@@ -2471,6 +2469,63 @@ mod tests {
         assert!(format!("{err:#}").contains("`a.txt` on the base side"));
         // Reported once: the recorder is drained.
         reads.finish().unwrap();
+    }
+
+    #[test]
+    fn every_recorded_read_failure_is_surfaced_up_to_a_bound() {
+        let failed = |path: &str| -> Result<Option<String>> {
+            Err(anyhow::anyhow!("failed to read `{path}` on the base side"))
+        };
+        let reads = ReadRecorder::new();
+        assert_eq!(reads.keep(failed("a.txt")), None);
+        assert_eq!(reads.keep(Ok(Some("x".to_string()))).as_deref(), Some("x"));
+        assert_eq!(reads.keep(failed("b.txt")), None);
+        // The same read failing again is the same failure.
+        assert_eq!(reads.keep(failed("a.txt")), None);
+        let shown = format!("{:#}", reads.finish().unwrap_err());
+        assert!(shown.starts_with("2 reads failed; the others: "), "{shown}");
+        assert!(shown.contains("`a.txt` on the base side"), "{shown}");
+        assert!(shown.contains("`b.txt` on the base side"), "{shown}");
+        reads.finish().unwrap();
+
+        // One failure is reported as it was, with nothing added.
+        assert_eq!(reads.keep(failed("only.txt")), None);
+        assert_eq!(
+            format!("{:#}", reads.finish().unwrap_err()),
+            "failed to read `only.txt` on the base side"
+        );
+
+        // Past the bound the rest are counted, not listed.
+        let total = ReadRecorder::MAX_KEPT + 3;
+        for i in 0..total {
+            assert_eq!(reads.keep(failed(&format!("f{i}.txt"))), None);
+        }
+        let shown = format!("{:#}", reads.finish().unwrap_err());
+        assert!(
+            shown.starts_with(&format!("{total} reads failed")),
+            "{shown}"
+        );
+        assert!(shown.contains(", and 3 more not listed"), "{shown}");
+        for i in 0..total {
+            assert_eq!(
+                shown.contains(&format!("`f{i}.txt`")),
+                i < ReadRecorder::MAX_KEPT,
+                "{i}: {shown}"
+            );
+        }
+    }
+
+    /// The reason of the first failure survives the line that lists the others.
+    #[test]
+    fn the_reason_of_the_first_read_failure_is_kept_when_others_are_listed() {
+        use crate::could_not_check::{classify, tag, Reason};
+        let reads = ReadRecorder::new();
+        let tagged: Result<Option<String>> =
+            Err(tag(Reason::Configuration, anyhow::anyhow!("first")));
+        assert_eq!(reads.keep(tagged), None);
+        assert_eq!(reads.keep(Err(anyhow::anyhow!("second"))), None);
+        let e = reads.finish().unwrap_err();
+        assert_eq!(classify(&e).0, Reason::Configuration);
     }
 
     #[test]
