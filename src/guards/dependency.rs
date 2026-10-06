@@ -43,8 +43,13 @@ pub struct DenyPolicy {
 
 /// Parses a `deny.toml` string into a structured `DenyPolicy`.
 pub fn parse_deny_toml(content: &str) -> Result<DenyPolicy> {
-    let mut policy = DenyPolicy::default();
     let val: TomlValue = toml::from_str(content).context("failed to parse deny.toml")?;
+    Ok(deny_policy_from(&val))
+}
+
+/// The policy a parsed `deny.toml` declares.
+fn deny_policy_from(val: &TomlValue) -> DenyPolicy {
+    let mut policy = DenyPolicy::default();
 
     if let Some(bans) = val.get("bans").and_then(TomlValue::as_table) {
         if let Some(deny_list) = bans.get("deny").and_then(TomlValue::as_array) {
@@ -87,7 +92,7 @@ pub fn parse_deny_toml(content: &str) -> Result<DenyPolicy> {
         }
     }
 
-    Ok(policy)
+    policy
 }
 
 fn is_wildcard_str(v: &str) -> bool {
@@ -881,7 +886,22 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
     // Load deny.toml policy if configured or auto-detected
     let deny_policy = if let Some(ref deny_path) = gate.deny_file {
         if let Some(content) = ctx.git.head_content(deny_path)? {
-            parse_deny_toml(&content).unwrap_or_default()
+            // A policy file that does not parse is not an empty policy: the change that
+            // breaks it would lift every ban in it. Location only, never the file's text.
+            let val: TomlValue = toml::from_str(&content).map_err(|e| {
+                let at = e
+                    .span()
+                    .map(|s| {
+                        let before = &content.as_bytes()[..s.start.min(content.len())];
+                        let line = before.iter().filter(|b| **b == b'\n').count() + 1;
+                        format!(" (line {line})")
+                    })
+                    .unwrap_or_default();
+                anyhow::anyhow!(
+                    "`{deny_path}` (`gates.dependency-delta.deny_file`) does not parse as TOML{at}; its bans and source policy could not be read"
+                )
+            })?;
+            deny_policy_from(&val)
         } else {
             DenyPolicy::default()
         }

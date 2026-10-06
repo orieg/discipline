@@ -4645,6 +4645,44 @@ smoke_cost::set_contains
         },
     ),
     (
+        "configuration: a capture pattern with no group or that does not compile, and a malformed exempt_arms glob, are found before any gate runs",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::check_configured_patterns;
+            let head = "[meta]\nversion = 1\nname = \"t\"\n";
+            let load = |body: &str| DisciplineConfig::from_toml_str(&format!("{head}{body}"));
+            let ids = ["ci-integrity", "command", "bench-regression"];
+            let names = |body: &str, needle: &str| -> Result<bool> {
+                Ok(check_configured_patterns(&load(body)?, &ids)
+                    .err()
+                    .is_some_and(|e| format!("{e:#}").contains(needle)))
+            };
+            let passes = |body: &str| -> Result<bool> {
+                Ok(check_configured_patterns(&load(body)?, &ids).is_ok())
+            };
+            Ok(names(
+                "[gates.ci-integrity]\ndocumented_job_count_pattern = '\\d+ jobs'\n",
+                "gates.ci-integrity.documented_job_count_pattern",
+            )? && names(
+                "[gates.ci-integrity]\ndocumented_job_count_pattern = '(\\d+ jobs'\n",
+                "not a valid regular expression",
+            )? && names(
+                "[gates.command]\nenabled = true\ncommand = \"true\"\ncount_pattern = '\\d+ passed'\n",
+                "gates.command.count_pattern",
+            )? && names(
+                "[gates.command]\nenabled = true\n[[gates.command.commands]]\nname = \"unit\"\ncommand = \"true\"\ncount_pattern = '(a'\n",
+                "gates.command.commands[unit].count_pattern",
+            )? && names(
+                "[gates.bench-regression]\nenabled = true\nexempt_arms = [\"heap[\"]\n",
+                "gates.bench-regression.exempt_arms",
+            )? && passes(
+                "[gates.ci-integrity]\nenabled = false\ndocumented_job_count_pattern = '(a'\n",
+            )? && passes(
+                "[gates.ci-integrity]\ndocumented_job_count_pattern = '(\\d+) jobs'\n[gates.command]\nenabled = true\ncommand = \"true\"\ncount_pattern = '(\\d+) passed'\n[gates.bench-regression]\nenabled = true\nexempt_arms = [\"*.heap.*\", \"map_get/random\"]\n",
+            )?)
+        },
+    ),
+    (
         "suppression-delta: extract_suppression_rules extracts exact rules across language packs",
         || {
             use crate::guards::suppression_delta::extract_suppression_rules;
