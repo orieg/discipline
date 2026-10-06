@@ -222,6 +222,45 @@ pub fn run_command_bounded(
     })
 }
 
+/// Whether the runner's environment authorises a change to a command a gate executes.
+/// `DISCIPLINE_COMMAND` and `DISCIPLINE_ALLOW_COMMAND_CHANGE` come from the runner, which
+/// the change under review cannot set; the `command` gate and `test-floor`'s
+/// `test_command` share this one switch.
+pub(crate) fn runner_authorises_command_change() -> bool {
+    std::env::var("DISCIPLINE_COMMAND").is_ok()
+        || std::env::var("DISCIPLINE_ALLOW_COMMAND_CHANGE").is_ok()
+}
+
+/// Whether two `[gates.command]` tables differ in anything the gate executes.
+///
+/// A value reaches a process invocation through these keys and no others:
+/// - on the table: `command`, `preset` (its default command and default canary) and
+///   `canary_command` (run for the table's own command, and inherited by every entry
+///   that declares neither a canary nor a preset that has one);
+/// - on a `[[gates.command.commands]]` entry: `command`, `preset`, `canary_command`, and
+///   `name` (it selects the `DISCIPLINE_COMMAND_<NAME>` override and the `base-tests`
+///   mode).
+///
+/// Entries are compared by position, so an inserted, removed or reordered entry differs.
+/// Keys that are only matched against output (`forbid_output`, `zero_items_pattern`,
+/// `canary_expected_diagnostic`, `snapshot`, `count_pattern`, `min_count`) execute
+/// nothing and are `config-integrity`'s to judge.
+pub(crate) fn executed_definitions_differ(
+    head: &crate::config::CommandGate,
+    base: &crate::config::CommandGate,
+) -> bool {
+    head.command != base.command
+        || head.preset != base.preset
+        || head.canary_command != base.canary_command
+        || head.commands.len() != base.commands.len()
+        || head.commands.iter().zip(&base.commands).any(|(h, b)| {
+            h.name != b.name
+                || h.command != b.command
+                || h.preset != b.preset
+                || h.canary_command != b.canary_command
+        })
+}
+
 /// Checks whether an untrusted PR diff modified command gate definitions without
 /// runner environment authorization.
 fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
@@ -234,28 +273,7 @@ fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
     let modified = if ctx.git.has_base() {
         match base_src {
             Some(src) => match DisciplineConfig::from_toml_str(&src) {
-                Ok(base_cfg) => {
-                    let base_cmd = &base_cfg.gates.command;
-                    let mut modded = false;
-                    if head_cmd.command != base_cmd.command || head_cmd.preset != base_cmd.preset {
-                        modded = true;
-                    }
-                    if head_cmd.commands.len() != base_cmd.commands.len() {
-                        modded = true;
-                    } else {
-                        for (h, b) in head_cmd.commands.iter().zip(base_cmd.commands.iter()) {
-                            if h.name != b.name
-                                || h.command != b.command
-                                || h.preset != b.preset
-                                || h.canary_command != b.canary_command
-                            {
-                                modded = true;
-                                break;
-                            }
-                        }
-                    }
-                    modded
-                }
+                Ok(base_cfg) => executed_definitions_differ(head_cmd, &base_cfg.gates.command),
                 Err(_) => head_has_commands,
             },
             None => head_has_commands,
@@ -264,15 +282,11 @@ fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
         false
     };
 
-    if modified {
-        let env_authorized = std::env::var("DISCIPLINE_COMMAND").is_ok()
-            || std::env::var("DISCIPLINE_ALLOW_COMMAND_CHANGE").is_ok();
-        if !env_authorized {
-            return Ok(Some(
-                "PR diff modifies command or canary definitions without runner environment authorization; commands cannot be introduced or altered by untrusted PR text"
-                    .to_string(),
-            ));
-        }
+    if modified && !runner_authorises_command_change() {
+        return Ok(Some(
+            "PR diff modifies command or canary definitions without runner environment authorization; commands cannot be introduced or altered by untrusted PR text"
+                .to_string(),
+        ));
     }
 
     Ok(None)
@@ -524,7 +538,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             Some(ctx.config_path),
             None,
             err_msg,
-            "Configure commands in the merge base ref discipline.toml or provide trusted overrides via runner environment (DISCIPLINE_COMMAND).",
+            "Configure commands in the merge base ref discipline.toml or provide trusted overrides via runner environment (DISCIPLINE_COMMAND), or set DISCIPLINE_ALLOW_COMMAND_CHANGE on the runner to accept the change.",
         );
         return Ok(outcome);
     }
@@ -1368,6 +1382,91 @@ fn evaluate_base_tests(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn gate(body: &str) -> crate::config::CommandGate {
+        DisciplineConfig::from_toml_str(&format!("[gates.command]\n{body}"))
+            .unwrap()
+            .gates
+            .command
+    }
+
+    /// Every key whose value reaches a process invocation, on the table and on an entry.
+    #[test]
+    fn a_difference_in_any_executed_key_is_a_modification() {
+        let base = gate("command = \"true\"\n\n[[gates.command.commands]]\nname = \"unit\"\ncommand = \"true\"\n");
+        assert!(!executed_definitions_differ(&base, &base));
+        let entry = "\n[[gates.command.commands]]\nname = \"unit\"\ncommand = \"true\"\n";
+        for (what, head) in [
+            ("table command", format!("command = \"false\"\n{entry}")),
+            ("table command removed", entry.to_string()),
+            ("table preset", format!("command = \"true\"\npreset = \"loom\"\n{entry}")),
+            (
+                "table canary_command",
+                format!("command = \"true\"\ncanary_command = \"false\"\n{entry}"),
+            ),
+            (
+                "entry command",
+                "command = \"true\"\n\n[[gates.command.commands]]\nname = \"unit\"\ncommand = \"false\"\n".to_string(),
+            ),
+            (
+                "entry name",
+                "command = \"true\"\n\n[[gates.command.commands]]\nname = \"base-tests\"\ncommand = \"true\"\n".to_string(),
+            ),
+            (
+                "entry preset",
+                format!("command = \"true\"\n{entry}preset = \"loom\"\n"),
+            ),
+            (
+                "entry canary_command",
+                format!("command = \"true\"\n{entry}canary_command = \"false\"\n"),
+            ),
+            ("entry added", format!("command = \"true\"\n{entry}{entry}")),
+            ("entry removed", "command = \"true\"\n".to_string()),
+        ] {
+            assert!(executed_definitions_differ(&gate(&head), &base), "{what}");
+            assert!(executed_definitions_differ(&base, &gate(&head)), "{what}, reversed");
+        }
+    }
+
+    /// The table-level canary counts whatever it overrides: nothing, an entry's
+    /// inherited canary, a preset's default, or a canary the base already had.
+    #[test]
+    fn a_table_canary_is_an_executed_key_whatever_it_overrides() {
+        for base in [
+            "command = \"true\"\n",
+            "\n[[gates.command.commands]]\nname = \"unit\"\ncommand = \"true\"\n",
+            "preset = \"sanitizers\"\n",
+            "command = \"true\"\ncanary_command = \"false\"\n",
+        ] {
+            let head = format!("canary_command = \"sh -c 'exit 1'\"\n{base}");
+            let head = if base.contains("canary_command") {
+                base.replace("\"false\"", "\"sh -c 'exit 1'\"")
+            } else {
+                head
+            };
+            assert!(
+                executed_definitions_differ(&gate(&head), &gate(base)),
+                "{base}"
+            );
+        }
+    }
+
+    /// Keys that are matched against output, or bound a run, execute nothing.
+    #[test]
+    fn a_compared_or_neutral_key_is_not_an_executed_one() {
+        let base = gate("command = \"true\"\n\n[[gates.command.commands]]\nname = \"unit\"\ncommand = \"true\"\n");
+        let head = gate(
+            "command = \"true\"\nenabled = false\nseverity = \"warning\"\nexempt_paths = [\"a\"]\n\
+             timeout_seconds = 5\ncount_pattern = \"(\\\\d+)\"\nmin_count = 1\nforbid_output = [\"x\"]\n\
+             zero_items_pattern = \"0 tests\"\nallow_zero = true\n\
+             canary_expected_diagnostic = \"boom\"\nsnapshot = \"api.txt\"\nsnapshot_ignore = [\"^#\"]\n\n\
+             [[gates.command.commands]]\nname = \"unit\"\ncommand = \"true\"\ntimeout_seconds = 5\n\
+             count_pattern = \"(\\\\d+)\"\nmin_count = 1\nforbid_output = [\"x\"]\nzero_items_pattern = \"0 tests\"\n\
+             allow_zero = true\ncanary_expected_diagnostic = \"boom\"\nsnapshot = \"api.txt\"\n\
+             snapshot_ignore = [\"^#\"]\n",
+        );
+        assert!(!executed_definitions_differ(&head, &base));
+    }
 
     #[test]
     fn test_split_command_line_basic() {

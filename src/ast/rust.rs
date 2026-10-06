@@ -935,6 +935,19 @@ impl<'a> Extractor<'a> {
                 if p.set_language(&tree_sitter_rust::LANGUAGE.into()).is_ok() {
                     if let Some(tree) = p.parse(&fake_fn, None) {
                         let root = tree.root_node();
+                        // The macro's token tree accepts tokens that are not a function
+                        // body. A body the grammar cannot read is reported like any other
+                        // source that parsed with errors, not counted as far as it went.
+                        if let (true, error_line, _) = super::collect_error_nodes_info(root) {
+                            self.facts.has_parse_errors = true;
+                            if self.facts.first_parse_error_line.is_none() {
+                                self.facts.first_parse_error_line =
+                                    Some(body_node.start_position().row + error_line.unwrap_or(1));
+                            }
+                        }
+                        // Reachability of the body as written, in the offsets of the
+                        // re-parsed text.
+                        let dead = super::reach::dead_ranges(root, &fake_fn, &RS_REACH);
                         if let Some(fn_item) = root.child(0) {
                             if let Some(body) = fn_item.child_by_field_name("body") {
                                 let is_qc = macro_name == "quickcheck"
@@ -943,6 +956,7 @@ impl<'a> Extractor<'a> {
                                 self.count_property_body_asserts(
                                     body,
                                     fake_fn.as_bytes(),
+                                    &dead,
                                     &mut test,
                                     &mut direct_calls,
                                     is_qc,
@@ -977,10 +991,16 @@ impl<'a> Extractor<'a> {
         &self,
         node: Node,
         src: &[u8],
+        dead: &super::reach::DeadRanges,
         test: &mut TestFn,
         direct_calls: &mut Vec<String>,
         is_quickcheck: bool,
     ) {
+        // An assertion no execution reaches (`if false { .. }`, after an early `return`)
+        // checks nothing, in a property body as in an ordinary test.
+        if super::reach::is_dead(dead, node.start_byte()) {
+            return;
+        }
         match node.kind() {
             "function_item" => {
                 return;
@@ -1079,7 +1099,7 @@ impl<'a> Extractor<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.count_property_body_asserts(child, src, test, direct_calls, is_quickcheck);
+            self.count_property_body_asserts(child, src, dead, test, direct_calls, is_quickcheck);
         }
     }
 

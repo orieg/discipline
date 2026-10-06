@@ -40,6 +40,20 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         },
     };
     let base_min_tests = base_cfg.as_ref().and_then(|c| c.gates.test_floor.min_tests);
+
+    // `test_command` is executed. Under the default policy side the configuration in
+    // force is the change's own copy, so a command the base side does not have is one the
+    // change supplies. Under `--policy-from base` the copy in force is the base's and the
+    // two are equal. A base configuration that is absent, or does not load, vouches for
+    // no command, as in the `command` gate.
+    let untrusted_test_command = ctx.git.has_base()
+        && test_command_supplied_by_change(
+            settings.test_command.as_deref(),
+            base_cfg
+                .as_ref()
+                .and_then(|c| c.gates.test_floor.test_command.as_deref()),
+        )
+        && !crate::guards::command::runner_authorises_command_change();
     let head_min_tests = settings.min_tests;
 
     // 1. Resolve base floor constant from constant_file if configured.
@@ -251,7 +265,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     // and run the base ref's tests. Comparing that against a runtime count
     // mixes two counting bases (see docs/GATES.md, test-floor), so the result
     // would be meaningless in either direction. Refuse before running anything.
-    if settings.test_command.is_some() && explicit_floor.is_none() {
+    if settings.test_command.is_some() && explicit_floor.is_none() && !untrusted_test_command {
         bail!(
             "test-floor: `test_command` supplies a runtime test count, but no floor is configured to \
              compare it against; set `min_tests` (or `constant_file` + `constant_name`) to a count on \
@@ -445,6 +459,21 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                 });
             }
         }
+    }
+
+    // A command the change supplies is not run, and no count stands in for it: the floor
+    // was set on that command's basis, so a static count would compare two bases.
+    if untrusted_test_command {
+        out.push(
+            settings.severity,
+            &crate::findings::UNTRUSTED_TEST_COMMAND,
+            Some(ctx.config_path),
+            None,
+            "The change adds or alters `test_command` in `[gates.test-floor]` without runner environment authorization; a command cannot be introduced or altered by the change it judges, so it was not run and the test count was not taken."
+                .to_string(),
+            "Configure `test_command` in the merge base ref's discipline.toml, or set DISCIPLINE_ALLOW_COMMAND_CHANGE on the runner to accept the change.",
+        );
+        return Ok(out);
     }
 
     // 7. Calculate measured test count.
@@ -817,6 +846,13 @@ pub fn count_base_workspace_ast_tests(
     Ok(count)
 }
 
+/// Whether the `test_command` in force is one the base side does not vouch for: it is
+/// set, and the base side's is absent or different. Removing a `test_command` executes
+/// nothing; `config-integrity` reports that.
+pub(crate) fn test_command_supplied_by_change(in_force: Option<&str>, base: Option<&str>) -> bool {
+    in_force.is_some() && in_force != base
+}
+
 /// Executes an external test listing command and counts tests from output lines.
 pub fn count_tests_via_command(cmd: &str, cwd: &Path) -> Result<usize> {
     let parts = crate::guards::command::split_command_line(cmd)?;
@@ -1052,6 +1088,24 @@ pub fn compare_test_identities(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_test_command_the_base_does_not_have_is_supplied_by_the_change() {
+        // Added, with or without a base configuration, and repointed.
+        assert!(test_command_supplied_by_change(Some("echo 9"), None));
+        assert!(test_command_supplied_by_change(
+            Some("echo 9"),
+            Some("echo 7")
+        ));
+        // Unchanged, which is also what `--policy-from base` gives.
+        assert!(!test_command_supplied_by_change(
+            Some("echo 7"),
+            Some("echo 7")
+        ));
+        // Removed or never set: nothing is executed.
+        assert!(!test_command_supplied_by_change(None, Some("echo 7")));
+        assert!(!test_command_supplied_by_change(None, None));
+    }
 
     #[test]
     fn parses_cargo_test_list_output() {

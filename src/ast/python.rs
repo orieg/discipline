@@ -65,6 +65,7 @@ impl LanguagePack for PythonPack {
             class_bases: HashMap::new(),
             collected_classes: HashSet::new(),
             class_stack: Vec::new(),
+            inherited_cases: Vec::new(),
             helpers: HashMap::new(),
             helper_calls: HashMap::new(),
             test_calls: Vec::new(),
@@ -159,6 +160,9 @@ struct PythonExtractor<'a> {
     collected_classes: HashSet<String>,
     /// For each enclosing class, whether pytest or unittest collects its methods.
     class_stack: Vec<bool>,
+    /// The case counts the enclosing module and classes give each of their tests: a
+    /// `parametrize` decorator on a class, a `pytestmark` in a class body or the module.
+    inherited_cases: Vec<(Option<usize>, bool)>,
     /// Non-test functions and methods of this file, keyed by scope-qualified
     /// name (`check` or `TestOrders::_expect`), with the failure paths in
     /// their own body.
@@ -359,7 +363,12 @@ impl<'a> PythonExtractor<'a> {
             }
         }
         let mut scope = Vec::new();
+        self.inherited_cases
+            .push(super::test_cases::extract_python_pytestmark_cases(
+                root, self.src,
+            ));
         self.visit_node(root, &mut scope, module_ignored);
+        self.inherited_cases.pop();
     }
 
     fn visit_node(&mut self, node: Node, scope: &mut Vec<String>, parent_ignored: bool) {
@@ -438,6 +447,14 @@ impl<'a> PythonExtractor<'a> {
         let collected = self.collected_classes.contains(&class_name);
         scope.push(class_name);
         self.class_stack.push(collected);
+        let body_cases = node
+            .child_by_field_name("body")
+            .map(|body| super::test_cases::extract_python_pytestmark_cases(body, self.src))
+            .unwrap_or((None, false));
+        self.inherited_cases.push(super::test_cases::multiply_cases(
+            super::test_cases::extract_python_cases(class_decorators, self.src),
+            body_cases,
+        ));
 
         if let Some(body) = node.child_by_field_name("body") {
             let mut cursor = body.walk();
@@ -474,6 +491,7 @@ impl<'a> PythonExtractor<'a> {
             }
         }
 
+        self.inherited_cases.pop();
         self.class_stack.pop();
         scope.pop();
     }
@@ -513,8 +531,10 @@ impl<'a> PythonExtractor<'a> {
 
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
-        let (cases, non_literal_cases) =
-            super::test_cases::extract_python_cases(decorators, self.src);
+        let (cases, non_literal_cases) = self.inherited_cases.iter().fold(
+            super::test_cases::extract_python_cases(decorators, self.src),
+            |own, outer| super::test_cases::multiply_cases(*outer, own),
+        );
 
         let mut test_fn = TestFn {
             name: full_name,
